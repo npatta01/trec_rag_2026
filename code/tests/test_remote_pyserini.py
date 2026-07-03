@@ -30,8 +30,37 @@ def test_config_uses_index_url_and_typed_values():
     assert config.queries == ("alpha", "beta", "gamma")
 
 
+def test_config_builds_index_url_from_env_index_and_base_url():
+    config = RemotePyseriniConfig.from_env(
+        {
+            "PYSERINI_INDEX": "custom index",
+            "PYSERINI_BASE_URL": "http://api.example.test/",
+        }
+    )
+
+    assert config.index_url == "http://api.example.test/v1/custom%20index/search"
+
+
+def test_config_builds_index_url_from_default_env_names():
+    config = RemotePyseriniConfig.from_env(
+        {
+            "DEFAULT_INDEX": "climbmix-400b",
+            "DEFAULT_BASE_URL": "http://api.example.test",
+        }
+    )
+
+    assert config.index_url == "http://api.example.test/v1/climbmix-400b/search"
+
+
+def test_config_requires_remote_endpoint_env():
+    with pytest.raises(ValueError, match="Set INDEX_URL.*PYSERINI_INDEX.*DEFAULT_INDEX"):
+        RemotePyseriniConfig.from_env({})
+
+
 def test_config_defaults_to_rag25_dev_topic_query():
-    config = RemotePyseriniConfig.from_env({})
+    config = RemotePyseriniConfig.from_env(
+        {"INDEX_URL": "http://api.example.test/v1/climbmix-400b/search"}
+    )
 
     assert len(config.queries) == 1
     assert "environmental and health impacts of e-waste" in config.queries[0]
@@ -203,4 +232,9 @@ def test_normalize_candidates_handles_hosted_api_string_docs():
 
 def test_config_rejects_bad_hits():
     with pytest.raises(ValueError, match="EXTERNAL_PYSERINI_HITS must be an integer"):
-        RemotePyseriniConfig.from_env({"EXTERNAL_PYSERINI_HITS": "many"})
+        RemotePyseriniConfig.from_env(
+            {
+                "INDEX_URL": "http://api.example.test/v1/climbmix-400b/search",
+                "EXTERNAL_PYSERINI_HITS": "many",
+            }
+        )

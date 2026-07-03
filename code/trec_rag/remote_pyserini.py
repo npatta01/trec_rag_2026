@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-DEFAULT_INDEX = "climbmix-400b"
-DEFAULT_BASE_URL = "http://api.castorini.uwaterloo.ca"
 DEFAULT_QUERIES = (
     "I'm seeking to understand the environmental and health impacts of e-waste and other "
     "waste, along with how proper recycling benefits sustainability and local economies. "
@@ -98,6 +96,23 @@ def env_queries(name: str, default: str, env: Mapping[str, str] | None = None) -
     return tuple(query.strip() for query in raw_value.split(";") if query.strip())
 
 
+def remote_index_url(env: Mapping[str, str] | None = None) -> str:
+    index_url = (_env_get(env, "INDEX_URL") or "").strip().rstrip("?")
+    if index_url:
+        return index_url
+
+    index = (_env_get(env, "PYSERINI_INDEX") or _env_get(env, "DEFAULT_INDEX") or "").strip()
+    base_url = (
+        _env_get(env, "PYSERINI_BASE_URL") or _env_get(env, "DEFAULT_BASE_URL") or ""
+    ).strip().rstrip("/")
+    if not index or not base_url:
+        raise ValueError(
+            "Set INDEX_URL, or set index/base env vars "
+            "(PYSERINI_INDEX/PYSERINI_BASE_URL or DEFAULT_INDEX/DEFAULT_BASE_URL)."
+        )
+    return f"{base_url}/v1/{urllib.parse.quote(index)}/search"
+
+
 @dataclass(frozen=True)
 class RemotePyseriniConfig:
     index_url: str
@@ -107,11 +122,8 @@ class RemotePyseriniConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RemotePyseriniConfig":
-        index = (_env_get(env, "PYSERINI_INDEX") or DEFAULT_INDEX).strip() or DEFAULT_INDEX
-        base_url = (_env_get(env, "PYSERINI_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-        default_index_url = f"{base_url}/v1/{urllib.parse.quote(index)}/search"
         return cls(
-            index_url=(_env_get(env, "INDEX_URL") or default_index_url).rstrip("?"),
+            index_url=remote_index_url(env),
             api_token=_env_get(env, "PYSERINI_API_TOKEN"),
             hits=env_int("EXTERNAL_PYSERINI_HITS", 5, env),
             queries=env_queries("SAMPLE_QUERIES", DEFAULT_QUERIES, env),

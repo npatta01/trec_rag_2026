@@ -6,9 +6,11 @@ Reusable Python helpers for repository notebooks and experiments.
 
 Inputs:
 
-- environment variables: `INDEX_URL`, `PYSERINI_API_TOKEN`,
-  `EXTERNAL_PYSERINI_HITS`, `SAMPLE_QUERIES`, optionally `PYSERINI_INDEX` and
-  `PYSERINI_BASE_URL`
+- endpoint environment: set `INDEX_URL`; or set `PYSERINI_INDEX` and
+  `PYSERINI_BASE_URL`; or use the aliases `DEFAULT_INDEX` and
+  `DEFAULT_BASE_URL`
+- other environment variables: `PYSERINI_API_TOKEN`, `EXTERNAL_PYSERINI_HITS`,
+  and `SAMPLE_QUERIES`
 - `.env` / `.env.local` files in the active worktree or shared checkout
 
 Outputs:
