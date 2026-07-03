@@ -4,26 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TREC RAG 2026 Briefing</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23126b61'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Arial' font-size='34' font-weight='700' fill='white'%3ER%3C/text%3E%3C/svg%3E">
   <style>
     :root {
-      --bg: #f4f7fa;
-      --surface: #ffffff;
-      --surface-muted: #eef3f7;
-      --text: #20262d;
-      --muted: #5d6976;
-      --border: #d9e2ea;
-      --teal: #0f766e;
-      --rose: #b94f62;
-      --blue: #2f6feb;
-      --green: #2f7d52;
-      --shadow: 0 18px 50px rgba(27, 39, 51, 0.08);
+      --bg: #f7f8f6;
+      --paper: #ffffff;
+      --ink: #17201c;
+      --muted: #66736c;
+      --line: #dfe5df;
+      --line-strong: #b8c5bd;
+      --teal: #126b61;
+      --teal-soft: #dcefeb;
+      --blue: #2f5f9d;
+      --blue-soft: #e2ebff;
+      --coral: #b85042;
+      --coral-soft: #f5dfda;
+      --gold: #9a6a12;
+      --gold-soft: #f4ead4;
+      --green: #2f6f3f;
+      --green-soft: #e0efdf;
+      --shadow: 0 18px 48px rgba(23, 32, 28, 0.08);
       --radius: 8px;
-      --sidebar-width: 300px;
-      font-family:
-        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-        "Segoe UI", sans-serif;
-      color: var(--text);
-      background: var(--bg);
+      --max: 1180px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     * {
@@ -36,523 +39,585 @@
 
     body {
       margin: 0;
-      min-height: 100vh;
+      overflow-x: hidden;
       background: var(--bg);
-      color: var(--text);
-    }
-
-    .layout {
-      display: grid;
-      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-      gap: 32px;
-      width: min(1440px, 100%);
-      margin: 0 auto;
-      padding: 28px;
-    }
-
-    .sidebar {
-      position: sticky;
-      top: 28px;
-      align-self: start;
-      min-height: calc(100vh - 56px);
-      max-height: calc(100vh - 56px);
-      overflow-y: auto;
-      padding: 24px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--surface);
-      box-shadow: var(--shadow);
-    }
-
-    .brand h1 {
-      margin: 0;
-      font-size: 1.45rem;
-      line-height: 1.2;
-      letter-spacing: 0;
-    }
-
-    .brand p {
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-size: 0.94rem;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.55;
     }
 
-    .progress-wrap {
-      margin: 24px 0 20px;
+    a {
+      color: var(--teal);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
     }
 
-    .progress-label {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+    .shell {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
     }
 
-    .progress-track {
-      height: 8px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: var(--surface-muted);
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(247, 248, 246, 0.92);
+      backdrop-filter: blur(14px);
     }
 
-    .progress-fill {
-      width: 0%;
-      height: 100%;
-      border-radius: inherit;
-      background: var(--teal);
-      transition: width 120ms ease-out;
-    }
-
-    .nav-list {
-      display: grid;
-      gap: 6px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .nav-link {
+    .topbar-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 18px;
+      min-height: 64px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
       gap: 12px;
-      min-height: 42px;
-      padding: 10px 12px;
-      border: 1px solid transparent;
-      border-radius: var(--radius);
-      color: var(--muted);
-      font-size: 0.93rem;
-      font-weight: 700;
+      min-width: 210px;
+      max-width: 100%;
+      color: var(--ink);
+      font-weight: 760;
       text-decoration: none;
-      transition:
-        background-color 140ms ease,
-        border-color 140ms ease,
-        color 140ms ease;
     }
 
-    .nav-link::after {
-      width: 8px;
-      height: 8px;
-      border-radius: 999px;
-      background: transparent;
-      content: "";
-      flex: 0 0 auto;
-    }
-
-    .nav-link:hover,
-    .nav-link:focus-visible {
-      border-color: var(--border);
-      background: var(--surface-muted);
-      color: var(--text);
-      outline: none;
-    }
-
-    .nav-link.active {
-      border-color: rgba(15, 118, 110, 0.26);
-      background: rgba(15, 118, 110, 0.08);
-      color: var(--teal);
-    }
-
-    .nav-link.active::after {
-      background: var(--teal);
-    }
-
-    main {
+    .brand-mark {
       display: grid;
-      gap: 22px;
-      min-width: 0;
-    }
-
-    main a {
-      color: var(--blue);
-      font-weight: 700;
-      text-decoration: underline;
-      text-decoration-thickness: 0.08em;
-      text-underline-offset: 0.16em;
-    }
-
-    main a:hover,
-    main a:focus-visible {
-      color: var(--teal);
-    }
-
-    main img,
-    main svg {
-      max-width: 100%;
-      height: auto;
-    }
-
-    .section-panel {
-      min-width: 0;
-      max-width: 100%;
-      scroll-margin-top: 28px;
-      padding: 30px;
-      border: 1px solid var(--border);
+      place-items: center;
+      width: 36px;
+      height: 36px;
       border-radius: var(--radius);
-      background: var(--surface);
-      box-shadow: var(--shadow);
+      background: var(--teal);
+      color: white;
+      font-weight: 820;
+      letter-spacing: 0;
     }
 
-    .section-kicker {
-      display: inline-flex;
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      max-width: 100%;
+    }
+
+    .nav a {
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    .nav a:hover,
+    .nav a:focus {
+      background: var(--paper);
+      color: var(--ink);
+      outline: 1px solid var(--line);
+    }
+
+    .hero {
+      padding: 72px 0 44px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(120deg, rgba(18, 107, 97, 0.12), transparent 36%),
+        linear-gradient(280deg, rgba(184, 80, 66, 0.10), transparent 38%),
+        var(--bg);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      gap: 42px;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 12px;
-      color: var(--teal);
-      font-size: 0.76rem;
-      font-weight: 800;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
     }
 
-    .section-kicker::before {
-      width: 18px;
-      height: 3px;
-      border-radius: 999px;
-      background: currentColor;
-      content: "";
+    .hero-grid > *,
+    .section-head > *,
+    .glossary-wrap > *,
+    .pipeline-layout > *,
+    .sample-layout > * {
+      min-width: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+      margin: 0;
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 880px;
+      font-size: clamp(2.55rem, 6vw, 5.65rem);
+      font-weight: 820;
     }
 
     h2 {
-      margin: 0;
-      font-size: clamp(1.55rem, 2.5vw, 2.45rem);
-      line-height: 1.14;
-      letter-spacing: 0;
-    }
-
-    .lede {
-      max-width: 820px;
-      margin: 14px 0 0;
-      color: var(--muted);
-      font-size: 1.04rem;
-      line-height: 1.72;
-    }
-
-    .card-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-      min-width: 0;
-      max-width: 100%;
-      margin-top: 24px;
-    }
-
-    .card-grid > *,
-    .technique-grid > *,
-    .note-card {
-      min-width: 0;
-      max-width: 100%;
-    }
-
-    .note-card {
-      min-height: 132px;
-      padding: 18px;
-      border: 1px solid var(--border);
-      border-top: 3px solid var(--accent, var(--teal));
-      border-radius: var(--radius);
-      background: #ffffff;
-    }
-
-    .note-card h3 {
-      margin: 0;
-      font-size: 0.94rem;
-      line-height: 1.35;
-      letter-spacing: 0;
-    }
-
-    .note-card p {
-      margin: 9px 0 0;
-      color: var(--muted);
-      font-size: 0.91rem;
-      line-height: 1.58;
-    }
-
-    .note-card.teal {
-      --accent: var(--teal);
-    }
-
-    .note-card.rose {
-      --accent: var(--rose);
-    }
-
-    .note-card.blue {
-      --accent: var(--blue);
-    }
-
-    .note-card.green {
-      --accent: var(--green);
-    }
-
-    .technique-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-      min-width: 0;
-      max-width: 100%;
-      margin-top: 24px;
-    }
-
-    .technique-card {
-      display: flex;
-      min-width: 0;
-      max-width: 100%;
-      min-height: 100%;
-      flex-direction: column;
-      padding: 18px;
-      border: 1px solid var(--border);
-      border-top: 3px solid var(--accent, var(--teal));
-      border-radius: var(--radius);
-      background: #ffffff;
-    }
-
-    .technique-card.retrieval {
-      --accent: var(--blue);
-    }
-
-    .technique-card.fusion {
-      --accent: var(--teal);
-    }
-
-    .technique-card.reranking {
-      --accent: var(--green);
-    }
-
-    .technique-card.generation {
-      --accent: var(--rose);
-    }
-
-    .technique-card.quality {
-      --accent: var(--green);
-    }
-
-    .technique-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-
-    .technique-tag {
-      display: inline-flex;
-      align-items: center;
-      min-height: 24px;
-      padding: 4px 8px;
-      border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--accent) 10%, #ffffff);
-      color: var(--accent);
-      font-size: 0.72rem;
+      font-size: clamp(1.8rem, 3.1vw, 3rem);
       font-weight: 800;
-      letter-spacing: 0.05em;
+    }
+
+    h3 {
+      font-size: 1.18rem;
+      font-weight: 780;
+    }
+
+    h4 {
+      color: var(--teal);
+      font-size: 0.9rem;
+      font-weight: 820;
       text-transform: uppercase;
     }
 
-    .technique-card h3 {
-      margin: 0;
-      font-size: 1rem;
-      line-height: 1.35;
-      letter-spacing: 0;
+    .lede {
+      max-width: 760px;
+      margin: 24px 0 0;
+      color: #38443e;
+      font-size: clamp(1.05rem, 1.6vw, 1.22rem);
     }
 
-    .technique-card p {
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-size: 0.92rem;
-      line-height: 1.58;
-    }
-
-    .technique-card details {
-      margin-top: 10px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #f8fafc;
-    }
-
-    .technique-card summary {
-      cursor: pointer;
-      padding: 10px 12px;
-      border-radius: 5px 5px 0 0;
-      color: var(--text);
-      font-size: 0.86rem;
-      font-weight: 800;
-      line-height: 1.35;
-    }
-
-    .technique-card summary:focus-visible {
-      background: var(--surface-muted);
-      color: var(--text);
-      outline: none;
-      box-shadow: inset 0 0 0 1px var(--border);
-    }
-
-    .technique-card details p {
-      margin: 0;
-      padding: 0 12px 12px;
-      font-size: 0.88rem;
-    }
-
-    .technique-card pre {
-      margin-top: 12px;
-      white-space: pre-wrap;
-    }
-
-    .tabs {
-      display: grid;
-      gap: 16px;
-      min-width: 0;
-      margin-top: 24px;
-    }
-
-    .tab-list {
+    .hero-actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      min-width: 0;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--border);
+      gap: 10px;
+      margin-top: 28px;
     }
 
-    .tab-button {
-      min-width: 0;
-      min-height: 40px;
-      padding: 9px 12px;
-      border: 1px solid var(--border);
+    .button,
+    .chip {
+      border: 1px solid var(--line-strong);
       border-radius: var(--radius);
-      appearance: none;
-      background: #ffffff;
-      color: var(--muted);
-      cursor: pointer;
+      background: var(--paper);
+      color: var(--ink);
       font: inherit;
-      font-size: 0.9rem;
-      font-weight: 800;
-      line-height: 1.25;
-      transition:
-        background-color 140ms ease,
-        border-color 140ms ease,
-        color 140ms ease,
-        box-shadow 140ms ease;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 150ms ease, border-color 150ms ease, background 150ms ease, color 150ms ease;
     }
 
-    .tab-button:hover,
-    .tab-button:focus-visible {
-      border-color: rgba(15, 118, 110, 0.32);
-      background: var(--surface-muted);
-      color: var(--text);
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 14px;
+      text-decoration: none;
+    }
+
+    .button.primary {
+      border-color: var(--teal);
+      background: var(--teal);
+      color: white;
+    }
+
+    .button:hover,
+    .button:focus,
+    .chip:hover,
+    .chip:focus {
+      transform: translateY(-1px);
+      border-color: var(--teal);
       outline: none;
-      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
     }
 
-    .tab-button.is-active,
-    .tab-button[aria-selected="true"] {
-      border-color: rgba(15, 118, 110, 0.34);
-      background: rgba(15, 118, 110, 0.08);
-      color: var(--teal);
-    }
-
-    .tab-panel {
+    .hero-visual,
+    .route-card,
+    .explain-card,
+    .task-card,
+    .pattern-card,
+    .sample-card,
+    .kit-card,
+    .diagnosis-card,
+    .source-card,
+    .definition-panel,
+    .pipeline-panel {
       min-width: 0;
-      max-width: 100%;
-      padding: 18px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: #ffffff;
+      background: var(--paper);
+      box-shadow: 0 8px 24px rgba(23, 32, 28, 0.04);
     }
 
-    .tab-panel[hidden] {
-      display: none;
+    .hero-visual {
+      padding: 18px;
+      box-shadow: var(--shadow);
     }
 
-    .tab-panel h3 {
+    .mini-flow {
+      display: grid;
+      gap: 10px;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfb;
+    }
+
+    .flow-num {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-weight: 820;
+    }
+
+    .flow-row strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .flow-row span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    section {
+      padding: 54px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.82fr) minmax(280px, 0.68fr);
+      gap: 32px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    .section-head p {
       margin: 0;
+      color: var(--muted);
       font-size: 1.02rem;
-      line-height: 1.35;
-      letter-spacing: 0;
     }
 
-    .tab-panel p {
+    .route-grid,
+    .task-grid,
+    .sample-grid,
+    .kit-grid,
+    .diagnosis-grid,
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .explain-grid,
+    .pattern-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .route-card,
+    .explain-card,
+    .task-card,
+    .pattern-card,
+    .sample-card,
+    .kit-card,
+    .diagnosis-card,
+    .source-card {
+      padding: 18px;
+    }
+
+    .route-card p,
+    .explain-card p,
+    .task-card p,
+    .pattern-card p,
+    .sample-card p,
+    .kit-card p,
+    .diagnosis-card p,
+    .source-card p {
       margin: 10px 0 0;
       color: var(--muted);
-      font-size: 0.94rem;
-      line-height: 1.62;
+      font-size: 0.96rem;
     }
 
-    .tab-panel pre {
-      white-space: pre-wrap;
+    .label,
+    .evidence-chip,
+    .provenance-chip {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      max-width: 100%;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-size: 0.78rem;
+      font-weight: 780;
+      line-height: 1.25;
     }
 
-    .timeline-list {
+    .label.blue,
+    .evidence-chip.team-side,
+    .provenance-chip.team-side {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .label.coral,
+    .evidence-chip.caution,
+    .provenance-chip.caution {
+      background: var(--coral-soft);
+      color: var(--coral);
+    }
+
+    .label.gold,
+    .evidence-chip.design,
+    .provenance-chip.design {
+      background: var(--gold-soft);
+      color: var(--gold);
+    }
+
+    .label.green,
+    .provenance-chip {
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .evidence-chip,
+    .provenance-chip {
+      min-height: 22px;
+      font-size: 0.72rem;
+      font-weight: 820;
+      text-transform: uppercase;
+    }
+
+    .glossary-wrap {
       display: grid;
-      gap: 12px;
-      margin: 24px 0 0;
+      grid-template-columns: minmax(230px, 0.36fr) minmax(0, 0.64fr);
+      gap: 18px;
+      align-items: start;
+      margin-top: 22px;
+    }
+
+    .glossary-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      align-content: start;
+      gap: 8px;
+    }
+
+    .chip {
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .chip.active {
+      border-color: var(--teal);
+      background: var(--teal);
+      color: white;
+    }
+
+    .definition-panel,
+    .pipeline-panel {
+      min-height: 214px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }
+
+    .definition-panel p,
+    .pipeline-panel p {
+      margin: 12px 0 0;
+      color: #4d5953;
+    }
+
+    .sample-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(320px, 0.65fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .sample-topic {
+      margin: 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--teal);
+      border-radius: var(--radius);
+      background: #fbfcfb;
+      color: #2f4039;
+      line-height: 1.65;
+    }
+
+    .sample-meta,
+    .sample-list,
+    .diagnosis-list {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0 0;
       padding: 0;
       list-style: none;
     }
 
-    .timeline-list li {
+    .sample-list li,
+    .diagnosis-list li {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfb;
+      color: #3f4b45;
+      font-size: 0.94rem;
+      line-height: 1.45;
+    }
+
+    .sample-list strong,
+    .diagnosis-list strong {
+      color: var(--ink);
+      font-weight: 820;
+    }
+
+    .table-wrap {
+      width: 100%;
+      margin-top: 18px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: 0 8px 24px rgba(23, 32, 28, 0.04);
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 0.92rem;
+    }
+
+    th,
+    td {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      padding: 0.1em 0.3em;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #f3f6f4;
+      color: #26332d;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+
+    .code-block {
+      display: block;
+      margin: 14px 0 0;
+      padding: 12px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f3f6f4;
+      color: #26332d;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .pipeline-layout {
       display: grid;
-      grid-template-columns: 132px minmax(0, 1fr);
-      gap: 18px;
-      padding: 16px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: #ffffff;
+      grid-template-columns: minmax(0, 0.98fr) minmax(280px, 0.58fr);
+      gap: 22px;
+      align-items: start;
     }
 
-    .timeline-list strong {
-      color: var(--blue);
+    .pipeline-diagram {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .stage-button {
+      min-height: 132px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .stage-button.active {
+      border-color: var(--teal);
+      box-shadow: inset 0 0 0 2px rgba(18, 107, 97, 0.12);
+    }
+
+    .stage-button span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
       font-size: 0.9rem;
-      line-height: 1.5;
     }
 
-    .timeline-list span {
-      color: var(--muted);
-      line-height: 1.55;
-    }
-
-    .callout {
-      margin-top: 24px;
-      padding: 18px;
-      border-left: 4px solid var(--rose);
+    .leaderboard-note,
+    .note,
+    .provenance-note {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--teal);
       border-radius: var(--radius);
-      background: #f8fafc;
-      color: var(--muted);
-      line-height: 1.65;
+      background: var(--teal-soft);
+      color: #2f4039;
     }
 
-    .callout strong {
-      color: var(--text);
+    .note {
+      border-left-color: var(--gold);
+      background: var(--gold-soft);
+      color: #55411c;
     }
 
     .appendix-details {
       display: grid;
       gap: 14px;
-      margin-top: 24px;
     }
 
-    .appendix-details details {
-      border: 1px solid var(--border);
+    details {
+      border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: #ffffff;
+      background: var(--paper);
     }
 
-    .appendix-details summary {
+    summary {
       cursor: pointer;
       padding: 14px 16px;
-      color: var(--text);
+      color: var(--ink);
       font-weight: 800;
       line-height: 1.35;
-    }
-
-    .appendix-details summary:focus-visible {
-      background: var(--surface-muted);
-      outline: none;
-      box-shadow: inset 0 0 0 1px var(--border);
     }
 
     .appendix-body {
@@ -569,7 +634,6 @@
       margin: 0;
     }
 
-    .appendix-list,
     .source-list {
       display: grid;
       gap: 9px;
@@ -577,813 +641,694 @@
     }
 
     .source-list a {
-      color: var(--blue);
-      text-decoration: underline;
-      text-decoration-thickness: 0.08em;
-      text-underline-offset: 0.16em;
       overflow-wrap: anywhere;
     }
 
-    .table-wrap {
-      min-width: 0;
-      width: 100%;
-      max-width: 100%;
-      margin-top: 24px;
-      overflow-x: auto;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: #ffffff;
-    }
-
-    table {
-      width: 100%;
-      min-width: 720px;
-      border-collapse: collapse;
-      color: var(--text);
+    footer {
+      padding: 34px 0 44px;
+      color: var(--muted);
       font-size: 0.92rem;
-      line-height: 1.55;
     }
 
-    th,
-    td {
-      padding: 13px 15px;
-      border-bottom: 1px solid var(--border);
-      text-align: left;
-      vertical-align: top;
-    }
-
-    th {
-      background: var(--surface-muted);
-      color: var(--text);
-      font-size: 0.78rem;
-      font-weight: 800;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    tr:last-child td {
-      border-bottom: 0;
-    }
-
-    code {
-      max-width: 100%;
-      padding: 0.12em 0.32em;
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      background: var(--surface-muted);
-      color: var(--text);
-      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-      font-size: 0.9em;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-    }
-
-    pre {
-      min-width: 0;
-      max-width: 100%;
-      margin: 18px 0 0;
-      overflow-x: auto;
-      padding: 14px 16px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: #f8fafc;
-      color: var(--text);
-      line-height: 1.5;
-      -webkit-overflow-scrolling: touch;
-    }
-
-    pre code {
-      display: block;
-      min-width: 0;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      font-size: 0.92rem;
-      overflow-wrap: normal;
-      white-space: inherit;
-      word-break: normal;
-    }
-
-    @media (max-width: 980px) {
-      .card-grid {
+    @media (max-width: 1040px) {
+      .explain-grid,
+      .pattern-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 
-    @media (max-width: 860px) {
-      .layout {
-        display: block;
-        padding: 16px;
+    @media (max-width: 960px) {
+      .hero-grid,
+      .section-head,
+      .glossary-wrap,
+      .sample-layout,
+      .pipeline-layout {
+        grid-template-columns: 1fr;
       }
 
-      .sidebar {
+      .route-grid,
+      .task-grid,
+      .sample-grid,
+      .kit-grid,
+      .diagnosis-grid,
+      .source-grid,
+      .pipeline-diagram {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
         position: static;
-        min-height: auto;
-        max-height: none;
-        overflow-y: visible;
-        margin-bottom: 16px;
-        padding: 20px;
       }
 
-      .nav-list {
-        display: flex;
-        flex-wrap: wrap;
+      .topbar-inner {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 12px 0;
       }
 
-      .nav-link {
-        min-height: 38px;
-        flex: 1 1 145px;
-        justify-content: center;
-        text-align: center;
-      }
-
-      .nav-link::after {
-        display: none;
-      }
-
-      main {
-        gap: 16px;
-      }
-
-      .section-panel {
-        scroll-margin-top: 14px;
-        padding: 22px;
-      }
-
-      .card-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .technique-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .tab-list {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .tab-button {
+      .nav {
+        justify-content: flex-start;
         width: 100%;
       }
 
-      .tab-panel {
-        padding: 16px;
+      .hero {
+        padding-top: 42px;
       }
 
-      .timeline-list li {
+      .hero-actions {
+        width: 100%;
+      }
+
+      .button {
+        justify-content: center;
+        max-width: 100%;
+        white-space: normal;
+      }
+
+      .route-grid,
+      .task-grid,
+      .sample-grid,
+      .kit-grid,
+      .diagnosis-grid,
+      .source-grid,
+      .explain-grid,
+      .pattern-grid,
+      .pipeline-diagram {
         grid-template-columns: 1fr;
-        gap: 6px;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      html {
-        scroll-behavior: auto;
-      }
-
-      .progress-fill,
-      .nav-link {
-        transition: none;
       }
     }
   </style>
 </head>
 <body>
-  <div class="layout">
-    <aside class="sidebar" aria-label="Report navigation">
-      <div class="brand">
-        <h1>TREC RAG Briefing</h1>
-        <p>A newcomer-friendly guide to the 2026 track, ClimbMix, and lessons from 2025.</p>
-      </div>
-
-      <div class="progress-wrap" role="progressbar" aria-label="Reading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-        <div class="progress-label">
-          <span>Progress</span>
-          <span id="progressText">0%</span>
-        </div>
-        <div class="progress-track" aria-hidden="true">
-          <div class="progress-fill" id="progressFill"></div>
-        </div>
-      </div>
-
-      <nav aria-label="Sections">
-        <ul class="nav-list">
-          <li><a class="nav-link active" href="#orientation" aria-current="page">Orientation</a></li>
-          <li><a class="nav-link" href="#climbmix">ClimbMix</a></li>
-          <li><a class="nav-link" href="#year-2025">2025 Context</a></li>
-          <li><a class="nav-link" href="#techniques">Technique Gallery</a></li>
-          <li><a class="nav-link" href="#changes">2025 to 2026</a></li>
-          <li><a class="nav-link" href="#strategy">Solving 2026</a></li>
-          <li><a class="nav-link" href="#evaluation">Evaluation</a></li>
-          <li><a class="nav-link" href="#appendix">Appendix</a></li>
-        </ul>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="/reports/index.html">
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <span>TREC RAG 2026</span>
+      </a>
+      <nav class="nav" aria-label="Page navigation">
+        <a href="/reports/index.html">Reports Home</a>
+        <a href="#start-here">Start</a>
+        <a href="#climbmix">ClimbMix</a>
+        <a href="#samples">Samples</a>
+        <a href="#pipeline">Pipeline</a>
+        <a href="#implementation-kit">Kit</a>
+        <a href="#evaluation">Evaluation</a>
+        <a href="trec-rag-2025-writeups/interactive-writeup.html">2025 Writeups</a>
       </nav>
-    </aside>
+    </div>
+  </header>
 
-    <main>
-      <section id="orientation" class="section-panel" aria-labelledby="orientation-title">
-        <div class="section-kicker">Orientation</div>
-        <h2 id="orientation-title">What Is This Competition About?</h2>
-        <p class="lede">TREC RAG asks for evidence retrieval plus cited answer generation: find useful documents for a complex information need, then write an answer whose claims are visibly grounded in those documents.</p>
-        <div class="card-grid">
-          <article class="note-card teal">
-            <h3>2026 tasks</h3>
-            <p>The 2026 track has Retrieval and RAG tasks. Retrieval measures the evidence list; RAG measures the end-to-end answer with citations.</p>
-          </article>
-          <article class="note-card blue">
-            <h3>Retrieval output</h3>
-            <p>Retrieval output is a ranked list of document IDs in the six-column TREC format:</p>
-            <pre><code>topic_id Q0 docid rank score run_id</code></pre>
-          </article>
-          <article class="note-card green">
-            <h3>RAG output</h3>
-            <p>RAG output is human-readable prose with sentence-level citations, not raw chunks. Every substantive generated answer sentence should be supported by citations.</p>
-          </article>
-        </div>
-      </section>
-
-      <section id="climbmix" class="section-panel" aria-labelledby="climbmix-title">
-        <div class="section-kicker">ClimbMix</div>
-        <h2 id="climbmix-title">What Is ClimbMix?</h2>
-        <p class="lede">ClimbMix is the 2026 evidence collection: a broad curated web/pretraining-style collection rather than a single-domain corpus. The official unit is a ClimbMix row/document with a ClimbMix docid.</p>
-        <div class="card-grid">
-          <article class="note-card rose">
-            <h3>Document anchor</h3>
-            <p>Systems can chunk locally for indexing, reranking, or generation, but final retrieval rows and RAG references should map back to official ClimbMix document IDs.</p>
-          </article>
-          <article class="note-card teal">
-            <h3>Baseline path</h3>
-            <p>Pyserini/BM25 baseline infrastructure gives teams a plain starting point: build a lexical index, run a standard ranked search, then inspect where stronger methods help.</p>
-          </article>
-          <article class="note-card blue">
-            <h3>System impact</h3>
-            <p>The practical discipline is traceability. Internal chunks may help the model read evidence, but submitted IDs and citations need to resolve to the official ClimbMix documents.</p>
-          </article>
-        </div>
-      </section>
-
-      <section id="year-2025" class="section-panel" aria-labelledby="year-2025-title">
-        <div class="section-kicker">2025 Context</div>
-        <h2 id="year-2025-title">What Happened In 2025?</h2>
-        <p class="lede">TREC RAG 2025 used MS MARCO V2.1 segmented documents and long narrative information needs, not only short keyword queries. The overview paper reports 105 narratives, with official assessed analysis centered on 22 selected narratives.</p>
-        <ul class="timeline-list">
-          <li>
-            <strong>Task framing</strong>
-            <span>The 2025 overview describes four tasks: Retrieval, Augmented Generation, Retrieval-Augmented Generation, and Relevance Judgment.</span>
-          </li>
-          <li>
-            <strong>System behavior</strong>
-            <span>Strong approaches treated each narrative as a multi-facet request, so answer quality depended on broad evidence coverage as well as careful citation and synthesis.</span>
-          </li>
-          <li>
-            <strong>Technique example</strong>
-            <span>UTokyo <code>4method_merge</code> is useful as a 2025 Retrieval task example of combining hybrid retrieval, HyDE-style querying, Reciprocal Rank Fusion (RRF), and reranking before final ranking.</span>
-          </li>
-        </ul>
-      </section>
-
-      <section id="techniques" class="section-panel" aria-labelledby="techniques-title">
-        <div class="section-kicker">Technique Gallery</div>
-        <h2 id="techniques-title">Approaches People Used In 2025</h2>
-        <p class="lede">Read the 2025 systems as a menu of useful techniques, not only as a leaderboard. Most strong RAG pipelines are built from small, understandable moves: find candidate evidence, merge and reorder it, choose what matters, write with citations, then check the answer.</p>
-        <div id="technique-grid" class="technique-grid" aria-label="Beginner technique gallery">
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>BM25 / lexical retrieval</h3>
-            <p>Search by keyword overlap. Documents that share rare or distinctive words with the query rise toward the top.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it as the first baseline, especially when the question includes names, IDs, product terms, legal phrases, or other wording that must match exactly.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>It can miss useful evidence when the document says the same idea with different words.</p>
-            </details>
-            <pre><code>query: "climbmix document ids citation format"
-BM25 favors pages with those exact terms.</code></pre>
-          </article>
-
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>Query expansion</h3>
-            <p>Add related phrases to the original query so search has more ways to find the same idea.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it when users use one term but the collection may use another, such as "cost" versus "price" or "doctor" versus "clinician".</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>Extra words can drift away from the intent and pull in documents that sound related but answer the wrong question.</p>
-            </details>
-            <pre><code>original: "solar rebate rules"
-expanded: "solar rebate rules tax credit incentive eligibility"</code></pre>
-          </article>
-
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>Query decomposition</h3>
-            <p>Split a long narrative need into smaller searches, each aimed at one part of the answer.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it for questions with multiple facets, time periods, entities, or comparison points that one search might not cover.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>Vague subqueries can make the system look busy while still missing the facts the final answer needs.</p>
-            </details>
-            <pre><code>need: "Compare benefits and risks"
-search 1: "main benefits"
-search 2: "reported risks"</code></pre>
-          </article>
-
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>Dense retrieval</h3>
-            <p>Turn queries and documents into embeddings, then retrieve text that is close in meaning even when the words differ.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it when paraphrases matter, when users ask in everyday language, or when the collection uses varied wording.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>It may retrieve passages that are topically similar but do not actually answer the question.</p>
-            </details>
-            <pre><code>"How do I appeal?" can find
-"request a review of the decision"</code></pre>
-          </article>
-
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>Hybrid sparse plus dense retrieval</h3>
-            <p>Run keyword search and embedding search together, then combine their strengths so exact terms and paraphrases both get a chance.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it when exact wording matters but you still need semantic coverage. UTokyo's documented 2025 Retrieval run is a useful example of this family with hybrid retrieval, HyDE-style querying, Reciprocal Rank Fusion (RRF), and reranking.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>Two retrievers mean more settings to tune, and bad merging can bury the best evidence instead of promoting it.</p>
-            </details>
-            <pre><code>candidates = bm25(query) + dense(query)
-next: fuse, rerank, then select evidence</code></pre>
-          </article>
-
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>SPLADE-style learned sparse retrieval</h3>
-            <p>Use a model to predict useful weighted keywords, keeping the speed and transparency of sparse search while adding learned expansion.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it when you want inverted-index behavior but need help matching related terms that plain keyword search would miss.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>It adds model complexity, indexing cost, and another source of retrieval behavior to debug.</p>
-            </details>
-          </article>
-
-          <article class="technique-card fusion">
-            <div class="technique-meta">
-              <span class="technique-tag">Fusion</span>
-            </div>
-            <h3>Reciprocal Rank Fusion</h3>
-            <p>Merge several ranked lists by rewarding documents that appear near the top of one or more lists.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it when you have BM25, dense, expanded-query, or decomposed-query results and want a simple, robust way to combine them.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>It cannot rescue evidence that no retriever found in the first place.</p>
-            </details>
-            <pre><code>score(doc) = sum(1 / (k + rank_in_each_list))</code></pre>
-          </article>
-
-          <article class="technique-card retrieval">
-            <div class="technique-meta">
-              <span class="technique-tag">Retrieval</span>
-            </div>
-            <h3>HyDE</h3>
-            <p>Ask a model to draft a hypothetical answer, then search with that draft so retrieval has richer language to match against.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it for abstract or underspecified questions where the original query is too thin to retrieve good evidence.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>If the hypothetical answer invents the wrong framing, retrieval can drift toward convincing but irrelevant material.</p>
-            </details>
-            <pre><code>user query -> hypothetical answer
-hypothetical answer -> retrieval query</code></pre>
-          </article>
-
-          <article class="technique-card reranking">
-            <div class="technique-meta">
-              <span class="technique-tag">Reranking</span>
-            </div>
-            <h3>LLM reranking</h3>
-            <p>Use a stronger model to read candidate passages and reorder them by how useful they are for the user's actual need.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it after broad retrieval when you can afford extra latency or cost to improve the top evidence shown to the generator.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>It is slower and costlier than first-stage retrieval, and a vague prompt can reward fluent but weak evidence.</p>
-            </details>
-            <pre><code>Prompt: "Rank these passages by direct support
-for answering the narrative."</code></pre>
-          </article>
-
-          <article class="technique-card reranking">
-            <div class="technique-meta">
-              <span class="technique-tag">Reranking</span>
-            </div>
-            <h3>Evidence selection</h3>
-            <p>Choose the small set of chunks the answer writer will actually use, rather than sending every retrieved passage forward.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it before generation when the candidate pool is large, repetitive, or mixed with distracting background material.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>Missing one important facet can produce a polished answer that is still incomplete.</p>
-            </details>
-          </article>
-
-          <article class="technique-card generation">
-            <div class="technique-meta">
-              <span class="technique-tag">Generation</span>
-            </div>
-            <h3>Citation-first generation</h3>
-            <p>Plan the answer around cited evidence before writing the final prose, so each important claim has a source.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it when the evaluation rewards traceable claims and when readers need to inspect where each part of the answer came from.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>The answer can become stiff if it lists citations without synthesizing what the evidence means.</p>
-            </details>
-            <pre><code>claim -> supporting doc id -> sentence
-repeat before drafting the final response</code></pre>
-          </article>
-
-          <article class="technique-card quality">
-            <div class="technique-meta">
-              <span class="technique-tag">Quality</span>
-            </div>
-            <h3>Post-generation checks</h3>
-            <p>Review the drafted answer for uncited claims, missing facets, wrong citations, and statements the evidence does not support.</p>
-            <details>
-              <summary>When to use it</summary>
-              <p>Use it as the final gate before submission, especially for long answers with many claims and citations.</p>
-            </details>
-            <details>
-              <summary>Watch out for</summary>
-              <p>A weak checker may rubber-stamp errors, so it needs clear rules and should inspect both the answer and the cited evidence.</p>
-            </details>
-            <pre><code>checklist: cited? supported? complete?
-flag anything that fails before submission</code></pre>
-          </article>
-        </div>
-      </section>
-
-      <section id="changes" class="section-panel" aria-labelledby="changes-title">
-        <div class="section-kicker">Transition</div>
-        <h2 id="changes-title">What Changed From 2025 To 2026?</h2>
-        <p class="lede">The 2026 track keeps the core retrieval-plus-synthesis challenge but changes the evidence collection, task structure, and citation target through ClimbMix.</p>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Dimension</th>
-                <th>2025</th>
-                <th>2026</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Corpus</td>
-                <td>MS MARCO V2.1 segmented documents.</td>
-                <td>ClimbMix document rows.</td>
-              </tr>
-              <tr>
-                <td>Tasks</td>
-                <td>Retrieval, AG, RAG, and RJ.</td>
-                <td>Retrieval and RAG.</td>
-              </tr>
-              <tr>
-                <td>Generation setup</td>
-                <td>Fixed-evidence AG plus end-to-end RAG.</td>
-                <td>Participant-owned retrieval and generation for RAG.</td>
-              </tr>
-              <tr>
-                <td>Evidence IDs</td>
-                <td>MS MARCO segment IDs.</td>
-                <td>ClimbMix document IDs.</td>
-              </tr>
-              <tr>
-                <td>Main lesson</td>
-                <td>Long narratives reward coverage across facets.</td>
-                <td>The same lesson applies over a broader web-style corpus.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="strategy" class="section-panel" aria-labelledby="strategy-title">
-        <div class="section-kicker">Strategy</div>
-        <h2 id="strategy-title">How I Would Approach 2026</h2>
-        <p class="lede">The official-style simple BM25 baseline should be title-first: use the topic title as the default query because it is fast, debuggable, and hard to fool yourself with. Use the narrative to understand the need, decompose facets, fuse candidate lists, rerank candidates, select evidence, guide generation, and run citation checks; treating title plus narrative as the raw query is an experiment to label separately, not the default baseline.</p>
-        <div class="card-grid">
-          <article class="note-card blue">
-            <h3>Search broadly</h3>
-            <p>Start with the title query, then use the narrative to split the need into concrete facets when it clearly asks for causes, impacts, responses, timelines, or affected groups.</p>
-          </article>
-          <article class="note-card teal">
-            <h3>Fuse and rerank</h3>
-            <p>Combine the candidate lists so useful documents from weaker facet searches survive, then rerank for direct support rather than surface keyword overlap alone.</p>
-          </article>
-          <article class="note-card green">
-            <h3>Write from evidence</h3>
-            <p>Select the smallest set of passages that covers the answer, draft only supported claims, and check that every citation points to evidence that really says the thing.</p>
-          </article>
-        </div>
-        <div class="tabs" aria-label="Worked examples for solving 2026">
-          <div class="tab-list" role="tablist" aria-label="Worked examples">
-            <button class="tab-button is-active" id="tab-direct" type="button" role="tab" aria-selected="true" aria-controls="panel-direct" data-tab="direct">Direct BM25</button>
-            <button class="tab-button" id="tab-facets" type="button" role="tab" aria-selected="false" aria-controls="panel-facets" data-tab="facets">Facet Search</button>
-            <button class="tab-button" id="tab-noise" type="button" role="tab" aria-selected="false" aria-controls="panel-noise" data-tab="noise">Noisy Decomposition</button>
-            <button class="tab-button" id="tab-cited" type="button" role="tab" aria-selected="false" aria-controls="panel-cited" data-tab="cited">Cited Answer</button>
+  <main>
+    <section class="hero">
+      <div class="shell hero-grid">
+        <div>
+          <h1>TREC RAG 2026 Briefing, rebuilt as a field guide.</h1>
+          <p class="lede">
+            This guide explains the current TREC RAG task, the ClimbMix collection, organizer-provided development examples, and a practical path for building a cited retrieval-augmented answer system.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#samples">See sample docs and answers</a>
+            <a class="button" href="#pipeline">Jump to the 2026 pipeline</a>
+            <a class="button" href="trec-rag-2025-writeups/interactive-writeup.html">Open the 2025 technique library</a>
           </div>
-          <article class="tab-panel" id="panel-direct" role="tabpanel" aria-labelledby="tab-direct" data-panel="direct">
-            <h3>Direct title BM25 is the control run</h3>
-            <p>This asks BM25 to match the topic title as the default query. It is useful because every later experiment should beat this run on recall or evidence quality, not just look more sophisticated. A title-plus-narrative query can be tried as a separate experiment, while the narrative remains essential for understanding facets, reranking, evidence selection, and generation.</p>
-            <pre><code>query = title
-# Use narrative for facets, reranking, evidence selection, and generation.
-search(climbmix_bm25, query, top_k=100)</code></pre>
+        </div>
+        <div class="hero-visual" aria-label="2026 RAG system overview">
+          <div class="mini-flow">
+            <div class="flow-row">
+              <div class="flow-num">1</div>
+              <div><strong>Read the narrative</strong><span>Identify the facets the answer must cover, not just the keywords to search.</span></div>
+            </div>
+            <div class="flow-row">
+              <div class="flow-num">2</div>
+              <div><strong>Retrieve ClimbMix evidence</strong><span>Use BM25 as the control run, then add coverage-oriented queries and reranking.</span></div>
+            </div>
+            <div class="flow-row">
+              <div class="flow-num">3</div>
+              <div><strong>Write with citations</strong><span>Draft human-readable prose where factual claims point back to selected document references.</span></div>
+            </div>
+            <div class="flow-row">
+              <div class="flow-num">4</div>
+              <div><strong>Check support and coverage</strong><span>Do not confuse a well-cited answer with a complete answer.</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="start-here">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Start Here: How to Use This Briefing</h2>
+          <p>Use this page as the current-track companion to the deeper 2025 writeup report. It is organized by what a new participant needs to understand first.</p>
+        </div>
+        <div class="route-grid">
+          <article class="route-card">
+            <span class="label">10-minute path</span>
+            <h3>Understand the task shape</h3>
+            <p>Read RAG in plain English, ClimbMix, sample documents, and the answer JSON. That is enough to explain the competition to someone new.</p>
           </article>
-          <article class="tab-panel" id="panel-facets" role="tabpanel" aria-labelledby="tab-facets" data-panel="facets" hidden>
-            <h3>Facet decomposition improves recall for broad narratives</h3>
-            <p>Many TREC RAG topics are not single-fact questions. A narrative might ask what caused an issue, who was affected, and what responses followed. Searching those facets separately gives each angle a chance to retrieve documents, then fusion keeps documents that are consistently useful across lists.</p>
-            <pre><code>facet_queries = ["wildfire smoke respiratory health impacts", "wildfire smoke affected groups children older adults", "wildfire smoke public health responses"]
-candidates = rrf(search_each(facet_queries))</code></pre>
+          <article class="route-card">
+            <span class="label blue">builder path</span>
+            <h3>Turn it into a system</h3>
+            <p>Read the 2025 lesson bridge, pipeline, implementation kit, and failure diagnosis. Then build a measured baseline ladder.</p>
           </article>
-          <article class="tab-panel" id="panel-noise" role="tabpanel" aria-labelledby="tab-noise" data-panel="noise" hidden>
-            <h3>Decomposition can add noise when facets are vague</h3>
-            <p>The danger is turning a specific narrative into generic search strings. A query like "public health responses" may retrieve pages about any issue in ClimbMix. Keep the facet label, but anchor it with topic terms copied from the narrative so the search expands coverage without drifting away.</p>
-            <pre><code>bad = "public health responses"
-better = "public health responses to wildfire smoke exposure"</code></pre>
+          <article class="route-card">
+            <span class="label coral">audit path</span>
+            <h3>Check claims and evidence</h3>
+            <p>Use the sample qrels, organizer nuggets, source caveats, and evaluation section to keep relevance, coverage, and citation support separate.</p>
           </article>
-          <article class="tab-panel" id="panel-cited" role="tabpanel" aria-labelledby="tab-cited" data-panel="cited" hidden>
-            <h3>Retrieved documents become a cited answer</h3>
-            <p>After reranking, choose passages that support distinct pieces of the answer. The generator should write sentence by sentence from those passages, attach zero-indexed citation indices into the ordered reference list, and preserve the official-style top-level JSONL object shape.</p>
-            <pre><code>{
+        </div>
+      </div>
+    </section>
+
+    <section id="plain-english">
+      <div class="shell">
+        <div class="section-head">
+          <h2>RAG In Plain English</h2>
+          <p>A TREC RAG system is a reading assistant with receipts: it finds evidence first, writes second, and makes important claims traceable.</p>
+        </div>
+        <div class="explain-grid">
+          <article class="explain-card">
+            <span class="label">retrieval</span>
+            <h3>Find candidate documents</h3>
+            <p>Search ClimbMix for document IDs that might help answer the narrative.</p>
+          </article>
+          <article class="explain-card">
+            <span class="label blue">evidence</span>
+            <h3>Select what matters</h3>
+            <p>Keep the passages or evidence cards that cover distinct facets, not only the highest lexical matches.</p>
+          </article>
+          <article class="explain-card">
+            <span class="label coral">generation</span>
+            <h3>Write readable prose</h3>
+            <p>The final RAG output should be a proper answer, not a dump of chunks.</p>
+          </article>
+          <article class="explain-card">
+            <span class="label gold">verification</span>
+            <h3>Check the receipts</h3>
+            <p>Every substantive factual answer claim should be supported by the cited references.</p>
+          </article>
+        </div>
+
+        <div class="glossary-wrap">
+          <div class="glossary-buttons" aria-label="Glossary terms">
+            <button class="chip active" type="button" data-term="narrative">narrative</button>
+            <button class="chip" type="button" data-term="climbmix">ClimbMix</button>
+            <button class="chip" type="button" data-term="document">document</button>
+            <button class="chip" type="button" data-term="nugget">nugget</button>
+            <button class="chip" type="button" data-term="qrel">qrel</button>
+            <button class="chip" type="button" data-term="citation">citation</button>
+          </div>
+          <div class="definition-panel" id="glossaryPanel" role="status" aria-live="polite">
+            <span class="label">Glossary</span>
+            <h3>Narrative</h3>
+            <p>A long user request with multiple aspects. In this task, the narrative is not just search text; it is the specification for evidence coverage and final answer content.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="climbmix">
+      <div class="shell">
+        <div class="section-head">
+          <h2>What Is ClimbMix?</h2>
+          <p>ClimbMix is the 2026 evidence collection: a broad curated web/pretraining-style collection rather than a narrow domain corpus.</p>
+        </div>
+        <div class="task-grid">
+          <article class="task-card">
+            <span class="label">official unit</span>
+            <h3>Submit document IDs</h3>
+            <p>The official retrieval unit is a ClimbMix row/document with a ClimbMix docid such as <code>shard_05975_34428</code>.</p>
+          </article>
+          <article class="task-card">
+            <span class="label blue">local chunks</span>
+            <h3>Chunk internally when useful</h3>
+            <p>You can chunk documents locally for indexing, reranking, evidence cards, or generation, but keep traceability back to official document IDs.</p>
+          </article>
+          <article class="task-card">
+            <span class="label coral">BM25 baseline</span>
+            <h3>Use BM25 as the control</h3>
+            <p>The Pyserini baseline gives a plain lexical starting point. The narrative then guides decomposition, reranking, evidence selection, and generation.</p>
+          </article>
+        </div>
+        <div class="provenance-note">
+          <strong>Important mental model:</strong> ClimbMix documents can be long and varied. Treat documents as source containers, then use local passage-level work to find the evidence inside them.
+        </div>
+      </div>
+    </section>
+
+    <section id="samples">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Sample Documents And Organizer Answers</h2>
+          <p>A concrete dev example makes the task easier to hold: one narrative, judged ClimbMix documents, organizer-provided answer nuggets, and an illustrative response object.</p>
+        </div>
+
+        <div class="sample-layout">
+          <div>
+            <p class="sample-topic">
+              <strong>RAG25 dev qid 58:</strong> The user wants nuclear energy's pros, cons, safety, accident risks such as Chernobyl, uses, climate impact, comparison with fusion, and examples such as Bison Energy and Peninsula Clean Energy.
+            </p>
+            <div class="table-wrap" aria-label="Sample judged ClimbMix documents">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Docid</th>
+                    <th>Qrel</th>
+                    <th>Size</th>
+                    <th>What The Document Looks Like</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>shard_05975_34428</code></td>
+                    <td>4</td>
+                    <td>4,356 words</td>
+                    <td>Article-style web document about nuclear energy as alternative energy, with discussion of climate, waste, safety, and accidents.</td>
+                  </tr>
+                  <tr>
+                    <td><code>shard_04044_42652</code></td>
+                    <td>4</td>
+                    <td>552 words</td>
+                    <td>Short explainer about fission reactions, reactor types, electricity generation, and tradeoffs.</td>
+                  </tr>
+                  <tr>
+                    <td><code>shard_05087_1995</code></td>
+                    <td>4</td>
+                    <td>5,378 words</td>
+                    <td>Long discussion-style web document touching uranium supply, nuclear reliability, alternatives, and policy arguments.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <article class="sample-card">
+            <span class="label gold">organizer nuggets</span>
+            <h3>Answer supervision is atomic</h3>
+            <p>The dev data provides nuggets, not a polished prose answer. The qid 58 file has 39 nuggets. Examples:</p>
+            <ul class="sample-list">
+              <li><strong>Vital:</strong> nuclear energy produces very low greenhouse gas emissions.</li>
+              <li><strong>Vital:</strong> major accidents include Chernobyl, Fukushima, and Three Mile Island.</li>
+              <li><strong>Vital:</strong> nuclear waste is toxic and difficult to manage long term.</li>
+              <li><strong>Vital:</strong> nuclear energy is used mainly for electricity generation.</li>
+              <li><strong>Okay:</strong> fusion energy is experimental.</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="sample-grid" style="margin-top: 18px;">
+          <article class="sample-card">
+            <span class="label">submitted shape</span>
+            <h3>A RAG answer is prose plus citation indices</h3>
+            <p>The <code>citations</code> values point into the zero-indexed <code>references</code> array.</p>
+            <pre class="code-block"><code>{
   "metadata": {
     "team_id": "example-team",
-    "run_id": "title-bm25-rag-v1",
+    "run_id": "sample-q58-rag-v1",
     "type": "automatic",
-    "narrative_id": "2026-001",
-    "title": "Health impacts of wildfire smoke exposure",
-    "narrative": "Summarize the reported health impacts of wildfire smoke exposure and identify which groups were most affected.",
-    "prompt": "Answer using only the provided ClimbMix evidence."
+    "narrative_id": "58",
+    "title": "Nuclear energy benefits, risks, and comparisons",
+    "prompt": "Answer using only selected ClimbMix evidence."
   },
   "references": [
-    "shard_01789_3390",
-    "shard_02144_1022",
-    "shard_04418_2207"
+    "shard_05975_34428",
+    "shard_04044_42652",
+    "shard_05087_1995"
   ],
   "answer": [
     {
-      "text": "The selected evidence links wildfire smoke exposure to respiratory health impacts, with children, older adults, and people with pre-existing conditions described as higher-risk groups.",
-      "citations": [0, 1]
+      "text": "Nuclear energy is mainly used to generate electricity, commonly through fission reactors that produce heat for power generation.",
+      "citations": [1]
     },
     {
-      "text": "The response evidence describes public-health guidance and temporary protective measures rather than a single permanent policy fix.",
-      "citations": [2]
+      "text": "Its climate advantage is low direct greenhouse-gas emissions compared with fossil-fuel generation, but the answer also needs to discuss waste, safety controls, and accident risks.",
+      "citations": [0, 1]
     }
   ]
 }</code></pre>
           </article>
-        </div>
-      </section>
-
-      <section id="evaluation" class="section-panel" aria-labelledby="evaluation-title">
-        <div class="section-kicker">Evaluation</div>
-        <h2 id="evaluation-title">How To Think About Grading</h2>
-        <p class="lede">Think of grading as two linked questions: did the system find evidence that covers the need, and did the final answer make only claims that the evidence can support?</p>
-        <div class="card-grid">
-          <article class="note-card blue">
-            <h3>Retrieval relevance is facet-aware</h3>
-            <p>A document can be more valuable if it helps answer multiple parts of a long narrative, such as causes, impacts, timelines, and affected groups. A narrower document can still be useful, but broad facet coverage often matters more than matching one phrase exactly.</p>
+          <article class="sample-card">
+            <span class="label blue">second topic</span>
+            <h3>Korean War example</h3>
+            <p>Qid <code>213</code> asks about origins, ending, US involvement, Cold War strategy, US politics, major errors, and presidential views. It has 50 organizer nuggets.</p>
+            <ul class="sample-list">
+              <li><strong>Vital:</strong> North Korea invaded South Korea on June 25, 1950.</li>
+              <li><strong>Vital:</strong> the Truman Doctrine aimed to contain communism.</li>
+              <li><strong>Vital:</strong> the US underestimated Chinese intervention risk.</li>
+            </ul>
           </article>
-          <article class="note-card green">
-            <h3>RAG quality is coverage plus support</h3>
-            <p>A strong answer covers the important pieces of the information need and cites evidence that actually supports each factual claim. Fluency helps readers, but it does not compensate for missing facets or weak citations.</p>
-          </article>
-          <article class="note-card rose">
-            <h3>Uncited claims create risk</h3>
-            <p>Uncited factual claims are liabilities. Connective prose may not always need citations, but factual answer claims should be cited or removed before submission.</p>
-          </article>
-          <article class="note-card teal">
-            <h3>Check the chain</h3>
-            <p>For each sentence, ask: is this part of the topic important, is the statement factual, and do the cited references say the same thing? If any answer is no, revise the answer or replace the evidence.</p>
+          <article class="sample-card">
+            <span class="label coral">how to use samples</span>
+            <h3>Evaluate by facets</h3>
+            <p>Use qrels to inspect retrieved evidence, nuggets to inspect coverage, and answer JSON to inspect whether each factual sentence cites actual support.</p>
           </article>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section id="appendix" class="section-panel" aria-labelledby="appendix-title">
-        <div class="section-kicker">Appendix</div>
-        <h2 id="appendix-title">Appendix</h2>
-        <p class="lede">Use the appendix for exact formats, terminology, and source references after reading the main guide.</p>
-        <div class="callout">
-          The 2026 task and development descriptions in this briefing are grounded in local <code>trec-rag-skills/.../references/</code> and <code>trec-rag-data/trec-rag-2026/development-data/</code> files, with public links below for official track context and 2025 source material.
+    <section id="year-2025">
+      <div class="shell">
+        <div class="section-head">
+          <h2>The 2025 Lesson Library</h2>
+          <p>The 2025 interactive report is the deeper technique map. This briefing uses it as a source of build patterns, not as a single leaderboard story.</p>
+        </div>
+        <div class="pattern-grid">
+          <article class="pattern-card">
+            <span class="label">coverage ledger</span>
+            <h3>Long narratives hide many needs</h3>
+            <p>Decompose the narrative into coverage slots and track which slots have strong evidence.</p>
+          </article>
+          <article class="pattern-card">
+            <span class="label blue">hybrid retrieval</span>
+            <h3>Keep several search signals alive</h3>
+            <p>BM25, dense retrieval, learned sparse retrieval, HyDE, and RRF can contribute different useful evidence.</p>
+          </article>
+          <article class="pattern-card">
+            <span class="label coral">evidence cards</span>
+            <h3>Compress before writing</h3>
+            <p>Turn passages into source-linked facts or cards before asking the model for polished prose.</p>
+          </article>
+          <article class="pattern-card">
+            <span class="label gold">dual evaluation</span>
+            <h3>Citation support is not coverage</h3>
+            <p>A cautious answer can be well supported and still miss vital nuggets, so evaluate both lenses.</p>
+          </article>
+        </div>
+        <div class="leaderboard-note">
+          <strong>Where to go deeper:</strong> open <a href="trec-rag-2025-writeups/interactive-writeup.html">the 2025 interactive writeup</a> for team dossiers, leaderboards, architecture figures, and a reusable playbook.
+        </div>
+      </div>
+    </section>
+
+    <section id="pipeline">
+      <div class="shell">
+        <div class="section-head">
+          <h2>The 2026 Build Pipeline</h2>
+          <p>Click a stage to see how I would turn the briefing into a concrete system. This is the shortest practical path from baseline to cited answers.</p>
+        </div>
+        <div class="pipeline-layout">
+          <div class="pipeline-diagram" aria-label="Interactive 2026 RAG pipeline">
+            <button class="stage-button active" type="button" data-step="baseline"><strong>1. Baseline</strong><span>Run title-first BM25 and keep it as the control.</span></button>
+            <button class="stage-button" type="button" data-step="coverage"><strong>2. Coverage</strong><span>Split narratives into facets only when the request is broad.</span></button>
+            <button class="stage-button" type="button" data-step="retrieve"><strong>3. Retrieve</strong><span>Fuse direct, facet, and optional dense results.</span></button>
+            <button class="stage-button" type="button" data-step="select"><strong>4. Select Evidence</strong><span>Choose passages or cards that cover distinct needs.</span></button>
+            <button class="stage-button" type="button" data-step="generate"><strong>5. Generate</strong><span>Write sentence-level answer claims with citations.</span></button>
+            <button class="stage-button" type="button" data-step="evaluate"><strong>6. Evaluate</strong><span>Score retrieval, coverage, support, and missing facets separately.</span></button>
+          </div>
+          <div class="pipeline-panel" id="pipelinePanel" role="status" aria-live="polite">
+            <span class="label">Stage 1</span>
+            <h3>Baseline with title-first BM25</h3>
+            <p>Run the title query directly against ClimbMix BM25. This creates a cheap, debuggable control run before adding decomposition, dense retrieval, reranking, or generation complexity.</p>
+            <p><strong>Log:</strong> query text, docid, rank, score, and whether each top document covers a real narrative facet.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="implementation-kit">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Implementation Kit</h2>
+          <p>Keep these small data structures and experiments visible. They make it easier to debug whether retrieval, evidence selection, or generation caused a failure.</p>
+        </div>
+        <div class="kit-grid">
+          <article class="kit-card">
+            <span class="label">schema</span>
+            <h3>NarrativeNeed</h3>
+            <pre class="code-block"><code>{
+  "qid": "58",
+  "need": "major nuclear accidents and impacts",
+  "importance": "vital",
+  "status": "covered|weak|missing"
+}</code></pre>
+          </article>
+          <article class="kit-card">
+            <span class="label blue">schema</span>
+            <h3>EvidenceCard</h3>
+            <pre class="code-block"><code>{
+  "docid": "shard_05975_34428",
+  "need": "climate impact",
+  "claim": "Nuclear power has low direct greenhouse gas emissions.",
+  "support_span": "short local excerpt or passage pointer"
+}</code></pre>
+          </article>
+          <article class="kit-card">
+            <span class="label coral">schema</span>
+            <h3>ClaimCitation</h3>
+            <pre class="code-block"><code>{
+  "sentence": "Nuclear energy is mainly used for electricity generation.",
+  "citations": [1],
+  "support_label": "supported"
+}</code></pre>
+          </article>
+        </div>
+        <div class="table-wrap" aria-label="Experiment ladder">
+          <table>
+            <thead>
+              <tr>
+                <th>Experiment</th>
+                <th>What It Tests</th>
+                <th>Keep It If</th>
+                <th>Failure Risk</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>BM25 baseline</td><td>Exact-term evidence</td><td>It finds useful docids for entity-heavy topics.</td><td>Vocabulary mismatch.</td></tr>
+              <tr><td>Facet searches</td><td>Coverage of multi-part narratives</td><td>They add distinct relevant docs.</td><td>Query drift.</td></tr>
+              <tr><td>Hybrid retrieval</td><td>Complementary lexical and semantic signals</td><td>It adds unique useful evidence.</td><td>Noisy fusion.</td></tr>
+              <tr><td>Evidence cards</td><td>Cleaner generation input</td><td>They preserve rare but vital facts.</td><td>Compression loss.</td></tr>
+              <tr><td>Citation-first generation</td><td>Claim support</td><td>It improves support without collapsing coverage.</td><td>Safe but incomplete answers.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="evaluation">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Evaluation: Coverage Plus Support</h2>
+          <p>Think of grading as two linked questions: did the system find evidence that covers the need, and did the final answer make only claims that evidence can support?</p>
+        </div>
+        <div class="task-grid">
+          <article class="task-card">
+            <span class="label">retrieval</span>
+            <h3>Facet-aware relevance</h3>
+            <p>A document can be valuable if it answers several parts of a long narrative, even if it is not the best match for one exact phrase.</p>
+          </article>
+          <article class="task-card">
+            <span class="label blue">generation</span>
+            <h3>Readable answer quality</h3>
+            <p>RAG output should be human-readable prose with citations, not only a list of cited chunks.</p>
+          </article>
+          <article class="task-card">
+            <span class="label coral">support</span>
+            <h3>Every citation must prove the claim</h3>
+            <p>Related text is not enough. A citation should support the specific sentence it is attached to.</p>
+          </article>
+        </div>
+        <div class="leaderboard-note">
+          <strong>Citation support is not coverage:</strong> a short answer can cite every sentence correctly and still miss vital nuggets. A long answer can cover many nuggets and still contain unsupported citations. Track both.
+        </div>
+      </div>
+    </section>
+
+    <section id="failure-diagnosis">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Failure Diagnosis</h2>
+          <p>When a run looks bad, name the failure before adding another model. Most issues fall into a small set of repeatable patterns.</p>
+        </div>
+        <div class="diagnosis-grid">
+          <article class="diagnosis-card">
+            <span class="label">missing facet</span>
+            <h3>Answer is fluent but incomplete</h3>
+            <ul class="diagnosis-list">
+              <li><strong>Likely cause:</strong> direct query over-weighted the easiest part of the narrative.</li>
+              <li><strong>Fix:</strong> add a coverage ledger and retrieve for weak facets.</li>
+            </ul>
+          </article>
+          <article class="diagnosis-card">
+            <span class="label blue">query drift</span>
+            <h3>Decomposition retrieves generic pages</h3>
+            <ul class="diagnosis-list">
+              <li><strong>Likely cause:</strong> subqueries dropped the topic anchor.</li>
+              <li><strong>Fix:</strong> keep entity and topic terms from the original narrative in each facet query.</li>
+            </ul>
+          </article>
+          <article class="diagnosis-card">
+            <span class="label coral">citation decoration</span>
+            <h3>Citations are topical but not proving</h3>
+            <ul class="diagnosis-list">
+              <li><strong>Likely cause:</strong> citations were attached after drafting.</li>
+              <li><strong>Fix:</strong> generate claim-source pairs and reject unsupported claims before final prose.</li>
+            </ul>
+          </article>
+        </div>
+        <div class="table-wrap" aria-label="Failure diagnosis table">
+          <table>
+            <thead>
+              <tr>
+                <th>Symptom</th>
+                <th>Likely Cause</th>
+                <th>Debug Signal</th>
+                <th>Repair</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>High retrieval score, weak answer</td><td>Evidence was unorganized</td><td>Generator prompt has many duplicate passages</td><td>Use evidence cards or nuggets before generation.</td></tr>
+              <tr><td>High support, low coverage</td><td>Answer is too cautious</td><td>Many vital nuggets absent</td><td>Force coverage check before final answer.</td></tr>
+              <tr><td>Long answer, weak citations</td><td>Unsupported synthesis</td><td>Sentences cite docs that only mention the topic</td><td>Run a sentence-level support judge.</td></tr>
+              <tr><td>Facet search hurts</td><td>Subqueries are vague</td><td>Retrieved docs answer the wrong domain</td><td>Anchor each facet with original entities.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="appendix">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Appendix</h2>
+          <p>Exact formats, local source paths, and caveats live here so the main report stays readable.</p>
         </div>
         <div class="appendix-details">
-          <details>
+          <details open>
             <summary>2026 submission formats</summary>
             <div class="appendix-body">
-              <p>Retrieval submissions use the standard six-column TREC row, one ranked document per line:</p>
-              <pre><code>topic_id Q0 docid rank score run_id</code></pre>
-              <p>RAG submissions use JSONL. Each line should keep the top-level shape of <code>metadata</code>, <code>references</code>, and <code>answer</code>. Citation indices in answer objects point into the zero-indexed <code>references</code> array.</p>
-              <pre><code>{
-  "metadata": {
-    "team_id": "example-team",
-    "run_id": "rag-run-01",
-    "type": "automatic",
-    "narrative_id": "2026-001",
-    "title": "Example topic",
-    "narrative": "Example narrative need",
-    "prompt": "Answer using only the supplied evidence."
-  },
-  "references": ["climbmix-doc-1", "climbmix-doc-2"],
-  "answer": [
-    {
-      "text": "A supported factual answer sentence.",
-      "citations": [0]
-    },
-    {
-      "text": "Another supported factual sentence.",
-      "citations": [0, 1]
-    }
-  ]
-}</code></pre>
+              <p>Retrieval submissions use the standard six-column TREC row:</p>
+              <pre class="code-block"><code>topic_id Q0 docid rank score run_id</code></pre>
+              <p>RAG submissions use JSONL with <code>metadata</code>, <code>references</code>, and <code>answer</code>. Citation indices in answer objects point into the zero-indexed <code>references</code> array.</p>
             </div>
           </details>
           <details>
             <summary>Development data mental model</summary>
             <div class="appendix-body">
-              <p>Local development data includes 22 RAG25 topics and 30 ResearchRubrics prompts. Treat them as practice material for understanding topic shape, citation behavior, and evaluator expectations.</p>
-              <p>Development qrels, short for query relevance judgments, are judged or model-generated pools for development, not exhaustive truth over all ClimbMix. They can guide experiments and error analysis, but a missing judgment does not prove that every unjudged ClimbMix document is irrelevant.</p>
-            </div>
-          </details>
-          <details>
-            <summary>Source caveats</summary>
-            <div class="appendix-body">
-              <ul class="appendix-list">
-                <li>Rankings are tied to a particular task, metric, and pool. Do not transfer a rank from Retrieval to full RAG unless the source explicitly supports that comparison.</li>
-                <li>A top Retrieval run is not automatically the top full RAG system. The answer-writing, citation, and support checks can change the end-to-end result.</li>
-                <li>Top RAG answer runs without a method writeup should be described carefully: name what the official run browser shows, but avoid inferring private pipeline details.</li>
-                <li>UTokyo <code>4method_merge</code> remains a Retrieval-task example only: useful for learning about hybrid retrieval, HyDE-style querying, fusion, and reranking, not evidence that the same run led full RAG answer quality.</li>
-              </ul>
+              <p>Local development data includes RAG25 topics, organizer nuggets, ResearchRubrics prompts, and qrels. Treat them as practice material for understanding topic shape, citation behavior, and evaluator expectations.</p>
+              <p>Development qrels are useful for experiments and error analysis, but a missing judgment does not prove that every unjudged ClimbMix document is irrelevant.</p>
             </div>
           </details>
           <details>
             <summary>Sources</summary>
             <div class="appendix-body">
               <ul class="source-list">
+                <li><code>trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv</code> for sample topic narratives.</li>
+                <li><code>trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl</code> for organizer-provided answer nuggets.</li>
+                <li><code>trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels</code> for sample ClimbMix relevance judgments.</li>
                 <li><a href="https://trec-rag.github.io/">Official TREC RAG site</a></li>
                 <li><a href="https://trec-rag.github.io/trec25/">Official 2025 TREC RAG page</a></li>
                 <li><a href="https://arxiv.org/abs/2603.09891">TREC RAG overview on arXiv</a></li>
-                <li><a href="https://trec.nist.gov/pubs/trec34/appendices/trec2025-rag-retrieval.html">NIST 2025 Retrieval appendix</a></li>
-                <li><a href="https://trec.nist.gov/pubs/trec34/papers/UTokyo.rag.pdf">UTokyo 2025 RAG track paper</a></li>
                 <li><a href="https://pages.nist.gov/trec-browser/trec34/rag/proceedings/">TREC 2025 RAG proceedings browser</a></li>
-                <li><a href="https://pages.nist.gov/trec-browser/trec34/rag/runs/">TREC 2025 RAG runs browser</a></li>
+                <li><a href="trec-rag-2025-writeups/interactive-writeup.html">Local 2025 interactive writeup report</a></li>
               </ul>
             </div>
           </details>
         </div>
-      </section>
-    </main>
-  </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      TREC RAG 2026 briefing. Pair this page with the 2025 interactive writeup for deeper method examples.
+    </div>
+  </footer>
 
   <script>
-    const sections = Array.from(document.querySelectorAll("section[id]"));
-    const navLinks = Array.from(document.querySelectorAll(".nav-link"));
-    const progressBar = document.querySelector("[role='progressbar']");
-    const progressFill = document.getElementById("progressFill");
-    const progressText = document.getElementById("progressText");
-
-    function updateProgress() {
-      const scrollable = document.documentElement.scrollHeight - window.innerHeight;
-      const progress = scrollable > 0 ? (window.scrollY / scrollable) * 100 : 0;
-      const bounded = Math.min(100, Math.max(0, progress));
-      const rounded = Math.round(bounded);
-
-      if (progressFill) {
-        progressFill.style.width = `${bounded}%`;
+    const glossary = {
+      narrative: {
+        title: "Narrative",
+        body: "A long user request with multiple aspects. Treat it as a coverage specification, not just a raw BM25 query."
+      },
+      climbmix: {
+        title: "ClimbMix",
+        body: "The 2026 evidence collection. The official unit is a ClimbMix document ID, while systems can still chunk documents internally for reading and generation."
+      },
+      document: {
+        title: "Document",
+        body: "An official ClimbMix row identified by a docid. It may be longer than the final passage you use in a prompt."
+      },
+      nugget: {
+        title: "Nugget",
+        body: "An atomic answer fact used to check whether a generated answer covers important information. Dev data provides nugget lists, not polished prose answers."
+      },
+      qrel: {
+        title: "Qrel",
+        body: "A relevance judgment row that connects a topic ID, document ID, and relevance grade. Use qrels to inspect retrieval behavior, not as exhaustive truth over the whole corpus."
+      },
+      citation: {
+        title: "Citation",
+        body: "In RAG output, a citation is an integer index pointing into the references array. It should support the specific sentence it is attached to."
       }
+    };
 
-      if (progressText) {
-        progressText.textContent = `${rounded}%`;
+    const pipeline = {
+      baseline: {
+        label: "Stage 1",
+        title: "Baseline with title-first BM25",
+        body: "Run the title query directly against ClimbMix BM25. This creates a cheap, debuggable control run before adding decomposition, dense retrieval, reranking, or generation complexity.",
+        log: "query text, docid, rank, score, and manual facet notes"
+      },
+      coverage: {
+        label: "Stage 2",
+        title: "Map the narrative into coverage slots",
+        body: "Split broad narratives into concrete needs such as benefits, risks, accident history, source comparison, or provider examples. Do this to guide retrieval and answer checking.",
+        log: "need text, importance, status, and missing evidence"
+      },
+      retrieve: {
+        label: "Stage 3",
+        title: "Retrieve and fuse candidates",
+        body: "Use direct BM25 as the anchor, then add facet searches and optional dense retrieval. Fuse only when each source adds useful evidence rather than duplicate noise.",
+        log: "which retriever found each kept doc and which need it supports"
+      },
+      select: {
+        label: "Stage 4",
+        title: "Select evidence before writing",
+        body: "Choose passages or evidence cards that cover distinct needs. Preserve source IDs through every summary or compression step.",
+        log: "selected docid, passage pointer, evidence card, and covered need"
+      },
+      generate: {
+        label: "Stage 5",
+        title: "Generate with citations attached",
+        body: "Write a human-readable answer where each substantive factual sentence carries citation indices into the ordered references list.",
+        log: "sentence, citation indices, and support check result"
+      },
+      evaluate: {
+        label: "Stage 6",
+        title: "Evaluate coverage and support separately",
+        body: "Check whether the answer covers vital nuggets and whether each citation proves its attached sentence. Do not optimize one lens while ignoring the other.",
+        log: "missing nuggets, unsupported claims, and repair decisions"
       }
+    };
 
-      if (progressBar) {
-        progressBar.setAttribute("aria-valuenow", String(rounded));
-      }
-    }
-
-    function updateActiveNav() {
-      if (!sections.length || !navLinks.length) {
-        return;
-      }
-
-      const offset = window.innerHeight * 0.32;
-      let currentId = sections[0]?.id;
-
-      for (const section of sections) {
-        const top = section.getBoundingClientRect().top;
-        if (top <= offset) {
-          currentId = section.id;
-        }
-      }
-
-      navLinks.forEach((link) => {
-        const isActive = link.getAttribute("href") === `#${currentId}`;
-        link.classList.toggle("active", isActive);
-        if (isActive) {
-          link.setAttribute("aria-current", "page");
-        } else {
-          link.removeAttribute("aria-current");
-        }
+    function showGlossary(term) {
+      const item = glossary[term];
+      const panel = document.getElementById("glossaryPanel");
+      panel.innerHTML = `<span class="label">Glossary</span><h3>${item.title}</h3><p>${item.body}</p>`;
+      document.querySelectorAll("[data-term]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.term === term);
       });
     }
 
-    function updateScrollState() {
-      updateProgress();
-      updateActiveNav();
-    }
-
-    function initTabs() {
-      const tabContainers = Array.from(document.querySelectorAll(".tabs"));
-
-      if (!tabContainers.length) {
-        return;
-      }
-
-      tabContainers.forEach((container) => {
-        const tabButtons = Array.from(container.querySelectorAll("[data-tab]"));
-
-        if (!tabButtons.length) {
-          return;
-        }
-
-        function getControlledPanel(button) {
-          const panelId = button.getAttribute("aria-controls");
-          const panel = panelId ? document.getElementById(panelId) : null;
-          return panel && container.contains(panel) ? panel : null;
-        }
-
-        function activateTab(activeButton) {
-          tabButtons.forEach((button) => {
-            const isActive = button === activeButton;
-            const panel = getControlledPanel(button);
-            button.classList.toggle("is-active", isActive);
-            button.setAttribute("aria-selected", String(isActive));
-            if (panel) {
-              panel.hidden = !isActive;
-            }
-          });
-        }
-
-        tabButtons.forEach((button) => {
-          button.addEventListener("click", () => activateTab(button));
-        });
-
-        const selected = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
-        activateTab(selected || tabButtons[0]);
+    function selectPipelineStep(step) {
+      const item = pipeline[step];
+      const panel = document.getElementById("pipelinePanel");
+      panel.innerHTML = `<span class="label">${item.label}</span><h3>${item.title}</h3><p>${item.body}</p><p><strong>Log:</strong> ${item.log}.</p>`;
+      document.querySelectorAll("[data-step]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.step === step);
       });
     }
 
-    window.addEventListener("scroll", updateScrollState, { passive: true });
-    window.addEventListener("resize", updateScrollState);
-    initTabs();
-    updateScrollState();
+    document.querySelectorAll("[data-term]").forEach((button) => {
+      button.addEventListener("click", () => showGlossary(button.dataset.term));
+    });
+
+    document.querySelectorAll("[data-step]").forEach((button) => {
+      button.addEventListener("click", () => selectPipelineStep(button.dataset.step));
+    });
   </script>
 </body>
 </html>

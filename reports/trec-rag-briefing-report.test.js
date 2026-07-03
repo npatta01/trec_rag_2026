@@ -1,0 +1,102 @@
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = __dirname;
+const htmlPath = path.join(root, "trec-rag-briefing-report.html");
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+assert(fs.existsSync(htmlPath), "trec-rag-briefing-report.html should exist");
+
+const html = fs.readFileSync(htmlPath, "utf8");
+
+const requiredSections = [
+  'id="start-here"',
+  'id="plain-english"',
+  'id="climbmix"',
+  'id="samples"',
+  'id="year-2025"',
+  'id="pipeline"',
+  'id="implementation-kit"',
+  'id="evaluation"',
+  'id="failure-diagnosis"',
+  'id="appendix"',
+];
+
+for (const section of requiredSections) {
+  assert(html.includes(section), `Missing required briefing section ${section}`);
+}
+
+const requiredStyleSignals = [
+  "TREC RAG 2026 Briefing",
+  "class=\"topbar\"",
+  "class=\"hero\"",
+  "class=\"shell hero-grid\"",
+  "class=\"route-grid\"",
+  "class=\"label",
+  "class=\"button primary\"",
+  "class=\"pipeline-diagram\"",
+  "class=\"stage-button",
+  "class=\"definition-panel\"",
+  "class=\"leaderboard-note\"",
+  "class=\"code-block\"",
+];
+
+for (const signal of requiredStyleSignals) {
+  assert(html.includes(signal), `Missing 2025-style signal: ${signal}`);
+}
+
+const requiredContentSignals = [
+  "Start Here: How to Use This Briefing",
+  "RAG In Plain English",
+  "ClimbMix is the 2026 evidence collection",
+  "Sample Documents And Organizer Answers",
+  "RAG25 dev qid 58",
+  "shard_05975_34428",
+  "sample-q58-rag-v1",
+  "The 2025 Lesson Library",
+  "The 2026 Build Pipeline",
+  "Implementation Kit",
+  "Failure Diagnosis",
+  "Citation support is not coverage",
+  "trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv",
+  "trec-rag-2025-writeups/interactive-writeup.html",
+];
+
+for (const signal of requiredContentSignals) {
+  assert(html.includes(signal), `Missing briefing content signal: ${signal}`);
+}
+
+const requiredInteractions = [
+  'data-term="narrative"',
+  'data-term="nugget"',
+  'data-step="baseline"',
+  'data-step="coverage"',
+  "function showGlossary",
+  "function selectPipelineStep",
+  "addEventListener",
+];
+
+for (const signal of requiredInteractions) {
+  assert(html.includes(signal), `Missing interaction signal: ${signal}`);
+}
+
+const forbiddenSignals = [
+  'class="sidebar"',
+  'class="layout"',
+  "PYSERINI_API_TOKEN",
+  "Authorization",
+  "Bearer ",
+  "TODO",
+  "placeholder",
+];
+
+for (const signal of forbiddenSignals) {
+  assert(!html.includes(signal), `Briefing should not include ${signal}`);
+}
+
+console.log("trec-rag-briefing-report smoke test passed");
