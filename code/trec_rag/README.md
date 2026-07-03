@@ -14,6 +14,8 @@ by responsibility:
 
 Inputs:
 
+- `.env.example` includes the public hosted endpoint defaults; copy it to a
+  local `.env` and fill in `PYSERINI_API_TOKEN`
 - endpoint environment: set `INDEX_URL`; or set `PYSERINI_INDEX` and
   `PYSERINI_BASE_URL`; or use the aliases `DEFAULT_INDEX` and
   `DEFAULT_BASE_URL`

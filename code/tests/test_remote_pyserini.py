@@ -9,6 +9,7 @@ from trec_rag.remote_pyserini import (
     RemotePyseriniClient,
     RemotePyseriniConfig,
     extract_text,
+    load_dotenv,
     load_repo_env,
     normalize_candidates,
 )
@@ -122,6 +123,27 @@ def test_load_repo_env_keeps_existing_environment_values(tmp_path, monkeypatch):
 
     assert os.environ["PYSERINI_API_TOKEN"] == "from-process"
     assert os.environ["INDEX_URL"] == "http://local/v1/climbmix-400b/search"
+
+
+def test_env_example_contains_public_remote_defaults(monkeypatch):
+    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    for key in (
+        "DEFAULT_BASE_URL",
+        "DEFAULT_INDEX",
+        "EXTERNAL_PYSERINI_HITS",
+        "INDEX_URL",
+        "PYSERINI_API_TOKEN",
+        "PYSERINI_BASE_URL",
+        "PYSERINI_INDEX",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    load_dotenv(env_example)
+    config = RemotePyseriniConfig.from_env()
+
+    assert config.index_url == "http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search"
+    assert config.api_token == ""
+    assert config.hits == 5
 
 
 def test_client_builds_authenticated_search_request():
