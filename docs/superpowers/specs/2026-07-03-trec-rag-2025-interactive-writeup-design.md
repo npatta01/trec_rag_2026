@@ -6,8 +6,8 @@ Build a single self-contained HTML page that explains the TREC RAG 2025 team app
 
 ## Artifact
 
-- Create `docs/trec-rag-2025-writeups/interactive-writeup.html`.
-- Create `docs/trec-rag-2025-writeups/interactive-writeup.test.js` as a lightweight smoke test.
+- Create `reports/trec-rag-2025-writeups/interactive-writeup.html`.
+- Create `reports/trec-rag-2025-writeups/interactive-writeup.test.js` as a lightweight smoke test.
 - Do not require a dev server, package install, or build step.
 
 ## Audience
@@ -49,7 +49,7 @@ The page should feel like a clean research briefing, not an academic PDF. Use a 
 
 ## Source Grounding
 
-Use the official local PDF collection and manifest in `docs/trec-rag-2025-writeups/`. Include links to the local PDFs and official NIST proceedings pages. Note that the participant roster has additional run submitters without official proceedings PDFs.
+Use the official local PDF collection and manifest in `reports/trec-rag-2025-writeups/`. Include links to the local PDFs and official NIST proceedings pages. Note that the participant roster has additional run submitters without official proceedings PDFs.
 
 ## Verification
 

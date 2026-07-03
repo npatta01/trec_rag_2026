@@ -15,7 +15,7 @@ The primary reader is technically comfortable but new to information retrieval a
 Create a single self-contained HTML file:
 
 ```text
-trec-rag-briefing-report.html
+reports/trec-rag-briefing-report.html
 ```
 
 The file should run directly in a browser without a build step or server. It should include embedded CSS and JavaScript for navigation, expandable examples, and lightweight interactivity.

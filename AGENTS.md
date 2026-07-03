@@ -5,7 +5,9 @@ coding agent working in this repository.
 
 ## Repository Shape
 
-- Keep source-backed reports under `docs/`.
+- Keep source-backed reports under `reports/`.
+- Keep design notes, implementation plans, and agent process records under
+  `docs/superpowers/`.
 - Keep reusable implementation code under `code/`.
 - Keep temporary files, downloaded scratch data, and local servers out of git.
 - Prefer one shared instruction file over tool-specific behavior. If a
@@ -43,4 +45,3 @@ coding agent working in this repository.
 - Do not commit local scratch files, secrets, server logs, or unrelated user
   changes.
 - Use concise commits that describe the user-facing change.
-

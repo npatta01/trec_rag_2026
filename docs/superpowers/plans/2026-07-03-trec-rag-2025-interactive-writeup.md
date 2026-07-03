@@ -13,7 +13,7 @@
 ### Task 1: Smoke Test
 
 **Files:**
-- Create: `docs/trec-rag-2025-writeups/interactive-writeup.test.js`
+- Create: `reports/trec-rag-2025-writeups/interactive-writeup.test.js`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -21,15 +21,15 @@ Create a Node script that reads `interactive-writeup.html`, verifies required se
 
 - [ ] **Step 2: Run the test and verify it fails**
 
-Run: `node docs/trec-rag-2025-writeups/interactive-writeup.test.js`
+Run: `node reports/trec-rag-2025-writeups/interactive-writeup.test.js`
 
 Expected: failure because `interactive-writeup.html` does not exist yet.
 
 ### Task 2: Static Interactive Page
 
 **Files:**
-- Create: `docs/trec-rag-2025-writeups/interactive-writeup.html`
-- Modify: `docs/trec-rag-2025-writeups/README.md`
+- Create: `reports/trec-rag-2025-writeups/interactive-writeup.html`
+- Modify: `reports/trec-rag-2025-writeups/README.md`
 
 - [ ] **Step 1: Build the HTML page**
 
@@ -45,18 +45,18 @@ Add a short README entry pointing to `interactive-writeup.html`.
 
 - [ ] **Step 3: Run the smoke test**
 
-Run: `node docs/trec-rag-2025-writeups/interactive-writeup.test.js`
+Run: `node reports/trec-rag-2025-writeups/interactive-writeup.test.js`
 
 Expected: pass.
 
 ### Task 3: Browser Verification
 
 **Files:**
-- Verify: `docs/trec-rag-2025-writeups/interactive-writeup.html`
+- Verify: `reports/trec-rag-2025-writeups/interactive-writeup.html`
 
 - [ ] **Step 1: Open with a local static server**
 
-Run: `python3 -m http.server 8765 --directory docs/trec-rag-2025-writeups`
+Run: `python3 -m http.server 8765 --directory reports/trec-rag-2025-writeups`
 
 Expected: page available at `http://127.0.0.1:8765/interactive-writeup.html`.
 

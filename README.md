@@ -5,8 +5,8 @@ implementation patterns.
 
 ## Current Contents
 
-- `trec-rag-briefing-report.html` - earlier standalone briefing report.
-- `docs/trec-rag-2025-writeups/` - standalone interactive report for the
+- `reports/trec-rag-briefing-report.html` - earlier standalone briefing report.
+- `reports/trec-rag-2025-writeups/` - standalone interactive report for the
   TREC RAG 2025 team writeups, downloaded PDFs, extracted figures, source
   manifest, and smoke test.
 - `docs/superpowers/` - design and implementation notes produced while building
