@@ -17,8 +17,8 @@ implementation patterns.
 ## Agent Workflow
 
 This repo is intended to be usable by both Codex and Claude. Shared agent
-instructions live in `AGENTS.md`; `CLAUDE.md` points Claude to the same contract
-so the two tools do not drift.
+instructions live in `AGENTS.md`; `CLAUDE.md` is a symlink to that file so the
+two tools do not drift.
 
 Before changing generated reports, run the relevant local smoke tests and, when
 touching rendered UI, use Playwright screenshots at desktop and mobile widths.
