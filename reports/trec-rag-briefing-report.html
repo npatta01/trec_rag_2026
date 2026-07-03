@@ -1099,16 +1099,17 @@
         <article class="sample-card" style="margin-top: 18px;">
           <span class="label blue">document record</span>
           <h3>What a retrieved ClimbMix document actually looks like</h3>
-          <p>A ClimbMix document is not a pre-cut answer passage. The hosted Pyserini API returns a document record with metadata plus one long <code>doc</code> text field. For this short qid 58 example, the full <code>doc</code> field is 552 words.</p>
+          <p>A ClimbMix document is not a pre-cut answer passage. The hosted Pyserini API returns a document record with metadata plus one long <code>doc</code> text field. For this short qid 58 example, the full <code>doc</code> field is 552 words; the report shows a complete short excerpt plus a paraphrased outline rather than embedding the entire raw web-corpus text.</p>
           <pre class="code-block"><code>{
   "api": "v1",
   "index": "climbmix-400b",
   "docid": "shard_04044_42652",
-  "doc": "Fission reactions occur when heavy atomic nuclei, such as uranium-235, are bombarded by neutrons, causing them to become highly unstable. ..."
+  "doc_excerpt_20_words": "Fission reactions occur when heavy atomic nuclei, such as uranium-235, are bombarded by neutrons, causing them to become highly unstable."
 }</code></pre>
           <ul class="sample-list">
             <li><strong>Official ID:</strong> cite or submit the parent docid, here <code>shard_04044_42652</code>.</li>
             <li><strong>Stored text:</strong> the <code>doc</code> field is the full source text returned for that ClimbMix document, not a generated summary.</li>
+            <li><strong>Document outline:</strong> this record explains nuclear fission basics, reactor designs, electricity generation, safety controls, waste issues, and the tradeoffs of nuclear power as a low-carbon energy source.</li>
             <li><strong>Local passage work:</strong> a system can chunk this text internally, but outputs should still trace back to the official ClimbMix docid.</li>
             <li><strong>Fetch pattern:</strong> <code>GET /v1/climbmix-400b/doc/shard_04044_42652</code> retrieves the complete record through the Pyserini REST service.</li>
           </ul>
