@@ -519,6 +519,57 @@
       color: var(--text);
     }
 
+    .appendix-details {
+      display: grid;
+      gap: 14px;
+      margin-top: 24px;
+    }
+
+    .appendix-details details {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #ffffff;
+    }
+
+    .appendix-details summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      color: var(--text);
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    .appendix-details summary:focus-visible {
+      background: var(--surface-muted);
+      outline: none;
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+
+    .appendix-body {
+      display: grid;
+      gap: 12px;
+      padding: 0 16px 16px;
+      color: var(--muted);
+      font-size: 0.94rem;
+      line-height: 1.62;
+    }
+
+    .appendix-body p,
+    .appendix-body ul {
+      margin: 0;
+    }
+
+    .appendix-list,
+    .source-list {
+      display: grid;
+      gap: 9px;
+      padding-left: 1.15rem;
+    }
+
+    .source-list a {
+      overflow-wrap: anywhere;
+    }
+
     .table-wrap {
       width: 100%;
       margin-top: 24px;
@@ -1117,19 +1168,23 @@ better = "public health responses to wildfire smoke exposure"</code></pre>
       <section id="evaluation" class="section-panel" aria-labelledby="evaluation-title">
         <div class="section-kicker">Evaluation</div>
         <h2 id="evaluation-title">How To Think About Grading</h2>
-        <p class="lede">The evaluation section should help readers distinguish answer quality, evidence quality, and the connection between the two.</p>
+        <p class="lede">Think of grading as two linked questions: did the system find evidence that covers the need, and did the final answer make only claims that the evidence can support?</p>
         <div class="card-grid">
+          <article class="note-card blue">
+            <h3>Retrieval relevance is facet-aware</h3>
+            <p>A document can be more valuable if it helps answer multiple parts of a long narrative, such as causes, impacts, timelines, and affected groups. A narrower document can still be useful, but broad facet coverage often matters more than matching one phrase exactly.</p>
+          </article>
           <article class="note-card green">
-            <h3>Grounding</h3>
-            <p>Every important claim should be traceable to the cited evidence, not merely plausible.</p>
+            <h3>RAG quality is coverage plus support</h3>
+            <p>A strong answer covers the important pieces of the information need and cites evidence that actually supports each factual claim. Fluency helps readers, but it does not compensate for missing facets or weak citations.</p>
           </article>
           <article class="note-card rose">
-            <h3>Completeness</h3>
-            <p>A high-quality answer covers the user need without adding unsupported extras or skipping key facets.</p>
+            <h3>Uncited claims create risk</h3>
+            <p>Uncited factual claims are liabilities. Connective prose may not always need citations, but factual answer claims should be cited or removed before submission.</p>
           </article>
-          <article class="note-card blue">
-            <h3>Usefulness</h3>
-            <p>Readable structure, calibrated confidence, and concise synthesis make evidence easier to act on.</p>
+          <article class="note-card teal">
+            <h3>Check the chain</h3>
+            <p>For each sentence, ask: is this part of the topic important, is the statement factual, and do the cited references say the same thing? If any answer is no, revise the answer or replace the evidence.</p>
           </article>
         </div>
       </section>
@@ -1139,7 +1194,71 @@ better = "public health responses to wildfire smoke exposure"</code></pre>
         <h2 id="appendix-title">Appendix</h2>
         <p class="lede">Use the appendix for exact formats, terminology, and source references after reading the main guide.</p>
         <div class="callout">
-          Start with the <a href="https://trec-rag.github.io/">Official TREC RAG site</a> for current track information. The later source section adds task documents, run notes, metric definitions, and terminology.
+          The 2026 task and development descriptions in this briefing are grounded in local <code>trec-rag-skills/.../references/</code> and <code>trec-rag-data/trec-rag-2026/development-data/</code> files, with public links below for official track context and 2025 source material.
+        </div>
+        <div class="appendix-details">
+          <details>
+            <summary>2026 submission formats</summary>
+            <div class="appendix-body">
+              <p>Retrieval submissions use the standard six-column TREC row, one ranked document per line:</p>
+              <pre><code>topic_id Q0 docid rank score run_id</code></pre>
+              <p>RAG submissions use JSONL. Each line should keep the top-level shape of <code>metadata</code>, <code>references</code>, and <code>answer</code>. Citation indices in answer objects point into the zero-indexed <code>references</code> array.</p>
+              <pre><code>{
+  "metadata": {
+    "team_id": "example-team",
+    "run_id": "rag-run-01",
+    "type": "automatic",
+    "narrative_id": "2026-001",
+    "title": "Example topic",
+    "narrative": "Example narrative need",
+    "prompt": "Answer using only the supplied evidence."
+  },
+  "references": ["climbmix-doc-1", "climbmix-doc-2"],
+  "answer": [
+    {
+      "text": "A supported factual answer sentence.",
+      "citations": [0]
+    },
+    {
+      "text": "Another supported factual sentence.",
+      "citations": [0, 1]
+    }
+  ]
+}</code></pre>
+            </div>
+          </details>
+          <details>
+            <summary>Development data mental model</summary>
+            <div class="appendix-body">
+              <p>Local development data includes 22 RAG25 topics and 30 ResearchRubrics prompts. Treat them as practice material for understanding topic shape, citation behavior, and evaluator expectations.</p>
+              <p>Development qrels, short for query relevance judgments, are judged or model-generated pools for development, not exhaustive truth over all ClimbMix. They can guide experiments and error analysis, but a missing judgment does not prove that every unjudged ClimbMix document is irrelevant.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Source caveats</summary>
+            <div class="appendix-body">
+              <ul class="appendix-list">
+                <li>Rankings are tied to a particular task, metric, and pool. Do not transfer a rank from Retrieval to full RAG unless the source explicitly supports that comparison.</li>
+                <li>A top Retrieval run is not automatically the top full RAG system. The answer-writing, citation, and support checks can change the end-to-end result.</li>
+                <li>Top RAG answer runs without a method writeup should be described carefully: name what the official run browser shows, but avoid inferring private pipeline details.</li>
+                <li>UTokyo <code>4method_merge</code> remains a Retrieval-task example only: useful for learning about hybrid retrieval, HyDE-style querying, fusion, and reranking, not evidence that the same run led full RAG answer quality.</li>
+              </ul>
+            </div>
+          </details>
+          <details>
+            <summary>Sources</summary>
+            <div class="appendix-body">
+              <ul class="source-list">
+                <li><a href="https://trec-rag.github.io/">Official TREC RAG site</a></li>
+                <li><a href="https://trec-rag.github.io/trec25/">Official 2025 TREC RAG page</a></li>
+                <li><a href="https://arxiv.org/abs/2603.09891">TREC RAG overview on arXiv</a></li>
+                <li><a href="https://trec.nist.gov/pubs/trec34/appendices/trec2025-rag-retrieval.html">NIST 2025 Retrieval appendix</a></li>
+                <li><a href="https://trec.nist.gov/pubs/trec34/papers/UTokyo.rag.pdf">UTokyo 2025 RAG track paper</a></li>
+                <li><a href="https://pages.nist.gov/trec-browser/trec34/rag/proceedings/">TREC 2025 RAG proceedings browser</a></li>
+                <li><a href="https://pages.nist.gov/trec-browser/trec34/rag/runs/">TREC 2025 RAG runs browser</a></li>
+              </ul>
+            </div>
+          </details>
         </div>
       </section>
     </main>
