@@ -41,6 +41,8 @@ for (const section of requiredSections) {
 
 assert(html.includes('rel="icon"'), "Standalone report should include an inline favicon");
 assert(html.includes("data:image/svg+xml"), "Standalone report favicon should not request /favicon.ico");
+assert(html.includes("Reports Home"), "2025 report should link back to the common reports index");
+assert(html.includes('href="../index.html"'), "2025 report home link should point to reports/index.html");
 
 const teamEntries = [...html.matchAll(/class="team-card"/g)];
 assert(teamEntries.length === 15, `Expected 15 team cards, found ${teamEntries.length}`);

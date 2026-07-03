@@ -5,7 +5,9 @@ implementation patterns.
 
 ## Current Contents
 
-- `reports/trec-rag-briefing-report.html` - earlier standalone briefing report.
+- `reports/index.html` - common entrypoint for the interactive reports.
+- `reports/trec-rag-briefing-report.html` - interactive 2026 briefing report
+  covering ClimbMix, sample documents, answer nuggets, and solution strategy.
 - `reports/trec-rag-2025-writeups/` - standalone interactive report for the
   TREC RAG 2025 team writeups, downloaded PDFs, extracted figures, source
   manifest, and smoke test.
@@ -22,3 +24,10 @@ two tools do not drift.
 
 Before changing generated reports, run the relevant local smoke tests and, when
 touching rendered UI, use Playwright screenshots at desktop and mobile widths.
+The current report smoke tests are:
+
+```bash
+node reports/index.test.js
+node reports/trec-rag-briefing-report.test.js
+node reports/trec-rag-2025-writeups/interactive-writeup.test.js
+```

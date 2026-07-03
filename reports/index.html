@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TREC RAG Reports</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23126b61'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Arial' font-size='34' font-weight='700' fill='white'%3ER%3C/text%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #f7f8f6;
+      --paper: #ffffff;
+      --ink: #17201c;
+      --muted: #66736c;
+      --line: #dfe5df;
+      --line-strong: #b8c5bd;
+      --teal: #126b61;
+      --teal-soft: #dcefeb;
+      --blue: #2f5f9d;
+      --blue-soft: #e2ebff;
+      --coral: #b85042;
+      --coral-soft: #f5dfda;
+      --gold: #9a6a12;
+      --gold-soft: #f4ead4;
+      --green: #2f6f3f;
+      --green-soft: #e0efdf;
+      --shadow: 0 18px 48px rgba(23, 32, 28, 0.08);
+      --radius: 8px;
+      --max: 1180px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--teal);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    .shell {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(247, 248, 246, 0.92);
+      backdrop-filter: blur(14px);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 64px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 210px;
+      max-width: 100%;
+      color: var(--ink);
+      font-weight: 760;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      background: var(--teal);
+      color: white;
+      font-weight: 820;
+      letter-spacing: 0;
+    }
+
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      max-width: 100%;
+    }
+
+    .nav a {
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    .nav a:hover,
+    .nav a:focus {
+      background: var(--paper);
+      color: var(--ink);
+      outline: 1px solid var(--line);
+    }
+
+    .hero {
+      padding: 72px 0 46px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(120deg, rgba(18, 107, 97, 0.12), transparent 36%),
+        linear-gradient(280deg, rgba(184, 80, 66, 0.10), transparent 38%),
+        var(--bg);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      gap: 42px;
+      align-items: center;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 860px;
+      font-size: clamp(2.5rem, 6vw, 5.6rem);
+      font-weight: 820;
+    }
+
+    h2 {
+      font-size: clamp(1.8rem, 3vw, 2.85rem);
+      font-weight: 800;
+    }
+
+    h3 {
+      font-size: 1.16rem;
+      font-weight: 780;
+    }
+
+    .lede {
+      max-width: 760px;
+      margin: 24px 0 0;
+      color: #38443e;
+      font-size: clamp(1.05rem, 1.6vw, 1.22rem);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 28px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--ink);
+      font: inherit;
+      font-weight: 700;
+      text-decoration: none;
+      transition: transform 150ms ease, border-color 150ms ease, background 150ms ease, color 150ms ease;
+    }
+
+    .button.primary {
+      border-color: var(--teal);
+      background: var(--teal);
+      color: white;
+    }
+
+    .button:hover,
+    .button:focus {
+      transform: translateY(-1px);
+      border-color: var(--teal);
+      outline: none;
+    }
+
+    .hero-visual,
+    .report-card,
+    .route-card,
+    .source-card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: 0 8px 24px rgba(23, 32, 28, 0.04);
+    }
+
+    .hero-visual {
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .mini-flow {
+      display: grid;
+      gap: 10px;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfb;
+    }
+
+    .flow-num {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-weight: 820;
+    }
+
+    .flow-row strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .flow-row span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    section {
+      padding: 54px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.82fr) minmax(280px, 0.68fr);
+      gap: 32px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    .section-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.02rem;
+    }
+
+    .reports-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .route-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .report-card,
+    .route-card,
+    .source-card {
+      padding: 18px;
+    }
+
+    .report-card {
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
+    .report-card p,
+    .route-card p,
+    .source-card p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 0.96rem;
+    }
+
+    .report-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 2px;
+    }
+
+    .label {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      max-width: 100%;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-size: 0.78rem;
+      font-weight: 780;
+      line-height: 1.25;
+    }
+
+    .label.blue {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .label.coral {
+      background: var(--coral-soft);
+      color: var(--coral);
+    }
+
+    .label.gold {
+      background: var(--gold-soft);
+      color: var(--gold);
+    }
+
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    footer {
+      padding: 34px 0 44px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 960px) {
+      .hero-grid,
+      .section-head {
+        grid-template-columns: 1fr;
+      }
+
+      .route-grid,
+      .source-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        position: static;
+      }
+
+      .topbar-inner {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 12px 0;
+      }
+
+      .nav {
+        justify-content: flex-start;
+        width: 100%;
+      }
+
+      .hero {
+        padding-top: 42px;
+      }
+
+      .hero-actions,
+      .report-actions {
+        width: 100%;
+      }
+
+      .button {
+        justify-content: center;
+        max-width: 100%;
+        white-space: normal;
+      }
+
+      .reports-grid,
+      .route-grid,
+      .source-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body id="reports-index">
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="/reports/index.html">
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <span>Reports Home</span>
+      </a>
+      <nav class="nav" aria-label="Report navigation">
+        <a href="/reports/trec-rag-briefing-report.html">2026 Briefing</a>
+        <a href="/reports/trec-rag-2025-writeups/interactive-writeup.html">2025 Writeups</a>
+        <a href="#reading-path">Reading Path</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="shell hero-grid">
+        <div>
+          <h1>TREC RAG Reports for builders and first-time readers.</h1>
+          <p class="lede">
+            Start with the 2026 briefing to understand the current task, ClimbMix, samples, and submission shape.
+            Then use the 2025 writeups as the technique library for retrieval, evidence selection, citation support, and evaluation.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="/reports/trec-rag-briefing-report.html">Open the 2026 briefing</a>
+            <a class="button" href="/reports/trec-rag-2025-writeups/interactive-writeup.html">Explore the 2025 writeups</a>
+          </div>
+        </div>
+        <div class="hero-visual" aria-label="Report navigation overview">
+          <div class="mini-flow">
+            <div class="flow-row">
+              <div class="flow-num">1</div>
+              <div><strong>Understand the current task</strong><span>Read the 2026 guide for ClimbMix, sample docs, nuggets, and output formats.</span></div>
+            </div>
+            <div class="flow-row">
+              <div class="flow-num">2</div>
+              <div><strong>Steal good system ideas</strong><span>Use the 2025 report for hybrid retrieval, reranking, evidence cards, and citation-first generation.</span></div>
+            </div>
+            <div class="flow-row">
+              <div class="flow-num">3</div>
+              <div><strong>Turn it into experiments</strong><span>Build a baseline ladder, track coverage, and compare support and completeness separately.</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="reports">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Available Reports</h2>
+          <p>Two reports, one reading path: the current competition guide and the deeper method library from last year.</p>
+        </div>
+        <div class="reports-grid">
+          <article class="report-card">
+            <span class="label">current track</span>
+            <div>
+              <h3>TREC RAG 2026 Briefing</h3>
+              <p>Explains the competition, ClimbMix, sample documents, organizer nuggets, answer JSON, evaluation framing, and a practical 2026 build strategy.</p>
+            </div>
+            <div class="report-actions">
+              <a class="button primary" href="/reports/trec-rag-briefing-report.html">Open briefing</a>
+              <a class="button" href="/reports/trec-rag-briefing-report.html#samples">Jump to samples</a>
+            </div>
+          </article>
+
+          <article class="report-card">
+            <span class="label blue">method library</span>
+            <div>
+              <h3>TREC RAG 2025 Writeups</h3>
+              <p>A detailed interactive review of 15 team writeups, including reader paths, leaderboards, architecture panels, implementation recipes, and failure diagnosis.</p>
+            </div>
+            <div class="report-actions">
+              <a class="button primary" href="/reports/trec-rag-2025-writeups/interactive-writeup.html">Open writeups</a>
+              <a class="button" href="/reports/trec-rag-2025-writeups/interactive-writeup.html#idea-bank">Jump to playbook</a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="reading-path">
+      <div class="shell">
+        <div class="section-head">
+          <h2>How To Read This Workspace</h2>
+          <p>Pick a path based on what you need today. The pages are designed to cross-reference each other instead of repeating every detail.</p>
+        </div>
+        <div class="route-grid">
+          <article class="route-card">
+            <span class="label">10-minute path</span>
+            <h3>Start with the briefing</h3>
+            <p>Read the orientation, ClimbMix, sample docs, and answer JSON sections. This gives you the task shape without drowning you in methods.</p>
+          </article>
+          <article class="route-card">
+            <span class="label coral">builder path</span>
+            <h3>Use the 2025 writeups as the technique library</h3>
+            <p>Open the pipeline, reusable playbook, implementation kit, and team dossiers when you are deciding what to build next.</p>
+          </article>
+          <article class="route-card">
+            <span class="label gold">audit path</span>
+            <h3>Check claims and sources</h3>
+            <p>Use the 2026 appendix for official local data references, then use the 2025 source audit and failure diagnosis to understand risk.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="source-map">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Source Map</h2>
+          <p>The reports keep generated explanation separate from source material, so readers can trace where each layer came from.</p>
+        </div>
+        <div class="source-grid">
+          <article class="source-card">
+            <span class="label">2026 data</span>
+            <h3>Local dev topics, nuggets, and qrels</h3>
+            <p>Used by the briefing for sample query, sample ClimbMix doc IDs, organizer nuggets, and source caveats.</p>
+          </article>
+          <article class="source-card">
+            <span class="label blue">2025 papers</span>
+            <h3>Proceedings PDFs and figures</h3>
+            <p>Used by the writeup report for team methods, architecture panels, score caveats, and reusable playbooks.</p>
+          </article>
+          <article class="source-card">
+            <span class="label coral">Smoke tests</span>
+            <h3>Static checks for report integrity</h3>
+            <p>Each interactive report has a Node smoke test that checks key sections, links, and safety constraints.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      TREC RAG reports workspace. Built as static HTML so the pages can be served directly from this repo.
+    </div>
+  </footer>
+</body>
+</html>
