@@ -732,6 +732,7 @@
         <a href="/reports/index.html">Reports Home</a>
         <a href="#start-here">Start</a>
         <a href="#climbmix">ClimbMix</a>
+        <a href="#data-at-a-glance">Data</a>
         <a href="#samples">Samples</a>
         <a href="#pipeline">Pipeline</a>
         <a href="#implementation-kit">Kit</a>
@@ -876,6 +877,111 @@
         </div>
         <div class="provenance-note">
           <strong>Important mental model:</strong> ClimbMix documents can be long and varied. Treat documents as source containers, then use local passage-level work to find the evidence inside them.
+        </div>
+      </div>
+    </section>
+
+    <section id="data-at-a-glance">
+      <div class="shell">
+        <div class="section-head">
+          <h2>Collection And Dev Set At A Glance</h2>
+          <p>The main corpus is huge; the development files are small practice artifacts layered over that same corpus. Keep those two ideas separate.</p>
+        </div>
+
+        <div class="explain-grid">
+          <article class="explain-card">
+            <span class="label">ClimbMix corpus</span>
+            <h3>553,240,576 documents</h3>
+            <p>Hugging Face lists the default ClimbMix train split as 553M text rows, about 600 GB of Parquet data.</p>
+          </article>
+          <article class="explain-card">
+            <span class="label blue">RAG25 dev</span>
+            <h3>22 narrative topics</h3>
+            <p>These are long, multi-facet TREC RAG 2025 narratives reused as 2026 development queries.</p>
+          </article>
+          <article class="explain-card">
+            <span class="label coral">Dev qrels pool</span>
+            <h3>26,341 judgments</h3>
+            <p>The current RAG25 UMBRELA qrels judge pooled ClimbMix candidate documents; they are not a separate dev corpus.</p>
+          </article>
+          <article class="explain-card">
+            <span class="label gold">ResearchRubrics</span>
+            <h3>30 deep-research prompts</h3>
+            <p>These prompts come with rubrics for answer diagnosis, not with ClimbMix relevance qrels.</p>
+          </article>
+        </div>
+
+        <div class="table-wrap" aria-label="Collection and development data counts">
+          <table>
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>Count</th>
+                <th>What It Means</th>
+                <th>Source In This Workspace</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>ClimbMix source corpus</td>
+                <td>553,240,576 documents / rows</td>
+                <td>The full evidence collection, exposed through the hosted <code>climbmix-400b</code> Pyserini index or a compatible custom index.</td>
+                <td>Hugging Face <code>karpathy/climbmix-400b-shuffle</code></td>
+              </tr>
+              <tr>
+                <td>RAG25 development topics</td>
+                <td>22 topic narratives</td>
+                <td>Practice TREC-style narratives with many subtopics each.</td>
+                <td><code>topics/rag25-topics-dev.tsv</code></td>
+              </tr>
+              <tr>
+                <td>RAG25 development qrels</td>
+                <td>26,341 judged topic-document rows over 26,151 unique ClimbMix docids</td>
+                <td>Projected relevance judgments over pooled candidate documents for the 22 RAG25 dev topics.</td>
+                <td><code>rag25-dev-umbrela-qrels/*.qrels</code></td>
+              </tr>
+              <tr>
+                <td>RAG25 answer nuggets</td>
+                <td>1,255 nuggets across 22 topics</td>
+                <td>Atomic coverage targets for diagnosing whether an answer addresses the important facets.</td>
+                <td><code>rag25-dev-nuggets/rag25-dev-nuggets.jsonl</code></td>
+              </tr>
+              <tr>
+                <td>ResearchRubrics development prompts</td>
+                <td>30 prompts with 755 rubric criteria</td>
+                <td>Open-ended deep-research prompts with rubric-based answer quality diagnostics.</td>
+                <td><code>researchrubrics-dev-rubrics/*.jsonl</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="sample-grid" style="margin-top: 18px;">
+          <article class="sample-card">
+            <span class="label">RAG25 topics</span>
+            <h3>Mostly public, social, and technical issues</h3>
+            <ul class="sample-list">
+              <li><strong>Environment and energy:</strong> e-waste, nuclear energy, deforestation, climate change.</li>
+              <li><strong>Health and safety:</strong> vaccines, cancer, chemicals, alcohol and drug use.</li>
+              <li><strong>Society and policy:</strong> banks, abortion, immigration, housing, race, euthanasia.</li>
+              <li><strong>History and geopolitics:</strong> the Holocaust, Korean War, Africa and development.</li>
+              <li><strong>Technology and media:</strong> technology in society, violent games, social media and mental health.</li>
+            </ul>
+          </article>
+          <article class="sample-card">
+            <span class="label blue">ResearchRubrics domains</span>
+            <h3>Deep-research prompts are broader</h3>
+            <p>The 30 ResearchRubrics prompts cover AI and ML, technical documentation, historical analysis, hypotheticals and philosophy, STEM, business planning, creative writing, current events, and consumer research.</p>
+          </article>
+          <article class="sample-card">
+            <span class="label coral">tailoring note</span>
+            <h3>Optimize for coverage, not one domain</h3>
+            <p>The corpus is broad web/pretraining data, and the topics are broad narratives. A good system should decompose needs, retrieve across facets, and then assemble evidence without overfitting to a single subject area.</p>
+          </article>
+        </div>
+
+        <div class="provenance-note">
+          <strong>Dev-set document count nuance:</strong> the released development data does not define a separate mini corpus. It defines topic files, answer diagnostics, rubrics, and projected qrels over candidate ClimbMix documents.
         </div>
       </div>
     </section>
@@ -1207,8 +1313,8 @@
           <details>
             <summary>Development data mental model</summary>
             <div class="appendix-body">
-              <p>Local development data includes RAG25 topics, organizer nuggets, ResearchRubrics prompts, and qrels. Treat them as practice material for understanding topic shape, citation behavior, and evaluator expectations.</p>
-              <p>Development qrels are useful for experiments and error analysis, but a missing judgment does not prove that every unjudged ClimbMix document is irrelevant.</p>
+              <p>Local development data includes 22 RAG25 narrative topics, 30 ResearchRubrics prompts, organizer nuggets, ResearchRubrics rubrics, and projected qrels. Treat them as practice material for understanding topic shape, citation behavior, and evaluator expectations.</p>
+              <p>Development qrels are useful for experiments and error analysis, but they cover pooled candidate documents rather than the full 553,240,576-document ClimbMix corpus. A missing judgment does not prove that every unjudged ClimbMix document is irrelevant.</p>
             </div>
           </details>
           <details>
@@ -1216,8 +1322,12 @@
             <div class="appendix-body">
               <ul class="source-list">
                 <li><code>trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv</code> for sample topic narratives.</li>
+                <li><code>trec-rag-data/trec-rag-2026/development-data/topics/research-rubrics-topics-dev.tsv</code> for ResearchRubrics development prompts.</li>
                 <li><code>trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl</code> for organizer-provided answer nuggets.</li>
                 <li><code>trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels</code> for sample ClimbMix relevance judgments.</li>
+                <li><code>trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/README.md</code> for qrels creation notes and the 26,341-judgment count.</li>
+                <li><code>trec-rag-data/trec-rag-2026/development-data/researchrubrics-dev-rubrics/research-rubrics-dev-rubrics.jsonl</code> for ResearchRubrics domains and rubric criteria.</li>
+                <li><a href="https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle">Hugging Face ClimbMix dataset page</a> for corpus row count and file size.</li>
                 <li><a href="https://trec-rag.github.io/">Official TREC RAG site</a></li>
                 <li><a href="https://trec-rag.github.io/trec25/">Official 2025 TREC RAG page</a></li>
                 <li><a href="https://arxiv.org/abs/2603.09891">TREC RAG overview on arXiv</a></li>
