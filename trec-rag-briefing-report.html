@@ -182,6 +182,12 @@
       color: var(--teal);
     }
 
+    main img,
+    main svg {
+      max-width: 100%;
+      height: auto;
+    }
+
     .section-panel {
       min-width: 0;
       max-width: 100%;
@@ -232,6 +238,8 @@
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 14px;
+      min-width: 0;
+      max-width: 100%;
       margin-top: 24px;
     }
 
@@ -285,6 +293,8 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 16px;
+      min-width: 0;
+      max-width: 100%;
       margin-top: 24px;
     }
 
@@ -567,11 +577,17 @@
     }
 
     .source-list a {
+      color: var(--blue);
+      text-decoration: underline;
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.16em;
       overflow-wrap: anywhere;
     }
 
     .table-wrap {
+      min-width: 0;
       width: 100%;
+      max-width: 100%;
       margin-top: 24px;
       overflow-x: auto;
       border: 1px solid var(--border);
@@ -610,6 +626,7 @@
     }
 
     code {
+      max-width: 100%;
       padding: 0.12em 0.32em;
       border: 1px solid var(--border);
       border-radius: 5px;
@@ -622,6 +639,7 @@
     }
 
     pre {
+      min-width: 0;
       max-width: 100%;
       margin: 18px 0 0;
       overflow-x: auto;
