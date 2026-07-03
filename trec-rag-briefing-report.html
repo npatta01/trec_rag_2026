@@ -315,6 +315,73 @@
       color: var(--text);
     }
 
+    .table-wrap {
+      width: 100%;
+      margin-top: 24px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #ffffff;
+    }
+
+    table {
+      width: 100%;
+      min-width: 720px;
+      border-collapse: collapse;
+      color: var(--text);
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    th,
+    td {
+      padding: 13px 15px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-muted);
+      color: var(--text);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      padding: 0.12em 0.32em;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--surface-muted);
+      color: var(--text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.9em;
+    }
+
+    pre {
+      margin: 18px 0 0;
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #f8fafc;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font-size: 0.92rem;
+    }
+
     @media (max-width: 980px) {
       .card-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -419,19 +486,20 @@
       <section id="orientation" class="section-panel" aria-labelledby="orientation-title">
         <div class="section-kicker">Orientation</div>
         <h2 id="orientation-title">What Is This Competition About?</h2>
-        <p class="lede">TREC RAG asks a system to do two hard things together: find useful evidence for a complex information need, then write a cited answer that is actually supported by that evidence.</p>
+        <p class="lede">TREC RAG asks for evidence retrieval plus cited answer generation: find useful documents for a complex information need, then write an answer whose claims are visibly grounded in those documents.</p>
         <div class="card-grid">
           <article class="note-card teal">
-            <h3>Core task</h3>
-            <p>Turn broad, realistic questions into grounded answers with retrievable evidence and visible attribution.</p>
+            <h3>2026 tasks</h3>
+            <p>The 2026 track has Retrieval and RAG tasks. Retrieval measures the evidence list; RAG measures the end-to-end answer with citations.</p>
           </article>
           <article class="note-card blue">
-            <h3>Why it is hard</h3>
-            <p>The system must balance recall, precision, synthesis, and citation faithfulness without drifting from the sources.</p>
+            <h3>Retrieval output</h3>
+            <p>Retrieval output is a ranked list of document IDs in the six-column TREC format:</p>
+            <pre><code>topic_id Q0 docid rank score run_id</code></pre>
           </article>
           <article class="note-card green">
-            <h3>Newcomer lens</h3>
-            <p>Think of the track as retrieval plus answer writing, evaluated as one connected evidence pipeline.</p>
+            <h3>RAG output</h3>
+            <p>RAG output is human-readable prose with sentence-level citations, not raw chunks. Every substantive generated answer sentence should be supported by citations.</p>
           </article>
         </div>
       </section>
@@ -439,19 +507,19 @@
       <section id="climbmix" class="section-panel" aria-labelledby="climbmix-title">
         <div class="section-kicker">ClimbMix</div>
         <h2 id="climbmix-title">What Is ClimbMix?</h2>
-        <p class="lede">ClimbMix is the 2026 evidence collection. For newcomers, the important idea is that retrieval and citations point to official ClimbMix document IDs, even if a system uses smaller chunks internally.</p>
+        <p class="lede">ClimbMix is the 2026 evidence collection: a broad curated web/pretraining-style collection rather than a single-domain corpus. The official unit is a ClimbMix row/document with a ClimbMix docid.</p>
         <div class="card-grid">
           <article class="note-card rose">
-            <h3>Broad corpus</h3>
-            <p>It is a broad web-style text collection rather than a narrow domain dataset.</p>
+            <h3>Document anchor</h3>
+            <p>Systems can chunk locally for indexing, reranking, or generation, but final retrieval rows and RAG references should map back to official ClimbMix document IDs.</p>
           </article>
           <article class="note-card teal">
-            <h3>Official IDs</h3>
-            <p>The submitted retrieval rows and RAG references should use ClimbMix document IDs.</p>
+            <h3>Baseline path</h3>
+            <p>Pyserini/BM25 baseline infrastructure gives teams a plain starting point: build a lexical index, run a standard ranked search, then inspect where stronger methods help.</p>
           </article>
           <article class="note-card blue">
             <h3>System impact</h3>
-            <p>Chunking, reranking, and evidence selection can happen internally, but final citations need to remain traceable.</p>
+            <p>The practical discipline is traceability. Internal chunks may help the model read evidence, but submitted IDs and citations need to resolve to the official ClimbMix documents.</p>
           </article>
         </div>
       </section>
@@ -459,19 +527,19 @@
       <section id="year-2025" class="section-panel" aria-labelledby="year-2025-title">
         <div class="section-kicker">2025 Context</div>
         <h2 id="year-2025-title">What Happened In 2025?</h2>
-        <p class="lede">The 2025 context separates track setup, common failure modes, participant choices, and the practical lessons that carry into 2026.</p>
+        <p class="lede">TREC RAG 2025 used MS MARCO V2.1 segmented documents and long narrative information needs, not only short keyword queries. The overview paper reports 105 narratives, with official assessed analysis centered on 22 selected narratives.</p>
         <ul class="timeline-list">
           <li>
             <strong>Task framing</strong>
-            <span>The 2025 task coupled retrieval, citation, and synthesis so answer quality depended on evidence quality as well as wording.</span>
+            <span>The 2025 overview describes four tasks: Retrieval, Augmented Generation, Retrieval-Augmented Generation, and Relevance Judgment.</span>
           </li>
           <li>
             <strong>System behavior</strong>
-            <span>Strong approaches used enough retrieval depth for coverage, structured answers around facets, and kept claims close to cited sources.</span>
+            <span>Strong approaches treated each narrative as a multi-facet request, so answer quality depended on broad evidence coverage as well as careful citation and synthesis.</span>
           </li>
           <li>
-            <strong>Takeaways</strong>
-            <span>Durable lessons include careful evidence selection, citation discipline, and answer planning; setup-specific tactics need fresh validation.</span>
+            <strong>Retrieval example</strong>
+            <span>UTokyo <code>4method_merge</code> is well documented as a top 2025 Retrieval task run; treat that as a retrieval result, not as a claim about full answer-generation leadership.</span>
           </li>
         </ul>
       </section>
@@ -499,20 +567,44 @@
       <section id="changes" class="section-panel" aria-labelledby="changes-title">
         <div class="section-kicker">Transition</div>
         <h2 id="changes-title">What Changed From 2025 To 2026?</h2>
-        <p class="lede">The 2026 track keeps the core retrieval-plus-synthesis challenge but changes the evidence collection and citation target through ClimbMix.</p>
-        <div class="card-grid">
-          <article class="note-card teal">
-            <h3>What stays useful</h3>
-            <p>Careful evidence selection, citation discipline, and answer planning remain useful from 2025.</p>
-          </article>
-          <article class="note-card rose">
-            <h3>What changes</h3>
-            <p>ClimbMix introduces a broader 2026 evidence collection and makes official document IDs the citation anchor for submitted evidence.</p>
-          </article>
-          <article class="note-card green">
-            <h3>Risk areas</h3>
-            <p>A 2025-style pipeline can under-retrieve, overfit old topic patterns, or lose traceability if chunk IDs replace official document IDs.</p>
-          </article>
+        <p class="lede">The 2026 track keeps the core retrieval-plus-synthesis challenge but changes the evidence collection, task structure, and citation target through ClimbMix.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>2025</th>
+                <th>2026</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Corpus</td>
+                <td>MS MARCO V2.1 segmented documents.</td>
+                <td>ClimbMix document rows.</td>
+              </tr>
+              <tr>
+                <td>Tasks</td>
+                <td>Retrieval, AG, RAG, and RJ.</td>
+                <td>Retrieval and RAG.</td>
+              </tr>
+              <tr>
+                <td>Generation setup</td>
+                <td>Fixed-evidence AG plus end-to-end RAG.</td>
+                <td>Participant-owned retrieval and generation for RAG.</td>
+              </tr>
+              <tr>
+                <td>Evidence IDs</td>
+                <td>MS MARCO segment IDs.</td>
+                <td>ClimbMix document IDs.</td>
+              </tr>
+              <tr>
+                <td>Main lesson</td>
+                <td>Long narratives reward coverage across facets.</td>
+                <td>The same lesson applies over a broader web-style corpus.</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
