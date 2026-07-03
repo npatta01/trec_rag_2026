@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- Create: `trec-rag-briefing-report.html`
+- Create: `reports/trec-rag-briefing-report.html`
   - Responsible for all report content, layout, interactivity, sources, and appendix sections.
 - No framework, package manager, build artifacts, or external assets.
 - No changes to the checked-in TREC data repositories.
@@ -81,11 +81,11 @@ Expected: these caveats appear in the final source/caveat appendix and are refle
 ### Task 2: Create Static Report Shell
 
 **Files:**
-- Create: `trec-rag-briefing-report.html`
+- Create: `reports/trec-rag-briefing-report.html`
 
 - [ ] **Step 1: Create the initial HTML shell**
 
-Use `apply_patch` to add `trec-rag-briefing-report.html` with this structure:
+Use `apply_patch` to add `reports/trec-rag-briefing-report.html` with this structure:
 
 ```html
 <!doctype html>
@@ -475,25 +475,25 @@ Run:
 python3 -m http.server 8765
 ```
 
-Expected: server starts and `http://localhost:8765/trec-rag-briefing-report.html` displays the shell without console errors. Stop the server after inspection unless continuing with browser testing.
+Expected: server starts and `http://localhost:8765/reports/trec-rag-briefing-report.html` displays the shell without console errors. Stop the server after inspection unless continuing with browser testing.
 
 - [ ] **Step 3: Commit the shell**
 
 Run:
 
 ```bash
-git add trec-rag-briefing-report.html
+git add reports/trec-rag-briefing-report.html
 git commit -m "Add TREC RAG briefing report shell"
 ```
 
-Expected: commit succeeds with only `trec-rag-briefing-report.html` staged.
+Expected: commit succeeds with only `reports/trec-rag-briefing-report.html` staged.
 
 ---
 
 ### Task 3: Add Core 2026 And 2025 Explanatory Content
 
 **Files:**
-- Modify: `trec-rag-briefing-report.html`
+- Modify: `reports/trec-rag-briefing-report.html`
 
 - [ ] **Step 1: Fill the orientation and ClimbMix sections**
 
@@ -575,7 +575,7 @@ Add this table to `changes`:
 Run:
 
 ```bash
-rg -n "MS MARCO V2.1|105 narratives|22 selected|4method_merge|ClimbMix|Retrieval and RAG" trec-rag-briefing-report.html
+rg -n "MS MARCO V2.1|105 narratives|22 selected|4method_merge|ClimbMix|Retrieval and RAG" reports/trec-rag-briefing-report.html
 ```
 
 Expected: each phrase appears in the relevant section, with caveated wording around rankings.
@@ -585,7 +585,7 @@ Expected: each phrase appears in the relevant section, with caveated wording aro
 Run:
 
 ```bash
-git add trec-rag-briefing-report.html
+git add reports/trec-rag-briefing-report.html
 git commit -m "Add TREC RAG briefing context"
 ```
 
@@ -596,7 +596,7 @@ Expected: commit succeeds.
 ### Task 4: Add Beginner Technique Gallery
 
 **Files:**
-- Modify: `trec-rag-briefing-report.html`
+- Modify: `reports/trec-rag-briefing-report.html`
 
 - [ ] **Step 1: Add technique card markup**
 
@@ -763,7 +763,7 @@ Add:
 Run:
 
 ```bash
-node -e "const fs=require('fs'); const html=fs.readFileSync('trec-rag-briefing-report.html','utf8'); console.log((html.match(/name: '/g)||[]).length)"
+node -e "const fs=require('fs'); const html=fs.readFileSync('reports/trec-rag-briefing-report.html','utf8'); console.log((html.match(/name: '/g)||[]).length)"
 ```
 
 Expected: prints `12`.
@@ -773,7 +773,7 @@ Expected: prints `12`.
 Run:
 
 ```bash
-git add trec-rag-briefing-report.html
+git add reports/trec-rag-briefing-report.html
 git commit -m "Add beginner TREC RAG technique gallery"
 ```
 
@@ -784,7 +784,7 @@ Expected: commit succeeds.
 ### Task 5: Add Worked Examples For Solving 2026
 
 **Files:**
-- Modify: `trec-rag-briefing-report.html`
+- Modify: `reports/trec-rag-briefing-report.html`
 
 - [ ] **Step 1: Add strategy overview cards**
 
@@ -883,7 +883,7 @@ tabButtons.forEach(button => {
 Run:
 
 ```bash
-node -e "const fs=require('fs'); const html=fs.readFileSync('trec-rag-briefing-report.html','utf8'); console.log((html.match(/data-tab=/g)||[]).length, (html.match(/data-panel=/g)||[]).length)"
+node -e "const fs=require('fs'); const html=fs.readFileSync('reports/trec-rag-briefing-report.html','utf8'); console.log((html.match(/data-tab=/g)||[]).length, (html.match(/data-panel=/g)||[]).length)"
 ```
 
 Expected: prints `4 4`.
@@ -893,7 +893,7 @@ Expected: prints `4 4`.
 Run:
 
 ```bash
-git add trec-rag-briefing-report.html
+git add reports/trec-rag-briefing-report.html
 git commit -m "Add worked TREC RAG strategy examples"
 ```
 
@@ -904,7 +904,7 @@ Expected: commit succeeds.
 ### Task 6: Add Evaluation, Appendix, And Sources
 
 **Files:**
-- Modify: `trec-rag-briefing-report.html`
+- Modify: `reports/trec-rag-briefing-report.html`
 
 - [ ] **Step 1: Fill evaluation section**
 
@@ -975,7 +975,7 @@ Add a paragraph in the appendix:
 Run:
 
 ```bash
-node -e "const fs=require('fs'); const html=fs.readFileSync('trec-rag-briefing-report.html','utf8'); const links=[...html.matchAll(/href=\"(https?:\/\/[^\"]+)\"/g)].map(m=>m[1]); console.log(links.length); console.log(links.join('\n'))"
+node -e "const fs=require('fs'); const html=fs.readFileSync('reports/trec-rag-briefing-report.html','utf8'); const links=[...html.matchAll(/href=\"(https?:\/\/[^\"]+)\"/g)].map(m=>m[1]); console.log(links.length); console.log(links.join('\n'))"
 ```
 
 Expected: prints at least `6` source links, including the 2025 page, overview paper, NIST appendix, UTokyo paper, proceedings browser, and runs browser.
@@ -985,7 +985,7 @@ Expected: prints at least `6` source links, including the 2025 page, overview pa
 Run:
 
 ```bash
-git add trec-rag-briefing-report.html
+git add reports/trec-rag-briefing-report.html
 git commit -m "Add TREC RAG evaluation appendix and sources"
 ```
 
@@ -996,7 +996,7 @@ Expected: commit succeeds.
 ### Task 7: Polish Layout And Accessibility
 
 **Files:**
-- Modify: `trec-rag-briefing-report.html`
+- Modify: `reports/trec-rag-briefing-report.html`
 
 - [ ] **Step 1: Add utility styling for callouts and examples**
 
@@ -1042,7 +1042,7 @@ Run:
 ```bash
 python3 - <<'PY'
 from pathlib import Path
-html = Path('trec-rag-briefing-report.html').read_text()
+html = Path('reports/trec-rag-briefing-report.html').read_text()
 for needle in ['<section id="orientation">', '<section id="climbmix">', '<section id="year-2025">', '<section id="techniques">', '<section id="strategy">', '<section id="appendix">']:
     print(needle, html.count(needle))
 print('empty h2 tags:', html.count('<h2></h2>'))
@@ -1068,7 +1068,7 @@ placeholder tokens: 0
 Run:
 
 ```bash
-git add trec-rag-briefing-report.html
+git add reports/trec-rag-briefing-report.html
 git commit -m "Polish TREC RAG briefing layout"
 ```
 
@@ -1079,7 +1079,7 @@ Expected: commit succeeds.
 ### Task 8: Final Verification
 
 **Files:**
-- Read: `trec-rag-briefing-report.html`
+- Read: `reports/trec-rag-briefing-report.html`
 - No required file changes unless verification finds issues
 
 - [ ] **Step 1: Validate expected content counts**
@@ -1089,7 +1089,7 @@ Run:
 ```bash
 python3 - <<'PY'
 from pathlib import Path
-html = Path('trec-rag-briefing-report.html').read_text()
+html = Path('reports/trec-rag-briefing-report.html').read_text()
 checks = {
     'sections': html.count('<section id='),
     'technique names': html.count("name: '"),
@@ -1119,7 +1119,7 @@ Run:
 python3 -m http.server 8765
 ```
 
-Expected: server starts. Open `http://localhost:8765/trec-rag-briefing-report.html`.
+Expected: server starts. Open `http://localhost:8765/reports/trec-rag-briefing-report.html`.
 
 - [ ] **Step 3: Browser-check core interactions**
 

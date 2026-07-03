@@ -1,0 +1,17 @@
+filename	kind	participant	title	url
+00-overview-rag.pdf	overview	coordinators	Overview of the TREC 2025 Retrieval Augmented Generation (RAG) Track	https://trec.nist.gov/pubs/trec34/papers/Overview_rag.pdf
+01-cfdalab-rag.pdf	team	cfdalab	CFDA at TREC 2025 Retrieval-Augmented Generation Track (RAG)	https://trec.nist.gov/pubs/trec34/papers/cfdalab.rag.pdf
+02-nit-agartala-rag.pdf	team	NIT Agartala	NITATREC at TREC RAG 2025: A Report on Exploring Sparse, Dense, and Hybrid Retrieval for Retrieval-Augmented Generation	https://trec.nist.gov/pubs/trec34/papers/NIT%20Agartala.rag.pdf
+03-uogtr-rag.pdf	team	uogTr	Processing Queries with Complex Information Needs: University of Glasgow Terrier Team at TREC RAG 2025	https://trec.nist.gov/pubs/trec34/papers/uogTr.rag.pdf
+04-wing-ii-rag.pdf	team	WING-II	Submodular Evidence Selection for Grounded Answer Generation in TREC RAG 2025	https://trec.nist.gov/pubs/trec34/papers/WING-II.rag.pdf
+05-grilllab-ikat-rag.pdf	team	grilllab	GRILL Lab at TREC 2025: Agentic Iterative Retrieval and Gap-Aware Refinement for TREC IKAT and TREC RAG	https://trec.nist.gov/pubs/trec34/papers/grilllab.ikat.rag.pdf
+06-ii-research-rag.pdf	team	ii_research	IIUoT at TREC 2025 Retrieval-Augmented Generation Track	https://trec.nist.gov/pubs/trec34/papers/ii_research.rag.pdf
+07-genaius-rag.pdf	team	GenAIus	From Nuggets to Clusters: Multi-Level Evidence Structuring for the TREC 2025 RAG Track	https://trec.nist.gov/pubs/trec34/papers/GenAIus.rag.pdf
+08-tus-rag.pdf	team	tus	Keystone-Docs RAG at TREC 2025: Coverage-Aware Few-Document Augmentation via Narrative Decomposition	https://trec.nist.gov/pubs/trec34/papers/tus.rag.pdf
+09-hltcoe-dragun-rag-ragtime.pdf	team	HLTCOE	HLTCOE Evaluation Team at TREC 2025: RAG, RAGTIME, DRAGUN, and BioGen	https://trec.nist.gov/pubs/trec34/papers/HLTCOE.dragun.rag.ragtime.pdf
+10-mitll-rag.pdf	team	MITLL	MIT Lincoln Laboratory at TREC 2025 Retrieval-Augmented Generation Track	https://trec.nist.gov/pubs/trec34/papers/MITLL.rag.pdf
+11-idaccs-rag-ragtime.pdf	team	IDACCS	Team IDACCS at TREC 2025: RAG and RAGTIME Tracks	https://trec.nist.gov/pubs/trec34/papers/IDACCS.rag.ragtime.pdf
+12-ncsu-las-rag-ragtime.pdf	team	ncsu-las	Laboratory for Analytic Sciences in TREC 2025 RAG and RAGTIME Tracks	https://trec.nist.gov/pubs/trec34/papers/ncsu-las.rag.ragtime.pdf
+13-utokyo-rag.pdf	team	UTokyo	UTokyo-HitU at TREC 2025 RAG Track: HyDE-Enhanced Sparse-Dense Retrieval Fusion with LLM Reranking	https://trec.nist.gov/pubs/trec34/papers/UTokyo.rag.pdf
+14-duth-rag.pdf	team	DUTH	Justification Retrieval with LLMs, Retrieval-Augmented Generation, and Hybrid Labels	https://trec.nist.gov/pubs/trec34/papers/DUTH.rag.pdf
+15-waterlooclarke-dragun-rag.pdf	team	WaterlooClarke	WaterlooClarke at TREC 2025	https://trec.nist.gov/pubs/trec34/papers/WaterlooClarke.dragun.rag.pdf

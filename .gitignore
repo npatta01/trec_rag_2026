@@ -1,1 +1,6 @@
 .worktrees/
+.env
+tmp/
+node_modules/
+*.log
+*.pid
