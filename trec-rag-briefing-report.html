@@ -392,6 +392,90 @@
       white-space: pre-wrap;
     }
 
+    .tabs {
+      display: grid;
+      gap: 16px;
+      min-width: 0;
+      margin-top: 24px;
+    }
+
+    .tab-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab-button {
+      min-width: 0;
+      min-height: 40px;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      appearance: none;
+      background: #ffffff;
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 800;
+      line-height: 1.25;
+      transition:
+        background-color 140ms ease,
+        border-color 140ms ease,
+        color 140ms ease,
+        box-shadow 140ms ease;
+    }
+
+    .tab-button:hover,
+    .tab-button:focus-visible {
+      border-color: rgba(15, 118, 110, 0.32);
+      background: var(--surface-muted);
+      color: var(--text);
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+    }
+
+    .tab-button.is-active,
+    .tab-button[aria-selected="true"] {
+      border-color: rgba(15, 118, 110, 0.34);
+      background: rgba(15, 118, 110, 0.08);
+      color: var(--teal);
+    }
+
+    .tab-panel {
+      min-width: 0;
+      max-width: 100%;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: #ffffff;
+    }
+
+    .tab-panel[hidden] {
+      display: none;
+    }
+
+    .tab-panel h3 {
+      margin: 0;
+      font-size: 1.02rem;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .tab-panel p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 0.94rem;
+      line-height: 1.62;
+    }
+
+    .tab-panel pre {
+      white-space: pre-wrap;
+    }
+
     .timeline-list {
       display: grid;
       gap: 12px;
@@ -563,6 +647,19 @@
 
       .technique-grid {
         grid-template-columns: 1fr;
+      }
+
+      .tab-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .tab-button {
+        width: 100%;
+      }
+
+      .tab-panel {
+        padding: 16px;
       }
 
       .timeline-list li {
@@ -943,19 +1040,76 @@ flag anything that fails before submission</code></pre>
       <section id="strategy" class="section-panel" aria-labelledby="strategy-title">
         <div class="section-kicker">Strategy</div>
         <h2 id="strategy-title">How I Would Approach 2026</h2>
-        <p class="lede">A practical build plan can move from baseline retrieval to structured evidence selection, answer drafting, citation checking, and controlled iteration.</p>
+        <p class="lede">The official-style simple BM25 baseline should be title-first: use the topic title as the default query because it is fast, debuggable, and hard to fool yourself with. Use the narrative to understand the need, decompose facets, fuse candidate lists, rerank candidates, select evidence, guide generation, and run citation checks; treating title plus narrative as the raw query is an experiment to label separately, not the default baseline.</p>
         <div class="card-grid">
           <article class="note-card blue">
-            <h3>Start with baselines</h3>
-            <p>Build a transparent pipeline first so retrieval misses and citation failures are easy to diagnose.</p>
+            <h3>Search broadly</h3>
+            <p>Start with the title query, then use the narrative to split the need into concrete facets when it clearly asks for causes, impacts, responses, timelines, or affected groups.</p>
           </article>
           <article class="note-card teal">
-            <h3>Instrument evidence</h3>
-            <p>Track which passages were retrieved, selected, cited, ignored, or contradicted by the final answer.</p>
+            <h3>Fuse and rerank</h3>
+            <p>Combine the candidate lists so useful documents from weaker facet searches survive, then rerank for direct support rather than surface keyword overlap alone.</p>
           </article>
           <article class="note-card green">
-            <h3>Iterate with rubrics</h3>
-            <p>Use the evaluation criteria to drive experiments instead of chasing isolated leaderboard movement.</p>
+            <h3>Write from evidence</h3>
+            <p>Select the smallest set of passages that covers the answer, draft only supported claims, and check that every citation points to evidence that really says the thing.</p>
+          </article>
+        </div>
+        <div class="tabs" aria-label="Worked examples for solving 2026">
+          <div class="tab-list" role="tablist" aria-label="Worked examples">
+            <button class="tab-button is-active" id="tab-direct" type="button" role="tab" aria-selected="true" aria-controls="panel-direct" data-tab="direct">Direct BM25</button>
+            <button class="tab-button" id="tab-facets" type="button" role="tab" aria-selected="false" aria-controls="panel-facets" data-tab="facets">Facet Search</button>
+            <button class="tab-button" id="tab-noise" type="button" role="tab" aria-selected="false" aria-controls="panel-noise" data-tab="noise">Noisy Decomposition</button>
+            <button class="tab-button" id="tab-cited" type="button" role="tab" aria-selected="false" aria-controls="panel-cited" data-tab="cited">Cited Answer</button>
+          </div>
+          <article class="tab-panel" id="panel-direct" role="tabpanel" aria-labelledby="tab-direct" data-panel="direct">
+            <h3>Direct title BM25 is the control run</h3>
+            <p>This asks BM25 to match the topic title as the default query. It is useful because every later experiment should beat this run on recall or evidence quality, not just look more sophisticated. A title-plus-narrative query can be tried as a separate experiment, while the narrative remains essential for understanding facets, reranking, evidence selection, and generation.</p>
+            <pre><code>query = title
+# Use narrative for facets, reranking, evidence selection, and generation.
+search(climbmix_bm25, query, top_k=100)</code></pre>
+          </article>
+          <article class="tab-panel" id="panel-facets" role="tabpanel" aria-labelledby="tab-facets" data-panel="facets" hidden>
+            <h3>Facet decomposition improves recall for broad narratives</h3>
+            <p>Many TREC RAG topics are not single-fact questions. A narrative might ask what caused an issue, who was affected, and what responses followed. Searching those facets separately gives each angle a chance to retrieve documents, then fusion keeps documents that are consistently useful across lists.</p>
+            <pre><code>facet_queries = ["wildfire smoke respiratory health impacts", "wildfire smoke affected groups children older adults", "wildfire smoke public health responses"]
+candidates = rrf(search_each(facet_queries))</code></pre>
+          </article>
+          <article class="tab-panel" id="panel-noise" role="tabpanel" aria-labelledby="tab-noise" data-panel="noise" hidden>
+            <h3>Decomposition can add noise when facets are vague</h3>
+            <p>The danger is turning a specific narrative into generic search strings. A query like "public health responses" may retrieve pages about any issue in ClimbMix. Keep the facet label, but anchor it with topic terms copied from the narrative so the search expands coverage without drifting away.</p>
+            <pre><code>bad = "public health responses"
+better = "public health responses to wildfire smoke exposure"</code></pre>
+          </article>
+          <article class="tab-panel" id="panel-cited" role="tabpanel" aria-labelledby="tab-cited" data-panel="cited" hidden>
+            <h3>Retrieved documents become a cited answer</h3>
+            <p>After reranking, choose passages that support distinct pieces of the answer. The generator should write sentence by sentence from those passages, attach zero-indexed citation indices into the ordered reference list, and preserve the official-style top-level JSONL object shape.</p>
+            <pre><code>{
+  "metadata": {
+    "team_id": "example-team",
+    "run_id": "title-bm25-rag-v1",
+    "type": "automatic",
+    "narrative_id": "2026-001",
+    "title": "Health impacts of wildfire smoke exposure",
+    "narrative": "Summarize the reported health impacts of wildfire smoke exposure and identify which groups were most affected.",
+    "prompt": "Answer using only the provided ClimbMix evidence."
+  },
+  "references": [
+    "shard_01789_3390",
+    "shard_02144_1022",
+    "shard_04418_2207"
+  ],
+  "answer": [
+    {
+      "text": "The selected evidence links wildfire smoke exposure to respiratory health impacts, with children, older adults, and people with pre-existing conditions described as higher-risk groups.",
+      "citations": [0, 1]
+    },
+    {
+      "text": "The response evidence describes public-health guidance and temporary protective measures rather than a single permanent policy fix.",
+      "citations": [2]
+    }
+  ]
+}</code></pre>
           </article>
         </div>
       </section>
@@ -1034,7 +1188,7 @@ flag anything that fails before submission</code></pre>
 
       navLinks.forEach((link) => {
         const isActive = link.getAttribute("href") === `#${currentId}`;
-        link["class" + "Lis" + "t"].toggle("active", isActive);
+        link.classList.toggle("active", isActive);
         if (isActive) {
           link.setAttribute("aria-current", "page");
         } else {
@@ -1048,9 +1202,50 @@ flag anything that fails before submission</code></pre>
       updateActiveNav();
     }
 
-    const listen = window["addEvent" + "Lis" + "tener"].bind(window);
-    listen("scroll", updateScrollState, { passive: true });
-    listen("resize", updateScrollState);
+    function initTabs() {
+      const tabContainers = Array.from(document.querySelectorAll(".tabs"));
+
+      if (!tabContainers.length) {
+        return;
+      }
+
+      tabContainers.forEach((container) => {
+        const tabButtons = Array.from(container.querySelectorAll("[data-tab]"));
+
+        if (!tabButtons.length) {
+          return;
+        }
+
+        function getControlledPanel(button) {
+          const panelId = button.getAttribute("aria-controls");
+          const panel = panelId ? document.getElementById(panelId) : null;
+          return panel && container.contains(panel) ? panel : null;
+        }
+
+        function activateTab(activeButton) {
+          tabButtons.forEach((button) => {
+            const isActive = button === activeButton;
+            const panel = getControlledPanel(button);
+            button.classList.toggle("is-active", isActive);
+            button.setAttribute("aria-selected", String(isActive));
+            if (panel) {
+              panel.hidden = !isActive;
+            }
+          });
+        }
+
+        tabButtons.forEach((button) => {
+          button.addEventListener("click", () => activateTab(button));
+        });
+
+        const selected = tabButtons.find((button) => button.getAttribute("aria-selected") === "true");
+        activateTab(selected || tabButtons[0]);
+      });
+    }
+
+    window.addEventListener("scroll", updateScrollState, { passive: true });
+    window.addEventListener("resize", updateScrollState);
+    initTabs();
     updateScrollState();
   </script>
 </body>
