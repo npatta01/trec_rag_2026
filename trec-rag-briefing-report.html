@@ -183,6 +183,8 @@
     }
 
     .section-panel {
+      min-width: 0;
+      max-width: 100%;
       scroll-margin-top: 28px;
       padding: 30px;
       border: 1px solid var(--border);
@@ -233,6 +235,13 @@
       margin-top: 24px;
     }
 
+    .card-grid > *,
+    .technique-grid > *,
+    .note-card {
+      min-width: 0;
+      max-width: 100%;
+    }
+
     .note-card {
       min-height: 132px;
       padding: 18px;
@@ -270,6 +279,117 @@
 
     .note-card.green {
       --accent: var(--green);
+    }
+
+    .technique-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .technique-card {
+      display: flex;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 100%;
+      flex-direction: column;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-top: 3px solid var(--accent, var(--teal));
+      border-radius: var(--radius);
+      background: #ffffff;
+    }
+
+    .technique-card.retrieval {
+      --accent: var(--blue);
+    }
+
+    .technique-card.fusion {
+      --accent: var(--teal);
+    }
+
+    .technique-card.reranking {
+      --accent: var(--green);
+    }
+
+    .technique-card.generation {
+      --accent: var(--rose);
+    }
+
+    .technique-card.quality {
+      --accent: var(--green);
+    }
+
+    .technique-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .technique-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 4px 8px;
+      border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 10%, #ffffff);
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .technique-card h3 {
+      margin: 0;
+      font-size: 1rem;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .technique-card p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.58;
+    }
+
+    .technique-card details {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+
+    .technique-card summary {
+      cursor: pointer;
+      padding: 10px 12px;
+      border-radius: 5px 5px 0 0;
+      color: var(--text);
+      font-size: 0.86rem;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    .technique-card summary:focus-visible {
+      background: var(--surface-muted);
+      color: var(--text);
+      outline: none;
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+
+    .technique-card details p {
+      margin: 0;
+      padding: 0 12px 12px;
+      font-size: 0.88rem;
+    }
+
+    .technique-card pre {
+      margin-top: 12px;
+      white-space: pre-wrap;
     }
 
     .timeline-list {
@@ -362,9 +482,12 @@
       color: var(--text);
       font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
       font-size: 0.9em;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     pre {
+      max-width: 100%;
       margin: 18px 0 0;
       overflow-x: auto;
       padding: 14px 16px;
@@ -373,13 +496,19 @@
       background: #f8fafc;
       color: var(--text);
       line-height: 1.5;
+      -webkit-overflow-scrolling: touch;
     }
 
     pre code {
+      display: block;
+      min-width: 0;
       padding: 0;
       border: 0;
       background: transparent;
       font-size: 0.92rem;
+      overflow-wrap: normal;
+      white-space: inherit;
+      word-break: normal;
     }
 
     @media (max-width: 980px) {
@@ -429,6 +558,10 @@
       }
 
       .card-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .technique-grid {
         grid-template-columns: 1fr;
       }
 
@@ -538,8 +671,8 @@
             <span>Strong approaches treated each narrative as a multi-facet request, so answer quality depended on broad evidence coverage as well as careful citation and synthesis.</span>
           </li>
           <li>
-            <strong>Retrieval example</strong>
-            <span>UTokyo <code>4method_merge</code> is well documented as a top 2025 Retrieval task run; treat that as a retrieval result, not as a claim about full answer-generation leadership.</span>
+            <strong>Technique example</strong>
+            <span>UTokyo <code>4method_merge</code> is useful as a 2025 Retrieval task example of combining hybrid retrieval, HyDE-style querying, Reciprocal Rank Fusion (RRF), and reranking before final ranking.</span>
           </li>
         </ul>
       </section>
@@ -547,19 +680,218 @@
       <section id="techniques" class="section-panel" aria-labelledby="techniques-title">
         <div class="section-kicker">Technique Gallery</div>
         <h2 id="techniques-title">Approaches People Used In 2025</h2>
-        <p class="lede">A compact gallery for methods that appeared in participant systems, organized so a newcomer can see how the pieces fit together.</p>
-        <div class="card-grid">
-          <article class="note-card blue">
+        <p class="lede">Read the 2025 systems as a menu of useful techniques, not only as a leaderboard. Most strong RAG pipelines are built from small, understandable moves: find candidate evidence, merge and reorder it, choose what matters, write with citations, then check the answer.</p>
+        <div id="technique-grid" class="technique-grid" aria-label="Beginner technique gallery">
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
+            <h3>BM25 / lexical retrieval</h3>
+            <p>Search by keyword overlap. Documents that share rare or distinctive words with the query rise toward the top.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it as the first baseline, especially when the question includes names, IDs, product terms, legal phrases, or other wording that must match exactly.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>It can miss useful evidence when the document says the same idea with different words.</p>
+            </details>
+            <pre><code>query: "climbmix document ids citation format"
+BM25 favors pages with those exact terms.</code></pre>
+          </article>
+
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
+            <h3>Query expansion</h3>
+            <p>Add related phrases to the original query so search has more ways to find the same idea.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it when users use one term but the collection may use another, such as "cost" versus "price" or "doctor" versus "clinician".</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>Extra words can drift away from the intent and pull in documents that sound related but answer the wrong question.</p>
+            </details>
+            <pre><code>original: "solar rebate rules"
+expanded: "solar rebate rules tax credit incentive eligibility"</code></pre>
+          </article>
+
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
             <h3>Query decomposition</h3>
-            <p>Break a complex prompt into focused retrieval intents before sending it through search.</p>
+            <p>Split a long narrative need into smaller searches, each aimed at one part of the answer.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it for questions with multiple facets, time periods, entities, or comparison points that one search might not cover.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>Vague subqueries can make the system look busy while still missing the facts the final answer needs.</p>
+            </details>
+            <pre><code>need: "Compare benefits and risks"
+search 1: "main benefits"
+search 2: "reported risks"</code></pre>
           </article>
-          <article class="note-card green">
-            <h3>Hybrid retrieval</h3>
-            <p>Combine lexical and dense signals, then rerank to improve evidence quality before generation.</p>
+
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
+            <h3>Dense retrieval</h3>
+            <p>Turn queries and documents into embeddings, then retrieve text that is close in meaning even when the words differ.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it when paraphrases matter, when users ask in everyday language, or when the collection uses varied wording.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>It may retrieve passages that are topically similar but do not actually answer the question.</p>
+            </details>
+            <pre><code>"How do I appeal?" can find
+"request a review of the decision"</code></pre>
           </article>
-          <article class="note-card rose">
-            <h3>Answer verification</h3>
-            <p>Use post-generation checks to catch weak citations, unsupported claims, and missed evidence.</p>
+
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
+            <h3>Hybrid sparse plus dense retrieval</h3>
+            <p>Run keyword search and embedding search together, then combine their strengths so exact terms and paraphrases both get a chance.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it when exact wording matters but you still need semantic coverage. UTokyo's documented 2025 Retrieval run is a useful example of this family with hybrid retrieval, HyDE-style querying, Reciprocal Rank Fusion (RRF), and reranking.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>Two retrievers mean more settings to tune, and bad merging can bury the best evidence instead of promoting it.</p>
+            </details>
+            <pre><code>candidates = bm25(query) + dense(query)
+next: fuse, rerank, then select evidence</code></pre>
+          </article>
+
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
+            <h3>SPLADE-style learned sparse retrieval</h3>
+            <p>Use a model to predict useful weighted keywords, keeping the speed and transparency of sparse search while adding learned expansion.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it when you want inverted-index behavior but need help matching related terms that plain keyword search would miss.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>It adds model complexity, indexing cost, and another source of retrieval behavior to debug.</p>
+            </details>
+          </article>
+
+          <article class="technique-card fusion">
+            <div class="technique-meta">
+              <span class="technique-tag">Fusion</span>
+            </div>
+            <h3>Reciprocal Rank Fusion</h3>
+            <p>Merge several ranked lists by rewarding documents that appear near the top of one or more lists.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it when you have BM25, dense, expanded-query, or decomposed-query results and want a simple, robust way to combine them.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>It cannot rescue evidence that no retriever found in the first place.</p>
+            </details>
+            <pre><code>score(doc) = sum(1 / (k + rank_in_each_list))</code></pre>
+          </article>
+
+          <article class="technique-card retrieval">
+            <div class="technique-meta">
+              <span class="technique-tag">Retrieval</span>
+            </div>
+            <h3>HyDE</h3>
+            <p>Ask a model to draft a hypothetical answer, then search with that draft so retrieval has richer language to match against.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it for abstract or underspecified questions where the original query is too thin to retrieve good evidence.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>If the hypothetical answer invents the wrong framing, retrieval can drift toward convincing but irrelevant material.</p>
+            </details>
+            <pre><code>user query -> hypothetical answer
+hypothetical answer -> retrieval query</code></pre>
+          </article>
+
+          <article class="technique-card reranking">
+            <div class="technique-meta">
+              <span class="technique-tag">Reranking</span>
+            </div>
+            <h3>LLM reranking</h3>
+            <p>Use a stronger model to read candidate passages and reorder them by how useful they are for the user's actual need.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it after broad retrieval when you can afford extra latency or cost to improve the top evidence shown to the generator.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>It is slower and costlier than first-stage retrieval, and a vague prompt can reward fluent but weak evidence.</p>
+            </details>
+            <pre><code>Prompt: "Rank these passages by direct support
+for answering the narrative."</code></pre>
+          </article>
+
+          <article class="technique-card reranking">
+            <div class="technique-meta">
+              <span class="technique-tag">Reranking</span>
+            </div>
+            <h3>Evidence selection</h3>
+            <p>Choose the small set of chunks the answer writer will actually use, rather than sending every retrieved passage forward.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it before generation when the candidate pool is large, repetitive, or mixed with distracting background material.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>Missing one important facet can produce a polished answer that is still incomplete.</p>
+            </details>
+          </article>
+
+          <article class="technique-card generation">
+            <div class="technique-meta">
+              <span class="technique-tag">Generation</span>
+            </div>
+            <h3>Citation-first generation</h3>
+            <p>Plan the answer around cited evidence before writing the final prose, so each important claim has a source.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it when the evaluation rewards traceable claims and when readers need to inspect where each part of the answer came from.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>The answer can become stiff if it lists citations without synthesizing what the evidence means.</p>
+            </details>
+            <pre><code>claim -> supporting doc id -> sentence
+repeat before drafting the final response</code></pre>
+          </article>
+
+          <article class="technique-card quality">
+            <div class="technique-meta">
+              <span class="technique-tag">Quality</span>
+            </div>
+            <h3>Post-generation checks</h3>
+            <p>Review the drafted answer for uncited claims, missing facets, wrong citations, and statements the evidence does not support.</p>
+            <details>
+              <summary>When to use it</summary>
+              <p>Use it as the final gate before submission, especially for long answers with many claims and citations.</p>
+            </details>
+            <details>
+              <summary>Watch out for</summary>
+              <p>A weak checker may rubber-stamp errors, so it needs clear rules and should inspect both the answer and the cited evidence.</p>
+            </details>
+            <pre><code>checklist: cited? supported? complete?
+flag anything that fails before submission</code></pre>
           </article>
         </div>
       </section>
