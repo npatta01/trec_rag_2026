@@ -2,7 +2,15 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
-## `remote_pyserini.py`
+## Remote Pyserini Helpers
+
+Stable notebook imports come from `remote_pyserini.py`. Implementation is split
+by responsibility:
+
+- `repo_env.py` loads `.env` / `.env.local` from the worktree or shared checkout.
+- `env_config.py` holds typed environment helpers.
+- `remote_config.py` builds `RemotePyseriniConfig`.
+- `remote_client.py` sends search requests and normalizes candidate rows.
 
 Inputs:
 
