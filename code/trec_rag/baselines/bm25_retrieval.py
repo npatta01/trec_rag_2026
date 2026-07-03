@@ -41,6 +41,25 @@ class RetrievalRow:
         return f"{self.topic_id} Q0 {self.docid} {self.rank} {self.score} {self.run_id}"
 
 
+def _query_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def build_query(topic: Topic) -> str:
+    title = " ".join(topic.title.split())
+    narrative = " ".join(topic.narrative.split())
+    if not title:
+        return narrative
+    if not narrative:
+        return title
+
+    title_key = _query_key(title)
+    narrative_key = _query_key(narrative)
+    if narrative_key == title_key or narrative_key.startswith(f"{title_key} "):
+        return narrative
+    return f"{title}\n{narrative}"
+
+
 def _candidate_rank(candidate: dict[str, object]) -> int:
     try:
         return int(candidate.get("rank") or 0)
@@ -117,9 +136,10 @@ def run_bm25_retrieval(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for topic in topics:
-        response = client.search(topic.title)
+        query = build_query(topic)
+        response = client.search(query)
         _cache_path(cache_dir, topic.id).write_text(
-            json.dumps({"query": topic.title, "response": response}, indent=2, sort_keys=True),
+            json.dumps({"query": query, "response": response}, indent=2, sort_keys=True),
             encoding="utf-8",
         )
         candidates = normalize_candidates(response)
@@ -181,7 +201,7 @@ def validate_retrieval_run(runfile: Path, *, expected_topic_ids: Iterable[str]) 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run title-only BM25 retrieval against the hosted Pyserini ClimbMix index."
+        description="Run topic-text BM25 retrieval against the hosted Pyserini ClimbMix index."
     )
     parser.add_argument("--topics", type=Path, required=True, help="Topic JSONL or dev TSV file.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)

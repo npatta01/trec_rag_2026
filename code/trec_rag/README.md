@@ -43,9 +43,10 @@ PYTHONPATH=code uv run --with pytest pytest code/tests/test_remote_pyserini.py -
 
 ## BM25 Retrieval Baseline
 
-The first reusable baseline is title-only BM25 retrieval over the hosted
-ClimbMix Pyserini index. It uses the remote helpers above and writes the TREC
-retrieval runfile format:
+The first reusable baseline is topic-text BM25 retrieval over the hosted
+ClimbMix Pyserini index. It combines `title` and `narrative` for official-style
+JSONL topics, uses the full text from local development TSV topics, and writes
+the TREC retrieval runfile format:
 
 ```text
 topic_id Q0 docid rank score run_id
@@ -54,8 +55,8 @@ topic_id Q0 docid rank score run_id
 Inputs:
 
 - official-style JSONL topics with `id`, `title`, and `narrative`
-- local development TSV topics shaped as `qid<TAB>text`; titles are derived
-  from the first words of the topic text
+- local development TSV topics shaped as `qid<TAB>text`; the full text is used
+  for retrieval, while a short derived title is kept for normalized records
 - `.env` / `.env.local` settings for `INDEX_URL` or `DEFAULT_BASE_URL` plus
   `DEFAULT_INDEX`, and `PYSERINI_API_TOKEN` when the endpoint requires it
 
@@ -73,7 +74,7 @@ Outputs:
 
 - `outputs/baseline/r_output_trec_rag_2026.tsv`: retrieval runfile
 - `outputs/baseline/cache/<topic_id>.json`: raw hosted Pyserini response plus
-  the title query used for that topic
+  the query text used for that topic
 
 The runner validates the generated runfile before exiting. Validation checks
 for six-column TREC rows, numeric ranks and scores, one or more rows for every

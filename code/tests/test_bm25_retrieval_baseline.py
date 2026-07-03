@@ -4,6 +4,7 @@ import pytest
 
 from trec_rag.baselines.bm25_retrieval import (
     RetrievalRow,
+    build_query,
     candidates_to_run_rows,
     run_bm25_retrieval,
     validate_retrieval_run,
@@ -108,7 +109,32 @@ def test_candidates_to_run_rows_rejects_missing_docids():
         )
 
 
-def test_run_bm25_retrieval_uses_titles_writes_runfile_and_caches_raw_responses(tmp_path):
+def test_build_query_combines_title_and_narrative_without_repeating_derived_titles():
+    official_topic = Topic(
+        id="99",
+        title="Athlete compensation",
+        narrative="Explain inclusion, cultural influence, and the business side of sports.",
+    )
+    derived_tsv_topic = Topic(
+        id="14",
+        title="I'm interested in sports societal impact",
+        narrative=(
+            "I'm interested in sports' societal impact, particularly concerning athlete "
+            "compensation and inclusion."
+        ),
+    )
+
+    assert build_query(official_topic) == (
+        "Athlete compensation\n"
+        "Explain inclusion, cultural influence, and the business side of sports."
+    )
+    assert build_query(derived_tsv_topic) == (
+        "I'm interested in sports' societal impact, particularly concerning athlete "
+        "compensation and inclusion."
+    )
+
+
+def test_run_bm25_retrieval_uses_full_topic_text_writes_runfile_and_caches_raw_responses(tmp_path):
     class FakeClient:
         def __init__(self):
             self.queries = []
@@ -126,7 +152,7 @@ def test_run_bm25_retrieval_uses_titles_writes_runfile_and_caches_raw_responses(
         Topic(
             id="31",
             title="E-waste impacts",
-            narrative="Use the narrative only for context, not the BM25 query.",
+            narrative="Use the narrative as part of the BM25 query.",
         )
     ]
     output_path = tmp_path / "r_output_trec_rag_2026.tsv"
@@ -142,7 +168,9 @@ def test_run_bm25_retrieval_uses_titles_writes_runfile_and_caches_raw_responses(
         depth=100,
     )
 
-    assert fake_client.queries == ["E-waste impacts"]
+    assert fake_client.queries == [
+        "E-waste impacts\nUse the narrative as part of the BM25 query."
+    ]
     assert rows == [
         RetrievalRow(
             topic_id="31",
@@ -164,7 +192,7 @@ def test_run_bm25_retrieval_uses_titles_writes_runfile_and_caches_raw_responses(
         "31 Q0 doc-b 2 7.5 pyserini_climbmix_bm25_top100",
     ]
     assert json.loads((cache_dir / "31.json").read_text(encoding="utf-8")) == {
-        "query": "E-waste impacts",
+        "query": "E-waste impacts\nUse the narrative as part of the BM25 query.",
         "response": {
             "candidates": [
                 {"rank": 2, "docid": "doc-b", "score": 7.5, "doc": {"contents": "second"}},

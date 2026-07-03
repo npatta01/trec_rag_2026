@@ -16,7 +16,7 @@ implementation patterns.
 - `docs/superpowers/` - design and implementation notes produced while building
   the report.
 - `code/` - reusable helpers for remote Pyserini access, topic loading, and the
-  title-only BM25 retrieval baseline.
+  topic-text BM25 retrieval baseline.
 
 ## Agent Workflow
 
