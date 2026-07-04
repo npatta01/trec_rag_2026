@@ -22,6 +22,22 @@ The run was intentionally gentle against the hosted endpoint: cached topics were
 reused, uncached requests were issued sequentially, and retries used a longer
 timeout with backoff after one topic hit the default 30 second timeout.
 
+## Approach
+
+The baseline treats retrieval as the first reusable stage of the RAG system. For
+each development topic, the pipeline uses the original topic narrative as a
+single BM25 query against the hosted Pyserini ClimbMix index. The retriever
+returns the top `1000` candidates with raw document text, writes the raw
+response into a shared cache keyed by query, index, endpoint, and hit count, and
+then normalizes those candidates into inspectable JSONL stage records.
+
+No reranking or query decomposition is applied in this experiment. The ranking
+stage simply preserves the BM25 order, deduplicates by `docid`, writes a TREC
+runfile, selects the top text-bearing evidence for placeholder RAG output, and
+evaluates the retrieval order with projected dev qrels. This makes the run a
+candidate-pool and retrieval-quality baseline rather than a full answer-quality
+system.
+
 ## Runtime Config
 
 This is the exact scratch config used for the full 22-topic `hits: 1000` run.
