@@ -15,8 +15,9 @@ implementation patterns.
   for querying the external Pyserini API.
 - `docs/superpowers/` - design and implementation notes produced while building
   the report.
-- `code/` - reusable helpers for remote Pyserini access, topic loading, and the
-  topic-text BM25 retrieval baseline.
+- `configs/` - checked-in experiment configurations.
+- `code/` - reusable helpers for remote Pyserini access, topic loading, the
+  config-driven RAG pipeline, and the topic-text BM25 retrieval baseline.
 
 ## Agent Workflow
 
@@ -37,5 +38,5 @@ node reports/trec-rag-2025-writeups/interactive-writeup.test.js
 The Python helper and baseline tests are:
 
 ```bash
-PYTHONPATH=code uv run --with pytest pytest code/tests -q
+PYTHONPATH=code uv run --with pytest --with pyyaml pytest code/tests -q
 ```

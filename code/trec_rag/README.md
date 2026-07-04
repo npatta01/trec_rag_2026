@@ -41,12 +41,50 @@ Run validation:
 PYTHONPATH=code uv run --with pytest pytest code/tests/test_remote_pyserini.py -q
 ```
 
+## Config-Driven RAG Pipeline
+
+The pipeline is the preferred path for experiments. It keeps query
+understanding, retrieval, ranking, evidence selection, generation, and
+evaluation as separate stages. V1 ships one runnable configuration:
+`configs/rag25_bm25_full_query_v1.yaml`.
+
+Run:
+
+```bash
+PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
+  --config configs/rag25_bm25_full_query_v1.yaml
+```
+
+The experiment ID is the run identity. If `experiment.output_dir` is omitted,
+outputs are written to `outputs/<experiment.id>/`.
+
+Current V1 stages:
+
+- `original_topic` query understanding: use the original narrative/prompt text.
+- `pyserini_remote` retriever: run remote BM25 over ClimbMix.
+- `passthrough` ranking: accept exactly one retrieval stream and deduplicate by
+  best rank.
+- `top_k` evidence selection: choose text-bearing ranked candidates.
+- `placeholder` generation: write valid cited RAG JSONL for plumbing checks.
+- `dev_projected_qrels` evaluation: compute development diagnostics such as
+  `ndcg@10` and `recall@100`.
+
+Outputs:
+
+- `r_output_trec_rag_2026.tsv`
+- `rag_output_trec_rag_2026.jsonl`
+- `retrieval_metrics.json`
+- `stage_queries.jsonl`
+- `stage_retrieved.jsonl`
+- `stage_ranked.jsonl`
+- `stage_evidence.jsonl`
+- `cache/`
+
 ## BM25 Retrieval Baseline
 
 The first reusable baseline is topic-text BM25 retrieval over the hosted
-ClimbMix Pyserini index. It combines `title` and `narrative` for official-style
-JSONL topics, uses the full text from local development TSV topics, and writes
-the TREC retrieval runfile format:
+ClimbMix Pyserini index. It uses the original topic narrative/prompt text as
+the query and writes the TREC retrieval runfile format:
 
 ```text
 topic_id Q0 docid rank score run_id
@@ -54,7 +92,8 @@ topic_id Q0 docid rank score run_id
 
 Inputs:
 
-- official-style JSONL topics with `id`, `title`, and `narrative`
+- official-style JSONL topics with `id`, `title`, and `narrative`; retrieval
+  uses `narrative`
 - local development TSV topics shaped as `qid<TAB>text`; the full text is used
   for retrieval, while a short derived title is kept for normalized records
 - `.env` / `.env.local` settings for `INDEX_URL` or `DEFAULT_BASE_URL` plus
@@ -84,5 +123,5 @@ input topic, duplicate document IDs within a topic, and contiguous ranks from
 Run all Python tests:
 
 ```bash
-PYTHONPATH=code uv run --with pytest pytest code/tests -q
+PYTHONPATH=code uv run --with pytest --with pyyaml pytest code/tests -q
 ```

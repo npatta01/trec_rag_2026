@@ -1,0 +1,43 @@
+experiment:
+  id: rag25_bm25_full_query_v1
+
+submission:
+  team_id: local-baseline
+
+topics:
+  path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  format: tsv
+
+query_understanding:
+  variants:
+    - name: original
+      type: original_topic
+
+retrievers:
+  - name: climbmix_bm25
+    type: pyserini_remote
+    query_variants: [original]
+    hits: 100
+    index: climbmix-400b
+
+ranking:
+  type: passthrough
+  dedupe:
+    by: docid
+    keep: best_rank
+    preserve_provenance: true
+
+evidence:
+  type: top_k
+  k: 5
+  require_text: true
+  allow_fewer: true
+
+generation:
+  type: placeholder
+
+evaluation:
+  kind: dev_projected_qrels
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  metrics: [ndcg@10, recall@100]
+  relevance_threshold: 2

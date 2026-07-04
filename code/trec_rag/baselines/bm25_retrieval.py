@@ -1,4 +1,4 @@
-"""Title-only BM25 retrieval baseline for TREC RAG 2026."""
+"""BM25 retrieval baseline for TREC RAG 2026."""
 
 from __future__ import annotations
 
@@ -41,23 +41,8 @@ class RetrievalRow:
         return f"{self.topic_id} Q0 {self.docid} {self.rank} {self.score} {self.run_id}"
 
 
-def _query_key(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
-
-
 def build_query(topic: Topic) -> str:
-    title = " ".join(topic.title.split())
-    narrative = " ".join(topic.narrative.split())
-    if not title:
-        return narrative
-    if not narrative:
-        return title
-
-    title_key = _query_key(title)
-    narrative_key = _query_key(narrative)
-    if narrative_key == title_key or narrative_key.startswith(f"{title_key} "):
-        return narrative
-    return f"{title}\n{narrative}"
+    return " ".join(topic.narrative.split())
 
 
 def _candidate_rank(candidate: dict[str, object]) -> int:

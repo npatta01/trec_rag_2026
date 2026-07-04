@@ -109,7 +109,7 @@ def test_candidates_to_run_rows_rejects_missing_docids():
         )
 
 
-def test_build_query_combines_title_and_narrative_without_repeating_derived_titles():
+def test_build_query_uses_original_topic_narrative_without_title_concat():
     official_topic = Topic(
         id="99",
         title="Athlete compensation",
@@ -125,7 +125,6 @@ def test_build_query_combines_title_and_narrative_without_repeating_derived_titl
     )
 
     assert build_query(official_topic) == (
-        "Athlete compensation\n"
         "Explain inclusion, cultural influence, and the business side of sports."
     )
     assert build_query(derived_tsv_topic) == (
@@ -168,9 +167,7 @@ def test_run_bm25_retrieval_uses_full_topic_text_writes_runfile_and_caches_raw_r
         depth=100,
     )
 
-    assert fake_client.queries == [
-        "E-waste impacts\nUse the narrative as part of the BM25 query."
-    ]
+    assert fake_client.queries == ["Use the narrative as part of the BM25 query."]
     assert rows == [
         RetrievalRow(
             topic_id="31",
@@ -192,7 +189,7 @@ def test_run_bm25_retrieval_uses_full_topic_text_writes_runfile_and_caches_raw_r
         "31 Q0 doc-b 2 7.5 pyserini_climbmix_bm25_top100",
     ]
     assert json.loads((cache_dir / "31.json").read_text(encoding="utf-8")) == {
-        "query": "E-waste impacts\nUse the narrative as part of the BM25 query.",
+        "query": "Use the narrative as part of the BM25 query.",
         "response": {
             "candidates": [
                 {"rank": 2, "docid": "doc-b", "score": 7.5, "doc": {"contents": "second"}},
