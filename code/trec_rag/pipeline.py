@@ -22,7 +22,7 @@ from trec_rag.pipeline_models import (
 )
 from trec_rag.query_understanding import build_query_variants
 from trec_rag.ranking import passthrough_rank
-from trec_rag.repo_env import load_repo_env
+from trec_rag.repo_env import load_repo_env, shared_checkout_root
 from trec_rag.retrievers import Retriever, pyserini_factory
 from trec_rag.topics import Topic, load_topics
 
@@ -33,6 +33,7 @@ RetrieverFactory = Callable[[RetrieverConfig, Path], Retriever]
 @dataclass(frozen=True)
 class PipelineResult:
     output_dir: Path
+    cache_dir: Path
     queries: list[QueryVariant]
     retrieved: list[RetrievedCandidate]
     ranked: list[RankedCandidate]
@@ -53,6 +54,11 @@ def _write_json(payload: dict[str, object], path: Path) -> None:
     path.write_text(json.dumps(jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def pipeline_cache_dir(root_dir: Path, experiment_id: str) -> Path:
+    cache_root = shared_checkout_root(root_dir) or root_dir
+    return cache_root / "outputs" / experiment_id / "cache"
+
+
 def run_pipeline(
     config_path: Path,
     *,
@@ -63,7 +69,7 @@ def run_pipeline(
     retriever_factories = {"pyserini_remote": pyserini_factory, **(retriever_factories or {})}
 
     output_dir = config.output_dir
-    cache_dir = output_dir / "cache"
+    cache_dir = pipeline_cache_dir(config.root_dir, config.run_id)
     topics = load_topics(config.topics.path)
     topics_by_id = {topic.id: topic for topic in topics}
 
@@ -137,6 +143,7 @@ def run_pipeline(
 
     return PipelineResult(
         output_dir=output_dir,
+        cache_dir=cache_dir,
         queries=queries,
         retrieved=retrieved,
         ranked=ranked,

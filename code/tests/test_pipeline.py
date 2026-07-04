@@ -5,7 +5,7 @@ import pytest
 from trec_rag.evaluation import evaluate_ranked, parse_qrels
 from trec_rag.evidence import select_top_k_evidence
 from trec_rag.generation import generate_placeholder_rag
-from trec_rag.pipeline import run_pipeline
+from trec_rag.pipeline import pipeline_cache_dir, run_pipeline
 from trec_rag.pipeline_config import RetrieverConfig, load_pipeline_config
 from trec_rag.pipeline_models import (
     QueryVariant,
@@ -528,6 +528,18 @@ def test_qrels_metrics_handle_graded_labels_and_unjudged_docs(tmp_path):
     assert metrics["metrics"]["recall@3"] == 0.5
 
 
+def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_path):
+    shared = tmp_path / "shared"
+    worktree = tmp_path / "worktree"
+    git_dir = shared / ".git" / "worktrees" / "wt"
+    git_dir.mkdir(parents=True)
+    worktree.mkdir()
+    (worktree / "AGENTS.md").write_text("# instructions\n", encoding="utf-8")
+    (worktree / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+
+    assert pipeline_cache_dir(worktree, "demo") == shared / "outputs" / "demo" / "cache"
+
+
 def test_run_pipeline_writes_stage_outputs_with_fake_retriever(tmp_path):
     topics_path = tmp_path / "topics.tsv"
     topics_path.write_text("31\tExplain e-waste impacts.\n", encoding="utf-8")
@@ -583,12 +595,20 @@ evaluation:
                 )
             ]
 
+    cache_dirs = []
+
+    def fake_factory(_config, cache_dir):
+        cache_dirs.append(cache_dir)
+        return FakeRetriever()
+
     result = run_pipeline(
         config_path,
-        retriever_factories={"fake": lambda _config, _cache_dir: FakeRetriever()},
+        retriever_factories={"fake": fake_factory},
     )
 
     assert result.output_dir == tmp_path / "outputs" / "rag25_fake_v1"
+    assert result.cache_dir == tmp_path / "outputs" / "rag25_fake_v1" / "cache"
+    assert cache_dirs == [result.cache_dir]
     assert (result.output_dir / "r_output_trec_rag_2026.tsv").read_text(
         encoding="utf-8"
     ).splitlines() == ["31 Q0 doc-a 1 9.0 rag25_fake_v1"]

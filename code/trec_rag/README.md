@@ -56,7 +56,10 @@ PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
 ```
 
 The experiment ID is the run identity. If `experiment.output_dir` is omitted,
-outputs are written to `outputs/<experiment.id>/`.
+stage outputs are written to `outputs/<experiment.id>/`. When running from a
+linked worktree, remote retriever cache files are stored under the shared
+checkout root instead of the worktree:
+`<shared-checkout>/outputs/<experiment.id>/cache/`.
 
 Current V1 stages:
 
@@ -80,7 +83,10 @@ Outputs:
 - `stage_retrieved.jsonl`
 - `stage_ranked.jsonl`
 - `stage_evidence.jsonl`
-- `cache/`
+
+Shared cache:
+
+- `<repo-root-or-shared-checkout>/outputs/<experiment.id>/cache/`
 
 ## BM25 Retrieval Baseline
 
