@@ -106,8 +106,10 @@ future run id would be something like `rag25_bm25_full_dev_hits1000_v1`.
   `tmp/hits1000-full-dev/output/rag_output_trec_rag_2026.jsonl`
 - Metrics:
   `tmp/hits1000-full-dev/output/retrieval_metrics.json`
+- Run-level tracker:
+  `reports/experiments/runs.csv`
 - Topic score tracker:
-  `reports/experiments/bm25_pyserini_hits1000_topic_scores.csv`
+  `reports/experiments/topic_scores.csv`
 - Raw Pyserini cache:
   `/home/nidhin/projects/trec_rag/outputs/cache_demo_two_topics_hits1000/cache/`
 
@@ -137,9 +139,10 @@ Aggregate metrics:
 Per-topic metrics:
 
 The same values are also stored in CSV form at
-`reports/experiments/bm25_pyserini_hits1000_topic_scores.csv` with one row per
-topic plus an `overall` row, so future experiment variants can be compared by
-topic id.
+`reports/experiments/topic_scores.csv` with one row per experiment/topic plus
+an `overall` row. Run-level metadata and aggregate metrics are stored in
+`reports/experiments/runs.csv`, so future experiment variants can be compared
+by topic id without creating a new schema each time.
 
 | topic | ndcg@10 | recall@100 |
 |---|---:|---:|
