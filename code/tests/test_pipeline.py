@@ -6,7 +6,7 @@ from trec_rag.evaluation import evaluate_ranked, parse_qrels
 from trec_rag.evidence import select_top_k_evidence
 from trec_rag.generation import generate_placeholder_rag
 from trec_rag.pipeline import run_pipeline
-from trec_rag.pipeline_config import load_pipeline_config
+from trec_rag.pipeline_config import RetrieverConfig, load_pipeline_config
 from trec_rag.pipeline_models import (
     QueryVariant,
     RankedCandidate,
@@ -14,7 +14,13 @@ from trec_rag.pipeline_models import (
 )
 from trec_rag.query_understanding import build_query_variants
 from trec_rag.ranking import passthrough_rank
-from trec_rag.retrievers import cache_path, normalize_retrieved_candidates
+from trec_rag.remote_pyserini import RemotePyseriniConfig
+from trec_rag.retrievers import (
+    PyseriniRemoteRetriever,
+    cache_path,
+    normalize_retrieved_candidates,
+    request_cache_key,
+)
 from trec_rag.topics import Topic
 
 
@@ -74,6 +80,7 @@ evaluation:
     assert config.experiment.id == "rag25_bm25_full_query_v1"
     assert config.output_dir == tmp_path / "outputs" / "rag25_bm25_full_query_v1"
     assert config.run_id == "rag25_bm25_full_query_v1"
+    assert config.retrievers[0].cache is True
 
     bad_path = write_config(
         tmp_path / "bad.yaml",
@@ -91,6 +98,31 @@ generation: {type: placeholder}
 
     with pytest.raises(ValueError, match="submission.run_id.*experiment.id"):
         load_pipeline_config(bad_path)
+
+
+def test_config_allows_disabling_retriever_cache(tmp_path):
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        """
+experiment: {id: demo}
+submission: {team_id: local-baseline}
+topics: {path: topics.tsv, format: tsv}
+query_understanding: {variants: [{name: original, type: original_topic}]}
+retrievers:
+  - name: climbmix_bm25
+    type: pyserini_remote
+    query_variants: [original]
+    hits: 10
+    cache: false
+ranking: {type: passthrough}
+evidence: {type: top_k, k: 1, allow_fewer: true}
+generation: {type: placeholder}
+""",
+    )
+
+    config = load_pipeline_config(config_path)
+
+    assert config.retrievers[0].cache is False
 
 
 def test_config_rejects_duplicate_names_and_unknown_query_variant(tmp_path):
@@ -259,6 +291,135 @@ def test_retrieval_normalization_and_cache_path_include_topic_variant_and_retrie
             text="B text",
         ),
     ]
+
+
+def test_request_cache_key_changes_when_hits_change():
+    query = QueryVariant("31", "original", "e-waste narrative", "original_topic")
+    first = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+    )
+    second = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=100,
+        index="climbmix-400b",
+    )
+
+    assert request_cache_key(first, query, index_url="https://pyserini.test/search") != (
+        request_cache_key(second, query, index_url="https://pyserini.test/search")
+    )
+
+
+def test_pyserini_remote_retriever_reads_cached_response_when_cache_enabled(tmp_path):
+    query = QueryVariant("31", "original", "e-waste narrative", "original_topic")
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+    )
+
+    class FailingClient:
+        config = RemotePyseriniConfig(
+            index_url="https://pyserini.test/search",
+            api_token=None,
+            hits=10,
+            queries=(),
+        )
+
+        def search(self, _query):
+            raise AssertionError("cache hit should not call remote search")
+
+    cache_file = tmp_path / cache_path(
+        query.topic_id,
+        query.variant_name,
+        config.name,
+        request_cache_key(config, query, index_url=FailingClient.config.index_url),
+    )
+    cache_file.write_text(
+        json.dumps(
+            {
+                "response": {
+                    "candidates": [
+                        {"rank": 1, "docid": "doc-cached", "score": 7.0, "doc": {"contents": "Cached"}}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=FailingClient())
+
+    candidates = retriever.retrieve(query)
+
+    assert [candidate.docid for candidate in candidates] == ["doc-cached"]
+
+
+def test_pyserini_remote_retriever_cache_false_bypasses_cache_and_does_not_write(tmp_path):
+    query = QueryVariant("31", "original", "e-waste narrative", "original_topic")
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+        cache=False,
+    )
+
+    class CountingClient:
+        config = RemotePyseriniConfig(
+            index_url="https://pyserini.test/search",
+            api_token=None,
+            hits=10,
+            queries=(),
+        )
+
+        def __init__(self):
+            self.calls = []
+
+        def search(self, query_text):
+            self.calls.append(query_text)
+            return {
+                "candidates": [
+                    {"rank": 1, "docid": "doc-fresh", "score": 9.0, "doc": {"contents": "Fresh"}}
+                ]
+            }
+
+    stale_cache = tmp_path / cache_path(
+        query.topic_id,
+        query.variant_name,
+        config.name,
+        request_cache_key(config, query, index_url=CountingClient.config.index_url),
+    )
+    stale_cache.write_text(
+        json.dumps(
+            {
+                "response": {
+                    "candidates": [
+                        {"rank": 1, "docid": "doc-stale", "score": 1.0, "doc": {"contents": "Stale"}}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_cache_text = stale_cache.read_text(encoding="utf-8")
+    client = CountingClient()
+    retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client)
+
+    candidates = retriever.retrieve(query)
+
+    assert client.calls == ["e-waste narrative"]
+    assert [candidate.docid for candidate in candidates] == ["doc-fresh"]
+    assert stale_cache.read_text(encoding="utf-8") == original_cache_text
+    assert sorted(path.name for path in tmp_path.iterdir()) == [stale_cache.name]
 
 
 def test_passthrough_ranking_dedupes_docids_and_preserves_provenance():

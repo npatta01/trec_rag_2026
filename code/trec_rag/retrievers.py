@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -27,10 +28,35 @@ def _safe_part(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "part"
 
 
-def cache_path(topic_id: str, variant_name: str, retriever_name: str) -> Path:
-    return Path(
-        f"{_safe_part(topic_id)}__{_safe_part(variant_name)}__{_safe_part(retriever_name)}.json"
-    )
+def cache_path(
+    topic_id: str,
+    variant_name: str,
+    retriever_name: str,
+    request_key: str | None = None,
+) -> Path:
+    base = f"{_safe_part(topic_id)}__{_safe_part(variant_name)}__{_safe_part(retriever_name)}"
+    if request_key:
+        return Path(f"{base}__{_safe_part(request_key)}.json")
+    return Path(f"{base}.json")
+
+
+def request_cache_key(
+    config: RetrieverConfig,
+    query: QueryVariant,
+    *,
+    index_url: str,
+) -> str:
+    fingerprint = {
+        "retriever_name": config.name,
+        "retriever_type": config.type,
+        "index": config.index,
+        "index_url": index_url,
+        "hits": config.hits,
+        "query_text": query.query_text,
+    }
+    return hashlib.sha256(
+        json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
 
 
 def normalize_retrieved_candidates(
@@ -72,23 +98,51 @@ class PyseriniRemoteRetriever:
         self.client = client or RemotePyseriniClient(_remote_config(config))
 
     def retrieve(self, query: QueryVariant) -> list[RetrievedCandidate]:
-        response = self.client.search(query.query_text)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        (self.cache_dir / cache_path(query.topic_id, query.variant_name, self.config.name)).write_text(
-            json.dumps(
-                {
-                    "query": query.query_text,
-                    "topic_id": query.topic_id,
-                    "variant_name": query.variant_name,
-                    "retriever_name": self.config.name,
-                    "response": response,
-                },
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
+        request_key = request_cache_key(
+            self.config,
+            query,
+            index_url=self.client.config.index_url,
         )
+        cache_file = self.cache_dir / cache_path(
+            query.topic_id,
+            query.variant_name,
+            self.config.name,
+            request_key,
+        )
+        if self.config.cache and cache_file.exists():
+            payload = json.loads(cache_file.read_text(encoding="utf-8"))
+            response = payload.get("response")
+            if not isinstance(response, dict):
+                raise ValueError(f"cache file missing response object: {cache_file}")
+            return normalize_retrieved_candidates(
+                response,
+                query=query,
+                retriever_name=self.config.name,
+            )
+
+        response = self.client.search(query.query_text)
+        if self.config.cache:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(
+                json.dumps(
+                    {
+                        "cache_key": request_key,
+                        "query": query.query_text,
+                        "topic_id": query.topic_id,
+                        "variant_name": query.variant_name,
+                        "retriever_name": self.config.name,
+                        "retriever_type": self.config.type,
+                        "index": self.config.index,
+                        "index_url": self.client.config.index_url,
+                        "hits": self.config.hits,
+                        "response": response,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
         return normalize_retrieved_candidates(response, query=query, retriever_name=self.config.name)
 
 

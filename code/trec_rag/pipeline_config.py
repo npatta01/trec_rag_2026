@@ -41,6 +41,7 @@ class RetrieverConfig:
     query_variants: tuple[str, ...]
     hits: int
     index: str | None = None
+    cache: bool = True
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,19 @@ def _check_unique(names: list[str], label: str) -> None:
         seen.add(name)
 
 
+def _optional_bool(mapping: dict[str, Any], key: str, default: bool) -> bool:
+    value = mapping.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    raise ValueError(f"{key} must be a boolean")
+
+
 def load_pipeline_config(path: Path) -> PipelineConfig:
     config_path = path.resolve()
     root_dir = find_repo_root(config_path.parent)
@@ -197,6 +211,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
                 query_variants=query_variant_names,
                 hits=int(row.get("hits") or 100),
                 index=str(row["index"]).strip() if row.get("index") else None,
+                cache=_optional_bool(row, "cache", True),
             )
         )
     _check_unique([retriever.name for retriever in retrievers], "retriever")

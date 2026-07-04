@@ -19,6 +19,7 @@ retrievers:
     query_variants: [original]
     hits: 100
     index: climbmix-400b
+    cache: true
 
 ranking:
   type: passthrough

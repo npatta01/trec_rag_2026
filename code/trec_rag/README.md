@@ -61,7 +61,9 @@ outputs are written to `outputs/<experiment.id>/`.
 Current V1 stages:
 
 - `original_topic` query understanding: use the original narrative/prompt text.
-- `pyserini_remote` retriever: run remote BM25 over ClimbMix.
+- `pyserini_remote` retriever: run remote BM25 over ClimbMix. Set
+  `cache: true` to read and write request-keyed raw response caches, or
+  `cache: false` to always call the remote endpoint.
 - `passthrough` ranking: accept exactly one retrieval stream and deduplicate by
   best rank.
 - `top_k` evidence selection: choose text-bearing ranked candidates.
