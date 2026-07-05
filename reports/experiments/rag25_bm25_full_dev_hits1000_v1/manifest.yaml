@@ -1,0 +1,53 @@
+experiment:
+  id: rag25_bm25_full_dev_hits1000_v1
+  runtime_id: cache_demo_two_topics_hits1000
+  run_date: 2026-07-04
+  split: dev
+  description: Full development-set BM25 candidate-pool baseline.
+
+config:
+  file: config.yaml
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: original_topic_narrative
+  hits: 1000
+  ranking: passthrough
+  cache: true
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 22
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+  topic_scores: topic_scores.csv
+
+local_artifacts:
+  output_dir: tmp/hits1000-full-dev/output
+  runfile: tmp/hits1000-full-dev/output/r_output_trec_rag_2026.tsv
+  retrieved_jsonl: tmp/hits1000-full-dev/output/stage_retrieved.jsonl
+  rag_jsonl: tmp/hits1000-full-dev/output/rag_output_trec_rag_2026.jsonl
+  cache_dir: /home/nidhin/projects/trec_rag/outputs/cache_demo_two_topics_hits1000/cache
+  note: Large output and cache artifacts are local ignored files, not tracked in git.
+
+counts:
+  runfile_rows: 22000
+  retrieved_rows: 22000
+  rag_rows: 22
+  cache_files: 22
+  raw_cache_size: 665M
+  output_dir_size: 1.4G
+
+metrics:
+  ndcg_at_10: 0.4139611685
+  recall_at_100: 0.1080879457
+
+operational_notes:
+  - Cached topics were reused where available.
+  - Uncached requests were issued sequentially.
+  - One topic hit the default 30 second timeout; the resumed run used a longer timeout and backoff.
+  - The canonical experiment id differs from the runtime id because the initial smoke-run id was reused for cache continuity.
