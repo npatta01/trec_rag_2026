@@ -40,3 +40,61 @@ Run validation:
 ```bash
 PYTHONPATH=code uv run --with pytest pytest code/tests/test_remote_pyserini.py -q
 ```
+
+## Config-Driven RAG Pipeline
+
+The pipeline is the preferred path for experiments. It keeps query
+understanding, retrieval, ranking, evidence selection, generation, and
+evaluation as separate stages. V1 ships one runnable configuration:
+`configs/rag25_bm25_full_query_v1.yaml`.
+
+Run:
+
+```bash
+PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
+  --config configs/rag25_bm25_full_query_v1.yaml
+```
+
+The experiment ID is the run identity. If `experiment.output_dir` is omitted,
+stage outputs are written to `outputs/<experiment.id>/`. When running from a
+linked worktree, remote retriever cache files are stored under the shared
+checkout root instead of the worktree:
+`<shared-checkout>/outputs/<experiment.id>/cache/`.
+
+Topic parsing follows `topics.format` in the YAML (`tsv` or `jsonl`), not the
+filename suffix. For remote Pyserini runs, a retriever `index` in YAML takes
+precedence over `PYSERINI_INDEX`; if `INDEX_URL` is set, it must point at the
+same index declared in YAML.
+
+Current V1 stages:
+
+- `original_topic` query understanding: use the original narrative/prompt text.
+- `pyserini_remote` retriever: run remote BM25 over ClimbMix. Set
+  `cache: true` to read and write request-keyed raw response caches, or
+  `cache: false` to always call the remote endpoint.
+- `passthrough` ranking: accept exactly one retrieval stream and deduplicate by
+  best rank.
+- `top_k` evidence selection: choose text-bearing ranked candidates.
+- `placeholder` generation: write valid cited RAG JSONL for plumbing checks.
+- `dev_projected_qrels` evaluation: compute development diagnostics such as
+  `ndcg@10` and `recall@100`.
+
+Outputs:
+
+- `r_output_trec_rag_2026.tsv`
+- `rag_output_trec_rag_2026.jsonl`
+- `retrieval_metrics.json`
+- `stage_queries.jsonl`
+- `stage_retrieved.jsonl`
+- `stage_ranked.jsonl`
+- `stage_evidence.jsonl`
+
+Shared cache:
+
+- `<repo-root-or-shared-checkout>/outputs/<experiment.id>/cache/`
+
+Run all Python tests:
+
+```bash
+PYTHONPATH=code uv run --with pytest --with pyyaml pytest code/tests -q
+```

@@ -15,8 +15,9 @@ implementation patterns.
   for querying the external Pyserini API.
 - `docs/superpowers/` - design and implementation notes produced while building
   the report.
-- `code/` - placeholder for reusable code that should be shared across reports,
-  experiments, and future agents.
+- `configs/` - checked-in experiment configurations.
+- `code/` - reusable helpers for remote Pyserini access, topic loading, and the
+  config-driven BM25 RAG pipeline.
 
 ## Agent Workflow
 
@@ -32,4 +33,10 @@ The current report smoke tests are:
 node reports/index.test.js
 node reports/trec-rag-briefing-report.test.js
 node reports/trec-rag-2025-writeups/interactive-writeup.test.js
+```
+
+The Python helper and baseline tests are:
+
+```bash
+PYTHONPATH=code uv run --with pytest --with pyyaml pytest code/tests -q
 ```
