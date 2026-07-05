@@ -125,6 +125,25 @@ generation: {type: placeholder}
     assert config.retrievers[0].cache is False
 
 
+def test_config_rejects_unknown_topic_format(tmp_path):
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        """
+experiment: {id: demo}
+submission: {team_id: local-baseline}
+topics: {path: topics.data, format: csv}
+query_understanding: {variants: [{name: original, type: original_topic}]}
+retrievers: [{name: climbmix_bm25, type: pyserini_remote, query_variants: [original], hits: 10}]
+ranking: {type: passthrough}
+evidence: {type: top_k, k: 1, allow_fewer: true}
+generation: {type: placeholder}
+""",
+    )
+
+    with pytest.raises(ValueError, match="topics.format"):
+        load_pipeline_config(config_path)
+
+
 def test_config_rejects_duplicate_names_and_unknown_query_variant(tmp_path):
     duplicate_path = write_config(
         tmp_path / "duplicate.yaml",
@@ -313,6 +332,37 @@ def test_request_cache_key_changes_when_hits_change():
     assert request_cache_key(first, query, index_url="https://pyserini.test/search") != (
         request_cache_key(second, query, index_url="https://pyserini.test/search")
     )
+
+
+def test_pyserini_remote_retriever_rejects_conflicting_index_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("INDEX_URL", "https://pyserini.test/v1/other-index/search")
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+    )
+
+    with pytest.raises(ValueError, match="INDEX_URL conflicts"):
+        PyseriniRemoteRetriever(config, cache_dir=tmp_path)
+
+
+def test_pyserini_remote_retriever_uses_yaml_index_over_env_index(tmp_path, monkeypatch):
+    monkeypatch.delenv("INDEX_URL", raising=False)
+    monkeypatch.setenv("PYSERINI_INDEX", "other-index")
+    monkeypatch.setenv("PYSERINI_BASE_URL", "https://pyserini.test")
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+    )
+
+    retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path)
+
+    assert retriever.client.config.index_url == "https://pyserini.test/v1/climbmix-400b/search"
 
 
 def test_pyserini_remote_retriever_reads_cached_response_when_cache_enabled(tmp_path):
@@ -541,7 +591,7 @@ def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_pa
 
 
 def test_run_pipeline_writes_stage_outputs_with_fake_retriever(tmp_path):
-    topics_path = tmp_path / "topics.tsv"
+    topics_path = tmp_path / "topics.data"
     topics_path.write_text("31\tExplain e-waste impacts.\n", encoding="utf-8")
     qrels_path = tmp_path / "qrels.txt"
     qrels_path.write_text("31 0 doc-a 4\n", encoding="utf-8")

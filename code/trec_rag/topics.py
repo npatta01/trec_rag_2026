@@ -77,8 +77,17 @@ def _load_tsv_topics(path: Path, title_words: int) -> list[Topic]:
     return topics
 
 
-def load_topics(path: Path, *, title_words: int = 12) -> list[Topic]:
-    if path.suffix.lower() == ".tsv":
+def load_topics(
+    path: Path,
+    *,
+    title_words: int = 12,
+    topic_format: str | None = None,
+) -> list[Topic]:
+    normalized_format = topic_format.strip().lower() if topic_format else None
+    if normalized_format and normalized_format not in {"jsonl", "tsv"}:
+        raise ValueError(f"unsupported topic format: {topic_format}")
+
+    if normalized_format == "tsv" or (normalized_format is None and path.suffix.lower() == ".tsv"):
         topics = _load_tsv_topics(path, title_words)
     else:
         topics = _load_jsonl_topics(path)

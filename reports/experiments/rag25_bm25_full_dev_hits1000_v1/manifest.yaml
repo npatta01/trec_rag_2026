@@ -31,7 +31,7 @@ local_artifacts:
   runfile: tmp/hits1000-full-dev/output/r_output_trec_rag_2026.tsv
   retrieved_jsonl: tmp/hits1000-full-dev/output/stage_retrieved.jsonl
   rag_jsonl: tmp/hits1000-full-dev/output/rag_output_trec_rag_2026.jsonl
-  cache_dir: /home/nidhin/projects/trec_rag/outputs/cache_demo_two_topics_hits1000/cache
+  cache_dir: outputs/cache_demo_two_topics_hits1000/cache
   note: Large output and cache artifacts are local ignored files, not tracked in git.
 
 counts:
@@ -49,5 +49,5 @@ metrics:
 operational_notes:
   - Cached topics were reused where available.
   - Uncached requests were issued sequentially.
-  - One topic hit the default 30 second timeout; the resumed run used a longer timeout and backoff.
+  - One topic hit the default 30 second timeout; the resumed run used a local longer-timeout retry for that request only.
   - The canonical experiment id differs from the runtime id because the initial smoke-run id was reused for cache continuity.

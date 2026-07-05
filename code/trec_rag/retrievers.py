@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import urllib.parse
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
@@ -148,11 +149,30 @@ class PyseriniRemoteRetriever:
 
 def _remote_config(config: RetrieverConfig) -> RemotePyseriniConfig:
     env = dict(os.environ)
-    if config.index and not env.get("INDEX_URL"):
-        env.setdefault("PYSERINI_INDEX", config.index)
+    if config.index:
+        index_url = env.get("INDEX_URL")
+        if index_url:
+            url_index = _index_from_search_url(index_url)
+            if url_index != config.index:
+                raise ValueError(
+                    "INDEX_URL conflicts with retrievers[].index "
+                    f"({url_index or 'unknown'} != {config.index})"
+                )
+        env["PYSERINI_INDEX"] = config.index
     remote = RemotePyseriniConfig.from_env(env)
     return replace(remote, hits=config.hits)
 
 
 def pyserini_factory(config: RetrieverConfig, cache_dir: Path) -> PyseriniRemoteRetriever:
     return PyseriniRemoteRetriever(config, cache_dir=cache_dir)
+
+
+def _index_from_search_url(index_url: str) -> str | None:
+    path_parts = [
+        urllib.parse.unquote(part)
+        for part in urllib.parse.urlparse(index_url.rstrip("?")).path.strip("/").split("/")
+        if part
+    ]
+    if len(path_parts) >= 3 and path_parts[-3] == "v1" and path_parts[-1] == "search":
+        return path_parts[-2]
+    return None

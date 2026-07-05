@@ -61,6 +61,11 @@ linked worktree, remote retriever cache files are stored under the shared
 checkout root instead of the worktree:
 `<shared-checkout>/outputs/<experiment.id>/cache/`.
 
+Topic parsing follows `topics.format` in the YAML (`tsv` or `jsonl`), not the
+filename suffix. For remote Pyserini runs, a retriever `index` in YAML takes
+precedence over `PYSERINI_INDEX`; if `INDEX_URL` is set, it must point at the
+same index declared in YAML.
+
 Current V1 stages:
 
 - `original_topic` query understanding: use the original narrative/prompt text.
@@ -87,46 +92,6 @@ Outputs:
 Shared cache:
 
 - `<repo-root-or-shared-checkout>/outputs/<experiment.id>/cache/`
-
-## BM25 Retrieval Baseline
-
-The first reusable baseline is topic-text BM25 retrieval over the hosted
-ClimbMix Pyserini index. It uses the original topic narrative/prompt text as
-the query and writes the TREC retrieval runfile format:
-
-```text
-topic_id Q0 docid rank score run_id
-```
-
-Inputs:
-
-- official-style JSONL topics with `id`, `title`, and `narrative`; retrieval
-  uses `narrative`
-- local development TSV topics shaped as `qid<TAB>text`; the full text is used
-  for retrieval, while a short derived title is kept for normalized records
-- `.env` / `.env.local` settings for `INDEX_URL` or `DEFAULT_BASE_URL` plus
-  `DEFAULT_INDEX`, and `PYSERINI_API_TOKEN` when the endpoint requires it
-
-Run:
-
-```bash
-PYTHONPATH=code python -m trec_rag.baselines.bm25_retrieval \
-  --topics path/to/topics.jsonl \
-  --output outputs/baseline/r_output_trec_rag_2026.tsv \
-  --cache-dir outputs/baseline/cache \
-  --hits 100
-```
-
-Outputs:
-
-- `outputs/baseline/r_output_trec_rag_2026.tsv`: retrieval runfile
-- `outputs/baseline/cache/<topic_id>.json`: raw hosted Pyserini response plus
-  the query text used for that topic
-
-The runner validates the generated runfile before exiting. Validation checks
-for six-column TREC rows, numeric ranks and scores, one or more rows for every
-input topic, duplicate document IDs within a topic, and contiguous ranks from
-`1`.
 
 Run all Python tests:
 

@@ -170,9 +170,12 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     submission = SubmissionConfig(team_id=_require_text(submission_raw, "team_id", "submission"))
 
     topics_raw = _require_mapping(config.get("topics"), "topics")
+    topic_format = _require_text(topics_raw, "format", "topics").lower()
+    if topic_format not in {"jsonl", "tsv"}:
+        raise ValueError("topics.format must be one of: jsonl, tsv")
     topics = TopicsConfig(
         path=_resolve_input_path(root_dir, _require_text(topics_raw, "path", "topics")),
-        format=_require_text(topics_raw, "format", "topics"),
+        format=topic_format,
     )
 
     query_raw = _require_mapping(config.get("query_understanding"), "query_understanding")

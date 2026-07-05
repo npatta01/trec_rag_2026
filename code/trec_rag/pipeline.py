@@ -70,7 +70,7 @@ def run_pipeline(
 
     output_dir = config.output_dir
     cache_dir = pipeline_cache_dir(config.root_dir, config.run_id)
-    topics = load_topics(config.topics.path)
+    topics = load_topics(config.topics.path, topic_format=config.topics.format)
     topics_by_id = {topic.id: topic for topic in topics}
 
     variant_configs = [

@@ -16,8 +16,8 @@ implementation patterns.
 - `docs/superpowers/` - design and implementation notes produced while building
   the report.
 - `configs/` - checked-in experiment configurations.
-- `code/` - reusable helpers for remote Pyserini access, topic loading, the
-  config-driven RAG pipeline, and the topic-text BM25 retrieval baseline.
+- `code/` - reusable helpers for remote Pyserini access, topic loading, and the
+  config-driven BM25 RAG pipeline.
 
 ## Agent Workflow
 
