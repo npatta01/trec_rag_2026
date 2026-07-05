@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.parse
 from dataclasses import replace
 from pathlib import Path
@@ -122,6 +123,8 @@ class PyseriniRemoteRetriever:
             )
 
         response = self.client.search(query.query_text)
+        if self.config.request_delay_seconds:
+            time.sleep(self.config.request_delay_seconds)
         if self.config.cache:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(

@@ -1,4 +1,6 @@
 import json
+import urllib.error
+from io import BytesIO
 
 import pytest
 
@@ -6,6 +8,7 @@ from trec_rag.evaluation import evaluate_ranked, parse_qrels
 from trec_rag.evidence import select_top_k_evidence
 from trec_rag.generation import generate_placeholder_rag
 from trec_rag.pipeline import pipeline_cache_dir, run_pipeline
+from trec_rag.litellm_facets import LiteLLMFacetGenerator, UrllibJsonTransport
 from trec_rag.pipeline_config import RetrieverConfig, load_pipeline_config
 from trec_rag.pipeline_models import (
     QueryVariant,
@@ -13,7 +16,7 @@ from trec_rag.pipeline_models import (
     RetrievedCandidate,
 )
 from trec_rag.query_understanding import build_query_variants
-from trec_rag.ranking import passthrough_rank
+from trec_rag.ranking import passthrough_rank, rrf_rank
 from trec_rag.remote_pyserini import RemotePyseriniConfig
 from trec_rag.retrievers import (
     PyseriniRemoteRetriever,
@@ -123,6 +126,49 @@ generation: {type: placeholder}
     config = load_pipeline_config(config_path)
 
     assert config.retrievers[0].cache is False
+
+
+def test_config_loads_title_llm_facets_and_rrf(tmp_path):
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        """
+experiment: {id: rag25_facets_v1}
+submission: {team_id: local-baseline}
+topics: {path: topics.tsv, format: tsv}
+query_understanding:
+  variants:
+    - {name: title, type: title}
+    - {name: facets, type: llm_facets, provider: litellm, max_facets: 7, cache: false}
+retrievers:
+  - name: climbmix_bm25
+    type: pyserini_remote
+    query_variants: [title, facets]
+    hits: 100
+    index: climbmix-400b
+    request_delay_seconds: 2.5
+ranking:
+  type: rrf
+  rrf_k: 42
+  stream_weights: {title: 1.0, facets: 0.5}
+  dedupe: {by: docid, keep: best_rank, preserve_provenance: true}
+evidence: {type: top_k, k: 5, allow_fewer: true}
+generation: {type: placeholder}
+""",
+    )
+
+    config = load_pipeline_config(config_path)
+
+    assert [(row.name, row.type) for row in config.query_variants] == [
+        ("title", "title"),
+        ("facets", "llm_facets"),
+    ]
+    assert config.query_variants[1].provider == "litellm"
+    assert config.query_variants[1].max_facets == 7
+    assert config.query_variants[1].cache is False
+    assert config.retrievers[0].request_delay_seconds == 2.5
+    assert config.ranking.type == "rrf"
+    assert config.ranking.rrf_k == 42
+    assert config.ranking.stream_weights == {"title": 1.0, "facets": 0.5}
 
 
 def test_config_rejects_unknown_topic_format(tmp_path):
@@ -263,6 +309,125 @@ def test_original_topic_query_uses_narrative_without_title_concat():
             source_type="original_topic",
         )
     ]
+
+
+def test_title_and_litellm_facet_query_variants():
+    topic = Topic(
+        id="31",
+        title="Electronic waste impacts",
+        narrative="Explain health risks and recycling responses for e-waste.",
+    )
+
+    class FakeFacetGenerator:
+        def generate(self, topic, *, variant_name, max_facets, cache):
+            assert topic.id == "31"
+            assert variant_name == "facets"
+            assert max_facets == 2
+            assert cache is True
+            return [
+                {"search_query": "e-waste health risks"},
+                {"search_query": "e-waste recycling responses"},
+            ]
+
+    variants = build_query_variants(
+        topic,
+        variant_configs=[
+            {"name": "title", "type": "title"},
+            {"name": "facets", "type": "llm_facets", "max_facets": 2, "cache": True},
+        ],
+        facet_generator=FakeFacetGenerator(),
+    )
+
+    assert variants == [
+        QueryVariant("31", "title", "Electronic waste impacts", "title"),
+        QueryVariant("31", "facets", "e-waste health risks", "llm_facet"),
+        QueryVariant("31", "facets", "e-waste recycling responses", "llm_facet"),
+    ]
+
+
+def test_litellm_facet_generator_rejects_invalid_json(tmp_path):
+    class FakeTransport:
+        def post_json(self, _url, _payload, _headers, _timeout):
+            return {"choices": [{"message": {"content": "not-json"}}]}
+
+    generator = LiteLLMFacetGenerator(
+        base_url="http://litellm.test/v1",
+        model="qwen-local",
+        cache_dir=tmp_path,
+        transport=FakeTransport(),
+    )
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        generator.generate(
+            Topic("31", "E-waste", "Explain e-waste impacts."),
+            variant_name="facets",
+            max_facets=5,
+            cache=False,
+        )
+
+
+def test_litellm_facet_generator_parses_and_caches_facets(tmp_path):
+    class FakeTransport:
+        def __init__(self):
+            self.calls = 0
+
+        def post_json(self, _url, _payload, _headers, _timeout):
+            self.calls += 1
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "```json\n"
+                                "{\"facets\":[{\"search_query\":\"e-waste health risks\"},"
+                                "{\"query\":\"battery recycling policy\"}]}\n"
+                                "```"
+                            )
+                        }
+                    }
+                ]
+            }
+
+    transport = FakeTransport()
+    generator = LiteLLMFacetGenerator(
+        base_url="http://litellm.test/v1",
+        model="qwen-local",
+        cache_dir=tmp_path,
+        transport=transport,
+    )
+
+    topic = Topic("31", "E-waste", "Explain e-waste impacts.")
+    first = generator.generate(topic, variant_name="facets", max_facets=2, cache=True)
+    second = generator.generate(topic, variant_name="facets", max_facets=2, cache=True)
+
+    assert first == [
+        {"search_query": "e-waste health risks"},
+        {"search_query": "battery recycling policy"},
+    ]
+    assert second == first
+    assert transport.calls == 1
+
+
+def test_litellm_transport_includes_http_error_body(monkeypatch):
+    def fake_urlopen(_request, timeout):
+        assert timeout == 3
+        raise urllib.error.HTTPError(
+            url="http://litellm.test/v1/chat/completions",
+            code=500,
+            msg="Internal Server Error",
+            hdrs={},
+            fp=BytesIO(b'{"error":"Cannot connect to host localhost:8000"}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="localhost:8000"):
+        UrllibJsonTransport().post_json(
+            "http://litellm.test/v1/chat/completions",
+            {"model": "qwen-local"},
+            {"Content-Type": "application/json"},
+            3,
+        )
 
 
 def test_retrieval_normalization_and_cache_path_include_topic_variant_and_retriever():
@@ -513,6 +678,43 @@ def test_passthrough_rejects_multiple_retrieval_streams():
         passthrough_rank(candidates)
 
 
+def test_rrf_rank_fuses_query_streams_and_preserves_provenance():
+    candidates = [
+        RetrievedCandidate("31", "title", "bm25", "e-waste", "doc-a", 1, 10.0, "A"),
+        RetrievedCandidate("31", "title", "bm25", "e-waste", "doc-b", 2, 9.0, "B"),
+        RetrievedCandidate("31", "facets", "bm25", "health risks", "doc-b", 1, 8.0, "B facet"),
+        RetrievedCandidate("31", "facets", "bm25", "recycling", "doc-c", 1, 7.0, "C"),
+    ]
+
+    ranked = rrf_rank(candidates, k=60)
+
+    assert [(row.docid, row.rank) for row in ranked] == [
+        ("doc-b", 1),
+        ("doc-a", 2),
+        ("doc-c", 3),
+    ]
+    assert ranked[0].score == pytest.approx((1 / 62) + (1 / 61))
+    assert {item["query_text"] for item in ranked[0].provenance} == {"e-waste", "health risks"}
+
+
+def test_weighted_rrf_can_make_original_topic_stream_dominate_facets():
+    candidates = [
+        RetrievedCandidate("31", "original", "bm25", "full narrative", "doc-original", 1, 10.0, "A"),
+        RetrievedCandidate("31", "facets", "bm25", "facet one", "doc-facet", 1, 9.0, "B"),
+        RetrievedCandidate("31", "facets", "bm25", "facet two", "doc-facet", 1, 8.0, "B again"),
+        RetrievedCandidate("31", "facets", "bm25", "facet three", "doc-facet", 1, 7.0, "B third"),
+    ]
+
+    ranked = rrf_rank(candidates, k=60, stream_weights={"original": 4.0, "facets": 0.25})
+
+    assert [(row.docid, row.rank) for row in ranked] == [
+        ("doc-original", 1),
+        ("doc-facet", 2),
+    ]
+    assert ranked[0].score == pytest.approx(4.0 / 61)
+    assert ranked[1].score == pytest.approx(3 * (0.25 / 61))
+
+
 def test_evidence_allows_fewer_text_bearing_candidates_and_placeholder_rag_is_cited():
     topic = Topic(id="31", title="E-waste", narrative="Explain e-waste impacts.")
     ranked = [
@@ -671,3 +873,99 @@ evaluation:
     assert json.loads((result.output_dir / "retrieval_metrics.json").read_text())["metrics"][
         "recall@100"
     ] == 1.0
+
+
+def test_run_pipeline_writes_rrf_outputs_with_fake_facets_and_fake_retriever(tmp_path):
+    topics_path = tmp_path / "topics.jsonl"
+    topics_path.write_text(
+        json.dumps(
+            {
+                "id": "31",
+                "title": "Electronic waste impacts",
+                "narrative": "Explain health risks and recycling responses for e-waste.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text("31 0 doc-overlap 4\n", encoding="utf-8")
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        f"""
+experiment: {{id: rag25_fake_facets_v1}}
+submission: {{team_id: local-baseline}}
+topics: {{path: {topics_path}, format: jsonl}}
+query_understanding:
+  variants:
+    - {{name: title, type: title}}
+    - {{name: facets, type: llm_facets, max_facets: 2, cache: true}}
+retrievers:
+  - name: fake
+    type: fake
+    query_variants: [title, facets]
+    hits: 10
+ranking:
+  type: rrf
+  rrf_k: 60
+evidence: {{type: top_k, k: 2, require_text: true, allow_fewer: true}}
+generation: {{type: placeholder}}
+evaluation:
+  qrels: {qrels_path}
+  metrics: [recall@10]
+""",
+    )
+
+    class FakeFacetGenerator:
+        def generate(self, _topic, *, variant_name, max_facets, cache):
+            assert (variant_name, max_facets, cache) == ("facets", 2, True)
+            return [
+                {"search_query": "e-waste health risks"},
+                {"search_query": "e-waste recycling responses"},
+            ]
+
+    class FakeRetriever:
+        def retrieve(self, query):
+            docs_by_query = {
+                "Electronic waste impacts": [
+                    ("doc-title", 1, 10.0, "Title-only evidence."),
+                    ("doc-overlap", 2, 9.0, "Overlap evidence from title."),
+                ],
+                "e-waste health risks": [
+                    ("doc-overlap", 1, 8.0, "Overlap evidence from facet."),
+                ],
+                "e-waste recycling responses": [
+                    ("doc-facet", 1, 7.0, "Facet-only evidence."),
+                ],
+            }
+            return [
+                RetrievedCandidate(
+                    query.topic_id,
+                    query.variant_name,
+                    "fake",
+                    query.query_text,
+                    docid,
+                    rank,
+                    score,
+                    text,
+                )
+                for docid, rank, score, text in docs_by_query[query.query_text]
+            ]
+
+    result = run_pipeline(
+        config_path,
+        retriever_factories={"fake": lambda _config, _cache_dir: FakeRetriever()},
+        facet_generator=FakeFacetGenerator(),
+    )
+
+    queries = read_jsonl(result.output_dir / "stage_queries.jsonl")
+    assert [row["query_text"] for row in queries] == [
+        "Electronic waste impacts",
+        "e-waste health risks",
+        "e-waste recycling responses",
+    ]
+    assert (result.output_dir / "r_output_trec_rag_2026.tsv").read_text(
+        encoding="utf-8"
+    ).splitlines()[0].startswith("31 Q0 doc-overlap 1 ")
+    assert result.ranked[0].docid == "doc-overlap"
+    assert len(result.ranked[0].provenance) == 2

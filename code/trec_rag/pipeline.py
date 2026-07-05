@@ -11,6 +11,7 @@ from typing import Callable
 from trec_rag.evaluation import evaluate_ranked, parse_qrels
 from trec_rag.evidence import select_top_k_evidence
 from trec_rag.generation import generate_placeholder_rag
+from trec_rag.litellm_facets import LiteLLMFacetGenerator
 from trec_rag.pipeline_config import RetrieverConfig, load_pipeline_config
 from trec_rag.pipeline_models import (
     EvidenceRecord,
@@ -21,7 +22,7 @@ from trec_rag.pipeline_models import (
     write_jsonl,
 )
 from trec_rag.query_understanding import build_query_variants
-from trec_rag.ranking import passthrough_rank
+from trec_rag.ranking import passthrough_rank, rrf_rank
 from trec_rag.repo_env import load_repo_env, shared_checkout_root
 from trec_rag.retrievers import Retriever, pyserini_factory
 from trec_rag.topics import Topic, load_topics
@@ -63,9 +64,10 @@ def run_pipeline(
     config_path: Path,
     *,
     retriever_factories: dict[str, RetrieverFactory] | None = None,
+    facet_generator: object | None = None,
 ) -> PipelineResult:
     config = load_pipeline_config(config_path)
-    load_repo_env(config.root_dir)
+    load_repo_env(config.root_dir, override_existing=True)
     retriever_factories = {"pyserini_remote": pyserini_factory, **(retriever_factories or {})}
 
     output_dir = config.output_dir
@@ -73,13 +75,16 @@ def run_pipeline(
     topics = load_topics(config.topics.path, topic_format=config.topics.format)
     topics_by_id = {topic.id: topic for topic in topics}
 
-    variant_configs = [
-        {"name": variant.name, "type": variant.type} for variant in config.query_variants
-    ]
+    if facet_generator is None and any(variant.type == "llm_facets" for variant in config.query_variants):
+        facet_generator = LiteLLMFacetGenerator(cache_dir=cache_dir / "facets")
     queries = [
         query
         for topic in topics
-        for query in build_query_variants(topic, variant_configs=variant_configs)
+        for query in build_query_variants(
+            topic,
+            variant_configs=config.query_variants,
+            facet_generator=facet_generator,
+        )
     ]
     write_jsonl(queries, output_dir / "stage_queries.jsonl")
 
@@ -100,9 +105,16 @@ def run_pipeline(
                 retrieved.extend(retriever.retrieve(query))
     write_jsonl(retrieved, output_dir / "stage_retrieved.jsonl")
 
-    if config.ranking.type != "passthrough":
+    if config.ranking.type == "passthrough":
+        ranked = passthrough_rank(retrieved)
+    elif config.ranking.type == "rrf":
+        ranked = rrf_rank(
+            retrieved,
+            k=config.ranking.rrf_k,
+            stream_weights=config.ranking.stream_weights,
+        )
+    else:
         raise ValueError(f"unknown ranking type: {config.ranking.type}")
-    ranked = passthrough_rank(retrieved)
     write_jsonl(ranked, output_dir / "stage_ranked.jsonl")
     _write_trec_run(ranked, output_dir / "r_output_trec_rag_2026.tsv", config.run_id)
 

@@ -32,6 +32,9 @@ class TopicsConfig:
 class QueryVariantConfig:
     name: str
     type: str
+    provider: str | None = None
+    max_facets: int = 8
+    cache: bool = True
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,7 @@ class RetrieverConfig:
     hits: int
     index: str | None = None
     cache: bool = True
+    request_delay_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,8 @@ class RankingConfig:
     dedupe_by: str = "docid"
     dedupe_keep: str = "best_rank"
     preserve_provenance: bool = True
+    rrf_k: int = 60
+    stream_weights: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +157,55 @@ def _optional_bool(mapping: dict[str, Any], key: str, default: bool) -> bool:
     raise ValueError(f"{key} must be a boolean")
 
 
+def _optional_int(mapping: dict[str, Any], key: str, default: int, *, minimum: int = 1) -> int:
+    raw_value = mapping.get(key, default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if value < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    return value
+
+
+def _optional_float(
+    mapping: dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    minimum: float = 0.0,
+) -> float:
+    raw_value = mapping.get(key, default)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a number") from exc
+    if value < minimum:
+        raise ValueError(f"{key} must be at least {minimum:g}")
+    return value
+
+
+def _optional_float_mapping(mapping: dict[str, Any], key: str) -> dict[str, float] | None:
+    raw_value = mapping.get(key)
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{key} must be a mapping")
+    weights: dict[str, float] = {}
+    for raw_name, raw_weight in raw_value.items():
+        name = str(raw_name).strip()
+        if not name:
+            raise ValueError(f"{key} keys must be non-empty strings")
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key}.{name} must be a number") from exc
+        if weight < 0:
+            raise ValueError(f"{key}.{name} must be at least 0")
+        weights[name] = weight
+    return weights
+
+
 def load_pipeline_config(path: Path) -> PipelineConfig:
     config_path = path.resolve()
     root_dir = find_repo_root(config_path.parent)
@@ -182,17 +237,26 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     variant_rows = query_raw.get("variants")
     if not isinstance(variant_rows, list) or not variant_rows:
         raise ValueError("query_understanding.variants must be a non-empty list")
-    query_variants = tuple(
-        QueryVariantConfig(
-            name=_require_text(_require_mapping(row, "query variant"), "name", "query variant"),
-            type=_require_text(_require_mapping(row, "query variant"), "type", "query variant"),
+    query_variants_list: list[QueryVariantConfig] = []
+    for row in variant_rows:
+        row = _require_mapping(row, "query variant")
+        variant_type = _require_text(row, "type", "query variant")
+        if variant_type not in {"original_topic", "title", "llm_facets"}:
+            raise ValueError(f"unknown query variant type: {variant_type}")
+        provider = str(row.get("provider") or "litellm").strip() if variant_type == "llm_facets" else None
+        if variant_type == "llm_facets" and provider != "litellm":
+            raise ValueError("llm_facets provider must be litellm")
+        query_variants_list.append(
+            QueryVariantConfig(
+                name=_require_text(row, "name", "query variant"),
+                type=variant_type,
+                provider=provider,
+                max_facets=_optional_int(row, "max_facets", 8),
+                cache=_optional_bool(row, "cache", True),
+            )
         )
-        for row in variant_rows
-    )
+    query_variants = tuple(query_variants_list)
     _check_unique([variant.name for variant in query_variants], "query variant")
-    for variant in query_variants:
-        if variant.type != "original_topic":
-            raise ValueError(f"unknown query variant type: {variant.type}")
     variant_names = {variant.name for variant in query_variants}
 
     retriever_rows = config.get("retrievers")
@@ -215,12 +279,14 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
                 hits=int(row.get("hits") or 100),
                 index=str(row["index"]).strip() if row.get("index") else None,
                 cache=_optional_bool(row, "cache", True),
+                request_delay_seconds=_optional_float(row, "request_delay_seconds", 0.0),
             )
         )
     _check_unique([retriever.name for retriever in retrievers], "retriever")
 
     ranking_raw = _require_mapping(config.get("ranking"), "ranking")
-    if _require_text(ranking_raw, "type", "ranking") != "passthrough":
+    ranking_type = _require_text(ranking_raw, "type", "ranking")
+    if ranking_type not in {"passthrough", "rrf"}:
         raise ValueError(f"unknown ranking type: {ranking_raw.get('type')}")
     dedupe_raw = ranking_raw.get("dedupe") or {}
     if not isinstance(dedupe_raw, dict):
@@ -228,12 +294,14 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     dedupe_by = str(dedupe_raw.get("by") or "docid")
     dedupe_keep = str(dedupe_raw.get("keep") or "best_rank")
     if dedupe_by != "docid" or dedupe_keep != "best_rank":
-        raise ValueError("passthrough dedupe only supports by: docid and keep: best_rank")
+        raise ValueError(f"{ranking_type} dedupe only supports by: docid and keep: best_rank")
     ranking = RankingConfig(
-        type="passthrough",
+        type=ranking_type,
         dedupe_by=dedupe_by,
         dedupe_keep=dedupe_keep,
         preserve_provenance=bool(dedupe_raw.get("preserve_provenance", True)),
+        rrf_k=_optional_int(ranking_raw, "rrf_k", 60),
+        stream_weights=_optional_float_mapping(ranking_raw, "stream_weights"),
     )
 
     evidence_raw = _require_mapping(config.get("evidence"), "evidence")

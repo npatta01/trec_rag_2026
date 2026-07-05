@@ -1,0 +1,62 @@
+experiment:
+  id: rag25_bm25_original_litellm_facets_weighted_rrf_v1
+  runtime_id: rag25_bm25_original_litellm_facets_weighted_rrf_v1
+  run_date: 2026-07-05
+  split: dev
+  description: Full narrative BM25 with LiteLLM facet expansion and weighted RRF.
+
+config:
+  file: config.yaml
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: original_topic_narrative_plus_litellm_facets
+  hits: 100
+  ranking: weighted_rrf_original_4_facets_0.25
+  cache: true
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 22
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+  topic_scores: topic_scores.csv
+  config: config.yaml
+
+local_artifacts:
+  output_dir: outputs/rag25_bm25_original_litellm_facets_weighted_rrf_v1
+  runfile: outputs/rag25_bm25_original_litellm_facets_weighted_rrf_v1/r_output_trec_rag_2026.tsv
+  retrieved_jsonl: outputs/rag25_bm25_original_litellm_facets_weighted_rrf_v1/stage_retrieved.jsonl
+  rag_jsonl: outputs/rag25_bm25_original_litellm_facets_weighted_rrf_v1/rag_output_trec_rag_2026.jsonl
+  cache_dir: outputs/rag25_bm25_original_litellm_facets_weighted_rrf_v1/cache
+  note: Large output and cache artifacts are local ignored files, not tracked in git.
+
+counts:
+  query_rows: 187
+  retrieved_rows: 18700
+  runfile_rows: 17587
+  rag_rows: 22
+
+metrics:
+  ndcg_at_10: 0.4294133095
+  recall_at_100: 0.1080879457
+
+comparisons:
+  narrative_baseline:
+    experiment_id: rag25_bm25_full_query_v1
+    ndcg_at_10: 0.4139611685
+    recall_at_100: 0.1080879457
+  regressed_title_facets:
+    experiment_id: rag25_bm25_litellm_facets_rrf_v1
+    ndcg_at_10: 0.2928717959
+    recall_at_100: 0.0419527453
+
+operational_notes:
+  - Local vLLM served Qwen/Qwen3-4B-Instruct-2507 as qwen-local.
+  - LiteLLM proxied qwen-local with disk caching enabled.
+  - Hosted Pyserini requests were issued sequentially with request_delay_seconds set to 3.
+  - Weighted RRF was added to keep original_topic as the dominant retrieval stream.

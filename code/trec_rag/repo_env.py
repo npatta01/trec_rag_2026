@@ -50,8 +50,8 @@ def load_dotenv(
             os.environ.setdefault(key, value.strip().strip('"').strip("'"))
 
 
-def load_repo_env(repo_root: Path) -> None:
-    protected_keys = set(os.environ)
+def load_repo_env(repo_root: Path, *, override_existing: bool = False) -> None:
+    protected_keys = set() if override_existing else set(os.environ)
     roots = []
     shared_root = shared_checkout_root(repo_root)
     if shared_root and shared_root != repo_root:

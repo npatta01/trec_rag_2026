@@ -1,5 +1,7 @@
 import json
 import os
+import urllib.error
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -125,6 +127,23 @@ def test_load_repo_env_keeps_existing_environment_values(tmp_path, monkeypatch):
     assert os.environ["INDEX_URL"] == "http://local/v1/climbmix-400b/search"
 
 
+def test_load_repo_env_can_make_repo_dotenv_authoritative(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        "PYSERINI_API_TOKEN=from-env\n"
+        "LITELLM_BASE_URL=http://env-litellm/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYSERINI_API_TOKEN", "from-process")
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://example-default/v1")
+
+    load_repo_env(repo, override_existing=True)
+
+    assert os.environ["PYSERINI_API_TOKEN"] == "from-env"
+    assert os.environ["LITELLM_BASE_URL"] == "http://env-litellm/v1"
+
+
 def test_env_example_contains_public_remote_defaults(monkeypatch):
     env_example = Path(__file__).resolve().parents[2] / ".env.example"
     for key in (
@@ -183,6 +202,51 @@ def test_client_builds_authenticated_search_request():
     assert captured["headers"]["Accept"] == "application/json"
     assert captured["headers"]["Authorization"] == "Bearer secret-token"
     assert captured["timeout"] == 30
+
+
+def test_client_retries_rate_limit_with_retry_after():
+    calls = []
+    sleeps = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"candidates": [{"docid": "doc-a"}]}).encode("utf-8")
+
+    def fake_urlopen(_request, timeout):
+        assert timeout == 30
+        calls.append("search")
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(
+                url="http://api.example.test/search",
+                code=429,
+                msg="Too Many Requests",
+                hdrs={"Retry-After": "0.25"},
+                fp=BytesIO(b"rate limited"),
+            )
+        return FakeResponse()
+
+    config = RemotePyseriniConfig(
+        index_url="http://api.example.test/v1/climbmix-400b/search",
+        api_token=None,
+        hits=3,
+        queries=("wildfire smoke",),
+    )
+
+    response = RemotePyseriniClient(
+        config,
+        opener=fake_urlopen,
+        sleeper=sleeps.append,
+    ).search("wildfire smoke")
+
+    assert response == {"candidates": [{"docid": "doc-a"}]}
+    assert calls == ["search", "search"]
+    assert sleeps == [0.25]
 
 
 def test_extract_text_and_normalize_candidates():

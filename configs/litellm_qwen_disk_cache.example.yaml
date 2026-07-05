@@ -1,0 +1,12 @@
+model_list:
+  - model_name: qwen-local
+    litellm_params:
+      model: hosted_vllm/qwen-local
+      api_base: http://localhost:8000/v1
+      api_key: none
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: disk
+    disk_cache_dir: outputs/litellm-cache

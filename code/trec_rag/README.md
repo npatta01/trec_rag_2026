@@ -45,8 +45,9 @@ PYTHONPATH=code uv run --with pytest pytest code/tests/test_remote_pyserini.py -
 
 The pipeline is the preferred path for experiments. It keeps query
 understanding, retrieval, ranking, evidence selection, generation, and
-evaluation as separate stages. V1 ships one runnable configuration:
-`configs/rag25_bm25_full_query_v1.yaml`.
+evaluation as separate stages. V1 ships a single-query BM25 configuration:
+`configs/rag25_bm25_full_query_v1.yaml`. The facet/RRF BM25 configuration is
+`configs/rag25_bm25_litellm_facets_rrf_v1.yaml`.
 
 Run:
 
@@ -69,15 +70,70 @@ same index declared in YAML.
 Current V1 stages:
 
 - `original_topic` query understanding: use the original narrative/prompt text.
+- `title` query understanding: use `Topic.title` directly as a short BM25
+  query.
+- `llm_facets` query understanding: call LiteLLM at
+  `LITELLM_BASE_URL` with `LITELLM_MODEL` and parse strict JSON facet queries.
 - `pyserini_remote` retriever: run remote BM25 over ClimbMix. Set
   `cache: true` to read and write request-keyed raw response caches, or
   `cache: false` to always call the remote endpoint.
 - `passthrough` ranking: accept exactly one retrieval stream and deduplicate by
   best rank.
+- `rrf` ranking: fuse title and facet BM25 streams with reciprocal rank fusion,
+  deduplicate by `docid`, and preserve per-query provenance.
 - `top_k` evidence selection: choose text-bearing ranked candidates.
 - `placeholder` generation: write valid cited RAG JSONL for plumbing checks.
 - `dev_projected_qrels` evaluation: compute development diagnostics such as
   `ndcg@10` and `recall@100`.
+
+Run the BM25 facets + RRF pipeline after LiteLLM is listening on port 4000:
+
+```bash
+PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
+  --config configs/rag25_bm25_litellm_facets_rrf_v1.yaml
+```
+
+### Local LiteLLM/vLLM facet service
+
+On Windows, run vLLM from WSL2 Ubuntu. Official vLLM is Linux-first, so native
+Windows is not the supported service path. For the detected RTX 5070 Ti 16 GB
+class GPU, start the 4B Qwen model with capped context and concurrency:
+
+```bash
+vllm serve Qwen/Qwen3-4B-Instruct-2507 \
+  --served-model-name qwen-local \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --dtype bfloat16 \
+  --max-model-len 4096 \
+  --max-num-seqs 1 \
+  --gpu-memory-utilization 0.72 \
+  --enforce-eager
+```
+
+If that startup health check fails, use `Qwen/Qwen3-1.7B` with the same flags.
+Then start LiteLLM from this repo with disk caching. On this Windows setup,
+use the Python module entrypoint so Application Control does not block the
+generated `litellm` launcher, and include the `caching` extra:
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"
+uv run --with "litellm[proxy,caching]" `
+  python -m litellm.proxy.proxy_cli `
+  --config configs/litellm_qwen_disk_cache.example.yaml `
+  --port 4000
+```
+
+Manual service checks:
+
+```bash
+curl http://localhost:8000/v1/models
+curl http://localhost:4000/v1/models
+```
+
+LiteLLM disk cache entries are configured under `outputs/litellm-cache`.
+Pipeline-side facet JSON caches are stored under
+`outputs/<experiment.id>/cache/facets/`.
 
 Outputs:
 
