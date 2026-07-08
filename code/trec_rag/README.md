@@ -45,14 +45,25 @@ PYTHONPATH=code uv run --with pytest pytest code/tests/test_remote_pyserini.py -
 
 The pipeline is the preferred path for experiments. It keeps query
 understanding, retrieval, ranking, evidence selection, generation, and
-evaluation as separate stages. V1 ships one runnable configuration:
-`configs/rag25_bm25_full_query_v1.yaml`.
+evaluation as separate stages. V1 ships runnable BM25 and BM25-plus-reranker
+configurations:
+
+- `configs/rag25_bm25_full_query_v1.yaml`
+- `configs/rag25_bm25_mixedbread_rerank_v1.yaml`
 
 Run:
 
 ```bash
 PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
   --config configs/rag25_bm25_full_query_v1.yaml
+```
+
+Run the BM25 plus coverage-aware reranker config after the score artifacts have
+been generated:
+
+```bash
+PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
+  --config configs/rag25_bm25_mixedbread_rerank_v1.yaml
 ```
 
 The experiment ID is the run identity. If `experiment.output_dir` is omitted,
@@ -74,6 +85,8 @@ Current V1 stages:
   `cache: false` to always call the remote endpoint.
 - `passthrough` ranking: accept exactly one retrieval stream and deduplicate by
   best rank.
+- `coverage_aware_long_doc_aggregate` ranking: rerank a BM25 candidate stream
+  with cached Mixedbread long-document and window scores.
 - `top_k` evidence selection: choose text-bearing ranked candidates.
 - `placeholder` generation: write valid cited RAG JSONL for plumbing checks.
 - `dev_projected_qrels` evaluation: compute development diagnostics such as

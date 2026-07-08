@@ -21,7 +21,7 @@ from trec_rag.pipeline_models import (
     write_jsonl,
 )
 from trec_rag.query_understanding import build_query_variants
-from trec_rag.ranking import passthrough_rank
+from trec_rag.ranking import coverage_aware_long_doc_rank, passthrough_rank
 from trec_rag.repo_env import load_repo_env, shared_checkout_root
 from trec_rag.retrievers import Retriever, pyserini_factory
 from trec_rag.topics import Topic, load_topics
@@ -100,9 +100,26 @@ def run_pipeline(
                 retrieved.extend(retriever.retrieve(query))
     write_jsonl(retrieved, output_dir / "stage_retrieved.jsonl")
 
-    if config.ranking.type != "passthrough":
+    if config.ranking.type == "passthrough":
+        ranked = passthrough_rank(retrieved)
+    elif config.ranking.type == "coverage_aware_long_doc_aggregate":
+        if config.ranking.reranker is None:
+            raise ValueError("coverage-aware ranking requires ranking.reranker")
+        formula = config.ranking.reranker.formula
+        ranked = coverage_aware_long_doc_rank(
+            retrieved,
+            document_score_path=config.ranking.reranker.document_score_path,
+            window_score_path=config.ranking.reranker.window_score_path,
+            long_document_weight=formula.long_document_weight,
+            strongest_passage_weight=formula.strongest_passage_weight,
+            coverage_bonus_weight=formula.coverage_bonus_weight,
+            relative_span_delta=formula.relative_span_delta,
+            support_cap=formula.support_cap,
+            min_new_chars=formula.min_new_chars,
+            top_window_weights=formula.top_window_weights,
+        )
+    else:
         raise ValueError(f"unknown ranking type: {config.ranking.type}")
-    ranked = passthrough_rank(retrieved)
     write_jsonl(ranked, output_dir / "stage_ranked.jsonl")
     _write_trec_run(ranked, output_dir / "r_output_trec_rag_2026.tsv", config.run_id)
 

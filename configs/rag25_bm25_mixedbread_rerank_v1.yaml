@@ -1,0 +1,72 @@
+# BM25 candidate retrieval plus coverage-aware Mixedbread reranking.
+#
+# This config expects reranker score artifacts to already exist at the paths
+# below. They are produced by the long-context Mixedbread and chunk-scoring
+# experiment scripts used in the tracked reranker reports.
+experiment:
+  id: rag25_bm25_mixedbread_rerank_v1
+
+submission:
+  team_id: local-baseline
+
+topics:
+  path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  format: tsv
+
+query_understanding:
+  variants:
+    - name: original
+      type: original_topic
+
+retrievers:
+  - name: climbmix_bm25
+    type: pyserini_remote
+    query_variants: [original]
+    hits: 50
+    index: climbmix-400b
+    cache: true
+
+ranking:
+  type: coverage_aware_long_doc_aggregate
+  dedupe:
+    by: docid
+    keep: best_rank
+    preserve_provenance: true
+  reranker:
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    score_source: cached_artifacts
+    document_score_path: tmp/st_crossencoder_longctx_hits50_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_scores.jsonl
+    window_score_path: tmp/st_chunk_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_scores.jsonl
+    formula:
+      long_document_weight: 0.5
+      strongest_passage_weight: 0.5
+      coverage_bonus_weight: 0.25
+      relative_span_delta: 1.0
+      support_cap: 6
+      min_new_chars: 800
+      top_window_weights: [0.55, 0.25, 0.13, 0.07]
+
+evidence:
+  type: top_k
+  k: 5
+  require_text: true
+  allow_fewer: true
+
+generation:
+  type: placeholder
+
+evaluation:
+  kind: dev_projected_qrels
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  metrics:
+    - ndcg@10
+    - precision@10
+    - recall@10
+    - hit_rate@10
+    - relevant_count@10
+    - graded_recall@10
+    - recall@50
+    - relevant_count@50
+    - graded_recall@50
+    - ideal_dcg_coverage@50
+  relevance_threshold: 2

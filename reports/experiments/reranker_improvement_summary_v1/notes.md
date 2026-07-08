@@ -107,6 +107,10 @@ not the pure prefix scorer and not the best-average z-normalized formula. It
 gives up some average score versus the best-average formula, but it removes
 large topic regressions in this dev sample.
 
+The runnable pipeline config for this setup is
+`configs/rag25_bm25_mixedbread_rerank_v1.yaml`. It retrieves BM25 top-50
+candidates and applies cached coverage-aware Mixedbread reranker scores.
+
 The topic-level companion report tracks the same decision with additional
 `precision@10`, `recall@10`, `hit_rate@10`, `relevant_count@10`, and candidate
 pool `recall@50` metrics. Its main regression finding is topic `515`: BM25 has

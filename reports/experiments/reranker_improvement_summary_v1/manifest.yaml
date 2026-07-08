@@ -17,6 +17,7 @@ tracked_record_files:
   metrics: metrics.json
 
 source_experiments:
+  runnable_config: configs/rag25_bm25_mixedbread_rerank_v1.yaml
   bm25: reports/experiments/rag25_bm25_full_dev_hits1000_v1/metrics.json
   topic_level_reranker_metrics: reports/experiments/topic_level_reranker_metrics_v1/metrics.json
   mixedbread_aggregation: reports/experiments/cross_encoder_doc_aggregation_mixedbread_v1/metrics.json
