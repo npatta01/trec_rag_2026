@@ -19,6 +19,7 @@ tracked_record_files:
   metrics: metrics.json
   system_scores: system_scores.csv
   topic_system_scores: topic_system_scores.csv
+  topic_scores: topic_scores.csv
   prompt_probe_scores: prompt_probe_scores.csv
 
 source_artifacts:
@@ -41,4 +42,8 @@ source_artifacts:
     - tmp/qwen_rerank_probe_results.json
 
 metrics:
+  ndcg_at_10: 0.5399427110
+  best_system_id: mixedbread_ai_mxbai_rerank_base_v2__chunk_top4_weighted__st_chunk_eval_hits50_mixedbread_ai_mxbai_rerank_base_v2_ml1024_cm3500_ov350
+  best_model: mixedbread-ai/mxbai-rerank-base-v2
+  best_method: chunk_top4_weighted
   see: metrics.json

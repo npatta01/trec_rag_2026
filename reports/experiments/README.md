@@ -5,13 +5,14 @@ This directory keeps durable experiment records.
 - `<experiment_id>/`: source-of-truth folder for one experiment. Simple
   single-run folders should include `manifest.yaml`, `config.yaml`,
   `metrics.json`, `topic_scores.csv`, and `notes.md`. Multi-system comparison
-  folders may use clearly named tables such as `system_scores.csv` or
-  `topic_system_scores.csv` instead of the single-run `topic_scores.csv`.
+  folders should use clearly named tables such as `system_scores.csv` and
+  `topic_system_scores.csv`; when possible, also include a compatibility
+  `topic_scores.csv` with `runtime_id` set to the compared system id.
 - `runs.csv`: derived index with one row per experiment run, including
   run-level configuration, provenance, artifact paths, and aggregate metrics.
 - `topic_scores.csv`: derived index with one row per
-  `(experiment_id, topic_id)` metric record, plus an `overall` row for each
-  experiment.
+  `(experiment_id, runtime_id, topic_id)` metric record, plus an `overall` row
+  when the source experiment provides one.
 
 Use stable `experiment_id` values when possible. Future variants such as
 different hit counts, query decomposition, dense retrieval, or reranking should

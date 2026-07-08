@@ -106,5 +106,6 @@ small hard-example probe.
 
 - `system_scores.csv`: one row per full-dev model/method result.
 - `topic_system_scores.csv`: one row per topic and full-dev system.
+- `topic_scores.csv`: compatibility table for the global experiment index; `runtime_id` is the compared system id.
 - `prompt_probe_scores.csv`: qualitative prompt/probe alignment summary.
 - `metrics.json`: machine-readable copy of the same summary.
