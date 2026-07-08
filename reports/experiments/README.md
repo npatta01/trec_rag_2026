@@ -2,9 +2,11 @@
 
 This directory keeps durable experiment records.
 
-- `<experiment_id>/`: source-of-truth folder for one experiment. Each folder
-  should include `manifest.yaml`, `config.yaml`, `metrics.json`,
-  `topic_scores.csv`, and `notes.md`.
+- `<experiment_id>/`: source-of-truth folder for one experiment. Simple
+  single-run folders should include `manifest.yaml`, `config.yaml`,
+  `metrics.json`, `topic_scores.csv`, and `notes.md`. Multi-system comparison
+  folders may use clearly named tables such as `system_scores.csv` or
+  `topic_system_scores.csv` instead of the single-run `topic_scores.csv`.
 - `runs.csv`: derived index with one row per experiment run, including
   run-level configuration, provenance, artifact paths, and aggregate metrics.
 - `topic_scores.csv`: derived index with one row per

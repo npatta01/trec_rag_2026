@@ -157,7 +157,7 @@
   "not_evaluated": [
     {
       "model": "Qwen/Qwen3-Reranker-8B",
-      "reason": "No 8B output artifact was present in this workspace for this summary."
+      "reason": "No 22-topic full-dev 8B output artifact was present in this workspace for this summary; only a hard-example prompt probe is captured in cross_encoder_model_comparison_v1."
     }
   ]
 }

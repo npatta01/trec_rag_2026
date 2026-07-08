@@ -1,0 +1,13 @@
+model,instruction,topic_count,document_count,mean_spearman,worst_topic,worst_spearman,source_artifact
+Qwen/Qwen3-Reranker-0.6B,official_default,3,12,0.6291419622,144,0.1054092553,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-0.6B,custom_full_narrative,3,12,0.5270462767,515,0.3162277660,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-0.6B,stricter_full_narrative,3,12,0.5270462767,515,0.3162277660,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-4B,official_default,3,12,0.3865006029,515,-0.1054092553,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-4B,custom_full_narrative,3,12,-0.0702728369,515,-0.6324555320,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-4B,stricter_full_narrative,3,12,0.0185185185,515,-0.6324555320,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-8B,official_default,3,12,-0.1405456738,515,-0.9486832981,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-8B,custom_full_narrative,3,12,-0.5973191136,200,-0.9486832981,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-8B,stricter_full_narrative,3,12,-0.1756820922,515,-0.9486832981,tmp/qwen_rerank_prompt_probe.json
+Qwen/Qwen3-Reranker-0.6B,probe_default,3,75,0.4015224751,515,-0.0114200412,tmp/qwen_rerank_probe_results.json
+Qwen/Qwen3-Reranker-4B,probe_default,3,75,0.2390466771,515,-0.2056267482,tmp/qwen_rerank_probe_results.json
+Qwen/Qwen3-Reranker-8B,probe_default,3,75,0.2082594880,515,-0.1797959271,tmp/qwen_rerank_probe_results.json

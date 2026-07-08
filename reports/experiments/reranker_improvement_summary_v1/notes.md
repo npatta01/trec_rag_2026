@@ -118,11 +118,18 @@ one relevant document in the top 10, while the coverage-aware reranker moves all
 three relevant top-50 candidates below rank 10. That is an ordering regression,
 not a retrieval-absence issue.
 
+The detailed model-comparison companion is
+`reports/experiments/cross_encoder_model_comparison_v1/`. It captures the
+full-dev Qwen 0.6B and 4B runs, Mixedbread runs, BGE reranker, MiniLM
+cross-encoder, topic-level deltas for each system, and the qualitative Qwen
+prompt probes.
+
 Qwen should not be the default reranker based on these runs. The Qwen runs do
 improve average `nDCG@10` over BM25, but the gains are smaller and the topic
 regressions are larger. The available 4B chunk run did not outperform the 0.6B
-variants. There is no Qwen 8B result artifact in this workspace, so this summary
-does not make a claim about 8B.
+variants. The workspace has a Qwen 8B hard-example prompt probe, but not a
+full 22-topic Qwen 8B dev-set run, so the table above does not make a full-dev
+claim about 8B.
 
 The follow-up should stay separate: query decomposition, facet coverage, and
 alternate-query recall can be evaluated next without changing the current
