@@ -109,6 +109,11 @@ def _read_topic_scores(path: Path) -> list[dict[str, str]]:
     return [{field: row.get(field, "") for field in TOPIC_SCORE_FIELDS} for row in rows]
 
 
+def _has_config(manifest: dict[str, Any]) -> bool:
+    config = manifest.get("config")
+    return isinstance(config, dict) and bool(config)
+
+
 def build_experiment_indexes(experiments_dir: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     run_rows: list[dict[str, str]] = []
     topic_score_rows: list[dict[str, str]] = []
@@ -117,7 +122,7 @@ def build_experiment_indexes(experiments_dir: Path) -> tuple[list[dict[str, str]
         manifest = _read_manifest(manifest_path)
         run_rows.append(_run_row(experiments_dir, record_dir, manifest))
         topic_scores_path = record_dir / "topic_scores.csv"
-        if topic_scores_path.exists():
+        if topic_scores_path.exists() and _has_config(manifest):
             topic_score_rows.extend(_read_topic_scores(topic_scores_path))
     return run_rows, topic_score_rows
 

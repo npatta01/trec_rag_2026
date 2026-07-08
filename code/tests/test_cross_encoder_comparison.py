@@ -95,24 +95,12 @@ def test_write_comparison_report_creates_summary_files(tmp_path):
 
     system_rows = list(csv.DictReader((output_dir / "system_scores.csv").open()))
     topic_rows = list(csv.DictReader((output_dir / "topic_system_scores.csv").open()))
-    compat_topic_rows = list(csv.DictReader((output_dir / "topic_scores.csv").open()))
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     notes = (output_dir / "notes.md").read_text(encoding="utf-8")
 
     assert system_rows[0]["system_id"] == "example_model__reranked__reranker"
     assert topic_rows[0]["system_id"] == "example_model__reranked__reranker"
-    assert compat_topic_rows == [
-        {
-            "experiment_id": "cross_encoder_model_comparison_v1",
-            "runtime_id": "example_model__reranked__reranker",
-            "run_date": "2026-07-08",
-            "split": "dev",
-            "hits": "50",
-            "topic_id": "1",
-            "ndcg_at_10": "0.6000000000",
-            "recall_at_100": "",
-        }
-    ]
+    assert not (output_dir / "topic_scores.csv").exists()
     assert metrics["baseline"]["ndcg@10"] == 0.4
     assert metrics["best_full_dev_system"]["ndcg@10"] == 0.6
     assert "example/model" in notes

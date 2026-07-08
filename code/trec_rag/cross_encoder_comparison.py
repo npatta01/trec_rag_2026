@@ -55,17 +55,6 @@ PROMPT_PROBE_FIELDS = [
     "source_artifact",
 ]
 
-COMPAT_TOPIC_SCORE_FIELDS = [
-    "experiment_id",
-    "runtime_id",
-    "run_date",
-    "split",
-    "hits",
-    "topic_id",
-    "ndcg_at_10",
-    "recall_at_100",
-]
-
 DEFAULT_FULL_DEV_ARTIFACTS = [
     Path("tmp/qwen_aggregation_eval_hits20_Qwen3_Reranker_0p6B.json"),
     Path("tmp/qwen_aggregation_eval_hits20_Qwen3_Reranker_4B.json"),
@@ -340,28 +329,6 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) ->
         writer.writerows(rows)
 
 
-def _compat_topic_score_rows(
-    system_rows: list[dict[str, str]], topic_rows: list[dict[str, str]]
-) -> list[dict[str, str]]:
-    systems_by_id = {row["system_id"]: row for row in system_rows}
-    rows: list[dict[str, str]] = []
-    for topic_row in topic_rows:
-        system = systems_by_id[topic_row["system_id"]]
-        rows.append(
-            {
-                "experiment_id": "cross_encoder_model_comparison_v1",
-                "runtime_id": topic_row["system_id"],
-                "run_date": "2026-07-08",
-                "split": "dev",
-                "hits": system["candidate_depth"],
-                "topic_id": topic_row["topic_id"],
-                "ndcg_at_10": topic_row["system_ndcg_at_10"],
-                "recall_at_100": "",
-            }
-        )
-    return rows
-
-
 def _baseline_ndcg(paths: Iterable[Path]) -> float:
     for path in paths:
         if path.exists():
@@ -544,8 +511,6 @@ def _write_notes(
             "",
             "- `system_scores.csv`: one row per full-dev model/method result.",
             "- `topic_system_scores.csv`: one row per topic and full-dev system.",
-            "- `topic_scores.csv`: compatibility table for the global experiment index; "
-            "`runtime_id` is the compared system id.",
             "- `prompt_probe_scores.csv`: qualitative prompt/probe alignment summary.",
             "- `metrics.json`: machine-readable copy of the same summary.",
         ]
@@ -583,7 +548,6 @@ tracked_record_files:
   metrics: metrics.json
   system_scores: system_scores.csv
   topic_system_scores: topic_system_scores.csv
-  topic_scores: topic_scores.csv
   prompt_probe_scores: prompt_probe_scores.csv
 
 source_artifacts:
@@ -617,11 +581,6 @@ def write_comparison_report(
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(output_dir / "system_scores.csv", SYSTEM_SCORE_FIELDS, system_rows)
     _write_csv(output_dir / "topic_system_scores.csv", TOPIC_SYSTEM_SCORE_FIELDS, topic_rows)
-    _write_csv(
-        output_dir / "topic_scores.csv",
-        COMPAT_TOPIC_SCORE_FIELDS,
-        _compat_topic_score_rows(system_rows, topic_rows),
-    )
     _write_csv(output_dir / "prompt_probe_scores.csv", PROMPT_PROBE_FIELDS, prompt_rows)
     _write_metrics(
         output_dir / "metrics.json",

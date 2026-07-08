@@ -19,7 +19,6 @@ tracked_record_files:
   metrics: metrics.json
   system_scores: system_scores.csv
   topic_system_scores: topic_system_scores.csv
-  topic_scores: topic_scores.csv
   prompt_probe_scores: prompt_probe_scores.csv
 
 source_artifacts:
