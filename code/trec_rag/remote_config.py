@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import urllib.parse
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -23,17 +22,7 @@ def remote_index_url(env: Mapping[str, str] | None = None) -> str:
     index_url = (env_get(env, "INDEX_URL") or "").strip().rstrip("?")
     if index_url:
         return index_url
-
-    index = (env_get(env, "PYSERINI_INDEX") or env_get(env, "DEFAULT_INDEX") or "").strip()
-    base_url = (
-        env_get(env, "PYSERINI_BASE_URL") or env_get(env, "DEFAULT_BASE_URL") or ""
-    ).strip().rstrip("/")
-    if not index or not base_url:
-        raise ValueError(
-            "Set INDEX_URL, or set index/base env vars "
-            "(PYSERINI_INDEX/PYSERINI_BASE_URL or DEFAULT_INDEX/DEFAULT_BASE_URL)."
-        )
-    return f"{base_url}/v1/{urllib.parse.quote(index)}/search"
+    raise ValueError("Set INDEX_URL to the hosted Pyserini search endpoint.")
 
 
 @dataclass(frozen=True)

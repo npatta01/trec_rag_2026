@@ -14,11 +14,9 @@ by responsibility:
 
 Inputs:
 
-- `.env.example` includes the public hosted endpoint defaults; copy it to a
-  local `.env` and fill in `PYSERINI_API_TOKEN`
-- endpoint environment: set `INDEX_URL`; or set `PYSERINI_INDEX` and
-  `PYSERINI_BASE_URL`; or use the aliases `DEFAULT_INDEX` and
-  `DEFAULT_BASE_URL`
+- `.env.example` includes the public hosted ClimbMix search endpoint; copy it
+  to a local `.env` and fill in `PYSERINI_API_TOKEN`
+- endpoint environment: set `INDEX_URL` to the hosted ClimbMix search endpoint
 - other environment variables: `PYSERINI_API_TOKEN`, `EXTERNAL_PYSERINI_HITS`,
   and `SAMPLE_QUERIES`
 - `.env` / `.env.local` files in the active worktree or shared checkout
@@ -73,9 +71,8 @@ checkout root instead of the worktree:
 `<shared-checkout>/outputs/<experiment.id>/cache/`.
 
 Topic parsing follows `topics.format` in the YAML (`tsv` or `jsonl`), not the
-filename suffix. For remote Pyserini runs, a retriever `index` in YAML takes
-precedence over `PYSERINI_INDEX`; if `INDEX_URL` is set, it must point at the
-same index declared in YAML.
+filename suffix. For remote Pyserini runs, `INDEX_URL` must point at the same
+index declared in YAML.
 
 Current V1 stages:
 

@@ -398,10 +398,8 @@ def test_pyserini_remote_retriever_rejects_conflicting_index_url(tmp_path, monke
         PyseriniRemoteRetriever(config, cache_dir=tmp_path)
 
 
-def test_pyserini_remote_retriever_uses_yaml_index_over_env_index(tmp_path, monkeypatch):
-    monkeypatch.delenv("INDEX_URL", raising=False)
-    monkeypatch.setenv("PYSERINI_INDEX", "other-index")
-    monkeypatch.setenv("PYSERINI_BASE_URL", "https://pyserini.test")
+def test_pyserini_remote_retriever_uses_matching_index_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("INDEX_URL", "https://pyserini.test/v1/climbmix-400b/search")
     config = RetrieverConfig(
         name="climbmix_bm25",
         type="pyserini_remote",
