@@ -19,11 +19,13 @@ const requiredSignals = [
   "Reports Home",
   "TREC RAG 2026 Briefing",
   "TREC RAG 2025 Writeups",
+  "TREC RAGTIME 2025 Reproduction Playbook",
   "reports-index",
   "Start with the briefing",
   "Use the 2025 writeups as the technique library",
   "reports/trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
+  "reports/ragtime-2025-reproduction-playbook.html",
   "class=\"topbar\"",
   "class=\"hero\"",
   "class=\"shell hero-grid\"",
@@ -52,6 +54,7 @@ for (const signal of forbiddenSignals) {
 const linkedFiles = [
   "trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
+  "ragtime-2025-reproduction-playbook.html",
 ];
 
 for (const linkedFile of linkedFiles) {
