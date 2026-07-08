@@ -18,6 +18,7 @@ tracked_record_files:
 
 source_experiments:
   bm25: reports/experiments/rag25_bm25_full_dev_hits1000_v1/metrics.json
+  topic_level_reranker_metrics: reports/experiments/topic_level_reranker_metrics_v1/metrics.json
   mixedbread_aggregation: reports/experiments/cross_encoder_doc_aggregation_mixedbread_v1/metrics.json
   qwen_0p6b_chunks: tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_0p6B.json
   qwen_4b_chunks: tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_4B.json

@@ -107,6 +107,13 @@ not the pure prefix scorer and not the best-average z-normalized formula. It
 gives up some average score versus the best-average formula, but it removes
 large topic regressions in this dev sample.
 
+The topic-level companion report tracks the same decision with additional
+`precision@10`, `recall@10`, `hit_rate@10`, `relevant_count@10`, and candidate
+pool `recall@50` metrics. Its main regression finding is topic `515`: BM25 has
+one relevant document in the top 10, while the coverage-aware reranker moves all
+three relevant top-50 candidates below rank 10. That is an ordering regression,
+not a retrieval-absence issue.
+
 Qwen should not be the default reranker based on these runs. The Qwen runs do
 improve average `nDCG@10` over BM25, but the gains are smaller and the topic
 regressions are larger. The available 4B chunk run did not outperform the 0.6B

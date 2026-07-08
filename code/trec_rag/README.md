@@ -77,8 +77,8 @@ Current V1 stages:
 - `top_k` evidence selection: choose text-bearing ranked candidates.
 - `placeholder` generation: write valid cited RAG JSONL for plumbing checks.
 - `dev_projected_qrels` evaluation: compute development diagnostics such as
-  `ndcg@10`, `recall@100`, `graded_recall@100`, and
-  `ideal_dcg_coverage@100`.
+  `ndcg@10`, `precision@10`, `recall@100`, `hit_rate@10`,
+  `relevant_count@10`, `graded_recall@100`, and `ideal_dcg_coverage@100`.
 
 Outputs:
 

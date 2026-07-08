@@ -610,6 +610,38 @@ def test_qrels_metrics_report_graded_recall_and_ideal_dcg_coverage(tmp_path):
     )
 
 
+def test_qrels_metrics_report_precision_hit_rate_and_relevant_count(tmp_path):
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text(
+        "31 0 doc-a 4\n"
+        "31 0 doc-b 2\n"
+        "31 0 doc-c 1\n"
+        "32 0 doc-z 2\n",
+        encoding="utf-8",
+    )
+    ranked = [
+        RankedCandidate("31", "doc-unjudged", 1, 10.0, "", []),
+        RankedCandidate("31", "doc-b", 2, 9.0, "", []),
+        RankedCandidate("31", "doc-c", 3, 8.0, "", []),
+        RankedCandidate("32", "doc-unjudged", 1, 5.0, "", []),
+    ]
+
+    metrics = evaluate_ranked(
+        ranked,
+        parse_qrels(qrels_path),
+        metric_names=["precision@3", "hit_rate@3", "relevant_count@3"],
+        relevance_threshold=2,
+    )
+
+    assert metrics["per_topic"]["31"]["precision@3"] == pytest.approx(1 / 3)
+    assert metrics["per_topic"]["31"]["hit_rate@3"] == 1.0
+    assert metrics["per_topic"]["31"]["relevant_count@3"] == 1
+    assert metrics["per_topic"]["32"]["precision@3"] == 0.0
+    assert metrics["per_topic"]["32"]["hit_rate@3"] == 0.0
+    assert metrics["per_topic"]["32"]["relevant_count@3"] == 0
+    assert metrics["metrics"]["hit_rate@3"] == 0.5
+
+
 def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_path):
     shared = tmp_path / "shared"
     worktree = tmp_path / "worktree"
