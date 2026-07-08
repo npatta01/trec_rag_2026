@@ -1,4 +1,5 @@
 import json
+import math
 
 import pytest
 
@@ -123,6 +124,55 @@ generation: {type: placeholder}
     config = load_pipeline_config(config_path)
 
     assert config.retrievers[0].cache is False
+
+
+def test_config_loads_coverage_aware_reranker(tmp_path):
+    doc_scores = tmp_path / "doc_scores.jsonl"
+    chunk_scores = tmp_path / "chunk_scores.jsonl"
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        f"""
+experiment: {{id: demo}}
+submission: {{team_id: local-baseline}}
+topics: {{path: topics.tsv, format: tsv}}
+query_understanding: {{variants: [{{name: original, type: original_topic}}]}}
+retrievers:
+  - name: climbmix_bm25
+    type: pyserini_remote
+    query_variants: [original]
+    hits: 50
+ranking:
+  type: coverage_aware_long_doc_aggregate
+  dedupe:
+    by: docid
+    keep: best_rank
+    preserve_provenance: true
+  reranker:
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    score_source: cached_artifacts
+    document_score_path: {doc_scores}
+    window_score_path: {chunk_scores}
+    formula:
+      long_document_weight: 0.5
+      strongest_passage_weight: 0.5
+      coverage_bonus_weight: 0.25
+      relative_span_delta: 1.0
+      support_cap: 6
+      min_new_chars: 800
+      top_window_weights: [0.55, 0.25, 0.13, 0.07]
+evidence: {{type: top_k, k: 1, allow_fewer: true}}
+generation: {{type: placeholder}}
+""",
+    )
+
+    config = load_pipeline_config(config_path)
+
+    assert config.ranking.type == "coverage_aware_long_doc_aggregate"
+    assert config.ranking.reranker is not None
+    assert config.ranking.reranker.model == "mixedbread-ai/mxbai-rerank-base-v2"
+    assert config.ranking.reranker.document_score_path == doc_scores
+    assert config.ranking.reranker.window_score_path == chunk_scores
+    assert config.ranking.reranker.formula.coverage_bonus_weight == 0.25
 
 
 def test_config_rejects_unknown_topic_format(tmp_path):
@@ -578,6 +628,69 @@ def test_qrels_metrics_handle_graded_labels_and_unjudged_docs(tmp_path):
     assert metrics["metrics"]["recall@3"] == 0.5
 
 
+def test_qrels_metrics_report_graded_recall_and_ideal_dcg_coverage(tmp_path):
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text(
+        "31 0 doc-a 4\n"
+        "31 0 doc-b 2\n"
+        "31 0 doc-c 1\n"
+        "31 0 doc-d 0\n",
+        encoding="utf-8",
+    )
+    ranked = [
+        RankedCandidate("31", "doc-unjudged", 1, 10.0, "", []),
+        RankedCandidate("31", "doc-b", 2, 9.0, "", []),
+        RankedCandidate("31", "doc-c", 3, 8.0, "", []),
+    ]
+
+    qrels = parse_qrels(qrels_path)
+    metrics = evaluate_ranked(
+        ranked,
+        qrels,
+        metric_names=["graded_recall@3", "ideal_dcg_coverage@3"],
+        relevance_threshold=2,
+    )
+
+    assert metrics["per_topic"]["31"]["graded_recall@3"] == pytest.approx(3 / 7)
+    expected_candidate_idcg = 3 / math.log2(2) + 1 / math.log2(3)
+    expected_true_idcg = 15 / math.log2(2) + 3 / math.log2(3) + 1 / math.log2(4)
+    assert metrics["per_topic"]["31"]["ideal_dcg_coverage@3"] == pytest.approx(
+        expected_candidate_idcg / expected_true_idcg
+    )
+
+
+def test_qrels_metrics_report_precision_hit_rate_and_relevant_count(tmp_path):
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text(
+        "31 0 doc-a 4\n"
+        "31 0 doc-b 2\n"
+        "31 0 doc-c 1\n"
+        "32 0 doc-z 2\n",
+        encoding="utf-8",
+    )
+    ranked = [
+        RankedCandidate("31", "doc-unjudged", 1, 10.0, "", []),
+        RankedCandidate("31", "doc-b", 2, 9.0, "", []),
+        RankedCandidate("31", "doc-c", 3, 8.0, "", []),
+        RankedCandidate("32", "doc-unjudged", 1, 5.0, "", []),
+    ]
+
+    metrics = evaluate_ranked(
+        ranked,
+        parse_qrels(qrels_path),
+        metric_names=["precision@3", "hit_rate@3", "relevant_count@3"],
+        relevance_threshold=2,
+    )
+
+    assert metrics["per_topic"]["31"]["precision@3"] == pytest.approx(1 / 3)
+    assert metrics["per_topic"]["31"]["hit_rate@3"] == 1.0
+    assert metrics["per_topic"]["31"]["relevant_count@3"] == 1
+    assert metrics["per_topic"]["32"]["precision@3"] == 0.0
+    assert metrics["per_topic"]["32"]["hit_rate@3"] == 0.0
+    assert metrics["per_topic"]["32"]["relevant_count@3"] == 0
+    assert metrics["metrics"]["hit_rate@3"] == 0.5
+
+
 def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_path):
     shared = tmp_path / "shared"
     worktree = tmp_path / "worktree"
@@ -671,3 +784,130 @@ evaluation:
     assert json.loads((result.output_dir / "retrieval_metrics.json").read_text())["metrics"][
         "recall@100"
     ] == 1.0
+
+
+def test_run_pipeline_applies_cached_coverage_aware_reranker(tmp_path):
+    topics_path = tmp_path / "topics.tsv"
+    topics_path.write_text("31\tExplain banks.\n", encoding="utf-8")
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text("31 0 doc-b 4\n31 0 doc-a 0\n", encoding="utf-8")
+    doc_scores = tmp_path / "doc_scores.jsonl"
+    doc_scores.write_text(
+        "\n".join(
+            [
+                json.dumps({"topic_id": "31", "docid": "doc-a", "score": 0.0}),
+                json.dumps({"topic_id": "31", "docid": "doc-b", "score": 10.0}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    chunk_scores = tmp_path / "chunk_scores.jsonl"
+    chunk_scores.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "topic_id": "31",
+                        "docid": "doc-a",
+                        "chunk_index": 0,
+                        "start_char": 0,
+                        "end_char": 1000,
+                        "score": 0.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "topic_id": "31",
+                        "docid": "doc-b",
+                        "chunk_index": 0,
+                        "start_char": 0,
+                        "end_char": 1000,
+                        "score": 10.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        f"""
+experiment:
+  id: rag25_fake_rerank_v1
+submission:
+  team_id: local-baseline
+topics:
+  path: {topics_path}
+  format: tsv
+query_understanding:
+  variants:
+    - name: original
+      type: original_topic
+retrievers:
+  - name: fake
+    type: fake
+    query_variants: [original]
+    hits: 50
+ranking:
+  type: coverage_aware_long_doc_aggregate
+  reranker:
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    score_source: cached_artifacts
+    document_score_path: {doc_scores}
+    window_score_path: {chunk_scores}
+    formula:
+      long_document_weight: 0.5
+      strongest_passage_weight: 0.5
+      coverage_bonus_weight: 0.25
+      relative_span_delta: 1.0
+      support_cap: 6
+      min_new_chars: 800
+      top_window_weights: [0.55, 0.25, 0.13, 0.07]
+evidence:
+  type: top_k
+  k: 1
+  require_text: true
+  allow_fewer: true
+generation:
+  type: placeholder
+evaluation:
+  kind: dev_projected_qrels
+  qrels: {qrels_path}
+  metrics: [ndcg@10, precision@10]
+  relevance_threshold: 2
+""",
+    )
+
+    class FakeRetriever:
+        def retrieve(self, query):
+            return [
+                RetrievedCandidate(
+                    query.topic_id,
+                    query.variant_name,
+                    "fake",
+                    query.query_text,
+                    "doc-a",
+                    1,
+                    9.0,
+                    "A",
+                ),
+                RetrievedCandidate(
+                    query.topic_id,
+                    query.variant_name,
+                    "fake",
+                    query.query_text,
+                    "doc-b",
+                    2,
+                    8.0,
+                    "B",
+                ),
+            ]
+
+    result = run_pipeline(config_path, retriever_factories={"fake": lambda _config, _cache: FakeRetriever()})
+
+    assert [(row.docid, row.rank) for row in result.ranked] == [("doc-b", 1), ("doc-a", 2)]
+    assert result.ranked[0].provenance[-1]["ranker"] == "coverage_aware_long_doc_aggregate"
+    assert read_jsonl(result.output_dir / "stage_evidence.jsonl")[0]["docid"] == "doc-b"
+    assert result.metrics["metrics"]["ndcg@10"] == 1.0

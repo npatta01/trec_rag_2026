@@ -1,0 +1,47 @@
+{
+  "kind": "dev_projected_qrels",
+  "metrics": [
+    {
+      "candidate_depth": 10,
+      "binary_recall": 0.012223886357766585,
+      "graded_recall": 0.011415449385205424,
+      "ideal_dcg_coverage": 0.4934594558729849,
+      "oracle_ndcg@10_from_topk": 0.4934594558729849
+    },
+    {
+      "candidate_depth": 50,
+      "binary_recall": 0.054849007101213675,
+      "graded_recall": 0.053164246427760325,
+      "ideal_dcg_coverage": 0.4940613154501678,
+      "oracle_ndcg@10_from_topk": 0.8187189277533732
+    },
+    {
+      "candidate_depth": 100,
+      "binary_recall": 0.10808794569429726,
+      "graded_recall": 0.10510869397950123,
+      "ideal_dcg_coverage": 0.5205255696116236,
+      "oracle_ndcg@10_from_topk": 0.9175291068284586
+    },
+    {
+      "candidate_depth": 1000,
+      "binary_recall": 0.26635425443172767,
+      "graded_recall": 0.25840544153445166,
+      "ideal_dcg_coverage": 0.39776858427857376,
+      "oracle_ndcg@10_from_topk": 0.9631481168146724
+    }
+  ],
+  "weakest_topics_at_50": [
+    {"topic_id": "144", "graded_recall": 0.032908, "ideal_dcg_coverage": 0.132999, "oracle_ndcg@10_from_topk": 0.211882},
+    {"topic_id": "515", "graded_recall": 0.027083, "ideal_dcg_coverage": 0.298298, "oracle_ndcg@10_from_topk": 0.368781},
+    {"topic_id": "225", "graded_recall": 0.059099, "ideal_dcg_coverage": 0.401273, "oracle_ndcg@10_from_topk": 0.466667},
+    {"topic_id": "213", "graded_recall": 0.052632, "ideal_dcg_coverage": 0.251930, "oracle_ndcg@10_from_topk": 0.516509},
+    {"topic_id": "707", "graded_recall": 0.046499, "ideal_dcg_coverage": 0.446133, "oracle_ndcg@10_from_topk": 0.608151}
+  ],
+  "weakest_topics_at_1000": [
+    {"topic_id": "144", "graded_recall": 0.165212, "ideal_dcg_coverage": 0.197876, "oracle_ndcg@10_from_topk": 0.584049},
+    {"topic_id": "707", "graded_recall": 0.192560, "ideal_dcg_coverage": 0.298678, "oracle_ndcg@10_from_topk": 0.761121},
+    {"topic_id": "515", "graded_recall": 0.121528, "ideal_dcg_coverage": 0.198531, "oracle_ndcg@10_from_topk": 0.844089},
+    {"topic_id": "200", "graded_recall": 0.134795, "ideal_dcg_coverage": 0.239628, "oracle_ndcg@10_from_topk": 1.000000},
+    {"topic_id": "37", "graded_recall": 0.159860, "ideal_dcg_coverage": 0.299643, "oracle_ndcg@10_from_topk": 1.000000}
+  ]
+}

@@ -1,0 +1,37 @@
+experiment:
+  id: reranker_improvement_summary_v1
+  run_date: 2026-07-05
+  split: dev
+  description: Summary of BM25 top-50 reranker improvements and the selected adjusted scoring formula.
+
+scope:
+  topic_count: 22
+  candidate_depth: 50
+  metric: ndcg@10
+  baseline: BM25 candidate order
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+
+source_experiments:
+  runnable_config: configs/rag25_bm25_mixedbread_rerank_v1.yaml
+  cross_encoder_model_comparison: reports/experiments/cross_encoder_model_comparison_v1/metrics.json
+  bm25: reports/experiments/rag25_bm25_full_dev_hits1000_v1/metrics.json
+  topic_level_reranker_metrics: reports/experiments/topic_level_reranker_metrics_v1/metrics.json
+  mixedbread_aggregation: reports/experiments/cross_encoder_doc_aggregation_mixedbread_v1/metrics.json
+  qwen_0p6b_chunks: tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_0p6B.json
+  qwen_4b_chunks: tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_4B.json
+  qwen_0p6b_full_doc: tmp/qwen_full_doc_margin_hits50_Qwen3_Reranker_0p6B_ml32768.json
+  minilm_seqcls: tmp/seqcls_eval_hits50_cross_encoder__ms_marco_MiniLM_L6_v2_ml512.json
+  bge_seqcls: tmp/seqcls_eval_hits50_BAAI__bge_reranker_v2_m3_ml1024.json
+  mixedbread_prefix: tmp/st_crossencoder_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024.json
+  mixedbread_long_context: tmp/st_crossencoder_longctx_hits50_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512.json
+
+recommendation:
+  formula: coverage_aware_long_doc_aggregate
+  ndcg_at_10: 0.527544426
+  delta_vs_bm25: 0.113583257
+  reason: Best tested long-context formula with no topic loss worse than -0.1.

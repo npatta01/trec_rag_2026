@@ -1,0 +1,163 @@
+{
+  "kind": "dev_projected_qrels",
+  "topic_count": 22,
+  "candidate_depth": 50,
+  "metric": "ndcg@10",
+  "baseline": {
+    "name": "BM25 candidate order",
+    "ndcg@10": 0.4139611685119935
+  },
+  "definitions": {
+    "loss": "A topic-level nDCG@10 delta below 0 versus BM25.",
+    "big_loss": "A topic-level nDCG@10 delta below -0.1 versus BM25.",
+    "relative_lift": "(method_ndcg - bm25_ndcg) / bm25_ndcg"
+  },
+  "results": [
+    {
+      "name": "Mixedbread best-average adjusted formula",
+      "model": "mixedbread-ai/mxbai-rerank-base-v2",
+      "method": "z_blend0p5_plus_relspan_d1p5_cap6_a0p25",
+      "ndcg@10": 0.5595991744990626,
+      "delta_vs_bm25": 0.1456380059870691,
+      "relative_lift_vs_bm25": 0.3518156220076705,
+      "topic_losses": 2,
+      "big_topic_losses": 1,
+      "worst_topic": "224",
+      "worst_delta": -0.12405417186222523,
+      "note": "Highest average score, but still has one big regression and requires topic-level z normalization."
+    },
+    {
+      "name": "Mixedbread base v2 prefix",
+      "model": "mixedbread-ai/mxbai-rerank-base-v2",
+      "method": "st_crossencoder_max_length_1024",
+      "ndcg@10": 0.5322243661028735,
+      "delta_vs_bm25": 0.11826319759088,
+      "relative_lift_vs_bm25": 0.285686693793004,
+      "topic_losses": 5,
+      "big_topic_losses": 2,
+      "worst_topic": "224",
+      "worst_delta": -0.2222050771670514,
+      "note": "Strong mean improvement but too much regression risk."
+    },
+    {
+      "name": "Mixedbread conservative adjusted formula",
+      "model": "mixedbread-ai/mxbai-rerank-base-v2",
+      "method": "blend0p5_plus_relspan_d1_cap6_a0p25",
+      "ndcg@10": 0.5275444259646211,
+      "delta_vs_bm25": 0.11358325745262765,
+      "relative_lift_vs_bm25": 0.27438143017353295,
+      "topic_losses": 4,
+      "big_topic_losses": 0,
+      "worst_topic": "515",
+      "worst_delta": -0.0948156889440471,
+      "note": "Recommended current formula because it keeps the lift while avoiding big topic regressions."
+    },
+    {
+      "name": "Mixedbread long-context document score",
+      "model": "mixedbread-ai/mxbai-rerank-base-v2",
+      "method": "doc_max_32768_buf512_score",
+      "ndcg@10": 0.5154219200267127,
+      "delta_vs_bm25": 0.10146075151471923,
+      "relative_lift_vs_bm25": 0.24509726813127317,
+      "topic_losses": 6,
+      "big_topic_losses": 1,
+      "worst_topic": "224",
+      "worst_delta": -0.10082250829173389,
+      "note": "Uses the full document when it fits, otherwise the longest safe prefix."
+    },
+    {
+      "name": "MiniLM sequence classifier",
+      "model": "cross-encoder/ms-marco-MiniLM-L6-v2",
+      "method": "seqcls_max_length_512",
+      "ndcg@10": 0.49905587120680045,
+      "delta_vs_bm25": 0.08509470269480696,
+      "relative_lift_vs_bm25": 0.2055620410017795,
+      "topic_losses": 6,
+      "big_topic_losses": 2,
+      "worst_topic": "31",
+      "worst_delta": -0.2814230470459319,
+      "note": "Improves the mean but has large regressions."
+    },
+    {
+      "name": "BGE reranker v2 m3",
+      "model": "BAAI/bge-reranker-v2-m3",
+      "method": "seqcls_max_length_1024",
+      "ndcg@10": 0.49038826680752584,
+      "delta_vs_bm25": 0.07642709829553235,
+      "relative_lift_vs_bm25": 0.18462383457427617,
+      "topic_losses": 6,
+      "big_topic_losses": 3,
+      "worst_topic": "224",
+      "worst_delta": -0.18589144708632166,
+      "note": "Positive average lift, but weaker than Mixedbread and not robust enough."
+    },
+    {
+      "name": "Qwen 0.6B hybrid full75/chunk25 margin",
+      "model": "Qwen/Qwen3-Reranker-0.6B",
+      "method": "hybrid_full75_chunk25_margin",
+      "ndcg@10": 0.4892623970403262,
+      "delta_vs_bm25": 0.07530122852833271,
+      "relative_lift_vs_bm25": 0.1819040872819235,
+      "topic_losses": 6,
+      "big_topic_losses": 4,
+      "worst_topic": "224",
+      "worst_delta": -0.21508217394445606,
+      "note": "Best Qwen run found so far, but still materially more brittle than Mixedbread."
+    },
+    {
+      "name": "Qwen 0.6B full-doc probability fallback",
+      "model": "Qwen/Qwen3-Reranker-0.6B",
+      "method": "full_doc_probability_else_chunk",
+      "ndcg@10": 0.4820407810711007,
+      "delta_vs_bm25": 0.06807961255910722,
+      "relative_lift_vs_bm25": 0.16445893416482318,
+      "topic_losses": 6,
+      "big_topic_losses": 5,
+      "worst_topic": "37",
+      "worst_delta": -0.20425343252074207,
+      "note": "Full-document Qwen improved over chunk-only Qwen but retained large regressions."
+    },
+    {
+      "name": "Qwen 0.6B chunk top3 weighted",
+      "model": "Qwen/Qwen3-Reranker-0.6B",
+      "method": "top3_weighted",
+      "ndcg@10": 0.4583081460840568,
+      "delta_vs_bm25": 0.044346977572063295,
+      "relative_lift_vs_bm25": 0.10712835151053172,
+      "topic_losses": 8,
+      "big_topic_losses": 4,
+      "worst_topic": "224",
+      "worst_delta": -0.29779605842569723,
+      "note": "Best simple Qwen 0.6B chunk aggregation."
+    },
+    {
+      "name": "Qwen 4B chunk max",
+      "model": "Qwen/Qwen3-Reranker-4B",
+      "method": "qwen_max",
+      "ndcg@10": 0.4485499929112924,
+      "delta_vs_bm25": 0.03458882439929889,
+      "relative_lift_vs_bm25": 0.08355572220367999,
+      "topic_losses": 8,
+      "big_topic_losses": 5,
+      "worst_topic": "37",
+      "worst_delta": -0.37909597073620843,
+      "note": "Best Qwen 4B aggregate in the run; did not beat the 0.6B Qwen variants."
+    }
+  ],
+  "recommended_formula": {
+    "name": "Coverage-aware long-doc aggregate",
+    "plain_definition": "0.5 * long_document_relevance + 0.5 * strongest_passage_relevance + 0.25 * bounded_coverage_support",
+    "definition": "0.5 * doc_max_32768_buf512_score + 0.5 * top4_weighted_window_score + 0.25 * min(relative_span_support_1.0, 6)",
+    "long_document_relevance": "doc_max_32768_buf512_score",
+    "strongest_passage_relevance": "top4_weighted_window_score",
+    "bounded_coverage_support": "min(relative_span_support_1.0, 6)",
+    "top4_weighted_window_score": "0.55*s1 + 0.25*s2 + 0.13*s3 + 0.07*s4 where s1 >= s2 >= s3 >= s4 are window scores.",
+    "relative_span_support_1.0": "Count of span-distinct chunks whose score is within 1.0 of the document's best chunk score, capped at 6."
+  },
+  "not_evaluated": [
+    {
+      "model": "Qwen/Qwen3-Reranker-8B",
+      "reason": "No 22-topic full-dev 8B output artifact was present in this workspace for this summary; only a hard-example prompt probe is captured in cross_encoder_model_comparison_v1."
+    }
+  ]
+}

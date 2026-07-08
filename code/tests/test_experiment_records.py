@@ -77,3 +77,110 @@ metrics:
         }
     ]
     assert [row["topic_id"] for row in score_rows] == ["overall", "14"]
+
+
+def test_write_experiment_indexes_skips_missing_topic_scores(tmp_path):
+    experiments_dir = tmp_path / "reports" / "experiments"
+    single_run_dir = experiments_dir / "single_run_v1"
+    summary_dir = experiments_dir / "summary_only_v1"
+    single_run_dir.mkdir(parents=True)
+    summary_dir.mkdir()
+    (single_run_dir / "manifest.yaml").write_text(
+        """
+experiment:
+  id: single_run_v1
+  runtime_id: run-a
+  run_date: 2026-07-04
+  split: dev
+config:
+  hits: 50
+data:
+  topic_count: 2
+metrics:
+  ndcg_at_10: 0.5
+""",
+        encoding="utf-8",
+    )
+    (single_run_dir / "topic_scores.csv").write_text(
+        "experiment_id,runtime_id,run_date,split,hits,topic_id,ndcg_at_10,recall_at_100\n"
+        "single_run_v1,run-a,2026-07-04,dev,50,overall,0.5,\n",
+        encoding="utf-8",
+    )
+    (summary_dir / "manifest.yaml").write_text(
+        """
+experiment:
+  id: summary_only_v1
+  run_date: 2026-07-05
+  split: dev
+scope:
+  topic_count: 2
+  candidate_depths:
+    - 20
+    - 50
+metrics:
+  ndcg_at_10: 0.6
+notes: Uses topic_system_scores.csv instead of topic_scores.csv.
+""",
+        encoding="utf-8",
+    )
+
+    write_experiment_indexes(experiments_dir)
+
+    run_rows = list(csv.DictReader((experiments_dir / "runs.csv").open()))
+    score_rows = list(csv.DictReader((experiments_dir / "topic_scores.csv").open()))
+
+    assert [row["experiment_id"] for row in run_rows] == ["single_run_v1", "summary_only_v1"]
+    assert run_rows[1]["hits"] == "20,50"
+    assert run_rows[1]["topic_count"] == "2"
+    assert [row["experiment_id"] for row in score_rows] == ["single_run_v1"]
+
+
+def test_topic_scores_index_only_includes_config_backed_runs(tmp_path):
+    experiments_dir = tmp_path / "reports" / "experiments"
+    config_run_dir = experiments_dir / "config_run_v1"
+    comparison_dir = experiments_dir / "comparison_v1"
+    config_run_dir.mkdir(parents=True)
+    comparison_dir.mkdir()
+    topic_score_csv = (
+        "experiment_id,runtime_id,run_date,split,hits,topic_id,ndcg_at_10,recall_at_100\n"
+    )
+    (config_run_dir / "manifest.yaml").write_text(
+        """
+experiment:
+  id: config_run_v1
+  runtime_id: run-a
+  run_date: 2026-07-04
+  split: dev
+config:
+  file: config.yaml
+  hits: 50
+metrics:
+  ndcg_at_10: 0.5
+""",
+        encoding="utf-8",
+    )
+    (config_run_dir / "topic_scores.csv").write_text(
+        topic_score_csv + "config_run_v1,run-a,2026-07-04,dev,50,14,0.5,\n",
+        encoding="utf-8",
+    )
+    (comparison_dir / "manifest.yaml").write_text(
+        """
+experiment:
+  id: comparison_v1
+  run_date: 2026-07-05
+  split: dev
+tracked_record_files:
+  topic_system_scores: topic_system_scores.csv
+""",
+        encoding="utf-8",
+    )
+    (comparison_dir / "topic_scores.csv").write_text(
+        topic_score_csv + "comparison_v1,system-a,2026-07-05,dev,50,14,0.6,\n",
+        encoding="utf-8",
+    )
+
+    write_experiment_indexes(experiments_dir)
+
+    score_rows = list(csv.DictReader((experiments_dir / "topic_scores.csv").open()))
+
+    assert [row["experiment_id"] for row in score_rows] == ["config_run_v1"]

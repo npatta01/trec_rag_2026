@@ -50,6 +50,27 @@ class RankingConfig:
     dedupe_by: str = "docid"
     dedupe_keep: str = "best_rank"
     preserve_provenance: bool = True
+    reranker: "CoverageAwareRerankerConfig | None" = None
+
+
+@dataclass(frozen=True)
+class CoverageAwareFormulaConfig:
+    long_document_weight: float = 0.5
+    strongest_passage_weight: float = 0.5
+    coverage_bonus_weight: float = 0.25
+    relative_span_delta: float = 1.0
+    support_cap: int = 6
+    min_new_chars: int = 800
+    top_window_weights: tuple[float, ...] = (0.55, 0.25, 0.13, 0.07)
+
+
+@dataclass(frozen=True)
+class CoverageAwareRerankerConfig:
+    model: str
+    score_source: str
+    document_score_path: Path
+    window_score_path: Path
+    formula: CoverageAwareFormulaConfig
 
 
 @dataclass(frozen=True)
@@ -151,6 +172,43 @@ def _optional_bool(mapping: dict[str, Any], key: str, default: bool) -> bool:
     raise ValueError(f"{key} must be a boolean")
 
 
+def _coverage_aware_reranker_config(
+    ranking_raw: dict[str, Any],
+    root_dir: Path,
+) -> CoverageAwareRerankerConfig:
+    reranker_raw = _require_mapping(ranking_raw.get("reranker"), "ranking.reranker")
+    score_source = _require_text(reranker_raw, "score_source", "ranking.reranker")
+    if score_source != "cached_artifacts":
+        raise ValueError("ranking.reranker.score_source must be cached_artifacts")
+    formula_raw = reranker_raw.get("formula") or {}
+    if not isinstance(formula_raw, dict):
+        raise ValueError("ranking.reranker.formula must be a mapping")
+    weights = formula_raw.get("top_window_weights") or (0.55, 0.25, 0.13, 0.07)
+    if not isinstance(weights, list | tuple) or not weights:
+        raise ValueError("ranking.reranker.formula.top_window_weights must be a non-empty list")
+    return CoverageAwareRerankerConfig(
+        model=_require_text(reranker_raw, "model", "ranking.reranker"),
+        score_source=score_source,
+        document_score_path=_resolve_input_path(
+            root_dir,
+            _require_text(reranker_raw, "document_score_path", "ranking.reranker"),
+        ),
+        window_score_path=_resolve_input_path(
+            root_dir,
+            _require_text(reranker_raw, "window_score_path", "ranking.reranker"),
+        ),
+        formula=CoverageAwareFormulaConfig(
+            long_document_weight=float(formula_raw.get("long_document_weight", 0.5)),
+            strongest_passage_weight=float(formula_raw.get("strongest_passage_weight", 0.5)),
+            coverage_bonus_weight=float(formula_raw.get("coverage_bonus_weight", 0.25)),
+            relative_span_delta=float(formula_raw.get("relative_span_delta", 1.0)),
+            support_cap=int(formula_raw.get("support_cap", 6)),
+            min_new_chars=int(formula_raw.get("min_new_chars", 800)),
+            top_window_weights=tuple(float(weight) for weight in weights),
+        ),
+    )
+
+
 def load_pipeline_config(path: Path) -> PipelineConfig:
     config_path = path.resolve()
     root_dir = find_repo_root(config_path.parent)
@@ -220,7 +278,8 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     _check_unique([retriever.name for retriever in retrievers], "retriever")
 
     ranking_raw = _require_mapping(config.get("ranking"), "ranking")
-    if _require_text(ranking_raw, "type", "ranking") != "passthrough":
+    ranking_type = _require_text(ranking_raw, "type", "ranking")
+    if ranking_type not in {"passthrough", "coverage_aware_long_doc_aggregate"}:
         raise ValueError(f"unknown ranking type: {ranking_raw.get('type')}")
     dedupe_raw = ranking_raw.get("dedupe") or {}
     if not isinstance(dedupe_raw, dict):
@@ -230,10 +289,15 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
     if dedupe_by != "docid" or dedupe_keep != "best_rank":
         raise ValueError("passthrough dedupe only supports by: docid and keep: best_rank")
     ranking = RankingConfig(
-        type="passthrough",
+        type=ranking_type,
         dedupe_by=dedupe_by,
         dedupe_keep=dedupe_keep,
         preserve_provenance=bool(dedupe_raw.get("preserve_provenance", True)),
+        reranker=(
+            _coverage_aware_reranker_config(ranking_raw, root_dir)
+            if ranking_type == "coverage_aware_long_doc_aggregate"
+            else None
+        ),
     )
 
     evidence_raw = _require_mapping(config.get("evidence"), "evidence")

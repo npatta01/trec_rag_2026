@@ -1,0 +1,35 @@
+experiment:
+  id: bm25_candidate_pool_coverage_v1
+  run_date: 2026-07-05
+  split: dev
+  description: Candidate-pool coverage diagnostics for BM25 retrieval depths.
+
+config:
+  candidate_source: cache_demo_two_topics_hits1000 BM25 cache
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: original_topic_narrative
+  ranking: passthrough
+
+data:
+  topic_count: 22
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+  topic_completeness: topic_completeness.json
+
+local_artifacts:
+  full_diagnostic_json: tmp/bm25_candidate_pool_coverage.json
+  full_diagnostic_markdown: tmp/bm25_candidate_pool_coverage.md
+  cache_dir: /home/nidhin/projects/trec_rag/outputs/cache_demo_two_topics_hits1000/cache
+  note: Full per-topic diagnostics are local ignored files, not tracked in git.
+
+metrics:
+  top50_graded_recall: 0.0531642464
+  top50_oracle_ndcg_at_10: 0.8187189278
+  top1000_graded_recall: 0.2584054415
+  top1000_oracle_ndcg_at_10: 0.9631481168

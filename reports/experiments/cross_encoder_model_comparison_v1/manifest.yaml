@@ -1,0 +1,48 @@
+experiment:
+  id: cross_encoder_model_comparison_v1
+  run_date: 2026-07-08
+  split: dev
+  description: Durable capture of full-dev cross-encoder model comparisons and Qwen prompt probes.
+
+scope:
+  topic_count: 22
+  candidate_depths:
+    - 20
+    - 50
+  baseline: BM25 candidate order
+  metric: ndcg@10
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+  system_scores: system_scores.csv
+  topic_system_scores: topic_system_scores.csv
+  prompt_probe_scores: prompt_probe_scores.csv
+
+source_artifacts:
+  full_dev:
+    - tmp/qwen_aggregation_eval_hits20_Qwen3_Reranker_0p6B.json
+    - tmp/qwen_aggregation_eval_hits20_Qwen3_Reranker_4B.json
+    - tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_0p6B.json
+    - tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_0p6B_ov0.json
+    - tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_0p6B_gap2000.json
+    - tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_0p6B_gap3000.json
+    - tmp/qwen_aggregation_eval_hits50_Qwen3_Reranker_4B.json
+    - tmp/qwen_full_doc_margin_hits50_Qwen3_Reranker_0p6B_ml32768.json
+    - tmp/seqcls_eval_hits50_BAAI__bge_reranker_v2_m3_ml1024.json
+    - tmp/seqcls_eval_hits50_cross_encoder__ms_marco_MiniLM_L6_v2_ml512.json
+    - tmp/st_crossencoder_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024.json
+    - tmp/st_crossencoder_longctx_hits50_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512.json
+    - tmp/st_chunk_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350.json
+  prompt_probes:
+    - tmp/qwen_rerank_prompt_probe.json
+    - tmp/qwen_rerank_probe_results.json
+
+metrics:
+  ndcg_at_10: 0.5399427110
+  best_system_id: mixedbread_ai_mxbai_rerank_base_v2__chunk_top4_weighted__st_chunk_eval_hits50_mixedbread_ai_mxbai_rerank_base_v2_ml1024_cm3500_ov350
+  best_model: mixedbread-ai/mxbai-rerank-base-v2
+  best_method: chunk_top4_weighted
+  see: metrics.json

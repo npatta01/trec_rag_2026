@@ -1,0 +1,48 @@
+experiment:
+  id: cross_encoder_doc_aggregation_mixedbread_v1
+  run_date: 2026-07-05
+  split: dev
+  description: Deterministic document-level aggregation over Mixedbread cross-encoder window scores.
+
+config:
+  candidate_source: rag25_bm25_full_dev_hits1000_v1 top 50 per topic
+  reranker: mixedbread-ai/mxbai-rerank-base-v2
+  reranker_api: sentence-transformers CrossEncoder
+  max_length: 1024
+  chunking: semantic windows, 3500 character target, 350 character overlap
+  query_source: original_topic_narrative
+  training: none
+
+data:
+  topic_count: 22
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+
+local_artifacts:
+  scripts:
+    - tmp/evaluate_st_chunk_aggregation.py
+    - tmp/evaluate_st_crossencoder.py
+    - tmp/evaluate_st_crossencoder_long_context.py
+    - tmp/evaluate_cross_encoder_doc_scoring_grid.py
+  score_cache:
+    - tmp/st_chunk_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_scores.jsonl
+    - tmp/st_crossencoder_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024_scores.jsonl
+    - tmp/st_crossencoder_longctx_hits50_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_scores.jsonl
+  summary_outputs:
+    - tmp/cross_encoder_doc_scoring_grid.md
+    - tmp/cross_encoder_doc_scoring_grid.json
+    - tmp/cross_encoder_doc_scoring_grid_longctx32768.md
+    - tmp/cross_encoder_doc_scoring_grid_longctx32768.json
+  note: Large score caches and scratch scripts are local ignored files, not tracked in git.
+
+metrics:
+  bm25_ndcg_at_10: 0.4139611685
+  recommended_no_big_regression_ndcg_at_10: 0.5275444260
+  best_average_ndcg_at_10: 0.5595991745
+  long_context_fit_count: 1079
+  long_context_truncated_count: 21

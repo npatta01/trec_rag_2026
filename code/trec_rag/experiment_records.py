@@ -67,20 +67,25 @@ def _run_row(experiments_dir: Path, record_dir: Path, manifest: dict[str, Any]) 
     experiment = manifest.get("experiment") or {}
     config = manifest.get("config") or {}
     data = manifest.get("data") or {}
+    scope = manifest.get("scope") or {}
     artifacts = manifest.get("local_artifacts") or {}
     counts = manifest.get("counts") or {}
     metrics = manifest.get("metrics") or {}
+    candidate_depths = scope.get("candidate_depths") or []
+    hits = config.get("hits") or scope.get("candidate_depth")
+    if hits is None and candidate_depths:
+        hits = ",".join(str(depth) for depth in candidate_depths)
     return {
         "experiment_id": _text(experiment.get("id")),
         "runtime_id": _text(experiment.get("runtime_id")),
         "run_date": _text(experiment.get("run_date")),
         "split": _text(experiment.get("split")),
         "topics": _basename(_text(data.get("topics"))),
-        "topic_count": _text(data.get("topic_count")),
+        "topic_count": _text(data.get("topic_count") or scope.get("topic_count")),
         "retriever": _text(config.get("retriever")),
         "index": _text(config.get("index")),
         "query_source": _text(config.get("query_source")),
-        "hits": _text(config.get("hits")),
+        "hits": _text(hits),
         "ranking": _text(config.get("ranking")),
         "evaluation_qrels": _basename(_text(data.get("qrels"))),
         "record_dir": str(record_dir.relative_to(experiments_dir)),
@@ -104,6 +109,11 @@ def _read_topic_scores(path: Path) -> list[dict[str, str]]:
     return [{field: row.get(field, "") for field in TOPIC_SCORE_FIELDS} for row in rows]
 
 
+def _has_config(manifest: dict[str, Any]) -> bool:
+    config = manifest.get("config")
+    return isinstance(config, dict) and bool(config)
+
+
 def build_experiment_indexes(experiments_dir: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     run_rows: list[dict[str, str]] = []
     topic_score_rows: list[dict[str, str]] = []
@@ -111,7 +121,9 @@ def build_experiment_indexes(experiments_dir: Path) -> tuple[list[dict[str, str]
         record_dir = manifest_path.parent
         manifest = _read_manifest(manifest_path)
         run_rows.append(_run_row(experiments_dir, record_dir, manifest))
-        topic_score_rows.extend(_read_topic_scores(record_dir / "topic_scores.csv"))
+        topic_scores_path = record_dir / "topic_scores.csv"
+        if topic_scores_path.exists() and _has_config(manifest):
+            topic_score_rows.extend(_read_topic_scores(topic_scores_path))
     return run_rows, topic_score_rows
 
 
