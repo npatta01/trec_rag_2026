@@ -158,7 +158,6 @@ def _remote_config(config: RetrieverConfig) -> RemotePyseriniConfig:
                     "INDEX_URL conflicts with retrievers[].index "
                     f"({url_index or 'unknown'} != {config.index})"
                 )
-        env["PYSERINI_INDEX"] = config.index
     remote = RemotePyseriniConfig.from_env(env)
     return replace(remote, hits=config.hits)
 

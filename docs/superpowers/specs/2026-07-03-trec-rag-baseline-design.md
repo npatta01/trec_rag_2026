@@ -111,7 +111,7 @@ The RAG baseline is meant to be a valid starting point, not a strong final syste
 The pipeline will read local configuration from environment variables:
 
 - `PYSERINI_API_TOKEN`: required for authenticated API calls.
-- `INDEX_URL`: optional override for the Pyserini REST base URL.
+- `INDEX_URL`: hosted Pyserini REST search endpoint.
 
 The implementation must not print, log, commit, or write API tokens into generated outputs.
 

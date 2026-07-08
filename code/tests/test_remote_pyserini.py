@@ -31,30 +31,8 @@ def test_config_uses_index_url_and_typed_values():
     assert config.queries == ("alpha", "beta", "gamma")
 
 
-def test_config_builds_index_url_from_env_index_and_base_url():
-    config = RemotePyseriniConfig.from_env(
-        {
-            "PYSERINI_INDEX": "custom index",
-            "PYSERINI_BASE_URL": "http://api.example.test/",
-        }
-    )
-
-    assert config.index_url == "http://api.example.test/v1/custom%20index/search"
-
-
-def test_config_builds_index_url_from_default_env_names():
-    config = RemotePyseriniConfig.from_env(
-        {
-            "DEFAULT_INDEX": "climbmix-400b",
-            "DEFAULT_BASE_URL": "http://api.example.test",
-        }
-    )
-
-    assert config.index_url == "http://api.example.test/v1/climbmix-400b/search"
-
-
 def test_config_requires_remote_endpoint_env():
-    with pytest.raises(ValueError, match="Set INDEX_URL.*PYSERINI_INDEX.*DEFAULT_INDEX"):
+    with pytest.raises(ValueError, match="Set INDEX_URL"):
         RemotePyseriniConfig.from_env({})
 
 
@@ -128,13 +106,9 @@ def test_load_repo_env_keeps_existing_environment_values(tmp_path, monkeypatch):
 def test_env_example_contains_public_remote_defaults(monkeypatch):
     env_example = Path(__file__).resolve().parents[2] / ".env.example"
     for key in (
-        "DEFAULT_BASE_URL",
-        "DEFAULT_INDEX",
         "EXTERNAL_PYSERINI_HITS",
         "INDEX_URL",
         "PYSERINI_API_TOKEN",
-        "PYSERINI_BASE_URL",
-        "PYSERINI_INDEX",
     ):
         monkeypatch.delenv(key, raising=False)
 
