@@ -38,7 +38,7 @@ Default query:
 Run validation:
 
 ```bash
-PYTHONPATH=code uv run --with pytest pytest code/tests/test_remote_pyserini.py -q
+uv run pytest code/tests/test_remote_pyserini.py -q
 ```
 
 ## Config-Driven RAG Pipeline
@@ -54,7 +54,7 @@ configurations:
 Run:
 
 ```bash
-PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
+uv run python -m trec_rag.pipeline \
   --config configs/rag25_bm25_full_query_v1.yaml
 ```
 
@@ -62,7 +62,7 @@ Run the BM25 plus coverage-aware reranker config after the score artifacts have
 been generated:
 
 ```bash
-PYTHONPATH=code uv run --with pyyaml python -m trec_rag.pipeline \
+uv run python -m trec_rag.pipeline \
   --config configs/rag25_bm25_mixedbread_rerank_v1.yaml
 ```
 
@@ -110,7 +110,7 @@ Shared cache:
 Run all Python tests:
 
 ```bash
-PYTHONPATH=code uv run --with pytest --with pyyaml --with semantic-text-splitter pytest code/tests -q
+uv run pytest -q
 ```
 
 ## Chunking Helpers
@@ -137,6 +137,5 @@ Outputs:
 Run validation:
 
 ```bash
-PYTHONPATH=code uv run --with pytest --with semantic-text-splitter \
-  pytest code/tests/test_chunking.py -q
+uv run pytest code/tests/test_chunking.py -q
 ```

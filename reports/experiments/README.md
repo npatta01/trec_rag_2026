@@ -21,6 +21,6 @@ append new rows rather than overwrite old results.
 Regenerate the global indexes from the per-experiment folders with:
 
 ```bash
-PYTHONPATH=code uv run --with pyyaml python -m trec_rag.experiment_records \
+uv run python -m trec_rag.experiment_records \
   --experiments-dir reports/experiments
 ```

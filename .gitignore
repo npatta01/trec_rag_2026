@@ -1,4 +1,7 @@
 .worktrees/
+.venv/
+.pytest_cache/
+*.egg-info/
 .env
 tmp/
 outputs/
