@@ -77,7 +77,8 @@ Current V1 stages:
 - `top_k` evidence selection: choose text-bearing ranked candidates.
 - `placeholder` generation: write valid cited RAG JSONL for plumbing checks.
 - `dev_projected_qrels` evaluation: compute development diagnostics such as
-  `ndcg@10` and `recall@100`.
+  `ndcg@10`, `recall@100`, `graded_recall@100`, and
+  `ideal_dcg_coverage@100`.
 
 Outputs:
 
@@ -96,5 +97,33 @@ Shared cache:
 Run all Python tests:
 
 ```bash
-PYTHONPATH=code uv run --with pytest --with pyyaml pytest code/tests -q
+PYTHONPATH=code uv run --with pytest --with pyyaml --with semantic-text-splitter pytest code/tests -q
+```
+
+## Chunking Helpers
+
+Stable chunking contracts live in `chunking.py`. The public API is intentionally
+small:
+
+- `ChunkingConfig`: backend-neutral size, overlap, and trim settings.
+- `TextChunk`: stable output record with `document_id`, `chunk_id`, text, and
+  character offsets.
+- `TextChunker`: protocol that rerankers and evidence selectors should depend
+  on.
+- `SemanticTextChunker`: default adapter backed by `semantic-text-splitter`.
+
+Inputs:
+
+- raw document text
+- a stable `document_id`, usually the ClimbMix `docid`
+
+Outputs:
+
+- ordered `TextChunk` records with IDs like `shard_1_2:0000`
+
+Run validation:
+
+```bash
+PYTHONPATH=code uv run --with pytest --with semantic-text-splitter \
+  pytest code/tests/test_chunking.py -q
 ```

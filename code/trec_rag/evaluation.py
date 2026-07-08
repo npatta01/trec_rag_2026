@@ -54,6 +54,23 @@ def _recall_at(
     return len(retrieved_relevant) / len(relevant)
 
 
+def _graded_recall_at(ranked_docids: list[str], topic_qrels: dict[str, int], k: int) -> float:
+    total_grade = sum(max(grade, 0) for grade in topic_qrels.values())
+    if total_grade == 0:
+        return 0.0
+    retrieved_grade = sum(max(topic_qrels.get(docid, 0), 0) for docid in ranked_docids[:k])
+    return retrieved_grade / total_grade
+
+
+def _ideal_dcg_coverage_at(ranked_docids: list[str], topic_qrels: dict[str, int], k: int) -> float:
+    true_ideal = sorted(topic_qrels.values(), reverse=True)[:k]
+    true_ideal_dcg = _dcg(true_ideal)
+    if true_ideal_dcg == 0:
+        return 0.0
+    retrieved_ideal = sorted((topic_qrels.get(docid, 0) for docid in ranked_docids[:k]), reverse=True)[:k]
+    return _dcg(retrieved_ideal) / true_ideal_dcg
+
+
 def evaluate_ranked(
     ranked: list[RankedCandidate],
     qrels: Qrels,
@@ -83,6 +100,10 @@ def evaluate_ranked(
                     cutoff,
                     relevance_threshold,
                 )
+            elif name == "graded_recall":
+                per_topic[topic_id][metric] = _graded_recall_at(docids, topic_qrels, cutoff)
+            elif name == "ideal_dcg_coverage":
+                per_topic[topic_id][metric] = _ideal_dcg_coverage_at(docids, topic_qrels, cutoff)
             else:
                 raise ValueError(f"unknown metric: {metric}")
 

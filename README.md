@@ -38,5 +38,5 @@ node reports/trec-rag-2025-writeups/interactive-writeup.test.js
 The Python helper and baseline tests are:
 
 ```bash
-PYTHONPATH=code uv run --with pytest --with pyyaml pytest code/tests -q
+PYTHONPATH=code uv run --with pytest --with pyyaml --with semantic-text-splitter pytest code/tests -q
 ```

@@ -1,4 +1,5 @@
 import json
+import math
 
 import pytest
 
@@ -576,6 +577,37 @@ def test_qrels_metrics_handle_graded_labels_and_unjudged_docs(tmp_path):
     assert 0.0 < metrics["per_topic"]["31"]["ndcg@3"] < 1.0
     assert metrics["per_topic"]["32"]["recall@3"] == 0.0
     assert metrics["metrics"]["recall@3"] == 0.5
+
+
+def test_qrels_metrics_report_graded_recall_and_ideal_dcg_coverage(tmp_path):
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text(
+        "31 0 doc-a 4\n"
+        "31 0 doc-b 2\n"
+        "31 0 doc-c 1\n"
+        "31 0 doc-d 0\n",
+        encoding="utf-8",
+    )
+    ranked = [
+        RankedCandidate("31", "doc-unjudged", 1, 10.0, "", []),
+        RankedCandidate("31", "doc-b", 2, 9.0, "", []),
+        RankedCandidate("31", "doc-c", 3, 8.0, "", []),
+    ]
+
+    qrels = parse_qrels(qrels_path)
+    metrics = evaluate_ranked(
+        ranked,
+        qrels,
+        metric_names=["graded_recall@3", "ideal_dcg_coverage@3"],
+        relevance_threshold=2,
+    )
+
+    assert metrics["per_topic"]["31"]["graded_recall@3"] == pytest.approx(3 / 7)
+    expected_candidate_idcg = 3 / math.log2(2) + 1 / math.log2(3)
+    expected_true_idcg = 15 / math.log2(2) + 3 / math.log2(3) + 1 / math.log2(4)
+    assert metrics["per_topic"]["31"]["ideal_dcg_coverage@3"] == pytest.approx(
+        expected_candidate_idcg / expected_true_idcg
+    )
 
 
 def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_path):
