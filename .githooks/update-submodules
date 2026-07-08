@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$repo_root" ] || [ ! -f "$repo_root/.gitmodules" ]; then
+  exit 0
+fi
+
+cd "$repo_root"
+
+if ! git config --file .gitmodules --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1; then
+  exit 0
+fi
+
+echo "Updating git submodules..."
+git submodule sync --recursive
+git submodule update --init --recursive

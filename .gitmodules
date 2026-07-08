@@ -1,0 +1,6 @@
+[submodule "trec-rag-data"]
+	path = trec-rag-data
+	url = https://github.com/TREC-RAG/trec-rag-data.git
+[submodule "trec-rag-skills"]
+	path = trec-rag-skills
+	url = https://github.com/TREC-RAG/trec-rag-skills.git
