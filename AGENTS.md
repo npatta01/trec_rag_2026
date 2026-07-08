@@ -45,3 +45,8 @@ coding agent working in this repository.
 - Do not commit local scratch files, secrets, server logs, or unrelated user
   changes.
 - Use concise commits that describe the user-facing change.
+- When creating, switching to, or working inside a linked worktree, make sure
+  git submodules are initialized and updated with
+  `git submodule update --init --recursive`. If `.githooks/` is configured via
+  `git config core.hooksPath .githooks`, the tracked hooks handle this after
+  checkout and merge.
