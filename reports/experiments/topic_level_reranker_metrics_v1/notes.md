@@ -24,6 +24,11 @@ document in the top 10, while the reranker has zero. Since both methods have the
 same three relevant documents available in the top-50 candidate pool, this is a
 reranker ordering regression rather than a retrieval miss.
 
+For full topic-level tracking, use the companion CSV files:
+
+- `topic_system_metrics.csv`: one row per `topic_id` and system, with all tracked metrics.
+- `topic_metric_deltas.csv`: one row per `topic_id` and metric, with BM25, reranker, delta, and regression flags.
+
 ## How To Read The Metrics
 
 - `nDCG@10` is the main graded ranking metric. Use the delta column to find reranker regressions.
@@ -34,7 +39,11 @@ reranker ordering regression rather than a retrieval miss.
 - `graded_recall@10` is useful when moving a grade-4 document matters more than moving a grade-2 document.
 - `recall@50` is candidate-pool context. It should not change after reranking the same top-50 pool.
 
-## Worst nDCG@10 Topic Deltas
+## nDCG@10 Regression Topics
+
+These are only topics where the reranker is worse than BM25 on `nDCG@10`.
+Topics with positive deltas are tracked in `topic_metric_deltas.csv` and the
+all-topic table below.
 
 | topic | BM25 nDCG@10 | reranker nDCG@10 | delta | BM25 P@10 | reranker P@10 | BM25 recall@10 | reranker recall@10 | relevant@10 delta | recall@50 |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -42,10 +51,6 @@ reranker ordering regression rather than a retrieval miss.
 | 224 | 0.816497 | 0.725531 | -0.090967 | 1.000000 | 1.000000 | 0.015314 | 0.015314 | +0 | 0.070444 |
 | 897 | 0.304874 | 0.282596 | -0.022278 | 1.000000 | 0.900000 | 0.014837 | 0.013353 | -1 | 0.057864 |
 | 31 | 0.847805 | 0.839708 | -0.008098 | 1.000000 | 1.000000 | 0.010811 | 0.010811 | +0 | 0.054054 |
-| 161 | 0.666326 | 0.676766 | +0.010441 | 0.800000 | 0.900000 | 0.011645 | 0.013100 | +1 | 0.062591 |
-| 499 | 0.681611 | 0.719831 | +0.038220 | 1.000000 | 0.900000 | 0.016420 | 0.014778 | -1 | 0.068966 |
-| 14 | 0.355333 | 0.409446 | +0.054113 | 0.700000 | 1.000000 | 0.010072 | 0.014388 | +3 | 0.061871 |
-| 225 | 0.257264 | 0.316527 | +0.059263 | 0.900000 | 0.900000 | 0.016216 | 0.016216 | +0 | 0.068468 |
 
 ## All Topic Deltas
 
