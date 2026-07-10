@@ -32,6 +32,28 @@ coding agent working in this repository.
 - Add README notes beside new code explaining inputs, outputs, and validation.
 - Keep generated artifacts separate from reusable code.
 
+## Environment Setup
+
+- Use the repo-pinned Python in `.python-version`; uv will install it when
+  needed.
+- In linked worktrees, copy the local `.env` from the main/shared checkout when
+  it is missing so endpoint tokens and local paths stay available. Keep `.env`
+  out of git.
+- Use one local virtual environment, `.venv/`, for the active machine.
+- Run `code/tools/setup_env.sh` to set up the environment. It auto-detects AMD
+  ROCm and syncs the `rocm` dependency group; otherwise it syncs the standard
+  project environment.
+- After setup, run Python commands through `.venv/bin/python` or
+  `.venv/bin/python-rocm` instead of relying on `uv run`, because `uv run` syncs
+  only uv's static default groups and does not auto-detect ROCm hardware.
+- On AMD ROCm hosts, use `.venv/bin/python-rocm` for commands that need PyTorch
+  GPU access. The helper only adds the detected ROCm runtime library path before
+  invoking `.venv/bin/python`.
+- Keep reusable cache artifacts under the repo-root `cache/` directory in the
+  main/shared checkout: retrieval responses under `cache/retrieval/` and
+  reranker scores under `cache/reranker/`.
+- Keep `.venv/` and generated activation helpers out of git.
+
 ## Verification
 
 - Run targeted tests after changes.

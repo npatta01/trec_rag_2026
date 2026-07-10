@@ -11,6 +11,16 @@ dependencies = [
 dev = [
     "pytest",
 ]
+rocm = [
+    "numpy ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sentence-transformers ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "transformers>=4.55.5 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "triton @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.dependency-groups]
+rocm = { requires-python = ">=3.12,<3.13" }
 
 [build-system]
 requires = ["setuptools>=69"]

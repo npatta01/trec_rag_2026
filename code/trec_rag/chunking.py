@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class MissingChunkerDependency(RuntimeError):
@@ -59,6 +59,16 @@ class SemanticTextChunker:
 
     def __init__(self, config: ChunkingConfig | None = None) -> None:
         self.config = config or ChunkingConfig()
+        self._splitter: Any | None = None
+
+    def _get_splitter(self) -> Any:
+        if self._splitter is None:
+            self._splitter = _import_text_splitter()(
+                self.config.max_characters,
+                overlap=self.config.overlap_characters,
+                trim=self.config.trim,
+            )
+        return self._splitter
 
     def split_text(self, text: str, *, document_id: str) -> list[TextChunk]:
         if not document_id.strip():
@@ -66,11 +76,7 @@ class SemanticTextChunker:
         if not text.strip():
             return []
 
-        splitter = _import_text_splitter()(
-            self.config.max_characters,
-            overlap=self.config.overlap_characters,
-            trim=self.config.trim,
-        )
+        splitter = self._get_splitter()
         chunks: list[TextChunk] = []
         for index, (start_char, chunk_text) in enumerate(splitter.chunk_indices(text)):
             if not chunk_text.strip():

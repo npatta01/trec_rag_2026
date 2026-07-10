@@ -22,7 +22,7 @@ from trec_rag.pipeline_models import (
 )
 from trec_rag.query_understanding import build_query_variants
 from trec_rag.ranking import coverage_aware_long_doc_rank, passthrough_rank
-from trec_rag.repo_env import load_repo_env, shared_checkout_root
+from trec_rag.repo_env import load_repo_env, repo_cache_root
 from trec_rag.retrievers import Retriever, pyserini_factory
 from trec_rag.topics import Topic, load_topics
 
@@ -54,9 +54,8 @@ def _write_json(payload: dict[str, object], path: Path) -> None:
     path.write_text(json.dumps(jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def pipeline_cache_dir(root_dir: Path, experiment_id: str) -> Path:
-    cache_root = shared_checkout_root(root_dir) or root_dir
-    return cache_root / "outputs" / experiment_id / "cache"
+def pipeline_cache_dir(root_dir: Path, _experiment_id: str) -> Path:
+    return repo_cache_root(root_dir) / "retrieval" / "pyserini_remote"
 
 
 def run_pipeline(

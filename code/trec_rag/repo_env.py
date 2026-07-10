@@ -29,6 +29,11 @@ def shared_checkout_root(repo_root: Path) -> Path | None:
     return git_dir.parent.parent.parent
 
 
+def repo_cache_root(repo_root: Path) -> Path:
+    """Return the repo-root cache directory shared by linked worktrees."""
+    return (shared_checkout_root(repo_root) or repo_root) / "cache"
+
+
 def load_dotenv(
     path: Path,
     *,

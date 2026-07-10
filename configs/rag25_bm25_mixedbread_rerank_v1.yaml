@@ -22,7 +22,7 @@ retrievers:
   - name: climbmix_bm25
     type: pyserini_remote
     query_variants: [original]
-    hits: 50
+    hits: 1000
     index: climbmix-400b
     cache: true
 
@@ -35,8 +35,8 @@ ranking:
   reranker:
     model: mixedbread-ai/mxbai-rerank-base-v2
     score_source: cached_artifacts
-    document_score_path: tmp/st_crossencoder_longctx_hits50_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_scores.jsonl
-    window_score_path: tmp/st_chunk_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_scores.jsonl
+    document_score_path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_scores.jsonl
+    window_score_path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_scores.jsonl
     formula:
       long_document_weight: 0.5
       strongest_passage_weight: 0.5
