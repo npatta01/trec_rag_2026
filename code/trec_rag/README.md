@@ -104,6 +104,31 @@ Outputs:
 Shared cache:
 
 - `<repo-root-or-shared-checkout>/cache/retrieval/pyserini_remote/`
+- `<repo-root-or-shared-checkout>/cache/reranker/artifacts/`
+- `<repo-root-or-shared-checkout>/cache/reranker/score_cache/`
+
+## Restoring Shared Cache Artifacts
+
+GitHub Release cache archives are packaged with a top-level `cache/` directory.
+Extract the archive from the repository root, not from inside an existing
+`cache/` directory:
+
+```bash
+cd /path/to/trec_rag_2026
+tar --use-compress-program=unzstd \
+  -xf trec-rag-cache-rag25-dev-20260709.tar.zst
+```
+
+After extraction, these paths should exist at the repo root:
+
+```text
+cache/retrieval/pyserini_remote/
+cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/
+cache/reranker/score_cache/
+```
+
+For linked worktrees, extract into the main/shared checkout root. The pipeline
+resolves worktree cache paths back to that shared root automatically.
 
 Run all Python tests:
 

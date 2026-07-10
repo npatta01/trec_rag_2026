@@ -52,6 +52,9 @@ coding agent working in this repository.
 - Keep reusable cache artifacts under the repo-root `cache/` directory in the
   main/shared checkout: retrieval responses under `cache/retrieval/` and
   reranker scores under `cache/reranker/`.
+- Shared cache archives should contain a top-level `cache/` directory. Restore
+  them by extracting from the repo root so the final paths are
+  `./cache/retrieval/...` and `./cache/reranker/...`.
 - Keep `.venv/` and generated activation helpers out of git.
 
 ## Verification
