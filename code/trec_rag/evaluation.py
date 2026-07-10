@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
 from trec_rag.pipeline_models import RankedCandidate
@@ -61,6 +62,16 @@ def _relevant_count_at(ranked_docids: list[str], relevant: set[str], k: int) -> 
     return len(set(ranked_docids[:k]) & relevant)
 
 
+def _judged_count_at(ranked_docids: list[str], topic_qrels: dict[str, int], k: int) -> int:
+    return len(set(ranked_docids[:k]) & set(topic_qrels))
+
+
+def _judged_rate_at(ranked_docids: list[str], topic_qrels: dict[str, int], k: int) -> float:
+    if k <= 0:
+        return 0.0
+    return _judged_count_at(ranked_docids, topic_qrels, k) / k
+
+
 def _precision_at(
     ranked_docids: list[str],
     topic_qrels: dict[str, int],
@@ -106,13 +117,20 @@ def evaluate_ranked(
     *,
     metric_names: list[str] | tuple[str, ...],
     relevance_threshold: int,
+    topic_ids: Iterable[str] | None = None,
 ) -> dict[str, object]:
     by_topic: dict[str, list[RankedCandidate]] = defaultdict(list)
     for candidate in ranked:
         by_topic[candidate.topic_id].append(candidate)
 
+    evaluated_topic_ids = set(by_topic) if topic_ids is None else {str(topic_id) for topic_id in topic_ids}
+    unexpected_topic_ids = set(by_topic) - evaluated_topic_ids
+    if unexpected_topic_ids:
+        unexpected = ", ".join(sorted(unexpected_topic_ids))
+        raise ValueError(f"ranked rows contain topics outside the evaluation population: {unexpected}")
+
     per_topic: dict[str, dict[str, float]] = {}
-    for topic_id in sorted(by_topic):
+    for topic_id in sorted(evaluated_topic_ids):
         topic_rows = sorted(by_topic[topic_id], key=lambda row: row.rank)
         docids = [row.docid for row in topic_rows]
         topic_qrels = qrels.get(topic_id, {})
@@ -146,6 +164,10 @@ def evaluate_ranked(
             elif name == "relevant_count":
                 relevant = _relevant_docids(topic_qrels, relevance_threshold)
                 per_topic[topic_id][metric] = _relevant_count_at(docids, relevant, cutoff)
+            elif name == "judged_count":
+                per_topic[topic_id][metric] = _judged_count_at(docids, topic_qrels, cutoff)
+            elif name == "judged_rate":
+                per_topic[topic_id][metric] = _judged_rate_at(docids, topic_qrels, cutoff)
             elif name == "graded_recall":
                 per_topic[topic_id][metric] = _graded_recall_at(docids, topic_qrels, cutoff)
             elif name == "ideal_dcg_coverage":

@@ -1,0 +1,120 @@
+{
+  "app_name": "trec-rag-rerank-score-cache-v2",
+  "byte_identical_to_canonical": {
+    "document": false,
+    "window": false
+  },
+  "cache_key_note": "The scorer recomputed keys from raw cached retrieval text to obtain every warm-cache hit. The posthoc validator cannot independently recompute them because artifacts retain hashes rather than raw text; it matched every artifact key, score, and query/text hash to its schema-v2 cache row.",
+  "cache_keys_recomputed_from_raw_text_by_scorer": true,
+  "canonical_document_sha256": "bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1",
+  "canonical_results": "results",
+  "canonical_window_sha256": "e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c",
+  "device": "cpu",
+  "document_semantic_comparison": {
+    "canonicalized_sha256": "13ebde53996448fd1961c279ba2f526dea3f7d166f326bd01a0c9e687ef83bed",
+    "row_order_ignored": true,
+    "rows": 22000,
+    "semantic_equal": true
+  },
+  "elapsed_seconds": 267.08811473846436,
+  "error": null,
+  "layout": "legacy",
+  "model_loading_forbidden": true,
+  "model_required": {
+    "document": false,
+    "window": false
+  },
+  "model_scores": {
+    "document": 0,
+    "window": 0
+  },
+  "posthoc_validator_recomputed_cache_keys": false,
+  "preflight_log_sha256": "64ee6b780da9a406aa14c2285d2afe7d4223d63dae462398ccffc063dea9688d",
+  "regenerated_document": {
+    "all_rows_matched_modal_cache": true,
+    "rows": 22000,
+    "rows_by_topic": {
+      "14": 1000,
+      "144": 1000,
+      "161": 1000,
+      "200": 1000,
+      "213": 1000,
+      "219": 1000,
+      "224": 1000,
+      "225": 1000,
+      "233": 1000,
+      "273": 1000,
+      "300": 1000,
+      "31": 1000,
+      "37": 1000,
+      "407": 1000,
+      "477": 1000,
+      "499": 1000,
+      "515": 1000,
+      "58": 1000,
+      "707": 1000,
+      "72": 1000,
+      "84": 1000,
+      "897": 1000
+    },
+    "sha256": "f9d7d5ba140d60cea0c62796cb38e36cb5be24f99f4eecffd6d6fc2eb290a9ad"
+  },
+  "regenerated_window": {
+    "all_rows_matched_modal_cache": true,
+    "rows": 227156,
+    "rows_by_topic": {
+      "14": 6517,
+      "144": 12195,
+      "161": 14425,
+      "200": 6925,
+      "213": 12664,
+      "219": 12797,
+      "224": 8758,
+      "225": 5086,
+      "233": 8103,
+      "273": 15635,
+      "300": 21688,
+      "31": 6071,
+      "37": 10427,
+      "407": 8276,
+      "477": 15736,
+      "499": 5645,
+      "515": 11533,
+      "58": 9538,
+      "707": 9133,
+      "72": 7030,
+      "84": 9585,
+      "897": 9389
+    },
+    "sha256": "bc255237b4bcaa30f89aef90df8fc47f53e68927978473c68415604d94bb56f1"
+  },
+  "run_id": null,
+  "score_cache_files": {
+    "workspace/cache/reranker/score_cache/schema_v2/sentence_transformers_cross_encoder/backend_5_6_0/mixedbread_ai_mxbai_rerank_base_v2/revision_3ea9d4dffa7d12a4f366be8e275c349de9fc9865/representation_raw_logits/dtype_bfloat16/max_length_1024/window.jsonl": {
+      "rows": 225291,
+      "sha256": "593f5199186e23f06c19d11fdf286d1dbe6558e5120857744cbf3df6e7d89fdc"
+    },
+    "workspace/cache/reranker/score_cache/schema_v2/sentence_transformers_cross_encoder/backend_5_6_0/mixedbread_ai_mxbai_rerank_base_v2/revision_3ea9d4dffa7d12a4f366be8e275c349de9fc9865/representation_raw_logits/dtype_bfloat16/max_length_32256/doc_max_32768_buf512.jsonl": {
+      "rows": 21907,
+      "sha256": "65a23a7b812bff9d2961fd032fede18d0a4617acdfc9bab28d54ad3b6a130285"
+    }
+  },
+  "score_cache_unchanged": true,
+  "score_cache_unique_keys": 247198,
+  "scorer_log_sha256": "41eab1ce86b8a8f38d83568a4e7655410458b2360daec39169f3d300f637d828",
+  "semantic_equal_to_canonical": true,
+  "source_status_sha256": "9e77e86d22a5ba1f07c32126fd9cfb72d3e231e7a725e895488b42e97f1c9ab8",
+  "started_unix": 1783710473.2746894,
+  "state": "completed",
+  "updated_unix": 1783710740.3628032,
+  "verification_id": "warm-cache-v2",
+  "verification_root": "verifications/legacy/warm-cache-v2",
+  "volume_name": "trec-rag-raw-logit-hits1000-20260710",
+  "window_semantic_comparison": {
+    "canonicalized_sha256": "148474f55a744d0986f4e8828caace0ac023253851ed4e2aa10dcd0d9a087c39",
+    "row_order_ignored": true,
+    "rows": 227156,
+    "semantic_equal": true
+  },
+  "workspace": "workspace"
+}

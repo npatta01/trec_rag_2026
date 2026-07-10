@@ -1,8 +1,8 @@
 # BM25 candidate retrieval plus coverage-aware Mixedbread reranking.
 #
-# This config expects reranker score artifacts to already exist at the paths
-# below. They are produced by the long-context Mixedbread and chunk-scoring
-# experiment scripts used in the tracked reranker reports.
+# This config expects versioned raw-logit score artifacts at the paths below.
+# Build them with trec_rag.rerank_score_cache; default model activations such as
+# sigmoid probabilities are deliberately incompatible with this formula.
 experiment:
   id: rag25_bm25_mixedbread_rerank_v1
 
@@ -34,9 +34,21 @@ ranking:
     preserve_provenance: true
   reranker:
     model: mixedbread-ai/mxbai-rerank-base-v2
+    model_revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+    backend_version: 5.6.0
+    score_representation: raw_logits
+    inference_dtype: bfloat16
+    input_policy: trec_rag_raw_v2
+    artifact_schema_version: 2
+    document_max_length: 32768
+    document_pair_buffer_tokens: 512
+    window_max_length: 1024
+    chunk_max_characters: 3500
+    chunk_overlap_characters: 350
     score_source: cached_artifacts
-    document_score_path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_scores.jsonl
-    window_score_path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_scores.jsonl
+    candidate_depth: 50
+    document_score_path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_raw_logits_artifact_v2_scores.jsonl
+    window_score_path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_raw_logits_artifact_v2_scores.jsonl
     formula:
       long_document_weight: 0.5
       strongest_passage_weight: 0.5
@@ -60,13 +72,20 @@ evaluation:
   qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
   metrics:
     - ndcg@10
+    - judged_count@10
+    - judged_rate@10
     - precision@10
     - recall@10
     - hit_rate@10
     - relevant_count@10
     - graded_recall@10
+    - judged_count@50
+    - judged_rate@50
+    - precision@50
     - recall@50
+    - hit_rate@50
     - relevant_count@50
     - graded_recall@50
     - ideal_dcg_coverage@50
+    - recall@100
   relevance_threshold: 2

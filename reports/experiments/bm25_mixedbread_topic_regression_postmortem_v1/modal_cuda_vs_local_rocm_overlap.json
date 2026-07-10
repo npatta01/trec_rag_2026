@@ -1,0 +1,35 @@
+{
+  "comparison": "local_rocm_top50_vs_modal_cuda_all1000_overlap",
+  "document": {
+    "different_rows": 589,
+    "exact_equal_rows": 511,
+    "local_artifact": "cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits50_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_raw_logits_artifact_v2_scores.jsonl",
+    "local_sha256": "f4a2dea5176df735a6aabc5c147f79aec5b1db018285dde88cd4d577f159fd11",
+    "max_absolute_difference": 0.1875,
+    "max_signed_difference": 0.1875,
+    "mean_absolute_difference": 0.041193181818181816,
+    "mean_signed_difference": 0.006193181818181818,
+    "median_absolute_difference": 0.0625,
+    "min_signed_difference": -0.1875,
+    "modal_artifact": "cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_raw_logits_artifact_v2_scores.jsonl",
+    "modal_sha256": "bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1",
+    "overlap_rows": 1100,
+    "p99_absolute_difference": 0.125
+  },
+  "window": {
+    "different_rows": 7323,
+    "exact_equal_rows": 5615,
+    "local_artifact": "cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits50_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_raw_logits_artifact_v2_scores.jsonl",
+    "local_sha256": "cb96bf1c01a1b79de7faf4822e7d82c3d2669998f46c97a66c63a3a50691b11e",
+    "max_absolute_difference": 0.25,
+    "max_signed_difference": 0.25,
+    "mean_absolute_difference": 0.04272540191683413,
+    "mean_signed_difference": -0.0006545640748183646,
+    "median_absolute_difference": 0.0625,
+    "min_signed_difference": -0.25,
+    "modal_artifact": "cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_raw_logits_artifact_v2_scores.jsonl",
+    "modal_sha256": "e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c",
+    "overlap_rows": 12938,
+    "p99_absolute_difference": 0.125
+  }
+}
