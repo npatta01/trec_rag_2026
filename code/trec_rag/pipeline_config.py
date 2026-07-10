@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,18 @@ class CoverageAwareRerankerConfig:
     document_score_path: Path
     window_score_path: Path
     formula: CoverageAwareFormulaConfig
+    candidate_depth: int | None = None
+    model_revision: str | None = None
+    backend_version: str | None = None
+    score_representation: str | None = None
+    inference_dtype: str | None = None
+    input_policy: str | None = None
+    artifact_schema_version: int | None = None
+    document_max_length: int | None = None
+    document_pair_buffer_tokens: int | None = None
+    window_max_length: int | None = None
+    chunk_max_characters: int | None = None
+    chunk_overlap_characters: int | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +185,34 @@ def _optional_bool(mapping: dict[str, Any], key: str, default: bool) -> bool:
     raise ValueError(f"{key} must be a boolean")
 
 
+def _optional_text(mapping: dict[str, Any], key: str) -> str | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{key} must not be empty")
+    return text
+
+
+def _optional_nonnegative_int(
+    mapping: dict[str, Any],
+    key: str,
+    *,
+    positive: bool,
+) -> int | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"ranking.reranker.{key} must be a {qualifier} integer")
+    if (positive and value <= 0) or (not positive and value < 0):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"ranking.reranker.{key} must be a {qualifier} integer")
+    return value
+
+
 def _coverage_aware_reranker_config(
     ranking_raw: dict[str, Any],
     root_dir: Path,
@@ -183,9 +224,125 @@ def _coverage_aware_reranker_config(
     formula_raw = reranker_raw.get("formula") or {}
     if not isinstance(formula_raw, dict):
         raise ValueError("ranking.reranker.formula must be a mapping")
-    weights = formula_raw.get("top_window_weights") or (0.55, 0.25, 0.13, 0.07)
+    weights = formula_raw.get("top_window_weights", (0.55, 0.25, 0.13, 0.07))
     if not isinstance(weights, list | tuple) or not weights:
         raise ValueError("ranking.reranker.formula.top_window_weights must be a non-empty list")
+    parsed_weights = tuple(float(weight) for weight in weights)
+    if not all(math.isfinite(weight) and weight >= 0 for weight in parsed_weights):
+        raise ValueError(
+            "ranking.reranker.formula.top_window_weights must be finite and non-negative"
+        )
+    if parsed_weights[0] <= 0:
+        raise ValueError(
+            "ranking.reranker.formula.top_window_weights must start with a positive weight"
+        )
+    candidate_depth_raw = reranker_raw.get("candidate_depth")
+    if candidate_depth_raw is not None and (
+        isinstance(candidate_depth_raw, bool) or not isinstance(candidate_depth_raw, int)
+    ):
+        raise ValueError("ranking.reranker.candidate_depth must be a positive integer")
+    candidate_depth = candidate_depth_raw
+    if candidate_depth is not None and candidate_depth <= 0:
+        raise ValueError("ranking.reranker.candidate_depth must be greater than zero")
+    score_representation = _optional_text(reranker_raw, "score_representation")
+    if score_representation not in {None, "raw_logits", "model_default"}:
+        raise ValueError(
+            "ranking.reranker.score_representation must be raw_logits or model_default"
+        )
+    artifact_schema_version = _optional_nonnegative_int(
+        reranker_raw,
+        "artifact_schema_version",
+        positive=True,
+    )
+    document_max_length = _optional_nonnegative_int(
+        reranker_raw,
+        "document_max_length",
+        positive=True,
+    )
+    document_pair_buffer_tokens = _optional_nonnegative_int(
+        reranker_raw,
+        "document_pair_buffer_tokens",
+        positive=False,
+    )
+    window_max_length = _optional_nonnegative_int(
+        reranker_raw,
+        "window_max_length",
+        positive=True,
+    )
+    chunk_max_characters = _optional_nonnegative_int(
+        reranker_raw,
+        "chunk_max_characters",
+        positive=True,
+    )
+    chunk_overlap_characters = _optional_nonnegative_int(
+        reranker_raw,
+        "chunk_overlap_characters",
+        positive=False,
+    )
+    if (
+        document_max_length is not None
+        and document_pair_buffer_tokens is not None
+        and document_pair_buffer_tokens >= document_max_length
+    ):
+        raise ValueError(
+            "ranking.reranker.document_pair_buffer_tokens must be smaller than "
+            "document_max_length"
+        )
+    model_revision = _optional_text(reranker_raw, "model_revision")
+    backend_version = _optional_text(reranker_raw, "backend_version")
+    inference_dtype = _optional_text(reranker_raw, "inference_dtype")
+    input_policy = _optional_text(reranker_raw, "input_policy")
+    if artifact_schema_version is not None and artifact_schema_version >= 2:
+        required_v2 = {
+            "model_revision": model_revision,
+            "backend_version": backend_version,
+            "score_representation": score_representation,
+            "inference_dtype": inference_dtype,
+            "input_policy": input_policy,
+            "document_max_length": document_max_length,
+            "document_pair_buffer_tokens": document_pair_buffer_tokens,
+            "window_max_length": window_max_length,
+            "chunk_max_characters": chunk_max_characters,
+            "chunk_overlap_characters": chunk_overlap_characters,
+        }
+        missing_v2 = [field for field, value in required_v2.items() if value is None]
+        if missing_v2:
+            raise ValueError(
+                "artifact schema v2 requires pinned reranker fields: "
+                + ", ".join(missing_v2)
+            )
+    long_document_weight = float(formula_raw.get("long_document_weight", 0.5))
+    strongest_passage_weight = float(formula_raw.get("strongest_passage_weight", 0.5))
+    coverage_bonus_weight = float(formula_raw.get("coverage_bonus_weight", 0.25))
+    relative_span_delta = float(formula_raw.get("relative_span_delta", 1.0))
+    if not all(
+        math.isfinite(value)
+        for value in (
+            long_document_weight,
+            strongest_passage_weight,
+            coverage_bonus_weight,
+            relative_span_delta,
+        )
+    ):
+        raise ValueError("ranking.reranker.formula numeric values must be finite")
+    if any(
+        value < 0
+        for value in (
+            long_document_weight,
+            strongest_passage_weight,
+            coverage_bonus_weight,
+        )
+    ):
+        raise ValueError("ranking.reranker.formula weights must be non-negative")
+    if relative_span_delta < 0:
+        raise ValueError("ranking.reranker.formula.relative_span_delta must not be negative")
+    support_cap = formula_raw.get("support_cap", 6)
+    min_new_chars = formula_raw.get("min_new_chars", 800)
+    for field, value in (("support_cap", support_cap), ("min_new_chars", min_new_chars)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"ranking.reranker.formula.{field} must be a positive integer"
+            )
     return CoverageAwareRerankerConfig(
         model=_require_text(reranker_raw, "model", "ranking.reranker"),
         score_source=score_source,
@@ -197,14 +354,26 @@ def _coverage_aware_reranker_config(
             root_dir,
             _require_text(reranker_raw, "window_score_path", "ranking.reranker"),
         ),
+        candidate_depth=candidate_depth,
+        model_revision=model_revision,
+        backend_version=backend_version,
+        score_representation=score_representation,
+        inference_dtype=inference_dtype,
+        input_policy=input_policy,
+        artifact_schema_version=artifact_schema_version,
+        document_max_length=document_max_length,
+        document_pair_buffer_tokens=document_pair_buffer_tokens,
+        window_max_length=window_max_length,
+        chunk_max_characters=chunk_max_characters,
+        chunk_overlap_characters=chunk_overlap_characters,
         formula=CoverageAwareFormulaConfig(
-            long_document_weight=float(formula_raw.get("long_document_weight", 0.5)),
-            strongest_passage_weight=float(formula_raw.get("strongest_passage_weight", 0.5)),
-            coverage_bonus_weight=float(formula_raw.get("coverage_bonus_weight", 0.25)),
-            relative_span_delta=float(formula_raw.get("relative_span_delta", 1.0)),
-            support_cap=int(formula_raw.get("support_cap", 6)),
-            min_new_chars=int(formula_raw.get("min_new_chars", 800)),
-            top_window_weights=tuple(float(weight) for weight in weights),
+            long_document_weight=long_document_weight,
+            strongest_passage_weight=strongest_passage_weight,
+            coverage_bonus_weight=coverage_bonus_weight,
+            relative_span_delta=relative_span_delta,
+            support_cap=support_cap,
+            min_new_chars=min_new_chars,
+            top_window_weights=parsed_weights,
         ),
     )
 

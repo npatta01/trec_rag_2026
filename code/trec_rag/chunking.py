@@ -45,7 +45,7 @@ def _import_text_splitter():
     except ImportError as exc:
         raise MissingChunkerDependency(
             "semantic-text-splitter is required for SemanticTextChunker. "
-            "Run with: uv run --with semantic-text-splitter ..."
+            "Run code/tools/setup_env.sh, then use .venv/bin/python."
         ) from exc
     return TextSplitter
 

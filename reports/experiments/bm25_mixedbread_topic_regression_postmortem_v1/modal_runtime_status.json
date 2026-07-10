@@ -1,0 +1,29 @@
+{
+  "document_rows": 22000,
+  "document_sha256": "bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1",
+  "elapsed_seconds": 3867.079414844513,
+  "error": null,
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "input_sha256": "ab0b224b31f167db161833d3c3820876ab22edf61d209bd2bcc6c5da513c3e66",
+  "modal_cloud_provider": "CLOUD_PROVIDER_AWS",
+  "modal_region": "us-east-1",
+  "modal_task_id": "ta-01KX6GF1KER2JD8MWNQFCMDFPR",
+  "started_unix": 1783703785.978442,
+  "state": "completed",
+  "torch_cuda_version": "12.8",
+  "updated_unix": 1783707653.0578563,
+  "versions": {
+    "PyYAML": "6.0.3",
+    "huggingface-hub": "1.22.0",
+    "numpy": "2.5.1",
+    "safetensors": "0.8.0",
+    "semantic-text-splitter": "0.32.0",
+    "sentence-transformers": "5.6.0",
+    "tokenizers": "0.22.2",
+    "torch": "2.9.1",
+    "transformers": "5.13.0",
+    "zstandard": "0.25.0"
+  },
+  "window_rows": 227156,
+  "window_sha256": "e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c"
+}

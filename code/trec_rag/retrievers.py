@@ -7,7 +7,7 @@ import json
 import os
 import re
 import urllib.parse
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +23,22 @@ from trec_rag.remote_pyserini import (
 class Retriever(Protocol):
     def retrieve(self, query: QueryVariant) -> list[RetrievedCandidate]:
         ...
+
+
+@dataclass
+class RetrieverCacheStats:
+    hits: int = 0
+    misses: int = 0
+    writes: int = 0
+    bypasses: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "writes": self.writes,
+            "bypasses": self.bypasses,
+        }
 
 
 def _safe_part(value: str) -> str:
@@ -97,6 +113,17 @@ class PyseriniRemoteRetriever:
         self.config = config
         self.cache_dir = cache_dir
         self.client = client or RemotePyseriniClient(_remote_config(config))
+        self.cache_stats = RetrieverCacheStats()
+        self.cache_hit_artifacts: list[dict[str, object]] = []
+
+    def cache_summary(self) -> dict[str, object]:
+        requests = self.cache_stats.hits + self.cache_stats.misses + self.cache_stats.bypasses
+        return {
+            "enabled": self.config.cache,
+            "requests": requests,
+            "hit_artifacts": self.cache_hit_artifacts,
+            **self.cache_stats.as_dict(),
+        }
 
     def retrieve(self, query: QueryVariant) -> list[RetrievedCandidate]:
         request_key = request_cache_key(
@@ -111,16 +138,29 @@ class PyseriniRemoteRetriever:
             request_key,
         )
         if self.config.cache and cache_file.exists():
-            payload = json.loads(cache_file.read_text(encoding="utf-8"))
+            cache_bytes = cache_file.read_bytes()
+            payload = json.loads(cache_bytes)
             response = payload.get("response")
             if not isinstance(response, dict):
                 raise ValueError(f"cache file missing response object: {cache_file}")
-            return normalize_retrieved_candidates(
+            candidates = normalize_retrieved_candidates(
                 response,
                 query=query,
                 retriever_name=self.config.name,
             )
-
+            self.cache_stats.hits += 1
+            self.cache_hit_artifacts.append(
+                {
+                    "file": cache_file.name,
+                    "sha256": hashlib.sha256(cache_bytes).hexdigest(),
+                    "candidate_count": len(candidates),
+                }
+            )
+            return candidates
+        if self.config.cache:
+            self.cache_stats.misses += 1
+        else:
+            self.cache_stats.bypasses += 1
         response = self.client.search(query.query_text)
         if self.config.cache:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +184,7 @@ class PyseriniRemoteRetriever:
                 ),
                 encoding="utf-8",
             )
+            self.cache_stats.writes += 1
         return normalize_retrieved_candidates(response, query=query, retriever_name=self.config.name)
 
 

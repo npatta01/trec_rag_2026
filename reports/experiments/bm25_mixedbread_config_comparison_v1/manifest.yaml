@@ -1,0 +1,105 @@
+experiment:
+  id: bm25_mixedbread_config_comparison_v1
+  run_date: 2026-07-10
+  split: dev
+  description: Reproducible per-topic BM25 versus raw-logit Mixedbread reranker comparison.
+
+scope:
+  topic_count: 22
+  retrieval_depth: 1000
+  rerank_depth: 50
+  baseline: rag25_bm25_full_query_v1
+  candidate: rag25_bm25_mixedbread_rerank_v1
+  metric: ndcg@10
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+  unjudged_policy: grade_zero
+
+tracked_record_files:
+  notes: notes.md
+  metrics: metrics.json
+  topic_metrics: topic_metrics.csv
+  topic_metric_deltas: topic_metric_deltas.csv
+
+source_configs:
+  baseline:
+    path: configs/rag25_bm25_full_query_v1.yaml
+    sha256: 74c9533ef97c1d6b845fbfe6a02ad09d9bfe1865aaf61a23865fba15957a2320
+  candidate:
+    path: configs/rag25_bm25_mixedbread_rerank_v1.yaml
+    sha256: 0150c5fe21e15cfac3b2513bd69214f202a4a9c02bb9f9f027e6b5afd37c1467
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topics_sha256: dec2aa2e672dede15d46b255f66bccc41f3fa1688a3523d030b2f70ee6f54abf
+  data_submodule_commit: 1de1b22ac7f9936be7e42c9e70d576cc9cb83770
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  qrels_sha256: 42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37
+  top_10_judged_rate: 1.0
+  top_50_judged_rate: 1.0
+
+reranker:
+  model: mixedbread-ai/mxbai-rerank-base-v2
+  model_revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+  backend: sentence-transformers CrossEncoder
+  backend_version: 5.6.0
+  inference_dtype: bfloat16
+  score_representation: raw_logits
+  input_policy: trec_rag_raw_v2
+  artifact_schema_version: 2
+  document_scores:
+    path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_raw_logits_artifact_v2_scores.jsonl
+    rows: 22000
+    sha256: bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1
+  window_scores:
+    path: cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_raw_logits_artifact_v2_scores.jsonl
+    rows: 227156
+    sha256: e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c
+
+modal_provenance:
+  runtime_status: reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_runtime_status.json
+  runtime_status_sha256: 9e77e86d22a5ba1f07c32126fd9cfb72d3e231e7a725e895488b42e97f1c9ab8
+  warm_cache_status: reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_warm_cache_verification.json
+  warm_cache_status_sha256: 84bebe88fc40f5c5b475db0f8e45d4759a914fb779b747d8619f99afea08bcc2
+  volume_name: trec-rag-raw-logit-hits1000-20260710
+  gpu: NVIDIA A100-SXM4-80GB
+  cloud_provider: CLOUD_PROVIDER_AWS
+  region: us-east-1
+  warm_document_cache_hits: 22000
+  warm_window_cache_hits: 227156
+  warm_model_scores: 0
+  score_cache_unchanged: true
+  semantic_equal_to_canonical: true
+
+cache_validation:
+  baseline_retrieval_hits: 22
+  candidate_retrieval_hits: 22
+  retrieval_misses: 0
+  retrieval_writes: 0
+  comparison_model_inference_requests: 0
+  v2_materialization_document_global_cache_hits: 22000
+  v2_materialization_window_global_cache_hits: 227156
+  v2_materialization_model_scores: 0
+  repeated_cache_build_document_model_scores: 0
+  repeated_cache_build_window_model_scores: 0
+  repeated_cache_build_writes: 0
+
+metrics:
+  bm25_ndcg_at_10: 0.4139611685
+  reranker_ndcg_at_10: 0.5310079039
+  delta_ndcg_at_10: 0.1170467354
+  relative_delta_ndcg_at_10: 0.2827481037
+  improved_topics: 18
+  degraded_topics: 4
+  tied_topics: 0
+  big_regressions_at_minus_0_1: 2
+  precision_at_10_delta: 0.0590909091
+  relevant_count_at_10_delta: 0.5909090909
+
+reproduce:
+  comparison: .venv/bin/python -m trec_rag.pipeline_comparison
+  cache_check: .venv/bin/python -m trec_rag.rerank_score_cache --dry-run --limit-per-topic 1000
+
+supersedes:
+  record: reports/experiments/topic_level_reranker_metrics_v1/
+  reason: The older record depended on ignored local score files and did not pin the score representation or model/runtime identity.

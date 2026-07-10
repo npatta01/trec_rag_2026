@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 
@@ -14,7 +15,7 @@ from trec_rag.pipeline_models import (
     RetrievedCandidate,
 )
 from trec_rag.query_understanding import build_query_variants
-from trec_rag.ranking import passthrough_rank
+from trec_rag.ranking import coverage_aware_long_doc_rank, passthrough_rank
 from trec_rag.remote_pyserini import RemotePyseriniConfig
 from trec_rag.retrievers import (
     PyseriniRemoteRetriever,
@@ -150,6 +151,7 @@ ranking:
   reranker:
     model: mixedbread-ai/mxbai-rerank-base-v2
     score_source: cached_artifacts
+    candidate_depth: 50
     document_score_path: {doc_scores}
     window_score_path: {chunk_scores}
     formula:
@@ -170,9 +172,97 @@ generation: {{type: placeholder}}
     assert config.ranking.type == "coverage_aware_long_doc_aggregate"
     assert config.ranking.reranker is not None
     assert config.ranking.reranker.model == "mixedbread-ai/mxbai-rerank-base-v2"
+    assert config.ranking.reranker.candidate_depth == 50
     assert config.ranking.reranker.document_score_path == doc_scores
     assert config.ranking.reranker.window_score_path == chunk_scores
     assert config.ranking.reranker.formula.coverage_bonus_weight == 0.25
+
+    for invalid_depth in ("0", "true", "50.5"):
+        invalid_path = write_config(
+            tmp_path / f"invalid-depth-{invalid_depth}.yaml",
+            config_path.read_text(encoding="utf-8").replace(
+                "candidate_depth: 50", f"candidate_depth: {invalid_depth}"
+            ),
+        )
+        with pytest.raises(ValueError, match="candidate_depth"):
+            load_pipeline_config(invalid_path)
+
+
+@pytest.mark.parametrize(
+    ("formula_entry", "error"),
+    [
+        ("top_window_weights: []", "non-empty"),
+        ("top_window_weights: [0.0, 1.0]", "positive weight"),
+        ("top_window_weights: [-0.1, 1.0]", "finite and non-negative"),
+        ("top_window_weights: [.nan]", "finite and non-negative"),
+        ("long_document_weight: -0.1", "weights must be non-negative"),
+        ("strongest_passage_weight: -0.1", "weights must be non-negative"),
+        ("coverage_bonus_weight: -0.1", "weights must be non-negative"),
+    ],
+)
+def test_config_rejects_invalid_coverage_formula_weights(tmp_path, formula_entry, error):
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        f"""
+experiment: {{id: demo}}
+submission: {{team_id: local-baseline}}
+topics: {{path: topics.tsv, format: tsv}}
+query_understanding: {{variants: [{{name: original, type: original_topic}}]}}
+retrievers: [{{name: bm25, type: pyserini_remote, query_variants: [original], hits: 10}}]
+ranking:
+  type: coverage_aware_long_doc_aggregate
+  reranker:
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    score_source: cached_artifacts
+    document_score_path: document.jsonl
+    window_score_path: windows.jsonl
+    formula:
+      {formula_entry}
+evidence: {{type: top_k, k: 1, allow_fewer: true}}
+generation: {{type: placeholder}}
+""",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        load_pipeline_config(config_path)
+
+
+@pytest.mark.parametrize(
+    "formula_entry",
+    [
+        "support_cap: true",
+        "support_cap: 1.5",
+        "support_cap: 0",
+        "min_new_chars: true",
+        "min_new_chars: 1.5",
+        "min_new_chars: 0",
+    ],
+)
+def test_config_rejects_non_positive_integer_coverage_limits(tmp_path, formula_entry):
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        f"""
+experiment: {{id: demo}}
+submission: {{team_id: local-baseline}}
+topics: {{path: topics.tsv, format: tsv}}
+query_understanding: {{variants: [{{name: original, type: original_topic}}]}}
+retrievers: [{{name: bm25, type: pyserini_remote, query_variants: [original], hits: 10}}]
+ranking:
+  type: coverage_aware_long_doc_aggregate
+  reranker:
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    score_source: cached_artifacts
+    document_score_path: document.jsonl
+    window_score_path: windows.jsonl
+    formula:
+      {formula_entry}
+evidence: {{type: top_k, k: 1, allow_fewer: true}}
+generation: {{type: placeholder}}
+""",
+    )
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        load_pipeline_config(config_path)
 
 
 def test_config_rejects_unknown_topic_format(tmp_path):
@@ -458,6 +548,21 @@ def test_pyserini_remote_retriever_reads_cached_response_when_cache_enabled(tmp_
     candidates = retriever.retrieve(query)
 
     assert [candidate.docid for candidate in candidates] == ["doc-cached"]
+    assert retriever.cache_summary() == {
+        "enabled": True,
+        "requests": 1,
+        "hit_artifacts": [
+            {
+                "file": cache_file.name,
+                "sha256": hashlib.sha256(cache_file.read_bytes()).hexdigest(),
+                "candidate_count": 1,
+            }
+        ],
+        "hits": 1,
+        "misses": 0,
+        "writes": 0,
+        "bypasses": 0,
+    }
 
 
 def test_pyserini_remote_retriever_cache_false_bypasses_cache_and_does_not_write(tmp_path):
@@ -518,6 +623,7 @@ def test_pyserini_remote_retriever_cache_false_bypasses_cache_and_does_not_write
     assert [candidate.docid for candidate in candidates] == ["doc-fresh"]
     assert stale_cache.read_text(encoding="utf-8") == original_cache_text
     assert sorted(path.name for path in tmp_path.iterdir()) == [stale_cache.name]
+    assert retriever.cache_summary()["bypasses"] == 1
 
 
 def test_passthrough_ranking_dedupes_docids_and_preserves_provenance():
@@ -549,6 +655,47 @@ def test_passthrough_ranking_restarts_final_ranks_per_topic():
         ("31", "doc-a", 1),
         ("32", "doc-b", 1),
     ]
+
+
+def test_coverage_aware_ranking_rejects_non_finite_cached_scores(tmp_path):
+    candidates = [
+        RetrievedCandidate("31", "original", "bm25", "query", "doc-a", 1, 1.0, "A")
+    ]
+    document_scores = tmp_path / "document.jsonl"
+    document_scores.write_text(
+        json.dumps({"topic_id": "31", "docid": "doc-a", "score": float("nan")}) + "\n",
+        encoding="utf-8",
+    )
+    window_scores = tmp_path / "window.jsonl"
+    window_scores.write_text(
+        json.dumps(
+            {
+                "topic_id": "31",
+                "docid": "doc-a",
+                "chunk_index": 0,
+                "start_char": 0,
+                "end_char": 1,
+                "score": 1.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="document score must be finite"):
+        coverage_aware_long_doc_rank(
+            candidates,
+            document_score_path=document_scores,
+            window_score_path=window_scores,
+            candidate_depth=1,
+            long_document_weight=0.5,
+            strongest_passage_weight=0.5,
+            coverage_bonus_weight=0.25,
+            relative_span_delta=1.0,
+            support_cap=6,
+            min_new_chars=1,
+            top_window_weights=(1.0,),
+        )
 
 
 def test_passthrough_rejects_multiple_retrieval_streams():
@@ -676,7 +823,13 @@ def test_qrels_metrics_report_precision_hit_rate_and_relevant_count(tmp_path):
     metrics = evaluate_ranked(
         ranked,
         parse_qrels(qrels_path),
-        metric_names=["precision@3", "hit_rate@3", "relevant_count@3"],
+        metric_names=[
+            "precision@3",
+            "hit_rate@3",
+            "relevant_count@3",
+            "judged_count@3",
+            "judged_rate@3",
+        ],
         relevance_threshold=2,
     )
 
@@ -686,7 +839,29 @@ def test_qrels_metrics_report_precision_hit_rate_and_relevant_count(tmp_path):
     assert metrics["per_topic"]["32"]["precision@3"] == 0.0
     assert metrics["per_topic"]["32"]["hit_rate@3"] == 0.0
     assert metrics["per_topic"]["32"]["relevant_count@3"] == 0
+    assert metrics["per_topic"]["31"]["judged_count@3"] == 2
+    assert metrics["per_topic"]["31"]["judged_rate@3"] == pytest.approx(2 / 3)
+    assert metrics["per_topic"]["32"]["judged_count@3"] == 0
+    assert metrics["per_topic"]["32"]["judged_rate@3"] == 0.0
     assert metrics["metrics"]["hit_rate@3"] == 0.5
+
+
+def test_qrels_topic_without_ranked_rows_is_kept_in_macro_average(tmp_path):
+    qrels_path = tmp_path / "qrels.txt"
+    qrels_path.write_text("31 0 doc-a 4\n32 0 doc-b 4\n", encoding="utf-8")
+    ranked = [RankedCandidate("31", "doc-a", 1, 1.0, "", [])]
+
+    metrics = evaluate_ranked(
+        ranked,
+        parse_qrels(qrels_path),
+        metric_names=["ndcg@10"],
+        relevance_threshold=2,
+        topic_ids=["31", "32"],
+    )
+
+    assert metrics["per_topic"]["31"]["ndcg@10"] == 1.0
+    assert metrics["per_topic"]["32"]["ndcg@10"] == 0.0
+    assert metrics["metrics"]["ndcg@10"] == 0.5
 
 
 def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_path):
@@ -784,6 +959,9 @@ evaluation:
     assert json.loads((result.output_dir / "retrieval_metrics.json").read_text())["metrics"][
         "recall@100"
     ] == 1.0
+    assert json.loads((result.output_dir / "run_metadata.json").read_text())["cache"][
+        "retrieval"
+    ][0]["status"] == "not_reported"
 
 
 def test_run_pipeline_applies_cached_coverage_aware_reranker(tmp_path):
@@ -855,6 +1033,7 @@ ranking:
   reranker:
     model: mixedbread-ai/mxbai-rerank-base-v2
     score_source: cached_artifacts
+    candidate_depth: 2
     document_score_path: {doc_scores}
     window_score_path: {chunk_scores}
     formula:
@@ -903,11 +1082,36 @@ evaluation:
                     8.0,
                     "B",
                 ),
+                RetrievedCandidate(
+                    query.topic_id,
+                    query.variant_name,
+                    "fake",
+                    query.query_text,
+                    "doc-c",
+                    3,
+                    7.0,
+                    "C",
+                ),
             ]
 
     result = run_pipeline(config_path, retriever_factories={"fake": lambda _config, _cache: FakeRetriever()})
 
-    assert [(row.docid, row.rank) for row in result.ranked] == [("doc-b", 1), ("doc-a", 2)]
+    assert [(row.docid, row.rank) for row in result.ranked] == [
+        ("doc-b", 1),
+        ("doc-a", 2),
+        ("doc-c", 3),
+    ]
     assert result.ranked[0].provenance[-1]["ranker"] == "coverage_aware_long_doc_aggregate"
+    assert result.ranked[-1].provenance[-1]["ranker"] == "bm25_tail_after_rerank"
+    assert [row.score for row in result.ranked] == sorted(
+        (row.score for row in result.ranked), reverse=True
+    )
     assert read_jsonl(result.output_dir / "stage_evidence.jsonl")[0]["docid"] == "doc-b"
     assert result.metrics["metrics"]["ndcg@10"] == 1.0
+    reranker_cache = result.run_metadata["cache"]["reranker"]
+    assert reranker_cache["document_scores"]["sha256"] == hashlib.sha256(
+        doc_scores.read_bytes()
+    ).hexdigest()
+    assert reranker_cache["window_scores"]["sha256"] == hashlib.sha256(
+        chunk_scores.read_bytes()
+    ).hexdigest()

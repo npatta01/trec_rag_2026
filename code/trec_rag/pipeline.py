@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,9 +23,9 @@ from trec_rag.pipeline_models import (
 )
 from trec_rag.query_understanding import build_query_variants
 from trec_rag.ranking import coverage_aware_long_doc_rank, passthrough_rank
-from trec_rag.repo_env import load_repo_env, repo_cache_root
+from trec_rag.repo_env import load_repo_env, repo_cache_root, shared_checkout_root
 from trec_rag.retrievers import Retriever, pyserini_factory
-from trec_rag.topics import Topic, load_topics
+from trec_rag.topics import load_topics
 
 
 RetrieverFactory = Callable[[RetrieverConfig, Path], Retriever]
@@ -40,6 +41,7 @@ class PipelineResult:
     evidence: list[EvidenceRecord]
     rag_records: list[dict[str, object]]
     metrics: dict[str, object]
+    run_metadata: dict[str, object]
 
 
 def _write_trec_run(ranked: list[RankedCandidate], path: Path, run_id: str) -> None:
@@ -52,6 +54,32 @@ def _write_trec_run(ranked: list[RankedCandidate], path: Path, run_id: str) -> N
 def _write_json(payload: dict[str, object], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _portable_repo_path(root_dir: Path, path: Path) -> str:
+    roots = [root_dir]
+    shared_root = shared_checkout_root(root_dir)
+    if shared_root:
+        roots.append(shared_root)
+    resolved = path.resolve()
+    for root in roots:
+        try:
+            return str(resolved.relative_to(root.resolve()))
+        except ValueError:
+            continue
+    return str(path)
+
+
+def _file_provenance(root_dir: Path, path: Path) -> dict[str, object]:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": _portable_repo_path(root_dir, path),
+        "size_bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
 
 
 def pipeline_cache_dir(root_dir: Path, _experiment_id: str) -> Path:
@@ -87,6 +115,7 @@ def run_pipeline(
         queries_by_variant.setdefault(query.variant_name, []).append(query)
 
     retrieved: list[RetrievedCandidate] = []
+    retrieval_cache: list[dict[str, object]] = []
     for retriever_config in config.retrievers:
         if retriever_config.type not in retriever_factories:
             raise ValueError(f"unknown retriever type: {retriever_config.type}")
@@ -97,6 +126,18 @@ def run_pipeline(
         for variant_name in retriever_config.query_variants:
             for query in queries_by_variant[variant_name]:
                 retrieved.extend(retriever.retrieve(query))
+        cache_summary = getattr(retriever, "cache_summary", None)
+        retrieval_cache.append(
+            {
+                "retriever": retriever_config.name,
+                "type": retriever_config.type,
+                **(
+                    cache_summary()
+                    if callable(cache_summary)
+                    else {"enabled": retriever_config.cache, "status": "not_reported"}
+                ),
+            }
+        )
     write_jsonl(retrieved, output_dir / "stage_retrieved.jsonl")
 
     if config.ranking.type == "passthrough":
@@ -105,10 +146,67 @@ def run_pipeline(
         if config.ranking.reranker is None:
             raise ValueError("coverage-aware ranking requires ranking.reranker")
         formula = config.ranking.reranker.formula
+        metadata_enabled = (
+            config.ranking.reranker.artifact_schema_version is not None
+            or config.ranking.reranker.score_representation is not None
+        )
+        expected_score_metadata = (
+            {
+                key: value
+                for key, value in {
+                    "model": config.ranking.reranker.model,
+                    "model_revision": config.ranking.reranker.model_revision,
+                    "backend_version": config.ranking.reranker.backend_version,
+                    "score_representation": config.ranking.reranker.score_representation,
+                    "inference_dtype": config.ranking.reranker.inference_dtype,
+                    "input_policy": config.ranking.reranker.input_policy,
+                    "artifact_schema_version": (
+                        config.ranking.reranker.artifact_schema_version
+                    ),
+                }.items()
+                if value is not None
+            }
+            if metadata_enabled
+            else {}
+        )
+        document_score_metadata: dict[str, object] = {}
+        if config.ranking.reranker.document_max_length is not None:
+            requested_max_length = config.ranking.reranker.document_max_length
+            pair_buffer_tokens = (
+                config.ranking.reranker.document_pair_buffer_tokens or 0
+            )
+            document_score_metadata = {
+                "requested_max_length": requested_max_length,
+                "max_length": requested_max_length - pair_buffer_tokens,
+                "pair_buffer_tokens": pair_buffer_tokens,
+                "score_kind": (
+                    f"doc_max_{requested_max_length}_buf{pair_buffer_tokens}"
+                ),
+            }
+        window_score_metadata: dict[str, object] = {}
+        if config.ranking.reranker.window_max_length is not None:
+            window_score_metadata = {
+                "requested_max_length": config.ranking.reranker.window_max_length,
+                "max_length": config.ranking.reranker.window_max_length,
+                "pair_buffer_tokens": 0,
+                "score_kind": "window",
+            }
+            if config.ranking.reranker.chunk_max_characters is not None:
+                window_score_metadata["chunk_max_characters"] = (
+                    config.ranking.reranker.chunk_max_characters
+                )
+            if config.ranking.reranker.chunk_overlap_characters is not None:
+                window_score_metadata["chunk_overlap_characters"] = (
+                    config.ranking.reranker.chunk_overlap_characters
+                )
         ranked = coverage_aware_long_doc_rank(
             retrieved,
             document_score_path=config.ranking.reranker.document_score_path,
             window_score_path=config.ranking.reranker.window_score_path,
+            candidate_depth=config.ranking.reranker.candidate_depth,
+            expected_score_metadata=expected_score_metadata,
+            expected_document_score_metadata=document_score_metadata,
+            expected_window_score_metadata=window_score_metadata,
             long_document_weight=formula.long_document_weight,
             strongest_passage_weight=formula.strongest_passage_weight,
             coverage_bonus_weight=formula.coverage_bonus_weight,
@@ -153,9 +251,46 @@ def run_pipeline(
             parse_qrels(config.evaluation.qrels),
             metric_names=config.evaluation.metrics,
             relevance_threshold=config.evaluation.relevance_threshold,
+            topic_ids=topics_by_id,
         )
         metrics["kind"] = config.evaluation.kind
     _write_json(metrics, output_dir / "retrieval_metrics.json")
+
+    reranker_cache: dict[str, object] | None = None
+    if config.ranking.reranker:
+        reranker_cache = {
+            "score_source": config.ranking.reranker.score_source,
+            "score_metadata": expected_score_metadata,
+            "document_score_policy": document_score_metadata,
+            "window_score_policy": window_score_metadata,
+            "document_scores": _file_provenance(
+                config.root_dir,
+                config.ranking.reranker.document_score_path,
+            ),
+            "window_scores": _file_provenance(
+                config.root_dir,
+                config.ranking.reranker.window_score_path,
+            ),
+            "model_inference_requests": 0,
+        }
+    run_metadata: dict[str, object] = {
+        "experiment_id": config.run_id,
+        "topic_count": len(topics),
+        "retrieved_candidate_count": len(retrieved),
+        "ranked_candidate_count": len(ranked),
+        "ranking": {
+            "type": config.ranking.type,
+            "candidate_depth": (
+                config.ranking.reranker.candidate_depth if config.ranking.reranker else None
+            ),
+        },
+        "cache": {
+            "retrieval_root": _portable_repo_path(config.root_dir, cache_dir),
+            "retrieval": retrieval_cache,
+            "reranker": reranker_cache,
+        },
+    }
+    _write_json(run_metadata, output_dir / "run_metadata.json")
 
     return PipelineResult(
         output_dir=output_dir,
@@ -166,6 +301,7 @@ def run_pipeline(
         evidence=evidence,
         rag_records=rag_records,
         metrics=metrics,
+        run_metadata=run_metadata,
     )
 
 

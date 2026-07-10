@@ -1,0 +1,2877 @@
+{
+  "aggregate": {
+    "graded_recall@10": {
+      "baseline": 0.011415449385205419,
+      "candidate": 0.013349743416679544,
+      "delta": 0.001934294031474125
+    },
+    "graded_recall@50": {
+      "baseline": 0.053164246427760325,
+      "candidate": 0.053164246427760325,
+      "delta": 0.0
+    },
+    "hit_rate@10": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0
+    },
+    "hit_rate@50": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0
+    },
+    "ideal_dcg_coverage@50": {
+      "baseline": 0.4940613154501677,
+      "candidate": 0.4940613154501677,
+      "delta": 0.0
+    },
+    "judged_count@10": {
+      "baseline": 10.0,
+      "candidate": 10.0,
+      "delta": 0.0
+    },
+    "judged_count@50": {
+      "baseline": 50.0,
+      "candidate": 50.0,
+      "delta": 0.0
+    },
+    "judged_rate@10": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0
+    },
+    "judged_rate@50": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0
+    },
+    "ndcg@10": {
+      "baseline": 0.4139611685119936,
+      "candidate": 0.5310079039149209,
+      "delta": 0.11704673540292732
+    },
+    "precision@10": {
+      "baseline": 0.7045454545454546,
+      "candidate": 0.7636363636363637,
+      "delta": 0.05909090909090908
+    },
+    "precision@50": {
+      "baseline": 0.6554545454545454,
+      "candidate": 0.6554545454545454,
+      "delta": 0.0
+    },
+    "recall@10": {
+      "baseline": 0.012223886357766585,
+      "candidate": 0.013715454073316891,
+      "delta": 0.0014915677155503057
+    },
+    "recall@100": {
+      "baseline": 0.10808794569429726,
+      "candidate": 0.10808794569429726,
+      "delta": 0.0
+    },
+    "recall@50": {
+      "baseline": 0.054849007101213675,
+      "candidate": 0.054849007101213675,
+      "delta": 0.0
+    },
+    "relevant_count@10": {
+      "baseline": 7.045454545454546,
+      "candidate": 7.636363636363637,
+      "delta": 0.5909090909090908
+    },
+    "relevant_count@50": {
+      "baseline": 32.77272727272727,
+      "candidate": 32.77272727272727,
+      "delta": 0.0
+    }
+  },
+  "comparison": {
+    "baseline": {
+      "artifact_schema_version": null,
+      "backend_version": null,
+      "candidate_depth": null,
+      "chunk_max_characters": null,
+      "chunk_overlap_characters": null,
+      "config": "configs/rag25_bm25_full_query_v1.yaml",
+      "config_sha256": "74c9533ef97c1d6b845fbfe6a02ad09d9bfe1865aaf61a23865fba15957a2320",
+      "document_max_length": null,
+      "document_pair_buffer_tokens": null,
+      "experiment_id": "rag25_bm25_full_query_v1",
+      "inference_dtype": null,
+      "input_policy": null,
+      "model": null,
+      "model_revision": null,
+      "ranking": "passthrough",
+      "retrieval_hits": 1000,
+      "score_representation": null,
+      "window_max_length": null
+    },
+    "baseline_id": "rag25_bm25_full_query_v1",
+    "cache": {
+      "baseline": {
+        "reranker": null,
+        "retrieval": [
+          {
+            "bypasses": 0,
+            "enabled": true,
+            "hit_artifacts": [
+              {
+                "candidate_count": 1000,
+                "file": "14__original__climbmix_bm25__7f4431a51367740b.json",
+                "sha256": "69282e20c77fb7b105a77f10798869030f8e99b75c2b1ef6cf7f3ea09e67e5cf"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "31__original__climbmix_bm25__ad544d6feb430286.json",
+                "sha256": "6017d3befb34f9e2090f7b208a7ea6cd7aa8caf04edd78107b457ca1a97a24ac"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "37__original__climbmix_bm25__81eb05bbd4c88d2d.json",
+                "sha256": "08f4d6641d26c0384549dec380e1de5e27c5f1ebc0bcbf99887d236f9fe3c610"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "58__original__climbmix_bm25__7e2d20b7fe348dc3.json",
+                "sha256": "261f03142c1a375fa142d30b447b57ec70b934cc763eeadf53bf9197e47753f6"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "72__original__climbmix_bm25__4b315f86f1489359.json",
+                "sha256": "c9718dfc564384e3f0da8536df092a922120fa7b7cae17d231f1fc9c3bd88364"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "84__original__climbmix_bm25__756f45ba9e99aca2.json",
+                "sha256": "3bdcec58f4b568362518add507ee987565aec45950b37c4a0ecf411080e3ffce"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "144__original__climbmix_bm25__0c54a3a69ff23b94.json",
+                "sha256": "635ae9cec3857c53a77440514b11f56c283a212fa8bacf3901ade12edf3437e0"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "161__original__climbmix_bm25__4d32fee8356cc5ad.json",
+                "sha256": "d5752b357d84e2f967719d8d85c0fbb37df9ce2bb21b7a494bd208e581ac3330"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "200__original__climbmix_bm25__ce004a50c66d7f41.json",
+                "sha256": "6a75189e3e31f0b5868725bbde606a0d8e970556443510956800dedf4ddb455c"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "213__original__climbmix_bm25__de773f8a5a9c65f0.json",
+                "sha256": "aec0a17804e9067049ed9afb35d3143e7f612a68b3cb7439c6a7bd8b03f046e5"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "219__original__climbmix_bm25__82040a9999215df4.json",
+                "sha256": "7e8fbc1b1cde0c6cd689068326ad479f343435d4c908b36fb205db0638b262be"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "224__original__climbmix_bm25__3f8403e196850955.json",
+                "sha256": "9e43a5970e2d8a931ee47cc8b4b1340b0ba29f4f896d4195dfc7b30d48d386f7"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "225__original__climbmix_bm25__a4cf92a54ce37ea8.json",
+                "sha256": "136873b45c87723eb99e838aede42e67b11c56c397608fd805a1a6b21e8c872f"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "233__original__climbmix_bm25__7cdd439263a3903a.json",
+                "sha256": "5acb3f7038c8059f409d4ef7ee61098f39882bff1809a63915893770d602c89d"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "273__original__climbmix_bm25__6317c02800ae6128.json",
+                "sha256": "e046893acf7d219ab90e568fea57b931a6fbb5db6340755c84ea3aa482f01cd3"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "300__original__climbmix_bm25__e42dcb4a7247c265.json",
+                "sha256": "8aa1dc9cd6cea7da438aad5f997f3e56f812d43604be04cfa745cc483b90dd07"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "407__original__climbmix_bm25__8986a6dac9137062.json",
+                "sha256": "7fe4f8a75ec2f3d0cec9ddb899b06db8e9530b6c2f1bebad790c1b92c55a8f7c"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "477__original__climbmix_bm25__61baa0cc0cbbf901.json",
+                "sha256": "e13e4654e10716d6c4262a5cc853be8efebbc8e8314fe914d14f822d67e15ced"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "499__original__climbmix_bm25__f1e1147e49a93c98.json",
+                "sha256": "4723c0c2264acdbfab7083695c6d04f9d2c6e6e418b035e71fab728ba8119e91"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "515__original__climbmix_bm25__92a8aacc62ff7e31.json",
+                "sha256": "8c08b2ad2f628d563fffaf4ed5665da5adfade246b37d8bed1dfd55828db4cc9"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "707__original__climbmix_bm25__a6e5e63bb87fcd05.json",
+                "sha256": "b20c9f22576ece21153439670525dc4335d906b89ffec788dd23f9f8a2ab9f6d"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "897__original__climbmix_bm25__ba304548f18745ca.json",
+                "sha256": "ca8641ef392be4a40a4cfd778c3e5d3963261f7a81311c7ccd8f7b2f2e4ef880"
+              }
+            ],
+            "hits": 22,
+            "misses": 0,
+            "requests": 22,
+            "retriever": "climbmix_bm25",
+            "type": "pyserini_remote",
+            "writes": 0
+          }
+        ],
+        "retrieval_root": "cache/retrieval/pyserini_remote"
+      },
+      "candidate": {
+        "reranker": {
+          "document_score_policy": {
+            "max_length": 32256,
+            "pair_buffer_tokens": 512,
+            "requested_max_length": 32768,
+            "score_kind": "doc_max_32768_buf512"
+          },
+          "document_scores": {
+            "path": "cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_raw_logits_artifact_v2_scores.jsonl",
+            "sha256": "bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1",
+            "size_bytes": 16953591
+          },
+          "model_inference_requests": 0,
+          "score_metadata": {
+            "artifact_schema_version": 2,
+            "backend_version": "5.6.0",
+            "inference_dtype": "bfloat16",
+            "input_policy": "trec_rag_raw_v2",
+            "model": "mixedbread-ai/mxbai-rerank-base-v2",
+            "model_revision": "3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+            "score_representation": "raw_logits"
+          },
+          "score_source": "cached_artifacts",
+          "window_score_policy": {
+            "chunk_max_characters": 3500,
+            "chunk_overlap_characters": 350,
+            "max_length": 1024,
+            "pair_buffer_tokens": 0,
+            "requested_max_length": 1024,
+            "score_kind": "window"
+          },
+          "window_scores": {
+            "path": "cache/reranker/artifacts/rag25_bm25_mixedbread_rerank_v1/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_raw_logits_artifact_v2_scores.jsonl",
+            "sha256": "e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c",
+            "size_bytes": 232228596
+          }
+        },
+        "retrieval": [
+          {
+            "bypasses": 0,
+            "enabled": true,
+            "hit_artifacts": [
+              {
+                "candidate_count": 1000,
+                "file": "14__original__climbmix_bm25__7f4431a51367740b.json",
+                "sha256": "69282e20c77fb7b105a77f10798869030f8e99b75c2b1ef6cf7f3ea09e67e5cf"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "31__original__climbmix_bm25__ad544d6feb430286.json",
+                "sha256": "6017d3befb34f9e2090f7b208a7ea6cd7aa8caf04edd78107b457ca1a97a24ac"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "37__original__climbmix_bm25__81eb05bbd4c88d2d.json",
+                "sha256": "08f4d6641d26c0384549dec380e1de5e27c5f1ebc0bcbf99887d236f9fe3c610"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "58__original__climbmix_bm25__7e2d20b7fe348dc3.json",
+                "sha256": "261f03142c1a375fa142d30b447b57ec70b934cc763eeadf53bf9197e47753f6"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "72__original__climbmix_bm25__4b315f86f1489359.json",
+                "sha256": "c9718dfc564384e3f0da8536df092a922120fa7b7cae17d231f1fc9c3bd88364"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "84__original__climbmix_bm25__756f45ba9e99aca2.json",
+                "sha256": "3bdcec58f4b568362518add507ee987565aec45950b37c4a0ecf411080e3ffce"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "144__original__climbmix_bm25__0c54a3a69ff23b94.json",
+                "sha256": "635ae9cec3857c53a77440514b11f56c283a212fa8bacf3901ade12edf3437e0"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "161__original__climbmix_bm25__4d32fee8356cc5ad.json",
+                "sha256": "d5752b357d84e2f967719d8d85c0fbb37df9ce2bb21b7a494bd208e581ac3330"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "200__original__climbmix_bm25__ce004a50c66d7f41.json",
+                "sha256": "6a75189e3e31f0b5868725bbde606a0d8e970556443510956800dedf4ddb455c"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "213__original__climbmix_bm25__de773f8a5a9c65f0.json",
+                "sha256": "aec0a17804e9067049ed9afb35d3143e7f612a68b3cb7439c6a7bd8b03f046e5"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "219__original__climbmix_bm25__82040a9999215df4.json",
+                "sha256": "7e8fbc1b1cde0c6cd689068326ad479f343435d4c908b36fb205db0638b262be"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "224__original__climbmix_bm25__3f8403e196850955.json",
+                "sha256": "9e43a5970e2d8a931ee47cc8b4b1340b0ba29f4f896d4195dfc7b30d48d386f7"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "225__original__climbmix_bm25__a4cf92a54ce37ea8.json",
+                "sha256": "136873b45c87723eb99e838aede42e67b11c56c397608fd805a1a6b21e8c872f"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "233__original__climbmix_bm25__7cdd439263a3903a.json",
+                "sha256": "5acb3f7038c8059f409d4ef7ee61098f39882bff1809a63915893770d602c89d"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "273__original__climbmix_bm25__6317c02800ae6128.json",
+                "sha256": "e046893acf7d219ab90e568fea57b931a6fbb5db6340755c84ea3aa482f01cd3"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "300__original__climbmix_bm25__e42dcb4a7247c265.json",
+                "sha256": "8aa1dc9cd6cea7da438aad5f997f3e56f812d43604be04cfa745cc483b90dd07"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "407__original__climbmix_bm25__8986a6dac9137062.json",
+                "sha256": "7fe4f8a75ec2f3d0cec9ddb899b06db8e9530b6c2f1bebad790c1b92c55a8f7c"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "477__original__climbmix_bm25__61baa0cc0cbbf901.json",
+                "sha256": "e13e4654e10716d6c4262a5cc853be8efebbc8e8314fe914d14f822d67e15ced"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "499__original__climbmix_bm25__f1e1147e49a93c98.json",
+                "sha256": "4723c0c2264acdbfab7083695c6d04f9d2c6e6e418b035e71fab728ba8119e91"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "515__original__climbmix_bm25__92a8aacc62ff7e31.json",
+                "sha256": "8c08b2ad2f628d563fffaf4ed5665da5adfade246b37d8bed1dfd55828db4cc9"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "707__original__climbmix_bm25__a6e5e63bb87fcd05.json",
+                "sha256": "b20c9f22576ece21153439670525dc4335d906b89ffec788dd23f9f8a2ab9f6d"
+              },
+              {
+                "candidate_count": 1000,
+                "file": "897__original__climbmix_bm25__ba304548f18745ca.json",
+                "sha256": "ca8641ef392be4a40a4cfd778c3e5d3963261f7a81311c7ccd8f7b2f2e4ef880"
+              }
+            ],
+            "hits": 22,
+            "misses": 0,
+            "requests": 22,
+            "retriever": "climbmix_bm25",
+            "type": "pyserini_remote",
+            "writes": 0
+          }
+        ],
+        "retrieval_root": "cache/retrieval/pyserini_remote"
+      }
+    },
+    "candidate": {
+      "artifact_schema_version": 2,
+      "backend_version": "5.6.0",
+      "candidate_depth": 50,
+      "chunk_max_characters": 3500,
+      "chunk_overlap_characters": 350,
+      "config": "configs/rag25_bm25_mixedbread_rerank_v1.yaml",
+      "config_sha256": "0150c5fe21e15cfac3b2513bd69214f202a4a9c02bb9f9f027e6b5afd37c1467",
+      "document_max_length": 32768,
+      "document_pair_buffer_tokens": 512,
+      "experiment_id": "rag25_bm25_mixedbread_rerank_v1",
+      "inference_dtype": "bfloat16",
+      "input_policy": "trec_rag_raw_v2",
+      "model": "mixedbread-ai/mxbai-rerank-base-v2",
+      "model_revision": "3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
+      "ranking": "coverage_aware_long_doc_aggregate",
+      "retrieval_hits": 1000,
+      "score_representation": "raw_logits",
+      "window_max_length": 1024
+    },
+    "candidate_id": "rag25_bm25_mixedbread_rerank_v1",
+    "candidate_pool_match": true,
+    "evaluation_kind": "dev_projected_qrels",
+    "generated_at": "2026-07-10T19:14:06.840675+00:00",
+    "qrels": "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels",
+    "qrels_sha256": "42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37",
+    "relevance_threshold": 2,
+    "topics": "trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv",
+    "topics_sha256": "dec2aa2e672dede15d46b255f66bccc41f3fa1688a3523d030b2f70ee6f54abf",
+    "unjudged_policy": "Documents absent from qrels receive grade 0."
+  },
+  "primary_metric_summary": {
+    "baseline": 0.4139611685119936,
+    "big_regression_threshold": -0.1,
+    "candidate": 0.5310079039149209,
+    "delta": 0.11704673540292732,
+    "metric": "ndcg@10",
+    "topic_counts": {
+      "big_regressions": 2,
+      "degraded": 4,
+      "improved": 18,
+      "tied": 0
+    },
+    "topic_delta_distribution": {
+      "max": 0.3966325313236927,
+      "median": 0.10401302278711555,
+      "min": -0.12382008547394385
+    }
+  },
+  "topic_count": 22,
+  "topics": [
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.010004547521600727,
+          "candidate": 0.01273306048203729,
+          "delta": 0.0027285129604365625,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.059572532969531605,
+          "candidate": 0.059572532969531605,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.5828025587391206,
+          "candidate": 0.5828025587391206,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.3553332720985301,
+          "candidate": 0.5574985130473844,
+          "delta": 0.2021652409488543,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.7,
+          "candidate": 1.0,
+          "delta": 0.30000000000000004,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.86,
+          "candidate": 0.86,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.010071942446043165,
+          "candidate": 0.014388489208633094,
+          "delta": 0.00431654676258993,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.1223021582733813,
+          "candidate": 0.1223021582733813,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.0618705035971223,
+          "candidate": 0.0618705035971223,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 7.0,
+          "candidate": 10.0,
+          "delta": 3.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 43.0,
+          "candidate": 43.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "14",
+      "topic_title": "I'm interested in sports societal impact particularly concerning athlete compensation inclusion cultural"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.011467889908256881,
+          "candidate": 0.012450851900393184,
+          "delta": 0.0009829619921363029,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.0563564875491481,
+          "candidate": 0.0563564875491481,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.8202566914396686,
+          "candidate": 0.8202566914396686,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.8478053202281971,
+          "candidate": 0.8408053145190638,
+          "delta": -0.0070000057091332835,
+          "status": "degraded"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.010810810810810811,
+          "candidate": 0.010810810810810811,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.10594594594594595,
+          "candidate": 0.10594594594594595,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.05405405405405406,
+          "candidate": 0.05405405405405406,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "degraded",
+      "topic_id": "31",
+      "topic_title": "I'm seeking to understand the environmental and health impacts of e-waste and"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.010501750291715286,
+          "candidate": 0.011279657720731234,
+          "delta": 0.0007779074290159473,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.049786075457020615,
+          "candidate": 0.049786075457020615,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.5476132057638449,
+          "candidate": 0.5476132057638449,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.6389817973551069,
+          "candidate": 0.6649017010626942,
+          "delta": 0.025919903707587344,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.8,
+          "candidate": 0.9,
+          "delta": 0.09999999999999998,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.88,
+          "candidate": 0.88,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.009673518742442563,
+          "candidate": 0.010882708585247884,
+          "delta": 0.0012091898428053215,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.10519951632406288,
+          "candidate": 0.10519951632406288,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.053204353083434096,
+          "candidate": 0.053204353083434096,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 8.0,
+          "candidate": 9.0,
+          "delta": 1.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 44.0,
+          "candidate": 44.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "37",
+      "topic_title": "I'm hoping to gain a deeper understanding of how family structures childhood"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.01708898055391868,
+          "candidate": 0.020035356511490868,
+          "delta": 0.0029463759575721893,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.07955215085444903,
+          "candidate": 0.07955215085444903,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.6186498789158178,
+          "candidate": 0.6186498789158178,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.5008083446148816,
+          "candidate": 0.7746739296722466,
+          "delta": 0.273865585057365,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.92,
+          "candidate": 0.92,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.01937984496124031,
+          "candidate": 0.01937984496124031,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.1821705426356589,
+          "candidate": 0.1821705426356589,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.08914728682170543,
+          "candidate": 0.08914728682170543,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 46.0,
+          "candidate": 46.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "58",
+      "topic_title": "I'm interested in nuclear energy's pros cons safety and accident risks like"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.008382815228781,
+          "candidate": 0.011526370939573873,
+          "delta": 0.0031435557107928735,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.04645476772616137,
+          "candidate": 0.04645476772616137,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.6033949938808157,
+          "candidate": 0.6033949938808157,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.3236594716627187,
+          "candidate": 0.7202920029864114,
+          "delta": 0.3966325313236927,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.9,
+          "candidate": 0.9,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.011098779134295227,
+          "candidate": 0.011098779134295227,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.10210876803551609,
+          "candidate": 0.10210876803551609,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.049944506104328525,
+          "candidate": 0.049944506104328525,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 45.0,
+          "candidate": 45.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "72",
+      "topic_title": "I want to understand why deforestation is such a major problem Specifically"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.012838147638697846,
+          "candidate": 0.016047684548372305,
+          "delta": 0.0032095369096744597,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.06464924346629987,
+          "candidate": 0.06464924346629987,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.6049610542960457,
+          "candidate": 0.6049610542960457,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.49180041527240637,
+          "candidate": 0.7831257173839652,
+          "delta": 0.2913253021115588,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.92,
+          "candidate": 0.92,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.014265335235378032,
+          "candidate": 0.014265335235378032,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.11412268188302425,
+          "candidate": 0.11412268188302425,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.06562054208273894,
+          "candidate": 0.06562054208273894,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 46.0,
+          "candidate": 46.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "84",
+      "topic_title": "I'm looking for detailed information about vaccines including their safety the causes"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.006715916722632639,
+          "candidate": 0.010073875083948958,
+          "delta": 0.003357958361316319,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.03290799194089993,
+          "candidate": 0.03290799194089993,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.1329994695672314,
+          "candidate": 0.1329994695672314,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.0886758432964747,
+          "candidate": 0.19924356580779418,
+          "delta": 0.11056772251131948,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.1,
+          "candidate": 0.4,
+          "delta": 0.30000000000000004,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.1,
+          "candidate": 0.1,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.0023752969121140144,
+          "candidate": 0.009501187648456057,
+          "delta": 0.007125890736342043,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.0332541567695962,
+          "candidate": 0.0332541567695962,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.011876484560570071,
+          "candidate": 0.011876484560570071,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 1.0,
+          "candidate": 4.0,
+          "delta": 3.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 5.0,
+          "candidate": 5.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "144",
+      "topic_title": "I'm seeking a comprehensive understanding of financial institutions specifically why banks like"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.013419713095788986,
+          "candidate": 0.013882461823229986,
+          "delta": 0.00046274872744100047,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.05923183711244794,
+          "candidate": 0.05923183711244794,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.574971701777365,
+          "candidate": 0.574971701777365,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.6663255610722455,
+          "candidate": 0.6969039271582186,
+          "delta": 0.030578366085973085,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.8,
+          "candidate": 0.8,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.86,
+          "candidate": 0.86,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.011644832605531296,
+          "candidate": 0.011644832605531296,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.12663755458515283,
+          "candidate": 0.12663755458515283,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.06259097525473072,
+          "candidate": 0.06259097525473072,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 8.0,
+          "candidate": 8.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 43.0,
+          "candidate": 43.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "161",
+      "topic_title": "I want to understand the main arguments surrounding abortion and why people"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.004383561643835616,
+          "candidate": 0.009315068493150684,
+          "delta": 0.004931506849315068,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.02684931506849315,
+          "candidate": 0.02684931506849315,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.25278885371363036,
+          "candidate": 0.25278885371363036,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.1400835882196266,
+          "candidate": 0.3869921618764073,
+          "delta": 0.24690857365678068,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.2,
+          "candidate": 0.5,
+          "delta": 0.3,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.3,
+          "candidate": 0.3,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.004048582995951417,
+          "candidate": 0.010121457489878543,
+          "delta": 0.006072874493927126,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.058704453441295545,
+          "candidate": 0.058704453441295545,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.030364372469635626,
+          "candidate": 0.030364372469635626,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 2.0,
+          "candidate": 5.0,
+          "delta": 3.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 15.0,
+          "candidate": 15.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "200",
+      "topic_title": "I want to deeply understand the Holocaust what it was why and"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.015037593984962405,
+          "candidate": 0.02631578947368421,
+          "delta": 0.011278195488721804,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.05263157894736842,
+          "candidate": 0.05263157894736842,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.2519300247728689,
+          "candidate": 0.2519300247728689,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.11215979380890685,
+          "candidate": 0.46832367247827766,
+          "delta": 0.3561638786693708,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.5,
+          "candidate": 0.6,
+          "delta": 0.09999999999999998,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.22,
+          "candidate": 0.22,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.028901734104046242,
+          "candidate": 0.03468208092485549,
+          "delta": 0.005780346820809246,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.09826589595375723,
+          "candidate": 0.09826589595375723,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.06358381502890173,
+          "candidate": 0.06358381502890173,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 5.0,
+          "candidate": 6.0,
+          "delta": 1.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 11.0,
+          "candidate": 11.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "213",
+      "topic_title": "I'm looking into the Korean War to learn about its origins how"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.011794871794871795,
+          "candidate": 0.011794871794871795,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "graded_recall@50": {
+          "baseline": 0.052307692307692305,
+          "candidate": 0.052307692307692305,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.4407219040834055,
+          "candidate": 0.4407219040834055,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.49335731559725,
+          "candidate": 0.405354335134365,
+          "delta": -0.08800298046288502,
+          "status": "degraded"
+        },
+        "precision@10": {
+          "baseline": 0.7,
+          "candidate": 0.7,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.64,
+          "candidate": 0.64,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.01206896551724138,
+          "candidate": 0.01206896551724138,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.1,
+          "candidate": 0.1,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.05517241379310345,
+          "candidate": 0.05517241379310345,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 7.0,
+          "candidate": 7.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 32.0,
+          "candidate": 32.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "degraded",
+      "topic_id": "219",
+      "topic_title": "I'm interested in understanding technology's societal impact exploring its positive and negative"
+    },
+    {
+      "is_big_regression": true,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.01639344262295082,
+          "candidate": 0.014988290398126464,
+          "delta": -0.0014051522248243568,
+          "status": "degraded"
+        },
+        "graded_recall@50": {
+          "baseline": 0.07119437939110071,
+          "candidate": 0.07119437939110071,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.6920174084712105,
+          "candidate": 0.6920174084712105,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.8164972118893085,
+          "candidate": 0.6926771264153646,
+          "delta": -0.12382008547394385,
+          "status": "degraded"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 0.9,
+          "delta": -0.09999999999999998,
+          "status": "degraded"
+        },
+        "precision@50": {
+          "baseline": 0.92,
+          "candidate": 0.92,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.015313935681470138,
+          "candidate": 0.013782542113323124,
+          "delta": -0.0015313935681470145,
+          "status": "degraded"
+        },
+        "recall@100": {
+          "baseline": 0.13476263399693722,
+          "candidate": 0.13476263399693722,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.07044410413476264,
+          "candidate": 0.07044410413476264,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 9.0,
+          "delta": -1.0,
+          "status": "degraded"
+        },
+        "relevant_count@50": {
+          "baseline": 46.0,
+          "candidate": 46.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "degraded",
+      "topic_id": "224",
+      "topic_title": "I want to understand why people immigrate or become refugees the challenges"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.012873025160912814,
+          "candidate": 0.011702750146284377,
+          "delta": -0.0011702750146284375,
+          "status": "degraded"
+        },
+        "graded_recall@50": {
+          "baseline": 0.0590988882387361,
+          "candidate": 0.0590988882387361,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.40127290036822655,
+          "candidate": 0.40127290036822655,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.2572640430261628,
+          "candidate": 0.2692174641786153,
+          "delta": 0.011953421152452515,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.9,
+          "candidate": 0.7,
+          "delta": -0.20000000000000007,
+          "status": "degraded"
+        },
+        "precision@50": {
+          "baseline": 0.76,
+          "candidate": 0.76,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.016216216216216217,
+          "candidate": 0.012612612612612612,
+          "delta": -0.003603603603603605,
+          "status": "degraded"
+        },
+        "recall@100": {
+          "baseline": 0.14234234234234233,
+          "candidate": 0.14234234234234233,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.06846846846846846,
+          "candidate": 0.06846846846846846,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 9.0,
+          "candidate": 7.0,
+          "delta": -2.0,
+          "status": "degraded"
+        },
+        "relevant_count@50": {
+          "baseline": 38.0,
+          "candidate": 38.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "225",
+      "topic_title": "I'm exploring how exposure to violent video games and gory content affects"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.011064479206409768,
+          "candidate": 0.011446012972148036,
+          "delta": 0.0003815337657382678,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.045784051888592144,
+          "candidate": 0.045784051888592144,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.53793178754907,
+          "candidate": 0.53793178754907,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.5438357471436231,
+          "candidate": 0.7164575782168117,
+          "delta": 0.17262183107318851,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.9,
+          "candidate": 0.9,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.8,
+          "candidate": 0.8,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.011435832274459974,
+          "candidate": 0.011435832274459974,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.08640406607369759,
+          "candidate": 0.08640406607369759,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.05082592121982211,
+          "candidate": 0.05082592121982211,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 9.0,
+          "candidate": 9.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 40.0,
+          "candidate": 40.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "233",
+      "topic_title": "I'm interested in learning how social media affects mental health particularly among"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.011339475549255847,
+          "candidate": 0.01630049610205528,
+          "delta": 0.004961020552799431,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.057406094968107724,
+          "candidate": 0.057406094968107724,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.4825551998539313,
+          "candidate": 0.4825551998539313,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.32232755593747364,
+          "candidate": 0.4197858790003853,
+          "delta": 0.09745832306291163,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.5,
+          "candidate": 0.7,
+          "delta": 0.19999999999999996,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.46,
+          "candidate": 0.46,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.015151515151515152,
+          "candidate": 0.021212121212121213,
+          "delta": 0.0060606060606060615,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.15151515151515152,
+          "candidate": 0.15151515151515152,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.0696969696969697,
+          "candidate": 0.0696969696969697,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 5.0,
+          "candidate": 7.0,
+          "delta": 2.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 23.0,
+          "candidate": 23.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "273",
+      "topic_title": "I want to understand why Africa despite its rich resources is often"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.011276499774470004,
+          "candidate": 0.012629679747406405,
+          "delta": 0.001353179972936401,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.05277401894451962,
+          "candidate": 0.05277401894451962,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.5052787884197153,
+          "candidate": 0.5052787884197153,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.35460161022185904,
+          "candidate": 0.47138600823112453,
+          "delta": 0.11678439800926549,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.9,
+          "candidate": 0.8,
+          "delta": -0.09999999999999998,
+          "status": "degraded"
+        },
+        "precision@50": {
+          "baseline": 0.74,
+          "candidate": 0.74,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.014173228346456693,
+          "candidate": 0.012598425196850394,
+          "delta": -0.0015748031496062992,
+          "status": "degraded"
+        },
+        "recall@100": {
+          "baseline": 0.11653543307086614,
+          "candidate": 0.11653543307086614,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.05826771653543307,
+          "candidate": 0.05826771653543307,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 9.0,
+          "candidate": 8.0,
+          "delta": -1.0,
+          "status": "degraded"
+        },
+        "relevant_count@50": {
+          "baseline": 37.0,
+          "candidate": 37.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "300",
+      "topic_title": "I'm interested in learning about effective strategies to prevent and reduce global"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.010014306151645207,
+          "candidate": 0.011444921316165951,
+          "delta": 0.001430615164520744,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.05078683834048641,
+          "candidate": 0.05078683834048641,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.422578187672676,
+          "candidate": 0.422578187672676,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.2786364164872879,
+          "candidate": 0.4539030660007579,
+          "delta": 0.17526664951347004,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.2,
+          "candidate": 0.3,
+          "delta": 0.09999999999999998,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.32,
+          "candidate": 0.32,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.006756756756756757,
+          "candidate": 0.010135135135135136,
+          "delta": 0.0033783783783783786,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.125,
+          "candidate": 0.125,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.05405405405405406,
+          "candidate": 0.05405405405405406,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 2.0,
+          "candidate": 3.0,
+          "delta": 1.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 16.0,
+          "candidate": 16.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "407",
+      "topic_title": "I'm curious why housing and rent prices have soared particularly in places"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.014582164890633763,
+          "candidate": 0.016264722378014584,
+          "delta": 0.001682557487380821,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.06001121704991587,
+          "candidate": 0.06001121704991587,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.48556737884324497,
+          "candidate": 0.48556737884324497,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.4559153326307294,
+          "candidate": 0.5223219106317071,
+          "delta": 0.06640657800097766,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.7,
+          "candidate": 0.9,
+          "delta": 0.20000000000000007,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.62,
+          "candidate": 0.62,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.013333333333333334,
+          "candidate": 0.017142857142857144,
+          "delta": 0.0038095238095238095,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.10095238095238095,
+          "candidate": 0.10095238095238095,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.05904761904761905,
+          "candidate": 0.05904761904761905,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 7.0,
+          "candidate": 9.0,
+          "delta": 2.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 31.0,
+          "candidate": 31.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "477",
+      "topic_title": "I'm trying to understand the concept of race how it's defined debated"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.016042780748663103,
+          "candidate": 0.015556635877491492,
+          "delta": -0.0004861448711716114,
+          "status": "degraded"
+        },
+        "graded_recall@50": {
+          "baseline": 0.06951871657754011,
+          "candidate": 0.06951871657754011,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.6880349338937115,
+          "candidate": 0.6880349338937115,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.6816109118659602,
+          "candidate": 0.7292917822080262,
+          "delta": 0.04768087034206592,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 0.9,
+          "delta": -0.09999999999999998,
+          "status": "degraded"
+        },
+        "precision@50": {
+          "baseline": 0.84,
+          "candidate": 0.84,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.016420361247947456,
+          "candidate": 0.014778325123152709,
+          "delta": -0.001642036124794747,
+          "status": "degraded"
+        },
+        "recall@100": {
+          "baseline": 0.13957307060755336,
+          "candidate": 0.13957307060755336,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.06896551724137931,
+          "candidate": 0.06896551724137931,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 9.0,
+          "delta": -1.0,
+          "status": "degraded"
+        },
+        "relevant_count@50": {
+          "baseline": 42.0,
+          "candidate": 42.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "499",
+      "topic_title": "I'm hoping to understand the arguments for and against legalizing euthanasia including"
+    },
+    {
+      "is_big_regression": true,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.006944444444444444,
+          "candidate": 0.004166666666666667,
+          "delta": -0.0027777777777777775,
+          "status": "degraded"
+        },
+        "graded_recall@50": {
+          "baseline": 0.027083333333333334,
+          "candidate": 0.027083333333333334,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.2982978860472572,
+          "candidate": 0.2982978860472572,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.2299254607424843,
+          "candidate": 0.11877988855028397,
+          "delta": -0.11114557219220032,
+          "status": "degraded"
+        },
+        "precision@10": {
+          "baseline": 0.1,
+          "candidate": 0.1,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.06,
+          "candidate": 0.06,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.0024154589371980675,
+          "candidate": 0.0024154589371980675,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.021739130434782608,
+          "candidate": 0.021739130434782608,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.007246376811594203,
+          "candidate": 0.007246376811594203,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 3.0,
+          "candidate": 3.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "degraded",
+      "topic_id": "515",
+      "topic_title": "I'm interested in learning why cancer rates are rising particularly among young"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.008205689277899343,
+          "candidate": 0.012035010940919038,
+          "delta": 0.003829321663019695,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.04649890590809628,
+          "candidate": 0.04649890590809628,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.4461330036928143,
+          "candidate": 0.4461330036928143,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.2026664541869443,
+          "candidate": 0.43877072085844726,
+          "delta": 0.23610426667150297,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 0.5,
+          "candidate": 0.7,
+          "delta": 0.19999999999999996,
+          "status": "improved"
+        },
+        "precision@50": {
+          "baseline": 0.52,
+          "candidate": 0.52,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.008532423208191127,
+          "candidate": 0.011945392491467578,
+          "delta": 0.003412969283276451,
+          "status": "improved"
+        },
+        "recall@100": {
+          "baseline": 0.08873720136518772,
+          "candidate": 0.08873720136518772,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.04436860068259386,
+          "candidate": 0.04436860068259386,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 5.0,
+          "candidate": 7.0,
+          "delta": 2.0,
+          "status": "improved"
+        },
+        "relevant_count@50": {
+          "baseline": 26.0,
+          "candidate": 26.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "707",
+      "topic_title": "I'm trying to understand the health risks and potential dangers of various"
+    },
+    {
+      "is_big_regression": false,
+      "metrics": {
+        "graded_recall@10": {
+          "baseline": 0.010767790262172285,
+          "candidate": 0.011704119850187267,
+          "delta": 0.0009363295880149818,
+          "status": "improved"
+        },
+        "graded_recall@50": {
+          "baseline": 0.04915730337078652,
+          "candidate": 0.04915730337078652,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "hit_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ideal_dcg_coverage@50": {
+          "baseline": 0.4785911281420176,
+          "candidate": 0.4785911281420176,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_count@50": {
+          "baseline": 50.0,
+          "candidate": 50.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "judged_rate@50": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "ndcg@10": {
+          "baseline": 0.3048742399056817,
+          "candidate": 0.35146762070990967,
+          "delta": 0.04659338080422798,
+          "status": "improved"
+        },
+        "precision@10": {
+          "baseline": 1.0,
+          "candidate": 1.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "precision@50": {
+          "baseline": 0.78,
+          "candidate": 0.78,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@10": {
+          "baseline": 0.01483679525222552,
+          "candidate": 0.01483679525222552,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@100": {
+          "baseline": 0.12166172106824925,
+          "candidate": 0.12166172106824925,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "recall@50": {
+          "baseline": 0.057863501483679525,
+          "candidate": 0.057863501483679525,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@10": {
+          "baseline": 10.0,
+          "candidate": 10.0,
+          "delta": 0.0,
+          "status": "tied"
+        },
+        "relevant_count@50": {
+          "baseline": 39.0,
+          "candidate": 39.0,
+          "delta": 0.0,
+          "status": "tied"
+        }
+      },
+      "primary_status": "improved",
+      "topic_id": "897",
+      "topic_title": "I'm trying to understand how alcohol use affects neighborhood quality of life"
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+experiment:
+  id: bm25_mixedbread_topic_regression_postmortem_v1
+  generated_at: '2026-07-10T19:18:28.884867+00:00'
+  description: Reproducible topic-level regression diagnosis with saved-score component
+    counterfactuals.
+scope:
+  split: development
+  topic_count: 22
+  candidate_depth: 50
+  metric_cutoff: 10
+  relevance_threshold: 2
+  focus_topics:
+  - '224'
+  - '515'
+  qrels_policy: Documents absent from qrels receive grade 0.
+  scored_candidate_count: 1100
+  judged_candidate_count: 1100
+  judged_candidate_rate: 1.0
+formula:
+  long_document_weight: 0.5
+  strongest_passage_weight: 0.5
+  coverage_bonus_weight: 0.25
+  relative_span_delta: 1.0
+  support_cap: 6
+  min_new_chars: 800
+  top_window_weights:
+  - 0.55
+  - 0.25
+  - 0.13
+  - 0.07
+runtime:
+  provider: Modal / CLOUD_PROVIDER_AWS / us-east-1
+  hardware: NVIDIA A100-SXM4-80GB
+  modal_cloud_provider: CLOUD_PROVIDER_AWS
+  modal_region: us-east-1
+  state: completed
+  is_completed_modal: true
+  model: mixedbread-ai/mxbai-rerank-base-v2
+  model_revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+  backend: sentence-transformers CrossEncoder
+  backend_version: 5.6.0
+  inference_dtype: bfloat16
+  score_representation: raw_logits
+  input_policy: trec_rag_raw_v2
+  artifact_schema_version: 2
+  runtime_status:
+    document_rows: 22000
+    document_sha256: bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1
+    elapsed_seconds: 3867.079414844513
+    error: null
+    gpu: NVIDIA A100-SXM4-80GB
+    input_sha256: ab0b224b31f167db161833d3c3820876ab22edf61d209bd2bcc6c5da513c3e66
+    modal_cloud_provider: CLOUD_PROVIDER_AWS
+    modal_region: us-east-1
+    modal_task_id: ta-01KX6GF1KER2JD8MWNQFCMDFPR
+    started_unix: 1783703785.978442
+    state: completed
+    torch_cuda_version: '12.8'
+    updated_unix: 1783707653.0578563
+    versions:
+      PyYAML: 6.0.3
+      huggingface-hub: 1.22.0
+      numpy: 2.5.1
+      safetensors: 0.8.0
+      semantic-text-splitter: 0.32.0
+      sentence-transformers: 5.6.0
+      tokenizers: 0.22.2
+      torch: 2.9.1
+      transformers: 5.13.0
+      zstandard: 0.25.0
+    window_rows: 227156
+    window_sha256: e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c
+  artifact_binding:
+    state: completed
+    volume_name: trec-rag-raw-logit-hits1000-20260710
+    artifact_sha256:
+      document: bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1
+      window: e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c
+warm_cache:
+  state: completed
+  verification_id: warm-cache-v2
+  app_name: trec-rag-rerank-score-cache-v2
+  volume_name: trec-rag-raw-logit-hits1000-20260710
+  source_status_sha256: 9e77e86d22a5ba1f07c32126fd9cfb72d3e231e7a725e895488b42e97f1c9ab8
+  score_cache_unchanged: true
+  semantic_equal_to_canonical: true
+  model_required:
+    document: false
+    window: false
+  model_scores:
+    document: 0
+    window: 0
+  zero_model_calls: true
+  document:
+    rows: 22000
+    topic_count: 22
+    all_rows_matched_modal_cache: true
+    regenerated_sha256: f9d7d5ba140d60cea0c62796cb38e36cb5be24f99f4eecffd6d6fc2eb290a9ad
+    canonical_sha256: bebc16f08e91bedd6d29900feb460943e66b1ba0188c89eabeaf6af63993f4a1
+  window:
+    rows: 227156
+    topic_count: 22
+    all_rows_matched_modal_cache: true
+    regenerated_sha256: bc255237b4bcaa30f89aef90df8fc47f53e68927978473c68415604d94bb56f1
+    canonical_sha256: e05cde296fd46766b89ccf71a59329571dc3c590cef41ae61bacf41734fa844c
+sources:
+  baseline_ranked:
+    path: outputs/rag25_bm25_full_query_v1/stage_ranked.jsonl
+    size_bytes: 700019491
+    sha256: e4f0cfb74dc0465d82d01efbcdc29ed2f33ab73b82c190bc4858a60d8522ac21
+  candidate_ranked:
+    path: outputs/rag25_bm25_mixedbread_rerank_v1/stage_ranked.jsonl
+    size_bytes: 702076752
+    sha256: bbcabd017bf0eac5aa070e2cc6518e4e1630892bd8b3f114bb7cca2424096c24
+  qrels:
+    path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+    size_bytes: 674306
+    sha256: 42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37
+  topics:
+    path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+    size_bytes: 6893
+    sha256: dec2aa2e672dede15d46b255f66bccc41f3fa1688a3523d030b2f70ee6f54abf
+  candidate_config:
+    path: configs/rag25_bm25_mixedbread_rerank_v1.yaml
+    size_bytes: 2661
+    sha256: 0150c5fe21e15cfac3b2513bd69214f202a4a9c02bb9f9f027e6b5afd37c1467
+  candidate_run_metadata:
+    path: outputs/rag25_bm25_mixedbread_rerank_v1/run_metadata.json
+    size_bytes: 7167
+    sha256: a58080a3c275ee1050c540dcdeb65bc61575f5b57dc2d935f2e3e748a447b771
+  artifact_manifest:
+    path: reports/experiments/bm25_mixedbread_config_comparison_v1/manifest.yaml
+    size_bytes: 4181
+    sha256: 1dc1fa24a4f9440d85e5916a74f6f69a505f702917e1301aa722cdf6d3559fd9
+  runtime_status:
+    path: reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_runtime_status.json
+    size_bytes: 980
+    sha256: 9e77e86d22a5ba1f07c32126fd9cfb72d3e231e7a725e895488b42e97f1c9ab8
+  warm_cache_status:
+    path: reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_warm_cache_verification.json
+    size_bytes: 4194
+    sha256: 84bebe88fc40f5c5b475db0f8e45d4759a914fb779b747d8619f99afea08bcc2
+  modal_cuda_vs_local_rocm_overlap:
+    path: reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_cuda_vs_local_rocm_overlap.json
+    size_bytes: 2017
+    sha256: 6099e32e9273c0564b6d3155e0ab90da3860356ecf0a50940c6bd8e03e3960b5
+  generator:
+    path: code/trec_rag/topic_regression_postmortem.py
+    size_bytes: 82459
+    sha256: 408778c9a9151b475ebd296b53e9e5ecd97411aec4d3ff796928a83ad30962c9
+outputs:
+  report: notes.md
+  metrics: metrics.json
+  counterfactuals: component_counterfactuals.csv
+  calibration: component_calibration.csv
+  grade_summary: component_grade_summary.csv
+  top10_movements: top10_movements.csv
+  runtime_overlap: modal_cuda_vs_local_rocm_overlap.json
+reproduce:
+  command: .venv/bin/python -m trec_rag.topic_regression_postmortem --runtime-status
+    reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_runtime_status.json
+    --warm-cache-status reports/experiments/bm25_mixedbread_topic_regression_postmortem_v1/modal_warm_cache_verification.json
+  modal_refresh_rule: After replacing score artifacts, rerun both pipeline configs
+    and this generator; do not carry forward conclusions from prior artifacts.
+diagnostic_rule:
+  aggregation_sensitive: At least one document, passage, or no-coverage saved-score
+    ranking reaches BM25 nDCG@10 while shipped does not.
+  model_signal_limited: None of those saved-score rankings reaches BM25 nDCG@10.
+  claim_boundary: Labels describe controlled counterfactuals in this run and are not
+    causal or test-set generalization claims.
