@@ -5,6 +5,7 @@
 .env
 tmp/
 outputs/
+cache/
 node_modules/
 __pycache__/
 *.pyc

@@ -698,7 +698,9 @@ def test_pipeline_cache_dir_uses_shared_checkout_root_for_linked_worktree(tmp_pa
     (worktree / "AGENTS.md").write_text("# instructions\n", encoding="utf-8")
     (worktree / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
 
-    assert pipeline_cache_dir(worktree, "demo") == shared / "outputs" / "demo" / "cache"
+    assert pipeline_cache_dir(worktree, "demo") == (
+        shared / "cache" / "retrieval" / "pyserini_remote"
+    )
 
 
 def test_run_pipeline_writes_stage_outputs_with_fake_retriever(tmp_path):
@@ -768,7 +770,7 @@ evaluation:
     )
 
     assert result.output_dir == tmp_path / "outputs" / "rag25_fake_v1"
-    assert result.cache_dir == tmp_path / "outputs" / "rag25_fake_v1" / "cache"
+    assert result.cache_dir == tmp_path / "cache" / "retrieval" / "pyserini_remote"
     assert cache_dirs == [result.cache_dir]
     assert (result.output_dir / "r_output_trec_rag_2026.tsv").read_text(
         encoding="utf-8"

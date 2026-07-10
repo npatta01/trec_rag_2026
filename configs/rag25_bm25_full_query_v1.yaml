@@ -17,7 +17,7 @@ retrievers:
   - name: climbmix_bm25
     type: pyserini_remote
     query_variants: [original]
-    hits: 100
+    hits: 1000
     index: climbmix-400b
     cache: true
 
