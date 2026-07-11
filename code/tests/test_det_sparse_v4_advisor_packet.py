@@ -54,6 +54,11 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "actual live post-dispatch run still pending" in text
     assert "canonical live-attestation bundle sealing" in text
     assert "advisor dispatch-GO binding,\nfile-backed advisor-GO review CLI" in text
+    assert "semantic_anchor_manual_runner_invocation_v1" in text
+    assert "semantic_anchor_manual_runner_invocation_review_v1" in text
+    assert "--validate-manual-runner-invocation" in text
+    assert "--manual-runner-invocation path/to/manual-runner-invocation.json" in text
+    assert "does not create a\nnetwork client, invoke a transport, or dispatch the model" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "accepts only canonical sealed synthetic responses" in text
@@ -70,6 +75,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
     assert "advisor dispatch-GO binding" in text
     assert "file-backed advisor-GO review CLI" in text
+    assert "file-backed manual runner invocation review" in text
     assert "runner replay CLI modes" in text
     assert "completed replay mutation coverage" in text
     assert "runner-visible artifact hashes without opening scorer-only gold" in text
@@ -79,7 +85,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "actual live model invocation remains closed" in text
     assert "canonical sealed scorer input" in text
     assert "ledger-bound scorer-only" in text
-    assert "`175 passed`." in text
+    assert "`177 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

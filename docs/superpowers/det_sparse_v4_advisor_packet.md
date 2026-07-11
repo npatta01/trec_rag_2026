@@ -162,6 +162,25 @@ The file-backed CLI path is:
 It requires the advisor GO receipt to be canonical JSON bytes, writes the review
 create-only, and still does not invoke the runner.
 
+The final manual runner invocation gate is also file-backed before any transport
+is created. The receipt must use `semantic_anchor_manual_runner_invocation_v1`,
+bind both the live-attestation review SHA-256 and the advisor-dispatch-GO review
+SHA-256, keep `egress_allowed=false` and `external_cost_authorized=false`, name
+the `injected_local_loopback` transport kind, and explicitly set local-only
+`inference_authorized=true` plus `dispatch_authorized=true`. The review command
+validates the canonical receipt and emits
+`semantic_anchor_manual_runner_invocation_review_v1`; it still does not create a
+network client, invoke a transport, or dispatch the model:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_runner \
+  --validate-manual-runner-invocation \
+  --live-attestation-review path/to/live-attestation-review.json \
+  --advisor-dispatch-go-review path/to/advisor-go-review.json \
+  --manual-runner-invocation path/to/manual-runner-invocation.json \
+  --output path/to/manual-runner-invocation-review.json
+```
+
 Sealed synthetic responses are scored only after run-directory replay proves
 all 24 raw responses are committed. The offline completed-run replay verifier
 already exercises that boundary on a sealed synthetic run directory; an actual
@@ -227,14 +246,15 @@ validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, captured-bundle
 review, canonical live-attestation bundle sealing, advisor dispatch-GO binding,
-file-backed advisor-GO review CLI, pre-dispatch run-directory replay, offline
-completed synthetic run-directory replay, runner replay CLI modes,
+file-backed advisor-GO review CLI, file-backed manual runner invocation review,
+pre-dispatch run-directory replay, offline completed synthetic run-directory replay,
+runner replay CLI modes,
 completed replay mutation coverage, runner-visible artifact hashing without
 scorer-only gold opens, reviewed fake-transport dispatch implementation,
 failed-transport terminal sealing, canonical sealed scorer input,
 ledger-bound scorer-only sealed-response review, and reviewer qualification
 terminal-state mapping:
-`175 passed`.
+`177 passed`.
 
 ## What is not yet proven
 

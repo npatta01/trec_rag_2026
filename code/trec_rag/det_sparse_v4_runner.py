@@ -68,6 +68,11 @@ MANUAL_RUNNER_INVOCATION_SCHEMA_VERSION = "semantic_anchor_manual_runner_invocat
 MANUAL_RUNNER_INVOCATION_STATUS = "manual_runner_invocation_go"
 MANUAL_RUNNER_INVOCATION_SCOPE = "det_sparse_v4_synthetic_local_dispatch"
 MANUAL_RUNNER_TRANSPORT_KIND = "injected_local_loopback"
+MANUAL_RUNNER_INVOCATION_REVIEW_SCHEMA_VERSION = (
+    "semantic_anchor_manual_runner_invocation_review_v1"
+)
+MANUAL_RUNNER_INVOCATION_REVIEW_STATUS = "manual_runner_invocation_review_pass"
+MANUAL_RUNNER_INVOCATION_NEXT_GATE = "invoke_injected_local_transport"
 
 
 def build_pre_dispatch_no_go_run(
@@ -242,7 +247,10 @@ def build_synthetic_dispatch_run(
     live_review_sha256 = contract.sha256_bytes(
         preflight.canonical_report_bytes(live_attestation_review)
     )
-    if advisor_dispatch_go_review.get("live_attestation_review_sha256") != live_review_sha256:
+    if (
+        advisor_dispatch_go_review.get("live_attestation_review_sha256")
+        != live_review_sha256
+    ):
         raise ValueError("advisor dispatch GO review is not bound to live attestation review")
     advisor_review_sha256 = contract.sha256_bytes(
         preflight.canonical_report_bytes(advisor_dispatch_go_review)
@@ -577,6 +585,174 @@ def validate_manual_runner_invocation(
         raise ValueError("manual runner invocation must authorize local dispatch")
     if not isinstance(receipt.get("approved_by"), str) or not receipt.get("approved_by"):
         raise ValueError("manual runner invocation approved_by must be nonempty")
+
+
+def build_manual_runner_invocation_review(
+    *,
+    live_attestation_review: Mapping[str, object],
+    advisor_dispatch_go_review: Mapping[str, object],
+    manual_runner_invocation: Mapping[str, object],
+) -> dict[str, object]:
+    """Validate the final file-backed manual invocation gate without dispatching."""
+
+    preflight.validate_live_attestation_review(live_attestation_review)
+    preflight.validate_advisor_dispatch_go_review(advisor_dispatch_go_review)
+    live_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_attestation_review)
+    )
+    if advisor_dispatch_go_review.get("live_attestation_review_sha256") != live_review_sha256:
+        raise ValueError("advisor dispatch GO review is not bound to live attestation review")
+    advisor_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(advisor_dispatch_go_review)
+    )
+    validate_manual_runner_invocation(
+        manual_runner_invocation,
+        live_attestation_review_sha256=live_review_sha256,
+        advisor_dispatch_go_review_sha256=advisor_review_sha256,
+    )
+    review = {
+        "schema_version": MANUAL_RUNNER_INVOCATION_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": MANUAL_RUNNER_INVOCATION_REVIEW_STATUS,
+        "live_attestation_review_sha256": live_review_sha256,
+        "advisor_dispatch_go_review_sha256": advisor_review_sha256,
+        "manual_runner_invocation_sha256": contract.sha256_bytes(
+            contract.canonical_json_bytes(manual_runner_invocation)
+        ),
+        "approved_by": manual_runner_invocation["approved_by"],
+        "approval_scope": manual_runner_invocation["approval_scope"],
+        "transport_kind": manual_runner_invocation["transport_kind"],
+        "egress_allowed": False,
+        "external_cost_authorized": False,
+        "inference_authorized": True,
+        "dispatch_authorized": True,
+        "next_gate": MANUAL_RUNNER_INVOCATION_NEXT_GATE,
+    }
+    validate_manual_runner_invocation_review(review)
+    return review
+
+
+def build_manual_runner_invocation_review_from_files(
+    *,
+    live_attestation_review_path: Path,
+    advisor_dispatch_go_review_path: Path,
+    manual_runner_invocation_path: Path,
+) -> dict[str, object]:
+    """Validate file-backed manual runner invocation without creating transport."""
+
+    live_review_file = live_attestation_review_path.resolve()
+    advisor_review_file = advisor_dispatch_go_review_path.resolve()
+    invocation_file = manual_runner_invocation_path.resolve()
+    live_attestation_review = _require_mapping(
+        contract.load_json_no_duplicates(live_review_file),
+        "live attestation review",
+    )
+    advisor_dispatch_go_review = _require_mapping(
+        contract.load_json_no_duplicates(advisor_review_file),
+        "advisor dispatch GO review",
+    )
+    manual_runner_invocation = _require_mapping(
+        contract.load_json_no_duplicates(invocation_file),
+        "manual runner invocation",
+    )
+    if invocation_file.read_bytes() != (
+        contract.canonical_json_bytes(manual_runner_invocation) + b"\n"
+    ):
+        raise ValueError("manual runner invocation is not canonical JSON bytes")
+    review = build_manual_runner_invocation_review(
+        live_attestation_review=live_attestation_review,
+        advisor_dispatch_go_review=advisor_dispatch_go_review,
+        manual_runner_invocation=manual_runner_invocation,
+    )
+    review["live_attestation_review_path"] = str(live_review_file)
+    review["advisor_dispatch_go_review_path"] = str(advisor_review_file)
+    review["manual_runner_invocation_path"] = str(invocation_file)
+    review["manual_runner_invocation_canonical"] = True
+    validate_manual_runner_invocation_review(review)
+    return review
+
+
+def validate_manual_runner_invocation_review(review: Mapping[str, object]) -> None:
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "live_attestation_review_sha256",
+        "advisor_dispatch_go_review_sha256",
+        "manual_runner_invocation_sha256",
+        "approved_by",
+        "approval_scope",
+        "transport_kind",
+        "egress_allowed",
+        "external_cost_authorized",
+        "inference_authorized",
+        "dispatch_authorized",
+        "next_gate",
+    }
+    file_backed_keys = {
+        "live_attestation_review_path",
+        "advisor_dispatch_go_review_path",
+        "manual_runner_invocation_path",
+        "manual_runner_invocation_canonical",
+    }
+    actual_keys = set(review)
+    if actual_keys != expected_keys and actual_keys != expected_keys.union(
+        file_backed_keys
+    ):
+        raise ValueError(
+            "manual runner invocation review keys mismatch: "
+            f"missing={expected_keys - actual_keys} "
+            f"extra={actual_keys - expected_keys - file_backed_keys}"
+        )
+    if review.get("schema_version") != MANUAL_RUNNER_INVOCATION_REVIEW_SCHEMA_VERSION:
+        raise ValueError("manual runner invocation review schema_version mismatch")
+    if review.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("manual runner invocation review experiment_id mismatch")
+    if review.get("status") != MANUAL_RUNNER_INVOCATION_REVIEW_STATUS:
+        raise ValueError("manual runner invocation review status mismatch")
+    for key in (
+        "live_attestation_review_sha256",
+        "advisor_dispatch_go_review_sha256",
+        "manual_runner_invocation_sha256",
+    ):
+        value = review.get(key)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or not all(character in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"manual runner invocation review {key} must be sha256")
+    if review.get("approval_scope") != MANUAL_RUNNER_INVOCATION_SCOPE:
+        raise ValueError("manual runner invocation review approval scope mismatch")
+    if review.get("transport_kind") != MANUAL_RUNNER_TRANSPORT_KIND:
+        raise ValueError("manual runner invocation review transport kind mismatch")
+    if not isinstance(review.get("approved_by"), str) or not review.get("approved_by"):
+        raise ValueError("manual runner invocation review approved_by must be nonempty")
+    if review.get("egress_allowed") is not False:
+        raise ValueError("manual runner invocation review must keep egress closed")
+    if review.get("external_cost_authorized") is not False:
+        raise ValueError(
+            "manual runner invocation review must not authorize external cost"
+        )
+    if review.get("inference_authorized") is not True:
+        raise ValueError("manual runner invocation review must authorize local inference")
+    if review.get("dispatch_authorized") is not True:
+        raise ValueError("manual runner invocation review must authorize local dispatch")
+    if review.get("next_gate") != MANUAL_RUNNER_INVOCATION_NEXT_GATE:
+        raise ValueError("manual runner invocation review next_gate mismatch")
+    if "manual_runner_invocation_canonical" in review and review.get(
+        "manual_runner_invocation_canonical"
+    ) is not True:
+        raise ValueError("manual runner invocation must be canonical")
+    for key in (
+        "live_attestation_review_path",
+        "advisor_dispatch_go_review_path",
+        "manual_runner_invocation_path",
+    ):
+        if key in review and (
+            not isinstance(review.get(key), str) or not review.get(key)
+        ):
+            raise ValueError(f"manual runner invocation review {key} must be nonempty")
 
 
 def replay_completed_synthetic_run(
@@ -922,7 +1098,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "without model dispatch."
         )
     )
-    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("output_dir", type=Path, nargs="?")
     parser.add_argument("--artifact-dir", type=Path, default=contract.ARTIFACT_DIR)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -938,12 +1114,65 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "validate its scorer input without opening gold."
         ),
     )
+    mode.add_argument(
+        "--validate-manual-runner-invocation",
+        action="store_true",
+        help=(
+            "Validate the final manual runner invocation receipt and write a "
+            "review without creating a transport or dispatching."
+        ),
+    )
+    parser.add_argument(
+        "--live-attestation-review",
+        type=Path,
+        help="Live-attestation review JSON for manual invocation validation.",
+    )
+    parser.add_argument(
+        "--advisor-dispatch-go-review",
+        type=Path,
+        help="Advisor dispatch-GO review JSON for manual invocation validation.",
+    )
+    parser.add_argument(
+        "--manual-runner-invocation",
+        type=Path,
+        help="Canonical manual runner invocation receipt JSON.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Create-only output path for manual invocation review JSON.",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    if args.replay_pre_dispatch_no_go:
+    if args.validate_manual_runner_invocation:
+        if args.output_dir is not None:
+            raise ValueError(
+                "--validate-manual-runner-invocation does not take output_dir"
+            )
+        if not (
+            args.live_attestation_review
+            and args.advisor_dispatch_go_review
+            and args.manual_runner_invocation
+            and args.output
+        ):
+            raise ValueError(
+                "--validate-manual-runner-invocation requires "
+                "--live-attestation-review, --advisor-dispatch-go-review, "
+                "--manual-runner-invocation, and --output"
+            )
+        review = build_manual_runner_invocation_review_from_files(
+            live_attestation_review_path=args.live_attestation_review,
+            advisor_dispatch_go_review_path=args.advisor_dispatch_go_review,
+            manual_runner_invocation_path=args.manual_runner_invocation,
+        )
+        _create_only(args.output, contract.canonical_json_bytes(review) + b"\n")
+        print(f"Wrote v4 manual runner invocation review to {args.output.resolve()}")
+    elif args.replay_pre_dispatch_no_go:
+        if args.output_dir is None:
+            raise ValueError("--replay-pre-dispatch-no-go requires output_dir")
         result = replay_pre_dispatch_no_go_run(
             args.output_dir,
             artifact_dir=args.artifact_dir,
@@ -953,6 +1182,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{result.output_dir}: reservations={len(result.reservation_paths)}"
         )
     elif args.replay_completed_synthetic:
+        if args.output_dir is None:
+            raise ValueError("--replay-completed-synthetic requires output_dir")
         result = replay_completed_synthetic_run(
             args.output_dir,
             artifact_dir=args.artifact_dir,
@@ -964,6 +1195,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"raw_responses={len(result.raw_response_paths)}"
         )
     else:
+        if args.output_dir is None:
+            raise ValueError("output_dir is required")
         result = build_pre_dispatch_no_go_run(
             args.output_dir,
             artifact_dir=args.artifact_dir,

@@ -351,6 +351,118 @@ def test_synthetic_dispatch_run_requires_manual_invocation_before_transport(
     assert not output_dir.exists()
 
 
+def test_manual_runner_invocation_review_cli_validates_file_backed_gate(
+    tmp_path: Path,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    live_review_path = tmp_path / "live-attestation-review.json"
+    advisor_review_path = tmp_path / "advisor-dispatch-go-review.json"
+    invocation_path = tmp_path / "manual-runner-invocation.json"
+    output_path = tmp_path / "manual-runner-invocation-review.json"
+    live_review_path.write_bytes(
+        contract.canonical_json_bytes(live_review) + b"\n"
+    )
+    advisor_review_path.write_bytes(
+        contract.canonical_json_bytes(advisor_review) + b"\n"
+    )
+    invocation_path.write_bytes(
+        contract.canonical_json_bytes(manual_invocation) + b"\n"
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_runner",
+            "--validate-manual-runner-invocation",
+            "--live-attestation-review",
+            str(live_review_path),
+            "--advisor-dispatch-go-review",
+            str(advisor_review_path),
+            "--manual-runner-invocation",
+            str(invocation_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    assert "Wrote v4 manual runner invocation review" in completed.stdout
+    review = json.loads(output_path.read_text(encoding="utf-8"))
+    assert review["schema_version"] == (
+        "semantic_anchor_manual_runner_invocation_review_v1"
+    )
+    assert review["status"] == "manual_runner_invocation_review_pass"
+    assert review["live_attestation_review_sha256"] == contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_review)
+    )
+    assert review["advisor_dispatch_go_review_sha256"] == contract.sha256_bytes(
+        preflight.canonical_report_bytes(advisor_review)
+    )
+    assert review["manual_runner_invocation_sha256"] == contract.sha256_bytes(
+        contract.canonical_json_bytes(manual_invocation)
+    )
+    assert review["transport_kind"] == "injected_local_loopback"
+    assert review["egress_allowed"] is False
+    assert review["external_cost_authorized"] is False
+    assert review["inference_authorized"] is True
+    assert review["dispatch_authorized"] is True
+    assert review["next_gate"] == "invoke_injected_local_transport"
+    assert review["manual_runner_invocation_canonical"] is True
+    runner.validate_manual_runner_invocation_review(review)
+    assert output_path.read_bytes() == contract.canonical_json_bytes(review) + b"\n"
+
+
+def test_manual_runner_invocation_review_rejects_noncanonical_receipt(
+    tmp_path: Path,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    live_review_path = tmp_path / "live-attestation-review.json"
+    advisor_review_path = tmp_path / "advisor-dispatch-go-review.json"
+    invocation_path = tmp_path / "manual-runner-invocation.json"
+    output_path = tmp_path / "manual-runner-invocation-review.json"
+    live_review_path.write_bytes(
+        contract.canonical_json_bytes(live_review) + b"\n"
+    )
+    advisor_review_path.write_bytes(
+        contract.canonical_json_bytes(advisor_review) + b"\n"
+    )
+    invocation_path.write_text(
+        json.dumps(manual_invocation, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_runner",
+            "--validate-manual-runner-invocation",
+            "--live-attestation-review",
+            str(live_review_path),
+            "--advisor-dispatch-go-review",
+            str(advisor_review_path),
+            "--manual-runner-invocation",
+            str(invocation_path),
+            "--output",
+            str(output_path),
+        ],
+        check=False,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode != 0
+    assert "manual runner invocation is not canonical JSON bytes" in completed.stderr
+    assert not output_path.exists()
+
+
 def test_synthetic_dispatch_run_seals_transport_no_body_no_go_on_bad_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
