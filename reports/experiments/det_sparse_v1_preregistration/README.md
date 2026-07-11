@@ -2,9 +2,48 @@
 
 Date: 2026-07-11
 
-Status: advisor-approved for a clean-tree, analyzer-only offline preflight.
-External retrieval remains blocked and no retrieval, model, reranker, or paid
-API call was made while producing this record.
+Status: sealed offline preflight is mechanically valid but received a
+post-preflight **scientific NO-GO**. The arm is retired without retrieval.
+No qrels, retrieval, model, reranker, or paid API call was made while producing
+or reviewing this record.
+
+## Post-preflight archive review
+
+The canonical preflight was created from clean commit
+`dcfcb2dd8ed11f519f53a791bf27690ac158198a` and tree
+`fe230fb771851f44fc4cf23f87dc92cd2d098795`. Its freeze SHA-256 is
+`22a2008b630833268b5c1463504d5186b4c9c5292eaf3d6480eabaf7ee74bf29`.
+All four plan files are hash-valid and mechanically `ok`, with no fallback,
+11 base unique requests, a derived maximum of 21 requests, and zero external,
+model, or reranker calls. The qrels-opened flag is false.
+
+Exact query-shape review then exposed a scientific admission failure:
+
+- Topic `225` facet `f02` is byte-identical to the original query.
+- Topic `707` facet `f02` is byte-identical to the original query.
+- Topic `897` facet `f02` is byte-identical to the original query.
+
+For those two-unit narratives, rendering the child as `P + u002` reconstructs
+the original. Canonical alias dedup works correctly, but the only genuinely new
+facet stream is the first-unit prefix; there is no child-specific PRF stream.
+Only topic `200` exercises substantive multi-facet retrieval and expansion, so
+this four-topic arm cannot answer the intended decomposition-plus-expansion
+question.
+
+Topic `200` also clarifies an ambiguity in the frozen prose. The parent-only
+`P` facet is a pre-merge seed, not a final invariant: the unrestricted
+adjacent-min cap merge absorbed `u002` through `u004` into final `f01`. That is
+consistent with the executable merge rule and audit but inconsistent with a
+literal reading that final `f01` always equals only `P`. Because `f01` then
+contains substantive units, the prose rationale for excluding it from PRF is
+also incomplete; exclusion is the frozen policy/cost choice, not proof that it
+is parent-only.
+
+The archive is preserved as evidence that exact-span/mechanical validity is not
+sufficient for useful decomposition. It must not be used for retrieval, and it
+must not be repaired in place. Any continuation requires a new version, fresh
+topics, an analyzer-distinct-from-original facet admission rule, a coverage-unit
+non-original-path invariant, and an unambiguous parent-merge policy.
 
 ## Question and interpretation boundary
 
@@ -59,7 +98,8 @@ authorization.
 - Live pinned localhost Lucene sidecar: 11 passed.
 - Python compilation: passed.
 - `git diff --check`: passed.
-- Independent IR advisor: GO to commit and run only the offline preflight.
+- Independent IR advisor: GO to commit and run only the offline preflight;
+  post-preflight semantic review changed the retrieval verdict to NO-GO.
 - External retrieval: NO-GO by design.
 
 The canonical offline preflight is run only after this source is committed so
