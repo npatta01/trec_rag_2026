@@ -36,6 +36,10 @@ LOCAL_EVIDENCE_CAPTURE_REVIEW_SCHEMA_VERSION = (
     "semantic_anchor_local_evidence_capture_approval_review_v1"
 )
 LOCAL_EVIDENCE_CAPTURE_REVIEW_STATUS = "local_evidence_capture_approval_review_pass"
+SNAPSHOT_SYMLINK_LAYOUT_REVIEW_SCHEMA_VERSION = (
+    "semantic_anchor_snapshot_symlink_layout_review_v1"
+)
+SNAPSHOT_SYMLINK_LAYOUT_REVIEW_STATUS = "snapshot_symlink_layout_review_pass"
 OFFSET_PARITY_REVIEW_SCHEMA_VERSION = "semantic_anchor_offset_parity_review_v1"
 OFFSET_PARITY_REVIEW_STATUS = "offset_parity_review_pass"
 NEXT_GATE = "advisor_review_before_live_attestation_or_model_inference"
@@ -43,6 +47,9 @@ OFFSET_PARITY_NEXT_GATE = "live_model_inventory_and_compiler_attestation"
 LIVE_ATTESTATION_NEXT_GATE = "advisor_go_before_model_dispatch"
 ADVISOR_DISPATCH_GO_NEXT_GATE = "manual_runner_invocation_still_required"
 LOCAL_EVIDENCE_CAPTURE_NEXT_GATE = "run_local_evidence_capture_without_dispatch"
+SNAPSHOT_SYMLINK_LAYOUT_NEXT_GATE = (
+    "advisor_review_before_symlink_target_hashing_or_inventory_contract_update"
+)
 UNTOUCHED_TOPIC_APPROVAL_NEXT_GATE = "design_versioned_untouched_topic_confirmation_set"
 ADVISOR_CLOSED_GATES_ACK_KEY = (
     "acknowledged_no_topic_q" + "rels_retrieval_rerank_or_paid_calls"
@@ -873,8 +880,91 @@ def build_model_inventory_attestation_from_snapshot(
     return inventory
 
 
+def build_snapshot_symlink_layout_review(snapshot_path: Path) -> dict[str, object]:
+    """Inspect snapshot symlink layout without following or hashing targets."""
+
+    snapshot = snapshot_path.resolve()
+    if not snapshot.is_dir():
+        raise ValueError("snapshot symlink layout path must be an existing directory")
+    if (
+        snapshot.name != contract.EXPECTED_MODEL_REVISION
+        or snapshot.parent.name != "snapshots"
+    ):
+        raise ValueError("snapshot symlink layout path must bind expected revision")
+    blob_root = snapshot.parent.parent / "blobs"
+    symlink_paths = sorted(path for path in snapshot.rglob("*") if path.is_symlink())
+    regular_file_paths = sorted(
+        path for path in snapshot.rglob("*") if not path.is_symlink() and path.is_file()
+    )
+    if not symlink_paths:
+        raise ValueError("snapshot symlink layout review requires symlinks")
+
+    symlink_targets: dict[str, str] = {}
+    resolved_targets: dict[str, str] = {}
+    target_scope_issues: dict[str, str] = {}
+    for path in symlink_paths:
+        relative = _relative_snapshot_path(snapshot, path)
+        raw_target = os.readlink(path)
+        symlink_targets[relative] = raw_target
+        resolved = _lexical_absolute_path(path.parent / raw_target)
+        resolved_targets[relative] = str(resolved)
+        if not _path_is_relative_to(resolved, blob_root):
+            target_scope_issues[relative] = str(resolved)
+
+    observed_weight_files = sorted(
+        relative
+        for relative in symlink_targets
+        if relative.endswith(MODEL_INVENTORY_FILE_SUFFIX)
+    )
+    review = {
+        "schema_version": SNAPSHOT_SYMLINK_LAYOUT_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": SNAPSHOT_SYMLINK_LAYOUT_REVIEW_STATUS,
+        "repository": contract.EXPECTED_MODEL_REPOSITORY,
+        "revision": contract.EXPECTED_MODEL_REVISION,
+        "snapshot_path": str(snapshot),
+        "blob_root": str(blob_root.resolve()),
+        "symlink_count": len(symlink_paths),
+        "regular_file_count": len(regular_file_paths),
+        "symlink_targets": symlink_targets,
+        "resolved_targets": resolved_targets,
+        "target_scope_issues": target_scope_issues,
+        "all_targets_within_blob_root": not target_scope_issues,
+        "expected_loaded_shards": list(MODEL_INVENTORY_EXPECTED_SHARDS),
+        "observed_weight_files": observed_weight_files,
+        "expected_original_full_weight": MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT,
+        "original_full_weight_present": (
+            MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT in symlink_targets
+        ),
+        "inventory_contract_compatible": (
+            observed_weight_files
+            == sorted(
+                list(MODEL_INVENTORY_EXPECTED_SHARDS)
+                + [MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT]
+            )
+        ),
+        "blob_hashing_authorized": False,
+        "model_loading_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+        "next_gate": SNAPSHOT_SYMLINK_LAYOUT_NEXT_GATE,
+    }
+    validate_snapshot_symlink_layout_review(review)
+    return review
+
+
 def _relative_snapshot_path(snapshot: Path, path: Path) -> str:
     return path.relative_to(snapshot).as_posix()
+
+
+def _lexical_absolute_path(path: Path) -> Path:
+    return Path(os.path.abspath(os.path.normpath(os.fspath(path))))
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    absolute_path = _lexical_absolute_path(path)
+    absolute_parent = _lexical_absolute_path(parent)
+    return absolute_path == absolute_parent or absolute_parent in absolute_path.parents
 
 
 def _validate_capture_sha256(value: object, relative_path: str) -> str:
@@ -1581,6 +1671,109 @@ def validate_local_evidence_capture_approval_review(
         raise ValueError("local evidence capture approval review next_gate mismatch")
 
 
+def validate_snapshot_symlink_layout_review(report: Mapping[str, object]) -> None:
+    """Validate a symlink-layout policy review that still forbids hashing."""
+
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "repository",
+        "revision",
+        "snapshot_path",
+        "blob_root",
+        "symlink_count",
+        "regular_file_count",
+        "symlink_targets",
+        "resolved_targets",
+        "target_scope_issues",
+        "all_targets_within_blob_root",
+        "expected_loaded_shards",
+        "observed_weight_files",
+        "expected_original_full_weight",
+        "original_full_weight_present",
+        "inventory_contract_compatible",
+        "blob_hashing_authorized",
+        "model_loading_authorized",
+        "dispatch_authorized",
+        "external_cost_authorized",
+        "next_gate",
+    }
+    actual_keys = set(report)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "snapshot symlink layout review keys mismatch: "
+            f"missing={expected_keys - actual_keys} extra={actual_keys - expected_keys}"
+        )
+    if report.get("schema_version") != SNAPSHOT_SYMLINK_LAYOUT_REVIEW_SCHEMA_VERSION:
+        raise ValueError("snapshot symlink layout review schema_version mismatch")
+    if report.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("snapshot symlink layout review experiment_id mismatch")
+    if report.get("status") != SNAPSHOT_SYMLINK_LAYOUT_REVIEW_STATUS:
+        raise ValueError("snapshot symlink layout review status mismatch")
+    if report.get("repository") != contract.EXPECTED_MODEL_REPOSITORY:
+        raise ValueError("snapshot symlink layout review repository mismatch")
+    if report.get("revision") != contract.EXPECTED_MODEL_REVISION:
+        raise ValueError("snapshot symlink layout review revision mismatch")
+    for key in ("snapshot_path", "blob_root"):
+        if not isinstance(report.get(key), str) or not report.get(key):
+            raise ValueError(f"snapshot symlink layout review {key} must be nonempty")
+    symlink_count = report.get("symlink_count")
+    if not isinstance(symlink_count, int) or symlink_count <= 0:
+        raise ValueError("snapshot symlink layout review symlink_count must be positive")
+    regular_file_count = report.get("regular_file_count")
+    if not isinstance(regular_file_count, int) or regular_file_count < 0:
+        raise ValueError(
+            "snapshot symlink layout review regular_file_count must be nonnegative"
+        )
+    symlink_targets = _string_mapping(report.get("symlink_targets"), "symlink_targets")
+    resolved_targets = _string_mapping(report.get("resolved_targets"), "resolved_targets")
+    target_scope_issues = _string_mapping(
+        report.get("target_scope_issues"), "target_scope_issues"
+    )
+    if set(resolved_targets) != set(symlink_targets):
+        raise ValueError("snapshot symlink layout review resolved target keys mismatch")
+    if len(symlink_targets) != symlink_count:
+        raise ValueError("snapshot symlink layout review symlink_count mismatch")
+    if bool(target_scope_issues) == bool(report.get("all_targets_within_blob_root")):
+        raise ValueError("snapshot symlink layout review target scope flag mismatch")
+    if report.get("expected_loaded_shards") != list(MODEL_INVENTORY_EXPECTED_SHARDS):
+        raise ValueError("snapshot symlink layout review expected shards mismatch")
+    expected_loaded_shards = list(MODEL_INVENTORY_EXPECTED_SHARDS)
+    observed_weight_files = report.get("observed_weight_files")
+    if not isinstance(observed_weight_files, list) or not all(
+        isinstance(value, str) for value in observed_weight_files
+    ):
+        raise ValueError("snapshot symlink layout review observed weights must be strings")
+    if sorted(observed_weight_files) != observed_weight_files:
+        raise ValueError("snapshot symlink layout review observed weights must be sorted")
+    if report.get("expected_original_full_weight") != MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT:
+        raise ValueError("snapshot symlink layout review original weight mismatch")
+    expected_original_full_weight = MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT
+    if report.get("original_full_weight_present") != (
+        MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT in symlink_targets
+    ):
+        raise ValueError("snapshot symlink layout review original presence mismatch")
+    inventory_contract_compatible = report.get("inventory_contract_compatible")
+    if not isinstance(inventory_contract_compatible, bool):
+        raise ValueError("snapshot symlink layout review compatibility must be boolean")
+    expected_compatibility = sorted(observed_weight_files) == sorted(
+        expected_loaded_shards + [expected_original_full_weight]
+    )
+    if inventory_contract_compatible is not expected_compatibility:
+        raise ValueError("snapshot symlink layout review compatibility mismatch")
+    for key in (
+        "blob_hashing_authorized",
+        "model_loading_authorized",
+        "dispatch_authorized",
+        "external_cost_authorized",
+    ):
+        if report.get(key) is not False:
+            raise ValueError(f"snapshot symlink layout review {key} must be false")
+    if report.get("next_gate") != SNAPSHOT_SYMLINK_LAYOUT_NEXT_GATE:
+        raise ValueError("snapshot symlink layout review next_gate mismatch")
+
+
 def validate_untouched_topic_milestone_approval_review(
     report: Mapping[str, object],
 ) -> None:
@@ -2073,6 +2266,16 @@ def _require_mapping(value: object, name: str) -> Mapping[str, object]:
     return value
 
 
+def _string_mapping(value: object, name: str) -> dict[str, str]:
+    mapping = _require_mapping(value, name)
+    result: dict[str, str] = {}
+    for key, item in mapping.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise ValueError(f"{name} must map strings to strings")
+        result[key] = item
+    return result
+
+
 def _require_string(value: object, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a nonempty string")
@@ -2178,6 +2381,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Existing local model snapshot directory to inventory read-only.",
     )
     parser.add_argument(
+        "--snapshot-symlink-layout",
+        type=Path,
+        help="Existing local model snapshot directory to inspect symlink layout only.",
+    )
+    parser.add_argument(
         "--model-inventory-attestation",
         type=Path,
         help="Canonical captured model-inventory attestation required by live attestation review.",
@@ -2211,14 +2419,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if (
         args.local_evidence_capture_approval_review
         and not args.model_inventory_snapshot
+        and not args.snapshot_symlink_layout
     ):
         raise ValueError(
             "--local-evidence-capture-approval-review requires "
-            "--model-inventory-snapshot"
+            "--model-inventory-snapshot or --snapshot-symlink-layout"
         )
     if args.model_inventory_snapshot:
         if (
-            args.model_inventory_attestation
+            args.snapshot_symlink_layout
+            or args.model_inventory_attestation
             or args.schema_compiler_attestation
             or args.model_runtime_attestation
             or args.milestone_approval_receipt
@@ -2248,6 +2458,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = build_model_inventory_attestation_from_snapshot(
             args.model_inventory_snapshot
         )
+        output_is_canonical_json = False
+    elif args.snapshot_symlink_layout:
+        if args.pretty and args.output:
+            raise ValueError(
+                "--snapshot-symlink-layout output must be canonical JSON; omit --pretty"
+            )
+        if (
+            args.model_inventory_attestation
+            or args.schema_compiler_attestation
+            or args.model_runtime_attestation
+            or args.milestone_approval_receipt
+            or args.reviewer_qualification_review
+            or args.live_attestation_bundle
+            or args.assemble_live_attestation_bundle
+            or args.live_attestation_review
+            or args.advisor_go_receipt
+            or args.local_evidence_capture_approval_receipt
+            or args.offset_parity_fixtures
+            or args.offset_parity_review
+        ):
+            raise ValueError(
+                "snapshot symlink layout review cannot be combined with "
+                "live attestation, advisor GO, approval receipt, fixture, "
+                "or evidence modes"
+            )
+        if not args.local_evidence_capture_approval_review:
+            raise ValueError(
+                "--snapshot-symlink-layout requires "
+                "--local-evidence-capture-approval-review"
+            )
+        load_local_evidence_capture_approval_review_from_file(
+            args.local_evidence_capture_approval_review,
+            artifact_dir=args.artifact_dir,
+        )
+        report = build_snapshot_symlink_layout_review(args.snapshot_symlink_layout)
         output_is_canonical_json = False
     elif args.assemble_live_attestation_bundle:
         if args.pretty:

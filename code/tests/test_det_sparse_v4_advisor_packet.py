@@ -127,6 +127,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "--model-inventory-snapshot" in text
     assert "--local-evidence-capture-approval-review path/to/local-evidence-capture-review.json" in text
     assert "requires a canonical local evidence-capture approval review" in text
+    assert "--snapshot-symlink-layout path/to/gpt-oss-20b/snapshots/" in text
+    assert "keeps blob hashing, model loading,\ndispatch, and external cost authorization false" in text
     assert "--model-inventory-attestation path/to/model-inventory-attestation.json" in text
     assert "--schema-compiler-attestation path/to/schema-compiler-attestation.json" in text
     assert "--model-runtime-attestation path/to/model-runtime-attestation.json" in text
@@ -135,7 +137,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "exactly embed those same compiler\nand runtime records" in text
     assert "all five evidence files" in text
     assert "read-only model inventory\ncapture mechanics" in text
-    assert "`206 passed`." in text
+    assert "`207 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

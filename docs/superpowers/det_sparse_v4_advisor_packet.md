@@ -228,6 +228,23 @@ external cost authorization false.
 That review must be written as canonical compact JSON before it can unlock any
 local evidence capture command.
 
+If the existing local snapshot is materialized with symlinks, its layout is
+reviewed before any symlink target is followed or hashed:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_preflight \
+  --snapshot-symlink-layout path/to/gpt-oss-20b/snapshots/6cee5e81ee83917806bbde320786a8fb61efebee \
+  --local-evidence-capture-approval-review path/to/local-evidence-capture-review.json \
+  --output path/to/snapshot-symlink-layout-review.json
+```
+
+That review records each snapshot symlink and its lexically resolved target,
+requires target paths to remain inside the model cache blob root, records the
+observed weight filenames, and explicitly keeps blob hashing, model loading,
+dispatch, and external cost authorization false. It is a policy-review gate
+only: incompatible shard naming or symlink materialization must go back to
+advisor review before inventory hashing is allowed.
+
 An already-cached local model snapshot can be inventoried read-only without
 loading the model:
 
@@ -396,8 +413,8 @@ failed-transport terminal sealing, canonical sealed scorer input,
 ledger-bound scorer-only sealed-response review, bound reviewer qualification
 review, reviewer qualification terminal-state mapping, executable
 untouched-topic/v5 milestone approval gating, and read-only model inventory
-capture mechanics:
-`206 passed`.
+capture mechanics plus symlink-layout policy review:
+`207 passed`.
 
 ## What is not yet proven
 

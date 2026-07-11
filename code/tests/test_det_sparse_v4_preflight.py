@@ -314,6 +314,37 @@ def _write_sparse_model_snapshot(tmp_path: Path, *, valid_total_size: bool = Tru
     return snapshot
 
 
+def _write_symlink_model_snapshot(tmp_path: Path) -> Path:
+    model_root = tmp_path / "models--openai--gpt-oss-20b"
+    snapshot = model_root / "snapshots" / contract.EXPECTED_MODEL_REVISION
+    blob_root = model_root / "blobs"
+    snapshot.mkdir(parents=True)
+    blob_root.mkdir(parents=True)
+    try:
+        for index, name in enumerate(
+            [
+                "config.json",
+                "generation_config.json",
+                "tokenizer.json",
+                "model-00000-of-00002" + preflight.MODEL_INVENTORY_FILE_SUFFIX,
+                "model-00001-of-00002" + preflight.MODEL_INVENTORY_FILE_SUFFIX,
+                "model-00002-of-00002" + preflight.MODEL_INVENTORY_FILE_SUFFIX,
+            ],
+            start=1,
+        ):
+            blob = blob_root / f"{index:064x}"
+            blob.write_text(f"blob {index}\n", encoding="utf-8")
+            (snapshot / name).symlink_to(Path("..") / ".." / "blobs" / blob.name)
+        original_blob = blob_root / ("f" * 64)
+        original_blob.write_text("original\n", encoding="utf-8")
+        original = snapshot / "original" / ("model" + preflight.MODEL_INVENTORY_FILE_SUFFIX)
+        original.parent.mkdir()
+        original.symlink_to(Path("..") / ".." / ".." / "blobs" / original_blob.name)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this environment")
+    return snapshot
+
+
 def _fake_snapshot_hasher(path: Path) -> str:
     relative = path.as_posix()
     digest_seed = sum(ord(character) for character in relative) % 16
@@ -584,6 +615,114 @@ def test_model_inventory_capture_rejects_symlinks_when_supported(tmp_path: Path)
         preflight.build_model_inventory_attestation_from_snapshot(
             snapshot,
             file_hasher=_fake_snapshot_hasher,
+        )
+
+
+def test_snapshot_symlink_layout_review_binds_targets_without_hashing(tmp_path: Path):
+    snapshot = _write_symlink_model_snapshot(tmp_path)
+
+    review = preflight.build_snapshot_symlink_layout_review(snapshot)
+
+    assert review["schema_version"] == "semantic_anchor_snapshot_symlink_layout_review_v1"
+    assert review["status"] == "snapshot_symlink_layout_review_pass"
+    assert review["repository"] == contract.EXPECTED_MODEL_REPOSITORY
+    assert review["revision"] == contract.EXPECTED_MODEL_REVISION
+    assert review["snapshot_path"] == str(snapshot.resolve())
+    assert review["symlink_count"] == 7
+    assert review["regular_file_count"] == 0
+    assert review["all_targets_within_blob_root"] is True
+    assert review["target_scope_issues"] == {}
+    assert review["expected_loaded_shards"] == list(
+        preflight.MODEL_INVENTORY_EXPECTED_SHARDS
+    )
+    assert review["observed_weight_files"] == [
+        "model-00000-of-00002" + preflight.MODEL_INVENTORY_FILE_SUFFIX,
+        "model-00001-of-00002" + preflight.MODEL_INVENTORY_FILE_SUFFIX,
+        "model-00002-of-00002" + preflight.MODEL_INVENTORY_FILE_SUFFIX,
+        preflight.MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT,
+    ]
+    assert review["original_full_weight_present"] is True
+    assert review["inventory_contract_compatible"] is False
+    assert review["blob_hashing_authorized"] is False
+    assert review["model_loading_authorized"] is False
+    assert review["dispatch_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    assert review["next_gate"] == (
+        "advisor_review_before_symlink_target_hashing_or_inventory_contract_update"
+    )
+    preflight.validate_snapshot_symlink_layout_review(review)
+
+    mutated = dict(review, blob_hashing_authorized=True)
+    with pytest.raises(ValueError, match="blob_hashing_authorized"):
+        preflight.validate_snapshot_symlink_layout_review(mutated)
+
+    mutated = dict(review, inventory_contract_compatible=True)
+    with pytest.raises(ValueError, match="compatibility mismatch"):
+        preflight.validate_snapshot_symlink_layout_review(mutated)
+
+
+def test_snapshot_symlink_layout_review_reports_out_of_scope_targets(tmp_path: Path):
+    snapshot = _write_symlink_model_snapshot(tmp_path)
+    bad_blob = tmp_path / "outside-blob"
+    bad_blob.write_text("outside\n", encoding="utf-8")
+    bad_link = snapshot / "bad" / ("model" + preflight.MODEL_INVENTORY_FILE_SUFFIX)
+    bad_link.parent.mkdir()
+    bad_link.symlink_to(bad_blob)
+
+    review = preflight.build_snapshot_symlink_layout_review(snapshot)
+
+    assert review["all_targets_within_blob_root"] is False
+    assert "bad/model" + preflight.MODEL_INVENTORY_FILE_SUFFIX in review[
+        "target_scope_issues"
+    ]
+    assert review["blob_hashing_authorized"] is False
+    preflight.validate_snapshot_symlink_layout_review(review)
+
+
+def test_snapshot_symlink_layout_review_cli_is_approval_gated(tmp_path: Path):
+    snapshot = _write_symlink_model_snapshot(tmp_path)
+    approval_review_path = _write_local_evidence_capture_approval_review(tmp_path)
+    output_path = tmp_path / "snapshot-symlink-layout-review.json"
+
+    with pytest.raises(ValueError, match="requires --local-evidence-capture-approval-review"):
+        preflight.main(
+            [
+                "--snapshot-symlink-layout",
+                str(snapshot),
+                "--output",
+                str(tmp_path / "missing-approval-layout-review.json"),
+            ]
+        )
+
+    assert (
+        preflight.main(
+            [
+                "--snapshot-symlink-layout",
+                str(snapshot),
+                "--local-evidence-capture-approval-review",
+                str(approval_review_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    review = json.loads(output_path.read_text(encoding="utf-8"))
+    preflight.validate_snapshot_symlink_layout_review(review)
+    assert output_path.read_bytes() == preflight.canonical_report_bytes(review)
+    assert review["blob_hashing_authorized"] is False
+
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.main(
+            [
+                "--snapshot-symlink-layout",
+                str(snapshot),
+                "--local-evidence-capture-approval-review",
+                str(approval_review_path),
+                "--output",
+                str(tmp_path / "pretty-layout-review.json"),
+                "--pretty",
+            ]
         )
 
 
