@@ -19,6 +19,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`source_audit`: 4 source files, `status=pass`" in text
     assert "`runtime_file_access`: `status=pass`" in text
     assert "runtime file-open tracing validated" in text
+    assert "model-cache and safetensors path denial" in text
+    assert "`models--openai--gpt-oss-20b`, model" in text
     assert "create-only runner scaffold writes 24 request-hash reservation records" in text
     assert "`unexpected_trec_rag_modules=[]`" in text
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
@@ -38,7 +40,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "classification" in text
     assert "runtime file-open tracing, live attestation evidence validators, and" in text
     assert "pre-dispatch run-directory replay:" in text
-    assert "`144 passed`." in text
+    assert "`145 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

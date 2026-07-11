@@ -21,7 +21,10 @@ from trec_rag import query_schema_compat
 
 PREFLIGHT_REPORT_SCHEMA_VERSION = "semantic_anchor_offline_preflight_report_v1"
 PREFLIGHT_STATUS = "offline_preflight_pass"
+LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION = "semantic_anchor_live_attestation_review_v1"
+LIVE_ATTESTATION_REVIEW_STATUS = "live_attestation_review_pass"
 NEXT_GATE = "advisor_review_before_live_attestation_or_model_inference"
+LIVE_ATTESTATION_NEXT_GATE = "advisor_go_before_model_dispatch"
 ZERO_COST_COUNTERS = {
     "model_calls": 0,
     "retrieval_calls": 0,
@@ -35,6 +38,7 @@ SCHEMA_COMPATIBILITY_CHECKER = "vllm_0_24_xgrammar_unsupported_feature_lint"
 REQUEST_IDENTITY_CHECKER = "semantic_anchor_request_identity_v1"
 SOURCE_AUDIT_CHECKER = "det_sparse_v4_static_direct_source_audit_v1"
 RUNTIME_FILE_ACCESS_CHECKER = "det_sparse_v4_runtime_file_access_audit_v1"
+MODEL_INVENTORY_ARTIFACT = "semantic_anchor_model_inventory_attestation_v1.json"
 ALLOWED_IMPORT_ROOTS = (
     "__future__",
     "argparse",
@@ -138,6 +142,72 @@ def _build_offline_preflight_report_untraced(
         require_runtime_file_access=False,
     )
     return report
+
+
+def build_live_attestation_review(
+    bundle_path: Path,
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Validate a captured live attestation bundle without opening dispatch."""
+
+    report = build_runtime_file_access_summary(
+        lambda: _build_live_attestation_review_untraced(
+            bundle_path,
+            artifact_dir=artifact_dir,
+        )
+    )
+    validate_live_attestation_review(report)
+    return report
+
+
+def _build_live_attestation_review_untraced(
+    bundle_path: Path,
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    offline_report = _build_offline_preflight_report_untraced(artifact_dir)
+    artifact_hashes = _require_mapping(
+        offline_report.get("artifact_sha256"), "artifact_sha256"
+    )
+    model_inventory_sha256 = _require_string(
+        artifact_hashes.get(MODEL_INVENTORY_ARTIFACT),
+        MODEL_INVENTORY_ARTIFACT,
+    )
+    request_identity = _require_mapping(
+        offline_report.get("request_identity"), "request_identity"
+    )
+    bundle_file = bundle_path.resolve()
+    bundle = _require_mapping(
+        contract.load_json_no_duplicates(bundle_file),
+        "live attestation bundle",
+    )
+    contract.validate_live_attestation_bundle(
+        bundle,
+        request_identity=request_identity,
+        expected_model_inventory_sha256=model_inventory_sha256,
+    )
+    model_runtime = _require_mapping(bundle.get("model_runtime"), "model_runtime")
+    pre_dispatch_attestation = contract.pre_dispatch_attestation_from_live_runtime(
+        model_runtime
+    )
+    return {
+        "schema_version": LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": LIVE_ATTESTATION_REVIEW_STATUS,
+        "bundle_path": str(bundle_file),
+        "bundle_sha256": contract.sha256_file(bundle_file),
+        "offline_preflight_status": offline_report["status"],
+        "request_case_order_sha256": request_identity["case_order_sha256"],
+        "model_inventory_artifact": MODEL_INVENTORY_ARTIFACT,
+        "model_inventory_sha256": model_inventory_sha256,
+        "pre_dispatch_attestation": pre_dispatch_attestation,
+        "cost_counters": dict(ZERO_COST_COUNTERS),
+        "inference_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+        "next_gate": LIVE_ATTESTATION_NEXT_GATE,
+    }
 
 
 def build_runtime_file_access_summary(
@@ -406,39 +476,7 @@ def validate_offline_preflight_report(
         raise ValueError("offline preflight source audit denied paths must be empty")
     runtime_file_access = report.get("runtime_file_access")
     if require_runtime_file_access:
-        if not isinstance(runtime_file_access, Mapping):
-            raise ValueError("offline preflight runtime_file_access must be an object")
-        if runtime_file_access.get("checker") != RUNTIME_FILE_ACCESS_CHECKER:
-            raise ValueError("offline preflight runtime file access checker mismatch")
-        if runtime_file_access.get("status") != "pass":
-            raise ValueError("offline preflight runtime file access must pass")
-        if runtime_file_access.get("denied_path_fragment_issues") != {}:
-            raise ValueError("offline preflight runtime denied paths must be empty")
-        if runtime_file_access.get("denied_write_paths") != []:
-            raise ValueError("offline preflight runtime writes must be empty")
-        for key in (
-            "observed_open_count",
-            "observed_unique_path_count",
-            "observed_read_path_count",
-            "observed_write_path_count",
-        ):
-            value = runtime_file_access.get(key)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"offline preflight runtime {key} must be nonnegative int")
-        if runtime_file_access.get("observed_write_path_count") != 0:
-            raise ValueError("offline preflight runtime write count must be zero")
-        observed_paths = runtime_file_access.get("observed_paths")
-        if not isinstance(observed_paths, list) or not observed_paths:
-            raise ValueError("offline preflight runtime observed_paths must be nonempty list")
-        for record in observed_paths:
-            if not isinstance(record, Mapping):
-                raise ValueError("offline preflight runtime observed path must be object")
-            path = record.get("path")
-            accesses = record.get("accesses")
-            if not isinstance(path, str) or not path:
-                raise ValueError("offline preflight runtime observed path must be string")
-            if accesses != ["read"]:
-                raise ValueError("offline preflight runtime observed path must be read-only")
+        _validate_runtime_file_access_summary(runtime_file_access, "offline preflight")
     schema_compatibility = report.get("schema_compatibility")
     if not isinstance(schema_compatibility, Mapping):
         raise ValueError("offline preflight schema_compatibility must be an object")
@@ -493,6 +531,81 @@ def validate_offline_preflight_report(
     for key, value in artifact_sha256.items():
         if not isinstance(key, str) or not isinstance(value, str) or len(value) != 64:
             raise ValueError("offline preflight artifact hashes must be sha256 strings")
+
+
+def validate_live_attestation_review(report: Mapping[str, object]) -> None:
+    """Validate that live attestation review still does not authorize dispatch."""
+
+    if report.get("schema_version") != LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION:
+        raise ValueError("live attestation review schema_version mismatch")
+    if report.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("live attestation review experiment_id mismatch")
+    if report.get("status") != LIVE_ATTESTATION_REVIEW_STATUS:
+        raise ValueError("live attestation review status mismatch")
+    if report.get("offline_preflight_status") != PREFLIGHT_STATUS:
+        raise ValueError("live attestation review offline preflight status mismatch")
+    if report.get("model_inventory_artifact") != MODEL_INVENTORY_ARTIFACT:
+        raise ValueError("live attestation review model inventory artifact mismatch")
+    for key in ("bundle_sha256", "request_case_order_sha256", "model_inventory_sha256"):
+        if not _is_sha256_string(report.get(key)):
+            raise ValueError(f"live attestation review {key} must be sha256")
+    if not isinstance(report.get("bundle_path"), str) or not report.get("bundle_path"):
+        raise ValueError("live attestation review bundle_path must be nonempty string")
+    if report.get("cost_counters") != ZERO_COST_COUNTERS:
+        raise ValueError("live attestation review cost counters must all be zero")
+    if report.get("inference_authorized") is not False:
+        raise ValueError("live attestation review must not authorize inference")
+    if report.get("dispatch_authorized") is not False:
+        raise ValueError("live attestation review must not authorize dispatch")
+    if report.get("external_cost_authorized") is not False:
+        raise ValueError("live attestation review must not authorize external cost")
+    if report.get("next_gate") != LIVE_ATTESTATION_NEXT_GATE:
+        raise ValueError("live attestation review next_gate mismatch")
+    pre_dispatch = report.get("pre_dispatch_attestation")
+    if not isinstance(pre_dispatch, Mapping):
+        raise ValueError("live attestation review pre_dispatch_attestation must be object")
+    contract.validate_pre_dispatch_attestation(pre_dispatch)
+    if pre_dispatch.get("model_inventory_sha256") != report.get("model_inventory_sha256"):
+        raise ValueError("live attestation review model inventory hash mismatch")
+    _validate_runtime_file_access_summary(
+        report.get("runtime_file_access"), "live attestation review"
+    )
+
+
+def _validate_runtime_file_access_summary(value: object, owner: str) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{owner} runtime_file_access must be an object")
+    if value.get("checker") != RUNTIME_FILE_ACCESS_CHECKER:
+        raise ValueError(f"{owner} runtime file access checker mismatch")
+    if value.get("status") != "pass":
+        raise ValueError(f"{owner} runtime file access must pass")
+    if value.get("denied_path_fragment_issues") != {}:
+        raise ValueError(f"{owner} runtime denied paths must be empty")
+    if value.get("denied_write_paths") != []:
+        raise ValueError(f"{owner} runtime writes must be empty")
+    for key in (
+        "observed_open_count",
+        "observed_unique_path_count",
+        "observed_read_path_count",
+        "observed_write_path_count",
+    ):
+        item = value.get(key)
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            raise ValueError(f"{owner} runtime {key} must be nonnegative int")
+    if value.get("observed_write_path_count") != 0:
+        raise ValueError(f"{owner} runtime write count must be zero")
+    observed_paths = value.get("observed_paths")
+    if not isinstance(observed_paths, list) or not observed_paths:
+        raise ValueError(f"{owner} runtime observed_paths must be nonempty list")
+    for record in observed_paths:
+        if not isinstance(record, Mapping):
+            raise ValueError(f"{owner} runtime observed path must be object")
+        path = record.get("path")
+        accesses = record.get("accesses")
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"{owner} runtime observed path must be string")
+        if accesses != ["read"]:
+            raise ValueError(f"{owner} runtime observed path must be read-only")
 
 
 def _direct_import_modules(path: Path, text: str) -> tuple[str, ...]:
@@ -592,13 +705,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional create-only JSON report path. Prints to stdout when omitted.",
     )
+    parser.add_argument(
+        "--live-attestation-bundle",
+        type=Path,
+        help="Optional captured live-attestation bundle to validate without dispatch.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    report = build_offline_preflight_report(args.artifact_dir)
+    if args.live_attestation_bundle:
+        report = build_live_attestation_review(
+            args.live_attestation_bundle,
+            artifact_dir=args.artifact_dir,
+        )
+    else:
+        report = build_offline_preflight_report(args.artifact_dir)
     payload = canonical_report_bytes(report, pretty=args.pretty)
     if args.output:
         _create_only(args.output, payload)

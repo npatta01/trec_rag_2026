@@ -2,12 +2,74 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from trec_rag import det_sparse_v4_contract as contract
 from trec_rag import det_sparse_v4_preflight as preflight
+
+
+def _offset_health():
+    return {
+        "schema_version": "lucene_whole_unit_offsets_health_v1",
+        "status": "ok",
+        "legacy_analyzer_port": 18081,
+        "offset_analyzer_port": 18082,
+    }
+
+
+def _schema_compiler_attestation(request_identity):
+    return {
+        "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
+        "compiler": {
+            "vllm_version": "0.24.0",
+            "xgrammar_version": "0.2.3",
+            "structured_outputs_backend": "xgrammar",
+        },
+        "case_order_sha256": request_identity["case_order_sha256"],
+        "cases": [
+            {
+                "case_id": case_id,
+                "request_sha256": request_sha256,
+                "schema_sha256": f"{index:064x}"[-64:],
+                "xgrammar_strict": "pass",
+            }
+            for index, (case_id, request_sha256) in enumerate(
+                request_identity["request_sha256"].items(),
+                start=1,
+            )
+        ],
+    }
+
+
+def _model_runtime_attestation(model_inventory_sha256: str):
+    return {
+        "schema_version": "semantic_anchor_live_model_runtime_attestation_v1",
+        "attestation_id": "runtime-attestation-001",
+        "served_model": "gpt-oss-local",
+        "repository": "openai/gpt-oss-20b",
+        "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+        "vllm_version": "0.24.0",
+        "xgrammar_version": "0.2.3",
+        "structured_outputs_backend": "xgrammar",
+        "loopback_only": True,
+        "egress_denied": True,
+        "read_only_model_mount": True,
+        "model_inventory_sha256": model_inventory_sha256,
+    }
+
+
+def _live_attestation_bundle(model_inventory_sha256: str):
+    request_identity = preflight.build_request_identity_summary(contract.ARTIFACT_DIR)
+    return {
+        "schema_version": "semantic_anchor_live_attestation_bundle_v1",
+        "offset_health": _offset_health(),
+        "schema_compiler": _schema_compiler_attestation(request_identity),
+        "model_runtime": _model_runtime_attestation(model_inventory_sha256),
+    }
 
 
 def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
@@ -141,6 +203,141 @@ def test_runtime_file_access_summary_catches_denied_reads_and_writes(tmp_path: P
     assert str(denied_file.resolve()) in summary["denied_path_fragment_issues"]
     assert summary["denied_path_fragment_issues"][str(denied_file.resolve())] == ["qrels"]
     assert str(write_file.resolve()) in summary["denied_write_paths"]
+
+
+def test_runtime_file_access_summary_catches_model_snapshot_reads(tmp_path: Path):
+    model_file = (
+        tmp_path
+        / ".cache"
+        / "huggingface"
+        / "hub"
+        / "models--openai--gpt-oss-20b"
+        / "snapshots"
+        / "6cee5e81ee83917806bbde320786a8fb61efebee"
+        / "model-00001-of-00003.safetensors"
+    )
+    model_file.parent.mkdir(parents=True)
+    model_file.write_text("not a real model\n", encoding="utf-8")
+
+    report = preflight.build_runtime_file_access_summary(
+        lambda: {"status": model_file.read_text(encoding="utf-8")}
+    )
+    summary = report["runtime_file_access"]
+
+    assert summary["status"] == "fail"
+    assert summary["denied_path_fragment_issues"][str(model_file.resolve())] == [
+        ".cache/huggingface",
+        "huggingface/hub",
+        "models--openai--gpt-oss-20b",
+        ".safetensors",
+    ]
+
+
+def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(tmp_path: Path):
+    artifact_hashes = contract.validate_artifact_bundle()
+    model_inventory_sha256 = artifact_hashes[
+        "semantic_anchor_model_inventory_attestation_v1.json"
+    ]
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(_live_attestation_bundle(model_inventory_sha256))
+        + b"\n"
+    )
+
+    report = preflight.build_live_attestation_review(bundle_path)
+
+    assert report["schema_version"] == "semantic_anchor_live_attestation_review_v1"
+    assert report["status"] == "live_attestation_review_pass"
+    assert report["bundle_path"] == str(bundle_path.resolve())
+    assert report["bundle_sha256"] == contract.sha256_file(bundle_path)
+    assert report["model_inventory_sha256"] == model_inventory_sha256
+    assert report["dispatch_authorized"] is False
+    assert report["inference_authorized"] is False
+    assert report["external_cost_authorized"] is False
+    assert report["next_gate"] == "advisor_go_before_model_dispatch"
+    assert report["pre_dispatch_attestation"] == {
+        "schema_version": "semantic_anchor_pre_dispatch_attestation_v1",
+        "attestation_id": "runtime-attestation-001",
+        "served_model": "gpt-oss-local",
+        "egress_denied": True,
+        "read_only_model_mount": True,
+        "model_inventory_sha256": model_inventory_sha256,
+    }
+    runtime_file_access = report["runtime_file_access"]
+    assert runtime_file_access["status"] == "pass"
+    assert runtime_file_access["observed_write_path_count"] == 0
+    observed_paths = {record["path"] for record in runtime_file_access["observed_paths"]}
+    assert str(bundle_path.resolve()) in observed_paths
+    preflight.validate_live_attestation_review(report)
+
+
+def test_live_attestation_review_rejects_model_inventory_and_write_drift(tmp_path: Path):
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(_live_attestation_bundle("9" * 64)) + b"\n"
+    )
+
+    with pytest.raises(ValueError, match="model inventory hash"):
+        preflight.build_live_attestation_review(bundle_path)
+
+    artifact_hashes = contract.validate_artifact_bundle()
+    good_bundle_path = tmp_path / "live-attestation-bundle-good.json"
+    good_bundle_path.write_bytes(
+        contract.canonical_json_bytes(
+            _live_attestation_bundle(
+                artifact_hashes["semantic_anchor_model_inventory_attestation_v1.json"]
+            )
+        )
+        + b"\n"
+    )
+    report = preflight.build_live_attestation_review(good_bundle_path)
+    runtime_file_access = dict(report["runtime_file_access"])
+    runtime_file_access["observed_write_path_count"] = 1
+    report["runtime_file_access"] = runtime_file_access
+    with pytest.raises(ValueError, match="runtime write count"):
+        preflight.validate_live_attestation_review(report)
+
+
+def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
+    artifact_hashes = contract.validate_artifact_bundle()
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    output_path = tmp_path / "live-attestation-review.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(
+            _live_attestation_bundle(
+                artifact_hashes["semantic_anchor_model_inventory_attestation_v1.json"]
+            )
+        )
+        + b"\n"
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_preflight",
+            "--live-attestation-bundle",
+            str(bundle_path),
+            "--output",
+            str(output_path),
+            "--pretty",
+        ],
+        check=True,
+        cwd=Path.cwd(),
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["schema_version"] == "semantic_anchor_live_attestation_review_v1"
+    assert report["dispatch_authorized"] is False
+    with pytest.raises(FileExistsError):
+        preflight.main(
+            [
+                "--live-attestation-bundle",
+                str(bundle_path),
+                "--output",
+                str(output_path),
+            ]
+        )
 
 
 def test_offline_preflight_fails_on_denied_imports(tmp_path: Path):

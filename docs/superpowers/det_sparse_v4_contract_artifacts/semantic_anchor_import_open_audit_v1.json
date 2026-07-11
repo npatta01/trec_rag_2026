@@ -27,7 +27,13 @@
     "research-rubrics",
     "qrels",
     "cache/retrieval",
-    "cache/reranker"
+    "cache/reranker",
+    ".cache/huggingface",
+    "huggingface/hub",
+    "models--openai--gpt-oss-20b",
+    "openai/gpt-oss-20b/snapshots",
+    "model.safetensors",
+    ".safetensors"
   ],
   "schema_version": "semantic_anchor_import_open_audit_v1",
   "status": "offline_fail_closed_static_contract"

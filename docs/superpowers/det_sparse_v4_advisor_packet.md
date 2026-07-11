@@ -73,7 +73,7 @@ deterministically.
 | Query decomposition/facet strategy needs vocabulary-gap handling | V4 tests a semantic exact-span selector only on synthetic cases, then renders deterministic sparse facets. | Proposed; no model call yet. |
 | Dense retrieval is not a practical main option at collection scale | V4 remains sparse/query-expansion oriented and does not require dense indexing or dense ranking. | Strategy-level choice, not yet empirically validated. |
 | Free-running agents could drift or spend | Design and preflight both disallow an agent loop; all counters remain zero. | Enforced as an offline gate. |
-| Source/import closure must be fail-closed | Preflight reports a static direct source audit over the v4 preflight, contract, schema-compat, and no-dispatch runner modules; denied imports, denied path fragments, unexpected import roots, and unexpected `trec_rag` modules must all be empty. It also wraps offline preflight in a runtime file-open audit that must observe read-only access, no denied path fragments, and zero writes. | Offline direct-source closure and runtime file-open tracing validated. |
+| Source/import closure must be fail-closed | Preflight reports a static direct source audit over the v4 preflight, contract, schema-compat, and no-dispatch runner modules; denied imports, denied path fragments, unexpected import roots, and unexpected `trec_rag` modules must all be empty. It also wraps offline preflight in a runtime file-open audit that must observe read-only access, no denied topic/qrels/cache/model path fragments, and zero writes. | Offline direct-source closure and runtime file-open tracing validated, including model-cache and safetensors path denial. |
 | Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas; all 24 schemas pass the offline vLLM 0.24/XGrammar unsupported-feature linter; offset health/error/response schemas are bound to executable Python validators; offset responses validate shape, hash, fingerprint, and monotonicity; chat completions have a strict assistant-content extractor that rejects non-JSON, duplicate keys, tool calls, wrong roles, wrong case IDs, and malformed ranges; captured live schema-compiler evidence must bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, the fixed case-order hash, and all 24 request hashes. | Offline fixtures, schema lint, offset sidecar schema validation, assistant-content extraction, and live-evidence validators covered; actual live compiler capture and live Java parity are still pending. |
 | Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. Captured runtime evidence must bind served model `gpt-oss-local`, repository `openai/gpt-oss-20b`, revision `6cee5e81ee83917806bbde320786a8fb61efebee`, vLLM/XGrammar versions, backend `xgrammar`, loopback-only serving, egress denial, read-only model mount, and the expected model-inventory SHA-256 before it can be projected into a ledger pre-dispatch attestation. | Offline fixture validation and live-evidence validators strengthened; actual live local inventory capture still pending. |
 | Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. | Attestation record shapes are validated offline; actual live collection still pending. |
@@ -106,7 +106,9 @@ Observed report summary from the committed tree:
   `denied_import_issues=[]`, `denied_path_fragment_issues={}`
 - `runtime_file_access`: `status=pass`, read-only observed paths,
   `observed_write_path_count=0`, `denied_path_fragment_issues={}`,
-  `denied_write_paths=[]`
+  `denied_write_paths=[]`; denied fragments include topic/qrels/cache paths,
+  Hugging Face model cache paths, `models--openai--gpt-oss-20b`, model
+  snapshots, and `.safetensors`
 - `schema_compatibility`: 24 cases, offline
   `vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`,
   `unsupported_feature_issues=[]`
@@ -140,7 +142,7 @@ validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, and
 pre-dispatch run-directory replay:
-`144 passed`.
+`145 passed`.
 
 ## What is not yet proven
 

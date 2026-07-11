@@ -64,6 +64,12 @@ DENIED_PATH_FRAGMENTS = (
     "qrels",
     "cache/retrieval",
     "cache/reranker",
+    ".cache/huggingface",
+    "huggingface/hub",
+    "models--openai--gpt-oss-20b",
+    "openai/gpt-oss-20b/snapshots",
+    "model.safetensors",
+    ".safetensors",
 )
 
 ARTIFACT_DIR = (

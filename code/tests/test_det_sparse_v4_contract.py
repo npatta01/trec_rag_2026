@@ -476,6 +476,8 @@ def test_denied_path_fragment_audit_catches_real_data_and_external_artifacts():
         "trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv\n"
         "cache/retrieval/run.jsonl\n"
         "research-rubrics/example.qrels\n"
+        ".cache/huggingface/hub/models--openai--gpt-oss-20b/snapshots/rev/model.safetensors\n"
+        "/models/openai/gpt-oss-20b/snapshots/rev/model-00001-of-00003.safetensors\n"
     )
 
     assert v4.audit_denied_path_fragments(text) == (
@@ -483,6 +485,12 @@ def test_denied_path_fragment_audit_catches_real_data_and_external_artifacts():
         "research-rubrics",
         "qrels",
         "cache/retrieval",
+        ".cache/huggingface",
+        "huggingface/hub",
+        "models--openai--gpt-oss-20b",
+        "openai/gpt-oss-20b/snapshots",
+        "model.safetensors",
+        ".safetensors",
     )
 
 
