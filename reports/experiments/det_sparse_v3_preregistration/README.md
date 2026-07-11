@@ -2,11 +2,10 @@
 
 Date: 2026-07-11
 
-Status: design frozen at commit `9fef81b`; synthetic-only implementation and
-pre-candidate admission review are complete with advisor GO. The one canonical
-preflight has not yet run. No remaining candidate narrative, qrels, retrieval
-result, graded metric, model, reranker, agent, or paid API has been opened or
-called.
+Status: archived scientific no-go. The design was frozen at commit `9fef81b`,
+the reviewed implementation was committed at `169c093`, and the one canonical
+qrels-blind preflight completed with zero eligible topics. No retrieval result,
+qrels, graded metric, model, reranker, agent, or paid API was opened or called.
 
 ## Why v3 exists
 
@@ -117,7 +116,90 @@ Pre-candidate verification on 2026-07-11:
   `sha256:1eeacc8c295ed4805f6ffead2417b1936aad296b02ea9e56b457230befc9e98d`;
 - external retrieval/model/reranker/qrels/paid calls: `0 / 0 / 0 / false / 0`.
 
-Two independent implementation reviews now give GO for a clean offline source
-commit. This is not a scientific GO for the intervention and does not open the
-external gate. That decision requires the frozen canonical selection followed
-by review of only its four qrels-blind selected shapes.
+Two independent implementation reviews gave GO for the clean offline source
+commit. That was not a scientific GO for the intervention and did not open the
+external gate. The canonical result below failed before four shapes existed.
+
+## Canonical v3 result
+
+The single allowed canonical run used source commit/tree
+`169c0938c7b5f6af73a490c64957ff45c43a49e7` /
+`b918add18e556ce377f41ab2ae33bc2d64821a7c`. It completed its post-seal fresh
+replay and terminal receipt, then stopped with:
+
+```text
+selection status: failure
+failure code: fewer_than_four_eligible_topics
+eligible / candidates: 0 / 9
+selected topics: none
+mechanical_valid: false
+```
+
+Eight candidates returned `recurrent_anchor_unavailable`; one returned
+`token_analyzer_alignment_mismatch` before recurrence screening. The redacted
+structural audit (no narrative or query text) was:
+
+| Topic | Units | Recurrent identities | Windows | Admissible | Failure |
+|---:|---:|---:|---:|---:|---|
+| 14 | 2 | 2 | 123 | 0 | recurrent anchor unavailable |
+| 31 | 2 | 2 | 141 | 0 | recurrent anchor unavailable |
+| 58 | 2 | 1 | 141 | 0 | recurrent anchor unavailable |
+| 72 | 5 | 0 | 57 | 0 | recurrent anchor unavailable |
+| 219 | 3 | 1 | 141 | 0 | recurrent anchor unavailable |
+| 233 | 2 | 0 | 75 | 0 | recurrent anchor unavailable |
+| 273 | 5 | 2 | 105 | 0 | recurrent anchor unavailable |
+| 477 | — | — | — | 0 | token/analyzer alignment mismatch |
+| 499 | 2 | 0 | 105 | 0 | recurrent anchor unavailable |
+
+Across the eight aligned plans, 888 windows produced zero admissible anchors
+and zero recurrent cores. Recurrent cardinality was 711 windows with zero
+identities, 176 with one, and only one with two. The two-identity window was not
+a near miss: it used six token records and five unique terms, had no joint raw
+child support, and simultaneously failed the unique-term, recurrence-precision,
+and joint-support gates. In other two-identity plans, the minimum span joining
+both identities required seven or eight token records, already outside the
+frozen six-record bound. Seventy-five singleton windows avoided the other
+recorded rejection reasons, but admitting them would relax both the two-term
+referent guarantee and the coupled precision rule, leaving many ambiguous
+choices rather than fixing semantic reference.
+
+This is a recurrence-recall/co-location failure, not a score, tie-break, topic
+selection, or retrieval-ranking failure. Relaxing to one recurrent term would
+weaken referent specificity; dropping joint support would admit split,
+incoherent evidence; widening the window after viewing this run would be a
+post-hoc repair. V3 is therefore archived without replacement, resampling, or
+rule change, and selected-shape review is skipped because no selected shapes
+exist. The entire nine-topic v3 universe is consumed for future tuning; a
+challenger must use untouched topics.
+
+## Seal and cost evidence
+
+- freeze SHA-256: `6a3b0aa730a94bf9005ffddbb040d1ef7a603619389c4295d0046ea643027c69`;
+- terminal receipt SHA-256:
+  `70f22ad9af727cc7ae075d83487c838bae31c9f5344b22543af0c48e850d596a`;
+- metadata SHA-256: `a91cb98baa3978d053edbb5af0fd7a5cfba00ee2ae39a224bed39e97838cafc4`;
+- selection SHA-256: `bb35ef48e8912651a7f2302d331ac3434595be421e5b88a22a472fc4b91f25ae`;
+- candidate-screen SHA-256:
+  `cfec0a00bdaa636fbc06cd1df7f2c88705034e240300a5dd5f5c0a79fb3a14ec`;
+- 18 unique sealed artifacts and 20 exact observed files including the freeze
+  and terminal receipt;
+- planned/derived requests: `0 / 0`;
+- external/model/reranker/qrels/paid calls: `0 / 0 / 0 / false / 0`;
+- external gate: `blocked` (`hosted_index_revision_unknown`).
+
+Two post-run reviewers independently confirmed the complete but mechanically
+invalid archive. It cannot authorize retrieval.
+
+## Recommended next version
+
+Use a new untouched-topic version that changes only the failed anchor selector:
+one pinned, schema-constrained call to the smallest viable local model consumes
+the exact full token tape and units and returns only `select|abstain` plus a
+consecutive first-unit token range. It may not generate terms, retry, repair, or
+run an agent loop. Recurrence remains an audit signal, not a hard prerequisite.
+Deterministic child grouping, protected parent, payload rules, sparse admission,
+cost firewall, and human shape review remain unchanged. Fix the one alignment
+failure generically with whole-unit Lucene token offsets mapped back to exact
+token records, not by weakening anchor admission. A larger or hosted model
+remains disallowed unless a separately measured challenger materially improves
+on the local arm.
