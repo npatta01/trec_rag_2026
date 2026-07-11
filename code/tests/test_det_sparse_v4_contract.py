@@ -964,25 +964,27 @@ def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight
         "safetensors_index_total_size": 13_761_264_768,
         "snapshot_path": "/models/openai/gpt-oss-20b/snapshots/6cee5e81ee83917806bbde320786a8fb61efebee",
         "loaded_shards": [
-            "model-00001.safetensors",
-            "model-00002.safetensors",
-            "model-00003.safetensors",
+            "model-00001-of-00003.safetensors",
+            "model-00002-of-00003.safetensors",
+            "model-00003-of-00003.safetensors",
         ],
         "loaded_files": [
             "config.json",
+            "generation_config.json",
             "tokenizer.json",
-            "model-00001.safetensors",
-            "model-00002.safetensors",
-            "model-00003.safetensors",
+            "model-00001-of-00003.safetensors",
+            "model-00002-of-00003.safetensors",
+            "model-00003-of-00003.safetensors",
         ],
         "unloaded_files": ["README.md", "original/model.safetensors"],
         "denied_files": ["original/model.safetensors"],
         "file_sha256": {
             "config.json": "a" * 64,
             "tokenizer.json": "b" * 64,
-            "model-00001.safetensors": "c" * 64,
-            "model-00002.safetensors": "d" * 64,
-            "model-00003.safetensors": "e" * 64,
+            "generation_config.json": "1" * 64,
+            "model-00001-of-00003.safetensors": "c" * 64,
+            "model-00002-of-00003.safetensors": "d" * 64,
+            "model-00003-of-00003.safetensors": "e" * 64,
             "README.md": "f" * 64,
             "original/model.safetensors": "9" * 64,
         },
@@ -996,6 +998,21 @@ def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight
     bad = dict(inventory)
     bad["loaded_shards"] = ["model-00001.safetensors", "model-00002.safetensors"]
     with pytest.raises(ValueError, match="exactly three"):
+        v4.validate_model_inventory(bad)
+    bad = dict(inventory)
+    bad["loaded_shards"] = [
+        "model-00001.safetensors",
+        "model-00002.safetensors",
+        "model-00003.safetensors",
+    ]
+    with pytest.raises(ValueError, match="expected shard names"):
+        v4.validate_model_inventory(bad)
+    bad = dict(inventory)
+    bad["snapshot_path"] = (
+        "/models/openai/gpt-oss-20b/snapshots/prefix-"
+        "6cee5e81ee83917806bbde320786a8fb61efebee"
+    )
+    with pytest.raises(ValueError, match="expected revision"):
         v4.validate_model_inventory(bad)
     bad = dict(inventory)
     bad["denied_files"] = []

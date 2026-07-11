@@ -1317,11 +1317,20 @@ def validate_model_inventory(inventory: Mapping[str, object]) -> None:
     if inventory.get("safetensors_index_total_size") != 13_761_264_768:
         raise ValueError("unexpected safetensors index total size")
     snapshot_path = inventory.get("snapshot_path")
-    if not isinstance(snapshot_path, str) or expected_revision not in snapshot_path:
+    expected_snapshot_suffix = f"/snapshots/{expected_revision}"
+    if (
+        not isinstance(snapshot_path, str)
+        or not snapshot_path.endswith(expected_snapshot_suffix)
+    ):
         raise ValueError("model inventory snapshot_path must bind expected revision")
     loaded = _string_tuple(inventory.get("loaded_shards"), "loaded_shards")
     if len(loaded) != 3 or len(set(loaded)) != 3:
         raise ValueError("model inventory must have exactly three unique loaded shards")
+    expected_loaded_shards = tuple(
+        f"model-{index:05d}-of-00003.safetensors" for index in range(1, 4)
+    )
+    if loaded != expected_loaded_shards:
+        raise ValueError("model inventory loaded_shards must match expected shard names")
     loaded_files = set(_string_tuple(inventory.get("loaded_files"), "loaded_files"))
     unloaded_files = set(_string_tuple(inventory.get("unloaded_files"), "unloaded_files"))
     denied = set(_string_tuple(inventory.get("denied_files"), "denied_files"))
