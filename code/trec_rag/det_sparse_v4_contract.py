@@ -154,6 +154,7 @@ class TerminalState(str, Enum):
     FIRST_CASE_NO_GO = "first_case_no_go"
     TRANSPORT_NO_BODY_NO_GO = "transport_no_body_no_go"
     PREFIX_INTEGRITY_NO_GO = "prefix_integrity_no_go"
+    RAW_SEALED_PENDING_SCORER = "raw_sealed_pending_scorer"
     COMPLETED_QUALIFICATION_NO_GO = "completed_qualification_no_go"
     COMPLETED_SYNTHETIC_GO = "completed_synthetic_go"
     INTERRUPTED_INCOMPLETE = "interrupted_incomplete"
@@ -756,6 +757,7 @@ def validate_terminal_receipt(receipt: Mapping[str, object]) -> None:
         TerminalState.FIRST_CASE_NO_GO,
         TerminalState.TRANSPORT_NO_BODY_NO_GO,
         TerminalState.PREFIX_INTEGRITY_NO_GO,
+        TerminalState.RAW_SEALED_PENDING_SCORER,
         TerminalState.INTERRUPTED_INCOMPLETE,
     } and gold_opened:
         raise ValueError("gold must remain unopened for incomplete/mechanical states")
@@ -767,6 +769,9 @@ def validate_terminal_receipt(receipt: Mapping[str, object]) -> None:
         raise ValueError("first_case_no_go must have exactly one attempted call")
     if state == TerminalState.TRANSPORT_NO_BODY_NO_GO and attempted < 1:
         raise ValueError("transport_no_body_no_go requires a dispatch attempt")
+    if state == TerminalState.RAW_SEALED_PENDING_SCORER:
+        if (attempted, completed, raw_committed) != (24, 24, 24):
+            raise ValueError("raw_sealed_pending_scorer requires 24 sealed raw responses")
     if state in {TerminalState.COMPLETED_QUALIFICATION_NO_GO, TerminalState.COMPLETED_SYNTHETIC_GO}:
         if (attempted, completed, raw_committed) != (24, 24, 24):
             raise ValueError("completed states require 24 sealed raw responses")

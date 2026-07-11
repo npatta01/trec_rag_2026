@@ -34,6 +34,7 @@
         "first_case_no_go",
         "transport_no_body_no_go",
         "prefix_integrity_no_go",
+        "raw_sealed_pending_scorer",
         "completed_qualification_no_go",
         "completed_synthetic_go",
         "interrupted_incomplete"
