@@ -79,10 +79,10 @@ deterministically.
 | Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. Captured runtime evidence must bind served model `gpt-oss-local`, repository `openai/gpt-oss-20b`, revision `6cee5e81ee83917806bbde320786a8fb61efebee`, vLLM/XGrammar versions, backend `xgrammar`, loopback-only serving, egress denial, read-only model mount, and the expected model-inventory SHA-256 before it can be projected into a ledger pre-dispatch attestation. | Offline fixture validation and live-evidence validators strengthened; actual live local inventory capture still pending. |
 | Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. The preflight CLI can validate a captured bundle file into a `semantic_anchor_live_attestation_review_v1` report, project the pre-dispatch ledger attestation, trace read-only file access, and still leaves `dispatch_authorized=false`. | Attestation record shapes and bundle-review path are validated offline; actual live collection still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
-| Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, executable ledger-prefix validator, and offline replay mutation oracles are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. The mutation oracles execute all eight registered failure-code surfaces in memory. The pre-dispatch replay verifier rereads an actual create-only run directory from sealed files and rejects noncanonical bytes, artifact-hash drift, reservation hash drift, extra dispatch artifacts, and nonzero terminal counters. | Offline shapes, prefix mechanics, mutation failure surfaces, and actual zero-dispatch run-directory replay validated; post-dispatch replay still pending. |
+| Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, executable ledger-prefix validator, and offline replay mutation oracles are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. The mutation oracles execute all eight registered failure-code surfaces in memory. The pre-dispatch replay verifier rereads an actual create-only run directory from sealed files and rejects noncanonical bytes, artifact-hash drift, reservation hash drift, extra dispatch artifacts, and nonzero terminal counters. The completed-run replay verifier rereads a 24-case synthetic run directory from sealed files, rejects extra artifacts, validates reservation/dispatch/raw/receipt ledger links, requires `raw_sealed_pending_scorer` with `gold_opened=false`, and validates the sealed scorer input before scorer-only gold can open. | Offline shapes, prefix mechanics, mutation failure surfaces, actual zero-dispatch run-directory replay, and offline completed synthetic run-directory replay validated; replay against an actual live post-dispatch run still pending. |
 | Runner entrypoint must not dispatch before approval | A create-only runner scaffold writes 24 request-hash reservation records, a fresh run manifest, and a `pre_dispatch_no_go` terminal receipt, validates the zero-call ledger prefix, refuses existing output directories, and performs no model, retrieval, reranking, topic, relevance-judgment, network, download, or model-file access. The replay verifier accepts only that exact file set and terminal state. | Offline no-dispatch runner boundary, reservation materialization, and no-go replay validated; live dispatch remains closed. |
 | Runner request identities must be fixed before dispatch | Preflight reports a `request_identity` block with fixed 24-case order, first scored case, canonical request-body SHA-256s, and request byte sizes. | Reservation and dispatch identities are offline-bound; no runner dispatch yet. |
-| Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. The scorer/gold linter validates case order, U1-bounded acceptable and wrong-referent ranges, abstain reasons, and deterministic response classifications (`correct_select`, `safe_abstain`, `wrong_referent`, `wrong_abstain`, `mechanical_failure`). A scorer-only CLI now accepts sealed synthetic responses, validates a `raw_sealed_pending_scorer` 24-response terminal state with `gold_opened=false`, validates ledger-prefix evidence, verifies parsed-response raw body hashes against raw response records and case receipts before opening gold, emits `semantic_anchor_scorer_review_v1`, and keeps inference/dispatch/external-cost authorization false. | Offline separation, scorer mechanics, raw-body binding, and scorer-only gold-opening boundary validated; scorer execution on a real post-dispatch run remains pending. |
+| Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. The scorer/gold linter validates case order, U1-bounded acceptable and wrong-referent ranges, abstain reasons, and deterministic response classifications (`correct_select`, `safe_abstain`, `wrong_referent`, `wrong_abstain`, `mechanical_failure`). A scorer-only CLI now accepts sealed synthetic responses, validates a `raw_sealed_pending_scorer` 24-response terminal state with `gold_opened=false`, validates ledger-prefix evidence, verifies parsed-response raw body hashes against raw response records and case receipts before opening gold, emits `semantic_anchor_scorer_review_v1`, and keeps inference/dispatch/external-cost authorization false. Reviewer receipts require at least two unanimous reviewers; only a perfect scorer receipt plus a valid reviewer receipt maps to `completed_synthetic_go`; any scorer miss maps to `completed_qualification_no_go`. | Offline separation, scorer mechanics, raw-body binding, scorer-only gold-opening boundary, and reviewer GO/NO-GO mapping validated; scorer execution on a real post-dispatch run remains pending. |
 | External cost must remain zero | Preflight reports zero model, retrieval, reranker, network, download, topic-file, and relevance-judgment counters. | Enforced for the offline packet. |
 
 ## Offline preflight evidence
@@ -136,8 +136,10 @@ That review validates the bundle against the frozen request identity and the
 committed model-inventory artifact SHA-256, emits a pre-dispatch ledger
 attestation, traces file opens, and explicitly keeps `dispatch_authorized=false`.
 
-Sealed synthetic responses, after a future post-dispatch replay proves all 24
-raw responses are committed, are scored with:
+Sealed synthetic responses are scored only after run-directory replay proves
+all 24 raw responses are committed. The offline completed-run replay verifier
+already exercises that boundary on a sealed synthetic run directory; an actual
+live post-dispatch run remains a later gate. Scoring is then invoked with:
 
 ```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_scorer \
@@ -151,6 +153,12 @@ committed and `gold_opened=false`, validates ledger-prefix evidence, verifies
 each raw body hash against raw response records and case receipts, then opens
 scorer-only gold labels, emits `semantic_anchor_scorer_review_v1`, and does not
 authorize inference, dispatch, or external cost.
+
+The reviewer qualification gate is executable offline: reviewer receipts require
+at least two unanimous reviewers, and the terminal-state mapper returns
+`completed_synthetic_go` only for a valid reviewer receipt plus all
+`correct_select` / `safe_abstain` scorer classifications. Any scorer miss maps
+to `completed_qualification_no_go`.
 
 The offline regression command used for this packet was:
 
@@ -172,9 +180,10 @@ checks, request identity binding, offset response validation, ledger-prefix
 validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, captured-bundle
-review, pre-dispatch run-directory replay, and ledger-bound scorer-only
-sealed-response review:
-`156 passed`.
+review, pre-dispatch run-directory replay, offline completed synthetic
+run-directory replay, ledger-bound scorer-only sealed-response review, and
+reviewer qualification terminal-state mapping:
+`157 passed`.
 
 ## What is not yet proven
 
@@ -185,7 +194,7 @@ remain open gates:
 2. Live local model inventory capture from the exact cached snapshot.
 3. Live XGrammar/vLLM compiler capture for all 24 per-case schemas.
 4. Post-approval live dispatch runner implementation with raw-first dispatch receipts.
-5. Replay mutation execution against an actual post-dispatch run directory.
+5. Replay mutation execution against an actual live post-dispatch run directory.
 6. Scorer-only gold opening against an actual post-dispatch run.
 7. Advisor approval before any untouched-topic or v5 confirmation milestone.
 

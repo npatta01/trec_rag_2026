@@ -36,8 +36,11 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
     assert "executable ledger-prefix validator" in text
-    assert "actual zero-dispatch run-directory replay validated" in text
-    assert "pre-dispatch run-directory replay, and ledger-bound scorer-only" in text
+    assert "actual zero-dispatch run-directory replay" in text
+    assert "offline completed synthetic run-directory replay validated" in text
+    assert "actual live post-dispatch run still pending" in text
+    assert "pre-dispatch run-directory replay, offline completed synthetic" in text
+    assert "offline completed synthetic\nrun-directory replay" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "semantic_anchor_scorer_review_v1" in text
@@ -45,11 +48,14 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`gold_opened=false`, validates ledger-prefix evidence" in text
     assert "validates ledger-prefix evidence" in text
     assert "verifies parsed-response raw body hashes" in text
+    assert "Reviewer receipts require at least two unanimous reviewers" in text
+    assert "`completed_synthetic_go` only" in text
+    assert "`completed_qualification_no_go`" in text
     assert "code/tests/test_det_sparse_v4_scorer.py" in text
     assert "classification" in text
     assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
     assert "ledger-bound scorer-only" in text
-    assert "`156 passed`." in text
+    assert "`157 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

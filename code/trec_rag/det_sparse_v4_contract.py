@@ -1111,6 +1111,43 @@ def validate_scorer_receipt(
         raise ValueError("scorer receipt case order mismatch")
 
 
+def validate_reviewer_receipt(receipt: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        receipt,
+        "reviewer receipt",
+        {"schema_version", "reviewer_count", "unanimous"},
+    )
+    if receipt.get("schema_version") != "semantic_anchor_reviewer_receipt_v1":
+        raise ValueError("reviewer receipt schema_version mismatch")
+    reviewer_count = _strict_int(receipt.get("reviewer_count"), "reviewer_count")
+    if reviewer_count < 2:
+        raise ValueError("reviewer receipt requires at least two reviewers")
+    if receipt.get("unanimous") is not True:
+        raise ValueError("reviewer receipt must be unanimous")
+
+
+def synthetic_qualification_terminal_state(
+    *,
+    scorer_receipt: Mapping[str, object],
+    reviewer_receipt: Mapping[str, object],
+    case_order: Sequence[str],
+) -> str:
+    """Map scorer/reviewer receipts to the final synthetic terminal state."""
+
+    validate_scorer_receipt(scorer_receipt, case_order=case_order)
+    validate_reviewer_receipt(reviewer_receipt)
+    classifications = [
+        _as_mapping(row, "scorer result")["classification"]
+        for row in _as_mapping(scorer_receipt, "scorer receipt")["case_results"]  # type: ignore[index]
+    ]
+    if all(
+        classification in {"correct_select", "safe_abstain"}
+        for classification in classifications
+    ):
+        return TerminalState.COMPLETED_SYNTHETIC_GO.value
+    return TerminalState.COMPLETED_QUALIFICATION_NO_GO.value
+
+
 def validate_ledger_prefix(
     *,
     case_order: Sequence[str],

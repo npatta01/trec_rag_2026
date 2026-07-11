@@ -896,6 +896,59 @@ def test_scorer_receipt_is_case_ordered_and_built_from_gold_bundle():
         v4.validate_scorer_receipt(bad, case_order=case_order)
 
 
+def test_reviewer_receipt_and_synthetic_qualification_gate_are_fail_closed():
+    case_order = _case_order()
+    scorer_receipt = {
+        "schema_version": "semantic_anchor_scorer_receipt_v1",
+        "case_results": [
+            {
+                "case_id": case_id,
+                "classification": "correct_select" if index <= 18 else "safe_abstain",
+            }
+            for index, case_id in enumerate(case_order, start=1)
+        ],
+    }
+    reviewer_receipt = {
+        "schema_version": "semantic_anchor_reviewer_receipt_v1",
+        "reviewer_count": 2,
+        "unanimous": True,
+    }
+
+    v4.validate_reviewer_receipt(reviewer_receipt)
+    assert (
+        v4.synthetic_qualification_terminal_state(
+            scorer_receipt=scorer_receipt,
+            reviewer_receipt=reviewer_receipt,
+            case_order=case_order,
+        )
+        == "completed_synthetic_go"
+    )
+
+    no_go_scorer = dict(scorer_receipt)
+    no_go_scorer["case_results"] = [dict(row) for row in scorer_receipt["case_results"]]
+    no_go_scorer["case_results"][0]["classification"] = "wrong_referent"
+    assert (
+        v4.synthetic_qualification_terminal_state(
+            scorer_receipt=no_go_scorer,
+            reviewer_receipt=reviewer_receipt,
+            case_order=case_order,
+        )
+        == "completed_qualification_no_go"
+    )
+
+    for bad_reviewer, message in (
+        (dict(reviewer_receipt, reviewer_count=1), "at least two"),
+        (dict(reviewer_receipt, unanimous=False), "unanimous"),
+        (dict(reviewer_receipt, schema_version="future"), "schema_version"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            v4.synthetic_qualification_terminal_state(
+                scorer_receipt=scorer_receipt,
+                reviewer_receipt=bad_reviewer,
+                case_order=case_order,
+            )
+
+
 def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight():
     inventory = {
         "schema_version": "semantic_anchor_model_inventory_attestation_v1",
