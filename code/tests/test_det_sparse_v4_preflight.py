@@ -205,6 +205,22 @@ def _untouched_topic_milestone_approval_receipt(
     }
 
 
+def _local_evidence_capture_approval_receipt() -> dict[str, object]:
+    offline_preflight = preflight.build_offline_preflight_report()
+    return {
+        "schema_version": "semantic_anchor_local_evidence_capture_approval_v1",
+        "approval_scope": "det_sparse_v4_local_evidence_capture_only",
+        "approved_by": "advisor-review",
+        "offline_preflight_sha256": contract.sha256_bytes(
+            preflight.canonical_report_bytes(offline_preflight)
+        ),
+        "acknowledged_existing_cached_model_only_no_downloads": True,
+        "acknowledged_no_model_dispatch_or_inference_generation": True,
+        "acknowledged_no_topic_qrels_retrieval_or_reranking": True,
+        "acknowledged_no_external_network_or_paid_calls": True,
+    }
+
+
 def _schema_compiler_attestation(request_identity):
     return {
         "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
@@ -1477,6 +1493,129 @@ def test_advisor_dispatch_go_review_cli_rejects_partial_or_noncanonical_receipts
         preflight.build_advisor_dispatch_go_review_from_files(
             live_review_path,
             advisor_go_path,
+        )
+
+
+def test_local_evidence_capture_approval_review_is_closed_to_dispatch_and_cost(
+    tmp_path: Path,
+):
+    receipt_path = tmp_path / "local-evidence-capture-go.json"
+    receipt = _local_evidence_capture_approval_receipt()
+    receipt_path.write_bytes(contract.canonical_json_bytes(receipt) + b"\n")
+
+    review = preflight.build_local_evidence_capture_approval_review_from_files(
+        receipt_path
+    )
+
+    assert review["schema_version"] == (
+        "semantic_anchor_local_evidence_capture_approval_review_v1"
+    )
+    assert review["status"] == "local_evidence_capture_approval_review_pass"
+    assert review["approval_scope"] == "det_sparse_v4_local_evidence_capture_only"
+    assert review["offline_preflight_sha256"] == receipt["offline_preflight_sha256"]
+    assert review["approval_receipt_sha256"] == contract.sha256_bytes(
+        contract.canonical_json_bytes(receipt)
+    )
+    assert review["approved_capture_steps"] == list(
+        preflight.LOCAL_EVIDENCE_CAPTURE_STEPS
+    )
+    assert review["local_evidence_capture_authorized"] is True
+    assert review["cached_model_reads_authorized"] is True
+    assert review["model_download_authorized"] is False
+    assert review["inference_generation_authorized"] is False
+    assert review["dispatch_authorized"] is False
+    assert review["topic_access_authorized"] is False
+    assert review["qrels_access_authorized"] is False
+    assert review["retrieval_authorized"] is False
+    assert review["reranking_authorized"] is False
+    assert review["external_network_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    assert review["next_gate"] == "run_local_evidence_capture_without_dispatch"
+    preflight.validate_local_evidence_capture_approval_review(review)
+
+    mutated = dict(review, dispatch_authorized=True)
+    with pytest.raises(ValueError, match="dispatch_authorized"):
+        preflight.validate_local_evidence_capture_approval_review(mutated)
+
+    mutated_receipt = dict(receipt, extra=True)
+    receipt_path.write_bytes(contract.canonical_json_bytes(mutated_receipt) + b"\n")
+    with pytest.raises(ValueError, match="keys mismatch"):
+        preflight.build_local_evidence_capture_approval_review_from_files(
+            receipt_path
+        )
+
+    mutated_receipt = dict(
+        receipt,
+        acknowledged_no_external_network_or_paid_calls=False,
+    )
+    receipt_path.write_bytes(contract.canonical_json_bytes(mutated_receipt) + b"\n")
+    with pytest.raises(ValueError, match="acknowledge"):
+        preflight.build_local_evidence_capture_approval_review_from_files(
+            receipt_path
+        )
+
+    mutated_receipt = dict(receipt, offline_preflight_sha256="9" * 64)
+    receipt_path.write_bytes(contract.canonical_json_bytes(mutated_receipt) + b"\n")
+    with pytest.raises(ValueError, match="offline preflight hash mismatch"):
+        preflight.build_local_evidence_capture_approval_review_from_files(
+            receipt_path
+        )
+
+
+def test_local_evidence_capture_approval_review_cli_is_create_only(tmp_path: Path):
+    receipt_path = tmp_path / "local-evidence-capture-go.json"
+    output_path = tmp_path / "local-evidence-capture-review.json"
+    receipt = _local_evidence_capture_approval_receipt()
+    receipt_path.write_bytes(contract.canonical_json_bytes(receipt) + b"\n")
+
+    assert (
+        preflight.main(
+            [
+                "--local-evidence-capture-approval-receipt",
+                str(receipt_path),
+                "--output",
+                str(output_path),
+                "--pretty",
+            ]
+        )
+        == 0
+    )
+    review = json.loads(output_path.read_text(encoding="utf-8"))
+    assert review["approval_receipt_path"] == str(receipt_path.resolve())
+    assert review["approval_receipt_canonical"] is True
+    assert review["local_evidence_capture_authorized"] is True
+    assert review["dispatch_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    preflight.validate_local_evidence_capture_approval_review(review)
+
+    with pytest.raises(FileExistsError):
+        preflight.main(
+            [
+                "--local-evidence-capture-approval-receipt",
+                str(receipt_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+
+    noncanonical_path = tmp_path / "noncanonical-local-evidence-go.json"
+    noncanonical_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.build_local_evidence_capture_approval_review_from_files(
+            noncanonical_path
+        )
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        preflight.main(
+            [
+                "--local-evidence-capture-approval-receipt",
+                str(receipt_path),
+                "--model-inventory-attestation",
+                str(tmp_path / "model-inventory.json"),
+            ]
         )
 
 

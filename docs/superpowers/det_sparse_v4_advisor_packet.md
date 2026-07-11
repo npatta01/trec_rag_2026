@@ -125,6 +125,25 @@ The report binds every committed v4 contract artifact by SHA-256. The full hash
 map is emitted by the command rather than copied here, so reviewers can rerun
 the command against the exact current checkout.
 
+Before any local evidence capture is run, an advisor approval receipt is reviewed
+create-only with:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_preflight \
+  --local-evidence-capture-approval-receipt path/to/local-evidence-capture-approval.json \
+  --output path/to/local-evidence-capture-approval-review.json \
+  --pretty
+```
+
+The receipt must use `semantic_anchor_local_evidence_capture_approval_v1`,
+bind the current offline preflight SHA-256, and acknowledge that it is limited
+to an existing cached model with no downloads, no model dispatch or inference
+generation, no topic/qrels/retrieval/reranking, and no external network or paid
+calls. The emitted
+`semantic_anchor_local_evidence_capture_approval_review_v1` authorizes only the
+local evidence-capture step, keeps those external and dispatch gates closed, and
+sets `next_gate=run_local_evidence_capture_without_dispatch`.
+
 Once offset parity, model inventory, schema-compiler, and model-runtime evidence
 files are separately produced, the canonical live-attestation bundle is assembled
 create-only with:
@@ -186,6 +205,26 @@ occurrences, nonzero rows with at least one occurrence, unique fixture IDs,
 stable offset fingerprint across every response, canonical request/response
 SHA-256 binding, executable offset response validation, zero cost counters, and
 no inference or dispatch authorization.
+
+Before those local evidence commands are run against real local services or the
+real cached model snapshot, an advisor/user receipt can be reviewed create-only:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_preflight \
+  --local-evidence-capture-approval-receipt path/to/local-evidence-capture-go.json \
+  --output path/to/local-evidence-capture-review.json \
+  --pretty
+```
+
+That receipt must use `semantic_anchor_local_evidence_capture_approval_v1`, bind
+the exact offline preflight SHA-256, approve only the local evidence capture
+steps, and acknowledge that cached model reads are allowed only for already
+present snapshots while model downloads, model dispatch/generation, topic/qrels
+access, retrieval, reranking, external network, and paid calls remain closed.
+The derived `semantic_anchor_local_evidence_capture_approval_review_v1` sets
+`local_evidence_capture_authorized=true` but keeps dispatch, generation,
+retrieval, reranking, topic/qrels access, downloads, external network, and
+external cost authorization false.
 
 An already-cached local model snapshot can be inventoried read-only without
 loading the model:
@@ -354,7 +393,7 @@ ledger-bound scorer-only sealed-response review, bound reviewer qualification
 review, reviewer qualification terminal-state mapping, executable
 untouched-topic/v5 milestone approval gating, and read-only model inventory
 capture mechanics:
-`199 passed`.
+`206 passed`.
 
 ## What is not yet proven
 

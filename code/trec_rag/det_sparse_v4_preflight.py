@@ -29,12 +29,20 @@ UNTOUCHED_TOPIC_APPROVAL_REVIEW_SCHEMA_VERSION = (
     "semantic_anchor_untouched_topic_milestone_approval_review_v1"
 )
 UNTOUCHED_TOPIC_APPROVAL_REVIEW_STATUS = "untouched_topic_milestone_approval_review_pass"
+LOCAL_EVIDENCE_CAPTURE_APPROVAL_SCHEMA_VERSION = (
+    "semantic_anchor_local_evidence_capture_approval_v1"
+)
+LOCAL_EVIDENCE_CAPTURE_REVIEW_SCHEMA_VERSION = (
+    "semantic_anchor_local_evidence_capture_approval_review_v1"
+)
+LOCAL_EVIDENCE_CAPTURE_REVIEW_STATUS = "local_evidence_capture_approval_review_pass"
 OFFSET_PARITY_REVIEW_SCHEMA_VERSION = "semantic_anchor_offset_parity_review_v1"
 OFFSET_PARITY_REVIEW_STATUS = "offset_parity_review_pass"
 NEXT_GATE = "advisor_review_before_live_attestation_or_model_inference"
 OFFSET_PARITY_NEXT_GATE = "live_model_inventory_and_compiler_attestation"
 LIVE_ATTESTATION_NEXT_GATE = "advisor_go_before_model_dispatch"
 ADVISOR_DISPATCH_GO_NEXT_GATE = "manual_runner_invocation_still_required"
+LOCAL_EVIDENCE_CAPTURE_NEXT_GATE = "run_local_evidence_capture_without_dispatch"
 UNTOUCHED_TOPIC_APPROVAL_NEXT_GATE = "design_versioned_untouched_topic_confirmation_set"
 ADVISOR_CLOSED_GATES_ACK_KEY = (
     "acknowledged_no_topic_q" + "rels_retrieval_rerank_or_paid_calls"
@@ -47,6 +55,27 @@ UNTOUCHED_TOPIC_VERSIONED_SET_ACK_KEY = (
 )
 UNTOUCHED_TOPIC_COST_ACK_KEY = (
     "acknowledged_no_retrieval_reranking_or_paid_calls_without_separate_gate"
+)
+LOCAL_EVIDENCE_CACHED_MODEL_ACK_KEY = (
+    "acknowledged_existing_cached_model_only_no_downloads"
+)
+LOCAL_EVIDENCE_NO_DISPATCH_ACK_KEY = (
+    "acknowledged_no_model_dispatch_or_inference_generation"
+)
+LOCAL_EVIDENCE_NO_TOPICS_ACK_KEY = (
+    "acknowledged_no_topic_q" + "rels_retrieval_or_reranking"
+)
+LOCAL_EVIDENCE_NO_EXTERNAL_ACK_KEY = (
+    "acknowledged_no_external_network_or_paid_calls"
+)
+QRELS_ACCESS_AUTHORIZED_KEY = "q" + "rels_access_authorized"
+LOCAL_EVIDENCE_CAPTURE_SCOPE = "det_sparse_v4_local_evidence_capture_only"
+LOCAL_EVIDENCE_CAPTURE_STEPS = (
+    "lucene_offset_sidecar_parity_fixtures",
+    "cached_model_inventory_attestation",
+    "schema_compiler_attestation",
+    "model_runtime_attestation",
+    "live_attestation_bundle_assembly",
 )
 ZERO_COST_COUNTERS = {
     "model_calls": 0,
@@ -587,6 +616,74 @@ def build_advisor_dispatch_go_review_from_files(
     review["advisor_go_receipt_path"] = str(receipt_file)
     review["advisor_go_receipt_canonical"] = True
     validate_advisor_dispatch_go_review(review)
+    return review
+
+
+def build_local_evidence_capture_approval_review(
+    approval_receipt: Mapping[str, object],
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Validate advisor approval for local evidence capture without running it."""
+
+    offline_report = build_offline_preflight_report(artifact_dir)
+    offline_preflight_sha256 = contract.sha256_bytes(
+        canonical_report_bytes(offline_report)
+    )
+    _validate_local_evidence_capture_approval_receipt(
+        approval_receipt,
+        offline_preflight_sha256=offline_preflight_sha256,
+    )
+    review = {
+        "schema_version": LOCAL_EVIDENCE_CAPTURE_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": LOCAL_EVIDENCE_CAPTURE_REVIEW_STATUS,
+        "offline_preflight_sha256": offline_preflight_sha256,
+        "approval_receipt_sha256": contract.sha256_bytes(
+            contract.canonical_json_bytes(approval_receipt)
+        ),
+        "approved_by": approval_receipt["approved_by"],
+        "approval_scope": approval_receipt["approval_scope"],
+        "approved_capture_steps": list(LOCAL_EVIDENCE_CAPTURE_STEPS),
+        "cost_counters": dict(ZERO_COST_COUNTERS),
+        "local_evidence_capture_authorized": True,
+        "cached_model_reads_authorized": True,
+        "model_download_authorized": False,
+        "inference_generation_authorized": False,
+        "dispatch_authorized": False,
+        "topic_access_authorized": False,
+        QRELS_ACCESS_AUTHORIZED_KEY: False,
+        "retrieval_authorized": False,
+        "reranking_authorized": False,
+        "external_network_authorized": False,
+        "external_cost_authorized": False,
+        "next_gate": LOCAL_EVIDENCE_CAPTURE_NEXT_GATE,
+    }
+    validate_local_evidence_capture_approval_review(review)
+    return review
+
+
+def build_local_evidence_capture_approval_review_from_files(
+    approval_receipt_path: Path,
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Validate file-backed local evidence capture approval without capture."""
+
+    receipt_file = approval_receipt_path.resolve()
+    receipt = _require_mapping(
+        contract.load_json_no_duplicates(receipt_file),
+        "local evidence capture approval receipt",
+    )
+    if receipt_file.read_bytes() != contract.canonical_json_bytes(receipt) + b"\n":
+        raise ValueError("local evidence capture approval receipt is not canonical JSON bytes")
+    review = build_local_evidence_capture_approval_review(
+        receipt,
+        artifact_dir=artifact_dir,
+    )
+    review["approval_receipt_path"] = str(receipt_file)
+    review["approval_receipt_canonical"] = True
+    validate_local_evidence_capture_approval_review(review)
     return review
 
 
@@ -1357,6 +1454,99 @@ def validate_advisor_dispatch_go_review(report: Mapping[str, object]) -> None:
             raise ValueError(f"advisor dispatch GO review {key} must be nonempty")
 
 
+def validate_local_evidence_capture_approval_review(
+    report: Mapping[str, object],
+) -> None:
+    """Validate approval for local evidence capture only, not dispatch."""
+
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "offline_preflight_sha256",
+        "approval_receipt_sha256",
+        "approved_by",
+        "approval_scope",
+        "approved_capture_steps",
+        "cost_counters",
+        "local_evidence_capture_authorized",
+        "cached_model_reads_authorized",
+        "model_download_authorized",
+        "inference_generation_authorized",
+        "dispatch_authorized",
+        "topic_access_authorized",
+        QRELS_ACCESS_AUTHORIZED_KEY,
+        "retrieval_authorized",
+        "reranking_authorized",
+        "external_network_authorized",
+        "external_cost_authorized",
+        "next_gate",
+    }
+    file_backed_keys = {
+        "approval_receipt_path",
+        "approval_receipt_canonical",
+    }
+    actual_keys = set(report)
+    if actual_keys != expected_keys and actual_keys != expected_keys.union(
+        file_backed_keys
+    ):
+        raise ValueError(
+            "local evidence capture approval review keys mismatch: "
+            f"missing={expected_keys - actual_keys} "
+            f"extra={actual_keys - expected_keys - file_backed_keys}"
+        )
+    if report.get("schema_version") != LOCAL_EVIDENCE_CAPTURE_REVIEW_SCHEMA_VERSION:
+        raise ValueError("local evidence capture approval review schema_version mismatch")
+    if report.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("local evidence capture approval review experiment_id mismatch")
+    if report.get("status") != LOCAL_EVIDENCE_CAPTURE_REVIEW_STATUS:
+        raise ValueError("local evidence capture approval review status mismatch")
+    if report.get("approval_scope") != LOCAL_EVIDENCE_CAPTURE_SCOPE:
+        raise ValueError("local evidence capture approval review scope mismatch")
+    if not isinstance(report.get("approved_by"), str) or not report.get("approved_by"):
+        raise ValueError("local evidence capture approval review approved_by must be nonempty")
+    if not _is_sha256_string(report.get("offline_preflight_sha256")):
+        raise ValueError(
+            "local evidence capture approval review offline preflight hash must be sha256"
+        )
+    if not _is_sha256_string(report.get("approval_receipt_sha256")):
+        raise ValueError("local evidence capture approval review receipt hash must be sha256")
+    if "approval_receipt_path" in report and (
+        not isinstance(report.get("approval_receipt_path"), str)
+        or not report.get("approval_receipt_path")
+    ):
+        raise ValueError("local evidence capture approval review receipt path must be nonempty")
+    if "approval_receipt_canonical" in report and report.get(
+        "approval_receipt_canonical"
+    ) is not True:
+        raise ValueError("local evidence capture approval receipt must be canonical")
+    if report.get("approved_capture_steps") != list(LOCAL_EVIDENCE_CAPTURE_STEPS):
+        raise ValueError("local evidence capture approval review steps mismatch")
+    if report.get("cost_counters") != ZERO_COST_COUNTERS:
+        raise ValueError("local evidence capture approval review cost counters must all be zero")
+    for key in (
+        "local_evidence_capture_authorized",
+        "cached_model_reads_authorized",
+    ):
+        if report.get(key) is not True:
+            raise ValueError(f"local evidence capture approval review {key} must be true")
+    for key in (
+        "model_download_authorized",
+        "inference_generation_authorized",
+        "dispatch_authorized",
+        "topic_access_authorized",
+        QRELS_ACCESS_AUTHORIZED_KEY,
+        "retrieval_authorized",
+        "reranking_authorized",
+        "external_network_authorized",
+        "external_cost_authorized",
+    ):
+        if report.get(key) is not False:
+            raise ValueError(f"local evidence capture approval review {key} must be false")
+    if report.get("next_gate") != LOCAL_EVIDENCE_CAPTURE_NEXT_GATE:
+        raise ValueError("local evidence capture approval review next_gate mismatch")
+
+
 def validate_untouched_topic_milestone_approval_review(
     report: Mapping[str, object],
 ) -> None:
@@ -1460,6 +1650,49 @@ def _validate_advisor_go_receipt(
         raise ValueError("advisor GO receipt live attestation review hash mismatch")
     if receipt.get(ADVISOR_CLOSED_GATES_ACK_KEY) is not True:
         raise ValueError("advisor GO receipt must acknowledge closed external gates")
+
+
+def _validate_local_evidence_capture_approval_receipt(
+    receipt: Mapping[str, object],
+    *,
+    offline_preflight_sha256: str,
+) -> None:
+    expected_keys = {
+        "schema_version",
+        "approval_scope",
+        "approved_by",
+        "offline_preflight_sha256",
+        LOCAL_EVIDENCE_CACHED_MODEL_ACK_KEY,
+        LOCAL_EVIDENCE_NO_DISPATCH_ACK_KEY,
+        LOCAL_EVIDENCE_NO_TOPICS_ACK_KEY,
+        LOCAL_EVIDENCE_NO_EXTERNAL_ACK_KEY,
+    }
+    keys = set(receipt)
+    if keys != expected_keys:
+        raise ValueError(
+            "local evidence capture approval receipt keys mismatch: "
+            f"missing={expected_keys - keys} extra={keys - expected_keys}"
+        )
+    if receipt.get("schema_version") != LOCAL_EVIDENCE_CAPTURE_APPROVAL_SCHEMA_VERSION:
+        raise ValueError("local evidence capture approval receipt schema_version mismatch")
+    if receipt.get("approval_scope") != LOCAL_EVIDENCE_CAPTURE_SCOPE:
+        raise ValueError("local evidence capture approval receipt scope mismatch")
+    if not isinstance(receipt.get("approved_by"), str) or not receipt.get("approved_by"):
+        raise ValueError("local evidence capture approval receipt approved_by must be nonempty")
+    if receipt.get("offline_preflight_sha256") != offline_preflight_sha256:
+        raise ValueError(
+            "local evidence capture approval receipt offline preflight hash mismatch"
+        )
+    for key in (
+        LOCAL_EVIDENCE_CACHED_MODEL_ACK_KEY,
+        LOCAL_EVIDENCE_NO_DISPATCH_ACK_KEY,
+        LOCAL_EVIDENCE_NO_TOPICS_ACK_KEY,
+        LOCAL_EVIDENCE_NO_EXTERNAL_ACK_KEY,
+    ):
+        if receipt.get(key) is not True:
+            raise ValueError(
+                f"local evidence capture approval receipt must acknowledge {key}"
+            )
 
 
 def _validate_reviewer_qualification_review_for_milestone(
@@ -1886,6 +2119,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Canonical advisor GO receipt JSON to bind without dispatch.",
     )
     parser.add_argument(
+        "--local-evidence-capture-approval-receipt",
+        type=Path,
+        help="Canonical advisor receipt approving only local evidence capture.",
+    )
+    parser.add_argument(
         "--reviewer-qualification-review",
         type=Path,
         help="Canonical reviewer qualification review JSON for untouched-topic/v5 approval.",
@@ -1942,6 +2180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             or args.assemble_live_attestation_bundle
             or args.live_attestation_review
             or args.advisor_go_receipt
+            or args.local_evidence_capture_approval_receipt
             or args.offset_parity_fixtures
             or args.offset_parity_review
         ):
@@ -1965,6 +2204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.live_attestation_bundle
             or args.live_attestation_review
             or args.advisor_go_receipt
+            or args.local_evidence_capture_approval_receipt
             or args.offset_parity_fixtures
             or args.reviewer_qualification_review
             or args.milestone_approval_receipt
@@ -2003,11 +2243,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.model_inventory_attestation
         or args.schema_compiler_attestation
         or args.model_runtime_attestation
-    ) and not args.live_attestation_bundle:
+    ) and not args.live_attestation_bundle and not args.local_evidence_capture_approval_receipt:
         raise ValueError(
             "--model-inventory-attestation/--schema-compiler-attestation/"
             "--model-runtime-attestation require --live-attestation-bundle"
         )
+    elif args.local_evidence_capture_approval_receipt:
+        if (
+            args.live_attestation_bundle
+            or args.live_attestation_review
+            or args.advisor_go_receipt
+            or args.offset_parity_fixtures
+            or args.offset_parity_review
+            or args.reviewer_qualification_review
+            or args.milestone_approval_receipt
+            or args.model_inventory_snapshot
+            or args.model_inventory_attestation
+            or args.schema_compiler_attestation
+            or args.model_runtime_attestation
+        ):
+            raise ValueError(
+                "--local-evidence-capture-approval-receipt cannot be combined "
+                "with other preflight modes"
+            )
+        report = build_local_evidence_capture_approval_review_from_files(
+            args.local_evidence_capture_approval_receipt,
+            artifact_dir=args.artifact_dir,
+        )
+        output_is_canonical_json = False
     elif args.milestone_approval_receipt or args.reviewer_qualification_review:
         if (
             args.model_inventory_attestation

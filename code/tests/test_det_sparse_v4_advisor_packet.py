@@ -60,6 +60,12 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
     assert "all 24 per-case response-schema hashes" in text
     assert "canonical per-case\n  response-schema SHA-256s" in text
+    assert "--local-evidence-capture-approval-receipt path/to/local-evidence-capture-approval.json" in text
+    assert "semantic_anchor_local_evidence_capture_approval_v1" in text
+    assert "semantic_anchor_local_evidence_capture_approval_review_v1" in text
+    assert "bind the current offline preflight SHA-256" in text
+    assert "no model dispatch or inference\ngeneration" in text
+    assert "next_gate=run_local_evidence_capture_without_dispatch" in text
     assert "executable ledger-prefix validator" in text
     assert "actual zero-dispatch run-directory replay" in text
     assert "offline completed synthetic run-directory replay validated" in text
@@ -113,6 +119,11 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "--reviewer-qualification-review path/to/reviewer-qualification-review.json" in text
     assert "--milestone-approval-receipt path/to/milestone-approval-receipt.json" in text
     assert "does not authorize topic access, retrieval,\nreranking, or external cost" in text
+    assert "--local-evidence-capture-approval-receipt path/to/local-evidence-capture-go.json" in text
+    assert "semantic_anchor_local_evidence_capture_approval_v1" in text
+    assert "bind\nthe exact offline preflight SHA-256" in text
+    assert "`local_evidence_capture_authorized=true`" in text
+    assert "external network, and\nexternal cost authorization false" in text
     assert "--model-inventory-snapshot" in text
     assert "--model-inventory-attestation path/to/model-inventory-attestation.json" in text
     assert "--schema-compiler-attestation path/to/schema-compiler-attestation.json" in text
@@ -122,7 +133,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "exactly embed those same compiler\nand runtime records" in text
     assert "all five evidence files" in text
     assert "read-only model inventory\ncapture mechanics" in text
-    assert "`199 passed`." in text
+    assert "`206 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
