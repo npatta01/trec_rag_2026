@@ -102,6 +102,45 @@ def _write_offset_parity_review(tmp_path: Path) -> Path:
     return review_path
 
 
+def _reviewer_qualification_review() -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_reviewer_qualification_review_v1",
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": "reviewer_qualification_review_pass",
+        "scorer_review_path": "/tmp/scorer-review.json",
+        "scorer_review_sha256": "1" * 64,
+        "reviewer_receipt_path": "/tmp/reviewer-receipt.json",
+        "reviewer_receipt_sha256": "2" * 64,
+        "sealed_responses_sha256": "3" * 64,
+        "gold_sha256": "4" * 64,
+        "rubric_artifact": "semantic_anchor_reviewer_rubric_v1.md",
+        "rubric_sha256": "5" * 64,
+        "artifact_bundle_sha256": "6" * 64,
+        "reviewer_count": 2,
+        "unanimous": True,
+        "terminal_state": "completed_synthetic_go",
+        "inference_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+    }
+
+
+def _untouched_topic_milestone_approval_receipt(
+    qualification_review: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_untouched_topic_milestone_advisor_approval_v1",
+        "approval_scope": "det_sparse_v5_untouched_topic_confirmation_design",
+        "approved_by": "advisor-review",
+        "reviewer_qualification_review_sha256": contract.sha256_bytes(
+            preflight.canonical_report_bytes(qualification_review)
+        ),
+        "acknowledged_consumed_dev_and_known_five_remain_closed": True,
+        "acknowledged_new_versioned_confirmation_set_required": True,
+        "acknowledged_no_retrieval_reranking_or_paid_calls_without_separate_gate": True,
+    }
+
+
 def _schema_compiler_attestation(request_identity):
     return {
         "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
@@ -115,7 +154,7 @@ def _schema_compiler_attestation(request_identity):
             {
                 "case_id": case_id,
                 "request_sha256": request_sha256,
-                "schema_sha256": f"{index:064x}"[-64:],
+                "schema_sha256": request_identity["schema_sha256"][case_id],
                 "xgrammar_strict": "pass",
             }
             for index, (case_id, request_sha256) in enumerate(
@@ -178,6 +217,13 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     assert runtime_file_access["checker"] == "det_sparse_v4_runtime_file_access_audit_v1"
     assert runtime_file_access["status"] == "pass"
     assert runtime_file_access["observed_open_count"] >= report["artifact_count"]
+    request_identity = report["request_identity"]
+    assert list(request_identity["schema_sha256"]) == [
+        f"synthetic-case-{index:03d}" for index in range(1, 25)
+    ]
+    assert all(
+        len(value) == 64 for value in request_identity["schema_sha256"].values()
+    )
     assert runtime_file_access["observed_read_path_count"] >= report["artifact_count"]
     assert runtime_file_access["observed_write_path_count"] == 0
     assert runtime_file_access["denied_path_fragment_issues"] == {}
@@ -200,10 +246,14 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     assert list(request_identity["request_sha256"]) == [
         f"synthetic-case-{index:03d}" for index in range(1, 25)
     ]
+    assert list(request_identity["schema_sha256"]) == [
+        f"synthetic-case-{index:03d}" for index in range(1, 25)
+    ]
     assert list(request_identity["request_body_size_bytes"]) == [
         f"synthetic-case-{index:03d}" for index in range(1, 25)
     ]
     assert all(len(value) == 64 for value in request_identity["request_sha256"].values())
+    assert all(len(value) == 64 for value in request_identity["schema_sha256"].values())
     assert all(value > 0 for value in request_identity["request_body_size_bytes"].values())
     assert report["denied_topic_ids"] == list(contract.DENIED_TOPIC_IDS)
     assert report["runner_visible_artifacts"] == list(contract.runner_visible_artifacts())
@@ -247,6 +297,14 @@ def test_offline_preflight_report_rejects_inference_or_cost_authorization():
     request_identity["request_sha256"]["synthetic-case-001"] = "not-a-sha"
     report["request_identity"] = request_identity
     with pytest.raises(ValueError, match="request hash"):
+        preflight.validate_offline_preflight_report(report)
+
+    report = preflight.build_offline_preflight_report()
+    request_identity = dict(report["request_identity"])
+    request_identity["schema_sha256"] = dict(request_identity["schema_sha256"])
+    request_identity["schema_sha256"]["synthetic-case-001"] = "not-a-sha"
+    report["request_identity"] = request_identity
+    with pytest.raises(ValueError, match="schema hash"):
         preflight.validate_offline_preflight_report(report)
 
     report = preflight.build_offline_preflight_report()
@@ -534,6 +592,25 @@ def test_live_attestation_review_rejects_model_inventory_and_write_drift(tmp_pat
         preflight.validate_live_attestation_review(report)
 
 
+def test_live_attestation_review_rejects_schema_compiler_schema_hash_drift(
+    tmp_path: Path,
+):
+    artifact_hashes = contract.validate_artifact_bundle()
+    model_inventory_sha256 = artifact_hashes[
+        "semantic_anchor_model_inventory_attestation_v1.json"
+    ]
+    bundle = _live_attestation_bundle(model_inventory_sha256)
+    bundle["schema_compiler"]["cases"][0]["schema_sha256"] = "9" * 64
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle_path.write_bytes(contract.canonical_json_bytes(bundle) + b"\n")
+
+    with pytest.raises(ValueError, match="schema_sha256 mismatch"):
+        preflight.build_live_attestation_review(
+            bundle_path,
+            offset_parity_review_path=_write_offset_parity_review(tmp_path),
+        )
+
+
 def test_live_attestation_review_rejects_noncanonical_bundle_bytes(tmp_path: Path):
     artifact_hashes = contract.validate_artifact_bundle()
     bundle_path = tmp_path / "live-attestation-bundle.json"
@@ -805,6 +882,144 @@ def test_advisor_dispatch_go_review_cli_rejects_partial_or_noncanonical_receipts
         )
 
 
+def test_untouched_topic_milestone_approval_review_is_bound_and_closed():
+    qualification_review = _reviewer_qualification_review()
+    approval_receipt = _untouched_topic_milestone_approval_receipt(
+        qualification_review
+    )
+
+    review = preflight.build_untouched_topic_milestone_approval_review(
+        qualification_review,
+        approval_receipt,
+    )
+
+    assert review["schema_version"] == (
+        "semantic_anchor_untouched_topic_milestone_approval_review_v1"
+    )
+    assert review["status"] == "untouched_topic_milestone_approval_review_pass"
+    assert review["approval_scope"] == (
+        "det_sparse_v5_untouched_topic_confirmation_design"
+    )
+    assert review["topic_access_authorized"] is False
+    assert review["retrieval_authorized"] is False
+    assert review["reranking_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    assert review["next_gate"] == "design_versioned_untouched_topic_confirmation_set"
+    preflight.validate_untouched_topic_milestone_approval_review(review)
+
+    mutated_receipt = dict(
+        approval_receipt,
+        reviewer_qualification_review_sha256="9" * 64,
+    )
+    with pytest.raises(ValueError, match="qualification review hash mismatch"):
+        preflight.build_untouched_topic_milestone_approval_review(
+            qualification_review,
+            mutated_receipt,
+        )
+
+    mutated_receipt = dict(
+        approval_receipt,
+        acknowledged_consumed_dev_and_known_five_remain_closed=False,
+    )
+    with pytest.raises(ValueError, match="closed consumed topic sets"):
+        preflight.build_untouched_topic_milestone_approval_review(
+            qualification_review,
+            mutated_receipt,
+        )
+
+    no_go_qualification = dict(
+        qualification_review,
+        terminal_state="completed_qualification_no_go",
+    )
+    with pytest.raises(ValueError, match="requires completed_synthetic_go"):
+        preflight.build_untouched_topic_milestone_approval_review(
+            no_go_qualification,
+            _untouched_topic_milestone_approval_receipt(no_go_qualification),
+        )
+
+
+def test_untouched_topic_milestone_approval_review_cli_is_create_only(
+    tmp_path: Path,
+):
+    qualification_review_path = tmp_path / "reviewer-qualification-review.json"
+    approval_receipt_path = tmp_path / "milestone-approval-receipt.json"
+    output_path = tmp_path / "milestone-approval-review.json"
+    qualification_review = _reviewer_qualification_review()
+    approval_receipt = _untouched_topic_milestone_approval_receipt(
+        qualification_review
+    )
+    qualification_review_path.write_bytes(
+        preflight.canonical_report_bytes(qualification_review)
+    )
+    approval_receipt_path.write_bytes(
+        contract.canonical_json_bytes(approval_receipt) + b"\n"
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_preflight",
+            "--reviewer-qualification-review",
+            str(qualification_review_path),
+            "--milestone-approval-receipt",
+            str(approval_receipt_path),
+            "--output",
+            str(output_path),
+            "--pretty",
+        ],
+        check=True,
+        cwd=Path.cwd(),
+    )
+
+    review = json.loads(output_path.read_text(encoding="utf-8"))
+    assert review["reviewer_qualification_review_path"] == str(
+        qualification_review_path.resolve()
+    )
+    assert review["approval_receipt_path"] == str(approval_receipt_path.resolve())
+    assert review["approval_receipt_canonical"] is True
+    assert review["topic_access_authorized"] is False
+    assert review["retrieval_authorized"] is False
+    preflight.validate_untouched_topic_milestone_approval_review(review)
+    with pytest.raises(FileExistsError):
+        preflight.main(
+            [
+                "--reviewer-qualification-review",
+                str(qualification_review_path),
+                "--milestone-approval-receipt",
+                str(approval_receipt_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+
+
+def test_untouched_topic_milestone_approval_cli_rejects_partial_or_noncanonical(
+    tmp_path: Path,
+):
+    qualification_review_path = tmp_path / "reviewer-qualification-review.json"
+    approval_receipt_path = tmp_path / "milestone-approval-receipt.json"
+    qualification_review = _reviewer_qualification_review()
+    approval_receipt = _untouched_topic_milestone_approval_receipt(
+        qualification_review
+    )
+    qualification_review_path.write_bytes(
+        preflight.canonical_report_bytes(qualification_review)
+    )
+    approval_receipt_path.write_text(
+        json.dumps(approval_receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires --reviewer-qualification-review"):
+        preflight.main(["--milestone-approval-receipt", str(approval_receipt_path)])
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.build_untouched_topic_milestone_approval_review_from_files(
+            qualification_review_path,
+            approval_receipt_path,
+        )
+
+
 def test_offline_preflight_fails_on_denied_imports(tmp_path: Path):
     bad_source = tmp_path / "bad_v4_runner.py"
     bad_source.write_text(
@@ -876,7 +1091,9 @@ def test_offline_preflight_schema_compatibility_reports_unsupported_features(tmp
     assert summary["unsupported_feature_issues"][0]["keyword"] == "uniqueItems"
 
 
-def test_offline_preflight_request_identity_binds_fixed_case_order_and_request_hashes(tmp_path: Path):
+def test_offline_preflight_request_identity_binds_fixed_case_order_request_and_schema_hashes(
+    tmp_path: Path,
+):
     copied = tmp_path / "artifacts"
     shutil.copytree(contract.ARTIFACT_DIR, copied)
 
@@ -885,7 +1102,11 @@ def test_offline_preflight_request_identity_binds_fixed_case_order_and_request_h
     assert summary["status"] == "pass"
     assert summary["first_case_id"] == "synthetic-case-001"
     assert len(summary["request_sha256"]) == 24
+    assert len(summary["schema_sha256"]) == 24
     assert summary["request_sha256"]["synthetic-case-001"] != summary["request_sha256"][
+        "synthetic-case-002"
+    ]
+    assert summary["schema_sha256"]["synthetic-case-001"] != summary["schema_sha256"][
         "synthetic-case-002"
     ]
 

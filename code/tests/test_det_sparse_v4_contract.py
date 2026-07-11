@@ -1025,7 +1025,7 @@ def _schema_compiler_attestation(request_identity=None):
             {
                 "case_id": case_id,
                 "request_sha256": request_sha256,
-                "schema_sha256": f"{index:064x}"[-64:],
+                "schema_sha256": request_identity["schema_sha256"][case_id],
                 "xgrammar_strict": "pass",
             }
             for index, (case_id, request_sha256) in enumerate(
@@ -1074,6 +1074,12 @@ def test_schema_compiler_attestation_binds_request_identity_and_backend():
         v4.validate_schema_compiler_attestation(mutated, request_identity=request_identity)
 
     mutated = dict(record)
+    mutated["cases"] = [dict(case) for case in record["cases"]]
+    mutated["cases"][0]["schema_sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="schema_sha256"):
+        v4.validate_schema_compiler_attestation(mutated, request_identity=request_identity)
+
+    mutated = dict(record)
     mutated["cases"] = [dict(case) for case in reversed(record["cases"])]
     with pytest.raises(ValueError, match="case order"):
         v4.validate_schema_compiler_attestation(mutated, request_identity=request_identity)
@@ -1082,6 +1088,15 @@ def test_schema_compiler_attestation_binds_request_identity_and_backend():
     mutated_identity["request_sha256"] = dict(mutated_identity["request_sha256"])
     mutated_identity["request_sha256"]["synthetic-case-001"] = "not-a-sha"
     with pytest.raises(ValueError, match="request_identity request_sha256"):
+        v4.validate_schema_compiler_attestation(
+            record,
+            request_identity=mutated_identity,
+        )
+
+    mutated_identity = dict(request_identity)
+    mutated_identity["schema_sha256"] = dict(mutated_identity["schema_sha256"])
+    mutated_identity["schema_sha256"]["synthetic-case-001"] = "not-a-sha"
+    with pytest.raises(ValueError, match="request_identity schema_sha256"):
         v4.validate_schema_compiler_attestation(
             record,
             request_identity=mutated_identity,

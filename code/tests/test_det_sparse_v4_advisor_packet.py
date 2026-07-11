@@ -52,6 +52,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
+    assert "all 24 per-case response-schema hashes" in text
+    assert "canonical per-case\n  response-schema SHA-256s" in text
     assert "executable ledger-prefix validator" in text
     assert "actual zero-dispatch run-directory replay" in text
     assert "offline completed synthetic run-directory replay validated" in text
@@ -101,7 +103,11 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "ledger-bound scorer-only" in text
     assert "--qualification-review" in text
     assert "--reviewer-receipt path/to/reviewer-receipt.json" in text
-    assert "`189 passed`." in text
+    assert "semantic_anchor_untouched_topic_milestone_advisor_approval_v1" in text
+    assert "--reviewer-qualification-review path/to/reviewer-qualification-review.json" in text
+    assert "--milestone-approval-receipt path/to/milestone-approval-receipt.json" in text
+    assert "does not authorize topic access, retrieval,\nreranking, or external cost" in text
+    assert "`193 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

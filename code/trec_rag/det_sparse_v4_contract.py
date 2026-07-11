@@ -426,9 +426,14 @@ def validate_schema_compiler_attestation(
     if record.get("case_order_sha256") != expected_order_sha256:
         raise ValueError("schema compiler case_order_sha256 mismatch")
     request_sha256 = _as_mapping(request_identity.get("request_sha256"), "request_sha256")
+    expected_schema_sha256 = _as_mapping(
+        request_identity.get("schema_sha256"), "schema_sha256"
+    )
     expected_case_order = tuple(request_sha256)
     if len(expected_case_order) != 24:
         raise ValueError("schema compiler request identity must contain 24 cases")
+    if tuple(expected_schema_sha256) != expected_case_order:
+        raise ValueError("schema compiler schema identity order mismatch")
 
     cases = record.get("cases")
     if not isinstance(cases, list) or len(cases) != len(expected_case_order):
@@ -448,7 +453,12 @@ def validate_schema_compiler_attestation(
         )
         if case.get("request_sha256") != expected_request_sha256:
             raise ValueError("schema compiler request_sha256 mismatch")
-        _validate_sha256_string(case.get("schema_sha256"), "schema_sha256")
+        expected_schema_hash = _validate_sha256_string(
+            expected_schema_sha256.get(case_id),
+            f"request_identity schema_sha256[{case_id}]",
+        )
+        if case.get("schema_sha256") != expected_schema_hash:
+            raise ValueError("schema compiler schema_sha256 mismatch")
         if case.get("xgrammar_strict") != "pass":
             raise ValueError("schema compiler xgrammar_strict must pass")
     if tuple(observed_order) != expected_case_order:

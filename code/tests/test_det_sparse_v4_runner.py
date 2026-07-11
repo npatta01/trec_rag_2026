@@ -245,7 +245,7 @@ def _schema_compiler_attestation(request_identity):
             {
                 "case_id": case_id,
                 "request_sha256": request_sha256,
-                "schema_sha256": f"{index:064x}"[-64:],
+                "schema_sha256": request_identity["schema_sha256"][case_id],
                 "xgrammar_strict": "pass",
             }
             for index, (case_id, request_sha256) in enumerate(

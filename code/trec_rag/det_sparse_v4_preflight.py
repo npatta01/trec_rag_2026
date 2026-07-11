@@ -25,14 +25,28 @@ LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION = "semantic_anchor_live_attestation_revie
 LIVE_ATTESTATION_REVIEW_STATUS = "live_attestation_review_pass"
 ADVISOR_DISPATCH_GO_REVIEW_SCHEMA_VERSION = "semantic_anchor_advisor_dispatch_go_review_v1"
 ADVISOR_DISPATCH_GO_REVIEW_STATUS = "advisor_dispatch_go_review_pass"
+UNTOUCHED_TOPIC_APPROVAL_REVIEW_SCHEMA_VERSION = (
+    "semantic_anchor_untouched_topic_milestone_approval_review_v1"
+)
+UNTOUCHED_TOPIC_APPROVAL_REVIEW_STATUS = "untouched_topic_milestone_approval_review_pass"
 OFFSET_PARITY_REVIEW_SCHEMA_VERSION = "semantic_anchor_offset_parity_review_v1"
 OFFSET_PARITY_REVIEW_STATUS = "offset_parity_review_pass"
 NEXT_GATE = "advisor_review_before_live_attestation_or_model_inference"
 OFFSET_PARITY_NEXT_GATE = "live_model_inventory_and_compiler_attestation"
 LIVE_ATTESTATION_NEXT_GATE = "advisor_go_before_model_dispatch"
 ADVISOR_DISPATCH_GO_NEXT_GATE = "manual_runner_invocation_still_required"
+UNTOUCHED_TOPIC_APPROVAL_NEXT_GATE = "design_versioned_untouched_topic_confirmation_set"
 ADVISOR_CLOSED_GATES_ACK_KEY = (
     "acknowledged_no_topic_q" + "rels_retrieval_rerank_or_paid_calls"
+)
+UNTOUCHED_TOPIC_CLOSED_SET_ACK_KEY = (
+    "acknowledged_consumed_dev_and_known_five_remain_closed"
+)
+UNTOUCHED_TOPIC_VERSIONED_SET_ACK_KEY = (
+    "acknowledged_new_versioned_confirmation_set_required"
+)
+UNTOUCHED_TOPIC_COST_ACK_KEY = (
+    "acknowledged_no_retrieval_reranking_or_paid_calls_without_separate_gate"
 )
 ZERO_COST_COUNTERS = {
     "model_calls": 0,
@@ -330,6 +344,74 @@ def build_advisor_dispatch_go_review_from_files(
     return review
 
 
+def build_untouched_topic_milestone_approval_review(
+    reviewer_qualification_review: Mapping[str, object],
+    approval_receipt: Mapping[str, object],
+) -> dict[str, object]:
+    """Validate advisor approval before any untouched-topic/v5 milestone design."""
+
+    _validate_reviewer_qualification_review_for_milestone(
+        reviewer_qualification_review
+    )
+    _validate_untouched_topic_milestone_approval_receipt(
+        approval_receipt,
+        reviewer_qualification_review=reviewer_qualification_review,
+    )
+    qualification_review_sha256 = contract.sha256_bytes(
+        canonical_report_bytes(reviewer_qualification_review)
+    )
+    return {
+        "schema_version": UNTOUCHED_TOPIC_APPROVAL_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": UNTOUCHED_TOPIC_APPROVAL_REVIEW_STATUS,
+        "reviewer_qualification_review_sha256": qualification_review_sha256,
+        "approval_receipt_sha256": contract.sha256_bytes(
+            contract.canonical_json_bytes(approval_receipt)
+        ),
+        "approved_by": approval_receipt["approved_by"],
+        "approval_scope": approval_receipt["approval_scope"],
+        "cost_counters": dict(ZERO_COST_COUNTERS),
+        "topic_access_authorized": False,
+        "retrieval_authorized": False,
+        "reranking_authorized": False,
+        "external_cost_authorized": False,
+        "next_gate": UNTOUCHED_TOPIC_APPROVAL_NEXT_GATE,
+    }
+
+
+def build_untouched_topic_milestone_approval_review_from_files(
+    reviewer_qualification_review_path: Path,
+    approval_receipt_path: Path,
+) -> dict[str, object]:
+    """Validate file-backed untouched-topic/v5 approval without topic access."""
+
+    qualification_file = reviewer_qualification_review_path.resolve()
+    receipt_file = approval_receipt_path.resolve()
+    qualification_review = _require_mapping(
+        contract.load_json_no_duplicates(qualification_file),
+        "reviewer qualification review",
+    )
+    approval_receipt = _require_mapping(
+        contract.load_json_no_duplicates(receipt_file),
+        "untouched topic milestone approval receipt",
+    )
+    if qualification_file.read_bytes() != canonical_report_bytes(qualification_review):
+        raise ValueError("reviewer qualification review is not canonical JSON bytes")
+    if receipt_file.read_bytes() != contract.canonical_json_bytes(approval_receipt) + b"\n":
+        raise ValueError(
+            "untouched topic milestone approval receipt is not canonical JSON bytes"
+        )
+    review = build_untouched_topic_milestone_approval_review(
+        qualification_review,
+        approval_receipt,
+    )
+    review["reviewer_qualification_review_path"] = str(qualification_file)
+    review["approval_receipt_path"] = str(receipt_file)
+    review["approval_receipt_canonical"] = True
+    validate_untouched_topic_milestone_approval_review(review)
+    return review
+
+
 def build_offset_parity_review(fixtures_path: Path) -> dict[str, object]:
     """Validate captured live offset parity fixtures without model inference."""
 
@@ -622,10 +704,16 @@ def build_request_identity_summary(
 
     request_sha256: dict[str, str] = {}
     request_body_size_bytes: dict[str, int] = {}
+    schema_sha256: dict[str, str] = {}
     for case_id in case_order:
-        request_body = contract.canonical_json_bytes(request_by_case[case_id])
+        request = request_by_case[case_id]
+        response_format = _require_mapping(request.get("response_format"), "response_format")
+        json_schema = _require_mapping(response_format.get("json_schema"), "json_schema")
+        schema = _require_mapping(json_schema.get("schema"), "schema")
+        request_body = contract.canonical_json_bytes(request)
         request_sha256[case_id] = contract.sha256_bytes(request_body)
         request_body_size_bytes[case_id] = len(request_body)
+        schema_sha256[case_id] = contract.sha256_bytes(contract.canonical_json_bytes(schema))
     order_body = contract.canonical_json_bytes(list(case_order))
     return {
         "checker": REQUEST_IDENTITY_CHECKER,
@@ -634,6 +722,7 @@ def build_request_identity_summary(
         "first_case_id": case_order[0],
         "case_order_sha256": contract.sha256_bytes(order_body),
         "request_sha256": request_sha256,
+        "schema_sha256": schema_sha256,
         "request_body_size_bytes": request_body_size_bytes,
     }
 
@@ -715,19 +804,26 @@ def validate_offline_preflight_report(
     if not _is_sha256_string(request_identity.get("case_order_sha256")):
         raise ValueError("offline preflight case_order_sha256 mismatch")
     request_sha256 = request_identity.get("request_sha256")
+    schema_sha256 = request_identity.get("schema_sha256")
     request_body_size_bytes = request_identity.get("request_body_size_bytes")
     if not isinstance(request_sha256, Mapping) or not isinstance(
         request_body_size_bytes, Mapping
+    ) or not isinstance(
+        schema_sha256, Mapping
     ):
         raise ValueError("offline preflight request identity maps must be objects")
     expected_case_ids = [f"synthetic-case-{index:03d}" for index in range(1, 25)]
     if list(request_sha256) != expected_case_ids:
         raise ValueError("offline preflight request identity order mismatch")
+    if list(schema_sha256) != expected_case_ids:
+        raise ValueError("offline preflight schema identity order mismatch")
     if list(request_body_size_bytes) != expected_case_ids:
         raise ValueError("offline preflight request size order mismatch")
     for case_id in expected_case_ids:
         if not _is_sha256_string(request_sha256.get(case_id)):
             raise ValueError("offline preflight request hash mismatch")
+        if not _is_sha256_string(schema_sha256.get(case_id)):
+            raise ValueError("offline preflight schema hash mismatch")
         size = request_body_size_bytes.get(case_id)
         if isinstance(size, bool) or not isinstance(size, int) or size < 1:
             raise ValueError("offline preflight request body size mismatch")
@@ -862,6 +958,78 @@ def validate_advisor_dispatch_go_review(report: Mapping[str, object]) -> None:
             raise ValueError(f"advisor dispatch GO review {key} must be nonempty")
 
 
+def validate_untouched_topic_milestone_approval_review(
+    report: Mapping[str, object],
+) -> None:
+    """Validate that milestone approval still does not authorize topic access."""
+
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "reviewer_qualification_review_sha256",
+        "approval_receipt_sha256",
+        "approved_by",
+        "approval_scope",
+        "cost_counters",
+        "topic_access_authorized",
+        "retrieval_authorized",
+        "reranking_authorized",
+        "external_cost_authorized",
+        "next_gate",
+    }
+    file_backed_keys = {
+        "reviewer_qualification_review_path",
+        "approval_receipt_path",
+        "approval_receipt_canonical",
+    }
+    actual_keys = set(report)
+    if actual_keys != expected_keys and actual_keys != expected_keys.union(file_backed_keys):
+        raise ValueError(
+            "untouched topic milestone approval review keys mismatch: "
+            f"missing={expected_keys - actual_keys} "
+            f"extra={actual_keys - expected_keys - file_backed_keys}"
+        )
+    if report.get("schema_version") != UNTOUCHED_TOPIC_APPROVAL_REVIEW_SCHEMA_VERSION:
+        raise ValueError("untouched topic milestone approval review schema_version mismatch")
+    if report.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("untouched topic milestone approval review experiment_id mismatch")
+    if report.get("status") != UNTOUCHED_TOPIC_APPROVAL_REVIEW_STATUS:
+        raise ValueError("untouched topic milestone approval review status mismatch")
+    for key in ("reviewer_qualification_review_sha256", "approval_receipt_sha256"):
+        if not _is_sha256_string(report.get(key)):
+            raise ValueError(
+                f"untouched topic milestone approval review {key} must be sha256"
+            )
+    if report.get("approval_scope") != "det_sparse_v5_untouched_topic_confirmation_design":
+        raise ValueError("untouched topic milestone approval review approval scope mismatch")
+    if not isinstance(report.get("approved_by"), str) or not report.get("approved_by"):
+        raise ValueError("untouched topic milestone approval review approved_by must be nonempty")
+    if report.get("cost_counters") != ZERO_COST_COUNTERS:
+        raise ValueError("untouched topic milestone approval review cost counters must all be zero")
+    if report.get("topic_access_authorized") is not False:
+        raise ValueError("untouched topic milestone approval review must not authorize topic access")
+    if report.get("retrieval_authorized") is not False:
+        raise ValueError("untouched topic milestone approval review must not authorize retrieval")
+    if report.get("reranking_authorized") is not False:
+        raise ValueError("untouched topic milestone approval review must not authorize reranking")
+    if report.get("external_cost_authorized") is not False:
+        raise ValueError("untouched topic milestone approval review must not authorize external cost")
+    if report.get("next_gate") != UNTOUCHED_TOPIC_APPROVAL_NEXT_GATE:
+        raise ValueError("untouched topic milestone approval review next_gate mismatch")
+    if "approval_receipt_canonical" in report and report.get(
+        "approval_receipt_canonical"
+    ) is not True:
+        raise ValueError("untouched topic milestone approval receipt must be canonical")
+    for key in ("reviewer_qualification_review_path", "approval_receipt_path"):
+        if key in report and (
+            not isinstance(report.get(key), str) or not report.get(key)
+        ):
+            raise ValueError(
+                f"untouched topic milestone approval review {key} must be nonempty"
+            )
+
+
 def _validate_advisor_go_receipt(
     receipt: Mapping[str, object],
     *,
@@ -893,6 +1061,114 @@ def _validate_advisor_go_receipt(
         raise ValueError("advisor GO receipt live attestation review hash mismatch")
     if receipt.get(ADVISOR_CLOSED_GATES_ACK_KEY) is not True:
         raise ValueError("advisor GO receipt must acknowledge closed external gates")
+
+
+def _validate_reviewer_qualification_review_for_milestone(
+    review: Mapping[str, object],
+) -> None:
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "scorer_review_path",
+        "scorer_review_sha256",
+        "reviewer_receipt_path",
+        "reviewer_receipt_sha256",
+        "sealed_responses_sha256",
+        "gold_sha256",
+        "rubric_artifact",
+        "rubric_sha256",
+        "artifact_bundle_sha256",
+        "reviewer_count",
+        "unanimous",
+        "terminal_state",
+        "inference_authorized",
+        "dispatch_authorized",
+        "external_cost_authorized",
+    }
+    keys = set(review)
+    if keys != expected_keys:
+        raise ValueError(
+            "reviewer qualification review keys mismatch: "
+            f"missing={expected_keys - keys} extra={keys - expected_keys}"
+        )
+    if review.get("schema_version") != "semantic_anchor_reviewer_qualification_review_v1":
+        raise ValueError("reviewer qualification review schema_version mismatch")
+    if review.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("reviewer qualification review experiment_id mismatch")
+    if review.get("status") != "reviewer_qualification_review_pass":
+        raise ValueError("reviewer qualification review status mismatch")
+    if review.get("terminal_state") != "completed_synthetic_go":
+        raise ValueError("untouched topic milestone requires completed_synthetic_go")
+    for key in (
+        "scorer_review_sha256",
+        "reviewer_receipt_sha256",
+        "sealed_responses_sha256",
+        "gold_sha256",
+        "rubric_sha256",
+        "artifact_bundle_sha256",
+    ):
+        if not _is_sha256_string(review.get(key)):
+            raise ValueError(f"reviewer qualification review {key} must be sha256")
+    if not isinstance(review.get("reviewer_count"), int) or review["reviewer_count"] < 2:
+        raise ValueError("reviewer qualification review requires at least two reviewers")
+    if review.get("unanimous") is not True:
+        raise ValueError("reviewer qualification review must be unanimous")
+    if review.get("inference_authorized") is not False:
+        raise ValueError("reviewer qualification review must not authorize inference")
+    if review.get("dispatch_authorized") is not False:
+        raise ValueError("reviewer qualification review must not authorize dispatch")
+    if review.get("external_cost_authorized") is not False:
+        raise ValueError("reviewer qualification review must not authorize external cost")
+
+
+def _validate_untouched_topic_milestone_approval_receipt(
+    receipt: Mapping[str, object],
+    *,
+    reviewer_qualification_review: Mapping[str, object],
+) -> None:
+    expected_keys = {
+        "schema_version",
+        "approval_scope",
+        "approved_by",
+        "reviewer_qualification_review_sha256",
+        UNTOUCHED_TOPIC_CLOSED_SET_ACK_KEY,
+        UNTOUCHED_TOPIC_VERSIONED_SET_ACK_KEY,
+        UNTOUCHED_TOPIC_COST_ACK_KEY,
+    }
+    keys = set(receipt)
+    if keys != expected_keys:
+        raise ValueError(
+            "untouched topic milestone approval receipt keys mismatch: "
+            f"missing={expected_keys - keys} extra={keys - expected_keys}"
+        )
+    if receipt.get("schema_version") != (
+        "semantic_anchor_untouched_topic_milestone_advisor_approval_v1"
+    ):
+        raise ValueError("untouched topic milestone approval receipt schema_version mismatch")
+    if receipt.get("approval_scope") != "det_sparse_v5_untouched_topic_confirmation_design":
+        raise ValueError("untouched topic milestone approval receipt approval scope mismatch")
+    if not isinstance(receipt.get("approved_by"), str) or not receipt.get("approved_by"):
+        raise ValueError("untouched topic milestone approval receipt approved_by must be nonempty")
+    expected_review_sha256 = contract.sha256_bytes(
+        canonical_report_bytes(reviewer_qualification_review)
+    )
+    if receipt.get("reviewer_qualification_review_sha256") != expected_review_sha256:
+        raise ValueError(
+            "untouched topic milestone approval receipt qualification review hash mismatch"
+        )
+    if receipt.get(UNTOUCHED_TOPIC_CLOSED_SET_ACK_KEY) is not True:
+        raise ValueError(
+            "untouched topic milestone approval must acknowledge closed consumed topic sets"
+        )
+    if receipt.get(UNTOUCHED_TOPIC_VERSIONED_SET_ACK_KEY) is not True:
+        raise ValueError(
+            "untouched topic milestone approval must require a new versioned set"
+        )
+    if receipt.get(UNTOUCHED_TOPIC_COST_ACK_KEY) is not True:
+        raise ValueError(
+            "untouched topic milestone approval must acknowledge separate cost gate"
+        )
 
 
 def _validate_offset_parity_fixture_record(
@@ -1183,6 +1459,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Canonical advisor GO receipt JSON to bind without dispatch.",
     )
     parser.add_argument(
+        "--reviewer-qualification-review",
+        type=Path,
+        help="Canonical reviewer qualification review JSON for untouched-topic/v5 approval.",
+    )
+    parser.add_argument(
+        "--milestone-approval-receipt",
+        type=Path,
+        help="Canonical advisor receipt approving only untouched-topic/v5 milestone design.",
+    )
+    parser.add_argument(
         "--offset-parity-fixtures",
         type=Path,
         help="Canonical captured 48-row offset parity fixture JSON to review.",
@@ -1198,7 +1484,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    if args.advisor_go_receipt or args.live_attestation_review:
+    if args.milestone_approval_receipt or args.reviewer_qualification_review:
+        if not (args.milestone_approval_receipt and args.reviewer_qualification_review):
+            raise ValueError(
+                "--milestone-approval-receipt requires "
+                "--reviewer-qualification-review, and vice versa"
+            )
+        if (
+            args.live_attestation_bundle
+            or args.live_attestation_review
+            or args.advisor_go_receipt
+            or args.offset_parity_fixtures
+            or args.offset_parity_review
+        ):
+            raise ValueError(
+                "untouched-topic milestone approval review cannot be combined "
+                "with live attestation, advisor GO, or offset parity review"
+            )
+        report = build_untouched_topic_milestone_approval_review_from_files(
+            args.reviewer_qualification_review,
+            args.milestone_approval_receipt,
+        )
+    elif args.advisor_go_receipt or args.live_attestation_review:
         if not (args.advisor_go_receipt and args.live_attestation_review):
             raise ValueError(
                 "--advisor-go-receipt requires --live-attestation-review, and vice versa"
