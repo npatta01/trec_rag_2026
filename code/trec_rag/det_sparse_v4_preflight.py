@@ -353,12 +353,74 @@ def build_live_attestation_bundle_from_files(
 ) -> dict[str, object]:
     """Assemble the canonical live-attestation bundle from validated evidence files."""
 
+    report = _build_live_attestation_bundle_assembly_report_untraced(
+        offset_parity_review_path=offset_parity_review_path,
+        model_inventory_attestation_path=model_inventory_attestation_path,
+        schema_compiler_attestation_path=schema_compiler_attestation_path,
+        model_runtime_attestation_path=model_runtime_attestation_path,
+        artifact_dir=artifact_dir,
+    )
+    return dict(_require_mapping(report.get("bundle"), "live attestation bundle"))
+
+
+def build_live_attestation_bundle_assembly_report(
+    *,
+    offset_parity_review_path: Path,
+    model_inventory_attestation_path: Path,
+    schema_compiler_attestation_path: Path,
+    model_runtime_attestation_path: Path,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Assemble a bundle while auditing local evidence-file reads."""
+
+    report = build_runtime_file_access_summary(
+        lambda: _build_live_attestation_bundle_assembly_report_untraced(
+            offset_parity_review_path=offset_parity_review_path,
+            model_inventory_attestation_path=model_inventory_attestation_path,
+            schema_compiler_attestation_path=schema_compiler_attestation_path,
+            model_runtime_attestation_path=model_runtime_attestation_path,
+            artifact_dir=artifact_dir,
+        )
+    )
+    _validate_runtime_file_access_summary(
+        report.get("runtime_file_access"), "live attestation bundle assembly"
+    )
+    required_paths = report.get("required_source_paths")
+    if not isinstance(required_paths, list) or not all(
+        isinstance(path, str) and path for path in required_paths
+    ):
+        raise ValueError(
+            "live attestation bundle assembly required_source_paths must be strings"
+        )
+    _validate_runtime_observed_required_paths(
+        report.get("runtime_file_access"),
+        "live attestation bundle assembly",
+        required_paths=tuple(required_paths),
+    )
+    return report
+
+
+def _build_live_attestation_bundle_assembly_report_untraced(
+    *,
+    offset_parity_review_path: Path,
+    model_inventory_attestation_path: Path,
+    schema_compiler_attestation_path: Path,
+    model_runtime_attestation_path: Path,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
     offline_report = _build_offline_preflight_report_untraced(artifact_dir)
     request_identity = _require_mapping(
         offline_report.get("request_identity"), "request_identity"
     )
 
     offset_review_file = offset_parity_review_path.resolve()
+    _reject_denied_path_fragments(
+        "live attestation bundle assembler",
+        offset_review_file,
+        model_inventory_attestation_path.resolve(),
+        schema_compiler_attestation_path.resolve(),
+        model_runtime_attestation_path.resolve(),
+    )
     offset_parity_review = _require_mapping(
         contract.load_json_no_duplicates(offset_review_file),
         "offset parity review",
@@ -370,6 +432,10 @@ def build_live_attestation_bundle_from_files(
     fixture_file = Path(
         _require_string(offset_parity_review.get("fixture_path"), "fixture_path")
     ).resolve()
+    _reject_denied_path_fragments(
+        "live attestation bundle assembler offset fixture",
+        fixture_file,
+    )
     fixture_record = _require_mapping(
         contract.load_json_no_duplicates(fixture_file),
         "offset parity fixtures",
@@ -432,7 +498,33 @@ def build_live_attestation_bundle_from_files(
         request_identity=request_identity,
         expected_model_inventory_sha256=model_inventory_sha256,
     )
-    return bundle
+    return {
+        "bundle": bundle,
+        "required_source_paths": [
+            str(offset_review_file),
+            str(fixture_file),
+            str(inventory_file),
+            str(schema_compiler_file),
+            str(model_runtime_file),
+        ],
+        "cost_counters": dict(ZERO_COST_COUNTERS),
+        "inference_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+    }
+
+
+def _reject_denied_path_fragments(owner: str, *paths: Path) -> None:
+    issues = {
+        str(path): contract.audit_denied_path_fragments(str(path))
+        for path in paths
+        if contract.audit_denied_path_fragments(str(path))
+    }
+    if issues:
+        raise ValueError(
+            f"{owner} denied path fragments: "
+            + json.dumps(issues, sort_keys=True)
+        )
 
 
 def build_advisor_dispatch_go_review(
@@ -1893,12 +1985,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--model-inventory-attestation, --schema-compiler-attestation, "
                 "and --model-runtime-attestation"
             )
-        report = build_live_attestation_bundle_from_files(
+        assembly_report = build_live_attestation_bundle_assembly_report(
             offset_parity_review_path=args.offset_parity_review,
             model_inventory_attestation_path=args.model_inventory_attestation,
             schema_compiler_attestation_path=args.schema_compiler_attestation,
             model_runtime_attestation_path=args.model_runtime_attestation,
             artifact_dir=args.artifact_dir,
+        )
+        report = dict(
+            _require_mapping(
+                assembly_report.get("bundle"),
+                "assembled live attestation bundle",
+            )
         )
         output_is_canonical_json = True
     elif (

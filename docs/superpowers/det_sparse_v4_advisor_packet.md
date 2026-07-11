@@ -142,6 +142,8 @@ create-only with:
 That assembler rereads the canonical offset fixture path named by the offset
 review, checks the fixture SHA-256 and offset fingerprint against the review,
 validates all four evidence files against the frozen request/model identities,
+audits runtime file opens to require read-only access to the offset review, its
+referenced fixture, model inventory, schema-compiler, and model-runtime files,
 and writes only canonical compact JSON because the next review gate rejects
 noncanonical bundle bytes. It performs no dispatch, model inference, retrieval,
 reranking, topic/qrels access, download, or network work.

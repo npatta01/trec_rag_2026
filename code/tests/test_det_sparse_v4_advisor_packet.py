@@ -52,6 +52,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "--live-attestation-bundle path/to/live-attestation-bundle.json" in text
     assert "--offset-parity-review path/to/offset-parity-review.json" in text
     assert "writes only canonical compact JSON" in text
+    assert "audits runtime file opens to require read-only access" in text
+    assert "referenced fixture, model inventory, schema-compiler, and model-runtime files" in text
     assert "performs no dispatch, model inference, retrieval,\nreranking" in text
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text

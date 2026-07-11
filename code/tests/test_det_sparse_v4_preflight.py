@@ -1109,8 +1109,33 @@ def test_live_attestation_bundle_assembler_writes_canonical_bundle(tmp_path: Pat
         schema_compiler_attestation_path=schema_compiler_path,
         model_runtime_attestation_path=model_runtime_path,
     )
+    assembly_report = preflight.build_live_attestation_bundle_assembly_report(
+        offset_parity_review_path=offset_review_path,
+        model_inventory_attestation_path=inventory_path,
+        schema_compiler_attestation_path=schema_compiler_path,
+        model_runtime_attestation_path=model_runtime_path,
+    )
 
     assert bundle == _live_attestation_bundle(model_inventory_sha256)
+    assert assembly_report["bundle"] == bundle
+    assert assembly_report["cost_counters"] == preflight.ZERO_COST_COUNTERS
+    assert assembly_report["inference_authorized"] is False
+    assert assembly_report["dispatch_authorized"] is False
+    assert assembly_report["external_cost_authorized"] is False
+    required_source_paths = set(assembly_report["required_source_paths"])
+    offset_review = contract.load_json_no_duplicates(offset_review_path)
+    assert required_source_paths == {
+        str(offset_review_path.resolve()),
+        str(Path(offset_review["fixture_path"]).resolve()),
+        str(inventory_path.resolve()),
+        str(schema_compiler_path.resolve()),
+        str(model_runtime_path.resolve()),
+    }
+    runtime_file_access = assembly_report["runtime_file_access"]
+    assert runtime_file_access["status"] == "pass"
+    assert runtime_file_access["observed_write_path_count"] == 0
+    observed_paths = {record["path"] for record in runtime_file_access["observed_paths"]}
+    assert required_source_paths.issubset(observed_paths)
     contract.validate_live_attestation_bundle(
         bundle,
         request_identity=preflight.build_request_identity_summary(contract.ARTIFACT_DIR),
@@ -1170,6 +1195,28 @@ def test_live_attestation_bundle_assembler_fails_closed_on_drift_and_options(
     drifted_review = dict(offset_review, fixture_sha256="9" * 64)
     offset_review_path.write_bytes(preflight.canonical_report_bytes(drifted_review))
     with pytest.raises(ValueError, match="fixture SHA-256"):
+        preflight.build_live_attestation_bundle_from_files(
+            offset_parity_review_path=offset_review_path,
+            model_inventory_attestation_path=inventory_path,
+            schema_compiler_attestation_path=schema_compiler_path,
+            model_runtime_attestation_path=model_runtime_path,
+        )
+
+    offset_review_path.write_bytes(preflight.canonical_report_bytes(offset_review))
+    denied_fixture_path = tmp_path / "cache" / "retrieval" / "offset-fixtures.json"
+    denied_fixture_path.parent.mkdir(parents=True)
+    denied_fixture_path.write_bytes(
+        contract.canonical_json_bytes(_offset_parity_fixtures()) + b"\n"
+    )
+    denied_fixture_review = dict(
+        offset_review,
+        fixture_path=str(denied_fixture_path.resolve()),
+        fixture_sha256=contract.sha256_file(denied_fixture_path),
+    )
+    offset_review_path.write_bytes(
+        preflight.canonical_report_bytes(denied_fixture_review)
+    )
+    with pytest.raises(ValueError, match="denied path fragments"):
         preflight.build_live_attestation_bundle_from_files(
             offset_parity_review_path=offset_review_path,
             model_inventory_attestation_path=inventory_path,
