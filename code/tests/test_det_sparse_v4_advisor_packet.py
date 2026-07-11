@@ -29,6 +29,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "Captured runtime evidence must bind served model `gpt-oss-local`" in text
     assert "Live attestation records must be exact before dispatch" in text
     assert "vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`" in text
+    assert "semantic_anchor_live_attestation_review_v1" in text
+    assert "dispatch_authorized=false" in text
+    assert "--live-attestation-bundle path/to/live-attestation-bundle.json" in text
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
@@ -38,9 +41,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "classification" in text
-    assert "runtime file-open tracing, live attestation evidence validators, and" in text
+    assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
     assert "pre-dispatch run-directory replay:" in text
-    assert "`145 passed`." in text
+    assert "`148 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
