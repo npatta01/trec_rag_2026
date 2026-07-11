@@ -596,6 +596,15 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
     assert str(offset_review_path.resolve()) in observed_paths
     preflight.validate_live_attestation_review(report)
 
+    with_extra_key = dict(report, topic_access_authorized=True)
+    with pytest.raises(ValueError, match="live attestation review keys mismatch"):
+        preflight.validate_live_attestation_review(with_extra_key)
+
+    missing_required_key = dict(report)
+    missing_required_key.pop("offset_fingerprint_sha256")
+    with pytest.raises(ValueError, match="live attestation review keys mismatch"):
+        preflight.validate_live_attestation_review(missing_required_key)
+
 
 def test_offset_parity_review_validates_48_canonical_fixture_rows(tmp_path: Path):
     fixtures_path = tmp_path / "offset-parity-fixtures.json"
