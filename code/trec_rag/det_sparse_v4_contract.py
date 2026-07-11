@@ -101,6 +101,20 @@ LEDGER_SCHEMA_FILES = (
     "semantic_anchor_run_manifest_v1.schema.json",
     "semantic_anchor_terminal_receipt_v1.schema.json",
 )
+RENDERER_ORACLE_IDS = (
+    "oracle_select_leading_entity",
+    "oracle_select_comparison_pair",
+    "oracle_abstain_coequal_subjects",
+)
+ALLOWED_IMPORT_ROOTS = (
+    "ast",
+    "dataclasses",
+    "enum",
+    "hashlib",
+    "json",
+    "pathlib",
+    "typing",
+)
 
 
 class TerminalState(str, Enum):
@@ -491,6 +505,66 @@ def validate_replay_mutation_registry(registry: Mapping[str, object]) -> tuple[s
     return tuple(mutation_ids)
 
 
+def validate_renderer_oracle(oracle: Mapping[str, object]) -> tuple[str, ...]:
+    if oracle.get("schema_version") != "semantic_anchor_renderer_oracle_v1":
+        raise ValueError("renderer oracle schema_version mismatch")
+    cases = oracle.get("oracle_cases")
+    if not isinstance(cases, list):
+        raise ValueError("renderer oracle cases must be list")
+    oracle_ids: list[str] = []
+    for value in cases:
+        case = _as_mapping(value, "renderer oracle case")
+        oracle_id = case.get("oracle_id")
+        if not isinstance(oracle_id, str) or not oracle_id:
+            raise ValueError("renderer oracle_id must be nonempty string")
+        oracle_ids.append(oracle_id)
+        input_value = _as_mapping(case.get("input"), "renderer oracle input")
+        case_id = input_value.get("case_id")
+        if not isinstance(case_id, str) or not case_id.startswith("synthetic-case-"):
+            raise ValueError("renderer oracle case_id must be synthetic")
+        anchor_range = _as_mapping(input_value.get("anchor_range"), "anchor range")
+        validate_model_response_shape(
+            {
+                "schema_version": MODEL_RESPONSE_SCHEMA_VERSION,
+                "case_id": case_id,
+                "decision": "abstain" if anchor_range.get("start_token") == -1 else "select",
+                "start_token": anchor_range.get("start_token"),
+                "end_token": anchor_range.get("end_token"),
+            },
+            case_id=case_id,
+            u1_token_count=7,
+        )
+        expected = _as_mapping(case.get("expected"), "renderer oracle expected")
+        status = expected.get("status")
+        if status == "rendered":
+            facets = expected.get("facet_queries")
+            if not isinstance(facets, list) or len(facets) != 2:
+                raise ValueError("rendered oracle must have two facet queries")
+            if any(audit_denied_path_fragments(str(facet)) for facet in facets):
+                raise ValueError("renderer oracle facet contains denied path fragment")
+        elif status == "original_only":
+            if expected.get("facet_queries") != []:
+                raise ValueError("original_only oracle must have no facet queries")
+        else:
+            raise ValueError("renderer oracle status must be rendered or original_only")
+    if tuple(oracle_ids) != RENDERER_ORACLE_IDS:
+        raise ValueError("renderer oracle IDs drifted")
+    return tuple(oracle_ids)
+
+
+def validate_import_open_audit_fixture(audit: Mapping[str, object]) -> None:
+    if audit.get("schema_version") != "semantic_anchor_import_open_audit_v1":
+        raise ValueError("import/open audit schema_version mismatch")
+    if tuple(audit.get("allowed_import_roots", ())) != ALLOWED_IMPORT_ROOTS:
+        raise ValueError("allowed import roots drifted")
+    if tuple(audit.get("denied_imports", ())) != tuple(sorted(DENIED_IMPORTS)):
+        raise ValueError("denied imports drifted")
+    if tuple(audit.get("denied_path_fragments", ())) != DENIED_PATH_FRAGMENTS:
+        raise ValueError("denied path fragments drifted")
+    if audit.get("allowed_artifact_directory") != "docs/superpowers/det_sparse_v4_contract_artifacts":
+        raise ValueError("allowed artifact directory drifted")
+
+
 def validate_artifact_bundle(
     artifact_dir: Path = ARTIFACT_DIR,
 ) -> dict[str, str]:
@@ -562,6 +636,9 @@ def runner_visible_artifacts() -> tuple[str, ...]:
         "semantic_anchor_case_receipt_v1.schema.json",
         "semantic_anchor_run_manifest_v1.schema.json",
         "semantic_anchor_replay_mutation_registry_v1.json",
+        "semantic_anchor_renderer_oracle_v1.json",
+        "semantic_anchor_model_inventory_attestation_v1.json",
+        "semantic_anchor_import_open_audit_v1.json",
     )
 
 
@@ -626,6 +703,23 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
     )
     validate_replay_mutation_registry(replay_mutations)
     _validate_ledger_schema_fixtures(artifact_dir)
+    renderer_oracle = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_renderer_oracle_v1.json"),
+        "renderer oracle",
+    )
+    validate_renderer_oracle(renderer_oracle)
+    model_inventory = _as_mapping(
+        load_json_no_duplicates(
+            artifact_dir / "semantic_anchor_model_inventory_attestation_v1.json"
+        ),
+        "model inventory attestation",
+    )
+    validate_model_inventory(model_inventory)
+    import_open_audit = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_import_open_audit_v1.json"),
+        "import open audit",
+    )
+    validate_import_open_audit_fixture(import_open_audit)
 
     corpus = _as_mapping(
         load_json_no_duplicates(artifact_dir / "semantic_anchor_synthetic_corpus_v1.json"),

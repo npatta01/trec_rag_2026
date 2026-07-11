@@ -90,6 +90,18 @@
       "visibility": "runner"
     },
     {
+      "path": "semantic_anchor_renderer_oracle_v1.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_model_inventory_attestation_v1.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_import_open_audit_v1.json",
+      "visibility": "runner"
+    },
+    {
       "path": "semantic_anchor_gold_labels_v1.json",
       "visibility": "scorer"
     },

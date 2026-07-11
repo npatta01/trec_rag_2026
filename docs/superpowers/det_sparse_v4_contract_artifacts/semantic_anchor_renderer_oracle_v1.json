@@ -1,0 +1,59 @@
+{
+  "oracle_cases": [
+    {
+      "expected": {
+        "anchor_text": "Aurora Bridge",
+        "facet_queries": [
+          "Aurora Bridge How often is it inspected",
+          "Aurora Bridge Who signs its log"
+        ],
+        "original_query": "Aurora Bridge tracks signal drift. How often is it inspected? Who signs its log?",
+        "status": "rendered"
+      },
+      "input": {
+        "anchor_range": {
+          "end_token": 2,
+          "start_token": 0
+        },
+        "case_id": "synthetic-case-001"
+      },
+      "oracle_id": "oracle_select_leading_entity"
+    },
+    {
+      "expected": {
+        "anchor_text": "Lumen versus Mistral",
+        "facet_queries": [
+          "Lumen versus Mistral How often is it inspected",
+          "Lumen versus Mistral Who signs its log"
+        ],
+        "original_query": "Lumen versus Mistral maps coolant routes. How often is it inspected? Who signs its log?",
+        "status": "rendered"
+      },
+      "input": {
+        "anchor_range": {
+          "end_token": 3,
+          "start_token": 0
+        },
+        "case_id": "synthetic-case-005"
+      },
+      "oracle_id": "oracle_select_comparison_pair"
+    },
+    {
+      "expected": {
+        "failure_code": "abstain_original_only",
+        "facet_queries": [],
+        "status": "original_only"
+      },
+      "input": {
+        "anchor_range": {
+          "end_token": -1,
+          "start_token": -1
+        },
+        "case_id": "synthetic-case-019"
+      },
+      "oracle_id": "oracle_abstain_coequal_subjects"
+    }
+  ],
+  "schema_version": "semantic_anchor_renderer_oracle_v1",
+  "status": "topic_free_expected_output_fixtures"
+}

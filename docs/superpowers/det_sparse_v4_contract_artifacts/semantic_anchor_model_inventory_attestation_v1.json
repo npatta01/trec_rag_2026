@@ -1,0 +1,37 @@
+{
+  "denied_files": [
+    "original/model.safetensors"
+  ],
+  "file_sha256": {
+    "config.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation_config.json": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "model-00001-of-00003.safetensors": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "model-00002-of-00003.safetensors": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "model-00003-of-00003.safetensors": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "original/model.safetensors": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "tokenizer.json": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "loaded_files": [
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "model-00001-of-00003.safetensors",
+    "model-00002-of-00003.safetensors",
+    "model-00003-of-00003.safetensors"
+  ],
+  "loaded_shards": [
+    "model-00001-of-00003.safetensors",
+    "model-00002-of-00003.safetensors",
+    "model-00003-of-00003.safetensors"
+  ],
+  "quantization_method": "mxfp4",
+  "repository": "openai/gpt-oss-20b",
+  "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+  "safetensors_index_total_size": 13761264768,
+  "schema_version": "semantic_anchor_model_inventory_attestation_v1",
+  "snapshot_path": "/offline-fixture/openai/gpt-oss-20b/snapshots/6cee5e81ee83917806bbde320786a8fb61efebee",
+  "unloaded_files": [
+    "README.md",
+    "original/model.safetensors"
+  ]
+}

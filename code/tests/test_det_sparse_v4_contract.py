@@ -378,6 +378,57 @@ def test_replay_mutation_registry_rejects_reordered_ids():
         v4.validate_replay_mutation_registry(mutated)
 
 
+def test_renderer_oracle_fixture_is_topic_free_and_ordered():
+    oracle = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_renderer_oracle_v1.json"
+    )
+
+    oracle_ids = v4.validate_renderer_oracle(oracle)
+    assert oracle_ids == v4.RENDERER_ORACLE_IDS
+    assert len(oracle_ids) == 3
+
+
+def test_renderer_oracle_rejects_denied_path_fragment():
+    oracle = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_renderer_oracle_v1.json"
+    )
+    mutated = dict(oracle)
+    mutated["oracle_cases"] = [dict(case) for case in oracle["oracle_cases"]]
+    mutated["oracle_cases"][0]["expected"] = dict(mutated["oracle_cases"][0]["expected"])
+    mutated["oracle_cases"][0]["expected"]["facet_queries"] = [
+        "rag25-topics-dev.tsv",
+        "Aurora Bridge Who signs its log",
+    ]
+
+    with pytest.raises(ValueError, match="denied path"):
+        v4.validate_renderer_oracle(mutated)
+
+
+def test_model_inventory_attestation_fixture_matches_local_small_model_contract():
+    inventory = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_model_inventory_attestation_v1.json"
+    )
+
+    v4.validate_model_inventory(inventory)
+    assert inventory["repository"] == "openai/gpt-oss-20b"
+    assert inventory["revision"] == "6cee5e81ee83917806bbde320786a8fb61efebee"
+    assert inventory["loaded_shards"] == [
+        "model-00001-of-00003.safetensors",
+        "model-00002-of-00003.safetensors",
+        "model-00003-of-00003.safetensors",
+    ]
+
+
+def test_import_open_audit_fixture_freezes_denied_surfaces():
+    audit = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_import_open_audit_v1.json"
+    )
+
+    v4.validate_import_open_audit_fixture(audit)
+    assert tuple(audit["denied_imports"]) == tuple(sorted(v4.DENIED_IMPORTS))
+    assert tuple(audit["denied_path_fragments"]) == v4.DENIED_PATH_FRAGMENTS
+
+
 def test_case001_schema_fixture_matches_generated_schema():
     schema = v4.load_json_no_duplicates(
         v4.ARTIFACT_DIR / "semantic_anchor_response_v1.case001.schema.json"
@@ -414,6 +465,9 @@ def test_manifest_requires_ledger_and_replay_artifacts():
         assert filename in hashes
     assert "semantic_anchor_replay_mutation_registry_v1.json" in hashes
     assert "semantic_anchor_reviewer_receipt_v1.schema.json" in hashes
+    assert "semantic_anchor_renderer_oracle_v1.json" in hashes
+    assert "semantic_anchor_model_inventory_attestation_v1.json" in hashes
+    assert "semantic_anchor_import_open_audit_v1.json" in hashes
 
 
 def test_json_loader_rejects_duplicate_keys(tmp_path: Path):

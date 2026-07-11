@@ -7,8 +7,11 @@ APIs, paid calls, or an agent loop.
 This directory contains literal schemas and fixtures for the v4 synthetic
 exact-span qualification contract. They are intentionally synthetic and
 topic-free. The current bundle has the full 24-case prompt/corpus/gold/request
-fixture set, but it is still not inference-authorizing because replay,
-attestation, oracle-renderer, and runtime ledgers remain incomplete.
+fixture set, offline ledger/replay schemas, topic-free renderer oracle fixtures,
+a static import/open audit fixture, and a model inventory attestation fixture.
+It is still not inference-authorizing because no live analyzer/model/runtime
+attestation has been collected and no executable runner has passed advisor
+review.
 
 `semantic_anchor_case_registry_v1.json` freezes the 24-case universe and category
 arithmetic. The corpus, gold-label, and JSONL request fixture files now contain
