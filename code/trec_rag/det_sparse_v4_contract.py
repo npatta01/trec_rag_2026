@@ -342,6 +342,44 @@ def validate_offset_fingerprint(fingerprint: Mapping[str, object]) -> None:
         raise ValueError("offset fingerprint runtime image digest must be sha256 digest")
 
 
+def validate_offset_health(health: Mapping[str, object]) -> None:
+    expected_keys = {
+        "schema_version",
+        "status",
+        "legacy_analyzer_port",
+        "offset_analyzer_port",
+    }
+    keys = set(health)
+    if keys != expected_keys:
+        raise ValueError(f"offset health keys mismatch: missing={expected_keys - keys} extra={keys - expected_keys}")
+    if health["schema_version"] != "lucene_whole_unit_offsets_health_v1":
+        raise ValueError("offset health schema_version mismatch")
+    if health["status"] != "ok":
+        raise ValueError("offset health status must be ok")
+    if health["legacy_analyzer_port"] != 18081:
+        raise ValueError("offset health legacy analyzer port mismatch")
+    if health["offset_analyzer_port"] != 18082:
+        raise ValueError("offset health offset analyzer port mismatch")
+
+
+def validate_offset_error(error: Mapping[str, object]) -> None:
+    expected_keys = {"schema_version", "error_code", "message"}
+    keys = set(error)
+    if keys != expected_keys:
+        raise ValueError(f"offset error keys mismatch: missing={expected_keys - keys} extra={keys - expected_keys}")
+    if error["schema_version"] != "lucene_whole_unit_offsets_error_v1":
+        raise ValueError("offset error schema_version mismatch")
+    if error["error_code"] not in {
+        "bad_json",
+        "schema_mismatch",
+        "invalid_utf8",
+        "analyzer_failure",
+    }:
+        raise ValueError("offset error_code mismatch")
+    if not isinstance(error["message"], str) or not error["message"]:
+        raise ValueError("offset error message must be nonempty string")
+
+
 def model_response_schema(case_id: str, *, u1_token_count: int) -> dict[str, object]:
     if not case_id:
         raise ValueError("case_id must be nonempty")
@@ -1475,6 +1513,7 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
     )
     if response_schema != expected_case001_response_schema():
         raise ValueError("case001 response schema fixture does not match generator")
+    _validate_offset_schema_fixtures(artifact_dir)
 
     system_prompt = (artifact_dir / "semantic_anchor_prompt_v1.system.txt").read_text(
         encoding="utf-8"
@@ -1705,6 +1744,60 @@ def _validate_ledger_schema_fixtures(artifact_dir: Path) -> None:
         required = schema.get("required")
         if not isinstance(required, list) or "schema_version" not in required:
             raise ValueError(f"ledger schema must require schema_version: {filename}")
+
+
+def _validate_offset_schema_fixtures(artifact_dir: Path) -> None:
+    health_schema = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "lucene_whole_unit_offsets_health_v1.schema.json"),
+        "offset health schema",
+    )
+    error_schema = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "lucene_whole_unit_offsets_error_v1.schema.json"),
+        "offset error schema",
+    )
+    response_schema = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "lucene_whole_unit_offsets_response_v1.schema.json"),
+        "offset response schema",
+    )
+    request_schema = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "lucene_whole_unit_offsets_request_v1.schema.json"),
+        "offset request schema",
+    )
+    for name, schema, version in (
+        ("offset health schema", health_schema, "lucene_whole_unit_offsets_health_v1"),
+        ("offset error schema", error_schema, "lucene_whole_unit_offsets_error_v1"),
+        ("offset response schema", response_schema, OFFSET_RESPONSE_SCHEMA_VERSION),
+        ("offset request schema", request_schema, OFFSET_REQUEST_SCHEMA_VERSION),
+    ):
+        if schema.get("type") != "object":
+            raise ValueError(f"{name} must be object")
+        if schema.get("additionalProperties") is not False:
+            raise ValueError(f"{name} must reject extra properties")
+        properties = _as_mapping(schema.get("properties"), f"{name} properties")
+        schema_version = _as_mapping(
+            properties.get("schema_version"), f"{name} schema_version"
+        )
+        if schema_version.get("const") != version:
+            raise ValueError(f"{name} schema_version const mismatch")
+        required = schema.get("required")
+        if not isinstance(required, list) or "schema_version" not in required:
+            raise ValueError(f"{name} must require schema_version")
+    health_properties = _as_mapping(health_schema.get("properties"), "health properties")
+    if _as_mapping(health_properties.get("legacy_analyzer_port"), "legacy port").get("const") != 18081:
+        raise ValueError("offset health legacy port const mismatch")
+    if _as_mapping(health_properties.get("offset_analyzer_port"), "offset port").get("const") != 18082:
+        raise ValueError("offset health offset port const mismatch")
+    error_code = _as_mapping(
+        _as_mapping(error_schema.get("properties"), "error properties").get("error_code"),
+        "error_code schema",
+    )
+    if tuple(error_code.get("enum", ())) != (
+        "bad_json",
+        "schema_mismatch",
+        "invalid_utf8",
+        "analyzer_failure",
+    ):
+        raise ValueError("offset error_code enum drifted")
 
 
 def _as_mapping(value: object, name: str) -> Mapping[str, object]:

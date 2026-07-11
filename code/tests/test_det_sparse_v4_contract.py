@@ -151,6 +151,32 @@ def test_offset_response_rejects_hash_schema_unit_and_fingerprint_drift():
         )
 
 
+def test_offset_health_and_error_shapes_are_fail_closed():
+    health = {
+        "schema_version": "lucene_whole_unit_offsets_health_v1",
+        "status": "ok",
+        "legacy_analyzer_port": 18081,
+        "offset_analyzer_port": 18082,
+    }
+    error = {
+        "schema_version": "lucene_whole_unit_offsets_error_v1",
+        "error_code": "bad_json",
+        "message": "malformed json",
+    }
+
+    v4.validate_offset_health(health)
+    v4.validate_offset_error(error)
+
+    with pytest.raises(ValueError, match="offset analyzer port"):
+        v4.validate_offset_health(dict(health, offset_analyzer_port=18081))
+    with pytest.raises(ValueError, match="extra"):
+        v4.validate_offset_health(dict(health, occurrences=[]))
+    with pytest.raises(ValueError, match="error_code"):
+        v4.validate_offset_error(dict(error, error_code="partial_analysis"))
+    with pytest.raises(ValueError, match="message"):
+        v4.validate_offset_error(dict(error, message=""))
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

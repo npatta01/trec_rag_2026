@@ -20,7 +20,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "create-only runner scaffold writes 24 request-hash reservation records" in text
     assert "`unexpected_trec_rag_modules=[]`" in text
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
-    assert "offset responses now have an executable Python shape/hash/monotonicity validator" in text
+    assert "offset health/error/response schemas are bound" in text
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
@@ -28,7 +28,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "classification" in text
-    assert "assistant-content extraction: `137 passed`." in text
+    assert "offset health/error schema checks:" in text
+    assert "`138 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
