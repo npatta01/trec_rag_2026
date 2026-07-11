@@ -316,6 +316,50 @@ while the collection identity is
 `hosted_climbmix_unknown_revision`; passing mechanical and advisor shape review
 does not open that gate.
 
+### Deterministic sparse v3
+
+`det_sparse_v3` is the fresh continuation after v2 was archived without
+retrieval. V2's leading-prefix anchor was mechanically distinct but lost the
+topic referent in two child queries. V3 instead extracts a compact exact span
+from anywhere in the first unit, using only jointly supported cross-unit term
+recurrence. Conversational source occurrences do not count as anchor evidence,
+disjoint recurrent subjects cause abstention, and every child receives the
+same exact source-backed anchor unconditionally.
+
+The frozen design is `docs/superpowers/det_sparse_v3_design.md`. It excludes all
+known-five, v1, and v2 topics and reserves the nine untouched IDs for a
+qrels-blind critical-first selection. A selected critical case must contain a
+raw and final child with no anchor-core BM25 term before insertion. The other
+three topics come from fixed structural quantile bins. No local model is used;
+model-assisted exact-span selection remains a separately versioned challenger
+only if this deterministic method abstains or fails.
+
+V3 keeps the same closed external gate: its offline preflight may use only the
+digest-pinned loopback Lucene analyzer and must record zero retrieval, model,
+and reranker calls plus `qrels_opened=false`. Passing preflight would still not
+authorize retrieval.
+
+The executable contract is `configs/det_sparse_v3.yaml`. The preflight reads
+only the nine raw-byte-matched candidate rows from the configured TSV, after it
+has attested a clean committed source tree and written create-only reservation
+and conversational-inventory records. It seals all nine candidate plans, the
+four selected plans (when selection succeeds), criticality and coverage
+ledgers, canonical query records, request ceilings, and a replayable freeze
+under `outputs/rag25_det_sparse_structural4_v3/preflight/`.
+
+After the preregistered synthetic, full-repository, advisor, and live-Lucene
+gates pass, the one allowed build command is:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.det_sparse_v3_preflight \
+  --config configs/det_sparse_v3.yaml
+```
+
+A successful existing freeze can be checked with the same command plus
+`--validate-only`. Validation creates a fresh local analyzer client and
+recomputes the projection, nine plans, selection, witnesses, canonical bytes,
+and exact artifact inventory. Neither mode authorizes an external request.
+
 ## Config-Driven RAG Pipeline
 
 The pipeline is the preferred path for experiments. It keeps query

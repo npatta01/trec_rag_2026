@@ -1,0 +1,248 @@
+schema_version: det_sparse_v3
+
+experiment:
+  id: rag25_det_sparse_structural4_v3
+  output_dir: outputs/rag25_det_sparse_structural4_v3
+
+topics:
+  path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  format: tsv
+  candidate_ids: ["14", "31", "58", "72", "219", "233", "273", "477", "499"]
+  excluded_ids: ["37", "84", "144", "161", "200", "213", "224", "225", "300", "407", "515", "707", "897"]
+  selection:
+    version: det_sparse_anchor_critical_quantile_selection_v3
+    seed: det_sparse_v3_recurrent_anchor_selection_20260711
+    selected_count: 4
+    critical_label: anchorless
+    critical_intersection: full_aligned_analyzer_terms
+    digest: sha256_seed_nul_topic_nul_narrative_sha_v1
+    remaining_sort: [capped_unit_count, original_unique_term_count, facet_count, anchor_core_term_count, numeric_topic_id]
+    binning: half_open_floor_thirds_v1
+    bin_count: 3
+    merge_masked_policy: stop_no_replacement
+
+query_planning:
+  planner_version: det_sparse_v3
+  renderer_version: det_sparse_recurrent_anchor_renderer_v3
+  splitter_version: det_sparse_exact_span_splitter_v1
+  tokenizer_version: narrative_token_tape_v1
+  anchor_selector_version: det_sparse_cross_unit_recurrent_anchor_v1
+  max_facets: 4
+  min_facet_terms: 3
+  min_units: 2
+  parent_min_unique_terms: 4
+  candidate_window:
+    max_token_records: 6
+    min_unique_terms: 2
+    max_unique_terms: 4
+    min_recurrent_terms: 2
+    recurrence_precision_numerator: 2
+    recurrence_precision_denominator: 3
+    min_joint_child_df: 1
+    max_analyzed_occurrences: 6
+    parent_occurrence_divisor: 2
+    maximal_core_only: true
+    disjoint_maximal_core_policy: original_only_ambiguous
+    tie_break: [max_core_score, later_start, shorter_unicode_codepoint_span, smaller_unsigned_utf8]
+  candidate_evidence:
+    version: det_sparse_candidate_evidence_sha256_v1
+    hash: sha256
+    encoding: compact_sorted_key_utf8_json_no_newline
+    keys: [end, narrative_sha256, start, text_sha256, token_ids]
+    offset_unit: unicode_code_points
+    token_id_semantics: ordered_zero_based_tape_indices
+  criticality:
+    selection_intersection: full_aligned_analyzer_terms
+    audit_intersection: eligible_nonconversational_terms
+    critical_label: anchorless
+    min_child_payload_terms: 2
+    merge_masked_policy: stop_no_replacement
+  conversational_surfaces:
+    version: det_sparse_conversational_surfaces_v1
+    normalization: unicode_nfkc_casefold_v1
+    hash_encoding: compact_json_utf8_sha256_v1
+    normalized_order: unsigned_utf8_lexicographic
+    source_count: 114
+    source_sha256: b317e77660c066025c43359d52f04d6da9370c41b744dec1e1fbde6802cc23c8
+    normalized_count: 114
+    normalized_sha256: d89564c9eab834c466078a1dca10adf1c33b5ed4c92dd7bed08f4fdefac6697c
+    projection_encoding: compact_json_source_normalized_analyzer_tokens_projection_v1
+    expected_projection_sha256: 752ce66fae9cbfc2038191d8beb068d84a8c1f70928b472dfa3ceaff63c68b23
+    projected_terms_order: unsigned_utf8_lexicographic
+    projected_term_count: 75
+    projected_terms_sha256: 4dc62d6d589b79e2ef80adad89ca8830d570f9ded37066e83dbb53d2237aac19
+    projection_policy: verify_attested_analyzer_before_candidates
+    surfaces:
+      - a
+      - about
+      - also
+      - an
+      - and
+      - answer
+      - are
+      - ask
+      - asking
+      - at
+      - be
+      - been
+      - being
+      - but
+      - by
+      - can
+      - could
+      - curious
+      - deeper
+      - describe
+      - description
+      - detailed
+      - did
+      - discuss
+      - discussion
+      - do
+      - does
+      - explain
+      - explanation
+      - finally
+      - for
+      - from
+      - gain
+      - had
+      - has
+      - have
+      - he
+      - her
+      - hers
+      - him
+      - his
+      - hope
+      - hoping
+      - how
+      - i
+      - i'd
+      - i’d
+      - i'm
+      - i’m
+      - identify
+      - in
+      - information
+      - interest
+      - interested
+      - is
+      - it
+      - its
+      - know
+      - knowing
+      - learn
+      - learning
+      - like
+      - liked
+      - list
+      - look
+      - looking
+      - may
+      - me
+      - might
+      - must
+      - my
+      - of
+      - "on"
+      - or
+      - our
+      - ours
+      - overview
+      - please
+      - provide
+      - question
+      - report
+      - say
+      - shall
+      - she
+      - should
+      - tell
+      - that
+      - the
+      - their
+      - theirs
+      - them
+      - these
+      - they
+      - this
+      - those
+      - to
+      - understand
+      - understanding
+      - want
+      - wanted
+      - wants
+      - was
+      - we
+      - we're
+      - we’re
+      - were
+      - what
+      - why
+      - will
+      - with
+      - would
+      - you
+      - your
+      - yours
+
+analyzer:
+  url: http://127.0.0.1:18081
+  expected_fingerprint_sha256: f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4
+
+retrieval:
+  type: pyserini_remote_raw_first_v1
+  endpoint_env: INDEX_URL
+  endpoint_url: https://api.castorini.uwaterloo.ca/v1/climbmix-400b/search
+  index: climbmix-400b
+  index_revision: hosted_climbmix_unknown_revision
+  hits: 100
+  required_results: 100
+  max_attempts: 1
+  retry_policy: none
+  redirect_policy: none
+  cache_policy: fresh_run_local
+
+retrieval_ledger:
+  version: det_sparse_retrieval_ledger_v1
+  run_namespace: det_sparse_v3_fresh_run_local
+  global_ticket_namespace: rag25_det_sparse_structural4_v3
+
+expansion:
+  formula_version: det_sparse_prf_v1
+  artifact_version: det_sparse_prf_artifact_v3
+  foreground_ranks: [1, 5]
+  background_ranks: [6, 50]
+  max_terms: 2
+  expand_parent_facet: false
+  max_expanded_facets: 3
+
+fusion:
+  version: weighted_rrf_v1
+  k: 60
+  arms: [O, F, E, FE]
+
+cost:
+  topic_count: 4
+  max_facets_per_topic: 4
+  max_unique_requests_per_topic: 9
+  max_external_requests: 36
+  model_calls: 0
+  reranker_calls: 0
+
+external_gate:
+  status: blocked
+  reason: hosted_index_revision_unknown
+
+evaluation:
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  relevance_threshold: 2
+  metrics:
+    - recall@100
+    - graded_recall@100
+    - ideal_dcg_coverage@100
+    - recall@50
+    - ndcg@10
+  firewall: frozen_manifest_required
