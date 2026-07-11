@@ -1755,7 +1755,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             raise ValueError(
                 "model inventory capture cannot be combined with live attestation, "
-                "advisor GO, milestone approval, model inventory attestation, or "
+                "advisor GO, milestone approval, live attestation evidence, or "
                 "offset parity review"
             )
         report = build_model_inventory_attestation_from_snapshot(

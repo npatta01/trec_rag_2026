@@ -574,6 +574,15 @@ def test_model_inventory_capture_cli_rejects_combined_modes(tmp_path: Path):
                 str(tmp_path / "fixtures.json"),
             ]
         )
+    with pytest.raises(ValueError, match="live attestation evidence"):
+        preflight.main(
+            [
+                "--model-inventory-snapshot",
+                str(snapshot),
+                "--schema-compiler-attestation",
+                str(tmp_path / "schema-compiler.json"),
+            ]
+        )
 
 
 def test_model_inventory_capture_cli_writes_create_only_inventory(
