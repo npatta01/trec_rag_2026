@@ -271,6 +271,51 @@ evidence before their first qrels read, then hash and parse the same qrels byte
 snapshot and apply the preregistered
 paired promotion gates.
 
+### Deterministic sparse v2
+
+`det_sparse_v2` is a new, isolated offline arm created after exact-shape review
+retired v1 without retrieval. It keeps the source-backed splitter and local
+Lucene analyzer, but protects the first unit as `f01` and gives every child a
+bounded strict prefix of that unit instead of copying the entire parent. Every
+facet must have a BM25 term-frequency signature distinct from the original and
+from every other facet. This fixes the v1 two-unit collapse mechanically; an
+advisor still has to judge whether the resulting queries are meaningful.
+
+The frozen configuration is `configs/det_sparse_v2.yaml`. It screens exactly
+13 fresh candidate topics without qrels, baseline scores, retrieval, a model,
+or a reranker, then deterministically selects one eligible topic from each of
+four structural strata. If a stratum is empty or any selected plan falls back,
+the pilot stops without substitution. The known five planner topics and all
+four burned v1 topics are excluded.
+
+Run the offline v2 contract tests:
+
+```bash
+.venv/bin/python -m pytest -q \
+  code/tests/test_deterministic_sparse_v2.py \
+  code/tests/test_det_sparse_v2_config.py \
+  code/tests/test_det_sparse_v2_selection.py \
+  code/tests/test_det_sparse_v2_provenance.py \
+  code/tests/test_det_sparse_v2_preflight.py
+```
+
+After committing a clean source tree and starting the pinned loopback analyzer,
+create the qrels-blind, create-only preflight:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.det_sparse_v2_preflight \
+  --config configs/det_sparse_v2.yaml
+```
+
+This command writes candidate screening, selected plans, exact base queries,
+coverage paths, request projections, and a pre-retrieval freeze. It reserves
+the create-only attempt before screening and replays the sealed semantics with
+a fresh local analyzer before reporting success. It makes zero external,
+model, and reranker calls and does not open qrels. Retrieval remains hard-blocked
+while the collection identity is
+`hosted_climbmix_unknown_revision`; passing mechanical and advisor shape review
+does not open that gate.
+
 ## Config-Driven RAG Pipeline
 
 The pipeline is the preferred path for experiments. It keeps query

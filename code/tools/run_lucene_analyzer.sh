@@ -6,7 +6,7 @@ common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
 shared_root="$(dirname "$common_dir")"
 cache_dir="${LUCENE_ANALYZER_CACHE_DIR:-$shared_root/cache/lucene-analyzer/10.4.0}"
 source_dir="$repo_root/code/tools/lucene_analyzer"
-image="${LUCENE_ANALYZER_JAVA_IMAGE:-docker.io/library/eclipse-temurin:21-jdk}"
+image="${LUCENE_ANALYZER_JAVA_IMAGE:-docker.io/library/eclipse-temurin@sha256:1eeacc8c295ed4805f6ffead2417b1936aad296b02ea9e56b457230befc9e98d}"
 container_name="${LUCENE_ANALYZER_CONTAINER:-trec-rag-lucene-analyzer}"
 port="${LUCENE_ANALYZER_PORT:-18081}"
 index_id="${LUCENE_ANALYZER_INDEX_ID:-hosted_climbmix_unknown_revision}"
@@ -30,7 +30,7 @@ download_jar() {
 download_jar lucene-core
 download_jar lucene-analysis-common
 
-podman pull "$image" >/dev/null
+podman image exists "$image" || podman pull "$image" >/dev/null
 podman run --rm \
   -v "$source_dir:/src:ro" \
   -v "$cache_dir:/build:rw" \
