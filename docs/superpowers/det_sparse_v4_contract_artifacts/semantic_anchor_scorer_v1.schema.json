@@ -1,0 +1,41 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_results": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "classification": {
+            "enum": [
+              "correct_select",
+              "safe_abstain",
+              "wrong_referent",
+              "wrong_abstain",
+              "mechanical_failure"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "classification"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_scorer_receipt_v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_results"
+  ],
+  "type": "object"
+}

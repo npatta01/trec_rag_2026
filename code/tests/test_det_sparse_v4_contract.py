@@ -298,3 +298,28 @@ def test_runner_visible_artifacts_are_physically_separated_from_gold_artifacts()
         )
     with pytest.raises(ValueError, match="gold"):
         v4.validate_runner_gold_separation(("hidden_gold_copy.json",), scorer)
+
+
+def test_committed_artifact_bundle_is_offline_smoke_only_and_internally_consistent():
+    hashes = v4.validate_artifact_bundle()
+
+    assert "semantic_anchor_artifact_manifest_v1.json" not in hashes
+    assert "semantic_anchor_request_fixture.case001.json" in hashes
+    assert "semantic_anchor_gold_labels_v1.json" in hashes
+    assert len(hashes["semantic_anchor_request_fixture.case001.json"]) == 64
+
+
+def test_case001_schema_fixture_matches_generated_schema():
+    schema = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_response_v1.case001.schema.json"
+    )
+
+    assert schema == v4.expected_case001_response_schema()
+
+
+def test_json_loader_rejects_duplicate_keys(tmp_path: Path):
+    path = tmp_path / "duplicate.json"
+    path.write_text('{"a":1,"a":2}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        v4.load_json_no_duplicates(path)

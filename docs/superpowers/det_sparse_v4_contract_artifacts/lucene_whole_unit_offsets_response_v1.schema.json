@@ -1,0 +1,94 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "fingerprint": {
+      "additionalProperties": false,
+      "properties": {
+        "legacy_term_chain_fingerprint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "offset_contract_version": {
+          "const": "lucene_whole_unit_offsets_v1",
+          "type": "string"
+        },
+        "offset_lucene_jar_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "offset_runtime_image_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "offset_server_class_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "legacy_term_chain_fingerprint_sha256",
+        "offset_contract_version",
+        "offset_server_class_sha256",
+        "offset_lucene_jar_sha256",
+        "offset_runtime_image_digest"
+      ],
+      "type": "object"
+    },
+    "occurrences": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "end_codepoint": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "position_increment": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_codepoint": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "term": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ordinal",
+          "term",
+          "start_codepoint",
+          "end_codepoint",
+          "position_increment"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "offset_unit": {
+      "const": "unicode_code_points",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "lucene_whole_unit_offsets_response_v1",
+      "type": "string"
+    },
+    "text_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "text_sha256",
+    "offset_unit",
+    "fingerprint",
+    "occurrences"
+  ],
+  "type": "object"
+}

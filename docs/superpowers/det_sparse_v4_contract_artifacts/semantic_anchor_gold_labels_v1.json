@@ -1,0 +1,17 @@
+{
+  "cases": [
+    {
+      "acceptable_ranges": [
+        {
+          "end_token": 2,
+          "start_token": 0
+        }
+      ],
+      "case_id": "synthetic-case-001",
+      "decision": "select",
+      "schema_version": "semantic_anchor_gold_label_v1",
+      "wrong_referent_ranges": []
+    }
+  ],
+  "schema_version": "semantic_anchor_gold_labels_v1"
+}

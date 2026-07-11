@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "error_code": {
+      "enum": [
+        "bad_json",
+        "schema_mismatch",
+        "invalid_utf8",
+        "analyzer_failure"
+      ],
+      "type": "string"
+    },
+    "message": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "lucene_whole_unit_offsets_error_v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "error_code",
+    "message"
+  ],
+  "type": "object"
+}

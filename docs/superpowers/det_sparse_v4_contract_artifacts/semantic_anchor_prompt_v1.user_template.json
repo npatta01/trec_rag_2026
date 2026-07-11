@@ -1,0 +1,8 @@
+{
+  "analyzer_evidence": [],
+  "case_id": "{case_id}",
+  "narrative": "{narrative}",
+  "schema_version": "semantic_anchor_prompt_user_template_v1",
+  "token_tape": [],
+  "unit_boundaries": []
+}

@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "const": "synthetic-case-001",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "select",
+        "abstain"
+      ],
+      "type": "string"
+    },
+    "end_token": {
+      "maximum": 7,
+      "minimum": -1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_response_v1",
+      "type": "string"
+    },
+    "start_token": {
+      "maximum": 7,
+      "minimum": -1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "decision",
+    "start_token",
+    "end_token"
+  ],
+  "type": "object"
+}

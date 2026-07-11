@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_sha256": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "attempted_calls": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "completed_calls": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "gold_opened": {
+      "type": "boolean"
+    },
+    "raw_committed_calls": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_terminal_receipt_v1",
+      "type": "string"
+    },
+    "terminal_state": {
+      "enum": [
+        "preflight_no_go",
+        "pre_dispatch_no_go",
+        "first_case_no_go",
+        "transport_no_body_no_go",
+        "prefix_integrity_no_go",
+        "completed_qualification_no_go",
+        "completed_synthetic_go",
+        "interrupted_incomplete"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "terminal_state",
+    "attempted_calls",
+    "completed_calls",
+    "raw_committed_calls",
+    "gold_opened",
+    "artifact_sha256"
+  ],
+  "type": "object"
+}

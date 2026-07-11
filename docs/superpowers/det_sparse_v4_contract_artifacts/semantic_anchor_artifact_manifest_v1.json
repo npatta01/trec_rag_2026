@@ -1,0 +1,66 @@
+{
+  "artifact_set_status": "offline_smoke_only_not_inference_authorizing",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "visibility": "reviewer"
+    },
+    {
+      "path": "lucene_whole_unit_offsets_request_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "lucene_whole_unit_offsets_response_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "lucene_whole_unit_offsets_health_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "lucene_whole_unit_offsets_error_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_response_v1.case001.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_prompt_v1.system.txt",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_prompt_v1.user_template.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_synthetic_corpus_v1.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_case_order_v1.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_request_fixture.case001.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_terminal_receipt_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_gold_labels_v1.json",
+      "visibility": "scorer"
+    },
+    {
+      "path": "semantic_anchor_scorer_v1.schema.json",
+      "visibility": "scorer"
+    },
+    {
+      "path": "semantic_anchor_reviewer_rubric_v1.md",
+      "visibility": "scorer"
+    }
+  ],
+  "schema_version": "semantic_anchor_artifact_manifest_v1"
+}

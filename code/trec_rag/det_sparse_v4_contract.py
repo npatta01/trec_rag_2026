@@ -57,6 +57,14 @@ DENIED_PATH_FRAGMENTS = (
     "cache/reranker",
 )
 
+ARTIFACT_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "superpowers"
+    / "det_sparse_v4_contract_artifacts"
+)
+ARTIFACT_MANIFEST = ARTIFACT_DIR / "semantic_anchor_artifact_manifest_v1.json"
+
 
 class TerminalState(str, Enum):
     PREFLIGHT_NO_GO = "preflight_no_go"
@@ -110,6 +118,26 @@ def text_sha256(text: str) -> str:
     return sha256_bytes(text.encode("utf-8"))
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_json_no_duplicates(path: Path) -> object:
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key in {path}: {key}")
+            result[key] = value
+        return result
+
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+
+
 def build_offset_request(text: str) -> tuple[dict[str, str], bytes, str]:
     request = {
         "schema_version": OFFSET_REQUEST_SCHEMA_VERSION,
@@ -150,6 +178,10 @@ def model_response_schema(case_id: str, *, u1_token_count: int) -> dict[str, obj
             },
         },
     }
+
+
+def expected_case001_response_schema() -> dict[str, object]:
+    return model_response_schema("synthetic-case-001", u1_token_count=7)
 
 
 def validate_model_response_shape(
@@ -319,14 +351,67 @@ def validate_model_inventory(inventory: Mapping[str, object]) -> None:
             raise ValueError(f"model inventory missing {key}")
 
 
+def validate_artifact_bundle(
+    artifact_dir: Path = ARTIFACT_DIR,
+) -> dict[str, str]:
+    manifest_path = artifact_dir / "semantic_anchor_artifact_manifest_v1.json"
+    manifest = _as_mapping(load_json_no_duplicates(manifest_path), "artifact manifest")
+    if manifest.get("schema_version") != "semantic_anchor_artifact_manifest_v1":
+        raise ValueError("artifact manifest schema_version mismatch")
+    if manifest.get("artifact_set_status") != "offline_smoke_only_not_inference_authorizing":
+        raise ValueError("artifact manifest must remain offline smoke only")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("artifact manifest must list artifacts")
+
+    seen: set[str] = set()
+    runner_files: list[str] = []
+    scorer_files: list[str] = []
+    hashes: dict[str, str] = {}
+    for item in artifacts:
+        entry = _as_mapping(item, "artifact entry")
+        path_value = entry.get("path")
+        visibility = entry.get("visibility")
+        if not isinstance(path_value, str) or not path_value:
+            raise ValueError("artifact entry path must be nonempty string")
+        if "/" in path_value or path_value.startswith("."):
+            raise ValueError(f"artifact path must be local basename: {path_value}")
+        if path_value in seen:
+            raise ValueError(f"duplicate artifact path: {path_value}")
+        seen.add(path_value)
+        if visibility == "runner":
+            runner_files.append(path_value)
+        elif visibility == "scorer":
+            scorer_files.append(path_value)
+        elif visibility != "reviewer":
+            raise ValueError(f"unknown artifact visibility for {path_value}: {visibility}")
+        path = artifact_dir / path_value
+        if not path.is_file():
+            raise ValueError(f"artifact missing: {path_value}")
+        hashes[path_value] = sha256_file(path)
+
+    expected = set(runner_visible_artifacts()).union(scorer_only_artifacts())
+    missing_expected = expected.difference(runner_files).difference(scorer_files)
+    if missing_expected:
+        raise ValueError(f"manifest missing expected artifacts: {sorted(missing_expected)}")
+    validate_runner_gold_separation(runner_files, scorer_files)
+    _validate_artifact_cross_file_consistency(artifact_dir)
+    return hashes
+
+
 def runner_visible_artifacts() -> tuple[str, ...]:
     return (
+        "lucene_whole_unit_offsets_request_v1.schema.json",
+        "lucene_whole_unit_offsets_response_v1.schema.json",
+        "lucene_whole_unit_offsets_health_v1.schema.json",
+        "lucene_whole_unit_offsets_error_v1.schema.json",
+        "semantic_anchor_response_v1.case001.schema.json",
         "semantic_anchor_synthetic_corpus_v1.json",
         "semantic_anchor_case_order_v1.json",
-        "semantic_anchor_response_v1.schema.json",
         "semantic_anchor_prompt_v1.system.txt",
         "semantic_anchor_prompt_v1.user_template.json",
-        "semantic_anchor_request_fixtures_v1.jsonl",
+        "semantic_anchor_request_fixture.case001.json",
+        "semantic_anchor_terminal_receipt_v1.schema.json",
     )
 
 
@@ -356,6 +441,104 @@ def _boundary_valid_reason(
     if decision == "select" and 0 <= start < end <= u1_token_count:
         return "valid_select_range"
     return None
+
+
+def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
+    response_schema = load_json_no_duplicates(
+        artifact_dir / "semantic_anchor_response_v1.case001.schema.json"
+    )
+    if response_schema != expected_case001_response_schema():
+        raise ValueError("case001 response schema fixture does not match generator")
+
+    request = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_request_fixture.case001.json"),
+        "case001 request fixture",
+    )
+    if request.get("model") != "gpt-oss-local":
+        raise ValueError("request fixture must use served local model alias")
+    if request.get("max_tokens") != 512:
+        raise ValueError("request fixture max_tokens mismatch")
+    if request.get("temperature") != 1.0 or request.get("seed") != 0:
+        raise ValueError("request fixture sampling mismatch")
+    if request.get("reasoning_effort") != "low":
+        raise ValueError("request fixture reasoning_effort mismatch")
+    response_format = _as_mapping(request.get("response_format"), "response_format")
+    if response_format.get("type") != "json_schema":
+        raise ValueError("request fixture response_format type mismatch")
+    json_schema = _as_mapping(response_format.get("json_schema"), "json_schema")
+    if json_schema.get("strict") is not True:
+        raise ValueError("request fixture must set strict json_schema")
+    if json_schema.get("schema") != response_schema:
+        raise ValueError("request fixture embeds different response schema")
+
+    messages = request.get("messages")
+    if not isinstance(messages, list) or [m.get("role") for m in messages if isinstance(m, dict)] != [
+        "system",
+        "user",
+    ]:
+        raise ValueError("request fixture must have exact system,user messages")
+    system_prompt = (artifact_dir / "semantic_anchor_prompt_v1.system.txt").read_text(
+        encoding="utf-8"
+    ).rstrip("\n")
+    if messages[0].get("content") != system_prompt:
+        raise ValueError("request fixture system prompt drift")
+    user_payload = json.loads(messages[1].get("content"), object_pairs_hook=dict)
+    if user_payload.get("case_id") != "synthetic-case-001":
+        raise ValueError("request fixture user case_id mismatch")
+
+    case_order = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_case_order_v1.json"),
+        "case order",
+    )
+    if case_order.get("case_order") != ["synthetic-case-001"]:
+        raise ValueError("case order fixture mismatch")
+    if case_order.get("smoke_case_id") != "synthetic-case-001":
+        raise ValueError("smoke case fixture mismatch")
+
+    corpus = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_synthetic_corpus_v1.json"),
+        "synthetic corpus",
+    )
+    cases = corpus.get("cases")
+    if not isinstance(cases, list) or len(cases) != 1:
+        raise ValueError("smoke corpus must contain exactly one case")
+    case = _as_mapping(cases[0], "synthetic case")
+    if case.get("case_id") != "synthetic-case-001":
+        raise ValueError("synthetic corpus case_id mismatch")
+    if case.get("narrative") != user_payload.get("narrative"):
+        raise ValueError("request fixture narrative differs from corpus")
+    if case.get("token_tape") != user_payload.get("token_tape"):
+        raise ValueError("request fixture token tape differs from corpus")
+    if case.get("unit_boundaries") != user_payload.get("unit_boundaries"):
+        raise ValueError("request fixture unit boundaries differ from corpus")
+
+    gold = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_gold_labels_v1.json"),
+        "gold labels",
+    )
+    gold_cases = gold.get("cases")
+    if not isinstance(gold_cases, list) or len(gold_cases) != 1:
+        raise ValueError("smoke gold must contain exactly one case")
+    gold_case = _as_mapping(gold_cases[0], "gold case")
+    if gold_case.get("case_id") != "synthetic-case-001":
+        raise ValueError("gold case_id mismatch")
+    validate_model_response_shape(
+        {
+            "schema_version": MODEL_RESPONSE_SCHEMA_VERSION,
+            "case_id": "synthetic-case-001",
+            "decision": "select",
+            "start_token": 0,
+            "end_token": 2,
+        },
+        case_id="synthetic-case-001",
+        u1_token_count=7,
+    )
+
+
+def _as_mapping(value: object, name: str) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return value
 
 
 def _strict_int(value: object, name: str) -> int:
