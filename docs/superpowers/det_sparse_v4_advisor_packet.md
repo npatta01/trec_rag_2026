@@ -125,7 +125,28 @@ The report binds every committed v4 contract artifact by SHA-256. The full hash
 map is emitted by the command rather than copied here, so reviewers can rerun
 the command against the exact current checkout.
 
-Captured live attestation bundles, once separately produced, are reviewed with:
+Once offset parity, model inventory, schema-compiler, and model-runtime evidence
+files are separately produced, the canonical live-attestation bundle is assembled
+create-only with:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_preflight \
+  --assemble-live-attestation-bundle \
+  --offset-parity-review path/to/offset-parity-review.json \
+  --model-inventory-attestation path/to/model-inventory-attestation.json \
+  --schema-compiler-attestation path/to/schema-compiler-attestation.json \
+  --model-runtime-attestation path/to/model-runtime-attestation.json \
+  --output path/to/live-attestation-bundle.json
+```
+
+That assembler rereads the canonical offset fixture path named by the offset
+review, checks the fixture SHA-256 and offset fingerprint against the review,
+validates all four evidence files against the frozen request/model identities,
+and writes only canonical compact JSON because the next review gate rejects
+noncanonical bundle bytes. It performs no dispatch, model inference, retrieval,
+reranking, topic/qrels access, download, or network work.
+
+Assembled live attestation bundles are then reviewed with:
 
 ```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_preflight \
@@ -187,6 +208,8 @@ entrypoint can be invoked. The receipt must use
 `det_sparse_v4_synthetic_local_dispatch` scope, bind the exact
 `semantic_anchor_live_attestation_review_v1` canonical SHA-256, and acknowledge
 that topic, qrels, retrieval, reranking, and paid-call gates remain closed. The
+file-backed review rejects noncanonical live-attestation review or advisor-GO
+receipt bytes before deriving any GO review. The
 derived `semantic_anchor_advisor_dispatch_go_review_v1` report still keeps
 `inference_authorized=false`, `dispatch_authorized=false`, and
 `external_cost_authorized=false`; its next gate is

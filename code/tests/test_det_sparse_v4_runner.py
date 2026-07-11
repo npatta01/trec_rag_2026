@@ -577,6 +577,45 @@ def test_manual_runner_invocation_review_rejects_noncanonical_receipt(
     assert not output_path.exists()
 
 
+def test_manual_runner_invocation_review_rejects_noncanonical_upstream_reviews(
+    tmp_path: Path,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    live_review_path = tmp_path / "live-attestation-review.json"
+    advisor_review_path = tmp_path / "advisor-dispatch-go-review.json"
+    invocation_path = tmp_path / "manual-runner-invocation.json"
+    invocation_path.write_bytes(
+        contract.canonical_json_bytes(manual_invocation) + b"\n"
+    )
+
+    live_review_path.write_text(
+        json.dumps(live_review, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    advisor_review_path.write_bytes(
+        preflight.canonical_report_bytes(advisor_review)
+    )
+    with pytest.raises(ValueError, match="live attestation review is not canonical"):
+        runner.build_manual_runner_invocation_review_from_files(
+            live_attestation_review_path=live_review_path,
+            advisor_dispatch_go_review_path=advisor_review_path,
+            manual_runner_invocation_path=invocation_path,
+        )
+
+    live_review_path.write_bytes(preflight.canonical_report_bytes(live_review))
+    advisor_review_path.write_text(
+        json.dumps(advisor_review, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="advisor dispatch GO review is not canonical"):
+        runner.build_manual_runner_invocation_review_from_files(
+            live_attestation_review_path=live_review_path,
+            advisor_dispatch_go_review_path=advisor_review_path,
+            manual_runner_invocation_path=invocation_path,
+        )
+
+
 def test_synthetic_dispatch_run_seals_transport_no_body_no_go_on_bad_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -655,6 +655,14 @@ def build_manual_runner_invocation_review_from_files(
         contract.load_json_no_duplicates(invocation_file),
         "manual runner invocation",
     )
+    if live_review_file.read_bytes() != preflight.canonical_report_bytes(
+        live_attestation_review
+    ):
+        raise ValueError("live attestation review is not canonical JSON bytes")
+    if advisor_review_file.read_bytes() != preflight.canonical_report_bytes(
+        advisor_dispatch_go_review
+    ):
+        raise ValueError("advisor dispatch GO review is not canonical JSON bytes")
     if invocation_file.read_bytes() != (
         contract.canonical_json_bytes(manual_runner_invocation) + b"\n"
     ):

@@ -46,9 +46,13 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "--live-attestation-review path/to/live-attestation-review.json" in text
     assert "--advisor-go-receipt path/to/advisor-go.json" in text
     assert "requires the advisor GO receipt to be canonical JSON bytes" in text
+    assert "rejects noncanonical live-attestation review or advisor-GO\nreceipt bytes" in text
     assert "dispatch_authorized=false" in text
+    assert "--assemble-live-attestation-bundle" in text
     assert "--live-attestation-bundle path/to/live-attestation-bundle.json" in text
     assert "--offset-parity-review path/to/offset-parity-review.json" in text
+    assert "writes only canonical compact JSON" in text
+    assert "performs no dispatch, model inference, retrieval,\nreranking" in text
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text

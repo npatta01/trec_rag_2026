@@ -343,6 +343,98 @@ def _build_live_attestation_review_untraced(
     }
 
 
+def build_live_attestation_bundle_from_files(
+    *,
+    offset_parity_review_path: Path,
+    model_inventory_attestation_path: Path,
+    schema_compiler_attestation_path: Path,
+    model_runtime_attestation_path: Path,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Assemble the canonical live-attestation bundle from validated evidence files."""
+
+    offline_report = _build_offline_preflight_report_untraced(artifact_dir)
+    request_identity = _require_mapping(
+        offline_report.get("request_identity"), "request_identity"
+    )
+
+    offset_review_file = offset_parity_review_path.resolve()
+    offset_parity_review = _require_mapping(
+        contract.load_json_no_duplicates(offset_review_file),
+        "offset parity review",
+    )
+    if offset_review_file.read_bytes() != canonical_report_bytes(offset_parity_review):
+        raise ValueError("offset parity review is not canonical JSON bytes")
+    validate_offset_parity_review(offset_parity_review)
+
+    fixture_file = Path(
+        _require_string(offset_parity_review.get("fixture_path"), "fixture_path")
+    ).resolve()
+    fixture_record = _require_mapping(
+        contract.load_json_no_duplicates(fixture_file),
+        "offset parity fixtures",
+    )
+    if fixture_file.read_bytes() != contract.canonical_json_bytes(fixture_record) + b"\n":
+        raise ValueError("offset parity fixtures are not canonical JSON bytes")
+    if contract.sha256_file(fixture_file) != offset_parity_review.get("fixture_sha256"):
+        raise ValueError("offset parity fixture SHA-256 does not match review")
+    fixture_summary = _validate_offset_parity_fixture_record(fixture_record)
+    if offset_parity_review.get("offset_fingerprint_sha256") != contract.sha256_bytes(
+        contract.canonical_json_bytes(fixture_summary["fingerprint"])
+    ):
+        raise ValueError("offset parity fixture fingerprint does not match review")
+
+    inventory_file = model_inventory_attestation_path.resolve()
+    model_inventory = _require_mapping(
+        contract.load_json_no_duplicates(inventory_file),
+        "model inventory attestation",
+    )
+    if inventory_file.read_bytes() != contract.canonical_json_bytes(model_inventory) + b"\n":
+        raise ValueError("model inventory attestation is not canonical JSON bytes")
+    contract.validate_model_inventory(model_inventory)
+    model_inventory_sha256 = contract.sha256_file(inventory_file)
+
+    schema_compiler_file = schema_compiler_attestation_path.resolve()
+    schema_compiler = _require_mapping(
+        contract.load_json_no_duplicates(schema_compiler_file),
+        "schema compiler attestation",
+    )
+    if (
+        schema_compiler_file.read_bytes()
+        != contract.canonical_json_bytes(schema_compiler) + b"\n"
+    ):
+        raise ValueError("schema compiler attestation is not canonical JSON bytes")
+    contract.validate_schema_compiler_attestation(
+        schema_compiler,
+        request_identity=request_identity,
+    )
+
+    model_runtime_file = model_runtime_attestation_path.resolve()
+    model_runtime = _require_mapping(
+        contract.load_json_no_duplicates(model_runtime_file),
+        "model runtime attestation",
+    )
+    if model_runtime_file.read_bytes() != contract.canonical_json_bytes(model_runtime) + b"\n":
+        raise ValueError("model runtime attestation is not canonical JSON bytes")
+    contract.validate_live_model_runtime_attestation(
+        model_runtime,
+        expected_model_inventory_sha256=model_inventory_sha256,
+    )
+
+    bundle = {
+        "schema_version": "semantic_anchor_live_attestation_bundle_v1",
+        "offset_health": fixture_record["health"],
+        "schema_compiler": schema_compiler,
+        "model_runtime": model_runtime,
+    }
+    contract.validate_live_attestation_bundle(
+        bundle,
+        request_identity=request_identity,
+        expected_model_inventory_sha256=model_inventory_sha256,
+    )
+    return bundle
+
+
 def build_advisor_dispatch_go_review(
     live_attestation_review: Mapping[str, object],
     advisor_go_receipt: Mapping[str, object],
@@ -391,6 +483,8 @@ def build_advisor_dispatch_go_review_from_files(
         contract.load_json_no_duplicates(receipt_file),
         "advisor GO receipt",
     )
+    if live_review_file.read_bytes() != canonical_report_bytes(live_attestation_review):
+        raise ValueError("live attestation review is not canonical JSON bytes")
     if receipt_file.read_bytes() != contract.canonical_json_bytes(advisor_go_receipt) + b"\n":
         raise ValueError("advisor GO receipt is not canonical JSON bytes")
     review = build_advisor_dispatch_go_review(
@@ -1685,6 +1779,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional captured live-attestation bundle to validate without dispatch.",
     )
     parser.add_argument(
+        "--assemble-live-attestation-bundle",
+        action="store_true",
+        help="Create the canonical live-attestation bundle from validated evidence files.",
+    )
+    parser.add_argument(
         "--live-attestation-review",
         type=Path,
         help="Prior live-attestation review JSON used by an advisor GO receipt.",
@@ -1748,6 +1847,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             or args.milestone_approval_receipt
             or args.reviewer_qualification_review
             or args.live_attestation_bundle
+            or args.assemble_live_attestation_bundle
             or args.live_attestation_review
             or args.advisor_go_receipt
             or args.offset_parity_fixtures
@@ -1761,6 +1861,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = build_model_inventory_attestation_from_snapshot(
             args.model_inventory_snapshot
         )
+        output_is_canonical_json = False
+    elif args.assemble_live_attestation_bundle:
+        if args.pretty:
+            raise ValueError(
+                "--assemble-live-attestation-bundle output must be canonical JSON; omit --pretty"
+            )
+        if not args.output:
+            raise ValueError("--assemble-live-attestation-bundle requires --output")
+        if (
+            args.live_attestation_bundle
+            or args.live_attestation_review
+            or args.advisor_go_receipt
+            or args.offset_parity_fixtures
+            or args.reviewer_qualification_review
+            or args.milestone_approval_receipt
+            or args.model_inventory_snapshot
+        ):
+            raise ValueError(
+                "--assemble-live-attestation-bundle cannot be combined with review, "
+                "approval, fixture, or snapshot modes"
+            )
+        if not (
+            args.offset_parity_review
+            and args.model_inventory_attestation
+            and args.schema_compiler_attestation
+            and args.model_runtime_attestation
+        ):
+            raise ValueError(
+                "--assemble-live-attestation-bundle requires --offset-parity-review, "
+                "--model-inventory-attestation, --schema-compiler-attestation, "
+                "and --model-runtime-attestation"
+            )
+        report = build_live_attestation_bundle_from_files(
+            offset_parity_review_path=args.offset_parity_review,
+            model_inventory_attestation_path=args.model_inventory_attestation,
+            schema_compiler_attestation_path=args.schema_compiler_attestation,
+            model_runtime_attestation_path=args.model_runtime_attestation,
+            artifact_dir=args.artifact_dir,
+        )
+        output_is_canonical_json = True
     elif (
         args.model_inventory_attestation
         or args.schema_compiler_attestation
@@ -1799,6 +1939,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.reviewer_qualification_review,
             args.milestone_approval_receipt,
         )
+        output_is_canonical_json = False
     elif args.advisor_go_receipt or args.live_attestation_review:
         if not (args.advisor_go_receipt and args.live_attestation_review):
             raise ValueError(
@@ -1821,6 +1962,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.live_attestation_review,
             args.advisor_go_receipt,
         )
+        output_is_canonical_json = False
     elif args.live_attestation_bundle:
         if args.offset_parity_fixtures:
             raise ValueError(
@@ -1850,12 +1992,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_runtime_attestation_path=args.model_runtime_attestation,
             artifact_dir=args.artifact_dir,
         )
+        output_is_canonical_json = False
     elif args.offset_parity_fixtures:
         if args.offset_parity_review:
             raise ValueError(
                 "--offset-parity-review cannot be combined with offset parity fixtures"
             )
         report = build_offset_parity_review(args.offset_parity_fixtures)
+        output_is_canonical_json = False
     elif args.offset_parity_review:
         raise ValueError("--offset-parity-review requires --live-attestation-bundle")
     elif (
@@ -1869,7 +2013,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     else:
         report = build_offline_preflight_report(args.artifact_dir)
-    payload = canonical_report_bytes(report, pretty=args.pretty)
+        output_is_canonical_json = False
+    if output_is_canonical_json:
+        payload = contract.canonical_json_bytes(report) + b"\n"
+    else:
+        payload = canonical_report_bytes(report, pretty=args.pretty)
     if args.output:
         _create_only(args.output, payload)
     else:

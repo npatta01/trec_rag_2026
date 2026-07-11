@@ -1095,6 +1095,140 @@ def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
         )
 
 
+def test_live_attestation_bundle_assembler_writes_canonical_bundle(tmp_path: Path):
+    inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
+    offset_review_path = _write_offset_parity_review(tmp_path)
+
+    bundle = preflight.build_live_attestation_bundle_from_files(
+        offset_parity_review_path=offset_review_path,
+        model_inventory_attestation_path=inventory_path,
+        schema_compiler_attestation_path=schema_compiler_path,
+        model_runtime_attestation_path=model_runtime_path,
+    )
+
+    assert bundle == _live_attestation_bundle(model_inventory_sha256)
+    contract.validate_live_attestation_bundle(
+        bundle,
+        request_identity=preflight.build_request_identity_summary(contract.ARTIFACT_DIR),
+        expected_model_inventory_sha256=model_inventory_sha256,
+    )
+
+    output_path = tmp_path / "assembled-live-attestation-bundle.json"
+    assert (
+        preflight.main(
+            [
+                "--assemble-live-attestation-bundle",
+                "--offset-parity-review",
+                str(offset_review_path),
+                "--model-inventory-attestation",
+                str(inventory_path),
+                "--schema-compiler-attestation",
+                str(schema_compiler_path),
+                "--model-runtime-attestation",
+                str(model_runtime_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    written = contract.load_json_no_duplicates(output_path)
+    assert written == bundle
+    assert output_path.read_bytes() == contract.canonical_json_bytes(bundle) + b"\n"
+    with pytest.raises(FileExistsError):
+        preflight.main(
+            [
+                "--assemble-live-attestation-bundle",
+                "--offset-parity-review",
+                str(offset_review_path),
+                "--model-inventory-attestation",
+                str(inventory_path),
+                "--schema-compiler-attestation",
+                str(schema_compiler_path),
+                "--model-runtime-attestation",
+                str(model_runtime_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+
+
+def test_live_attestation_bundle_assembler_fails_closed_on_drift_and_options(
+    tmp_path: Path,
+):
+    inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
+    offset_review_path = _write_offset_parity_review(tmp_path)
+    offset_review = contract.load_json_no_duplicates(offset_review_path)
+    drifted_review = dict(offset_review, fixture_sha256="9" * 64)
+    offset_review_path.write_bytes(preflight.canonical_report_bytes(drifted_review))
+    with pytest.raises(ValueError, match="fixture SHA-256"):
+        preflight.build_live_attestation_bundle_from_files(
+            offset_parity_review_path=offset_review_path,
+            model_inventory_attestation_path=inventory_path,
+            schema_compiler_attestation_path=schema_compiler_path,
+            model_runtime_attestation_path=model_runtime_path,
+        )
+
+    offset_review_path.write_bytes(preflight.canonical_report_bytes(offset_review))
+    with pytest.raises(ValueError, match="requires --output"):
+        preflight.main(
+            [
+                "--assemble-live-attestation-bundle",
+                "--offset-parity-review",
+                str(offset_review_path),
+                "--model-inventory-attestation",
+                str(inventory_path),
+                "--schema-compiler-attestation",
+                str(schema_compiler_path),
+                "--model-runtime-attestation",
+                str(model_runtime_path),
+            ]
+        )
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.main(
+            [
+                "--assemble-live-attestation-bundle",
+                "--offset-parity-review",
+                str(offset_review_path),
+                "--model-inventory-attestation",
+                str(inventory_path),
+                "--schema-compiler-attestation",
+                str(schema_compiler_path),
+                "--model-runtime-attestation",
+                str(model_runtime_path),
+                "--output",
+                str(tmp_path / "pretty-bundle.json"),
+                "--pretty",
+            ]
+        )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        preflight.main(
+            [
+                "--assemble-live-attestation-bundle",
+                "--live-attestation-bundle",
+                str(tmp_path / "bundle.json"),
+                "--offset-parity-review",
+                str(offset_review_path),
+                "--model-inventory-attestation",
+                str(inventory_path),
+                "--schema-compiler-attestation",
+                str(schema_compiler_path),
+                "--model-runtime-attestation",
+                str(model_runtime_path),
+                "--output",
+                str(tmp_path / "combined-bundle.json"),
+            ]
+        )
+
+
 def test_live_attestation_review_cli_requires_offset_parity_review(tmp_path: Path):
     artifact_hashes = contract.validate_artifact_bundle()
     bundle_path = tmp_path / "live-attestation-bundle.json"
@@ -1282,6 +1416,17 @@ def test_advisor_dispatch_go_review_cli_rejects_partial_or_noncanonical_receipts
     with pytest.raises(ValueError, match="requires --live-attestation-review"):
         preflight.main(["--advisor-go-receipt", str(advisor_go_path)])
     with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.build_advisor_dispatch_go_review_from_files(
+            live_review_path,
+            advisor_go_path,
+        )
+
+    advisor_go_path.write_bytes(contract.canonical_json_bytes(advisor_go) + b"\n")
+    live_review_path.write_text(
+        json.dumps(live_review, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="live attestation review is not canonical"):
         preflight.build_advisor_dispatch_go_review_from_files(
             live_review_path,
             advisor_go_path,
