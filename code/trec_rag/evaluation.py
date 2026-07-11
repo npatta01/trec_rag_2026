@@ -13,9 +13,15 @@ from trec_rag.pipeline_models import RankedCandidate
 Qrels = dict[str, dict[str, int]]
 
 
-def parse_qrels(path: Path) -> Qrels:
+def parse_qrels_bytes(content: bytes) -> Qrels:
+    """Parse exact qrels bytes so callers can hash and evaluate one snapshot."""
+
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("qrels must be UTF-8") from exc
     qrels: Qrels = defaultdict(dict)
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if not raw_line.strip():
             continue
         parts = raw_line.split()
@@ -27,6 +33,10 @@ def parse_qrels(path: Path) -> Qrels:
         except ValueError as exc:
             raise ValueError(f"line {line_number}: relevance grade must be an integer") from exc
     return dict(qrels)
+
+
+def parse_qrels(path: Path) -> Qrels:
+    return parse_qrels_bytes(path.read_bytes())
 
 
 def _dcg(grades: list[int]) -> float:

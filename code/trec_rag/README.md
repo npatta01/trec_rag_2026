@@ -208,6 +208,69 @@ Run all planner, analyzer, and ledger tests:
   code/tests/test_query_analyzer_contract.py
 ```
 
+### Deterministic sparse v1
+
+`det_sparse_v1` is the separately versioned continuation after the v2.1 model
+arm's admission failure. It makes no model call. It keeps the exact original
+query, splits only source-backed request units, copies the first unit as shared
+parent context, caps facets at four, derives optional single-word expansion
+from frozen BM25 results, and combines streams with weighted reciprocal-rank
+fusion. Model anchor kinds and free-form scope references do not exist in this
+arm.
+
+The frozen diagnostic configuration is
+`configs/det_sparse_v1.yaml`. It names exactly four non-locked difficult-topic
+diagnostics, `hits=100`, RRF `k=60`, no model or reranker, and a durable ceiling
+of 36 external requests. The four explicit ablations are original (`O`),
+original plus facets (`F`), original plus PRF expansion (`E`), and the combined
+arm (`FE`). This set is deliberately qrel-conditioned and cannot support a
+generalization claim.
+
+Run the synthetic/offline contract tests without contacting retrieval or a
+model:
+
+```bash
+.venv/bin/python -m pytest -q \
+  code/tests/test_deterministic_sparse.py \
+  code/tests/test_det_sparse_config.py \
+  code/tests/test_det_sparse_arms.py \
+  code/tests/test_rrf.py \
+  code/tests/test_det_sparse_ledger.py \
+  code/tests/test_det_sparse_budget.py \
+  code/tests/test_det_sparse_transport.py \
+  code/tests/test_det_sparse_freeze.py \
+  code/tests/test_det_sparse_preflight.py \
+  code/tests/test_det_sparse_provenance.py \
+  code/tests/test_det_sparse_nonregression.py \
+  code/tests/test_det_sparse_run.py
+```
+
+After the source is committed and the pinned local analyzer is running, the
+offline preflight command materializes exact plans and a create-only
+pre-retrieval freeze. It reads neither qrels nor the retrieval endpoint:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.det_sparse_preflight \
+  --config configs/det_sparse_v1.yaml
+```
+
+The retrieval ledger in `det_sparse_ledger.py` reserves every attempt before
+the call, writes exact response bytes before parsing, verifies exact identities
+and hashes, and stops before request 37. The formal pilot uses a fresh run-local
+ledger and canonical exact-query aliases rather than a pre-existing shared
+cache. A second experiment-global ticket ledger is stored under the Git common
+directory, so linked worktrees cannot reset the 36-call ceiling. The only
+admissible network implementation is a no-retry/no-redirect transport bound to
+the single frozen HTTPS endpoint.
+
+Passing preflight does not itself authorize retrieval. External execution is
+currently fail-closed because the hosted ClimbMix service exposes no immutable
+index revision; changing that requires a separately reviewed, versioned gate.
+Evaluation helpers replay plans, PRF, arms, and rankings from frozen raw ledger
+evidence before their first qrels read, then hash and parse the same qrels byte
+snapshot and apply the preregistered
+paired promotion gates.
+
 ## Config-Driven RAG Pipeline
 
 The pipeline is the preferred path for experiments. It keeps query

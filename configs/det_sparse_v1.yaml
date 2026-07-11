@@ -1,0 +1,66 @@
+schema_version: det_sparse_experiment_v1
+
+experiment:
+  id: rag25_det_sparse_difficult4_v1
+  output_dir: outputs/rag25_det_sparse_difficult4_v1
+
+topics:
+  path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  format: tsv
+  ids: ["200", "225", "707", "897"]
+  selection_kind: qrel_conditioned_difficult_topic_diagnostic
+
+query_planning:
+  splitter_version: det_sparse_exact_span_splitter_v1
+  tokenizer_version: narrative_token_tape_v1
+  max_facets: 4
+  min_unique_terms: 3
+
+analyzer:
+  url: http://127.0.0.1:18081
+  expected_fingerprint_sha256: f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4
+
+retrieval:
+  type: pyserini_remote_raw_first_v1
+  endpoint_env: INDEX_URL
+  endpoint_url: https://api.castorini.uwaterloo.ca/v1/climbmix-400b/search
+  index: climbmix-400b
+  index_revision: hosted_climbmix_unknown_revision
+  hits: 100
+  min_results: 50
+  cache_policy: fresh_run_local
+
+retrieval_ledger:
+  version: det_sparse_retrieval_ledger_v1
+
+expansion:
+  version: det_sparse_prf_v1
+  foreground_ranks: [1, 5]
+  background_ranks: [6, 50]
+  max_terms: 2
+  expand_parent_facet: false
+  max_expanded_facets: 3
+
+fusion:
+  version: weighted_rrf_v1
+  k: 60
+  arms: [O, F, E, FE]
+
+cost:
+  topic_count: 4
+  max_facets_per_topic: 4
+  max_unique_requests_per_topic: 9
+  max_external_requests: 36
+  model_calls: 0
+  reranker_calls: 0
+
+evaluation:
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  relevance_threshold: 2
+  metrics:
+    - recall@100
+    - graded_recall@100
+    - ideal_dcg_coverage@100
+    - recall@50
+    - ndcg@10
+  firewall: frozen_manifest_required

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,6 +55,177 @@ def passthrough_rank(candidates: list[RetrievedCandidate]) -> list[RankedCandida
                 provenance=[_provenance(candidate) for candidate in provenance_candidates],
             )
         )
+    return ranked
+
+
+def reciprocal_rank_fusion(
+    candidates: list[RetrievedCandidate],
+    *,
+    k: float = 60,
+    stream_weights: Mapping[tuple[str, str], float] | None = None,
+    limit: int | None = None,
+) -> list[RankedCandidate]:
+    """Fuse retrieval streams independently for each topic.
+
+    A stream is identified by ``(variant_name, retriever_name)``. Duplicate
+    documents within a stream contribute only their best source rank, while a
+    document returned by multiple streams receives one contribution from each
+    of those streams.
+    """
+
+    try:
+        valid_k = math.isfinite(k) and k >= 1
+    except TypeError:
+        valid_k = False
+    if not valid_k:
+        raise ValueError("rrf k must be finite and at least 1")
+    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit < 1):
+        raise ValueError("rrf limit must be an integer of at least 1")
+
+    for candidate in candidates:
+        try:
+            valid_rank = math.isfinite(candidate.rank) and candidate.rank >= 1
+        except TypeError:
+            valid_rank = False
+        if not valid_rank:
+            raise ValueError("retrieved candidate ranks must be finite and at least 1")
+
+    observed_streams = {
+        (candidate.variant_name, candidate.retriever_name) for candidate in candidates
+    }
+    if stream_weights is None:
+        weights = {stream: 1.0 for stream in observed_streams}
+    else:
+        weights: dict[tuple[str, str], float] = {}
+        for stream, raw_weight in stream_weights.items():
+            try:
+                weight = float(raw_weight)
+            except (TypeError, ValueError) as error:
+                raise ValueError("rrf stream weights must be finite and positive") from error
+            if not math.isfinite(weight) or weight <= 0:
+                raise ValueError("rrf stream weights must be finite and positive")
+            weights[stream] = weight
+
+        missing_streams = sorted(observed_streams - weights.keys())
+        if missing_streams:
+            raise ValueError(f"missing rrf stream weights for: {missing_streams!r}")
+
+    candidates_by_stream_doc: dict[
+        tuple[str, str, str, str], list[RetrievedCandidate]
+    ] = defaultdict(list)
+    candidates_by_doc: dict[tuple[str, str], list[RetrievedCandidate]] = defaultdict(list)
+    for candidate in candidates:
+        candidates_by_stream_doc[
+            (
+                candidate.topic_id,
+                candidate.variant_name,
+                candidate.retriever_name,
+                candidate.docid,
+            )
+        ].append(candidate)
+        candidates_by_doc[(candidate.topic_id, candidate.docid)].append(candidate)
+
+    representatives_by_doc: dict[tuple[str, str], list[RetrievedCandidate]] = defaultdict(list)
+    for stream_doc_candidates in candidates_by_stream_doc.values():
+        representative = min(
+            stream_doc_candidates,
+            key=lambda candidate: (
+                candidate.rank,
+                -candidate.score,
+                candidate.docid,
+                candidate.query_text,
+                not bool(candidate.text.strip()),
+                candidate.text,
+            ),
+        )
+        representatives_by_doc[(representative.topic_id, representative.docid)].append(
+            representative
+        )
+
+    scored_by_topic: dict[
+        str,
+        list[tuple[str, float, int, str, list[dict[str, object]]]],
+    ] = defaultdict(list)
+    for (topic_id, docid), representatives in representatives_by_doc.items():
+        ordered_representatives = sorted(
+            representatives,
+            key=lambda candidate: (
+                candidate.variant_name,
+                candidate.retriever_name,
+                candidate.rank,
+                -candidate.score,
+                candidate.query_text,
+            ),
+        )
+        contributions: list[float] = []
+        provenance: list[dict[str, object]] = []
+        for candidate in ordered_representatives:
+            stream = (candidate.variant_name, candidate.retriever_name)
+            weight = weights[stream]
+            contribution = weight / (k + candidate.rank)
+            contributions.append(contribution)
+            provenance.append(
+                {
+                    **_provenance(candidate),
+                    "ranker": "reciprocal_rank_fusion",
+                    "rrf_k": k,
+                    "rrf_weight": weight,
+                    "rrf_contribution": contribution,
+                }
+            )
+
+        text_candidates = [
+            candidate
+            for candidate in candidates_by_doc[(topic_id, docid)]
+            if candidate.text.strip()
+        ]
+        if text_candidates:
+            text = min(
+                text_candidates,
+                key=lambda candidate: (
+                    candidate.rank,
+                    -candidate.score,
+                    candidate.variant_name,
+                    candidate.retriever_name,
+                    candidate.query_text,
+                    candidate.text,
+                ),
+            ).text
+        else:
+            text = ""
+
+        scored_by_topic[topic_id].append(
+            (
+                docid,
+                math.fsum(contributions),
+                min(candidate.rank for candidate in ordered_representatives),
+                text,
+                provenance,
+            )
+        )
+
+    ranked: list[RankedCandidate] = []
+    for topic_id in sorted(scored_by_topic):
+        ordered_documents = sorted(
+            scored_by_topic[topic_id],
+            key=lambda item: (-item[1], item[2], item[0]),
+        )
+        if limit is not None:
+            ordered_documents = ordered_documents[:limit]
+        for rank, (docid, score, _best_source_rank, text, provenance) in enumerate(
+            ordered_documents,
+            start=1,
+        ):
+            ranked.append(
+                RankedCandidate(
+                    topic_id=topic_id,
+                    docid=docid,
+                    rank=rank,
+                    score=score,
+                    text=text,
+                    provenance=provenance,
+                )
+            )
     return ranked
 
 
