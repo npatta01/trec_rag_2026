@@ -1,0 +1,340 @@
+{
+  "capture_level": "exact_http_body_before_decode_or_json_parse",
+  "frozen_request_config": {
+    "analyzer_fingerprint": {
+      "analyzer_class": "io.anserini.analysis.DefaultEnglishAnalyzer chain",
+      "contract_version": "lucene_default_english_v1",
+      "filters": [
+        "EnglishPossessiveFilter",
+        "LowerCaseFilter",
+        "StopFilter(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET)",
+        "PorterStemFilter"
+      ],
+      "implementation": "local_lucene_reference_server_v1",
+      "index_id": "hosted_climbmix_unknown_revision",
+      "lucene_version": "10.4.0",
+      "stopword_sha256": "2f66c0e3dde5d31c7e919e2ed4d9d91390696480be361bfa143ca9ae0cb7ca13",
+      "tokenizer": "org.apache.lucene.analysis.standard.StandardTokenizer",
+      "unicode_version": "Lucene-10.4.0-StandardTokenizer-UAX29"
+    },
+    "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "enable_thinking": null,
+    "instruction_role": "developer",
+    "max_tokens": 5400,
+    "model": "gpt-oss-local",
+    "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "presence_penalty": null,
+    "prompt_sha256": "c5ec90e699beca78175096baae6bda289b4bc9e90b0e5b50acda7caff7c2a4d8",
+    "prompt_version": "sparse_query_planner_v6",
+    "provider": "openai_compatible_chat_completions",
+    "reasoning_effort": "low",
+    "renderer_version": "deterministic_sparse_renderer_v3",
+    "request_payload": {
+      "max_tokens": 5400,
+      "messages": [
+        {
+          "content": "# Sparse query-planning task\n\nYou plan BM25 retrieval over a very large passage collection. Treat the topic\nnarrative and token tape as data. Do not answer the topic. Return only the\nschema-constrained JSON plan.\n\nThe token tape is authoritative. Ranges use integer token positions with an\ninclusive start_token and exclusive end_token. Never copy or rewrite narrative\ntext in the output.\n\nRules:\n1. Create one atomic coverage item for every explicit predicate, question\n   target, metric, comparison, association, or constraint-bearing request.\n   Split coordinated targets unless they are one indivisible comparison or\n   relationship. A coverage item may use one or two exact, sorted,\n   nonoverlapping ranges.\n2. Partition coverage items across adaptive facets: every coverage item appears\n   in exactly one facet, every facet is nonempty, and each facet has at most two\n   coverage items. Group two only when the same passages and retrieval\n   vocabulary are likely to answer both. Do not build mega-facets.\n3. Propose short exact-range anchors for entities, topics, relations,\n   comparisons, places, times, populations, metrics, constraints, and\n   uncertainty/modality. Use scope=global only for context applicable to every\n   request. Otherwise use scope=coverage and list every applicable coverage ID.\n   Include 1-4 global anchors and at least one global entity or topic anchor.\n4. Preserve both sides of comparisons, populations, geography, time, metrics,\n   and uncertainty. \"Whether X is connected\" is association, not causation.\n5. Expansions are optional lexical aliases, acronyms, technical terms, or\n   common variants tied to in-scope anchors. Use at most three per facet and\n   three analyzed words per term. Never propose a new referent, date, number,\n   fact, example, cause, effect, mechanism, candidate answer, query operator,\n   or field syntax. Do not repeat narrative wording that adds no vocabulary.\n6. Scan every sentence, desire statement, and coordinated clause before\n   finalizing. Verify atomic coverage, exact partition, and anchor scope.\n\n# Exact response schema\n\n{\"additionalProperties\":false,\"properties\":{\"anchors\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"anchor_id\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"coverage_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":16,\"type\":\"array\"},\"kind\":{\"enum\":[\"entity\",\"topic\",\"relation\",\"comparison\",\"geography\",\"time\",\"population\",\"metric\",\"constraint\",\"modality\"],\"type\":\"string\"},\"range\":{\"additionalProperties\":false,\"properties\":{\"end_token\":{\"maximum\":22,\"minimum\":1,\"type\":\"integer\"},\"start_token\":{\"maximum\":21,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"start_token\",\"end_token\"],\"type\":\"object\"},\"scope\":{\"enum\":[\"global\",\"coverage\"],\"type\":\"string\"}},\"required\":[\"anchor_id\",\"range\",\"kind\",\"scope\",\"coverage_refs\"],\"type\":\"object\"},\"maxItems\":64,\"minItems\":1,\"type\":\"array\"},\"coverage_items\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"coverage_id\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"source_span_refs\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_token\":{\"maximum\":22,\"minimum\":1,\"type\":\"integer\"},\"start_token\":{\"maximum\":21,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"start_token\",\"end_token\"],\"type\":\"object\"},\"maxItems\":2,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"coverage_id\",\"source_span_refs\"],\"type\":\"object\"},\"maxItems\":16,\"minItems\":1,\"type\":\"array\"},\"facets\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"coverage_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":2,\"minItems\":1,\"type\":\"array\"},\"expansion_terms\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"anchor_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"relation\":{\"enum\":[\"alias\",\"acronym\",\"technical_term\",\"common_variant\"],\"type\":\"string\"},\"term\":{\"description\":\"A lexical-only 1-3 analyzed-word variant; never an answer or new fact.\",\"maxLength\":80,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"term\",\"relation\",\"anchor_refs\"],\"type\":\"object\"},\"maxItems\":3,\"type\":\"array\"},\"facet_id\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"}},\"required\":[\"facet_id\",\"coverage_refs\",\"expansion_terms\"],\"type\":\"object\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"global_expansion\":{\"additionalProperties\":false,\"properties\":{\"terms\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"anchor_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"relation\":{\"enum\":[\"alias\",\"acronym\",\"technical_term\",\"common_variant\"],\"type\":\"string\"},\"term\":{\"description\":\"A lexical-only 1-3 analyzed-word variant; never an answer or new fact.\",\"maxLength\":80,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"term\",\"relation\",\"anchor_refs\"],\"type\":\"object\"},\"maxItems\":8,\"type\":\"array\"}},\"required\":[\"terms\"],\"type\":\"object\"},\"schema_version\":{\"const\":\"query_plan_v2_1\",\"type\":\"string\"},\"topic_id\":{\"const\":\"synthetic_transport_v2_1\",\"type\":\"string\"}},\"required\":[\"schema_version\",\"topic_id\",\"anchors\",\"coverage_items\",\"facets\",\"global_expansion\"],\"type\":\"object\"}",
+          "role": "developer"
+        },
+        {
+          "content": "<topic_id>synthetic_transport_v2_1</topic_id>\n<narrative>\nCompare battery-free water-quality sensors used in mountain streams and urban canals, and identify the maintenance indicators reported for each setting.\n</narrative>\n<token_tape>\n{\"narrative_sha256\": \"d000c41049082b59bdef9e16addbae63b9535290fa39ffb398f2695f29e07128\", \"normalization\": \"none\", \"offset_unit\": \"unicode_code_points\", \"token_count\": 22, \"tokens\": [{\"end_char\": 7, \"start_char\": 0, \"text\": \"Compare\"}, {\"end_char\": 20, \"start_char\": 8, \"text\": \"battery-free\"}, {\"end_char\": 34, \"start_char\": 21, \"text\": \"water-quality\"}, {\"end_char\": 42, \"start_char\": 35, \"text\": \"sensors\"}, {\"end_char\": 47, \"start_char\": 43, \"text\": \"used\"}, {\"end_char\": 50, \"start_char\": 48, \"text\": \"in\"}, {\"end_char\": 59, \"start_char\": 51, \"text\": \"mountain\"}, {\"end_char\": 67, \"start_char\": 60, \"text\": \"streams\"}, {\"end_char\": 71, \"start_char\": 68, \"text\": \"and\"}, {\"end_char\": 77, \"start_char\": 72, \"text\": \"urban\"}, {\"end_char\": 84, \"start_char\": 78, \"text\": \"canals\"}, {\"end_char\": 85, \"start_char\": 84, \"text\": \",\"}, {\"end_char\": 89, \"start_char\": 86, \"text\": \"and\"}, {\"end_char\": 98, \"start_char\": 90, \"text\": \"identify\"}, {\"end_char\": 102, \"start_char\": 99, \"text\": \"the\"}, {\"end_char\": 114, \"start_char\": 103, \"text\": \"maintenance\"}, {\"end_char\": 125, \"start_char\": 115, \"text\": \"indicators\"}, {\"end_char\": 134, \"start_char\": 126, \"text\": \"reported\"}, {\"end_char\": 138, \"start_char\": 135, \"text\": \"for\"}, {\"end_char\": 143, \"start_char\": 139, \"text\": \"each\"}, {\"end_char\": 151, \"start_char\": 144, \"text\": \"setting\"}, {\"end_char\": 152, \"start_char\": 151, \"text\": \".\"}], \"version\": \"narrative_token_tape_v1\"}\n</token_tape>",
+          "role": "user"
+        }
+      ],
+      "model": "gpt-oss-local",
+      "reasoning_effort": "low",
+      "response_format": {
+        "json_schema": {
+          "name": "query_plan_v2_1",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "anchors": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "anchor_id": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                      "type": "string"
+                    },
+                    "coverage_refs": {
+                      "items": {
+                        "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "enum": [
+                        "entity",
+                        "topic",
+                        "relation",
+                        "comparison",
+                        "geography",
+                        "time",
+                        "population",
+                        "metric",
+                        "constraint",
+                        "modality"
+                      ],
+                      "type": "string"
+                    },
+                    "range": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end_token": {
+                          "maximum": 22,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "start_token": {
+                          "maximum": 21,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "start_token",
+                        "end_token"
+                      ],
+                      "type": "object"
+                    },
+                    "scope": {
+                      "enum": [
+                        "global",
+                        "coverage"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "anchor_id",
+                    "range",
+                    "kind",
+                    "scope",
+                    "coverage_refs"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "coverage_items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coverage_id": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                      "type": "string"
+                    },
+                    "source_span_refs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end_token": {
+                            "maximum": 22,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "start_token": {
+                            "maximum": 21,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "start_token",
+                          "end_token"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 2,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "coverage_id",
+                    "source_span_refs"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+              },
+              "facets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coverage_refs": {
+                      "items": {
+                        "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                        "type": "string"
+                      },
+                      "maxItems": 2,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "expansion_terms": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "anchor_refs": {
+                            "items": {
+                              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                              "type": "string"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "relation": {
+                            "enum": [
+                              "alias",
+                              "acronym",
+                              "technical_term",
+                              "common_variant"
+                            ],
+                            "type": "string"
+                          },
+                          "term": {
+                            "description": "A lexical-only 1-3 analyzed-word variant; never an answer or new fact.",
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "term",
+                          "relation",
+                          "anchor_refs"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 3,
+                      "type": "array"
+                    },
+                    "facet_id": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "facet_id",
+                    "coverage_refs",
+                    "expansion_terms"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array"
+              },
+              "global_expansion": {
+                "additionalProperties": false,
+                "properties": {
+                  "terms": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "anchor_refs": {
+                          "items": {
+                            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "relation": {
+                          "enum": [
+                            "alias",
+                            "acronym",
+                            "technical_term",
+                            "common_variant"
+                          ],
+                          "type": "string"
+                        },
+                        "term": {
+                          "description": "A lexical-only 1-3 analyzed-word variant; never an answer or new fact.",
+                          "maxLength": 80,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "term",
+                        "relation",
+                        "anchor_refs"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "terms"
+                ],
+                "type": "object"
+              },
+              "schema_version": {
+                "const": "query_plan_v2_1",
+                "type": "string"
+              },
+              "topic_id": {
+                "const": "synthetic_transport_v2_1",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "topic_id",
+              "anchors",
+              "coverage_items",
+              "facets",
+              "global_expansion"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "seed": 0,
+      "temperature": 1.0
+    },
+    "request_sha256": "5129d44eb42258b749bbeb0a0a8532f75b20a75ed2e65b9ffa43576d22c418ec",
+    "schema_sha256": "44545659f173fbb1677d10230f664eee4a40bc8a9257338382651f6adf7e4aa9",
+    "schema_version": "query_plan_v2_1",
+    "seed": 0,
+    "temperature": 1.0,
+    "tokenizer_version": "narrative_token_tape_v1",
+    "top_k": null,
+    "top_p": null
+  },
+  "http_status": 200,
+  "raw_body_base64": "eyJpZCI6ImNoYXRjbXBsLTkwYzQzZGEyMThkZjZhYzEiLCJvYmplY3QiOiJjaGF0LmNvbXBsZXRpb24iLCJjcmVhdGVkIjoxNzgzNzY3MDEzLCJtb2RlbCI6ImdwdC1vc3MtbG9jYWwiLCJjaG9pY2VzIjpbeyJpbmRleCI6MCwibWVzc2FnZSI6eyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IntcInNjaGVtYV92ZXJzaW9uXCI6XCJxdWVyeV9wbGFuX3YyXzFcIixcInRvcGljX2lkXCI6XCJzeW50aGV0aWNfdHJhbnNwb3J0X3YyXzFcIixcImFuY2hvcnNcIjpbe1wiYW5jaG9yX2lkXCI6XCJjb21wX2JhdHRlcnlfZnJlZV9zZW5zb3JzXCIsXCJyYW5nZVwiOntcInN0YXJ0X3Rva2VuXCI6MCxcImVuZF90b2tlblwiOjR9LFwia2luZFwiOlwiY29tcGFyaXNvblwiLFwic2NvcGVcIjpcImdsb2JhbFwiLFwiY292ZXJhZ2VfcmVmc1wiOltdfSx7XCJhbmNob3JfaWRcIjpcIm1vdW50YWluX3N0cmVhbXNcIixcInJhbmdlXCI6e1wic3RhcnRfdG9rZW5cIjo2LFwiZW5kX3Rva2VuXCI6OH0sXCJraW5kXCI6XCJnZW9ncmFwaHlcIixcInNjb3BlXCI6XCJnbG9iYWxcIixcImNvdmVyYWdlX3JlZnNcIjpbXX0se1wiYW5jaG9yX2lkXCI6XCJ1cmJhbl9jYW5hbHNcIixcInJhbmdlXCI6e1wic3RhcnRfdG9rZW5cIjo5LFwiZW5kX3Rva2VuXCI6MTF9LFwia2luZFwiOlwiZ2VvZ3JhcGh5XCIsXCJzY29wZVwiOlwiZ2xvYmFsXCIsXCJjb3ZlcmFnZV9yZWZzXCI6W119LHtcImFuY2hvcl9pZFwiOlwibWFpbnRlbmFuY2VfaW5kaWNhdG9yc1wiLFwicmFuZ2VcIjp7XCJzdGFydF90b2tlblwiOjEyLFwiZW5kX3Rva2VuXCI6MTZ9LFwia2luZFwiOlwibWV0cmljXCIsXCJzY29wZVwiOlwiY292ZXJhZ2VcIixcImNvdmVyYWdlX3JlZnNcIjpbXCJjb3ZfMVwiLFwiY292XzJcIl19XSxcImNvdmVyYWdlX2l0ZW1zXCI6W3tcImNvdmVyYWdlX2lkXCI6XCJjb3ZfMVwiLFwic291cmNlX3NwYW5fcmVmc1wiOlt7XCJzdGFydF90b2tlblwiOjYsXCJlbmRfdG9rZW5cIjo4fSx7XCJzdGFydF90b2tlblwiOjEyLFwiZW5kX3Rva2VuXCI6MTZ9XX0se1wiY292ZXJhZ2VfaWRcIjpcImNvdl8yXCIsXCJzb3VyY2Vfc3Bhbl9yZWZzXCI6W3tcInN0YXJ0X3Rva2VuXCI6OSxcImVuZF90b2tlblwiOjExfSx7XCJzdGFydF90b2tlblwiOjEyLFwiZW5kX3Rva2VuXCI6MTZ9XX1dLFwiZmFjZXRzXCI6W3tcImZhY2V0X2lkXCI6XCJmYWNfMVwiLFwiY292ZXJhZ2VfcmVmc1wiOltcImNvdl8xXCIsXCJjb3ZfMlwiXSxcImV4cGFuc2lvbl90ZXJtc1wiOlt7XCJ0ZXJtXCI6XCJtb3VudGFpblwiLFwicmVsYXRpb25cIjpcImNvbW1vbl92YXJpYW50XCIsXCJhbmNob3JfcmVmc1wiOltcIm1vdW50YWluX3N0cmVhbXNcIl19LHtcInRlcm1cIjpcInN0cmVhbXNcIixcInJlbGF0aW9uXCI6XCJjb21tb25fdmFyaWFudFwiLFwiYW5jaG9yX3JlZnNcIjpbXCJtb3VudGFpbl9zdHJlYW1zXCJdfSx7XCJ0ZXJtXCI6XCJ1cmJhblwiLFwicmVsYXRpb25cIjpcImNvbW1vbl92YXJpYW50XCIsXCJhbmNob3JfcmVmc1wiOltcInVyYmFuX2NhbmFsc1wiXX1dfV0sXCJnbG9iYWxfZXhwYW5zaW9uXCI6e1widGVybXNcIjpbe1widGVybVwiOlwiYmF0dGVyeSBmcmVlXCIsXCJyZWxhdGlvblwiOlwiYWxpYXNcIixcImFuY2hvcl9yZWZzXCI6W1wiY29tcF9iYXR0ZXJ5X2ZyZWVfc2Vuc29yc1wiXX0se1widGVybVwiOlwid2F0ZXIgcXVhbGl0eVwiLFwicmVsYXRpb25cIjpcImFsaWFzXCIsXCJhbmNob3JfcmVmc1wiOltcImNvbXBfYmF0dGVyeV9mcmVlX3NlbnNvcnNcIl19LHtcInRlcm1cIjpcIm1haW50ZW5hbmNlXCIsXCJyZWxhdGlvblwiOlwiY29tbW9uX3ZhcmlhbnRcIixcImFuY2hvcl9yZWZzXCI6W1wibWFpbnRlbmFuY2VfaW5kaWNhdG9yc1wiXX1dfSB9IiwicmVmdXNhbCI6bnVsbCwiYW5ub3RhdGlvbnMiOm51bGwsImF1ZGlvIjpudWxsLCJmdW5jdGlvbl9jYWxsIjpudWxsLCJyZWFzb25pbmciOiJXZSBuZWVkIGNvdmVyYWdlIGl0ZW1zOiBjb21wYXJpc29uLCB0d28gc2V0dGluZ3MsIG1haW50ZW5hbmNlIGluZGljYXRvcnMuIENyZWF0ZSBhbmNob3JzLiBVc2UgdG9rZW4gcmFuZ2VzLiB0b2tlbnMgMC0yMi4gRXhwb3J0LiJ9LCJsb2dwcm9icyI6bnVsbCwiZmluaXNoX3JlYXNvbiI6InN0b3AiLCJzdG9wX3JlYXNvbiI6bnVsbCwidG9rZW5faWRzIjpudWxsLCJyb3V0ZWRfZXhwZXJ0cyI6bnVsbH1dLCJzZXJ2aWNlX3RpZXIiOm51bGwsInN5c3RlbV9maW5nZXJwcmludCI6InZsbG0tMC4yNC4wLTllMzBmNzQ3IiwidXNhZ2UiOnsicHJvbXB0X3Rva2VucyI6MTk0NywidG90YWxfdG9rZW5zIjoyMzcwLCJjb21wbGV0aW9uX3Rva2VucyI6NDIzLCJwcm9tcHRfdG9rZW5zX2RldGFpbHMiOm51bGx9LCJwcm9tcHRfbG9ncHJvYnMiOm51bGwsInByb21wdF90b2tlbl9pZHMiOm51bGwsInByb21wdF90ZXh0IjpudWxsLCJrdl90cmFuc2Zlcl9wYXJhbXMiOm51bGx9",
+  "raw_body_bytes": 2451,
+  "raw_body_sha256": "9df74dd6d5da6b0ca09fb2c96cfc20441ffb5b17f82d4cb4a0dd23f81b883f4a",
+  "raw_body_utf8_preview": "{\"id\":\"chatcmpl-90c43da218df6ac1\",\"object\":\"chat.completion\",\"created\":1783767013,\"model\":\"gpt-oss-local\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"schema_version\\\":\\\"query_plan_v2_1\\\",\\\"topic_id\\\":\\\"synthetic_transport_v2_1\\\",\\\"anchors\\\":[{\\\"anchor_id\\\":\\\"comp_battery_free_sensors\\\",\\\"range\\\":{\\\"start_token\\\":0,\\\"end_token\\\":4},\\\"kind\\\":\\\"comparison\\\",\\\"scope\\\":\\\"global\\\",\\\"coverage_refs\\\":[]},{\\\"anchor_id\\\":\\\"mountain_streams\\\",\\\"range\\\":{\\\"start_token\\\":6,\\\"end_token\\\":8},\\\"kind\\\":\\\"geography\\\",\\\"scope\\\":\\\"global\\\",\\\"coverage_refs\\\":[]},{\\\"anchor_id\\\":\\\"urban_canals\\\",\\\"range\\\":{\\\"start_token\\\":9,\\\"end_token\\\":11},\\\"kind\\\":\\\"geography\\\",\\\"scope\\\":\\\"global\\\",\\\"coverage_refs\\\":[]},{\\\"anchor_id\\\":\\\"maintenance_indicators\\\",\\\"range\\\":{\\\"start_token\\\":12,\\\"end_token\\\":16},\\\"kind\\\":\\\"metric\\\",\\\"scope\\\":\\\"coverage\\\",\\\"coverage_refs\\\":[\\\"cov_1\\\",\\\"cov_2\\\"]}],\\\"coverage_items\\\":[{\\\"coverage_id\\\":\\\"cov_1\\\",\\\"source_span_refs\\\":[{\\\"start_token\\\":6,\\\"end_token\\\":8},{\\\"start_token\\\":12,\\\"end_token\\\":16}]},{\\\"coverage_id\\\":\\\"cov_2\\\",\\\"source_span_refs\\\":[{\\\"start_token\\\":9,\\\"end_token\\\":11},{\\\"start_token\\\":12,\\\"end_token\\\":16}]}],\\\"facets\\\":[{\\\"facet_id\\\":\\\"fac_1\\\",\\\"coverage_refs\\\":[\\\"cov_1\\\",\\\"cov_2\\\"],\\\"expansion_terms\\\":[{\\\"term\\\":\\\"mountain\\\",\\\"relation\\\":\\\"common_variant\\\",\\\"anchor_refs\\\":[\\\"mountain_streams\\\"]},{\\\"term\\\":\\\"streams\\\",\\\"relation\\\":\\\"common_variant\\\",\\\"anchor_refs\\\":[\\\"mountain_streams\\\"]},{\\\"term\\\":\\\"urban\\\",\\\"relation\\\":\\\"common_variant\\\",\\\"anchor_refs\\\":[\\\"urban_canals\\\"]}]}],\\\"global_expansion\\\":{\\\"terms\\\":[{\\\"term\\\":\\\"battery free\\\",\\\"relation\\\":\\\"alias\\\",\\\"anchor_refs\\\":[\\\"comp_battery_free_sensors\\\"]},{\\\"term\\\":\\\"water quality\\\",\\\"relation\\\":\\\"alias\\\",\\\"anchor_refs\\\":[\\\"comp_battery_free_sensors\\\"]},{\\\"term\\\":\\\"maintenance\\\",\\\"relation\\\":\\\"common_variant\\\",\\\"anchor_refs\\\":[\\\"maintenance_indicators\\\"]}]} }\",\"refusal\":null,\"annotations\":null,\"audio\":null,\"function_call\":null,\"reasoning\":\"We need coverage items: comparison, two settings, maintenance indicators. Create anchors. Use token ranges. tokens 0-22. Export.\"},\"logprobs\":null,\"finish_reason\":\"stop\",\"stop_reason\":null,\"token_ids\":null,\"routed_experts\":null}],\"service_tier\":null,\"system_fingerprint\":\"vllm-0.24.0-9e30f747\",\"usage\":{\"prompt_tokens\":1947,\"total_tokens\":2370,\"completion_tokens\":423,\"prompt_tokens_details\":null},\"prompt_logprobs\":null,\"prompt_token_ids\":null,\"prompt_text\":null,\"kv_transfer_params\":null}",
+  "request_elapsed_seconds": 40.49571858200943,
+  "request_ordinal": 1,
+  "request_started_at": "2026-07-11T10:50:12.703Z",
+  "response_headers": {
+    "connection": "close",
+    "content-length": "2451",
+    "content-type": "application/json",
+    "date": "Sat, 11 Jul 2026 10:50:12 GMT",
+    "server": "uvicorn"
+  },
+  "response_headers_capture_level": "normalized_mapping_duplicates_collapsed",
+  "response_received_at": "2026-07-11T10:50:53.200Z",
+  "run_id": "query_plan_v2_1_synthetic_smoke_001",
+  "run_kind": "synthetic_transport_smoke",
+  "topic_id": "synthetic_transport_v2_1"
+}

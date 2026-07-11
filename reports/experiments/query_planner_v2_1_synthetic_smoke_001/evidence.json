@@ -1,0 +1,36 @@
+{
+  "evidence_version": "query_planner_synthetic_outcome_v1",
+  "run_id": "query_plan_v2_1_synthetic_smoke_001",
+  "topic_id": "synthetic_transport_v2_1",
+  "source_commit": "ec412c4c1a7b8feb2800eb11829d1133590912d2",
+  "source_tree": "68b1511e4b16a9a609e765d81495d761499f5b2a",
+  "status": "plan_validation_error",
+  "validator_error": "global anchors must include an entity or topic anchor",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 1947,
+    "completion_tokens": 423,
+    "total_tokens": 2370
+  },
+  "elapsed_seconds": 40.50735292900936,
+  "raw_body_bytes": 2451,
+  "raw_body_sha256": "9df74dd6d5da6b0ca09fb2c96cfc20441ffb5b17f82d4cb4a0dd23f81b883f4a",
+  "archive_sha256": {
+    "_run.json": "a705b8ab28d09d43e6e73c04929409e4dfe90badbe64775e0591605cb7a9dd9c",
+    "outcome.json": "6f1842f038e17d7464110dc8b4e3161abb93e87902a94aea1150a80b49f198ac",
+    "raw_response.json": "81a0a5be70491d9bc896eb1ac4af1943224189470665876a3fb3debdd0bbb3f4",
+    "plans.manifest.json": "c1d71b5568ab53ab09669c9b05d6b9e72e2061cb9174e73f4be0f8758a7cb150"
+  },
+  "cost_boundary": {
+    "model_endpoint": "loopback_local",
+    "paid_api_calls": 0,
+    "retrieval_calls": 0,
+    "reranker_calls": 0,
+    "larger_model_downloads": 0
+  },
+  "protocol": {
+    "retry_performed": false,
+    "semantic_scoring_performed": false,
+    "known_five_requested": false
+  }
+}

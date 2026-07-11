@@ -1,0 +1,247 @@
+{
+  "failed": 1,
+  "failure_output": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_1_synthetic_smoke_001/plans.failures.jsonl",
+  "frozen_model_settings": {
+    "analyzer_fingerprint": {
+      "analyzer_class": "io.anserini.analysis.DefaultEnglishAnalyzer chain",
+      "contract_version": "lucene_default_english_v1",
+      "filters": [
+        "EnglishPossessiveFilter",
+        "LowerCaseFilter",
+        "StopFilter(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET)",
+        "PorterStemFilter"
+      ],
+      "implementation": "local_lucene_reference_server_v1",
+      "index_id": "hosted_climbmix_unknown_revision",
+      "lucene_version": "10.4.0",
+      "stopword_sha256": "2f66c0e3dde5d31c7e919e2ed4d9d91390696480be361bfa143ca9ae0cb7ca13",
+      "tokenizer": "org.apache.lucene.analysis.standard.StandardTokenizer",
+      "unicode_version": "Lucene-10.4.0-StandardTokenizer-UAX29"
+    },
+    "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+    "analyzer_interpretation": "pinned_upstream_reference_not_verified_hosted",
+    "analyzer_url": "http://127.0.0.1:18081",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "context_preflight": [
+      {
+        "max_model_len": 8192,
+        "max_output_tokens": 5400,
+        "prompt_tokens": 1947,
+        "remaining_context_tokens": 845,
+        "requested_total_tokens": 7347,
+        "tokenizer_url": "http://127.0.0.1:8000/tokenize",
+        "topic_id": "synthetic_transport_v2_1"
+      }
+    ],
+    "enable_thinking": null,
+    "external_cost_policy": {
+      "model_endpoint_loopback": true,
+      "paid_api_calls_expected": 0,
+      "reranker_calls": 0,
+      "retrieval_calls": 0
+    },
+    "instruction_role": "developer",
+    "live_runtime": {
+      "container_name": "trec-rag-gpt-oss",
+      "image_digest": "sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+      "image_id": "ee424d681e1d5644fa96f13cced1e511401e67ef04207bb459c1986d35ab84e7",
+      "launch_command": [
+        "--model",
+        "openai/gpt-oss-20b",
+        "--revision",
+        "6cee5e81ee83917806bbde320786a8fb61efebee",
+        "--served-model-name",
+        "gpt-oss-local",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--max-model-len",
+        "8192",
+        "--max-num-seqs",
+        "1",
+        "--gpu-memory-utilization",
+        "0.30",
+        "--structured-outputs-config",
+        "{\"backend\":\"xgrammar\"}",
+        "--enforce-eager"
+      ],
+      "model_record": {
+        "created": 1783767012,
+        "id": "gpt-oss-local",
+        "max_model_len": 8192,
+        "object": "model",
+        "owned_by": "vllm",
+        "parent": null,
+        "permission": [
+          {
+            "allow_create_engine": false,
+            "allow_fine_tuning": false,
+            "allow_logprobs": true,
+            "allow_sampling": true,
+            "allow_search_indices": false,
+            "allow_view": true,
+            "created": 1783767012,
+            "group": null,
+            "id": "modelperm-a74b09e38ca08a79",
+            "is_blocking": false,
+            "object": "model_permission",
+            "organization": "*"
+          }
+        ],
+        "root": "openai/gpt-oss-20b"
+      },
+      "port_bindings": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "8000"
+        }
+      ],
+      "verified_at": "2026-07-11T10:50:12.684Z",
+      "version_response": {
+        "version": "0.24.0"
+      }
+    },
+    "max_tokens": 5400,
+    "model": "gpt-oss-local",
+    "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "presence_penalty": null,
+    "prompt_version": "sparse_query_planner_v6",
+    "provider": "openai_compatible_chat_completions",
+    "reasoning_effort": "low",
+    "renderer_version": "deterministic_sparse_renderer_v3",
+    "schema_preflight": {
+      "manifest": {
+        "all_passed": true,
+        "compiler": {
+          "llguidance": "1.7.6",
+          "llguidance_check": "pass",
+          "vllm": "0.24.0",
+          "xgrammar": "0.2.3",
+          "xgrammar_strict": "pass"
+        },
+        "container": {
+          "container_name": "trec-rag-gpt-oss",
+          "image_digest": "sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+          "image_id": "ee424d681e1d5644fa96f13cced1e511401e67ef04207bb459c1986d35ab84e7",
+          "image_name": "docker.io/vllm/vllm-openai-rocm@sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+          "launch_command": [
+            "--model",
+            "openai/gpt-oss-20b",
+            "--revision",
+            "6cee5e81ee83917806bbde320786a8fb61efebee",
+            "--served-model-name",
+            "gpt-oss-local",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+            "--max-model-len",
+            "8192",
+            "--max-num-seqs",
+            "1",
+            "--gpu-memory-utilization",
+            "0.30",
+            "--structured-outputs-config",
+            "{\"backend\":\"xgrammar\"}",
+            "--enforce-eager"
+          ]
+        },
+        "created_at": "2026-07-11T10:46:42.789Z",
+        "execution_boundary": "offline_compiler_only_no_http_or_inference",
+        "manifest_version": "query_plan_v2_schema_preflight_v1",
+        "prompt_version": "sparse_query_planner_v6",
+        "required_server_backend": "xgrammar",
+        "schema_version": "query_plan_v2_1",
+        "schemas": [
+          {
+            "llguidance_check": "pass",
+            "narrative_sha256": "d000c41049082b59bdef9e16addbae63b9535290fa39ffb398f2695f29e07128",
+            "schema_sha256": "44545659f173fbb1677d10230f664eee4a40bc8a9257338382651f6adf7e4aa9",
+            "token_count": 22,
+            "topic_id": "synthetic_transport_v2_1",
+            "unsupported_feature_count": 0,
+            "xgrammar_strict": "pass"
+          },
+          {
+            "llguidance_check": "pass",
+            "narrative_sha256": "b78a23bf9b58574839bb45916367df99f8405b1135f8304ad440d6a169188186",
+            "schema_sha256": "74215679ba7223e960ae3c25de27641255164b5970aba905ce768c5536a2f574",
+            "token_count": 54,
+            "topic_id": "144",
+            "unsupported_feature_count": 0,
+            "xgrammar_strict": "pass"
+          },
+          {
+            "llguidance_check": "pass",
+            "narrative_sha256": "f499a0b22af55afdc71d4a4265681a9ccc2845d4c44ce9e4e927f881a912f4db",
+            "schema_sha256": "e83c7095edb524854f17fdaecec201d3ae62e46b85afbb4ade87507fd26b2629",
+            "token_count": 57,
+            "topic_id": "213",
+            "unsupported_feature_count": 0,
+            "xgrammar_strict": "pass"
+          },
+          {
+            "llguidance_check": "pass",
+            "narrative_sha256": "baa5af90ea013149e709c19ba123a207e54202fff2944cdb065909b8c4a2d9d8",
+            "schema_sha256": "6891060ee1114b03d174bb866df2349adabbbfc5a7be5f4c5f8fd944a68d7ef4",
+            "token_count": 50,
+            "topic_id": "224",
+            "unsupported_feature_count": 0,
+            "xgrammar_strict": "pass"
+          },
+          {
+            "llguidance_check": "pass",
+            "narrative_sha256": "7af4ef7cbfc1c0c1bbb5e5f80a287ed9324919ad0f4ef6d277417851ea723367",
+            "schema_sha256": "dd80b7621d9cd9c464fda5e0a968f27ef0e487140845b1b88635cc39bf2211c4",
+            "token_count": 55,
+            "topic_id": "407",
+            "unsupported_feature_count": 0,
+            "xgrammar_strict": "pass"
+          },
+          {
+            "llguidance_check": "pass",
+            "narrative_sha256": "21390506e45953972239c363b3f98939e752f536a17a8f4e596c47382ae044bd",
+            "schema_sha256": "b73929afc9e708c06261d6068a2843b0d57fa0a12aac8e91440aaad4083cf575",
+            "token_count": 52,
+            "topic_id": "515",
+            "unsupported_feature_count": 0,
+            "xgrammar_strict": "pass"
+          }
+        ]
+      },
+      "path": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/reports/experiments/query_planner_v2_schema_compat_v2_1/compiler_manifest_xgrammar.json",
+      "sha256": "cb96279f3f4919d1e6b1429b091bd286a951d03da346fcdad1114516aebdafbc"
+    },
+    "schema_version": "query_plan_v2_1",
+    "seed": 0,
+    "source_revision": {
+      "branch": "codex/structured-query-planner",
+      "commit": "ec412c4c1a7b8feb2800eb11829d1133590912d2",
+      "tracked_worktree_clean": true,
+      "tree": "68b1511e4b16a9a609e765d81495d761499f5b2a"
+    },
+    "temperature": 1.0,
+    "timeout_seconds": 1200.0,
+    "tokenizer_version": "narrative_token_tape_v1",
+    "top_k": null,
+    "top_p": null
+  },
+  "missing": 0,
+  "missing_topics": [],
+  "outcome_dir": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_1_synthetic_smoke_001/outcomes/query_plan_v2_1_synthetic_smoke_001",
+  "output": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_1_synthetic_smoke_001/plans.jsonl",
+  "raw_only_topics": [],
+  "request_order": [
+    "synthetic_transport_v2_1"
+  ],
+  "run_id": "query_plan_v2_1_synthetic_smoke_001",
+  "run_kind": "synthetic_transport_smoke",
+  "run_started_at": "2026-07-11T10:50:12.700Z",
+  "serial_execution": true,
+  "status_counts": {
+    "plan_validation_error": 1
+  },
+  "successful": 0,
+  "summary_written_at": "2026-07-11T10:51:02.871Z"
+}

@@ -1,0 +1,560 @@
+{
+  "elapsed_seconds": 40.50735292900936,
+  "failure": {
+    "elapsed_seconds": 40.50735292900936,
+    "expansion_audit": [],
+    "failure": {
+      "error": "global anchors must include an entity or topic anchor",
+      "error_type": "QueryPlanGenerationError",
+      "expansion_audit": [],
+      "hard_failure": false,
+      "status": "plan_validation_error"
+    },
+    "failure_kind": "plan_validation",
+    "fallback_rendered_queries": [
+      {
+        "components": [
+          "Compare battery-free water-quality sensors used in mountain streams and urban canals, and identify the maintenance indicators reported for each setting."
+        ],
+        "query_text": "Compare battery-free water-quality sensors used in mountain streams and urban canals, and identify the maintenance indicators reported for each setting.",
+        "renderer_budget_exception": false,
+        "source_type": "original",
+        "unique_content_tokens": [
+          "compar",
+          "batteri",
+          "free",
+          "water",
+          "qualiti",
+          "sensor",
+          "us",
+          "mountain",
+          "stream",
+          "urban",
+          "canal",
+          "identifi",
+          "mainten",
+          "indic",
+          "report",
+          "each",
+          "set"
+        ],
+        "variant_name": "original"
+      }
+    ],
+    "finished_at": "2026-07-11T10:50:53.211Z",
+    "provenance": {
+      "analyzer_fingerprint": {
+        "analyzer_class": "io.anserini.analysis.DefaultEnglishAnalyzer chain",
+        "contract_version": "lucene_default_english_v1",
+        "filters": [
+          "EnglishPossessiveFilter",
+          "LowerCaseFilter",
+          "StopFilter(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET)",
+          "PorterStemFilter"
+        ],
+        "implementation": "local_lucene_reference_server_v1",
+        "index_id": "hosted_climbmix_unknown_revision",
+        "lucene_version": "10.4.0",
+        "stopword_sha256": "2f66c0e3dde5d31c7e919e2ed4d9d91390696480be361bfa143ca9ae0cb7ca13",
+        "tokenizer": "org.apache.lucene.analysis.standard.StandardTokenizer",
+        "unicode_version": "Lucene-10.4.0-StandardTokenizer-UAX29"
+      },
+      "base_url": "http://127.0.0.1:8000/v1",
+      "elapsed_seconds": 40.499890097009484,
+      "enable_thinking": null,
+      "finish_reason": "stop",
+      "instruction_role": "developer",
+      "max_tokens": 5400,
+      "model": "gpt-oss-local",
+      "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+      "narrative_sha256": "d000c41049082b59bdef9e16addbae63b9535290fa39ffb398f2695f29e07128",
+      "presence_penalty": null,
+      "prompt_sha256": "c5ec90e699beca78175096baae6bda289b4bc9e90b0e5b50acda7caff7c2a4d8",
+      "prompt_version": "sparse_query_planner_v6",
+      "provider": "openai_compatible_chat_completions",
+      "reasoning_effort": "low",
+      "renderer_version": "deterministic_sparse_renderer_v3",
+      "request_sha256": "5129d44eb42258b749bbeb0a0a8532f75b20a75ed2e65b9ffa43576d22c418ec",
+      "response_id": "chatcmpl-90c43da218df6ac1",
+      "response_model": "gpt-oss-local",
+      "schema_sha256": "44545659f173fbb1677d10230f664eee4a40bc8a9257338382651f6adf7e4aa9",
+      "schema_version": "query_plan_v2_1",
+      "seed": 0,
+      "temperature": 1.0,
+      "token_count": 22,
+      "tokenizer_version": "narrative_token_tape_v1",
+      "top_k": null,
+      "top_p": null,
+      "usage": {
+        "completion_tokens": 423,
+        "prompt_tokens": 1947,
+        "prompt_tokens_details": null,
+        "total_tokens": 2370
+      }
+    },
+    "raw_response_path": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_1_synthetic_smoke_001/outcomes/query_plan_v2_1_synthetic_smoke_001/raw_responses/01_synthetic_transport_v2_1-5d5afc7f64.json",
+    "request_ordinal": 1,
+    "request_started_at": "2026-07-11T10:50:12.703Z",
+    "run_id": "query_plan_v2_1_synthetic_smoke_001",
+    "run_kind": "synthetic_transport_smoke",
+    "status": "plan_validation_error",
+    "token_tape": {
+      "narrative_sha256": "d000c41049082b59bdef9e16addbae63b9535290fa39ffb398f2695f29e07128",
+      "normalization": "none",
+      "offset_unit": "unicode_code_points",
+      "token_count": 22,
+      "tokens": [
+        {
+          "end_char": 7,
+          "start_char": 0,
+          "text": "Compare"
+        },
+        {
+          "end_char": 20,
+          "start_char": 8,
+          "text": "battery-free"
+        },
+        {
+          "end_char": 34,
+          "start_char": 21,
+          "text": "water-quality"
+        },
+        {
+          "end_char": 42,
+          "start_char": 35,
+          "text": "sensors"
+        },
+        {
+          "end_char": 47,
+          "start_char": 43,
+          "text": "used"
+        },
+        {
+          "end_char": 50,
+          "start_char": 48,
+          "text": "in"
+        },
+        {
+          "end_char": 59,
+          "start_char": 51,
+          "text": "mountain"
+        },
+        {
+          "end_char": 67,
+          "start_char": 60,
+          "text": "streams"
+        },
+        {
+          "end_char": 71,
+          "start_char": 68,
+          "text": "and"
+        },
+        {
+          "end_char": 77,
+          "start_char": 72,
+          "text": "urban"
+        },
+        {
+          "end_char": 84,
+          "start_char": 78,
+          "text": "canals"
+        },
+        {
+          "end_char": 85,
+          "start_char": 84,
+          "text": ","
+        },
+        {
+          "end_char": 89,
+          "start_char": 86,
+          "text": "and"
+        },
+        {
+          "end_char": 98,
+          "start_char": 90,
+          "text": "identify"
+        },
+        {
+          "end_char": 102,
+          "start_char": 99,
+          "text": "the"
+        },
+        {
+          "end_char": 114,
+          "start_char": 103,
+          "text": "maintenance"
+        },
+        {
+          "end_char": 125,
+          "start_char": 115,
+          "text": "indicators"
+        },
+        {
+          "end_char": 134,
+          "start_char": 126,
+          "text": "reported"
+        },
+        {
+          "end_char": 138,
+          "start_char": 135,
+          "text": "for"
+        },
+        {
+          "end_char": 143,
+          "start_char": 139,
+          "text": "each"
+        },
+        {
+          "end_char": 151,
+          "start_char": 144,
+          "text": "setting"
+        },
+        {
+          "end_char": 152,
+          "start_char": 151,
+          "text": "."
+        }
+      ],
+      "version": "narrative_token_tape_v1"
+    },
+    "topic": {
+      "id": "synthetic_transport_v2_1",
+      "narrative": "Compare battery-free water-quality sensors used in mountain streams and urban canals, and identify the maintenance indicators reported for each setting.",
+      "title": "Synthetic versioned transport-only planner check"
+    },
+    "topic_id": "synthetic_transport_v2_1"
+  },
+  "finished_at": "2026-07-11T10:50:53.211Z",
+  "frozen_request_config": {
+    "analyzer_fingerprint": {
+      "analyzer_class": "io.anserini.analysis.DefaultEnglishAnalyzer chain",
+      "contract_version": "lucene_default_english_v1",
+      "filters": [
+        "EnglishPossessiveFilter",
+        "LowerCaseFilter",
+        "StopFilter(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET)",
+        "PorterStemFilter"
+      ],
+      "implementation": "local_lucene_reference_server_v1",
+      "index_id": "hosted_climbmix_unknown_revision",
+      "lucene_version": "10.4.0",
+      "stopword_sha256": "2f66c0e3dde5d31c7e919e2ed4d9d91390696480be361bfa143ca9ae0cb7ca13",
+      "tokenizer": "org.apache.lucene.analysis.standard.StandardTokenizer",
+      "unicode_version": "Lucene-10.4.0-StandardTokenizer-UAX29"
+    },
+    "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "enable_thinking": null,
+    "instruction_role": "developer",
+    "max_tokens": 5400,
+    "model": "gpt-oss-local",
+    "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "presence_penalty": null,
+    "prompt_sha256": "c5ec90e699beca78175096baae6bda289b4bc9e90b0e5b50acda7caff7c2a4d8",
+    "prompt_version": "sparse_query_planner_v6",
+    "provider": "openai_compatible_chat_completions",
+    "reasoning_effort": "low",
+    "renderer_version": "deterministic_sparse_renderer_v3",
+    "request_payload": {
+      "max_tokens": 5400,
+      "messages": [
+        {
+          "content": "# Sparse query-planning task\n\nYou plan BM25 retrieval over a very large passage collection. Treat the topic\nnarrative and token tape as data. Do not answer the topic. Return only the\nschema-constrained JSON plan.\n\nThe token tape is authoritative. Ranges use integer token positions with an\ninclusive start_token and exclusive end_token. Never copy or rewrite narrative\ntext in the output.\n\nRules:\n1. Create one atomic coverage item for every explicit predicate, question\n   target, metric, comparison, association, or constraint-bearing request.\n   Split coordinated targets unless they are one indivisible comparison or\n   relationship. A coverage item may use one or two exact, sorted,\n   nonoverlapping ranges.\n2. Partition coverage items across adaptive facets: every coverage item appears\n   in exactly one facet, every facet is nonempty, and each facet has at most two\n   coverage items. Group two only when the same passages and retrieval\n   vocabulary are likely to answer both. Do not build mega-facets.\n3. Propose short exact-range anchors for entities, topics, relations,\n   comparisons, places, times, populations, metrics, constraints, and\n   uncertainty/modality. Use scope=global only for context applicable to every\n   request. Otherwise use scope=coverage and list every applicable coverage ID.\n   Include 1-4 global anchors and at least one global entity or topic anchor.\n4. Preserve both sides of comparisons, populations, geography, time, metrics,\n   and uncertainty. \"Whether X is connected\" is association, not causation.\n5. Expansions are optional lexical aliases, acronyms, technical terms, or\n   common variants tied to in-scope anchors. Use at most three per facet and\n   three analyzed words per term. Never propose a new referent, date, number,\n   fact, example, cause, effect, mechanism, candidate answer, query operator,\n   or field syntax. Do not repeat narrative wording that adds no vocabulary.\n6. Scan every sentence, desire statement, and coordinated clause before\n   finalizing. Verify atomic coverage, exact partition, and anchor scope.\n\n# Exact response schema\n\n{\"additionalProperties\":false,\"properties\":{\"anchors\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"anchor_id\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"coverage_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":16,\"type\":\"array\"},\"kind\":{\"enum\":[\"entity\",\"topic\",\"relation\",\"comparison\",\"geography\",\"time\",\"population\",\"metric\",\"constraint\",\"modality\"],\"type\":\"string\"},\"range\":{\"additionalProperties\":false,\"properties\":{\"end_token\":{\"maximum\":22,\"minimum\":1,\"type\":\"integer\"},\"start_token\":{\"maximum\":21,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"start_token\",\"end_token\"],\"type\":\"object\"},\"scope\":{\"enum\":[\"global\",\"coverage\"],\"type\":\"string\"}},\"required\":[\"anchor_id\",\"range\",\"kind\",\"scope\",\"coverage_refs\"],\"type\":\"object\"},\"maxItems\":64,\"minItems\":1,\"type\":\"array\"},\"coverage_items\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"coverage_id\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"source_span_refs\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_token\":{\"maximum\":22,\"minimum\":1,\"type\":\"integer\"},\"start_token\":{\"maximum\":21,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"start_token\",\"end_token\"],\"type\":\"object\"},\"maxItems\":2,\"minItems\":1,\"type\":\"array\"}},\"required\":[\"coverage_id\",\"source_span_refs\"],\"type\":\"object\"},\"maxItems\":16,\"minItems\":1,\"type\":\"array\"},\"facets\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"coverage_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":2,\"minItems\":1,\"type\":\"array\"},\"expansion_terms\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"anchor_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"relation\":{\"enum\":[\"alias\",\"acronym\",\"technical_term\",\"common_variant\"],\"type\":\"string\"},\"term\":{\"description\":\"A lexical-only 1-3 analyzed-word variant; never an answer or new fact.\",\"maxLength\":80,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"term\",\"relation\",\"anchor_refs\"],\"type\":\"object\"},\"maxItems\":3,\"type\":\"array\"},\"facet_id\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"}},\"required\":[\"facet_id\",\"coverage_refs\",\"expansion_terms\"],\"type\":\"object\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"global_expansion\":{\"additionalProperties\":false,\"properties\":{\"terms\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"anchor_refs\":{\"items\":{\"pattern\":\"^[A-Za-z][A-Za-z0-9_-]{0,31}$\",\"type\":\"string\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"relation\":{\"enum\":[\"alias\",\"acronym\",\"technical_term\",\"common_variant\"],\"type\":\"string\"},\"term\":{\"description\":\"A lexical-only 1-3 analyzed-word variant; never an answer or new fact.\",\"maxLength\":80,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"term\",\"relation\",\"anchor_refs\"],\"type\":\"object\"},\"maxItems\":8,\"type\":\"array\"}},\"required\":[\"terms\"],\"type\":\"object\"},\"schema_version\":{\"const\":\"query_plan_v2_1\",\"type\":\"string\"},\"topic_id\":{\"const\":\"synthetic_transport_v2_1\",\"type\":\"string\"}},\"required\":[\"schema_version\",\"topic_id\",\"anchors\",\"coverage_items\",\"facets\",\"global_expansion\"],\"type\":\"object\"}",
+          "role": "developer"
+        },
+        {
+          "content": "<topic_id>synthetic_transport_v2_1</topic_id>\n<narrative>\nCompare battery-free water-quality sensors used in mountain streams and urban canals, and identify the maintenance indicators reported for each setting.\n</narrative>\n<token_tape>\n{\"narrative_sha256\": \"d000c41049082b59bdef9e16addbae63b9535290fa39ffb398f2695f29e07128\", \"normalization\": \"none\", \"offset_unit\": \"unicode_code_points\", \"token_count\": 22, \"tokens\": [{\"end_char\": 7, \"start_char\": 0, \"text\": \"Compare\"}, {\"end_char\": 20, \"start_char\": 8, \"text\": \"battery-free\"}, {\"end_char\": 34, \"start_char\": 21, \"text\": \"water-quality\"}, {\"end_char\": 42, \"start_char\": 35, \"text\": \"sensors\"}, {\"end_char\": 47, \"start_char\": 43, \"text\": \"used\"}, {\"end_char\": 50, \"start_char\": 48, \"text\": \"in\"}, {\"end_char\": 59, \"start_char\": 51, \"text\": \"mountain\"}, {\"end_char\": 67, \"start_char\": 60, \"text\": \"streams\"}, {\"end_char\": 71, \"start_char\": 68, \"text\": \"and\"}, {\"end_char\": 77, \"start_char\": 72, \"text\": \"urban\"}, {\"end_char\": 84, \"start_char\": 78, \"text\": \"canals\"}, {\"end_char\": 85, \"start_char\": 84, \"text\": \",\"}, {\"end_char\": 89, \"start_char\": 86, \"text\": \"and\"}, {\"end_char\": 98, \"start_char\": 90, \"text\": \"identify\"}, {\"end_char\": 102, \"start_char\": 99, \"text\": \"the\"}, {\"end_char\": 114, \"start_char\": 103, \"text\": \"maintenance\"}, {\"end_char\": 125, \"start_char\": 115, \"text\": \"indicators\"}, {\"end_char\": 134, \"start_char\": 126, \"text\": \"reported\"}, {\"end_char\": 138, \"start_char\": 135, \"text\": \"for\"}, {\"end_char\": 143, \"start_char\": 139, \"text\": \"each\"}, {\"end_char\": 151, \"start_char\": 144, \"text\": \"setting\"}, {\"end_char\": 152, \"start_char\": 151, \"text\": \".\"}], \"version\": \"narrative_token_tape_v1\"}\n</token_tape>",
+          "role": "user"
+        }
+      ],
+      "model": "gpt-oss-local",
+      "reasoning_effort": "low",
+      "response_format": {
+        "json_schema": {
+          "name": "query_plan_v2_1",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "anchors": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "anchor_id": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                      "type": "string"
+                    },
+                    "coverage_refs": {
+                      "items": {
+                        "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "enum": [
+                        "entity",
+                        "topic",
+                        "relation",
+                        "comparison",
+                        "geography",
+                        "time",
+                        "population",
+                        "metric",
+                        "constraint",
+                        "modality"
+                      ],
+                      "type": "string"
+                    },
+                    "range": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end_token": {
+                          "maximum": 22,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "start_token": {
+                          "maximum": 21,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "start_token",
+                        "end_token"
+                      ],
+                      "type": "object"
+                    },
+                    "scope": {
+                      "enum": [
+                        "global",
+                        "coverage"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "anchor_id",
+                    "range",
+                    "kind",
+                    "scope",
+                    "coverage_refs"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "coverage_items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coverage_id": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                      "type": "string"
+                    },
+                    "source_span_refs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end_token": {
+                            "maximum": 22,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "start_token": {
+                            "maximum": 21,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "start_token",
+                          "end_token"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 2,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "coverage_id",
+                    "source_span_refs"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+              },
+              "facets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coverage_refs": {
+                      "items": {
+                        "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                        "type": "string"
+                      },
+                      "maxItems": 2,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "expansion_terms": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "anchor_refs": {
+                            "items": {
+                              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                              "type": "string"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "relation": {
+                            "enum": [
+                              "alias",
+                              "acronym",
+                              "technical_term",
+                              "common_variant"
+                            ],
+                            "type": "string"
+                          },
+                          "term": {
+                            "description": "A lexical-only 1-3 analyzed-word variant; never an answer or new fact.",
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "term",
+                          "relation",
+                          "anchor_refs"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 3,
+                      "type": "array"
+                    },
+                    "facet_id": {
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "facet_id",
+                    "coverage_refs",
+                    "expansion_terms"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array"
+              },
+              "global_expansion": {
+                "additionalProperties": false,
+                "properties": {
+                  "terms": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "anchor_refs": {
+                          "items": {
+                            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+                            "type": "string"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "relation": {
+                          "enum": [
+                            "alias",
+                            "acronym",
+                            "technical_term",
+                            "common_variant"
+                          ],
+                          "type": "string"
+                        },
+                        "term": {
+                          "description": "A lexical-only 1-3 analyzed-word variant; never an answer or new fact.",
+                          "maxLength": 80,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "term",
+                        "relation",
+                        "anchor_refs"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "terms"
+                ],
+                "type": "object"
+              },
+              "schema_version": {
+                "const": "query_plan_v2_1",
+                "type": "string"
+              },
+              "topic_id": {
+                "const": "synthetic_transport_v2_1",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "topic_id",
+              "anchors",
+              "coverage_items",
+              "facets",
+              "global_expansion"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "seed": 0,
+      "temperature": 1.0
+    },
+    "request_sha256": "5129d44eb42258b749bbeb0a0a8532f75b20a75ed2e65b9ffa43576d22c418ec",
+    "schema_sha256": "44545659f173fbb1677d10230f664eee4a40bc8a9257338382651f6adf7e4aa9",
+    "schema_version": "query_plan_v2_1",
+    "seed": 0,
+    "temperature": 1.0,
+    "tokenizer_version": "narrative_token_tape_v1",
+    "top_k": null,
+    "top_p": null
+  },
+  "raw_response_path": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_1_synthetic_smoke_001/outcomes/query_plan_v2_1_synthetic_smoke_001/raw_responses/01_synthetic_transport_v2_1-5d5afc7f64.json",
+  "record": null,
+  "request_ordinal": 1,
+  "request_started_at": "2026-07-11T10:50:12.703Z",
+  "response": {
+    "http_status": 200,
+    "response_id": null,
+    "response_model": null,
+    "usage": {}
+  },
+  "run_id": "query_plan_v2_1_synthetic_smoke_001",
+  "run_kind": "synthetic_transport_smoke",
+  "serial_execution": true,
+  "status": "plan_validation_error",
+  "topic_id": "synthetic_transport_v2_1"
+}
