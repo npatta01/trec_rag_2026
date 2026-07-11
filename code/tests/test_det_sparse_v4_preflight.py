@@ -114,6 +114,58 @@ def _write_model_inventory_attestation(tmp_path: Path) -> tuple[Path, str]:
     return inventory_path, contract.sha256_file(inventory_path)
 
 
+def _write_schema_compiler_attestation(tmp_path: Path) -> Path:
+    index = 0
+    while (tmp_path / f"schema-compiler-attestation-{index}.json").exists():
+        index += 1
+    request_identity = preflight.build_request_identity_summary(contract.ARTIFACT_DIR)
+    attestation_path = tmp_path / f"schema-compiler-attestation-{index}.json"
+    attestation_path.write_bytes(
+        contract.canonical_json_bytes(_schema_compiler_attestation(request_identity))
+        + b"\n"
+    )
+    return attestation_path
+
+
+def _write_model_runtime_attestation(
+    tmp_path: Path,
+    model_inventory_sha256: str,
+) -> Path:
+    index = 0
+    while (tmp_path / f"model-runtime-attestation-{index}.json").exists():
+        index += 1
+    attestation_path = tmp_path / f"model-runtime-attestation-{index}.json"
+    attestation_path.write_bytes(
+        contract.canonical_json_bytes(_model_runtime_attestation(model_inventory_sha256))
+        + b"\n"
+    )
+    return attestation_path
+
+
+def _write_live_attestation_evidence(
+    tmp_path: Path,
+    model_inventory_sha256: str,
+) -> tuple[Path, Path]:
+    return (
+        _write_schema_compiler_attestation(tmp_path),
+        _write_model_runtime_attestation(tmp_path, model_inventory_sha256),
+    )
+
+
+def _live_review_evidence_kwargs(
+    tmp_path: Path,
+    model_inventory_sha256: str,
+) -> dict[str, Path]:
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
+    return {
+        "schema_compiler_attestation_path": schema_compiler_path,
+        "model_runtime_attestation_path": model_runtime_path,
+    }
+
+
 def _reviewer_qualification_review() -> dict[str, object]:
     return {
         "schema_version": "semantic_anchor_reviewer_qualification_review_v1",
@@ -559,6 +611,10 @@ def test_model_inventory_capture_cli_writes_create_only_inventory(
 
 def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(tmp_path: Path):
     inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
     bundle_path = tmp_path / "live-attestation-bundle.json"
     bundle_path.write_bytes(
         contract.canonical_json_bytes(_live_attestation_bundle(model_inventory_sha256))
@@ -570,6 +626,8 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
         bundle_path,
         offset_parity_review_path=offset_review_path,
         model_inventory_attestation_path=inventory_path,
+        schema_compiler_attestation_path=schema_compiler_path,
+        model_runtime_attestation_path=model_runtime_path,
     )
 
     assert report["schema_version"] == "semantic_anchor_live_attestation_review_v1"
@@ -587,6 +645,14 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
     )
     assert report["model_inventory_sha256"] == model_inventory_sha256
     assert report["model_inventory_attestation_path"] == str(inventory_path.resolve())
+    assert report["schema_compiler_attestation_path"] == str(schema_compiler_path.resolve())
+    assert report["schema_compiler_attestation_sha256"] == contract.sha256_file(
+        schema_compiler_path
+    )
+    assert report["model_runtime_attestation_path"] == str(model_runtime_path.resolve())
+    assert report["model_runtime_attestation_sha256"] == contract.sha256_file(
+        model_runtime_path
+    )
     assert report["dispatch_authorized"] is False
     assert report["inference_authorized"] is False
     assert report["external_cost_authorized"] is False
@@ -606,6 +672,8 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
     assert str(bundle_path.resolve()) in observed_paths
     assert str(offset_review_path.resolve()) in observed_paths
     assert str(inventory_path.resolve()) in observed_paths
+    assert str(schema_compiler_path.resolve()) in observed_paths
+    assert str(model_runtime_path.resolve()) in observed_paths
     preflight.validate_live_attestation_review(report)
 
     with_extra_key = dict(report, topic_access_authorized=True)
@@ -616,6 +684,17 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
     missing_required_key.pop("offset_fingerprint_sha256")
     with pytest.raises(ValueError, match="live attestation review keys mismatch"):
         preflight.validate_live_attestation_review(missing_required_key)
+
+    missing_inventory_trace = dict(report)
+    missing_inventory_runtime = dict(runtime_file_access)
+    missing_inventory_runtime["observed_paths"] = [
+        record
+        for record in runtime_file_access["observed_paths"]
+        if record["path"] != str(inventory_path.resolve())
+    ]
+    missing_inventory_trace["runtime_file_access"] = missing_inventory_runtime
+    with pytest.raises(ValueError, match="missing required observed paths"):
+        preflight.validate_live_attestation_review(missing_inventory_trace)
 
 
 def test_offset_parity_review_validates_48_canonical_fixture_rows(tmp_path: Path):
@@ -764,6 +843,7 @@ def test_live_attestation_review_rejects_model_inventory_and_write_drift(tmp_pat
             bundle_path,
             offset_parity_review_path=_write_offset_parity_review(tmp_path),
             model_inventory_attestation_path=inventory_path,
+            **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
         )
 
     good_bundle_path = tmp_path / "live-attestation-bundle-good.json"
@@ -777,6 +857,7 @@ def test_live_attestation_review_rejects_model_inventory_and_write_drift(tmp_pat
         good_bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
         model_inventory_attestation_path=inventory_path,
+        **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
     )
     runtime_file_access = dict(report["runtime_file_access"])
     runtime_file_access["observed_write_path_count"] = 1
@@ -799,6 +880,7 @@ def test_live_attestation_review_rejects_schema_compiler_schema_hash_drift(
             bundle_path,
             offset_parity_review_path=_write_offset_parity_review(tmp_path),
             model_inventory_attestation_path=inventory_path,
+            **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
         )
 
 
@@ -813,6 +895,7 @@ def test_live_attestation_review_rejects_noncanonical_bundle_bytes(tmp_path: Pat
             bundle_path,
             offset_parity_review_path=_write_offset_parity_review(tmp_path),
             model_inventory_attestation_path=inventory_path,
+            **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
         )
 
     bundle_path.write_bytes(contract.canonical_json_bytes(bundle) + b"\n")
@@ -820,6 +903,7 @@ def test_live_attestation_review_rejects_noncanonical_bundle_bytes(tmp_path: Pat
         bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
         model_inventory_attestation_path=inventory_path,
+        **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
     )
     report["bundle_canonical"] = False
     with pytest.raises(ValueError, match="bundle must be canonical"):
@@ -846,11 +930,105 @@ def test_live_attestation_review_rejects_noncanonical_model_inventory_attestatio
             bundle_path,
             offset_parity_review_path=_write_offset_parity_review(tmp_path),
             model_inventory_attestation_path=inventory_path,
+            **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
+        )
+
+
+def test_live_attestation_review_rejects_noncanonical_compiler_and_runtime_evidence(
+    tmp_path: Path,
+):
+    inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(_live_attestation_bundle(model_inventory_sha256))
+        + b"\n"
+    )
+
+    schema_compiler = contract.load_json_no_duplicates(schema_compiler_path)
+    schema_compiler_path.write_text(
+        json.dumps(schema_compiler, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="schema compiler attestation is not canonical"):
+        preflight.build_live_attestation_review(
+            bundle_path,
+            offset_parity_review_path=_write_offset_parity_review(tmp_path),
+            model_inventory_attestation_path=inventory_path,
+            schema_compiler_attestation_path=schema_compiler_path,
+            model_runtime_attestation_path=model_runtime_path,
+        )
+
+    schema_compiler_path.write_bytes(
+        contract.canonical_json_bytes(schema_compiler) + b"\n"
+    )
+    model_runtime = contract.load_json_no_duplicates(model_runtime_path)
+    model_runtime_path.write_text(
+        json.dumps(model_runtime, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="model runtime attestation is not canonical"):
+        preflight.build_live_attestation_review(
+            bundle_path,
+            offset_parity_review_path=_write_offset_parity_review(tmp_path),
+            model_inventory_attestation_path=inventory_path,
+            schema_compiler_attestation_path=schema_compiler_path,
+            model_runtime_attestation_path=model_runtime_path,
+        )
+
+
+def test_live_attestation_review_rejects_invalid_bundle_and_runtime_file_mismatch(
+    tmp_path: Path,
+):
+    inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
+    bundle = _live_attestation_bundle(model_inventory_sha256)
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+
+    schema_mismatch = dict(bundle)
+    schema_mismatch["schema_compiler"] = dict(
+        schema_mismatch["schema_compiler"],
+        cases=[dict(row) for row in schema_mismatch["schema_compiler"]["cases"]],
+    )
+    schema_mismatch["schema_compiler"]["cases"][0]["xgrammar_strict"] = "warning"
+    bundle_path.write_bytes(contract.canonical_json_bytes(schema_mismatch) + b"\n")
+    with pytest.raises(ValueError, match="xgrammar_strict"):
+        preflight.build_live_attestation_review(
+            bundle_path,
+            offset_parity_review_path=_write_offset_parity_review(tmp_path),
+            model_inventory_attestation_path=inventory_path,
+            schema_compiler_attestation_path=schema_compiler_path,
+            model_runtime_attestation_path=model_runtime_path,
+        )
+
+    runtime_mismatch = dict(bundle)
+    runtime_mismatch["model_runtime"] = dict(
+        runtime_mismatch["model_runtime"],
+        attestation_id="runtime-attestation-002",
+    )
+    bundle_path.write_bytes(contract.canonical_json_bytes(runtime_mismatch) + b"\n")
+    with pytest.raises(ValueError, match="model_runtime"):
+        preflight.build_live_attestation_review(
+            bundle_path,
+            offset_parity_review_path=_write_offset_parity_review(tmp_path),
+            model_inventory_attestation_path=inventory_path,
+            schema_compiler_attestation_path=schema_compiler_path,
+            model_runtime_attestation_path=model_runtime_path,
         )
 
 
 def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
     inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
+    schema_compiler_path, model_runtime_path = _write_live_attestation_evidence(
+        tmp_path,
+        model_inventory_sha256,
+    )
     bundle_path = tmp_path / "live-attestation-bundle.json"
     output_path = tmp_path / "live-attestation-review.json"
     bundle_path.write_bytes(
@@ -870,6 +1048,10 @@ def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
             str(offset_review_path),
             "--model-inventory-attestation",
             str(inventory_path),
+            "--schema-compiler-attestation",
+            str(schema_compiler_path),
+            "--model-runtime-attestation",
+            str(model_runtime_path),
             "--output",
             str(output_path),
             "--pretty",
@@ -882,6 +1064,8 @@ def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
     assert report["schema_version"] == "semantic_anchor_live_attestation_review_v1"
     assert report["offset_parity_review_path"] == str(offset_review_path.resolve())
     assert report["model_inventory_attestation_path"] == str(inventory_path.resolve())
+    assert report["schema_compiler_attestation_path"] == str(schema_compiler_path.resolve())
+    assert report["model_runtime_attestation_path"] == str(model_runtime_path.resolve())
     assert report["dispatch_authorized"] is False
     with pytest.raises(FileExistsError):
         preflight.main(
@@ -892,6 +1076,10 @@ def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
                 str(offset_review_path),
                 "--model-inventory-attestation",
                 str(inventory_path),
+                "--schema-compiler-attestation",
+                str(schema_compiler_path),
+                "--model-runtime-attestation",
+                str(model_runtime_path),
                 "--output",
                 str(output_path),
             ]
@@ -943,6 +1131,7 @@ def test_advisor_dispatch_go_review_binds_live_attestation_review_without_dispat
         bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
         model_inventory_attestation_path=inventory_path,
+        **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
     )
     live_review_sha256 = contract.sha256_bytes(
         preflight.canonical_report_bytes(live_review)
@@ -994,6 +1183,7 @@ def test_advisor_dispatch_go_review_cli_writes_create_only_bound_report(tmp_path
         bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
         model_inventory_attestation_path=inventory_path,
+        **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
     )
     live_review_path.write_bytes(preflight.canonical_report_bytes(live_review))
     live_review_sha256 = contract.sha256_bytes(
@@ -1062,6 +1252,7 @@ def test_advisor_dispatch_go_review_cli_rejects_partial_or_noncanonical_receipts
         bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
         model_inventory_attestation_path=inventory_path,
+        **_live_review_evidence_kwargs(tmp_path, model_inventory_sha256),
     )
     live_review_path.write_bytes(preflight.canonical_report_bytes(live_review))
     live_review_sha256 = contract.sha256_bytes(

@@ -214,6 +214,8 @@ def build_live_attestation_review(
     *,
     offset_parity_review_path: Path,
     model_inventory_attestation_path: Path,
+    schema_compiler_attestation_path: Path,
+    model_runtime_attestation_path: Path,
     artifact_dir: Path = contract.ARTIFACT_DIR,
 ) -> dict[str, object]:
     """Validate a captured live attestation bundle without opening dispatch."""
@@ -223,6 +225,8 @@ def build_live_attestation_review(
             bundle_path,
             offset_parity_review_path=offset_parity_review_path,
             model_inventory_attestation_path=model_inventory_attestation_path,
+            schema_compiler_attestation_path=schema_compiler_attestation_path,
+            model_runtime_attestation_path=model_runtime_attestation_path,
             artifact_dir=artifact_dir,
         )
     )
@@ -235,6 +239,8 @@ def _build_live_attestation_review_untraced(
     *,
     offset_parity_review_path: Path,
     model_inventory_attestation_path: Path,
+    schema_compiler_attestation_path: Path,
+    model_runtime_attestation_path: Path,
     artifact_dir: Path = contract.ARTIFACT_DIR,
 ) -> dict[str, object]:
     offline_report = _build_offline_preflight_report_untraced(artifact_dir)
@@ -265,11 +271,43 @@ def _build_live_attestation_review_untraced(
         raise ValueError("model inventory attestation is not canonical JSON bytes")
     contract.validate_model_inventory(model_inventory)
     model_inventory_sha256 = contract.sha256_file(inventory_file)
+    schema_compiler_file = schema_compiler_attestation_path.resolve()
+    schema_compiler = _require_mapping(
+        contract.load_json_no_duplicates(schema_compiler_file),
+        "schema compiler attestation",
+    )
+    if (
+        schema_compiler_file.read_bytes()
+        != contract.canonical_json_bytes(schema_compiler) + b"\n"
+    ):
+        raise ValueError("schema compiler attestation is not canonical JSON bytes")
+    contract.validate_schema_compiler_attestation(
+        schema_compiler,
+        request_identity=request_identity,
+    )
+    model_runtime_file = model_runtime_attestation_path.resolve()
+    model_runtime_attestation = _require_mapping(
+        contract.load_json_no_duplicates(model_runtime_file),
+        "model runtime attestation",
+    )
+    if (
+        model_runtime_file.read_bytes()
+        != contract.canonical_json_bytes(model_runtime_attestation) + b"\n"
+    ):
+        raise ValueError("model runtime attestation is not canonical JSON bytes")
+    contract.validate_live_model_runtime_attestation(
+        model_runtime_attestation,
+        expected_model_inventory_sha256=model_inventory_sha256,
+    )
     contract.validate_live_attestation_bundle(
         bundle,
         request_identity=request_identity,
         expected_model_inventory_sha256=model_inventory_sha256,
     )
+    if bundle.get("schema_compiler") != schema_compiler:
+        raise ValueError("live attestation bundle schema_compiler does not match attestation file")
+    if bundle.get("model_runtime") != model_runtime_attestation:
+        raise ValueError("live attestation bundle model_runtime does not match attestation file")
     model_runtime = _require_mapping(bundle.get("model_runtime"), "model_runtime")
     pre_dispatch_attestation = contract.pre_dispatch_attestation_from_live_runtime(
         model_runtime
@@ -292,6 +330,10 @@ def _build_live_attestation_review_untraced(
         "model_inventory_artifact": MODEL_INVENTORY_ARTIFACT,
         "model_inventory_attestation_path": str(inventory_file),
         "model_inventory_sha256": model_inventory_sha256,
+        "schema_compiler_attestation_path": str(schema_compiler_file),
+        "schema_compiler_attestation_sha256": contract.sha256_file(schema_compiler_file),
+        "model_runtime_attestation_path": str(model_runtime_file),
+        "model_runtime_attestation_sha256": contract.sha256_file(model_runtime_file),
         "pre_dispatch_attestation": pre_dispatch_attestation,
         "cost_counters": dict(ZERO_COST_COUNTERS),
         "inference_authorized": False,
@@ -973,6 +1015,10 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
         "model_inventory_artifact",
         "model_inventory_attestation_path",
         "model_inventory_sha256",
+        "schema_compiler_attestation_path",
+        "schema_compiler_attestation_sha256",
+        "model_runtime_attestation_path",
+        "model_runtime_attestation_sha256",
         "pre_dispatch_attestation",
         "cost_counters",
         "inference_authorized",
@@ -1001,12 +1047,22 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
         "model_inventory_attestation_path"
     ):
         raise ValueError("live attestation review model_inventory_attestation_path mismatch")
+    if not isinstance(report.get("schema_compiler_attestation_path"), str) or not report.get(
+        "schema_compiler_attestation_path"
+    ):
+        raise ValueError("live attestation review schema_compiler_attestation_path mismatch")
+    if not isinstance(report.get("model_runtime_attestation_path"), str) or not report.get(
+        "model_runtime_attestation_path"
+    ):
+        raise ValueError("live attestation review model_runtime_attestation_path mismatch")
     for key in (
         "bundle_sha256",
         "offset_parity_review_sha256",
         "offset_fingerprint_sha256",
         "request_case_order_sha256",
         "model_inventory_sha256",
+        "schema_compiler_attestation_sha256",
+        "model_runtime_attestation_sha256",
     ):
         if not _is_sha256_string(report.get(key)):
             raise ValueError(f"live attestation review {key} must be sha256")
@@ -1040,6 +1096,17 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
         raise ValueError("live attestation review model inventory hash mismatch")
     _validate_runtime_file_access_summary(
         report.get("runtime_file_access"), "live attestation review"
+    )
+    _validate_runtime_observed_required_paths(
+        report.get("runtime_file_access"),
+        "live attestation review",
+        required_paths=(
+            report["bundle_path"],
+            report["offset_parity_review_path"],
+            report["model_inventory_attestation_path"],
+            report["schema_compiler_attestation_path"],
+            report["model_runtime_attestation_path"],
+        ),
     )
 
 
@@ -1492,6 +1559,29 @@ def _validate_runtime_file_access_summary(value: object, owner: str) -> None:
             raise ValueError(f"{owner} runtime observed path must be read-only")
 
 
+def _validate_runtime_observed_required_paths(
+    value: object,
+    owner: str,
+    *,
+    required_paths: Sequence[str],
+) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{owner} runtime_file_access must be an object")
+    observed_paths = value.get("observed_paths")
+    if not isinstance(observed_paths, list):
+        raise ValueError(f"{owner} runtime observed_paths must be nonempty list")
+    observed = {
+        record.get("path")
+        for record in observed_paths
+        if isinstance(record, Mapping) and isinstance(record.get("path"), str)
+    }
+    missing = sorted(path for path in required_paths if path not in observed)
+    if missing:
+        raise ValueError(
+            f"{owner} runtime missing required observed paths: {missing}"
+        )
+
+
 def _direct_import_modules(path: Path, text: str) -> tuple[str, ...]:
     tree = ast.parse(text, filename=str(path))
     modules: list[str] = []
@@ -1625,6 +1715,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Canonical captured model-inventory attestation required by live attestation review.",
     )
     parser.add_argument(
+        "--schema-compiler-attestation",
+        type=Path,
+        help="Canonical captured schema-compiler attestation required by live attestation review.",
+    )
+    parser.add_argument(
+        "--model-runtime-attestation",
+        type=Path,
+        help="Canonical captured model-runtime attestation required by live attestation review.",
+    )
+    parser.add_argument(
         "--offset-parity-fixtures",
         type=Path,
         help="Canonical captured 48-row offset parity fixture JSON to review.",
@@ -1643,6 +1743,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.model_inventory_snapshot:
         if (
             args.model_inventory_attestation
+            or args.schema_compiler_attestation
+            or args.model_runtime_attestation
             or args.milestone_approval_receipt
             or args.reviewer_qualification_review
             or args.live_attestation_bundle
@@ -1659,16 +1761,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = build_model_inventory_attestation_from_snapshot(
             args.model_inventory_snapshot
         )
-    elif args.model_inventory_attestation and not args.live_attestation_bundle:
+    elif (
+        args.model_inventory_attestation
+        or args.schema_compiler_attestation
+        or args.model_runtime_attestation
+    ) and not args.live_attestation_bundle:
         raise ValueError(
-            "--model-inventory-attestation requires --live-attestation-bundle"
+            "--model-inventory-attestation/--schema-compiler-attestation/"
+            "--model-runtime-attestation require --live-attestation-bundle"
         )
     elif args.milestone_approval_receipt or args.reviewer_qualification_review:
         if (
             args.model_inventory_attestation
+            or args.schema_compiler_attestation
+            or args.model_runtime_attestation
         ):
             raise ValueError(
-                "--model-inventory-attestation cannot be combined with milestone approval"
+                "live attestation evidence files cannot be combined with milestone approval"
             )
         if not (args.milestone_approval_receipt and args.reviewer_qualification_review):
             raise ValueError(
@@ -1699,11 +1808,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.live_attestation_bundle
             or args.offset_parity_fixtures
             or args.offset_parity_review
+            or args.schema_compiler_attestation
+            or args.model_runtime_attestation
             or args.model_inventory_attestation
         ):
             raise ValueError(
                 "--live-attestation-bundle/--offset-parity-fixtures/"
-                "--offset-parity-review/--model-inventory-attestation "
+                "--offset-parity-review/live-attestation-evidence "
                 "cannot be combined with advisor GO review"
             )
         report = build_advisor_dispatch_go_review_from_files(
@@ -1723,10 +1834,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "--live-attestation-bundle requires --model-inventory-attestation"
             )
+        if not args.schema_compiler_attestation:
+            raise ValueError(
+                "--live-attestation-bundle requires --schema-compiler-attestation"
+            )
+        if not args.model_runtime_attestation:
+            raise ValueError(
+                "--live-attestation-bundle requires --model-runtime-attestation"
+            )
         report = build_live_attestation_review(
             args.live_attestation_bundle,
             offset_parity_review_path=args.offset_parity_review,
             model_inventory_attestation_path=args.model_inventory_attestation,
+            schema_compiler_attestation_path=args.schema_compiler_attestation,
+            model_runtime_attestation_path=args.model_runtime_attestation,
             artifact_dir=args.artifact_dir,
         )
     elif args.offset_parity_fixtures:
@@ -1737,9 +1858,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = build_offset_parity_review(args.offset_parity_fixtures)
     elif args.offset_parity_review:
         raise ValueError("--offset-parity-review requires --live-attestation-bundle")
-    elif args.model_inventory_attestation:
+    elif (
+        args.model_inventory_attestation
+        or args.schema_compiler_attestation
+        or args.model_runtime_attestation
+    ):
         raise ValueError(
-            "--model-inventory-attestation requires --live-attestation-bundle"
+            "--model-inventory-attestation/--schema-compiler-attestation/"
+            "--model-runtime-attestation require --live-attestation-bundle"
         )
     else:
         report = build_offline_preflight_report(args.artifact_dir)

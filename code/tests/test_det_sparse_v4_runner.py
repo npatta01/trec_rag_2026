@@ -292,6 +292,28 @@ def _live_attestation_bundle(model_inventory_sha256: str):
     }
 
 
+def _write_schema_compiler_attestation(tmp_path: Path) -> Path:
+    request_identity = preflight.build_request_identity_summary(contract.ARTIFACT_DIR)
+    attestation_path = tmp_path / "schema-compiler-attestation.json"
+    attestation_path.write_bytes(
+        contract.canonical_json_bytes(_schema_compiler_attestation(request_identity))
+        + b"\n"
+    )
+    return attestation_path
+
+
+def _write_model_runtime_attestation(
+    tmp_path: Path,
+    model_inventory_sha256: str,
+) -> Path:
+    attestation_path = tmp_path / "model-runtime-attestation.json"
+    attestation_path.write_bytes(
+        contract.canonical_json_bytes(_model_runtime_attestation(model_inventory_sha256))
+        + b"\n"
+    )
+    return attestation_path
+
+
 def _approved_reviews(tmp_path: Path):
     inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
     bundle_path = tmp_path / "live-attestation-bundle.json"
@@ -303,6 +325,11 @@ def _approved_reviews(tmp_path: Path):
         bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
         model_inventory_attestation_path=inventory_path,
+        schema_compiler_attestation_path=_write_schema_compiler_attestation(tmp_path),
+        model_runtime_attestation_path=_write_model_runtime_attestation(
+            tmp_path,
+            model_inventory_sha256,
+        ),
     )
     live_review_sha256 = contract.sha256_bytes(
         preflight.canonical_report_bytes(live_review)

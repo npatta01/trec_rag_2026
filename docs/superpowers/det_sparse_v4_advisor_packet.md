@@ -132,16 +132,19 @@ Captured live attestation bundles, once separately produced, are reviewed with:
   --live-attestation-bundle path/to/live-attestation-bundle.json \
   --offset-parity-review path/to/offset-parity-review.json \
   --model-inventory-attestation path/to/model-inventory-attestation.json \
+  --schema-compiler-attestation path/to/schema-compiler-attestation.json \
+  --model-runtime-attestation path/to/model-runtime-attestation.json \
   --output path/to/live-attestation-review.json \
   --pretty
 ```
 
 That review validates the bundle against the frozen request identity and the
-canonical file-backed model-inventory attestation SHA-256, validates and binds
-the canonical offset parity review plus offset fingerprint SHA-256, emits a
-pre-dispatch ledger attestation, requires canonical JSON bundle bytes, reports
-`bundle_canonical=true`, traces file opens for all three evidence files, and explicitly keeps
-`dispatch_authorized=false`.
+canonical file-backed model-inventory, schema-compiler, and model-runtime
+attestation SHA-256s, requires the bundle to exactly embed those same compiler
+and runtime records, validates and binds the canonical offset parity review plus
+offset fingerprint SHA-256, emits a pre-dispatch ledger attestation, requires
+canonical JSON bundle bytes, reports `bundle_canonical=true`, traces file opens
+for all five evidence files, and explicitly keeps `dispatch_authorized=false`.
 
 Captured live offset parity fixtures, once produced by the loopback sidecar, are
 reviewed separately before model inventory/compiler gates:

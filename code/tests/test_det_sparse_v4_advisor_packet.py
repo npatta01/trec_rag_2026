@@ -109,7 +109,12 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "does not authorize topic access, retrieval,\nreranking, or external cost" in text
     assert "--model-inventory-snapshot" in text
     assert "--model-inventory-attestation path/to/model-inventory-attestation.json" in text
-    assert "canonical file-backed model-inventory attestation SHA-256" in text
+    assert "--schema-compiler-attestation path/to/schema-compiler-attestation.json" in text
+    assert "--model-runtime-attestation path/to/model-runtime-attestation.json" in text
+    assert "canonical file-backed model-inventory, schema-compiler, and model-runtime" in text
+    assert "schema-compiler, and model-runtime\nattestation SHA-256s" in text
+    assert "exactly embed those same compiler\nand runtime records" in text
+    assert "all five evidence files" in text
     assert "read-only model inventory\ncapture mechanics" in text
     assert "`199 passed`." in text
     assert "Advisor questions" in text
