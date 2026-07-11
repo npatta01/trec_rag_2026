@@ -21,6 +21,10 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`unexpected_trec_rag_modules=[]`" in text
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
     assert "offset health/error/response schemas are bound" in text
+    assert "captured live schema-compiler evidence must bind vLLM `0.24.0`" in text
+    assert "Captured runtime evidence must bind served model `gpt-oss-local`" in text
+    assert "Live attestation records must be exact before dispatch" in text
+    assert "vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`" in text
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
@@ -28,8 +32,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "classification" in text
-    assert "offset health/error schema checks:" in text
-    assert "`138 passed`." in text
+    assert "live attestation evidence validators:" in text
+    assert "`141 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
@@ -44,6 +48,7 @@ def test_v4_advisor_packet_maps_core_issues_to_evidence():
         "Source/import closure must be fail-closed",
         "Schema/runtime compatibility must be explicit",
         "Local model inventory must be exact and cost-free",
+        "Live attestation records must be exact before dispatch",
         "Anchor typing/scope must be unambiguous",
         "Ledger integrity must be raw-first and fail-closed",
         "Runner entrypoint must not dispatch before approval",

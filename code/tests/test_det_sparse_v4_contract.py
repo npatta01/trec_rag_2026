@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from trec_rag import det_sparse_v4_contract as v4
+from trec_rag import det_sparse_v4_preflight as preflight
 from trec_rag.query_schema_compat import require_vllm_xgrammar_compatible
 
 
@@ -105,6 +106,15 @@ def _offset_response(text: str = "Café rocket🚀"):
     }
 
 
+def _offset_health():
+    return {
+        "schema_version": "lucene_whole_unit_offsets_health_v1",
+        "status": "ok",
+        "legacy_analyzer_port": 18081,
+        "offset_analyzer_port": 18082,
+    }
+
+
 def test_offset_response_shape_accepts_strict_codepoint_offsets_and_fingerprint():
     text = "Café rocket🚀"
     response = _offset_response(text)
@@ -152,12 +162,7 @@ def test_offset_response_rejects_hash_schema_unit_and_fingerprint_drift():
 
 
 def test_offset_health_and_error_shapes_are_fail_closed():
-    health = {
-        "schema_version": "lucene_whole_unit_offsets_health_v1",
-        "status": "ok",
-        "legacy_analyzer_port": 18081,
-        "offset_analyzer_port": 18082,
-    }
+    health = _offset_health()
     error = {
         "schema_version": "lucene_whole_unit_offsets_error_v1",
         "error_code": "bad_json",
@@ -933,6 +938,148 @@ def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight
     bad["file_sha256"] = dict(inventory["file_sha256"], **{"config.json": "A" * 64})
     with pytest.raises(ValueError, match="lowercase sha256"):
         v4.validate_model_inventory(bad)
+
+
+def _request_identity():
+    return preflight.build_request_identity_summary(v4.ARTIFACT_DIR)
+
+
+def _schema_compiler_attestation(request_identity=None):
+    request_identity = request_identity or _request_identity()
+    return {
+        "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
+        "compiler": {
+            "vllm_version": "0.24.0",
+            "xgrammar_version": "0.2.3",
+            "structured_outputs_backend": "xgrammar",
+        },
+        "case_order_sha256": request_identity["case_order_sha256"],
+        "cases": [
+            {
+                "case_id": case_id,
+                "request_sha256": request_sha256,
+                "schema_sha256": f"{index:064x}"[-64:],
+                "xgrammar_strict": "pass",
+            }
+            for index, (case_id, request_sha256) in enumerate(
+                request_identity["request_sha256"].items(),
+                start=1,
+            )
+        ],
+    }
+
+
+def _model_runtime_attestation(model_inventory_sha256="8" * 64):
+    return {
+        "schema_version": "semantic_anchor_live_model_runtime_attestation_v1",
+        "attestation_id": "runtime-attestation-001",
+        "served_model": "gpt-oss-local",
+        "repository": "openai/gpt-oss-20b",
+        "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+        "vllm_version": "0.24.0",
+        "xgrammar_version": "0.2.3",
+        "structured_outputs_backend": "xgrammar",
+        "loopback_only": True,
+        "egress_denied": True,
+        "read_only_model_mount": True,
+        "model_inventory_sha256": model_inventory_sha256,
+    }
+
+
+def test_schema_compiler_attestation_binds_request_identity_and_backend():
+    request_identity = _request_identity()
+    record = _schema_compiler_attestation(request_identity)
+
+    v4.validate_schema_compiler_attestation(
+        record,
+        request_identity=request_identity,
+    )
+
+    mutated = dict(record)
+    mutated["compiler"] = dict(record["compiler"], structured_outputs_backend="outlines")
+    with pytest.raises(ValueError, match="backend"):
+        v4.validate_schema_compiler_attestation(mutated, request_identity=request_identity)
+
+    mutated = dict(record)
+    mutated["cases"] = [dict(case) for case in record["cases"]]
+    mutated["cases"][0]["request_sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="request_sha256"):
+        v4.validate_schema_compiler_attestation(mutated, request_identity=request_identity)
+
+    mutated = dict(record)
+    mutated["cases"] = [dict(case) for case in reversed(record["cases"])]
+    with pytest.raises(ValueError, match="case order"):
+        v4.validate_schema_compiler_attestation(mutated, request_identity=request_identity)
+
+    mutated_identity = dict(request_identity)
+    mutated_identity["request_sha256"] = dict(mutated_identity["request_sha256"])
+    mutated_identity["request_sha256"]["synthetic-case-001"] = "not-a-sha"
+    with pytest.raises(ValueError, match="request_identity request_sha256"):
+        v4.validate_schema_compiler_attestation(
+            record,
+            request_identity=mutated_identity,
+        )
+
+
+def test_live_model_runtime_attestation_projects_to_pre_dispatch_shape():
+    record = _model_runtime_attestation()
+
+    v4.validate_live_model_runtime_attestation(
+        record,
+        expected_model_inventory_sha256="8" * 64,
+    )
+    pre_dispatch = v4.pre_dispatch_attestation_from_live_runtime(record)
+
+    assert pre_dispatch == {
+        "schema_version": "semantic_anchor_pre_dispatch_attestation_v1",
+        "attestation_id": "runtime-attestation-001",
+        "served_model": "gpt-oss-local",
+        "egress_denied": True,
+        "read_only_model_mount": True,
+        "model_inventory_sha256": "8" * 64,
+    }
+
+    for field, value, message in (
+        ("served_model", "wrong-model", "served_model"),
+        ("repository", "other/repo", "repository"),
+        ("revision", "main", "revision"),
+        ("loopback_only", False, "loopback"),
+        ("egress_denied", False, "egress"),
+        ("read_only_model_mount", False, "read-only"),
+    ):
+        mutated = dict(record, **{field: value})
+        with pytest.raises(ValueError, match=message):
+            v4.validate_live_model_runtime_attestation(mutated)
+    with pytest.raises(ValueError, match="model inventory hash"):
+        v4.validate_live_model_runtime_attestation(
+            record,
+            expected_model_inventory_sha256="9" * 64,
+        )
+
+
+def test_live_attestation_bundle_requires_offset_compiler_and_runtime_identity():
+    request_identity = _request_identity()
+    bundle = {
+        "schema_version": "semantic_anchor_live_attestation_bundle_v1",
+        "offset_health": _offset_health(),
+        "schema_compiler": _schema_compiler_attestation(request_identity),
+        "model_runtime": _model_runtime_attestation(),
+    }
+
+    v4.validate_live_attestation_bundle(
+        bundle,
+        request_identity=request_identity,
+        expected_model_inventory_sha256="8" * 64,
+    )
+
+    mutated = dict(bundle)
+    mutated["offset_health"] = dict(bundle["offset_health"], status="starting")
+    with pytest.raises(ValueError, match="status"):
+        v4.validate_live_attestation_bundle(
+            mutated,
+            request_identity=request_identity,
+            expected_model_inventory_sha256="8" * 64,
+        )
 
 
 def test_runner_visible_artifacts_are_physically_separated_from_gold_artifacts():

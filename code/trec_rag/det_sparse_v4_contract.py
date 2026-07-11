@@ -27,6 +27,12 @@ OFFSET_UNIT = "unicode_code_points"
 SYNTHETIC_CORPUS_VERSION = "semantic_anchor_synthetic_corpus_v1"
 QUALIFICATION_LEDGER_VERSION = "semantic_anchor_qualification_ledger_v1"
 CASE_REGISTRY_VERSION = "semantic_anchor_case_registry_v1"
+EXPECTED_MODEL_REPOSITORY = "openai/gpt-oss-20b"
+EXPECTED_MODEL_REVISION = "6cee5e81ee83917806bbde320786a8fb61efebee"
+EXPECTED_SERVED_MODEL = "gpt-oss-local"
+EXPECTED_VLLM_VERSION = "0.24.0"
+EXPECTED_XGRAMMAR_VERSION = "0.2.3"
+EXPECTED_STRUCTURED_OUTPUTS_BACKEND = "xgrammar"
 
 KNOWN_FIVE_TOPIC_IDS = ("144", "213", "224", "407", "515")
 V1_TOPIC_IDS = ("200", "225", "707", "897")
@@ -378,6 +384,168 @@ def validate_offset_error(error: Mapping[str, object]) -> None:
         raise ValueError("offset error_code mismatch")
     if not isinstance(error["message"], str) or not error["message"]:
         raise ValueError("offset error message must be nonempty string")
+
+
+def validate_schema_compiler_attestation(
+    record: Mapping[str, object],
+    *,
+    request_identity: Mapping[str, object],
+) -> None:
+    """Validate captured per-request XGrammar compiler evidence before dispatch."""
+
+    _require_exact_mapping_keys(
+        record,
+        "schema compiler attestation",
+        {"schema_version", "compiler", "case_order_sha256", "cases"},
+    )
+    if record.get("schema_version") != "semantic_anchor_schema_compiler_attestation_v1":
+        raise ValueError("schema compiler attestation schema_version mismatch")
+
+    compiler = _as_mapping(record.get("compiler"), "schema compiler identity")
+    _require_exact_mapping_keys(
+        compiler,
+        "schema compiler identity",
+        {"vllm_version", "xgrammar_version", "structured_outputs_backend"},
+    )
+    if compiler.get("vllm_version") != EXPECTED_VLLM_VERSION:
+        raise ValueError("schema compiler vLLM version mismatch")
+    if compiler.get("xgrammar_version") != EXPECTED_XGRAMMAR_VERSION:
+        raise ValueError("schema compiler XGrammar version mismatch")
+    if compiler.get("structured_outputs_backend") != EXPECTED_STRUCTURED_OUTPUTS_BACKEND:
+        raise ValueError("schema compiler backend must be xgrammar")
+
+    expected_order_sha256 = request_identity.get("case_order_sha256")
+    _validate_sha256_string(expected_order_sha256, "request_identity case_order_sha256")
+    if record.get("case_order_sha256") != expected_order_sha256:
+        raise ValueError("schema compiler case_order_sha256 mismatch")
+    request_sha256 = _as_mapping(request_identity.get("request_sha256"), "request_sha256")
+    expected_case_order = tuple(request_sha256)
+    if len(expected_case_order) != 24:
+        raise ValueError("schema compiler request identity must contain 24 cases")
+
+    cases = record.get("cases")
+    if not isinstance(cases, list) or len(cases) != len(expected_case_order):
+        raise ValueError("schema compiler cases must match request identity count")
+    observed_order: list[str] = []
+    for row in cases:
+        case = _as_mapping(row, "schema compiler case")
+        _require_exact_mapping_keys(
+            case,
+            "schema compiler case",
+            {"case_id", "request_sha256", "schema_sha256", "xgrammar_strict"},
+        )
+        case_id = _validate_case_id(case.get("case_id"), "schema compiler case_id")
+        observed_order.append(case_id)
+        expected_request_sha256 = _validate_sha256_string(
+            request_sha256.get(case_id), f"request_identity request_sha256[{case_id}]"
+        )
+        if case.get("request_sha256") != expected_request_sha256:
+            raise ValueError("schema compiler request_sha256 mismatch")
+        _validate_sha256_string(case.get("schema_sha256"), "schema_sha256")
+        if case.get("xgrammar_strict") != "pass":
+            raise ValueError("schema compiler xgrammar_strict must pass")
+    if tuple(observed_order) != expected_case_order:
+        raise ValueError("schema compiler case order mismatch")
+
+
+def validate_live_model_runtime_attestation(
+    record: Mapping[str, object],
+    *,
+    expected_model_inventory_sha256: str | None = None,
+) -> None:
+    """Validate captured local runtime identity without making a model call."""
+
+    _require_exact_mapping_keys(
+        record,
+        "live model runtime attestation",
+        {
+            "schema_version",
+            "attestation_id",
+            "served_model",
+            "repository",
+            "revision",
+            "vllm_version",
+            "xgrammar_version",
+            "structured_outputs_backend",
+            "loopback_only",
+            "egress_denied",
+            "read_only_model_mount",
+            "model_inventory_sha256",
+        },
+    )
+    if record.get("schema_version") != "semantic_anchor_live_model_runtime_attestation_v1":
+        raise ValueError("live model runtime attestation schema_version mismatch")
+    _require_nonempty_string(record.get("attestation_id"), "attestation_id")
+    if record.get("served_model") != EXPECTED_SERVED_MODEL:
+        raise ValueError("live model runtime served_model mismatch")
+    if record.get("repository") != EXPECTED_MODEL_REPOSITORY:
+        raise ValueError("live model runtime repository mismatch")
+    if record.get("revision") != EXPECTED_MODEL_REVISION:
+        raise ValueError("live model runtime revision mismatch")
+    if record.get("vllm_version") != EXPECTED_VLLM_VERSION:
+        raise ValueError("live model runtime vLLM version mismatch")
+    if record.get("xgrammar_version") != EXPECTED_XGRAMMAR_VERSION:
+        raise ValueError("live model runtime XGrammar version mismatch")
+    if record.get("structured_outputs_backend") != EXPECTED_STRUCTURED_OUTPUTS_BACKEND:
+        raise ValueError("live model runtime backend must be xgrammar")
+    if record.get("loopback_only") is not True:
+        raise ValueError("live model runtime must be loopback_only")
+    if record.get("egress_denied") is not True:
+        raise ValueError("live model runtime must deny egress")
+    if record.get("read_only_model_mount") is not True:
+        raise ValueError("live model runtime requires read-only model mount")
+    inventory_sha256 = _validate_sha256_string(
+        record.get("model_inventory_sha256"), "model_inventory_sha256"
+    )
+    if (
+        expected_model_inventory_sha256 is not None
+        and inventory_sha256 != expected_model_inventory_sha256
+    ):
+        raise ValueError("live model runtime model inventory hash mismatch")
+
+
+def pre_dispatch_attestation_from_live_runtime(
+    record: Mapping[str, object],
+) -> dict[str, object]:
+    """Project a strict live-runtime record into the ledger attestation shape."""
+
+    validate_live_model_runtime_attestation(record)
+    attestation = {
+        "schema_version": "semantic_anchor_pre_dispatch_attestation_v1",
+        "attestation_id": record["attestation_id"],
+        "served_model": record["served_model"],
+        "egress_denied": record["egress_denied"],
+        "read_only_model_mount": record["read_only_model_mount"],
+        "model_inventory_sha256": record["model_inventory_sha256"],
+    }
+    validate_pre_dispatch_attestation(attestation)
+    return attestation
+
+
+def validate_live_attestation_bundle(
+    bundle: Mapping[str, object],
+    *,
+    request_identity: Mapping[str, object],
+    expected_model_inventory_sha256: str | None = None,
+) -> None:
+    """Validate the local evidence bundle required before opening dispatch."""
+
+    _require_exact_mapping_keys(
+        bundle,
+        "live attestation bundle",
+        {"schema_version", "offset_health", "schema_compiler", "model_runtime"},
+    )
+    if bundle.get("schema_version") != "semantic_anchor_live_attestation_bundle_v1":
+        raise ValueError("live attestation bundle schema_version mismatch")
+    validate_offset_health(_as_mapping(bundle.get("offset_health"), "offset_health"))
+    validate_schema_compiler_attestation(
+        _as_mapping(bundle.get("schema_compiler"), "schema_compiler"),
+        request_identity=request_identity,
+    )
+    validate_live_model_runtime_attestation(
+        _as_mapping(bundle.get("model_runtime"), "model_runtime"),
+        expected_model_inventory_sha256=expected_model_inventory_sha256,
+    )
 
 
 def model_response_schema(case_id: str, *, u1_token_count: int) -> dict[str, object]:
