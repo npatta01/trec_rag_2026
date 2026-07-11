@@ -35,6 +35,7 @@ def test_v4_advisor_packet_maps_core_issues_to_evidence():
         "Known-five topics must not be touched",
         "Source/import closure must be fail-closed",
         "Schema/runtime compatibility must be explicit",
+        "Local model inventory must be exact and cost-free",
         "Anchor typing/scope must be unambiguous",
         "Ledger integrity must be raw-first and fail-closed",
         "Evaluation protocol must avoid qrels leakage",

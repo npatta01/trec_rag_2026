@@ -518,26 +518,315 @@ def validate_terminal_receipt(receipt: Mapping[str, object]) -> None:
             raise ValueError("completed states require scorer/gold phase")
 
 
+def validate_run_manifest(manifest: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        manifest,
+        "run manifest",
+        {"schema_version", "case_count", "artifact_sha256", "terminal_receipt_path"},
+    )
+    if manifest.get("schema_version") != "semantic_anchor_run_manifest_v1":
+        raise ValueError("run manifest schema_version mismatch")
+    if manifest.get("case_count") != 24:
+        raise ValueError("run manifest case_count must be 24")
+    if manifest.get("terminal_receipt_path") != "terminal_receipt.json":
+        raise ValueError("run manifest terminal_receipt_path mismatch")
+    _validate_sha256_mapping(manifest.get("artifact_sha256"), "run manifest artifact_sha256")
+
+
+def validate_reservation(record: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        record,
+        "reservation",
+        {"schema_version", "run_id", "case_id", "request_sha256", "create_only"},
+    )
+    if record.get("schema_version") != "semantic_anchor_reservation_v1":
+        raise ValueError("reservation schema_version mismatch")
+    _require_nonempty_string(record.get("run_id"), "run_id")
+    _validate_case_id(record.get("case_id"), "reservation case_id")
+    _validate_sha256_string(record.get("request_sha256"), "reservation request_sha256")
+    if record.get("create_only") is not True:
+        raise ValueError("reservation must be create_only")
+
+
+def validate_pre_dispatch_attestation(record: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        record,
+        "pre-dispatch attestation",
+        {
+            "schema_version",
+            "attestation_id",
+            "served_model",
+            "egress_denied",
+            "read_only_model_mount",
+            "model_inventory_sha256",
+        },
+    )
+    if record.get("schema_version") != "semantic_anchor_pre_dispatch_attestation_v1":
+        raise ValueError("pre-dispatch attestation schema_version mismatch")
+    _require_nonempty_string(record.get("attestation_id"), "attestation_id")
+    if record.get("served_model") != "gpt-oss-local":
+        raise ValueError("pre-dispatch attestation served_model mismatch")
+    if record.get("egress_denied") is not True:
+        raise ValueError("pre-dispatch attestation must deny egress")
+    if record.get("read_only_model_mount") is not True:
+        raise ValueError("pre-dispatch attestation requires read-only model mount")
+    _validate_sha256_string(
+        record.get("model_inventory_sha256"), "model_inventory_sha256"
+    )
+
+
+def validate_dispatch_record(record: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        record,
+        "dispatch record",
+        {
+            "schema_version",
+            "case_id",
+            "request_bytes_sha256",
+            "loopback_only",
+            "dispatch_counted",
+        },
+    )
+    if record.get("schema_version") != "semantic_anchor_dispatch_record_v1":
+        raise ValueError("dispatch record schema_version mismatch")
+    _validate_case_id(record.get("case_id"), "dispatch case_id")
+    _validate_sha256_string(record.get("request_bytes_sha256"), "request_bytes_sha256")
+    if record.get("loopback_only") is not True:
+        raise ValueError("dispatch record must be loopback_only")
+    if record.get("dispatch_counted") is not True:
+        raise ValueError("dispatch record must be dispatch_counted")
+
+
+def validate_raw_response_record(record: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        record,
+        "raw response record",
+        {
+            "schema_version",
+            "case_id",
+            "http_status",
+            "finish_reason",
+            "served_model",
+            "body_size_bytes",
+            "body_sha256",
+        },
+    )
+    if record.get("schema_version") != "semantic_anchor_raw_response_body_v1":
+        raise ValueError("raw response schema_version mismatch")
+    _validate_case_id(record.get("case_id"), "raw response case_id")
+    if record.get("http_status") != 200:
+        raise ValueError("raw response http_status must be 200")
+    if record.get("finish_reason") != "stop":
+        raise ValueError("raw response finish_reason must be stop")
+    if record.get("served_model") != "gpt-oss-local":
+        raise ValueError("raw response served_model mismatch")
+    if _strict_int(record.get("body_size_bytes"), "body_size_bytes") < 1:
+        raise ValueError("raw response body_size_bytes must be positive")
+    _validate_sha256_string(record.get("body_sha256"), "raw response body_sha256")
+
+
+def validate_transport_failure_record(record: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        record,
+        "transport failure",
+        {
+            "schema_version",
+            "case_id",
+            "request_bytes_sha256",
+            "exception_class",
+            "exception_message",
+        },
+    )
+    if record.get("schema_version") != "semantic_anchor_transport_failure_v1":
+        raise ValueError("transport failure schema_version mismatch")
+    _validate_case_id(record.get("case_id"), "transport failure case_id")
+    _validate_sha256_string(record.get("request_bytes_sha256"), "request_bytes_sha256")
+    _require_nonempty_string(record.get("exception_class"), "exception_class")
+    if not isinstance(record.get("exception_message"), str):
+        raise ValueError("exception_message must be a string")
+
+
+def validate_case_receipt(record: Mapping[str, object]) -> None:
+    required = {"schema_version", "case_id", "request_sha256", "machine_status"}
+    allowed = required.union({"raw_response_sha256"})
+    keys = set(record)
+    if not required.issubset(keys) or keys.difference(allowed):
+        raise ValueError(
+            f"case receipt keys mismatch: missing={required - keys} extra={keys - allowed}"
+        )
+    if record.get("schema_version") != "semantic_anchor_case_receipt_v1":
+        raise ValueError("case receipt schema_version mismatch")
+    _validate_case_id(record.get("case_id"), "case receipt case_id")
+    _validate_sha256_string(record.get("request_sha256"), "case receipt request_sha256")
+    status = record.get("machine_status")
+    if status not in {"mechanical_pass", "mechanical_no_go"}:
+        raise ValueError("case receipt machine_status mismatch")
+    if "raw_response_sha256" in record:
+        _validate_sha256_string(
+            record.get("raw_response_sha256"), "case receipt raw_response_sha256"
+        )
+    elif status == "mechanical_pass":
+        raise ValueError("mechanical_pass requires raw_response_sha256")
+
+
+def validate_ledger_prefix(
+    *,
+    case_order: Sequence[str],
+    reservations: Sequence[Mapping[str, object]],
+    dispatches: Sequence[Mapping[str, object]],
+    raw_responses: Sequence[Mapping[str, object]],
+    transport_failures: Sequence[Mapping[str, object]],
+    case_receipts: Sequence[Mapping[str, object]],
+    terminal_receipt: Mapping[str, object],
+    run_manifest: Mapping[str, object] | None = None,
+) -> None:
+    """Validate a synthetic v4 ledger prefix without opening gold or model files."""
+
+    if len(case_order) != 24:
+        raise ValueError("ledger prefix requires the frozen 24-case order")
+    for case_id in case_order:
+        _validate_case_id(case_id, "case_order case_id")
+    if len(set(case_order)) != len(case_order):
+        raise ValueError("case_order contains duplicates")
+
+    for record in reservations:
+        validate_reservation(record)
+    for record in dispatches:
+        validate_dispatch_record(record)
+    for record in raw_responses:
+        validate_raw_response_record(record)
+    for record in transport_failures:
+        validate_transport_failure_record(record)
+    for record in case_receipts:
+        validate_case_receipt(record)
+    validate_terminal_receipt(terminal_receipt)
+    if run_manifest is not None:
+        validate_run_manifest(run_manifest)
+        if run_manifest.get("artifact_sha256") != terminal_receipt.get("artifact_sha256"):
+            raise ValueError("run manifest and terminal receipt artifact hashes differ")
+
+    _require_unique_case_records(reservations, "reservation")
+    _require_unique_case_records(dispatches, "dispatch")
+    _require_unique_case_records(raw_responses, "raw response")
+    _require_unique_case_records(transport_failures, "transport failure")
+    _require_unique_case_records(case_receipts, "case receipt")
+
+    order_index = {case_id: index for index, case_id in enumerate(case_order)}
+    observed_case_ids = [
+        str(record["case_id"])
+        for records in (
+            reservations,
+            dispatches,
+            raw_responses,
+            transport_failures,
+            case_receipts,
+        )
+        for record in records
+    ]
+    if any(case_id not in order_index for case_id in observed_case_ids):
+        raise ValueError("ledger prefix contains unknown case_id")
+    if observed_case_ids:
+        max_index = max(order_index[case_id] for case_id in observed_case_ids)
+        expected_prefix = set(case_order[: max_index + 1])
+        if not set(observed_case_ids).issubset(expected_prefix):
+            raise ValueError("ledger prefix contains non-prefix case_id")
+        for earlier_case_id in case_order[:max_index]:
+            if earlier_case_id not in {str(row["case_id"]) for row in reservations}:
+                raise ValueError("ledger prefix skips an earlier reservation")
+
+    reservation_by_case = {str(record["case_id"]): record for record in reservations}
+    dispatch_by_case = {str(record["case_id"]): record for record in dispatches}
+    raw_by_case = {str(record["case_id"]): record for record in raw_responses}
+    failure_by_case = {str(record["case_id"]): record for record in transport_failures}
+    receipt_by_case = {str(record["case_id"]): record for record in case_receipts}
+    if set(raw_by_case).intersection(failure_by_case):
+        raise ValueError("case cannot have both raw response and transport failure")
+
+    for case_id, dispatch in dispatch_by_case.items():
+        reservation = reservation_by_case.get(case_id)
+        if reservation is None:
+            raise ValueError("dispatch lacks reservation")
+        if dispatch["request_bytes_sha256"] != reservation["request_sha256"]:
+            raise ValueError("dispatch request hash differs from reservation")
+    for case_id, raw in raw_by_case.items():
+        if case_id not in dispatch_by_case:
+            raise ValueError("raw response lacks dispatch")
+        receipt = receipt_by_case.get(case_id)
+        if receipt is None:
+            raise ValueError("raw response lacks case receipt")
+        if receipt.get("machine_status") != "mechanical_pass":
+            raise ValueError("raw response case receipt must be mechanical_pass")
+        if receipt.get("raw_response_sha256") != raw["body_sha256"]:
+            raise ValueError("case receipt raw hash differs from raw response")
+    for case_id, failure in failure_by_case.items():
+        if case_id not in dispatch_by_case:
+            raise ValueError("transport failure lacks dispatch")
+        if failure["request_bytes_sha256"] != dispatch_by_case[case_id]["request_bytes_sha256"]:
+            raise ValueError("transport failure request hash differs from dispatch")
+        receipt = receipt_by_case.get(case_id)
+        if receipt is not None and receipt.get("machine_status") != "mechanical_no_go":
+            raise ValueError("transport failure receipt must be mechanical_no_go")
+    for case_id, receipt in receipt_by_case.items():
+        reservation = reservation_by_case.get(case_id)
+        if reservation is None:
+            raise ValueError("case receipt lacks reservation")
+        if receipt["request_sha256"] != reservation["request_sha256"]:
+            raise ValueError("case receipt request hash differs from reservation")
+
+    attempted = _strict_int(terminal_receipt.get("attempted_calls"), "attempted_calls")
+    completed = _strict_int(terminal_receipt.get("completed_calls"), "completed_calls")
+    raw_committed = _strict_int(
+        terminal_receipt.get("raw_committed_calls"), "raw_committed_calls"
+    )
+    if attempted != len(dispatches):
+        raise ValueError("terminal attempted_calls differs from dispatch count")
+    if completed != len(raw_responses):
+        raise ValueError("terminal completed_calls differs from raw response count")
+    if raw_committed != len(raw_responses):
+        raise ValueError("terminal raw_committed_calls differs from raw response count")
+
+
 def validate_model_inventory(inventory: Mapping[str, object]) -> None:
+    if inventory.get("schema_version") != "semantic_anchor_model_inventory_attestation_v1":
+        raise ValueError("model inventory schema_version mismatch")
     if inventory.get("repository") != "openai/gpt-oss-20b":
         raise ValueError("unexpected model repository")
-    if inventory.get("revision") != "6cee5e81ee83917806bbde320786a8fb61efebee":
+    expected_revision = "6cee5e81ee83917806bbde320786a8fb61efebee"
+    if inventory.get("revision") != expected_revision:
         raise ValueError("unexpected model revision")
     if inventory.get("quantization_method") != "mxfp4":
         raise ValueError("unexpected quantization method")
     if inventory.get("safetensors_index_total_size") != 13_761_264_768:
         raise ValueError("unexpected safetensors index total size")
+    snapshot_path = inventory.get("snapshot_path")
+    if not isinstance(snapshot_path, str) or expected_revision not in snapshot_path:
+        raise ValueError("model inventory snapshot_path must bind expected revision")
     loaded = _string_tuple(inventory.get("loaded_shards"), "loaded_shards")
     if len(loaded) != 3 or len(set(loaded)) != 3:
         raise ValueError("model inventory must have exactly three unique loaded shards")
+    loaded_files = set(_string_tuple(inventory.get("loaded_files"), "loaded_files"))
+    unloaded_files = set(_string_tuple(inventory.get("unloaded_files"), "unloaded_files"))
     denied = set(_string_tuple(inventory.get("denied_files"), "denied_files"))
     if "original/model.safetensors" not in denied:
         raise ValueError("original/model.safetensors must be denied or hidden from loader")
-    if "original/model.safetensors" in loaded:
+    if "original/model.safetensors" in loaded_files or "original/model.safetensors" in loaded:
         raise ValueError("original/model.safetensors must not be loaded")
-    for key in ("snapshot_path", "file_sha256", "loaded_files", "unloaded_files"):
-        if key not in inventory:
-            raise ValueError(f"model inventory missing {key}")
+    if "original/model.safetensors" not in unloaded_files:
+        raise ValueError("original/model.safetensors must be listed as unloaded")
+    overlap = loaded_files.intersection(denied)
+    if overlap:
+        raise ValueError(f"model inventory denied files cannot be loaded: {sorted(overlap)}")
+    if not set(loaded).issubset(loaded_files):
+        raise ValueError("model inventory loaded_shards must be loaded_files")
+    file_sha256 = inventory.get("file_sha256")
+    if not isinstance(file_sha256, Mapping) or not file_sha256:
+        raise ValueError("model inventory file_sha256 must be a nonempty object")
+    for path in loaded_files.union(unloaded_files).union(denied):
+        digest = file_sha256.get(path)
+        if not isinstance(digest, str) or len(digest) != 64 or digest.lower() != digest:
+            raise ValueError(f"model inventory missing lowercase sha256 for {path}")
+        if any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError(f"model inventory invalid sha256 for {path}")
 
 
 def validate_case_registry(registry: Mapping[str, object]) -> tuple[str, ...]:
@@ -1030,6 +1319,63 @@ def _as_mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+def _require_exact_mapping_keys(
+    value: Mapping[str, object], name: str, expected_keys: set[str]
+) -> None:
+    keys = set(value)
+    if keys != expected_keys:
+        raise ValueError(
+            f"{name} keys mismatch: missing={expected_keys - keys} extra={keys - expected_keys}"
+        )
+
+
+def _require_nonempty_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a nonempty string")
+    return value
+
+
+def _validate_case_id(value: object, name: str) -> str:
+    candidate = _require_nonempty_string(value, name)
+    prefix = "synthetic-case-"
+    suffix = candidate.removeprefix(prefix)
+    if (
+        not candidate.startswith(prefix)
+        or len(suffix) != 3
+        or not suffix.isdigit()
+        or not (1 <= int(suffix) <= 999)
+    ):
+        raise ValueError(f"{name} must be synthetic-case-NNN")
+    return candidate
+
+
+def _validate_sha256_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not _is_hex_sha256(value):
+        raise ValueError(f"{name} must be lowercase sha256")
+    return value
+
+
+def _validate_sha256_mapping(value: object, name: str) -> None:
+    mapping = _as_mapping(value, name)
+    if not mapping:
+        raise ValueError(f"{name} must be nonempty")
+    for key, digest in mapping.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"{name} keys must be nonempty strings")
+        _validate_sha256_string(digest, f"{name}[{key}]")
+
+
+def _require_unique_case_records(
+    records: Sequence[Mapping[str, object]], name: str
+) -> None:
+    seen: set[str] = set()
+    for record in records:
+        case_id = str(record["case_id"])
+        if case_id in seen:
+            raise ValueError(f"duplicate {name} for {case_id}")
+        seen.add(case_id)
 
 
 def _required_enum(

@@ -412,16 +412,35 @@ def test_terminal_receipt_counter_and_gold_rules_are_fail_closed():
 
 def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight():
     inventory = {
+        "schema_version": "semantic_anchor_model_inventory_attestation_v1",
         "repository": "openai/gpt-oss-20b",
         "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
         "quantization_method": "mxfp4",
         "safetensors_index_total_size": 13_761_264_768,
-        "snapshot_path": "/models/openai/gpt-oss-20b/snapshots/rev",
-        "loaded_shards": ["model-00001.safetensors", "model-00002.safetensors", "model-00003.safetensors"],
-        "loaded_files": ["config.json", "tokenizer.json"],
-        "unloaded_files": ["README.md"],
+        "snapshot_path": "/models/openai/gpt-oss-20b/snapshots/6cee5e81ee83917806bbde320786a8fb61efebee",
+        "loaded_shards": [
+            "model-00001.safetensors",
+            "model-00002.safetensors",
+            "model-00003.safetensors",
+        ],
+        "loaded_files": [
+            "config.json",
+            "tokenizer.json",
+            "model-00001.safetensors",
+            "model-00002.safetensors",
+            "model-00003.safetensors",
+        ],
+        "unloaded_files": ["README.md", "original/model.safetensors"],
         "denied_files": ["original/model.safetensors"],
-        "file_sha256": {"config.json": "a" * 64},
+        "file_sha256": {
+            "config.json": "a" * 64,
+            "tokenizer.json": "b" * 64,
+            "model-00001.safetensors": "c" * 64,
+            "model-00002.safetensors": "d" * 64,
+            "model-00003.safetensors": "e" * 64,
+            "README.md": "f" * 64,
+            "original/model.safetensors": "9" * 64,
+        },
     }
 
     v4.validate_model_inventory(inventory)
@@ -432,6 +451,14 @@ def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight
     bad = dict(inventory)
     bad["denied_files"] = []
     with pytest.raises(ValueError, match="original/model.safetensors"):
+        v4.validate_model_inventory(bad)
+    bad = dict(inventory)
+    bad["loaded_files"] = [*inventory["loaded_files"], "original/model.safetensors"]
+    with pytest.raises(ValueError, match="must not be loaded"):
+        v4.validate_model_inventory(bad)
+    bad = dict(inventory)
+    bad["file_sha256"] = dict(inventory["file_sha256"], **{"config.json": "A" * 64})
+    with pytest.raises(ValueError, match="lowercase sha256"):
         v4.validate_model_inventory(bad)
 
 
