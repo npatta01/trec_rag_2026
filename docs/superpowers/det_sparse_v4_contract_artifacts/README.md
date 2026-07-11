@@ -18,3 +18,7 @@ single-case smoke fixture for byte-level request checks.
 Before v4 can be frozen, this bundle must be expanded with the remaining
 non-model fixture registries required by
 `docs/superpowers/det_sparse_v4_synthetic_design.md`.
+
+The ledger and replay schemas in this directory define artifact shapes only.
+They do not run a model, contact a sidecar, replay a response, or validate a
+real run directory.

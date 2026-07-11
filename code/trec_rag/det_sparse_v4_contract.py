@@ -81,6 +81,26 @@ ABSTAIN_REASONS = (
     "all_ranges_violate_span_or_occurrence_cap",
     "adversarial_instruction_no_unambiguous_referent",
 )
+REPLAY_MUTATION_IDS = (
+    "mutate_request_body_byte",
+    "mutate_raw_response_body_byte",
+    "swap_case_order_ids",
+    "mark_prefix_gold_opened",
+    "change_response_schema_case_const",
+    "add_gold_to_runner_manifest",
+    "change_model_inventory_hash",
+    "mark_dispatch_non_loopback",
+)
+LEDGER_SCHEMA_FILES = (
+    "semantic_anchor_reservation_v1.schema.json",
+    "semantic_anchor_pre_dispatch_attestation_v1.schema.json",
+    "semantic_anchor_dispatch_record_v1.schema.json",
+    "semantic_anchor_raw_response_body_v1.schema.json",
+    "semantic_anchor_transport_failure_v1.schema.json",
+    "semantic_anchor_case_receipt_v1.schema.json",
+    "semantic_anchor_run_manifest_v1.schema.json",
+    "semantic_anchor_terminal_receipt_v1.schema.json",
+)
 
 
 class TerminalState(str, Enum):
@@ -443,6 +463,34 @@ def validate_case_registry(registry: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(case_ids)
 
 
+def validate_replay_mutation_registry(registry: Mapping[str, object]) -> tuple[str, ...]:
+    if registry.get("schema_version") != "semantic_anchor_replay_mutation_registry_v1":
+        raise ValueError("replay mutation registry schema_version mismatch")
+    mutations = registry.get("mutations")
+    if not isinstance(mutations, list):
+        raise ValueError("replay mutation registry mutations must be list")
+    mutation_ids: list[str] = []
+    failure_codes: set[str] = set()
+    for mutation in mutations:
+        entry = _as_mapping(mutation, "replay mutation")
+        mutation_id = entry.get("mutation_id")
+        failure_code = entry.get("expected_failure_code")
+        target = entry.get("target_artifact")
+        if not isinstance(mutation_id, str) or not mutation_id:
+            raise ValueError("replay mutation_id must be nonempty string")
+        if not isinstance(failure_code, str) or not failure_code:
+            raise ValueError("replay expected_failure_code must be nonempty string")
+        if not isinstance(target, str) or not target:
+            raise ValueError("replay target_artifact must be nonempty string")
+        mutation_ids.append(mutation_id)
+        failure_codes.add(failure_code)
+    if tuple(mutation_ids) != REPLAY_MUTATION_IDS:
+        raise ValueError("replay mutation IDs drifted")
+    if len(failure_codes) != len(mutation_ids):
+        raise ValueError("replay mutations must have unique failure codes")
+    return tuple(mutation_ids)
+
+
 def validate_artifact_bundle(
     artifact_dir: Path = ARTIFACT_DIR,
 ) -> dict[str, str]:
@@ -506,6 +554,14 @@ def runner_visible_artifacts() -> tuple[str, ...]:
         "semantic_anchor_request_fixture.case001.json",
         "semantic_anchor_request_fixtures_v1.jsonl",
         "semantic_anchor_terminal_receipt_v1.schema.json",
+        "semantic_anchor_reservation_v1.schema.json",
+        "semantic_anchor_pre_dispatch_attestation_v1.schema.json",
+        "semantic_anchor_dispatch_record_v1.schema.json",
+        "semantic_anchor_raw_response_body_v1.schema.json",
+        "semantic_anchor_transport_failure_v1.schema.json",
+        "semantic_anchor_case_receipt_v1.schema.json",
+        "semantic_anchor_run_manifest_v1.schema.json",
+        "semantic_anchor_replay_mutation_registry_v1.json",
     )
 
 
@@ -514,6 +570,7 @@ def scorer_only_artifacts() -> tuple[str, ...]:
         "semantic_anchor_gold_labels_v1.json",
         "semantic_anchor_scorer_v1.schema.json",
         "semantic_anchor_reviewer_rubric_v1.md",
+        "semantic_anchor_reviewer_receipt_v1.schema.json",
     )
 
 
@@ -561,6 +618,14 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
         raise ValueError("case order fixture mismatch")
     if case_order.get("smoke_case_id") != "synthetic-case-001":
         raise ValueError("smoke case fixture mismatch")
+    replay_mutations = _as_mapping(
+        load_json_no_duplicates(
+            artifact_dir / "semantic_anchor_replay_mutation_registry_v1.json"
+        ),
+        "replay mutation registry",
+    )
+    validate_replay_mutation_registry(replay_mutations)
+    _validate_ledger_schema_fixtures(artifact_dir)
 
     corpus = _as_mapping(
         load_json_no_duplicates(artifact_dir / "semantic_anchor_synthetic_corpus_v1.json"),
@@ -728,6 +793,25 @@ def _validate_one_case_fixture(
     for key in ("case_id", "narrative", "token_tape", "unit_boundaries", "analyzer_evidence"):
         if user_payload.get(key) != case.get(key):
             raise ValueError(f"request fixture {key} differs from corpus: {case_id}")
+
+
+def _validate_ledger_schema_fixtures(artifact_dir: Path) -> None:
+    for filename in LEDGER_SCHEMA_FILES:
+        schema = _as_mapping(load_json_no_duplicates(artifact_dir / filename), filename)
+        properties = _as_mapping(schema.get("properties"), f"{filename} properties")
+        if schema.get("type") != "object":
+            raise ValueError(f"ledger schema must be object: {filename}")
+        if schema.get("additionalProperties") is not False:
+            raise ValueError(f"ledger schema must reject extra properties: {filename}")
+        schema_version = _as_mapping(
+            properties.get("schema_version"), f"{filename} schema_version"
+        )
+        expected_const = filename.removesuffix(".schema.json")
+        if schema_version.get("const") != expected_const:
+            raise ValueError(f"ledger schema_version const mismatch: {filename}")
+        required = schema.get("required")
+        if not isinstance(required, list) or "schema_version" not in required:
+            raise ValueError(f"ledger schema must require schema_version: {filename}")
 
 
 def _as_mapping(value: object, name: str) -> Mapping[str, object]:

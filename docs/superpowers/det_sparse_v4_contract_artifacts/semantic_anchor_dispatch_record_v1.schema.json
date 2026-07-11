@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "pattern": "^synthetic-case-[0-9]{3}$",
+      "type": "string"
+    },
+    "dispatch_counted": {
+      "const": true,
+      "type": "boolean"
+    },
+    "loopback_only": {
+      "const": true,
+      "type": "boolean"
+    },
+    "request_bytes_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_dispatch_record_v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "request_bytes_sha256",
+    "loopback_only",
+    "dispatch_counted"
+  ],
+  "type": "object"
+}

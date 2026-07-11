@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attestation_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "egress_denied": {
+      "const": true,
+      "type": "boolean"
+    },
+    "model_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "read_only_model_mount": {
+      "const": true,
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_pre_dispatch_attestation_v1",
+      "type": "string"
+    },
+    "served_model": {
+      "const": "gpt-oss-local",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "attestation_id",
+    "served_model",
+    "egress_denied",
+    "read_only_model_mount",
+    "model_inventory_sha256"
+  ],
+  "type": "object"
+}

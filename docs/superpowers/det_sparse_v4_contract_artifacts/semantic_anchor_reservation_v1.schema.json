@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "pattern": "^synthetic-case-[0-9]{3}$",
+      "type": "string"
+    },
+    "create_only": {
+      "const": true,
+      "type": "boolean"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_reservation_v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "case_id",
+    "request_sha256",
+    "create_only"
+  ],
+  "type": "object"
+}

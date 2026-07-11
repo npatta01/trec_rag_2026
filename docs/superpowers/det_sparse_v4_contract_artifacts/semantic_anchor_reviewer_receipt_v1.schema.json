@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "reviewer_count": {
+      "minimum": 2,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_reviewer_receipt_v1",
+      "type": "string"
+    },
+    "unanimous": {
+      "const": true,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "reviewer_count",
+    "unanimous"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "body_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "body_size_bytes": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "case_id": {
+      "pattern": "^synthetic-case-[0-9]{3}$",
+      "type": "string"
+    },
+    "finish_reason": {
+      "const": "stop",
+      "type": "string"
+    },
+    "http_status": {
+      "const": 200,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_raw_response_body_v1",
+      "type": "string"
+    },
+    "served_model": {
+      "const": "gpt-oss-local",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "http_status",
+    "finish_reason",
+    "served_model",
+    "body_size_bytes",
+    "body_sha256"
+  ],
+  "type": "object"
+}

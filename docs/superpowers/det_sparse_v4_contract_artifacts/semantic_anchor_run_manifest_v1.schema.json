@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_sha256": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "case_count": {
+      "const": 24,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_run_manifest_v1",
+      "type": "string"
+    },
+    "terminal_receipt_path": {
+      "const": "terminal_receipt.json",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_count",
+    "artifact_sha256",
+    "terminal_receipt_path"
+  ],
+  "type": "object"
+}

@@ -58,6 +58,38 @@
       "visibility": "runner"
     },
     {
+      "path": "semantic_anchor_reservation_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_pre_dispatch_attestation_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_dispatch_record_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_raw_response_body_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_transport_failure_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_case_receipt_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_run_manifest_v1.schema.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_replay_mutation_registry_v1.json",
+      "visibility": "runner"
+    },
+    {
       "path": "semantic_anchor_gold_labels_v1.json",
       "visibility": "scorer"
     },
@@ -67,6 +99,10 @@
     },
     {
       "path": "semantic_anchor_reviewer_rubric_v1.md",
+      "visibility": "scorer"
+    },
+    {
+      "path": "semantic_anchor_reviewer_receipt_v1.schema.json",
       "visibility": "scorer"
     }
   ],

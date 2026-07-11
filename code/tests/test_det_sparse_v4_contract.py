@@ -352,6 +352,32 @@ def test_case_registry_rejects_missing_cartesian_cell():
         v4.validate_case_registry(mutated)
 
 
+def test_replay_mutation_registry_freezes_expected_failure_surface():
+    registry = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_replay_mutation_registry_v1.json"
+    )
+
+    mutation_ids = v4.validate_replay_mutation_registry(registry)
+    assert mutation_ids == v4.REPLAY_MUTATION_IDS
+    assert len(mutation_ids) == 8
+    assert len({m["expected_failure_code"] for m in registry["mutations"]}) == 8
+
+
+def test_replay_mutation_registry_rejects_reordered_ids():
+    registry = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_replay_mutation_registry_v1.json"
+    )
+    mutated = dict(registry)
+    mutated["mutations"] = [dict(mutation) for mutation in registry["mutations"]]
+    mutated["mutations"][0], mutated["mutations"][1] = (
+        mutated["mutations"][1],
+        mutated["mutations"][0],
+    )
+
+    with pytest.raises(ValueError, match="mutation IDs"):
+        v4.validate_replay_mutation_registry(mutated)
+
+
 def test_case001_schema_fixture_matches_generated_schema():
     schema = v4.load_json_no_duplicates(
         v4.ARTIFACT_DIR / "semantic_anchor_response_v1.case001.schema.json"
@@ -379,6 +405,15 @@ def test_full_fixture_files_cover_all_registry_cases_in_order():
     assert tuple(case["case_id"] for case in gold["cases"]) == case_ids
     assert tuple(record["case_id"] for record in requests) == case_ids
     assert len(corpus["cases"]) == len(gold["cases"]) == len(requests) == 24
+
+
+def test_manifest_requires_ledger_and_replay_artifacts():
+    hashes = v4.validate_artifact_bundle()
+
+    for filename in v4.LEDGER_SCHEMA_FILES:
+        assert filename in hashes
+    assert "semantic_anchor_replay_mutation_registry_v1.json" in hashes
+    assert "semantic_anchor_reviewer_receipt_v1.schema.json" in hashes
 
 
 def test_json_loader_rejects_duplicate_keys(tmp_path: Path):

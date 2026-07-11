@@ -1,0 +1,45 @@
+{
+  "mutations": [
+    {
+      "expected_failure_code": "request_hash_mismatch",
+      "mutation_id": "mutate_request_body_byte",
+      "target_artifact": "semantic_anchor_request_fixtures_v1.jsonl"
+    },
+    {
+      "expected_failure_code": "raw_response_hash_mismatch",
+      "mutation_id": "mutate_raw_response_body_byte",
+      "target_artifact": "semantic_anchor_raw_response_body_v1"
+    },
+    {
+      "expected_failure_code": "case_order_mismatch",
+      "mutation_id": "swap_case_order_ids",
+      "target_artifact": "semantic_anchor_case_order_v1.json"
+    },
+    {
+      "expected_failure_code": "gold_opened_before_complete",
+      "mutation_id": "mark_prefix_gold_opened",
+      "target_artifact": "semantic_anchor_terminal_receipt_v1"
+    },
+    {
+      "expected_failure_code": "schema_constant_mismatch",
+      "mutation_id": "change_response_schema_case_const",
+      "target_artifact": "semantic_anchor_response_v1.case001.schema.json"
+    },
+    {
+      "expected_failure_code": "runner_gold_visibility_violation",
+      "mutation_id": "add_gold_to_runner_manifest",
+      "target_artifact": "semantic_anchor_artifact_manifest_v1.json"
+    },
+    {
+      "expected_failure_code": "model_inventory_changed",
+      "mutation_id": "change_model_inventory_hash",
+      "target_artifact": "semantic_anchor_pre_dispatch_attestation_v1"
+    },
+    {
+      "expected_failure_code": "non_loopback_dispatch",
+      "mutation_id": "mark_dispatch_non_loopback",
+      "target_artifact": "semantic_anchor_dispatch_record_v1"
+    }
+  ],
+  "schema_version": "semantic_anchor_replay_mutation_registry_v1"
+}

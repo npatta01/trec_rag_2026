@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "pattern": "^synthetic-case-[0-9]{3}$",
+      "type": "string"
+    },
+    "exception_class": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "exception_message": {
+      "type": "string"
+    },
+    "request_bytes_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_transport_failure_v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "request_bytes_sha256",
+    "exception_class",
+    "exception_message"
+  ],
+  "type": "object"
+}

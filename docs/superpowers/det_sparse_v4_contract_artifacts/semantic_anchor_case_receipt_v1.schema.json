@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "pattern": "^synthetic-case-[0-9]{3}$",
+      "type": "string"
+    },
+    "machine_status": {
+      "enum": [
+        "mechanical_pass",
+        "mechanical_no_go"
+      ],
+      "type": "string"
+    },
+    "raw_response_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_case_receipt_v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "request_sha256",
+    "machine_status"
+  ],
+  "type": "object"
+}
