@@ -96,6 +96,9 @@ Observed report summary from the committed tree:
 - `denied_topic_count`: 22
 - `import_issues`: `[]`
 - `source_path_fragment_issues`: `{}`
+- `schema_compatibility`: 24 cases, offline
+  `vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`,
+  `unsupported_feature_issues=[]`
 - `inference_authorized`: `false`
 - `external_cost_authorized`: `false`
 - `next_gate`: `advisor_review_before_live_attestation_or_model_inference`
@@ -116,7 +119,7 @@ The offline regression command used for this packet was:
   -q
 ```
 
-Result after adding packet and offline schema-compatibility checks: `92 passed`.
+Result after adding packet and offline schema-compatibility checks: `93 passed`.
 
 ## What is not yet proven
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from trec_rag import det_sparse_v4_contract as contract
+from trec_rag.query_schema_compat import find_vllm_xgrammar_unsupported_features
 
 
 PREFLIGHT_REPORT_SCHEMA_VERSION = "semantic_anchor_offline_preflight_report_v1"
@@ -28,6 +29,7 @@ ZERO_COST_COUNTERS = {
     "downloads": 0,
     "network_calls": 0,
 }
+SCHEMA_COMPATIBILITY_CHECKER = "vllm_0_24_xgrammar_unsupported_feature_lint"
 
 
 def build_offline_preflight_report(
@@ -67,6 +69,7 @@ def build_offline_preflight_report(
     if fragment_issues:
         raise ValueError(f"v4 preflight denied path-fragment audit failed: {fragment_issues}")
 
+    schema_compatibility = build_schema_compatibility_summary(artifact_dir)
     report: dict[str, object] = {
         "schema_version": PREFLIGHT_REPORT_SCHEMA_VERSION,
         "experiment_id": contract.EXPERIMENT_ID,
@@ -80,6 +83,7 @@ def build_offline_preflight_report(
         "denied_topic_count": len(contract.DENIED_TOPIC_IDS),
         "import_issues": [],
         "source_path_fragment_issues": {},
+        "schema_compatibility": schema_compatibility,
         "cost_counters": dict(ZERO_COST_COUNTERS),
         "inference_authorized": False,
         "external_cost_authorized": False,
@@ -87,6 +91,34 @@ def build_offline_preflight_report(
     }
     validate_offline_preflight_report(report, expected_artifact_hashes=artifact_hashes)
     return report
+
+
+def build_schema_compatibility_summary(
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Run the offline vLLM/XGrammar unsupported-feature lint over all requests."""
+
+    request_records = contract.load_jsonl_no_duplicates(
+        artifact_dir / "semantic_anchor_request_fixtures_v1.jsonl"
+    )
+    issues: list[dict[str, object]] = []
+    for raw_record in request_records:
+        record = _require_mapping(raw_record, "request fixture record")
+        case_id = _require_string(record.get("case_id"), "case_id")
+        request = _require_mapping(record.get("request"), "request")
+        response_format = _require_mapping(request.get("response_format"), "response_format")
+        json_schema = _require_mapping(response_format.get("json_schema"), "json_schema")
+        schema = _require_mapping(json_schema.get("schema"), "schema")
+        for issue in find_vllm_xgrammar_unsupported_features(schema):
+            row = issue.to_dict()
+            row["case_id"] = case_id
+            issues.append(row)
+    return {
+        "checker": SCHEMA_COMPATIBILITY_CHECKER,
+        "case_count": len(request_records),
+        "status": "pass" if not issues else "fail",
+        "unsupported_feature_issues": issues,
+    }
 
 
 def validate_offline_preflight_report(
@@ -122,6 +154,17 @@ def validate_offline_preflight_report(
         raise ValueError("offline preflight path-fragment issues must be empty")
     if report.get("cost_counters") != ZERO_COST_COUNTERS:
         raise ValueError("offline preflight cost counters must all be zero")
+    schema_compatibility = report.get("schema_compatibility")
+    if not isinstance(schema_compatibility, Mapping):
+        raise ValueError("offline preflight schema_compatibility must be an object")
+    if schema_compatibility.get("checker") != SCHEMA_COMPATIBILITY_CHECKER:
+        raise ValueError("offline preflight schema compatibility checker mismatch")
+    if schema_compatibility.get("case_count") != 24:
+        raise ValueError("offline preflight schema compatibility case count mismatch")
+    if schema_compatibility.get("status") != "pass":
+        raise ValueError("offline preflight schema compatibility must pass")
+    if schema_compatibility.get("unsupported_feature_issues") != []:
+        raise ValueError("offline preflight schema compatibility issues must be empty")
 
     artifact_sha256 = report.get("artifact_sha256")
     if not isinstance(artifact_sha256, dict) or not artifact_sha256:
@@ -135,6 +178,18 @@ def validate_offline_preflight_report(
     for key, value in artifact_sha256.items():
         if not isinstance(key, str) or not isinstance(value, str) or len(value) != 64:
             raise ValueError("offline preflight artifact hashes must be sha256 strings")
+
+
+def _require_mapping(value: object, name: str) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return value
+
+
+def _require_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a nonempty string")
+    return value
 
 
 def canonical_report_bytes(report: Mapping[str, object], *, pretty: bool = False) -> bytes:

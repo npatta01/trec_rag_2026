@@ -18,6 +18,12 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     assert report["inference_authorized"] is False
     assert report["external_cost_authorized"] is False
     assert report["cost_counters"] == preflight.ZERO_COST_COUNTERS
+    assert report["schema_compatibility"] == {
+        "checker": "vllm_0_24_xgrammar_unsupported_feature_lint",
+        "case_count": 24,
+        "status": "pass",
+        "unsupported_feature_issues": [],
+    }
     assert report["denied_topic_ids"] == list(contract.DENIED_TOPIC_IDS)
     assert report["runner_visible_artifacts"] == list(contract.runner_visible_artifacts())
     assert report["scorer_only_artifacts"] == list(contract.scorer_only_artifacts())
@@ -37,6 +43,21 @@ def test_offline_preflight_report_rejects_inference_or_cost_authorization():
     report = preflight.build_offline_preflight_report()
     report["cost_counters"] = dict(preflight.ZERO_COST_COUNTERS, model_calls=1)
     with pytest.raises(ValueError, match="cost counters"):
+        preflight.validate_offline_preflight_report(report)
+
+    report = preflight.build_offline_preflight_report()
+    schema_compatibility = dict(report["schema_compatibility"])
+    schema_compatibility["unsupported_feature_issues"] = [
+        {
+            "case_id": "synthetic-case-001",
+            "json_path": "$.properties.bad",
+            "keyword": "uniqueItems",
+            "reason": "unsupported",
+        }
+    ]
+    schema_compatibility["status"] = "fail"
+    report["schema_compatibility"] = schema_compatibility
+    with pytest.raises(ValueError, match="schema compatibility"):
         preflight.validate_offline_preflight_report(report)
 
 
@@ -70,6 +91,33 @@ def test_offline_preflight_fails_on_missing_required_artifact(tmp_path: Path):
 
     with pytest.raises(ValueError, match="artifact missing"):
         preflight.build_offline_preflight_report(copied)
+
+
+def test_offline_preflight_schema_compatibility_reports_unsupported_features(tmp_path: Path):
+    copied = tmp_path / "artifacts"
+    shutil.copytree(contract.ARTIFACT_DIR, copied)
+    request_path = copied / "semantic_anchor_request_fixtures_v1.jsonl"
+    records = [
+        json.loads(line)
+        for line in request_path.read_text(encoding="utf-8").splitlines()
+    ]
+    records[0]["request"]["response_format"]["json_schema"]["schema"]["properties"][
+        "bad_array"
+    ] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "uniqueItems": True,
+    }
+    request_path.write_text(
+        "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = preflight.build_schema_compatibility_summary(copied)
+
+    assert summary["status"] == "fail"
+    assert summary["unsupported_feature_issues"][0]["case_id"] == "synthetic-case-001"
+    assert summary["unsupported_feature_issues"][0]["keyword"] == "uniqueItems"
 
 
 def test_offline_preflight_cli_writes_create_only_json(tmp_path: Path):

@@ -16,7 +16,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "inference_authorized`: `false`" in text
     assert "external_cost_authorized`: `false`" in text
     assert "next_gate`: `advisor_review_before_live_attestation_or_model_inference`" in text
-    assert "Result after adding packet and offline schema-compatibility checks: `92 passed`." in text
+    assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
+    assert "Result after adding packet and offline schema-compatibility checks: `93 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
