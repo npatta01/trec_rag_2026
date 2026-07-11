@@ -82,7 +82,7 @@ deterministically.
 | Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, executable ledger-prefix validator, and offline replay mutation oracles are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. The mutation oracles execute all eight registered failure-code surfaces in memory. The pre-dispatch replay verifier rereads an actual create-only run directory from sealed files and rejects noncanonical bytes, artifact-hash drift, reservation hash drift, extra dispatch artifacts, and nonzero terminal counters. | Offline shapes, prefix mechanics, mutation failure surfaces, and actual zero-dispatch run-directory replay validated; post-dispatch replay still pending. |
 | Runner entrypoint must not dispatch before approval | A create-only runner scaffold writes 24 request-hash reservation records, a fresh run manifest, and a `pre_dispatch_no_go` terminal receipt, validates the zero-call ledger prefix, refuses existing output directories, and performs no model, retrieval, reranking, topic, relevance-judgment, network, download, or model-file access. The replay verifier accepts only that exact file set and terminal state. | Offline no-dispatch runner boundary, reservation materialization, and no-go replay validated; live dispatch remains closed. |
 | Runner request identities must be fixed before dispatch | Preflight reports a `request_identity` block with fixed 24-case order, first scored case, canonical request-body SHA-256s, and request byte sizes. | Reservation and dispatch identities are offline-bound; no runner dispatch yet. |
-| Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. The scorer/gold linter validates case order, U1-bounded acceptable and wrong-referent ranges, abstain reasons, and deterministic response classifications (`correct_select`, `safe_abstain`, `wrong_referent`, `wrong_abstain`, `mechanical_failure`). A scorer-only CLI now accepts sealed synthetic responses, validates a `raw_sealed_pending_scorer` 24-response terminal state with `gold_opened=false` before opening gold, emits `semantic_anchor_scorer_review_v1`, and keeps inference/dispatch/external-cost authorization false. | Offline separation, scorer mechanics, and scorer-only gold-opening boundary validated; scorer execution on a real post-dispatch run remains pending. |
+| Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. The scorer/gold linter validates case order, U1-bounded acceptable and wrong-referent ranges, abstain reasons, and deterministic response classifications (`correct_select`, `safe_abstain`, `wrong_referent`, `wrong_abstain`, `mechanical_failure`). A scorer-only CLI now accepts sealed synthetic responses, validates a `raw_sealed_pending_scorer` 24-response terminal state with `gold_opened=false`, validates ledger-prefix evidence, verifies parsed-response raw body hashes against raw response records and case receipts before opening gold, emits `semantic_anchor_scorer_review_v1`, and keeps inference/dispatch/external-cost authorization false. | Offline separation, scorer mechanics, raw-body binding, and scorer-only gold-opening boundary validated; scorer execution on a real post-dispatch run remains pending. |
 | External cost must remain zero | Preflight reports zero model, retrieval, reranker, network, download, topic-file, and relevance-judgment counters. | Enforced for the offline packet. |
 
 ## Offline preflight evidence
@@ -147,9 +147,10 @@ raw responses are committed, are scored with:
 ```
 
 The scorer validates `raw_sealed_pending_scorer` with all 24 raw responses
-committed and `gold_opened=false` before opening scorer-only gold labels, emits
-`semantic_anchor_scorer_review_v1`, and does not authorize inference, dispatch,
-or external cost.
+committed and `gold_opened=false`, validates ledger-prefix evidence, verifies
+each raw body hash against raw response records and case receipts, then opens
+scorer-only gold labels, emits `semantic_anchor_scorer_review_v1`, and does not
+authorize inference, dispatch, or external cost.
 
 The offline regression command used for this packet was:
 
@@ -171,9 +172,9 @@ checks, request identity binding, offset response validation, ledger-prefix
 validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, captured-bundle
-review, pre-dispatch run-directory replay, and scorer-only sealed-response
-review:
-`153 passed`.
+review, pre-dispatch run-directory replay, and ledger-bound scorer-only
+sealed-response review:
+`156 passed`.
 
 ## What is not yet proven
 

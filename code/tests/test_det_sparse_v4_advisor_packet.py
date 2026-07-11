@@ -37,17 +37,19 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
     assert "executable ledger-prefix validator" in text
     assert "actual zero-dispatch run-directory replay validated" in text
-    assert "pre-dispatch run-directory replay, and scorer-only sealed-response" in text
+    assert "pre-dispatch run-directory replay, and ledger-bound scorer-only" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "semantic_anchor_scorer_review_v1" in text
     assert "`raw_sealed_pending_scorer` 24-response terminal state" in text
-    assert "`gold_opened=false` before opening scorer-only" in text
+    assert "`gold_opened=false`, validates ledger-prefix evidence" in text
+    assert "validates ledger-prefix evidence" in text
+    assert "verifies parsed-response raw body hashes" in text
     assert "code/tests/test_det_sparse_v4_scorer.py" in text
     assert "classification" in text
     assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
-    assert "scorer-only sealed-response" in text
-    assert "`153 passed`." in text
+    assert "ledger-bound scorer-only" in text
+    assert "`156 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

@@ -34,23 +34,92 @@ def _gold_driven_response(case: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _raw_body_for_response(response: dict[str, object]) -> str:
+    assistant_content = json.dumps(response, separators=(",", ":"), sort_keys=True)
+    body = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": assistant_content,
+                },
+            }
+        ]
+    }
+    return json.dumps(body, separators=(",", ":"), sort_keys=True)
+
+
 def _sealed_scorer_input(*, terminal_state: str = "raw_sealed_pending_scorer"):
     gold = contract.load_json_no_duplicates(
         contract.ARTIFACT_DIR / "semantic_anchor_gold_labels_v1.json"
     )
     artifact_sha256 = contract.validate_artifact_bundle()
+    run_id = "synthetic-scorer-run"
+    reservations = []
+    dispatches = []
+    raw_responses = []
+    case_receipts = []
     responses = []
     for index, case in enumerate(gold["cases"], start=1):
+        case_id = str(case["case_id"])
+        request_sha256 = f"{index:064x}"[-64:]
         response = _gold_driven_response(case)
+        raw_body = _raw_body_for_response(response)
+        raw_body_sha256 = contract.sha256_bytes(raw_body.encode("utf-8"))
+        reservations.append(
+            {
+                "schema_version": "semantic_anchor_reservation_v1",
+                "run_id": run_id,
+                "case_id": case_id,
+                "request_sha256": request_sha256,
+                "create_only": True,
+            }
+        )
+        dispatches.append(
+            {
+                "schema_version": "semantic_anchor_dispatch_record_v1",
+                "case_id": case_id,
+                "request_bytes_sha256": request_sha256,
+                "loopback_only": True,
+                "dispatch_counted": True,
+            }
+        )
+        raw_responses.append(
+            {
+                "schema_version": "semantic_anchor_raw_response_body_v1",
+                "case_id": case_id,
+                "http_status": 200,
+                "finish_reason": "stop",
+                "served_model": "gpt-oss-local",
+                "body_size_bytes": len(raw_body.encode("utf-8")),
+                "body_sha256": raw_body_sha256,
+            }
+        )
+        case_receipts.append(
+            {
+                "schema_version": "semantic_anchor_case_receipt_v1",
+                "case_id": case_id,
+                "request_sha256": request_sha256,
+                "machine_status": "mechanical_pass",
+                "raw_response_sha256": raw_body_sha256,
+            }
+        )
         responses.append(
             {
-                "case_id": case["case_id"],
-                "raw_response_sha256": f"{index:064x}"[-64:],
-                "response": response,
+                "case_id": case_id,
+                "raw_response_sha256": raw_body_sha256,
+                "raw_response_body": raw_body,
             }
         )
     return {
         "schema_version": "semantic_anchor_sealed_scorer_input_v1",
+        "run_manifest": {
+            "schema_version": "semantic_anchor_run_manifest_v1",
+            "case_count": 24,
+            "artifact_sha256": artifact_sha256,
+            "terminal_receipt_path": "terminal_receipt.json",
+        },
         "terminal_receipt": {
             "schema_version": "semantic_anchor_terminal_receipt_v1",
             "terminal_state": terminal_state,
@@ -60,6 +129,10 @@ def _sealed_scorer_input(*, terminal_state: str = "raw_sealed_pending_scorer"):
             "gold_opened": False,
             "artifact_sha256": artifact_sha256,
         },
+        "reservations": reservations,
+        "dispatches": dispatches,
+        "raw_responses": raw_responses,
+        "case_receipts": case_receipts,
         "responses": responses,
     }
 
@@ -95,7 +168,7 @@ def test_scorer_review_rejects_incomplete_or_reordered_sealed_inputs(tmp_path: P
     incomplete["terminal_receipt"]["raw_committed_calls"] = 0
     incomplete["terminal_receipt"]["gold_opened"] = False
     _write_json(sealed_path, incomplete)
-    with pytest.raises(ValueError, match="raw_sealed_pending_scorer"):
+    with pytest.raises(ValueError, match="terminal attempted_calls differs"):
         scorer.build_scorer_review(sealed_path)
 
     reordered = _sealed_scorer_input()
@@ -135,7 +208,21 @@ def test_scorer_review_does_not_open_gold_when_seal_is_incomplete(
 
 def test_scorer_review_classifies_malformed_sealed_response(tmp_path: Path):
     sealed = _sealed_scorer_input()
-    sealed["responses"][0]["response"]["start_token"] = True
+    bad_body = _raw_body_for_response(
+        {
+            "schema_version": "semantic_anchor_response_v1",
+            "case_id": "synthetic-case-001",
+            "decision": "select",
+            "start_token": True,
+            "end_token": 2,
+        }
+    )
+    bad_hash = contract.sha256_bytes(bad_body.encode("utf-8"))
+    sealed["responses"][0]["raw_response_body"] = bad_body
+    sealed["responses"][0]["raw_response_sha256"] = bad_hash
+    sealed["raw_responses"][0]["body_size_bytes"] = len(bad_body.encode("utf-8"))
+    sealed["raw_responses"][0]["body_sha256"] = bad_hash
+    sealed["case_receipts"][0]["raw_response_sha256"] = bad_hash
     sealed_path = tmp_path / "sealed-scorer-input.json"
     _write_json(sealed_path, sealed)
 
@@ -146,6 +233,23 @@ def test_scorer_review_classifies_malformed_sealed_response(tmp_path: Path):
         "classification": "mechanical_failure",
     }
     assert review["scorer_receipt"]["case_results"][1]["classification"] == "correct_select"
+
+
+def test_scorer_review_rejects_parsed_response_drift_from_raw_body_hash(tmp_path: Path):
+    sealed = _sealed_scorer_input()
+    drifted_response = _gold_driven_response(
+        {
+            "case_id": "synthetic-case-001",
+            "decision": "select",
+            "acceptable_ranges": [{"start_token": 2, "end_token": 4}],
+        }
+    )
+    sealed["responses"][0]["raw_response_body"] = _raw_body_for_response(drifted_response)
+    sealed_path = tmp_path / "sealed-scorer-input.json"
+    _write_json(sealed_path, sealed)
+
+    with pytest.raises(ValueError, match="body hash mismatch"):
+        scorer.build_scorer_review(sealed_path)
 
 
 def test_scorer_cli_writes_create_only_review_without_dispatch(tmp_path: Path):

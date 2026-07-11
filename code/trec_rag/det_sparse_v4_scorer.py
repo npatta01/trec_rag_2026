@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from trec_rag import det_sparse_v4_contract as contract
 
@@ -38,7 +38,7 @@ def build_scorer_review(
         contract.load_json_no_duplicates(sealed_path),
         "sealed scorer input",
     )
-    responses_by_case = _validate_sealed_scorer_input(
+    responses_by_case = validate_sealed_scorer_input(
         sealed_input,
         case_order=case_order,
     )
@@ -130,7 +130,7 @@ def validate_scorer_review(
     contract.validate_scorer_receipt(receipt, case_order=expected_case_order)
 
 
-def _validate_sealed_scorer_input(
+def validate_sealed_scorer_input(
     value: Mapping[str, object],
     *,
     case_order: Sequence[str],
@@ -138,11 +138,35 @@ def _validate_sealed_scorer_input(
     _require_exact_keys(
         value,
         "sealed scorer input",
-        {"schema_version", "terminal_receipt", "responses"},
+        {
+            "schema_version",
+            "run_manifest",
+            "terminal_receipt",
+            "reservations",
+            "dispatches",
+            "raw_responses",
+            "case_receipts",
+            "responses",
+        },
     )
     if value.get("schema_version") != SEALED_SCORER_INPUT_SCHEMA_VERSION:
         raise ValueError("sealed scorer input schema_version mismatch")
+    run_manifest = _require_mapping(value.get("run_manifest"), "run manifest")
     terminal = _require_mapping(value.get("terminal_receipt"), "terminal receipt")
+    reservations = _mapping_list(value.get("reservations"), "reservations")
+    dispatches = _mapping_list(value.get("dispatches"), "dispatches")
+    raw_records = _mapping_list(value.get("raw_responses"), "raw responses")
+    case_receipts = _mapping_list(value.get("case_receipts"), "case receipts")
+    contract.validate_ledger_prefix(
+        case_order=case_order,
+        reservations=reservations,
+        dispatches=dispatches,
+        raw_responses=raw_records,
+        transport_failures=[],
+        case_receipts=case_receipts,
+        terminal_receipt=terminal,
+        run_manifest=run_manifest,
+    )
     contract.validate_terminal_receipt(terminal)
     if terminal.get("terminal_state") != SCORER_INPUT_TERMINAL_STATE:
         raise ValueError("sealed scorer input requires raw_sealed_pending_scorer")
@@ -155,6 +179,7 @@ def _validate_sealed_scorer_input(
     if terminal.get("gold_opened") is not False:
         raise ValueError("sealed scorer input must not open gold before scorer")
 
+    raw_by_case = {str(record["case_id"]): record for record in raw_records}
     raw_responses = value.get("responses")
     if not isinstance(raw_responses, list) or len(raw_responses) != len(case_order):
         raise ValueError("sealed scorer input responses must contain all cases")
@@ -165,18 +190,66 @@ def _validate_sealed_scorer_input(
         _require_exact_keys(
             record,
             "sealed scorer response",
-            {"case_id", "raw_response_sha256", "response"},
+            {"case_id", "raw_response_sha256", "raw_response_body"},
         )
         case_id = _require_string(record.get("case_id"), "case_id")
         observed_order.append(case_id)
-        _validate_sha256(record.get("raw_response_sha256"), "raw_response_sha256")
-        response = _require_mapping(record.get("response"), "response")
+        raw_response_sha256 = _validate_sha256(
+            record.get("raw_response_sha256"), "raw_response_sha256"
+        )
+        raw_record = raw_by_case.get(case_id)
+        if raw_record is None:
+            raise ValueError("sealed scorer response lacks raw response record")
+        if raw_response_sha256 != raw_record.get("body_sha256"):
+            raise ValueError("sealed scorer response hash differs from raw record")
+        raw_body = _require_string(record.get("raw_response_body"), "raw_response_body")
+        if contract.sha256_bytes(raw_body.encode("utf-8")) != raw_response_sha256:
+            raise ValueError("sealed scorer response body hash mismatch")
+        try:
+            payload = _loads_object_no_duplicates(raw_body, "raw response body")
+            response = contract.extract_model_response_from_chat_completion(
+                payload,
+                case_id=case_id,
+                u1_token_count=7,
+            )
+        except ValueError:
+            response = {
+                "schema_version": contract.MODEL_RESPONSE_SCHEMA_VERSION,
+                "case_id": case_id,
+                "decision": "select",
+                "start_token": True,
+                "end_token": 0,
+            }
         responses_by_case[case_id] = response
     if tuple(observed_order) != tuple(case_order):
         raise ValueError("sealed scorer input response case order mismatch")
     if len(responses_by_case) != len(case_order):
         raise ValueError("sealed scorer input duplicate response case_id")
     return responses_by_case
+
+
+def _mapping_list(value: object, name: str) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list")
+    return tuple(_require_mapping(item, name) for item in value)
+
+
+def _loads_object_no_duplicates(text: str, name: str) -> Mapping[str, object]:
+    def reject_duplicates(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"{name} contains duplicate key: {key}")
+            result[key] = item
+        return result
+
+    try:
+        value = json.loads(text, object_pairs_hook=reject_duplicates)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be JSON object")
+    return value
 
 
 def _case_order(artifact_dir: Path = contract.ARTIFACT_DIR) -> tuple[str, ...]:
