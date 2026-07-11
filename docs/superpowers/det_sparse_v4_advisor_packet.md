@@ -6,8 +6,9 @@ Status: offline review packet. This document does not authorize model
 inference, topic access, relevance-judgment access, retrieval, reranking,
 downloads, hosted APIs, paid calls, or an agent loop.
 
-Baseline implementation reviewed by this packet:
-`0e267af5af6622f2119ede48593fc1d636390e08`
+Baseline implementation reviewed by this packet: the current
+`codex/structured-query-planner` checkout. The packet avoids embedding its own
+commit hash so the review text remains stable across final commit/amend steps.
 
 Primary references:
 
