@@ -951,6 +951,35 @@ def validate_offline_preflight_report(
 def validate_live_attestation_review(report: Mapping[str, object]) -> None:
     """Validate that live attestation review still does not authorize dispatch."""
 
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "bundle_path",
+        "bundle_sha256",
+        "bundle_canonical",
+        "offset_parity_review_path",
+        "offset_parity_review_sha256",
+        "offset_parity_review_status",
+        "offset_fingerprint_sha256",
+        "offline_preflight_status",
+        "request_case_order_sha256",
+        "model_inventory_artifact",
+        "model_inventory_sha256",
+        "pre_dispatch_attestation",
+        "cost_counters",
+        "inference_authorized",
+        "dispatch_authorized",
+        "external_cost_authorized",
+        "next_gate",
+        "runtime_file_access",
+    }
+    actual_keys = set(report)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "live attestation review keys mismatch: "
+            f"missing={expected_keys - actual_keys} extra={actual_keys - expected_keys}"
+        )
     if report.get("schema_version") != LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION:
         raise ValueError("live attestation review schema_version mismatch")
     if report.get("experiment_id") != contract.EXPERIMENT_ID:
