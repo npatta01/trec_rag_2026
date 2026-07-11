@@ -125,6 +125,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`local_evidence_capture_authorized=true`" in text
     assert "external network, and\nexternal cost authorization false" in text
     assert "--model-inventory-snapshot" in text
+    assert "--local-evidence-capture-approval-review path/to/local-evidence-capture-review.json" in text
+    assert "requires a canonical local evidence-capture approval review" in text
     assert "--model-inventory-attestation path/to/model-inventory-attestation.json" in text
     assert "--schema-compiler-attestation path/to/schema-compiler-attestation.json" in text
     assert "--model-runtime-attestation path/to/model-runtime-attestation.json" in text

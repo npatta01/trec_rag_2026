@@ -687,6 +687,40 @@ def build_local_evidence_capture_approval_review_from_files(
     return review
 
 
+def load_local_evidence_capture_approval_review_from_file(
+    approval_review_path: Path,
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> Mapping[str, object]:
+    """Load a canonical local evidence approval review used by capture commands."""
+
+    review_file = approval_review_path.resolve()
+    review = _require_mapping(
+        contract.load_json_no_duplicates(review_file),
+        "local evidence capture approval review",
+    )
+    if review_file.read_bytes() != canonical_report_bytes(review):
+        raise ValueError(
+            "local evidence capture approval review is not canonical JSON bytes"
+        )
+    validate_local_evidence_capture_approval_review(review)
+    if review.get("local_evidence_capture_authorized") is not True:
+        raise ValueError("local evidence capture approval review must authorize capture")
+    if review.get("cached_model_reads_authorized") is not True:
+        raise ValueError(
+            "local evidence capture approval review must authorize cached model reads"
+        )
+    current_preflight = build_offline_preflight_report(artifact_dir)
+    current_preflight_sha256 = contract.sha256_bytes(
+        canonical_report_bytes(current_preflight)
+    )
+    if review.get("offline_preflight_sha256") != current_preflight_sha256:
+        raise ValueError(
+            "local evidence capture approval review offline preflight hash mismatch"
+        )
+    return review
+
+
 def build_untouched_topic_milestone_approval_review(
     reviewer_qualification_review: Mapping[str, object],
     approval_receipt: Mapping[str, object],
@@ -2124,6 +2158,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Canonical advisor receipt approving only local evidence capture.",
     )
     parser.add_argument(
+        "--local-evidence-capture-approval-review",
+        type=Path,
+        help="Canonical approval review required before local evidence capture.",
+    )
+    parser.add_argument(
         "--reviewer-qualification-review",
         type=Path,
         help="Canonical reviewer qualification review JSON for untouched-topic/v5 approval.",
@@ -2169,6 +2208,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    if (
+        args.local_evidence_capture_approval_review
+        and not args.model_inventory_snapshot
+    ):
+        raise ValueError(
+            "--local-evidence-capture-approval-review requires "
+            "--model-inventory-snapshot"
+        )
     if args.model_inventory_snapshot:
         if (
             args.model_inventory_attestation
@@ -2189,6 +2236,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "advisor GO, milestone approval, live attestation evidence, or "
                 "offset parity review"
             )
+        if not args.local_evidence_capture_approval_review:
+            raise ValueError(
+                "--model-inventory-snapshot requires "
+                "--local-evidence-capture-approval-review"
+            )
+        load_local_evidence_capture_approval_review_from_file(
+            args.local_evidence_capture_approval_review,
+            artifact_dir=args.artifact_dir,
+        )
         report = build_model_inventory_attestation_from_snapshot(
             args.model_inventory_snapshot
         )
@@ -2249,6 +2305,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--model-runtime-attestation require --live-attestation-bundle"
         )
     elif args.local_evidence_capture_approval_receipt:
+        if args.pretty and args.output:
+            raise ValueError(
+                "--local-evidence-capture-approval-receipt output must be "
+                "canonical JSON when written for capture; omit --pretty"
+            )
         if (
             args.live_attestation_bundle
             or args.live_attestation_review

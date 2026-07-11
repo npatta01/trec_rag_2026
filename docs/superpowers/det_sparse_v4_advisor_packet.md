@@ -131,8 +131,7 @@ create-only with:
 ```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_preflight \
   --local-evidence-capture-approval-receipt path/to/local-evidence-capture-approval.json \
-  --output path/to/local-evidence-capture-approval-review.json \
-  --pretty
+  --output path/to/local-evidence-capture-approval-review.json
 ```
 
 The receipt must use `semantic_anchor_local_evidence_capture_approval_v1`,
@@ -143,6 +142,8 @@ calls. The emitted
 `semantic_anchor_local_evidence_capture_approval_review_v1` authorizes only the
 local evidence-capture step, keeps those external and dispatch gates closed, and
 sets `next_gate=run_local_evidence_capture_without_dispatch`.
+When written to disk for later capture commands, the review is canonical compact
+JSON; `--pretty` is intentionally rejected for this file-backed handoff.
 
 Once offset parity, model inventory, schema-compiler, and model-runtime evidence
 files are separately produced, the canonical live-attestation bundle is assembled
@@ -212,8 +213,7 @@ real cached model snapshot, an advisor/user receipt can be reviewed create-only:
 ```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_preflight \
   --local-evidence-capture-approval-receipt path/to/local-evidence-capture-go.json \
-  --output path/to/local-evidence-capture-review.json \
-  --pretty
+  --output path/to/local-evidence-capture-review.json
 ```
 
 That receipt must use `semantic_anchor_local_evidence_capture_approval_v1`, bind
@@ -225,6 +225,8 @@ The derived `semantic_anchor_local_evidence_capture_approval_review_v1` sets
 `local_evidence_capture_authorized=true` but keeps dispatch, generation,
 retrieval, reranking, topic/qrels access, downloads, external network, and
 external cost authorization false.
+That review must be written as canonical compact JSON before it can unlock any
+local evidence capture command.
 
 An already-cached local model snapshot can be inventoried read-only without
 loading the model:
@@ -232,16 +234,18 @@ loading the model:
 ```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_preflight \
   --model-inventory-snapshot path/to/gpt-oss-20b/snapshots/6cee5e81ee83917806bbde320786a8fb61efebee \
+  --local-evidence-capture-approval-review path/to/local-evidence-capture-review.json \
   --output path/to/model-inventory-attestation.json
 ```
 
 That capture hashes only files already present under the supplied snapshot,
-requires the expected revision path, three expected local shard files with the
-expected combined size, keeps `original/model.safetensors` denied/unloaded, and
-does not authorize model inference, network, download, retrieval, reranking, or
-topic/qrels access. Running this command against the real local model cache is
-still a separately approved local cache-read gate because it hashes large model
-files.
+requires a canonical local evidence-capture approval review, requires the
+review to match the current offline preflight SHA-256, requires the expected
+revision path, three expected local shard files with the expected combined size,
+keeps `original/model.safetensors` denied/unloaded, and does not authorize model
+inference, network, download, retrieval, reranking, or topic/qrels access.
+Running this command against the real local model cache is therefore gated by an
+explicit local cache-read approval because it hashes large model files.
 
 A later advisor/user GO receipt is also reviewed offline before any runner
 entrypoint can be invoked. The receipt must use

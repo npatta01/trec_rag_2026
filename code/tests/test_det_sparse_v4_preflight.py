@@ -221,6 +221,14 @@ def _local_evidence_capture_approval_receipt() -> dict[str, object]:
     }
 
 
+def _write_local_evidence_capture_approval_review(tmp_path: Path) -> Path:
+    receipt = _local_evidence_capture_approval_receipt()
+    review = preflight.build_local_evidence_capture_approval_review(receipt)
+    review_path = tmp_path / "local-evidence-capture-approval-review.json"
+    review_path.write_bytes(preflight.canonical_report_bytes(review))
+    return review_path
+
+
 def _schema_compiler_attestation(request_identity):
     return {
         "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
@@ -606,13 +614,34 @@ def test_model_inventory_capture_cli_writes_create_only_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ):
     snapshot = _write_sparse_model_snapshot(tmp_path)
+    approval_review_path = _write_local_evidence_capture_approval_review(tmp_path)
     output_path = tmp_path / "model-inventory.json"
-    monkeypatch.setattr(preflight.contract, "sha256_file", _fake_snapshot_hasher)
+    real_sha256_file = preflight.contract.sha256_file
+
+    def selective_snapshot_hasher(path: Path) -> str:
+        resolved = path.resolve()
+        if resolved == snapshot.resolve() or snapshot.resolve() in resolved.parents:
+            return _fake_snapshot_hasher(path)
+        return real_sha256_file(path)
+
+    monkeypatch.setattr(preflight.contract, "sha256_file", selective_snapshot_hasher)
+
+    with pytest.raises(ValueError, match="requires --local-evidence-capture-approval-review"):
+        preflight.main(
+            [
+                "--model-inventory-snapshot",
+                str(snapshot),
+                "--output",
+                str(tmp_path / "missing-approval.json"),
+            ]
+        )
 
     assert preflight.main(
         [
             "--model-inventory-snapshot",
             str(snapshot),
+            "--local-evidence-capture-approval-review",
+            str(approval_review_path),
             "--output",
             str(output_path),
         ]
@@ -628,8 +657,43 @@ def test_model_inventory_capture_cli_writes_create_only_inventory(
             [
                 "--model-inventory-snapshot",
                 str(snapshot),
+                "--local-evidence-capture-approval-review",
+                str(approval_review_path),
                 "--output",
                 str(output_path),
+            ]
+        )
+
+    noncanonical_review_path = tmp_path / "noncanonical-local-evidence-review.json"
+    review = contract.load_json_no_duplicates(approval_review_path)
+    noncanonical_review_path.write_text(
+        json.dumps(review, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="approval review is not canonical"):
+        preflight.main(
+            [
+                "--model-inventory-snapshot",
+                str(snapshot),
+                "--local-evidence-capture-approval-review",
+                str(noncanonical_review_path),
+                "--output",
+                str(tmp_path / "noncanonical-approval-output.json"),
+            ]
+        )
+
+    stale_review_path = tmp_path / "stale-local-evidence-review.json"
+    stale_review = dict(review, offline_preflight_sha256="0" * 64)
+    stale_review_path.write_bytes(preflight.canonical_report_bytes(stale_review))
+    with pytest.raises(ValueError, match="offline preflight hash mismatch"):
+        preflight.main(
+            [
+                "--model-inventory-snapshot",
+                str(snapshot),
+                "--local-evidence-capture-approval-review",
+                str(stale_review_path),
+                "--output",
+                str(tmp_path / "stale-approval-output.json"),
             ]
         )
 
@@ -1575,7 +1639,6 @@ def test_local_evidence_capture_approval_review_cli_is_create_only(tmp_path: Pat
                 str(receipt_path),
                 "--output",
                 str(output_path),
-                "--pretty",
             ]
         )
         == 0
@@ -1587,6 +1650,18 @@ def test_local_evidence_capture_approval_review_cli_is_create_only(tmp_path: Pat
     assert review["dispatch_authorized"] is False
     assert review["external_cost_authorized"] is False
     preflight.validate_local_evidence_capture_approval_review(review)
+    assert output_path.read_bytes() == preflight.canonical_report_bytes(review)
+
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.main(
+            [
+                "--local-evidence-capture-approval-receipt",
+                str(receipt_path),
+                "--output",
+                str(tmp_path / "pretty-local-evidence-review.json"),
+                "--pretty",
+            ]
+        )
 
     with pytest.raises(FileExistsError):
         preflight.main(
@@ -1615,6 +1690,14 @@ def test_local_evidence_capture_approval_review_cli_is_create_only(tmp_path: Pat
                 str(receipt_path),
                 "--model-inventory-attestation",
                 str(tmp_path / "model-inventory.json"),
+            ]
+        )
+
+    with pytest.raises(ValueError, match="requires --model-inventory-snapshot"):
+        preflight.main(
+            [
+                "--local-evidence-capture-approval-review",
+                str(output_path),
             ]
         )
 
