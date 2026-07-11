@@ -290,6 +290,16 @@ def _install_fakes(
     )
     monkeypatch.setattr(
         query_plan_v2_cli,
+        "_verify_source_revision",
+        lambda _repo_root: {
+            "commit": "1" * 40,
+            "tree": "2" * 40,
+            "branch": "test-branch",
+            "tracked_worktree_clean": True,
+        },
+    )
+    monkeypatch.setattr(
+        query_plan_v2_cli,
         "_context_preflight",
         lambda **kwargs: {
             "topic_id": kwargs["topic"].id,
@@ -709,3 +719,28 @@ def test_live_runtime_attestation_binds_container_port_version_and_model(monkeyp
             expected_model="gpt-oss-local",
             timeout=1.0,
         )
+
+
+def test_source_revision_attestation_requires_clean_committed_tree(monkeypatch, tmp_path):
+    values = {
+        ("status", "--porcelain", "--untracked-files=no"): "",
+        ("rev-parse", "HEAD"): "1" * 40 + "\n",
+        ("rev-parse", "HEAD^{tree}"): "2" * 40 + "\n",
+        ("branch", "--show-current"): "codex/test\n",
+    }
+
+    def fake_run(command, **_kwargs):
+        return SimpleNamespace(stdout=values[tuple(command[1:])])
+
+    monkeypatch.setattr(query_plan_v2_cli.subprocess, "run", fake_run)
+    verified = query_plan_v2_cli._verify_source_revision(tmp_path)
+    assert verified == {
+        "commit": "1" * 40,
+        "tree": "2" * 40,
+        "branch": "codex/test",
+        "tracked_worktree_clean": True,
+    }
+
+    values[("status", "--porcelain", "--untracked-files=no")] = " M code/file.py\n"
+    with pytest.raises(ValueError, match="not clean"):
+        query_plan_v2_cli._verify_source_revision(tmp_path)

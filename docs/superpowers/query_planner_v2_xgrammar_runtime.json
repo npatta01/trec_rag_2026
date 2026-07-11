@@ -1,0 +1,65 @@
+{
+  "schema_version": "local_model_runtime_v1",
+  "captured_at": "2026-07-11T10:47:53Z",
+  "source_revision_preparation_commit": "33f2860b20a90b892931aa3d6067ad395acb290f",
+  "capture_methods": [
+    "podman inspect trec-rag-gpt-oss",
+    "podman image inspect ee424d681e1d5644fa96f13cced1e511401e67ef04207bb459c1986d35ab84e7",
+    "GET http://127.0.0.1:8000/version",
+    "GET http://127.0.0.1:8000/v1/models"
+  ],
+  "container": {
+    "engine": "podman",
+    "id": "d914e2713229a914865ce55097609413f55854db5cd91bda93c2a89e518cace6",
+    "name": "trec-rag-gpt-oss",
+    "image_reference": "docker.io/vllm/vllm-openai-rocm@sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+    "image_id": "ee424d681e1d5644fa96f13cced1e511401e67ef04207bb459c1986d35ab84e7",
+    "image_digest": "sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28"
+  },
+  "server": {
+    "implementation": "vllm-openai-rocm",
+    "version": "0.24.0",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "tokenizer_url": "http://127.0.0.1:8000/tokenize",
+    "port_binding": "127.0.0.1:8000->8000/tcp",
+    "structured_outputs_backend": "xgrammar",
+    "xgrammar_version": "0.2.3",
+    "max_model_len": 8192,
+    "max_num_seqs": 1,
+    "gpu_memory_utilization": 0.3,
+    "enforce_eager": true
+  },
+  "model": {
+    "repository": "openai/gpt-oss-20b",
+    "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "served_alias": "gpt-oss-local"
+  },
+  "command": [
+    "--model",
+    "openai/gpt-oss-20b",
+    "--revision",
+    "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "--served-model-name",
+    "gpt-oss-local",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "8000",
+    "--max-model-len",
+    "8192",
+    "--max-num-seqs",
+    "1",
+    "--gpu-memory-utilization",
+    "0.30",
+    "--structured-outputs-config",
+    "{\"backend\":\"xgrammar\"}",
+    "--enforce-eager"
+  ],
+  "experiment_boundary": {
+    "runner_concurrency": 1,
+    "model_endpoint_loopback": true,
+    "paid_api_calls_expected": 0,
+    "retrieval_calls_expected": 0,
+    "reranker_calls_expected": 0
+  }
+}

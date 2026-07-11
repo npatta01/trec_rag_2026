@@ -60,11 +60,13 @@ on decoder-side `uniqueItems`.
 
 ## Remaining gate
 
-The runner requires a manifest whose inspected server launch command explicitly
-pins `--structured-outputs-config` to backend `xgrammar`; it will reject the
-current `auto` manifest. If the user authorizes one new versioned smoke, the
-local server will be restarted with the pinned backend, runtime provenance will
-be recaptured, and the preflight will be rerun into
-`compiler_manifest_xgrammar.json` before any HTTP request.
+After explicit user authorization, the same pinned image/model was restarted
+with backend `xgrammar` and concurrency one. Runtime provenance is recorded in
+`docs/superpowers/query_planner_v2_xgrammar_runtime.json`. The exact six-schema
+preflight was repeated into `compiler_manifest_xgrammar.json`; all 6/6 strict
+XGrammar and 6/6 llguidance checks pass. The runner additionally binds that
+manifest to the live Podman image, launch command, port mapping, `/version`, and
+`/v1/models` response before inference.
 
-No second smoke is authorized yet. The five-topic diagnostic remains NO-GO.
+The authorization covers exactly one new synthetic smoke. The five-topic
+diagnostic remains NO-GO.

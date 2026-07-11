@@ -1,0 +1,99 @@
+{
+  "all_passed": true,
+  "compiler": {
+    "llguidance": "1.7.6",
+    "llguidance_check": "pass",
+    "vllm": "0.24.0",
+    "xgrammar": "0.2.3",
+    "xgrammar_strict": "pass"
+  },
+  "container": {
+    "container_name": "trec-rag-gpt-oss",
+    "image_digest": "sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+    "image_id": "ee424d681e1d5644fa96f13cced1e511401e67ef04207bb459c1986d35ab84e7",
+    "image_name": "docker.io/vllm/vllm-openai-rocm@sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+    "launch_command": [
+      "--model",
+      "openai/gpt-oss-20b",
+      "--revision",
+      "6cee5e81ee83917806bbde320786a8fb61efebee",
+      "--served-model-name",
+      "gpt-oss-local",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--max-num-seqs",
+      "1",
+      "--gpu-memory-utilization",
+      "0.30",
+      "--structured-outputs-config",
+      "{\"backend\":\"xgrammar\"}",
+      "--enforce-eager"
+    ]
+  },
+  "created_at": "2026-07-11T10:46:42.789Z",
+  "execution_boundary": "offline_compiler_only_no_http_or_inference",
+  "manifest_version": "query_plan_v2_schema_preflight_v1",
+  "prompt_version": "sparse_query_planner_v6",
+  "required_server_backend": "xgrammar",
+  "schema_version": "query_plan_v2_1",
+  "schemas": [
+    {
+      "llguidance_check": "pass",
+      "narrative_sha256": "d000c41049082b59bdef9e16addbae63b9535290fa39ffb398f2695f29e07128",
+      "schema_sha256": "44545659f173fbb1677d10230f664eee4a40bc8a9257338382651f6adf7e4aa9",
+      "token_count": 22,
+      "topic_id": "synthetic_transport_v2_1",
+      "unsupported_feature_count": 0,
+      "xgrammar_strict": "pass"
+    },
+    {
+      "llguidance_check": "pass",
+      "narrative_sha256": "b78a23bf9b58574839bb45916367df99f8405b1135f8304ad440d6a169188186",
+      "schema_sha256": "74215679ba7223e960ae3c25de27641255164b5970aba905ce768c5536a2f574",
+      "token_count": 54,
+      "topic_id": "144",
+      "unsupported_feature_count": 0,
+      "xgrammar_strict": "pass"
+    },
+    {
+      "llguidance_check": "pass",
+      "narrative_sha256": "f499a0b22af55afdc71d4a4265681a9ccc2845d4c44ce9e4e927f881a912f4db",
+      "schema_sha256": "e83c7095edb524854f17fdaecec201d3ae62e46b85afbb4ade87507fd26b2629",
+      "token_count": 57,
+      "topic_id": "213",
+      "unsupported_feature_count": 0,
+      "xgrammar_strict": "pass"
+    },
+    {
+      "llguidance_check": "pass",
+      "narrative_sha256": "baa5af90ea013149e709c19ba123a207e54202fff2944cdb065909b8c4a2d9d8",
+      "schema_sha256": "6891060ee1114b03d174bb866df2349adabbbfc5a7be5f4c5f8fd944a68d7ef4",
+      "token_count": 50,
+      "topic_id": "224",
+      "unsupported_feature_count": 0,
+      "xgrammar_strict": "pass"
+    },
+    {
+      "llguidance_check": "pass",
+      "narrative_sha256": "7af4ef7cbfc1c0c1bbb5e5f80a287ed9324919ad0f4ef6d277417851ea723367",
+      "schema_sha256": "dd80b7621d9cd9c464fda5e0a968f27ef0e487140845b1b88635cc39bf2211c4",
+      "token_count": 55,
+      "topic_id": "407",
+      "unsupported_feature_count": 0,
+      "xgrammar_strict": "pass"
+    },
+    {
+      "llguidance_check": "pass",
+      "narrative_sha256": "21390506e45953972239c363b3f98939e752f536a17a8f4e596c47382ae044bd",
+      "schema_sha256": "b73929afc9e708c06261d6068a2843b0d57fa0a12aac8e91440aaad4083cf575",
+      "token_count": 52,
+      "topic_id": "515",
+      "unsupported_feature_count": 0,
+      "xgrammar_strict": "pass"
+    }
+  ]
+}

@@ -509,13 +509,20 @@ def _verify_schema_preflight(
     launch_command = (
         container.get("launch_command") if isinstance(container, Mapping) else None
     )
+    launched_model = (
+        _launch_value(launch_command, "--model")
+        if isinstance(launch_command, list)
+        else None
+    )
+    if launched_model is None and isinstance(launch_command, list) and launch_command:
+        launched_model = launch_command[0]
     if (
         not isinstance(container, Mapping)
         or container.get("image_digest") != PINNED_VLLM_IMAGE_DIGEST
         or not isinstance(launch_command, list)
         or not all(isinstance(item, str) for item in launch_command)
         or not launch_command
-        or launch_command[0] != "openai/gpt-oss-20b"
+        or launched_model != "openai/gpt-oss-20b"
         or _launch_value(launch_command, "--revision") != GPT_OSS_20B_REVISION
         or _launch_value(launch_command, "--served-model-name") != "gpt-oss-local"
         or _launch_value(launch_command, "--max-model-len") != "8192"
@@ -680,6 +687,43 @@ def _verify_live_runtime(
         "port_bindings": bindings,
         "version_response": version_response,
         "model_record": dict(model),
+    }
+
+
+def _verify_source_revision(repo_root: Path) -> dict[str, object]:
+    """Require all tracked source/evidence to match one committed Git tree."""
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    if status.strip():
+        raise ValueError("tracked source tree is not clean; commit before inference")
+
+    def git_value(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    commit = git_value("rev-parse", "HEAD")
+    tree = git_value("rev-parse", "HEAD^{tree}")
+    branch = git_value("branch", "--show-current")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(
+        r"[0-9a-f]{40}", tree
+    ):
+        raise ValueError("Git source revision is not a full SHA-1 identity")
+    return {
+        "commit": commit,
+        "tree": tree,
+        "branch": branch,
+        "tracked_worktree_clean": True,
     }
 
 
@@ -1066,6 +1110,7 @@ def generate_plans(args: argparse.Namespace) -> int:
         expected_model=args.model,
         timeout=args.tokenizer_timeout,
     )
+    source_revision = _verify_source_revision(repo_root)
 
     analyzer_probe = RemoteLuceneQueryAnalyzer(
         args.analyzer_url, timeout=args.analyzer_timeout
@@ -1147,6 +1192,7 @@ def generate_plans(args: argparse.Namespace) -> int:
         "context_preflight": context_preflight,
         "schema_preflight": schema_preflight,
         "live_runtime": live_runtime,
+        "source_revision": source_revision,
         "external_cost_policy": {
             "model_endpoint_loopback": _is_loopback_url(generator.base_url),
             "retrieval_calls": 0,
