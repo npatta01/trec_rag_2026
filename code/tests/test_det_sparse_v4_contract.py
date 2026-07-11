@@ -300,11 +300,12 @@ def test_runner_visible_artifacts_are_physically_separated_from_gold_artifacts()
         v4.validate_runner_gold_separation(("hidden_gold_copy.json",), scorer)
 
 
-def test_committed_artifact_bundle_is_offline_smoke_only_and_internally_consistent():
+def test_committed_artifact_bundle_is_24_case_offline_set_and_internally_consistent():
     hashes = v4.validate_artifact_bundle()
 
     assert "semantic_anchor_artifact_manifest_v1.json" not in hashes
     assert "semantic_anchor_case_registry_v1.json" in hashes
+    assert "semantic_anchor_request_fixtures_v1.jsonl" in hashes
     assert "semantic_anchor_request_fixture.case001.json" in hashes
     assert "semantic_anchor_gold_labels_v1.json" in hashes
     assert len(hashes["semantic_anchor_request_fixture.case001.json"]) == 64
@@ -357,6 +358,27 @@ def test_case001_schema_fixture_matches_generated_schema():
     )
 
     assert schema == v4.expected_case001_response_schema()
+
+
+def test_full_fixture_files_cover_all_registry_cases_in_order():
+    registry = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_case_registry_v1.json"
+    )
+    case_ids = v4.validate_case_registry(registry)
+    corpus = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_synthetic_corpus_v1.json"
+    )
+    gold = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_gold_labels_v1.json"
+    )
+    requests = v4.load_jsonl_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_request_fixtures_v1.jsonl"
+    )
+
+    assert tuple(case["case_id"] for case in corpus["cases"]) == case_ids
+    assert tuple(case["case_id"] for case in gold["cases"]) == case_ids
+    assert tuple(record["case_id"] for record in requests) == case_ids
+    assert len(corpus["cases"]) == len(gold["cases"]) == len(requests) == 24
 
 
 def test_json_loader_rejects_duplicate_keys(tmp_path: Path):

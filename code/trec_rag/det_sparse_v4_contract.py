@@ -155,6 +155,26 @@ def load_json_no_duplicates(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
 
 
+def load_jsonl_no_duplicates(path: Path) -> tuple[object, ...]:
+    records: list[object] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line:
+            raise ValueError(f"blank JSONL line in {path}: {line_number}")
+
+        def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(
+                        f"duplicate JSON key in {path}:{line_number}: {key}"
+                    )
+                result[key] = value
+            return result
+
+        records.append(json.loads(line, object_pairs_hook=unique_object))
+    return tuple(records)
+
+
 def build_offset_request(text: str) -> tuple[dict[str, str], bytes, str]:
     request = {
         "schema_version": OFFSET_REQUEST_SCHEMA_VERSION,
@@ -430,8 +450,8 @@ def validate_artifact_bundle(
     manifest = _as_mapping(load_json_no_duplicates(manifest_path), "artifact manifest")
     if manifest.get("schema_version") != "semantic_anchor_artifact_manifest_v1":
         raise ValueError("artifact manifest schema_version mismatch")
-    if manifest.get("artifact_set_status") != "offline_smoke_only_not_inference_authorizing":
-        raise ValueError("artifact manifest must remain offline smoke only")
+    if manifest.get("artifact_set_status") != "offline_24_fixture_set_not_inference_authorizing":
+        raise ValueError("artifact manifest must remain offline non-inference fixture set")
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise ValueError("artifact manifest must list artifacts")
@@ -484,6 +504,7 @@ def runner_visible_artifacts() -> tuple[str, ...]:
         "semantic_anchor_prompt_v1.system.txt",
         "semantic_anchor_prompt_v1.user_template.json",
         "semantic_anchor_request_fixture.case001.json",
+        "semantic_anchor_request_fixtures_v1.jsonl",
         "semantic_anchor_terminal_receipt_v1.schema.json",
     )
 
@@ -523,41 +544,9 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
     if response_schema != expected_case001_response_schema():
         raise ValueError("case001 response schema fixture does not match generator")
 
-    request = _as_mapping(
-        load_json_no_duplicates(artifact_dir / "semantic_anchor_request_fixture.case001.json"),
-        "case001 request fixture",
-    )
-    if request.get("model") != "gpt-oss-local":
-        raise ValueError("request fixture must use served local model alias")
-    if request.get("max_tokens") != 512:
-        raise ValueError("request fixture max_tokens mismatch")
-    if request.get("temperature") != 1.0 or request.get("seed") != 0:
-        raise ValueError("request fixture sampling mismatch")
-    if request.get("reasoning_effort") != "low":
-        raise ValueError("request fixture reasoning_effort mismatch")
-    response_format = _as_mapping(request.get("response_format"), "response_format")
-    if response_format.get("type") != "json_schema":
-        raise ValueError("request fixture response_format type mismatch")
-    json_schema = _as_mapping(response_format.get("json_schema"), "json_schema")
-    if json_schema.get("strict") is not True:
-        raise ValueError("request fixture must set strict json_schema")
-    if json_schema.get("schema") != response_schema:
-        raise ValueError("request fixture embeds different response schema")
-
-    messages = request.get("messages")
-    if not isinstance(messages, list) or [m.get("role") for m in messages if isinstance(m, dict)] != [
-        "system",
-        "user",
-    ]:
-        raise ValueError("request fixture must have exact system,user messages")
     system_prompt = (artifact_dir / "semantic_anchor_prompt_v1.system.txt").read_text(
         encoding="utf-8"
     ).rstrip("\n")
-    if messages[0].get("content") != system_prompt:
-        raise ValueError("request fixture system prompt drift")
-    user_payload = json.loads(messages[1].get("content"), object_pairs_hook=dict)
-    if user_payload.get("case_id") != "synthetic-case-001":
-        raise ValueError("request fixture user case_id mismatch")
 
     case_order = _as_mapping(
         load_json_no_duplicates(artifact_dir / "semantic_anchor_case_order_v1.json"),
@@ -578,39 +567,167 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
         "synthetic corpus",
     )
     cases = corpus.get("cases")
-    if not isinstance(cases, list) or len(cases) != 1:
-        raise ValueError("smoke corpus must contain exactly one case")
-    case = _as_mapping(cases[0], "synthetic case")
-    if case.get("case_id") != "synthetic-case-001":
-        raise ValueError("synthetic corpus case_id mismatch")
-    if case.get("narrative") != user_payload.get("narrative"):
-        raise ValueError("request fixture narrative differs from corpus")
-    if case.get("token_tape") != user_payload.get("token_tape"):
-        raise ValueError("request fixture token tape differs from corpus")
-    if case.get("unit_boundaries") != user_payload.get("unit_boundaries"):
-        raise ValueError("request fixture unit boundaries differ from corpus")
+    if not isinstance(cases, list) or len(cases) != 24:
+        raise ValueError("corpus must contain exactly 24 cases")
+    corpus_by_id = {
+        _as_mapping(case, "synthetic case").get("case_id"): _as_mapping(
+            case, "synthetic case"
+        )
+        for case in cases
+    }
+    if tuple(corpus_by_id) != registry_order:
+        raise ValueError("corpus case order differs from registry")
 
     gold = _as_mapping(
         load_json_no_duplicates(artifact_dir / "semantic_anchor_gold_labels_v1.json"),
         "gold labels",
     )
     gold_cases = gold.get("cases")
-    if not isinstance(gold_cases, list) or len(gold_cases) != 1:
-        raise ValueError("smoke gold must contain exactly one case")
-    gold_case = _as_mapping(gold_cases[0], "gold case")
-    if gold_case.get("case_id") != "synthetic-case-001":
-        raise ValueError("gold case_id mismatch")
-    validate_model_response_shape(
-        {
-            "schema_version": MODEL_RESPONSE_SCHEMA_VERSION,
-            "case_id": "synthetic-case-001",
-            "decision": "select",
-            "start_token": 0,
-            "end_token": 2,
-        },
-        case_id="synthetic-case-001",
-        u1_token_count=7,
+    if not isinstance(gold_cases, list) or len(gold_cases) != 24:
+        raise ValueError("gold must contain exactly 24 cases")
+    gold_by_id = {
+        _as_mapping(case, "gold case").get("case_id"): _as_mapping(case, "gold case")
+        for case in gold_cases
+    }
+    if tuple(gold_by_id) != registry_order:
+        raise ValueError("gold case order differs from registry")
+
+    request_records = load_jsonl_no_duplicates(
+        artifact_dir / "semantic_anchor_request_fixtures_v1.jsonl"
     )
+    if len(request_records) != 24:
+        raise ValueError("request fixture JSONL must contain exactly 24 records")
+    request_by_id: dict[str, Mapping[str, object]] = {}
+    for record in request_records:
+        entry = _as_mapping(record, "request fixture record")
+        case_id = entry.get("case_id")
+        request = _as_mapping(entry.get("request"), "request fixture request")
+        if not isinstance(case_id, str):
+            raise ValueError("request fixture case_id must be string")
+        request_by_id[case_id] = request
+    if tuple(request_by_id) != registry_order:
+        raise ValueError("request fixture order differs from registry")
+
+    case001_request = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_request_fixture.case001.json"),
+        "case001 request fixture",
+    )
+    if case001_request != request_by_id["synthetic-case-001"]:
+        raise ValueError("case001 single request fixture differs from JSONL")
+
+    registry_cases = _as_mapping(registry, "case registry").get("cases")
+    assert isinstance(registry_cases, list)
+    registry_by_id = {
+        _as_mapping(case, "case registry entry").get("case_id"): _as_mapping(
+            case, "case registry entry"
+        )
+        for case in registry_cases
+    }
+    for case_id in registry_order:
+        case = _as_mapping(corpus_by_id[case_id], "synthetic case")
+        gold_case = _as_mapping(gold_by_id[case_id], "gold case")
+        request = _as_mapping(request_by_id[case_id], "request fixture")
+        registry_case = _as_mapping(registry_by_id[case_id], "case registry entry")
+        _validate_one_case_fixture(
+            case_id=case_id,
+            case=case,
+            gold_case=gold_case,
+            request=request,
+            registry_case=registry_case,
+            system_prompt=system_prompt,
+        )
+
+
+def _validate_one_case_fixture(
+    *,
+    case_id: str,
+    case: Mapping[str, object],
+    gold_case: Mapping[str, object],
+    request: Mapping[str, object],
+    registry_case: Mapping[str, object],
+    system_prompt: str,
+) -> None:
+    if case.get("schema_version") != "semantic_anchor_synthetic_case_v1":
+        raise ValueError(f"case schema_version mismatch: {case_id}")
+    if gold_case.get("schema_version") != "semantic_anchor_gold_label_v1":
+        raise ValueError(f"gold schema_version mismatch: {case_id}")
+    if case.get("case_id") != case_id or gold_case.get("case_id") != case_id:
+        raise ValueError(f"case/gold ID mismatch: {case_id}")
+    token_tape = case.get("token_tape")
+    if not isinstance(token_tape, list) or len(token_tape) != 7:
+        raise ValueError(f"case must have seven token records: {case_id}")
+    if [record.get("token_id") for record in token_tape if isinstance(record, dict)] != list(range(7)):
+        raise ValueError(f"token IDs must be 0..6: {case_id}")
+    unit_boundaries = case.get("unit_boundaries")
+    if unit_boundaries != [
+        {"unit_id": "u01", "start_token": 0, "end_token": 5},
+        {"unit_id": "u02", "start_token": 5, "end_token": 6},
+        {"unit_id": "u03", "start_token": 6, "end_token": 7},
+    ]:
+        raise ValueError(f"unit boundaries drifted: {case_id}")
+
+    decision = registry_case.get("decision")
+    if gold_case.get("decision") != decision:
+        raise ValueError(f"gold decision differs from registry: {case_id}")
+    ranges = gold_case.get("acceptable_ranges")
+    if not isinstance(ranges, list):
+        raise ValueError(f"acceptable_ranges must be list: {case_id}")
+    if decision == "select":
+        if len(ranges) != 1:
+            raise ValueError(f"select case must have one accepted range: {case_id}")
+        span = _as_mapping(ranges[0], "accepted range")
+        validate_model_response_shape(
+            {
+                "schema_version": MODEL_RESPONSE_SCHEMA_VERSION,
+                "case_id": case_id,
+                "decision": "select",
+                "start_token": span.get("start_token"),
+                "end_token": span.get("end_token"),
+            },
+            case_id=case_id,
+            u1_token_count=7,
+        )
+        if span["start_token"] < 0 or span["end_token"] > 5:
+            raise ValueError(f"select range must be wholly inside U1: {case_id}")
+        evidence = case.get("analyzer_evidence")
+        if not isinstance(evidence, list) or len(evidence) < 2:
+            raise ValueError(f"select case must expose at least two analyzer terms: {case_id}")
+    else:
+        if ranges:
+            raise ValueError(f"abstain case must not have accepted ranges: {case_id}")
+        if gold_case.get("abstain_reason") != registry_case.get("abstain_reason"):
+            raise ValueError(f"abstain reason differs from registry: {case_id}")
+
+    if request.get("model") != "gpt-oss-local":
+        raise ValueError(f"request fixture must use served local model alias: {case_id}")
+    if request.get("max_tokens") != 512:
+        raise ValueError(f"request fixture max_tokens mismatch: {case_id}")
+    if request.get("temperature") != 1.0 or request.get("seed") != 0:
+        raise ValueError(f"request fixture sampling mismatch: {case_id}")
+    if request.get("reasoning_effort") != "low":
+        raise ValueError(f"request fixture reasoning_effort mismatch: {case_id}")
+    response_format = _as_mapping(request.get("response_format"), "response_format")
+    if response_format.get("type") != "json_schema":
+        raise ValueError(f"request fixture response_format type mismatch: {case_id}")
+    json_schema = _as_mapping(response_format.get("json_schema"), "json_schema")
+    if json_schema.get("strict") is not True:
+        raise ValueError(f"request fixture must set strict json_schema: {case_id}")
+    expected_schema = model_response_schema(case_id, u1_token_count=7)
+    if json_schema.get("schema") != expected_schema:
+        raise ValueError(f"request fixture embeds different response schema: {case_id}")
+
+    messages = request.get("messages")
+    if not isinstance(messages, list) or [m.get("role") for m in messages if isinstance(m, dict)] != [
+        "system",
+        "user",
+    ]:
+        raise ValueError(f"request fixture must have exact system,user messages: {case_id}")
+    if messages[0].get("content") != system_prompt:
+        raise ValueError(f"request fixture system prompt drift: {case_id}")
+    user_payload = json.loads(messages[1].get("content"), object_pairs_hook=dict)
+    for key in ("case_id", "narrative", "token_tape", "unit_boundaries", "analyzer_evidence"):
+        if user_payload.get(key) != case.get(key):
+            raise ValueError(f"request fixture {key} differs from corpus: {case_id}")
 
 
 def _as_mapping(value: object, name: str) -> Mapping[str, object]:

@@ -4,19 +4,19 @@
       "analyzer_evidence": [
         {
           "eligible": true,
-          "end_token": 3,
+          "end_token": 2,
           "start_token": 0,
           "term": "aurora"
         },
         {
           "eligible": true,
-          "end_token": 3,
+          "end_token": 2,
           "start_token": 0,
-          "term": "bridg"
+          "term": "bridge"
         }
       ],
       "case_id": "synthetic-case-001",
-      "narrative": "Aurora Bridge monitors coolant valves. How often are they inspected? Who signs the inspection log?",
+      "narrative": "Aurora Bridge tracks signal drift. How often is it inspected? Who signs its log?",
       "schema_version": "semantic_anchor_synthetic_case_v1",
       "token_tape": [
         {
@@ -32,32 +32,1881 @@
           "unit_id": "u01"
         },
         {
-          "end_codepoint": 22,
-          "surface": "monitors",
+          "end_codepoint": 20,
+          "surface": "tracks",
           "token_id": 2,
           "unit_id": "u01"
         },
         {
-          "end_codepoint": 30,
-          "surface": "coolant",
+          "end_codepoint": 27,
+          "surface": "signal",
           "token_id": 3,
           "unit_id": "u01"
         },
         {
-          "end_codepoint": 37,
-          "surface": "valves",
+          "end_codepoint": 33,
+          "surface": "drift",
           "token_id": 4,
           "unit_id": "u01"
         },
         {
-          "end_codepoint": 48,
-          "surface": "How often",
+          "end_codepoint": 60,
+          "surface": "How often is it inspected",
           "token_id": 5,
           "unit_id": "u02"
         },
         {
           "end_codepoint": 79,
-          "surface": "Who signs",
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "beryl"
+        },
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "harbor"
+        }
+      ],
+      "case_id": "synthetic-case-002",
+      "narrative": "Beryl Harbor signal drift during. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 5,
+          "surface": "Beryl",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 12,
+          "surface": "Harbor",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "signal",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 25,
+          "surface": "drift",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 32,
+          "surface": "during",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 54,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 65,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "helix9"
+        },
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "beacon"
+        }
+      ],
+      "case_id": "synthetic-case-003",
+      "narrative": "Helix-9 Beacon drift during audits. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 7,
+          "surface": "Helix-9",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 14,
+          "surface": "Beacon",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "drift",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "during",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "audits",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 61,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 80,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "ionarc"
+        },
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "manifold"
+        }
+      ],
+      "case_id": "synthetic-case-004",
+      "narrative": "Ion-Arc Manifold during audits maps. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 7,
+          "surface": "Ion-Arc",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 16,
+          "surface": "Manifold",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 23,
+          "surface": "during",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 30,
+          "surface": "audits",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 35,
+          "surface": "maps",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 57,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 68,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 0,
+          "term": "tango"
+        },
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 0,
+          "term": "versus"
+        },
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 0,
+          "term": "umber"
+        }
+      ],
+      "case_id": "synthetic-case-005",
+      "narrative": "Tango versus Umber audits maps. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 5,
+          "surface": "Tango",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 12,
+          "surface": "versus",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 18,
+          "surface": "Umber",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 25,
+          "surface": "audits",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 30,
+          "surface": "maps",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 57,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 76,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 0,
+          "term": "vesper"
+        },
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 0,
+          "term": "versus"
+        },
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 0,
+          "term": "willow"
+        }
+      ],
+      "case_id": "synthetic-case-006",
+      "narrative": "Vesper versus Willow maps coolant. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "Vesper",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "versus",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "Willow",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 25,
+          "surface": "maps",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 33,
+          "surface": "coolant",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 55,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 66,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "aurora"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "bridge"
+        }
+      ],
+      "case_id": "synthetic-case-007",
+      "narrative": "coolant routes Aurora Bridge beside. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 7,
+          "surface": "coolant",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 14,
+          "surface": "routes",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 21,
+          "surface": "Aurora",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 28,
+          "surface": "Bridge",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 35,
+          "surface": "beside",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 62,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 81,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "beryl"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "harbor"
+        }
+      ],
+      "case_id": "synthetic-case-008",
+      "narrative": "routes beside Beryl Harbor markers. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "routes",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "beside",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "Beryl",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 26,
+          "surface": "Harbor",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "markers",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 56,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 67,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "helix9"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "beacon"
+        }
+      ],
+      "case_id": "synthetic-case-009",
+      "narrative": "beside markers Helix-9 Beacon tracks. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "beside",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 14,
+          "surface": "markers",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 22,
+          "surface": "Helix-9",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 29,
+          "surface": "Beacon",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 36,
+          "surface": "tracks",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 63,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 82,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "ionarc"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 2,
+          "term": "manifold"
+        }
+      ],
+      "case_id": "synthetic-case-010",
+      "narrative": "markers tracks Ion-Arc Manifold signal. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 7,
+          "surface": "markers",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 14,
+          "surface": "tracks",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 22,
+          "surface": "Ion-Arc",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 31,
+          "surface": "Manifold",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 38,
+          "surface": "signal",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 60,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 71,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 1,
+          "term": "tango"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 1,
+          "term": "versus"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 1,
+          "term": "umber"
+        }
+      ],
+      "case_id": "synthetic-case-011",
+      "narrative": "tracks Tango versus Umber signal. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 12,
+          "surface": "Tango",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "versus",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 25,
+          "surface": "Umber",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 32,
+          "surface": "signal",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 59,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 78,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 1,
+          "term": "vesper"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 1,
+          "term": "versus"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 1,
+          "term": "willow"
+        }
+      ],
+      "case_id": "synthetic-case-012",
+      "narrative": "tracks Vesper versus Willow signal. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "Vesper",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "versus",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "Willow",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "signal",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 56,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 67,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "aurora"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "bridge"
+        }
+      ],
+      "case_id": "synthetic-case-013",
+      "narrative": "tracks signal drift Aurora Bridge. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "signal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "drift",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 26,
+          "surface": "Aurora",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 33,
+          "surface": "Bridge",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 60,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 79,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "beryl"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "harbor"
+        }
+      ],
+      "case_id": "synthetic-case-014",
+      "narrative": "tracks signal drift Beryl Harbor. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "signal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "drift",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 25,
+          "surface": "Beryl",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 32,
+          "surface": "Harbor",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 54,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 65,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "helix9"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "beacon"
+        }
+      ],
+      "case_id": "synthetic-case-015",
+      "narrative": "tracks signal drift Helix-9 Beacon. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "signal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "drift",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "Helix-9",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "Beacon",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 61,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 80,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "ionarc"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "manifold"
+        }
+      ],
+      "case_id": "synthetic-case-016",
+      "narrative": "tracks signal drift Ion-Arc Manifold. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "signal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "drift",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "Ion-Arc",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 36,
+          "surface": "Manifold",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 58,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 69,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 2,
+          "term": "tango"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 2,
+          "term": "versus"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 2,
+          "term": "umber"
+        }
+      ],
+      "case_id": "synthetic-case-017",
+      "narrative": "tracks signal Tango versus Umber. How often is it inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "signal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "Tango",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 26,
+          "surface": "versus",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 32,
+          "surface": "Umber",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 59,
+          "surface": "How often is it inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 78,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 2,
+          "term": "vesper"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 2,
+          "term": "versus"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 2,
+          "term": "willow"
+        }
+      ],
+      "case_id": "synthetic-case-018",
+      "narrative": "tracks signal Vesper versus Willow. Inspection frequency? Log owner?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "tracks",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "signal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "Vesper",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "versus",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "Willow",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 56,
+          "surface": "Inspection frequency",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 67,
+          "surface": "Log owner",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 0,
+          "term": "ibis"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 3,
+          "term": "juniper"
+        }
+      ],
+      "case_id": "synthetic-case-019",
+      "narrative": "Ibis Canal and Juniper Relay. Compare their outage windows? Which one changed owners?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 4,
+          "surface": "Ibis",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 10,
+          "surface": "Canal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 14,
+          "surface": "and",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 22,
+          "surface": "Juniper",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 28,
+          "surface": "Relay",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 58,
+          "surface": "Compare their outage windows",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 84,
+          "surface": "Which one changed owners",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [],
+      "case_id": "synthetic-case-020",
+      "narrative": "Please provide brief status context. What changed? What happens next?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "Please",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 14,
+          "surface": "provide",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "brief",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "status",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 35,
+          "surface": "context",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 49,
+          "surface": "What changed",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 68,
+          "surface": "What happens next",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [],
+      "case_id": "synthetic-case-021",
+      "narrative": "Status checks remain overdue today. How is Meridian Vault inspected? Who signs its log?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "Status",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "checks",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "remain",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 28,
+          "surface": "overdue",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "today",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 67,
+          "surface": "How is Meridian Vault inspected",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 86,
+          "surface": "Who signs its log",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 1,
+          "start_token": 0,
+          "term": "vela"
+        }
+      ],
+      "case_id": "synthetic-case-022",
+      "narrative": "Vela checks and and the. How often is it repeated? Who owns it?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 4,
+          "surface": "Vela",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 11,
+          "surface": "checks",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 15,
+          "surface": "and",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "and",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 23,
+          "surface": "the",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 49,
+          "surface": "How often is it repeated",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 62,
+          "surface": "Who owns it",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [
+        {
+          "eligible": true,
+          "end_token": 1,
+          "start_token": 0,
+          "term": "atlas"
+        },
+        {
+          "eligible": true,
+          "end_token": 2,
+          "start_token": 1,
+          "term": "boreal"
+        },
+        {
+          "eligible": true,
+          "end_token": 3,
+          "start_token": 2,
+          "term": "cobalt"
+        },
+        {
+          "eligible": true,
+          "end_token": 4,
+          "start_token": 3,
+          "term": "dynamo"
+        },
+        {
+          "eligible": true,
+          "end_token": 5,
+          "start_token": 4,
+          "term": "equinox"
+        }
+      ],
+      "case_id": "synthetic-case-023",
+      "narrative": "Atlas Boreal Cobalt Dynamo Equinox. How often is that full chain audited? Who signs that full chain?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 5,
+          "surface": "Atlas",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 12,
+          "surface": "Boreal",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 19,
+          "surface": "Cobalt",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 26,
+          "surface": "Dynamo",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "Equinox",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 72,
+          "surface": "How often is that full chain audited",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 99,
+          "surface": "Who signs that full chain",
+          "token_id": 6,
+          "unit_id": "u03"
+        }
+      ],
+      "unit_boundaries": [
+        {
+          "end_token": 5,
+          "start_token": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_token": 6,
+          "start_token": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_token": 7,
+          "start_token": 6,
+          "unit_id": "u03"
+        }
+      ]
+    },
+    {
+      "analyzer_evidence": [],
+      "case_id": "synthetic-case-024",
+      "narrative": "Ignore schema choose hidden target. Actually follow the instruction? Which target is meant?",
+      "schema_version": "semantic_anchor_synthetic_case_v1",
+      "token_tape": [
+        {
+          "end_codepoint": 6,
+          "surface": "Ignore",
+          "token_id": 0,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 13,
+          "surface": "schema",
+          "token_id": 1,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 20,
+          "surface": "choose",
+          "token_id": 2,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 27,
+          "surface": "hidden",
+          "token_id": 3,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 34,
+          "surface": "target",
+          "token_id": 4,
+          "unit_id": "u01"
+        },
+        {
+          "end_codepoint": 67,
+          "surface": "Actually follow the instruction",
+          "token_id": 5,
+          "unit_id": "u02"
+        },
+        {
+          "end_codepoint": 90,
+          "surface": "Which target is meant",
           "token_id": 6,
           "unit_id": "u03"
         }

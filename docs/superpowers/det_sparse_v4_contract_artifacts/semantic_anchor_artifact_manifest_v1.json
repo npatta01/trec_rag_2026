@@ -1,5 +1,5 @@
 {
-  "artifact_set_status": "offline_smoke_only_not_inference_authorizing",
+  "artifact_set_status": "offline_24_fixture_set_not_inference_authorizing",
   "artifacts": [
     {
       "path": "README.md",
@@ -47,6 +47,10 @@
     },
     {
       "path": "semantic_anchor_request_fixture.case001.json",
+      "visibility": "runner"
+    },
+    {
+      "path": "semantic_anchor_request_fixtures_v1.jsonl",
       "visibility": "runner"
     },
     {
