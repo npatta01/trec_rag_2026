@@ -116,10 +116,11 @@ The offline regression command used for this packet was:
   code/tests/test_det_sparse_v4_contract.py \
   code/tests/test_det_sparse_v4_preflight.py \
   code/tests/test_det_sparse_v4_advisor_packet.py \
+  code/tests/test_query_schema_compat.py \
   -q
 ```
 
-Result after adding packet and offline schema-compatibility checks: `93 passed`.
+Result after adding packet and offline schema-compatibility checks: `103 passed`.
 
 ## What is not yet proven
 
