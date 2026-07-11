@@ -2,9 +2,44 @@
 
 Date: 2026-07-11
 
-Status: frozen implementation awaiting its create-only canonical preflight.
-This record does not authorize retrieval. No qrels, external retrieval, model,
-reranker, or paid API call is part of this milestone.
+Status: sealed offline preflight is mechanically valid but received a
+post-preflight **scientific NO-GO**. V2 is retired without retrieval. No qrels,
+external retrieval, model, reranker, agent, or paid API call was made.
+
+## Post-preflight archive review
+
+The canonical preflight was created from clean commit
+`b4d8dceaf616af98e0957a8ca55ea2a91ea76f83` and tree
+`ad420c45b4a79d1e02bf7f74cced6ac6cf0e423a`. Its freeze SHA-256 is
+`18f9e4363c5ff0e00fea5a950636e37e82dbbf5d4db668e5ddfe7bc099369530`.
+All 13 candidates were mechanically eligible. The frozen rule selected topics
+`84`, `37`, `300`, and `161`, one from each structural stratum. Their four
+plans contain no fallback or alias, 15 base queries, and a derived maximum of
+26 requests. External, model, and reranker calls are zero; `qrels_opened` is
+false.
+
+The required qrels-blind query-shape review found two fatal facets:
+
+- Topic `300` facet `f02` renders “I'm interested in learning about effective
+  strategies I’d also like to know what global measures can be taken”. It
+  contains neither global warming nor climate change, so “global measures” has
+  no bounded subject.
+- Topic `161` facet `f02` renders “I want to understand and why people hold
+  such different views on it.” It contains no abortion-related term, leaving
+  “it” unresolved; the analyzer removes even that pronoun from the sparse
+  signature.
+
+The remaining facets are interpretable, narrower sparse requests. These two
+failures are nevertheless decisive under the frozen all-plans gate. They expose
+a new scientific weakness: the strict-prefix context can preserve generic
+conversational boilerplate instead of a topic-bearing referent. BM25 signature
+distinctness, exact-span provenance, and coverage completeness cannot detect
+that semantic loss.
+
+V2 must not run retrieval or expansion and cannot be repaired or resampled.
+Topics `84`, `37`, `300`, and `161` are burned. Any continuation requires a new
+version, the remaining fresh topics, and an admission rule that makes every
+subject-dependent child retain an explicit source-backed topic anchor.
 
 ## Why v2 exists
 
@@ -103,5 +138,6 @@ The full frozen contract and dark-mode-safe workflow are in
 - External retrieval/model/reranker calls: zero.
 - Qrels opened: no.
 
-Canonical commit, tree, freeze hash, selected topics, exact query-shape review,
-and final scientific go/no-go will be appended only after the sealed preflight.
+The canonical identities and post-preflight review are recorded above. Both
+independent reviewers issued the final scientific NO-GO after inspecting only
+the frozen qrels-blind query shapes.
