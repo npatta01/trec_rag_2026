@@ -22,6 +22,8 @@ SCHEMA_VERSION = "det_sparse_v4_contract_v1"
 MODEL_RESPONSE_SCHEMA_VERSION = "semantic_anchor_response_v1"
 OFFSET_REQUEST_SCHEMA_VERSION = "lucene_whole_unit_offsets_request_v1"
 OFFSET_RESPONSE_SCHEMA_VERSION = "lucene_whole_unit_offsets_response_v1"
+OFFSET_CONTRACT_VERSION = "lucene_whole_unit_offsets_v1"
+OFFSET_UNIT = "unicode_code_points"
 SYNTHETIC_CORPUS_VERSION = "semantic_anchor_synthetic_corpus_v1"
 QUALIFICATION_LEDGER_VERSION = "semantic_anchor_qualification_ledger_v1"
 CASE_REGISTRY_VERSION = "semantic_anchor_case_registry_v1"
@@ -218,6 +220,111 @@ def build_offset_request(text: str) -> tuple[dict[str, str], bytes, str]:
     return request, body, sha256_bytes(body)
 
 
+def validate_offset_response_shape(
+    response: Mapping[str, object],
+    *,
+    text: str,
+    expected_fingerprint: Mapping[str, object] | None = None,
+) -> None:
+    expected_keys = {
+        "schema_version",
+        "text_sha256",
+        "offset_unit",
+        "fingerprint",
+        "occurrences",
+    }
+    keys = set(response)
+    if keys != expected_keys:
+        raise ValueError(f"offset response keys mismatch: missing={expected_keys - keys} extra={keys - expected_keys}")
+    if response["schema_version"] != OFFSET_RESPONSE_SCHEMA_VERSION:
+        raise ValueError("offset response schema_version mismatch")
+    if response["offset_unit"] != OFFSET_UNIT:
+        raise ValueError("offset response offset_unit mismatch")
+    if response["text_sha256"] != text_sha256(text):
+        raise ValueError("offset response text_sha256 mismatch")
+
+    fingerprint = _as_mapping(response["fingerprint"], "offset fingerprint")
+    validate_offset_fingerprint(fingerprint)
+    if expected_fingerprint is not None and fingerprint != dict(expected_fingerprint):
+        raise ValueError("offset response fingerprint drift")
+
+    occurrences = response["occurrences"]
+    if not isinstance(occurrences, list):
+        raise ValueError("offset response occurrences must be list")
+    previous_start = -1
+    previous_end = -1
+    text_length = len(text)
+    for expected_ordinal, raw_occurrence in enumerate(occurrences):
+        occurrence = _as_mapping(raw_occurrence, "offset occurrence")
+        occurrence_keys = set(occurrence)
+        expected_occurrence_keys = {
+            "ordinal",
+            "term",
+            "start_codepoint",
+            "end_codepoint",
+            "position_increment",
+        }
+        if occurrence_keys != expected_occurrence_keys:
+            raise ValueError(
+                "offset occurrence keys mismatch: "
+                f"missing={expected_occurrence_keys - occurrence_keys} "
+                f"extra={occurrence_keys - expected_occurrence_keys}"
+            )
+        ordinal = _strict_int(occurrence["ordinal"], "ordinal")
+        if ordinal != expected_ordinal:
+            raise ValueError("offset occurrence ordinal gap")
+        term = occurrence["term"]
+        if not isinstance(term, str) or not term:
+            raise ValueError("offset occurrence term must be nonempty string")
+        start = _strict_int(occurrence["start_codepoint"], "start_codepoint")
+        end = _strict_int(occurrence["end_codepoint"], "end_codepoint")
+        position_increment = _strict_int(
+            occurrence["position_increment"], "position_increment"
+        )
+        if position_increment < 0:
+            raise ValueError("offset occurrence position_increment must be nonnegative")
+        if start < 0 or end < 0 or start >= end:
+            raise ValueError("offset occurrence must have nonempty nonnegative span")
+        if end > text_length:
+            raise ValueError("offset occurrence span exceeds text length")
+        if start < previous_start:
+            raise ValueError("offset occurrence starts are nonmonotone")
+        if end < previous_end:
+            raise ValueError("offset occurrence ends are nonmonotone")
+        previous_start = start
+        previous_end = end
+
+
+def validate_offset_fingerprint(fingerprint: Mapping[str, object]) -> None:
+    expected_keys = {
+        "legacy_term_chain_fingerprint_sha256",
+        "offset_contract_version",
+        "offset_server_class_sha256",
+        "offset_lucene_jar_sha256",
+        "offset_runtime_image_digest",
+    }
+    keys = set(fingerprint)
+    if keys != expected_keys:
+        raise ValueError(f"offset fingerprint keys mismatch: missing={expected_keys - keys} extra={keys - expected_keys}")
+    if fingerprint["offset_contract_version"] != OFFSET_CONTRACT_VERSION:
+        raise ValueError("offset fingerprint contract version mismatch")
+    for key in (
+        "legacy_term_chain_fingerprint_sha256",
+        "offset_server_class_sha256",
+        "offset_lucene_jar_sha256",
+    ):
+        value = fingerprint[key]
+        if not isinstance(value, str) or not _is_hex_sha256(value):
+            raise ValueError(f"offset fingerprint {key} must be lowercase sha256")
+    digest = fingerprint["offset_runtime_image_digest"]
+    if (
+        not isinstance(digest, str)
+        or not digest.startswith("sha256:")
+        or not _is_hex_sha256(digest.removeprefix("sha256:"))
+    ):
+        raise ValueError("offset fingerprint runtime image digest must be sha256 digest")
+
+
 def model_response_schema(case_id: str, *, u1_token_count: int) -> dict[str, object]:
     if not case_id:
         raise ValueError("case_id must be nonempty")
@@ -352,6 +459,17 @@ def audit_imports(
                 matched = _matching_denied_import(module, denied)
                 if matched:
                     issues.append(ImportAuditIssue(str(path), matched, node.lineno))
+                    continue
+                for alias in node.names:
+                    if alias.name == "*":
+                        imported = f"{module}.*" if module else "*"
+                    elif module:
+                        imported = f"{module}.{alias.name}"
+                    else:
+                        imported = alias.name
+                    matched = _matching_denied_import(imported, denied)
+                    if matched:
+                        issues.append(ImportAuditIssue(str(path), matched, node.lineno))
     return tuple(issues)
 
 
@@ -927,6 +1045,10 @@ def _strict_int(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must be an integer")
     return value
+
+
+def _is_hex_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _matching_denied_import(module: str, denied: Sequence[str]) -> str | None:

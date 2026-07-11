@@ -18,6 +18,17 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     assert report["inference_authorized"] is False
     assert report["external_cost_authorized"] is False
     assert report["cost_counters"] == preflight.ZERO_COST_COUNTERS
+    assert report["source_audit"]["checker"] == "det_sparse_v4_static_direct_source_audit_v1"
+    assert report["source_audit"]["status"] == "pass"
+    assert report["source_audit"]["audited_source_count"] == 3
+    assert report["source_audit"]["unexpected_import_roots"] == []
+    assert report["source_audit"]["unexpected_trec_rag_modules"] == []
+    assert report["source_audit"]["denied_import_issues"] == []
+    assert report["source_audit"]["denied_path_fragment_issues"] == {}
+    assert report["source_audit"]["observed_trec_rag_modules"] == [
+        "trec_rag.det_sparse_v4_contract",
+        "trec_rag.query_schema_compat",
+    ]
     assert report["schema_compatibility"] == {
         "checker": "vllm_0_24_xgrammar_unsupported_feature_lint",
         "case_count": 24,
@@ -81,6 +92,18 @@ def test_offline_preflight_fails_on_denied_path_fragments(tmp_path: Path):
     )
 
     with pytest.raises(ValueError, match="denied path-fragment audit failed"):
+        preflight.build_offline_preflight_report(source_paths=[bad_source])
+
+
+def test_offline_preflight_fails_on_unallowlisted_source_import(tmp_path: Path):
+    bad_source = tmp_path / "bad_import_root.py"
+    bad_source.write_text("import subprocess\n", encoding="utf-8")
+
+    summary = preflight.build_source_audit_summary([bad_source])
+
+    assert summary["status"] == "fail"
+    assert summary["unexpected_import_roots"] == ["subprocess"]
+    with pytest.raises(ValueError, match="source audit failed"):
         preflight.build_offline_preflight_report(source_paths=[bad_source])
 
 

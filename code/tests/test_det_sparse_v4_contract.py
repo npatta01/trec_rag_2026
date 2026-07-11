@@ -63,6 +63,145 @@ def test_offset_request_hashes_decoded_text_bytes_not_json_envelope():
     assert v4.text_sha256("Café 🚀") != body_sha256
 
 
+def _offset_fingerprint():
+    return {
+        "legacy_term_chain_fingerprint_sha256": "a" * 64,
+        "offset_contract_version": "lucene_whole_unit_offsets_v1",
+        "offset_server_class_sha256": "b" * 64,
+        "offset_lucene_jar_sha256": "c" * 64,
+        "offset_runtime_image_digest": "sha256:" + "d" * 64,
+    }
+
+
+def _offset_response(text: str = "Café rocket🚀"):
+    return {
+        "schema_version": "lucene_whole_unit_offsets_response_v1",
+        "text_sha256": v4.text_sha256(text),
+        "offset_unit": "unicode_code_points",
+        "fingerprint": _offset_fingerprint(),
+        "occurrences": [
+            {
+                "ordinal": 0,
+                "term": "café",
+                "start_codepoint": 0,
+                "end_codepoint": 4,
+                "position_increment": 1,
+            },
+            {
+                "ordinal": 1,
+                "term": "rocket",
+                "start_codepoint": 5,
+                "end_codepoint": 11,
+                "position_increment": 1,
+            },
+            {
+                "ordinal": 2,
+                "term": "🚀",
+                "start_codepoint": 11,
+                "end_codepoint": 12,
+                "position_increment": 1,
+            },
+        ],
+    }
+
+
+def test_offset_response_shape_accepts_strict_codepoint_offsets_and_fingerprint():
+    text = "Café rocket🚀"
+    response = _offset_response(text)
+
+    v4.validate_offset_response_shape(
+        response,
+        text=text,
+        expected_fingerprint=_offset_fingerprint(),
+    )
+    empty = _offset_response("")
+    empty["occurrences"] = []
+    v4.validate_offset_response_shape(empty, text="")
+
+
+def test_offset_response_rejects_hash_schema_unit_and_fingerprint_drift():
+    text = "Café rocket🚀"
+    response = _offset_response(text)
+
+    bad = dict(response, text_sha256="0" * 64)
+    with pytest.raises(ValueError, match="text_sha256"):
+        v4.validate_offset_response_shape(bad, text=text)
+
+    bad = dict(response, schema_version="future")
+    with pytest.raises(ValueError, match="schema_version"):
+        v4.validate_offset_response_shape(bad, text=text)
+
+    bad = dict(response, offset_unit="utf16")
+    with pytest.raises(ValueError, match="offset_unit"):
+        v4.validate_offset_response_shape(bad, text=text)
+
+    bad_fingerprint = dict(_offset_fingerprint(), offset_lucene_jar_sha256="C" * 64)
+    bad = dict(response, fingerprint=bad_fingerprint)
+    with pytest.raises(ValueError, match="lowercase sha256"):
+        v4.validate_offset_response_shape(bad, text=text)
+
+    with pytest.raises(ValueError, match="fingerprint drift"):
+        v4.validate_offset_response_shape(
+            response,
+            text=text,
+            expected_fingerprint=dict(
+                _offset_fingerprint(),
+                offset_server_class_sha256="e" * 64,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda occurrence: occurrence.update({"ordinal": 9}), "ordinal gap"),
+        (lambda occurrence: occurrence.update({"term": ""}), "term"),
+        (lambda occurrence: occurrence.update({"start_codepoint": True}), "integer"),
+        (lambda occurrence: occurrence.update({"start_codepoint": -1}), "nonempty"),
+        (lambda occurrence: occurrence.update({"end_codepoint": 99}), "text length"),
+        (lambda occurrence: occurrence.update({"end_codepoint": occurrence["start_codepoint"]}), "nonempty"),
+        (lambda occurrence: occurrence.update({"position_increment": -1}), "position_increment"),
+    ],
+)
+def test_offset_response_rejects_invalid_occurrence_rows(mutation, message):
+    text = "Café rocket🚀"
+    response = _offset_response(text)
+    response["occurrences"] = [dict(row) for row in response["occurrences"]]
+    mutation(response["occurrences"][1])
+
+    with pytest.raises(ValueError, match=message):
+        v4.validate_offset_response_shape(response, text=text)
+
+
+def test_offset_response_rejects_nonmonotone_occurrence_spans_and_extra_fields():
+    text = "Café rocket🚀"
+    response = _offset_response(text)
+    response["occurrences"] = [dict(row) for row in response["occurrences"]]
+    response["occurrences"][2]["start_codepoint"] = 4
+    response["occurrences"][2]["end_codepoint"] = 12
+    with pytest.raises(ValueError, match="starts are nonmonotone"):
+        v4.validate_offset_response_shape(response, text=text)
+
+    response = _offset_response(text)
+    response["occurrences"] = [dict(row) for row in response["occurrences"]]
+    response["occurrences"][0]["end_codepoint"] = 10
+    response["occurrences"][1]["start_codepoint"] = 5
+    response["occurrences"][1]["end_codepoint"] = 6
+    with pytest.raises(ValueError, match="ends are nonmonotone"):
+        v4.validate_offset_response_shape(response, text=text)
+
+    response = _offset_response(text)
+    response["extra"] = True
+    with pytest.raises(ValueError, match="extra"):
+        v4.validate_offset_response_shape(response, text=text)
+
+    response = _offset_response(text)
+    response["occurrences"] = [dict(row) for row in response["occurrences"]]
+    response["occurrences"][0]["extra"] = True
+    with pytest.raises(ValueError, match="extra"):
+        v4.validate_offset_response_shape(response, text=text)
+
+
 def test_model_response_schema_is_xgrammar_friendly_and_case_bounded():
     schema = v4.model_response_schema("case-001", u1_token_count=7)
 
@@ -190,6 +329,18 @@ def test_static_import_audit_rejects_topic_retrieval_and_legacy_planner_imports(
         "trec_rag.topics",
         "trec_rag.query_planner",
         "trec_rag.remote_pyserini",
+    ]
+
+    sneaky = tmp_path / "sneaky.py"
+    sneaky.write_text(
+        "from trec_rag import topics\n"
+        "from trec_rag import query_planner as planner\n",
+        encoding="utf-8",
+    )
+
+    assert [issue.module for issue in v4.audit_imports([sneaky])] == [
+        "trec_rag.topics",
+        "trec_rag.query_planner",
     ]
 
 

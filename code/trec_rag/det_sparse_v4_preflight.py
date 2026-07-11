@@ -8,13 +8,14 @@ retrieval, no reranking, no topic reads, and no relevance-judgment access.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from trec_rag import det_sparse_v4_contract as contract
-from trec_rag.query_schema_compat import find_vllm_xgrammar_unsupported_features
+from trec_rag import query_schema_compat
 
 
 PREFLIGHT_REPORT_SCHEMA_VERSION = "semantic_anchor_offline_preflight_report_v1"
@@ -30,6 +31,24 @@ ZERO_COST_COUNTERS = {
     "network_calls": 0,
 }
 SCHEMA_COMPATIBILITY_CHECKER = "vllm_0_24_xgrammar_unsupported_feature_lint"
+SOURCE_AUDIT_CHECKER = "det_sparse_v4_static_direct_source_audit_v1"
+ALLOWED_IMPORT_ROOTS = (
+    "__future__",
+    "argparse",
+    "ast",
+    "dataclasses",
+    "enum",
+    "hashlib",
+    "json",
+    "os",
+    "pathlib",
+    "trec_rag",
+    "typing",
+)
+ALLOWED_TREC_RAG_MODULES = (
+    "trec_rag.det_sparse_v4_contract",
+    "trec_rag.query_schema_compat",
+)
 
 
 def build_offline_preflight_report(
@@ -51,23 +70,21 @@ def build_offline_preflight_report(
     audited_paths = tuple(Path(path) for path in source_paths) if source_paths else (
         Path(__file__),
         Path(contract.__file__),
+        Path(query_schema_compat.__file__),
     )
-    import_issues = contract.audit_imports(audited_paths)
-    if import_issues:
-        details = ", ".join(
-            f"{issue.path}:{issue.line}:{issue.module}" for issue in import_issues
+    source_audit = build_source_audit_summary(audited_paths)
+    if source_audit["denied_import_issues"]:
+        raise ValueError(
+            "v4 preflight denied import audit failed: "
+            + json.dumps(source_audit["denied_import_issues"], sort_keys=True)
         )
-        raise ValueError(f"v4 preflight denied import audit failed: {details}")
-
-    fragment_issues: dict[str, list[str]] = {}
-    for path in audited_paths:
-        if path.resolve() == Path(contract.__file__).resolve():
-            continue
-        fragments = contract.audit_denied_path_fragments(path.read_text(encoding="utf-8"))
-        if fragments:
-            fragment_issues[str(path)] = list(fragments)
-    if fragment_issues:
-        raise ValueError(f"v4 preflight denied path-fragment audit failed: {fragment_issues}")
+    if source_audit["denied_path_fragment_issues"]:
+        raise ValueError(
+            "v4 preflight denied path-fragment audit failed: "
+            + json.dumps(source_audit["denied_path_fragment_issues"], sort_keys=True)
+        )
+    if source_audit["status"] != "pass":
+        raise ValueError("v4 preflight source audit failed")
 
     schema_compatibility = build_schema_compatibility_summary(artifact_dir)
     report: dict[str, object] = {
@@ -83,6 +100,7 @@ def build_offline_preflight_report(
         "denied_topic_count": len(contract.DENIED_TOPIC_IDS),
         "import_issues": [],
         "source_path_fragment_issues": {},
+        "source_audit": source_audit,
         "schema_compatibility": schema_compatibility,
         "cost_counters": dict(ZERO_COST_COUNTERS),
         "inference_authorized": False,
@@ -91,6 +109,58 @@ def build_offline_preflight_report(
     }
     validate_offline_preflight_report(report, expected_artifact_hashes=artifact_hashes)
     return report
+
+
+def build_source_audit_summary(source_paths: Sequence[Path]) -> dict[str, object]:
+    """Summarize the static direct source/import closure checked by preflight."""
+
+    audited_paths = tuple(Path(path) for path in source_paths)
+    import_issues = contract.audit_imports(audited_paths)
+    denied_import_issues = [
+        {"path": issue.path, "line": issue.line, "module": issue.module}
+        for issue in import_issues
+    ]
+    fragment_issues: dict[str, list[str]] = {}
+    observed_roots: set[str] = set()
+    observed_trec_rag_modules: set[str] = set()
+    for path in audited_paths:
+        text = path.read_text(encoding="utf-8")
+        if path.resolve() != Path(contract.__file__).resolve():
+            fragments = contract.audit_denied_path_fragments(text)
+            if fragments:
+                fragment_issues[str(path)] = list(fragments)
+        for imported in _direct_import_modules(path, text):
+            root = imported.split(".", 1)[0]
+            observed_roots.add(root)
+            if imported.startswith("trec_rag."):
+                observed_trec_rag_modules.add(imported)
+
+    unexpected_roots = sorted(observed_roots.difference(ALLOWED_IMPORT_ROOTS))
+    unexpected_trec_rag_modules = sorted(
+        observed_trec_rag_modules.difference(ALLOWED_TREC_RAG_MODULES)
+    )
+    status = (
+        "pass"
+        if not denied_import_issues
+        and not fragment_issues
+        and not unexpected_roots
+        and not unexpected_trec_rag_modules
+        else "fail"
+    )
+    return {
+        "checker": SOURCE_AUDIT_CHECKER,
+        "status": status,
+        "audited_source_count": len(audited_paths),
+        "audited_sources": [str(path) for path in audited_paths],
+        "allowed_import_roots": list(ALLOWED_IMPORT_ROOTS),
+        "observed_import_roots": sorted(observed_roots),
+        "unexpected_import_roots": unexpected_roots,
+        "allowed_trec_rag_modules": list(ALLOWED_TREC_RAG_MODULES),
+        "observed_trec_rag_modules": sorted(observed_trec_rag_modules),
+        "unexpected_trec_rag_modules": unexpected_trec_rag_modules,
+        "denied_import_issues": denied_import_issues,
+        "denied_path_fragment_issues": fragment_issues,
+    }
 
 
 def build_schema_compatibility_summary(
@@ -109,7 +179,7 @@ def build_schema_compatibility_summary(
         response_format = _require_mapping(request.get("response_format"), "response_format")
         json_schema = _require_mapping(response_format.get("json_schema"), "json_schema")
         schema = _require_mapping(json_schema.get("schema"), "schema")
-        for issue in find_vllm_xgrammar_unsupported_features(schema):
+        for issue in query_schema_compat.find_vllm_xgrammar_unsupported_features(schema):
             row = issue.to_dict()
             row["case_id"] = case_id
             issues.append(row)
@@ -154,6 +224,21 @@ def validate_offline_preflight_report(
         raise ValueError("offline preflight path-fragment issues must be empty")
     if report.get("cost_counters") != ZERO_COST_COUNTERS:
         raise ValueError("offline preflight cost counters must all be zero")
+    source_audit = report.get("source_audit")
+    if not isinstance(source_audit, Mapping):
+        raise ValueError("offline preflight source_audit must be an object")
+    if source_audit.get("checker") != SOURCE_AUDIT_CHECKER:
+        raise ValueError("offline preflight source audit checker mismatch")
+    if source_audit.get("status") != "pass":
+        raise ValueError("offline preflight source audit must pass")
+    if source_audit.get("unexpected_import_roots") != []:
+        raise ValueError("offline preflight source audit unexpected import roots")
+    if source_audit.get("unexpected_trec_rag_modules") != []:
+        raise ValueError("offline preflight source audit unexpected trec_rag modules")
+    if source_audit.get("denied_import_issues") != []:
+        raise ValueError("offline preflight source audit denied imports must be empty")
+    if source_audit.get("denied_path_fragment_issues") != {}:
+        raise ValueError("offline preflight source audit denied paths must be empty")
     schema_compatibility = report.get("schema_compatibility")
     if not isinstance(schema_compatibility, Mapping):
         raise ValueError("offline preflight schema_compatibility must be an object")
@@ -178,6 +263,21 @@ def validate_offline_preflight_report(
     for key, value in artifact_sha256.items():
         if not isinstance(key, str) or not isinstance(value, str) or len(value) != 64:
             raise ValueError("offline preflight artifact hashes must be sha256 strings")
+
+
+def _direct_import_modules(path: Path, text: str) -> tuple[str, ...]:
+    tree = ast.parse(text, filename=str(path))
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "trec_rag":
+                modules.extend(f"{module}.{alias.name}" for alias in node.names)
+            elif module:
+                modules.append(module)
+    return tuple(modules)
 
 
 def _require_mapping(value: object, name: str) -> Mapping[str, object]:
