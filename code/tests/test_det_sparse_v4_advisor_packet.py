@@ -35,6 +35,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "semantic_anchor_advisor_dispatch_go_v1" in text
     assert "semantic_anchor_advisor_dispatch_go_review_v1" in text
     assert "manual_runner_invocation_still_required" in text
+    assert "--live-attestation-review path/to/live-attestation-review.json" in text
+    assert "--advisor-go-receipt path/to/advisor-go.json" in text
+    assert "requires the advisor GO receipt to be canonical JSON bytes" in text
     assert "dispatch_authorized=false" in text
     assert "--live-attestation-bundle path/to/live-attestation-bundle.json" in text
     assert "strict assistant-content extractor" in text
@@ -45,7 +48,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "offline completed synthetic run-directory replay validated" in text
     assert "actual live post-dispatch run still pending" in text
     assert "canonical live-attestation bundle sealing" in text
-    assert "advisor dispatch-GO binding,\npre-dispatch run-directory replay" in text
+    assert "advisor dispatch-GO binding,\nfile-backed advisor-GO review CLI" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "semantic_anchor_scorer_review_v1" in text
@@ -60,8 +63,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "classification" in text
     assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
     assert "advisor dispatch-GO binding" in text
+    assert "file-backed advisor-GO review CLI" in text
     assert "ledger-bound scorer-only" in text
-    assert "`159 passed`." in text
+    assert "`161 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

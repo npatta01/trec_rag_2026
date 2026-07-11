@@ -149,6 +149,19 @@ derived `semantic_anchor_advisor_dispatch_go_review_v1` report still keeps
 `external_cost_authorized=false`; its next gate is
 `manual_runner_invocation_still_required`.
 
+The file-backed CLI path is:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_preflight \
+  --live-attestation-review path/to/live-attestation-review.json \
+  --advisor-go-receipt path/to/advisor-go.json \
+  --output path/to/advisor-go-review.json \
+  --pretty
+```
+
+It requires the advisor GO receipt to be canonical JSON bytes, writes the review
+create-only, and still does not invoke the runner.
+
 Sealed synthetic responses are scored only after run-directory replay proves
 all 24 raw responses are committed. The offline completed-run replay verifier
 already exercises that boundary on a sealed synthetic run directory; an actual
@@ -194,10 +207,10 @@ validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, captured-bundle
 review, canonical live-attestation bundle sealing, advisor dispatch-GO binding,
-pre-dispatch run-directory replay, offline completed synthetic run-directory
-replay, ledger-bound scorer-only sealed-response review, and reviewer
-qualification terminal-state mapping:
-`159 passed`.
+file-backed advisor-GO review CLI, pre-dispatch run-directory replay, offline
+completed synthetic run-directory replay, ledger-bound scorer-only
+sealed-response review, and reviewer qualification terminal-state mapping:
+`161 passed`.
 
 ## What is not yet proven
 

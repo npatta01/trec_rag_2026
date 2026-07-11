@@ -408,6 +408,114 @@ def test_advisor_dispatch_go_review_binds_live_attestation_review_without_dispat
         preflight.build_advisor_dispatch_go_review(live_review, mutated_go)
 
 
+def test_advisor_dispatch_go_review_cli_writes_create_only_bound_report(tmp_path: Path):
+    artifact_hashes = contract.validate_artifact_bundle()
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    live_review_path = tmp_path / "live-attestation-review.json"
+    advisor_go_path = tmp_path / "advisor-go.json"
+    output_path = tmp_path / "advisor-go-review.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(
+            _live_attestation_bundle(
+                artifact_hashes["semantic_anchor_model_inventory_attestation_v1.json"]
+            )
+        )
+        + b"\n"
+    )
+    live_review = preflight.build_live_attestation_review(bundle_path)
+    live_review_path.write_bytes(preflight.canonical_report_bytes(live_review))
+    live_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_review)
+    )
+    advisor_go = {
+        "schema_version": "semantic_anchor_advisor_dispatch_go_v1",
+        "approval_scope": "det_sparse_v4_synthetic_local_dispatch",
+        "approved_by": "advisor-review",
+        "live_attestation_review_sha256": live_review_sha256,
+        "acknowledged_no_topic_qrels_retrieval_rerank_or_paid_calls": True,
+    }
+    advisor_go_path.write_bytes(contract.canonical_json_bytes(advisor_go) + b"\n")
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_preflight",
+            "--live-attestation-review",
+            str(live_review_path),
+            "--advisor-go-receipt",
+            str(advisor_go_path),
+            "--output",
+            str(output_path),
+            "--pretty",
+        ],
+        check=True,
+        cwd=Path.cwd(),
+    )
+
+    review = json.loads(output_path.read_text(encoding="utf-8"))
+    assert review["schema_version"] == "semantic_anchor_advisor_dispatch_go_review_v1"
+    assert review["live_attestation_review_path"] == str(live_review_path.resolve())
+    assert review["advisor_go_receipt_path"] == str(advisor_go_path.resolve())
+    assert review["advisor_go_receipt_canonical"] is True
+    assert review["dispatch_authorized"] is False
+    assert review["inference_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    preflight.validate_advisor_dispatch_go_review(review)
+    with pytest.raises(FileExistsError):
+        preflight.main(
+            [
+                "--live-attestation-review",
+                str(live_review_path),
+                "--advisor-go-receipt",
+                str(advisor_go_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+
+
+def test_advisor_dispatch_go_review_cli_rejects_partial_or_noncanonical_receipts(
+    tmp_path: Path,
+):
+    artifact_hashes = contract.validate_artifact_bundle()
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    live_review_path = tmp_path / "live-attestation-review.json"
+    advisor_go_path = tmp_path / "advisor-go.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(
+            _live_attestation_bundle(
+                artifact_hashes["semantic_anchor_model_inventory_attestation_v1.json"]
+            )
+        )
+        + b"\n"
+    )
+    live_review = preflight.build_live_attestation_review(bundle_path)
+    live_review_path.write_bytes(preflight.canonical_report_bytes(live_review))
+    live_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_review)
+    )
+    advisor_go = {
+        "schema_version": "semantic_anchor_advisor_dispatch_go_v1",
+        "approval_scope": "det_sparse_v4_synthetic_local_dispatch",
+        "approved_by": "advisor-review",
+        "live_attestation_review_sha256": live_review_sha256,
+        "acknowledged_no_topic_qrels_retrieval_rerank_or_paid_calls": True,
+    }
+    advisor_go_path.write_text(
+        json.dumps(advisor_go, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires --live-attestation-review"):
+        preflight.main(["--advisor-go-receipt", str(advisor_go_path)])
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.build_advisor_dispatch_go_review_from_files(
+            live_review_path,
+            advisor_go_path,
+        )
+
+
 def test_offline_preflight_fails_on_denied_imports(tmp_path: Path):
     bad_source = tmp_path / "bad_v4_runner.py"
     bad_source.write_text(

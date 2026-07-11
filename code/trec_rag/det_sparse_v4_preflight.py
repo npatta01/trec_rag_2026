@@ -253,6 +253,35 @@ def build_advisor_dispatch_go_review(
     }
 
 
+def build_advisor_dispatch_go_review_from_files(
+    live_attestation_review_path: Path,
+    advisor_go_receipt_path: Path,
+) -> dict[str, object]:
+    """Validate file-backed advisor GO binding without dispatching."""
+
+    live_review_file = live_attestation_review_path.resolve()
+    receipt_file = advisor_go_receipt_path.resolve()
+    live_attestation_review = _require_mapping(
+        contract.load_json_no_duplicates(live_review_file),
+        "live attestation review",
+    )
+    advisor_go_receipt = _require_mapping(
+        contract.load_json_no_duplicates(receipt_file),
+        "advisor GO receipt",
+    )
+    if receipt_file.read_bytes() != contract.canonical_json_bytes(advisor_go_receipt) + b"\n":
+        raise ValueError("advisor GO receipt is not canonical JSON bytes")
+    review = build_advisor_dispatch_go_review(
+        live_attestation_review,
+        advisor_go_receipt,
+    )
+    review["live_attestation_review_path"] = str(live_review_file)
+    review["advisor_go_receipt_path"] = str(receipt_file)
+    review["advisor_go_receipt_canonical"] = True
+    validate_advisor_dispatch_go_review(review)
+    return review
+
+
 def build_runtime_file_access_summary(
     builder: Callable[[], dict[str, object]],
 ) -> dict[str, object]:
@@ -618,6 +647,32 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
 
 
 def validate_advisor_dispatch_go_review(report: Mapping[str, object]) -> None:
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "live_attestation_review_sha256",
+        "advisor_go_receipt_sha256",
+        "approved_by",
+        "approval_scope",
+        "cost_counters",
+        "inference_authorized",
+        "dispatch_authorized",
+        "external_cost_authorized",
+        "next_gate",
+    }
+    file_backed_keys = {
+        "live_attestation_review_path",
+        "advisor_go_receipt_path",
+        "advisor_go_receipt_canonical",
+    }
+    actual_keys = set(report)
+    if actual_keys != expected_keys and actual_keys != expected_keys.union(file_backed_keys):
+        raise ValueError(
+            "advisor dispatch GO review keys mismatch: "
+            f"missing={expected_keys - actual_keys} "
+            f"extra={actual_keys - expected_keys - file_backed_keys}"
+        )
     if report.get("schema_version") != ADVISOR_DISPATCH_GO_REVIEW_SCHEMA_VERSION:
         raise ValueError("advisor dispatch GO review schema_version mismatch")
     if report.get("experiment_id") != contract.EXPERIMENT_ID:
@@ -641,6 +696,15 @@ def validate_advisor_dispatch_go_review(report: Mapping[str, object]) -> None:
         raise ValueError("advisor dispatch GO review must not authorize external cost")
     if report.get("next_gate") != ADVISOR_DISPATCH_GO_NEXT_GATE:
         raise ValueError("advisor dispatch GO review next_gate mismatch")
+    if "advisor_go_receipt_canonical" in report and report.get(
+        "advisor_go_receipt_canonical"
+    ) is not True:
+        raise ValueError("advisor dispatch GO receipt must be canonical")
+    for key in ("live_attestation_review_path", "advisor_go_receipt_path"):
+        if key in report and (
+            not isinstance(report.get(key), str) or not report.get(key)
+        ):
+            raise ValueError(f"advisor dispatch GO review {key} must be nonempty")
 
 
 def _validate_advisor_go_receipt(
@@ -814,13 +878,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional captured live-attestation bundle to validate without dispatch.",
     )
+    parser.add_argument(
+        "--live-attestation-review",
+        type=Path,
+        help="Prior live-attestation review JSON used by an advisor GO receipt.",
+    )
+    parser.add_argument(
+        "--advisor-go-receipt",
+        type=Path,
+        help="Canonical advisor GO receipt JSON to bind without dispatch.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    if args.live_attestation_bundle:
+    if args.advisor_go_receipt or args.live_attestation_review:
+        if not (args.advisor_go_receipt and args.live_attestation_review):
+            raise ValueError(
+                "--advisor-go-receipt requires --live-attestation-review, and vice versa"
+            )
+        if args.live_attestation_bundle:
+            raise ValueError(
+                "--live-attestation-bundle cannot be combined with advisor GO review"
+            )
+        report = build_advisor_dispatch_go_review_from_files(
+            args.live_attestation_review,
+            args.advisor_go_receipt,
+        )
+    elif args.live_attestation_bundle:
         report = build_live_attestation_review(
             args.live_attestation_bundle,
             artifact_dir=args.artifact_dir,
