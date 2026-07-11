@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from trec_rag import det_sparse_v4_contract as contract
-from trec_rag import det_sparse_v4_preflight as preflight
 from trec_rag import det_sparse_v4_scorer as scorer
 
 
@@ -57,17 +56,17 @@ def build_pre_dispatch_no_go_run(
     """Create a reviewed zero-dispatch v4 run boundary.
 
     This function performs no inference, retrieval, reranking, topic access,
-    relevance-judgment access, network calls, downloads, or model-file reads.
+    relevance-judgment access, scorer-only gold access, network calls,
+    downloads, or model-file reads.
     """
 
-    report = preflight.build_offline_preflight_report(artifact_dir)
-    request_identity = _require_mapping(report["request_identity"], "request_identity")
+    request_identity = _runner_request_identity(artifact_dir)
     case_order = _case_order_from_request_identity(request_identity)
     reservations = _reservations_from_request_identity(
         request_identity,
         run_id=destination_run_id(output_dir),
     )
-    artifact_sha256 = _string_mapping(report["artifact_sha256"], "artifact_sha256")
+    artifact_sha256 = contract.validate_runner_artifact_bundle(artifact_dir)
 
     destination = output_dir.resolve()
     destination.mkdir(parents=True, exist_ok=False)
@@ -128,8 +127,7 @@ def replay_pre_dispatch_no_go_run(
 ) -> PreDispatchNoGoRun:
     """Replay and validate a zero-dispatch v4 run directory from sealed files."""
 
-    report = preflight.build_offline_preflight_report(artifact_dir)
-    request_identity = _require_mapping(report["request_identity"], "request_identity")
+    request_identity = _runner_request_identity(artifact_dir)
     case_order = _case_order_from_request_identity(request_identity)
     expected_reservations = _reservations_from_request_identity(
         request_identity,
@@ -138,7 +136,7 @@ def replay_pre_dispatch_no_go_run(
     expected_request_sha256 = _string_mapping(
         request_identity.get("request_sha256"), "request_sha256"
     )
-    artifact_sha256 = _string_mapping(report["artifact_sha256"], "artifact_sha256")
+    artifact_sha256 = contract.validate_runner_artifact_bundle(artifact_dir)
 
     destination = output_dir.resolve()
     if not destination.is_dir():
@@ -203,16 +201,15 @@ def replay_completed_synthetic_run(
     *,
     artifact_dir: Path = contract.ARTIFACT_DIR,
 ) -> CompletedSyntheticReplay:
-    """Replay a completed 24-case synthetic run before scorer gold is opened."""
+    """Replay a completed 24-case synthetic run without opening scorer-only gold."""
 
-    report = preflight.build_offline_preflight_report(artifact_dir)
-    request_identity = _require_mapping(report["request_identity"], "request_identity")
+    request_identity = _runner_request_identity(artifact_dir)
     case_order = _case_order_from_request_identity(request_identity)
     expected_reservations = _reservations_from_request_identity(
         request_identity,
         run_id=destination_run_id(output_dir),
     )
-    artifact_sha256 = _string_mapping(report["artifact_sha256"], "artifact_sha256")
+    artifact_sha256 = contract.validate_runner_artifact_bundle(artifact_dir)
     destination = output_dir.resolve()
     if not destination.is_dir():
         raise ValueError("completed replay requires an existing run directory")
@@ -293,6 +290,60 @@ def destination_run_id(output_dir: Path) -> str:
     if not run_id:
         raise ValueError("output_dir must have a nonempty final path component")
     return run_id
+
+
+def _runner_request_identity(artifact_dir: Path) -> Mapping[str, object]:
+    """Build runner request identity without opening scorer-only artifacts."""
+
+    case_order = _read_case_order(artifact_dir)
+    request_records = contract.load_jsonl_no_duplicates(
+        artifact_dir / "semantic_anchor_request_fixtures_v1.jsonl"
+    )
+    request_by_case: dict[str, Mapping[str, object]] = {}
+    for raw_record in request_records:
+        record = _require_mapping(raw_record, "request fixture record")
+        case_id = record.get("case_id")
+        request = _require_mapping(record.get("request"), "request")
+        if not isinstance(case_id, str):
+            raise ValueError("request fixture case_id must be string")
+        if case_id in request_by_case:
+            raise ValueError(f"duplicate request fixture case_id: {case_id}")
+        request_by_case[case_id] = request
+    if tuple(request_by_case) != case_order:
+        raise ValueError("request fixture order differs from fixed case order")
+
+    request_sha256: dict[str, str] = {}
+    request_body_size_bytes: dict[str, int] = {}
+    for case_id in case_order:
+        request_body = contract.canonical_json_bytes(request_by_case[case_id])
+        request_sha256[case_id] = contract.sha256_bytes(request_body)
+        request_body_size_bytes[case_id] = len(request_body)
+    order_body = contract.canonical_json_bytes(list(case_order))
+    return {
+        "checker": "semantic_anchor_runner_request_identity_v1",
+        "status": "pass",
+        "case_count": len(case_order),
+        "first_case_id": case_order[0],
+        "case_order_sha256": contract.sha256_bytes(order_body),
+        "request_sha256": request_sha256,
+        "request_body_size_bytes": request_body_size_bytes,
+    }
+
+
+def _read_case_order(artifact_dir: Path) -> tuple[str, ...]:
+    case_order = _require_mapping(
+        contract.load_json_no_duplicates(
+            artifact_dir / "semantic_anchor_case_order_v1.json"
+        ),
+        "case order",
+    )
+    raw_order = case_order.get("case_order")
+    if not isinstance(raw_order, list) or not all(
+        isinstance(case_id, str) for case_id in raw_order
+    ):
+        raise ValueError("case_order must be a string list")
+    contract.validate_fixed_case_order(raw_order)
+    return tuple(raw_order)
 
 
 def _case_order_from_request_identity(value: object) -> tuple[str, ...]:

@@ -63,6 +63,17 @@ def test_pre_dispatch_no_go_runner_writes_create_only_reservations_and_zero_call
     assert replayed == result
 
 
+def test_pre_dispatch_no_go_runner_does_not_open_scorer_gold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _deny_gold_json_open(monkeypatch)
+
+    result = runner.build_pre_dispatch_no_go_run(tmp_path / "v4-no-go")
+    replayed = runner.replay_pre_dispatch_no_go_run(result.output_dir)
+
+    assert replayed == result
+
+
 def test_pre_dispatch_no_go_runner_refuses_existing_output_dir(tmp_path: Path):
     output_dir = tmp_path / "v4-no-go"
     output_dir.mkdir()
@@ -175,11 +186,22 @@ def _write_record(path: Path, value: dict[str, object]) -> None:
     path.write_bytes(contract.canonical_json_bytes(value) + b"\n")
 
 
+def _deny_gold_json_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = contract.load_json_no_duplicates
+
+    def guarded(path: Path):
+        if Path(path).name == "semantic_anchor_gold_labels_v1.json":
+            raise AssertionError("runner must not open scorer-only gold labels")
+        return original(path)
+
+    monkeypatch.setattr(contract, "load_json_no_duplicates", guarded)
+
+
 def _build_completed_run(output_dir: Path) -> None:
     preflight_report = preflight.build_offline_preflight_report()
     request_identity = preflight_report["request_identity"]
     request_sha256 = request_identity["request_sha256"]
-    artifact_sha256 = preflight_report["artifact_sha256"]
+    artifact_sha256 = contract.validate_runner_artifact_bundle()
     case_order = tuple(request_sha256)
     run_id = output_dir.resolve().name
     output_dir.mkdir()
@@ -307,6 +329,18 @@ def test_completed_synthetic_replay_validates_24_case_run_and_sealed_scorer_inpu
     assert replayed.sealed_scorer_input_path == output_dir.resolve() / "sealed_scorer_input.json"
 
 
+def test_completed_synthetic_replay_does_not_open_scorer_gold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    output_dir = tmp_path / "completed-v4"
+    _build_completed_run(output_dir)
+    _deny_gold_json_open(monkeypatch)
+
+    replayed = runner.replay_completed_synthetic_run(output_dir)
+
+    assert len(replayed.raw_response_paths) == 24
+
+
 def test_completed_synthetic_replay_rejects_extra_dispatch_artifact_and_sealed_hash_drift(tmp_path: Path):
     output_dir = tmp_path / "completed-v4"
     _build_completed_run(output_dir)
@@ -320,6 +354,54 @@ def test_completed_synthetic_replay_rejects_extra_dispatch_artifact_and_sealed_h
     sealed["responses"][0]["raw_response_sha256"] = "9" * 64
     _write_record(sealed_path, sealed)
     with pytest.raises(ValueError, match="hash differs from raw record|raw hash mismatch"):
+        runner.replay_completed_synthetic_run(output_dir)
+
+
+def test_completed_synthetic_replay_rejects_gold_opened_terminal(tmp_path: Path):
+    output_dir = tmp_path / "completed-v4"
+    _build_completed_run(output_dir)
+    terminal_path = output_dir / "terminal_receipt.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    terminal["gold_opened"] = True
+    _write_record(terminal_path, terminal)
+
+    with pytest.raises(ValueError, match="must not open gold"):
+        runner.replay_completed_synthetic_run(output_dir)
+
+
+def test_completed_synthetic_replay_rejects_terminal_counter_drift(tmp_path: Path):
+    output_dir = tmp_path / "completed-v4"
+    _build_completed_run(output_dir)
+    terminal_path = output_dir / "terminal_receipt.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    terminal["raw_committed_calls"] = 23
+    _write_record(terminal_path, terminal)
+
+    with pytest.raises(ValueError, match="requires 24 sealed raw responses"):
+        runner.replay_completed_synthetic_run(output_dir)
+
+
+def test_completed_synthetic_replay_rejects_missing_raw_response_file(tmp_path: Path):
+    output_dir = tmp_path / "completed-v4"
+    _build_completed_run(output_dir)
+    (output_dir / "raw_responses" / "synthetic-case-001.json").unlink()
+
+    with pytest.raises(ValueError, match="raw_responses file set mismatch"):
+        runner.replay_completed_synthetic_run(output_dir)
+
+
+def test_completed_synthetic_replay_rejects_sealed_response_order_drift(tmp_path: Path):
+    output_dir = tmp_path / "completed-v4"
+    _build_completed_run(output_dir)
+    sealed_path = output_dir / "sealed_scorer_input.json"
+    sealed = json.loads(sealed_path.read_text(encoding="utf-8"))
+    sealed["responses"][0], sealed["responses"][1] = (
+        sealed["responses"][1],
+        sealed["responses"][0],
+    )
+    _write_record(sealed_path, sealed)
+
+    with pytest.raises(ValueError, match="case order"):
         runner.replay_completed_synthetic_run(output_dir)
 
 

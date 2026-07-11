@@ -1620,6 +1620,8 @@ def validate_import_open_audit_fixture(audit: Mapping[str, object]) -> None:
 def validate_artifact_bundle(
     artifact_dir: Path = ARTIFACT_DIR,
 ) -> dict[str, str]:
+    """Validate the complete offline artifact bundle, including scorer-only gold."""
+
     manifest_path = artifact_dir / "semantic_anchor_artifact_manifest_v1.json"
     manifest = _as_mapping(load_json_no_duplicates(manifest_path), "artifact manifest")
     if manifest.get("schema_version") != "semantic_anchor_artifact_manifest_v1":
@@ -1661,7 +1663,63 @@ def validate_artifact_bundle(
     if missing_expected:
         raise ValueError(f"manifest missing expected artifacts: {sorted(missing_expected)}")
     validate_runner_gold_separation(runner_files, scorer_files)
-    _validate_artifact_cross_file_consistency(artifact_dir)
+    _validate_artifact_cross_file_consistency(artifact_dir, include_scorer_only=True)
+    return hashes
+
+
+def validate_runner_artifact_bundle(
+    artifact_dir: Path = ARTIFACT_DIR,
+) -> dict[str, str]:
+    """Validate and hash only artifacts visible to the runner.
+
+    This deliberately does not open scorer-only artifacts such as gold labels.
+    The scorer validates those artifacts after the raw response ledger is sealed.
+    """
+
+    manifest_path = artifact_dir / "semantic_anchor_artifact_manifest_v1.json"
+    manifest = _as_mapping(load_json_no_duplicates(manifest_path), "artifact manifest")
+    if manifest.get("schema_version") != "semantic_anchor_artifact_manifest_v1":
+        raise ValueError("artifact manifest schema_version mismatch")
+    if manifest.get("artifact_set_status") != "offline_24_fixture_set_not_inference_authorizing":
+        raise ValueError("artifact manifest must remain offline non-inference fixture set")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("artifact manifest must list artifacts")
+
+    seen: set[str] = set()
+    runner_files: list[str] = []
+    scorer_files: list[str] = []
+    hashes: dict[str, str] = {}
+    for item in artifacts:
+        entry = _as_mapping(item, "artifact entry")
+        path_value = entry.get("path")
+        visibility = entry.get("visibility")
+        if not isinstance(path_value, str) or not path_value:
+            raise ValueError("artifact entry path must be nonempty string")
+        if "/" in path_value or path_value.startswith("."):
+            raise ValueError(f"artifact path must be local basename: {path_value}")
+        if path_value in seen:
+            raise ValueError(f"duplicate artifact path: {path_value}")
+        seen.add(path_value)
+        if visibility == "runner":
+            runner_files.append(path_value)
+            path = artifact_dir / path_value
+            if not path.is_file():
+                raise ValueError(f"artifact missing: {path_value}")
+            hashes[path_value] = sha256_file(path)
+        elif visibility == "scorer":
+            scorer_files.append(path_value)
+        elif visibility != "reviewer":
+            raise ValueError(f"unknown artifact visibility for {path_value}: {visibility}")
+
+    missing_runner = set(runner_visible_artifacts()).difference(runner_files)
+    if missing_runner:
+        raise ValueError(f"manifest missing runner artifacts: {sorted(missing_runner)}")
+    missing_scorer = set(scorer_only_artifacts()).difference(scorer_files)
+    if missing_scorer:
+        raise ValueError(f"manifest missing scorer artifacts: {sorted(missing_scorer)}")
+    validate_runner_gold_separation(runner_files, scorer_files)
+    _validate_artifact_cross_file_consistency(artifact_dir, include_scorer_only=False)
     return hashes
 
 
@@ -1723,7 +1781,11 @@ def _boundary_valid_reason(
     return None
 
 
-def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
+def _validate_artifact_cross_file_consistency(
+    artifact_dir: Path,
+    *,
+    include_scorer_only: bool,
+) -> None:
     response_schema = load_json_no_duplicates(
         artifact_dir / "semantic_anchor_response_v1.case001.schema.json"
     )
@@ -1790,19 +1852,21 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
     if tuple(corpus_by_id) != registry_order:
         raise ValueError("corpus case order differs from registry")
 
-    gold = _as_mapping(
-        load_json_no_duplicates(artifact_dir / "semantic_anchor_gold_labels_v1.json"),
-        "gold labels",
-    )
-    gold_cases = gold.get("cases")
-    if not isinstance(gold_cases, list) or len(gold_cases) != 24:
-        raise ValueError("gold must contain exactly 24 cases")
-    gold_by_id = {
-        _as_mapping(case, "gold case").get("case_id"): _as_mapping(case, "gold case")
-        for case in gold_cases
-    }
-    if tuple(gold_by_id) != registry_order:
-        raise ValueError("gold case order differs from registry")
+    gold_by_id: dict[object, Mapping[str, object]] = {}
+    if include_scorer_only:
+        gold = _as_mapping(
+            load_json_no_duplicates(artifact_dir / "semantic_anchor_gold_labels_v1.json"),
+            "gold labels",
+        )
+        gold_cases = gold.get("cases")
+        if not isinstance(gold_cases, list) or len(gold_cases) != 24:
+            raise ValueError("gold must contain exactly 24 cases")
+        gold_by_id = {
+            _as_mapping(case, "gold case").get("case_id"): _as_mapping(case, "gold case")
+            for case in gold_cases
+        }
+        if tuple(gold_by_id) != registry_order:
+            raise ValueError("gold case order differs from registry")
 
     request_records = load_jsonl_no_duplicates(
         artifact_dir / "semantic_anchor_request_fixtures_v1.jsonl"
@@ -1837,7 +1901,11 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
     }
     for case_id in registry_order:
         case = _as_mapping(corpus_by_id[case_id], "synthetic case")
-        gold_case = _as_mapping(gold_by_id[case_id], "gold case")
+        gold_case = (
+            _as_mapping(gold_by_id[case_id], "gold case")
+            if include_scorer_only
+            else None
+        )
         request = _as_mapping(request_by_id[case_id], "request fixture")
         registry_case = _as_mapping(registry_by_id[case_id], "case registry entry")
         _validate_one_case_fixture(
@@ -1854,17 +1922,20 @@ def _validate_one_case_fixture(
     *,
     case_id: str,
     case: Mapping[str, object],
-    gold_case: Mapping[str, object],
+    gold_case: Mapping[str, object] | None,
     request: Mapping[str, object],
     registry_case: Mapping[str, object],
     system_prompt: str,
 ) -> None:
     if case.get("schema_version") != "semantic_anchor_synthetic_case_v1":
         raise ValueError(f"case schema_version mismatch: {case_id}")
-    if gold_case.get("schema_version") != "semantic_anchor_gold_label_v1":
-        raise ValueError(f"gold schema_version mismatch: {case_id}")
-    if case.get("case_id") != case_id or gold_case.get("case_id") != case_id:
-        raise ValueError(f"case/gold ID mismatch: {case_id}")
+    if case.get("case_id") != case_id:
+        raise ValueError(f"case ID mismatch: {case_id}")
+    if gold_case is not None:
+        if gold_case.get("schema_version") != "semantic_anchor_gold_label_v1":
+            raise ValueError(f"gold schema_version mismatch: {case_id}")
+        if gold_case.get("case_id") != case_id:
+            raise ValueError(f"gold ID mismatch: {case_id}")
     token_tape = case.get("token_tape")
     if not isinstance(token_tape, list) or len(token_tape) != 7:
         raise ValueError(f"case must have seven token records: {case_id}")
@@ -1879,37 +1950,42 @@ def _validate_one_case_fixture(
         raise ValueError(f"unit boundaries drifted: {case_id}")
 
     decision = registry_case.get("decision")
-    if gold_case.get("decision") != decision:
-        raise ValueError(f"gold decision differs from registry: {case_id}")
-    validate_gold_label_case(gold_case, case_id=case_id, u1_token_count=5)
-    ranges = gold_case.get("acceptable_ranges")
-    if not isinstance(ranges, list):
-        raise ValueError(f"acceptable_ranges must be list: {case_id}")
+    ranges: list[object] = []
+    if gold_case is not None:
+        if gold_case.get("decision") != decision:
+            raise ValueError(f"gold decision differs from registry: {case_id}")
+        validate_gold_label_case(gold_case, case_id=case_id, u1_token_count=5)
+        raw_ranges = gold_case.get("acceptable_ranges")
+        if not isinstance(raw_ranges, list):
+            raise ValueError(f"acceptable_ranges must be list: {case_id}")
+        ranges = raw_ranges
     if decision == "select":
-        if len(ranges) != 1:
-            raise ValueError(f"select case must have one accepted range: {case_id}")
-        span = _as_mapping(ranges[0], "accepted range")
-        validate_model_response_shape(
-            {
-                "schema_version": MODEL_RESPONSE_SCHEMA_VERSION,
-                "case_id": case_id,
-                "decision": "select",
-                "start_token": span.get("start_token"),
-                "end_token": span.get("end_token"),
-            },
-            case_id=case_id,
-            u1_token_count=7,
-        )
-        if span["start_token"] < 0 or span["end_token"] > 5:
-            raise ValueError(f"select range must be wholly inside U1: {case_id}")
+        if gold_case is not None:
+            if len(ranges) != 1:
+                raise ValueError(f"select case must have one accepted range: {case_id}")
+            span = _as_mapping(ranges[0], "accepted range")
+            validate_model_response_shape(
+                {
+                    "schema_version": MODEL_RESPONSE_SCHEMA_VERSION,
+                    "case_id": case_id,
+                    "decision": "select",
+                    "start_token": span.get("start_token"),
+                    "end_token": span.get("end_token"),
+                },
+                case_id=case_id,
+                u1_token_count=7,
+            )
+            if span["start_token"] < 0 or span["end_token"] > 5:
+                raise ValueError(f"select range must be wholly inside U1: {case_id}")
         evidence = case.get("analyzer_evidence")
         if not isinstance(evidence, list) or len(evidence) < 2:
             raise ValueError(f"select case must expose at least two analyzer terms: {case_id}")
     else:
-        if ranges:
-            raise ValueError(f"abstain case must not have accepted ranges: {case_id}")
-        if gold_case.get("abstain_reason") != registry_case.get("abstain_reason"):
-            raise ValueError(f"abstain reason differs from registry: {case_id}")
+        if gold_case is not None:
+            if ranges:
+                raise ValueError(f"abstain case must not have accepted ranges: {case_id}")
+            if gold_case.get("abstain_reason") != registry_case.get("abstain_reason"):
+                raise ValueError(f"abstain reason differs from registry: {case_id}")
 
     if request.get("model") != "gpt-oss-local":
         raise ValueError(f"request fixture must use served local model alias: {case_id}")
