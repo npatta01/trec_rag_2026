@@ -405,6 +405,33 @@ def validate_model_response_shape(
         raise ValueError("select requires a nonempty nonnegative range")
 
 
+def extract_model_response_from_chat_completion(
+    payload: Mapping[str, object], *, case_id: str, u1_token_count: int
+) -> dict[str, object]:
+    """Extract and validate the strict assistant JSON object from a raw response."""
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise ValueError("chat completion must contain exactly one choice")
+    choice = _as_mapping(choices[0], "chat completion choice")
+    if choice.get("finish_reason") != "stop":
+        raise ValueError("chat completion finish_reason must be stop")
+    message = _as_mapping(choice.get("message"), "chat completion message")
+    if message.get("role") != "assistant":
+        raise ValueError("chat completion message role must be assistant")
+    for forbidden in ("tool_calls", "function_call", "refusal"):
+        if forbidden in message and message.get(forbidden) not in (None, [], ""):
+            raise ValueError(f"chat completion message must not contain {forbidden}")
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("chat completion assistant content must be a nonempty string")
+    if content != content.strip():
+        raise ValueError("chat completion assistant content must not have outer whitespace")
+    response = _loads_object_no_duplicates(content, "assistant content")
+    validate_model_response_shape(response, case_id=case_id, u1_token_count=u1_token_count)
+    return dict(response)
+
+
 def decision_boundary_grid(*, u1_token_count: int) -> tuple[DecisionBoundaryCase, ...]:
     if u1_token_count < 3:
         raise ValueError("u1_token_count must be at least 3 for distinct boundary fixtures")
@@ -1699,6 +1726,24 @@ def _require_exact_mapping_keys(
 def _require_nonempty_string(value: object, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a nonempty string")
+    return value
+
+
+def _loads_object_no_duplicates(text: str, name: str) -> Mapping[str, object]:
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key in {name}: {key}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(text, object_pairs_hook=unique_object)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be strict JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a JSON object")
     return value
 
 

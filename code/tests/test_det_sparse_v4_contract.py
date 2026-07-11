@@ -295,6 +295,102 @@ def test_model_response_shape_enforces_sentinel_bounds_and_no_extra_fields():
         )
 
 
+def _chat_completion(content, *, finish_reason="stop", extra_message=None):
+    message = {"role": "assistant", "content": content}
+    if extra_message:
+        message.update(extra_message)
+    return {
+        "id": "chatcmpl-offline-fixture",
+        "model": "gpt-oss-local",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": finish_reason,
+                "message": message,
+            }
+        ],
+    }
+
+
+def test_chat_completion_extractor_accepts_only_strict_assistant_json_object():
+    content = (
+        '{"case_id":"synthetic-case-001","decision":"select","end_token":2,'
+        '"schema_version":"semantic_anchor_response_v1","start_token":0}'
+    )
+
+    response = v4.extract_model_response_from_chat_completion(
+        _chat_completion(content),
+        case_id="synthetic-case-001",
+        u1_token_count=5,
+    )
+
+    assert response == {
+        "schema_version": "semantic_anchor_response_v1",
+        "case_id": "synthetic-case-001",
+        "decision": "select",
+        "start_token": 0,
+        "end_token": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({}, "exactly one choice"),
+        (_chat_completion("{}", finish_reason="length"), "finish_reason"),
+        (_chat_completion(" {}",), "outer whitespace"),
+        (_chat_completion("not-json"), "strict JSON"),
+        (_chat_completion("[]"), "JSON object"),
+        (
+            _chat_completion(
+                '{"schema_version":"semantic_anchor_response_v1",'
+                '"case_id":"synthetic-case-001","case_id":"synthetic-case-001",'
+                '"decision":"select","start_token":0,"end_token":2}'
+            ),
+            "duplicate JSON key",
+        ),
+        (
+            _chat_completion(
+                '{"schema_version":"semantic_anchor_response_v1",'
+                '"case_id":"synthetic-case-999","decision":"select",'
+                '"start_token":0,"end_token":2}'
+            ),
+            "case_id mismatch",
+        ),
+        (
+            _chat_completion(
+                '{"schema_version":"semantic_anchor_response_v1",'
+                '"case_id":"synthetic-case-001","decision":"select",'
+                '"start_token":0,"end_token":2}',
+                extra_message={"tool_calls": [{"id": "nope"}]},
+            ),
+            "tool_calls",
+        ),
+        (
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "tool", "content": "{}"},
+                    }
+                ]
+            },
+            "role",
+        ),
+    ],
+)
+def test_chat_completion_extractor_rejects_non_strict_or_non_assistant_payloads(
+    payload,
+    message,
+):
+    with pytest.raises(ValueError, match=message):
+        v4.extract_model_response_from_chat_completion(
+            payload,
+            case_id="synthetic-case-001",
+            u1_token_count=5,
+        )
+
+
 def test_decision_boundary_grid_is_72_cells_with_distinct_boundaries():
     grid = v4.decision_boundary_grid(u1_token_count=7)
 

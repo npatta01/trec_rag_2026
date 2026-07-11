@@ -21,6 +21,7 @@ from trec_rag import det_sparse_v4_preflight as preflight
 
 RUN_MANIFEST_PATH = "run_manifest.json"
 TERMINAL_RECEIPT_PATH = "terminal_receipt.json"
+RESERVATIONS_DIR = "reservations"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class PreDispatchNoGoRun:
     output_dir: Path
     run_manifest_path: Path
     terminal_receipt_path: Path
+    reservation_paths: tuple[Path, ...]
 
 
 def build_pre_dispatch_no_go_run(
@@ -42,7 +44,12 @@ def build_pre_dispatch_no_go_run(
     """
 
     report = preflight.build_offline_preflight_report(artifact_dir)
-    case_order = _case_order_from_request_identity(report["request_identity"])
+    request_identity = _require_mapping(report["request_identity"], "request_identity")
+    case_order = _case_order_from_request_identity(request_identity)
+    reservations = _reservations_from_request_identity(
+        request_identity,
+        run_id=destination_run_id(output_dir),
+    )
     artifact_sha256 = _string_mapping(report["artifact_sha256"], "artifact_sha256")
 
     destination = output_dir.resolve()
@@ -64,7 +71,7 @@ def build_pre_dispatch_no_go_run(
     }
     contract.validate_ledger_prefix(
         case_order=case_order,
-        reservations=[],
+        reservations=reservations,
         dispatches=[],
         raw_responses=[],
         transport_failures=[],
@@ -75,7 +82,15 @@ def build_pre_dispatch_no_go_run(
 
     run_manifest_path = destination / RUN_MANIFEST_PATH
     terminal_receipt_path = destination / TERMINAL_RECEIPT_PATH
+    reservations_dir = destination / RESERVATIONS_DIR
+    reservations_dir.mkdir(exist_ok=False)
     _create_only(run_manifest_path, contract.canonical_json_bytes(run_manifest) + b"\n")
+    reservation_paths: list[Path] = []
+    for reservation in reservations:
+        case_id = str(reservation["case_id"])
+        path = reservations_dir / f"{case_id}.json"
+        _create_only(path, contract.canonical_json_bytes(reservation) + b"\n")
+        reservation_paths.append(path)
     _create_only(
         terminal_receipt_path,
         contract.canonical_json_bytes(terminal_receipt) + b"\n",
@@ -85,7 +100,15 @@ def build_pre_dispatch_no_go_run(
         output_dir=destination,
         run_manifest_path=run_manifest_path,
         terminal_receipt_path=terminal_receipt_path,
+        reservation_paths=tuple(reservation_paths),
     )
+
+
+def destination_run_id(output_dir: Path) -> str:
+    run_id = output_dir.resolve().name
+    if not run_id:
+        raise ValueError("output_dir must have a nonempty final path component")
+    return run_id
 
 
 def _case_order_from_request_identity(value: object) -> tuple[str, ...]:
@@ -95,6 +118,26 @@ def _case_order_from_request_identity(value: object) -> tuple[str, ...]:
     if len(case_order) != 24:
         raise ValueError("request identity must contain 24 cases")
     return case_order
+
+
+def _reservations_from_request_identity(
+    value: object, *, run_id: str
+) -> tuple[dict[str, object], ...]:
+    identity = _require_mapping(value, "request_identity")
+    request_sha256 = _string_mapping(identity.get("request_sha256"), "request_sha256")
+    reservations = tuple(
+        {
+            "schema_version": "semantic_anchor_reservation_v1",
+            "run_id": run_id,
+            "case_id": case_id,
+            "request_sha256": digest,
+            "create_only": True,
+        }
+        for case_id, digest in request_sha256.items()
+    )
+    for reservation in reservations:
+        contract.validate_reservation(reservation)
+    return reservations
 
 
 def _string_mapping(value: object, name: str) -> dict[str, str]:
