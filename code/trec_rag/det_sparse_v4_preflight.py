@@ -48,6 +48,7 @@ ALLOWED_IMPORT_ROOTS = (
 )
 ALLOWED_TREC_RAG_MODULES = (
     "trec_rag.det_sparse_v4_contract",
+    "trec_rag.det_sparse_v4_preflight",
     "trec_rag.query_schema_compat",
 )
 
@@ -72,6 +73,7 @@ def build_offline_preflight_report(
         Path(__file__),
         Path(contract.__file__),
         Path(query_schema_compat.__file__),
+        Path(__file__).with_name("det_sparse_v4_runner.py"),
     )
     source_audit = build_source_audit_summary(audited_paths)
     if source_audit["denied_import_issues"]:

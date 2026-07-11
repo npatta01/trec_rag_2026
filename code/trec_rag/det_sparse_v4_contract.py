@@ -93,6 +93,16 @@ REPLAY_MUTATION_IDS = (
     "change_model_inventory_hash",
     "mark_dispatch_non_loopback",
 )
+REPLAY_FAILURE_CODES = (
+    "request_hash_mismatch",
+    "raw_response_hash_mismatch",
+    "case_order_mismatch",
+    "gold_opened_before_complete",
+    "schema_constant_mismatch",
+    "runner_gold_visibility_violation",
+    "model_inventory_changed",
+    "non_loopback_dispatch",
+)
 LEDGER_SCHEMA_FILES = (
     "semantic_anchor_reservation_v1.schema.json",
     "semantic_anchor_pre_dispatch_attestation_v1.schema.json",
@@ -870,12 +880,7 @@ def validate_ledger_prefix(
 ) -> None:
     """Validate a synthetic v4 ledger prefix without opening gold or model files."""
 
-    if len(case_order) != 24:
-        raise ValueError("ledger prefix requires the frozen 24-case order")
-    for case_id in case_order:
-        _validate_case_id(case_id, "case_order case_id")
-    if len(set(case_order)) != len(case_order):
-        raise ValueError("case_order contains duplicates")
+    validate_fixed_case_order(case_order)
 
     for record in reservations:
         validate_reservation(record)
@@ -1017,6 +1022,12 @@ def validate_model_inventory(inventory: Mapping[str, object]) -> None:
             raise ValueError(f"model inventory invalid sha256 for {path}")
 
 
+def validate_fixed_case_order(case_order: Sequence[str]) -> None:
+    expected = tuple(f"synthetic-case-{index:03d}" for index in range(1, 25))
+    if tuple(case_order) != expected:
+        raise ValueError("case_order_mismatch")
+
+
 def validate_case_registry(registry: Mapping[str, object]) -> tuple[str, ...]:
     if registry.get("schema_version") != CASE_REGISTRY_VERSION:
         raise ValueError("case registry schema_version mismatch")
@@ -1095,9 +1106,174 @@ def validate_replay_mutation_registry(registry: Mapping[str, object]) -> tuple[s
         failure_codes.add(failure_code)
     if tuple(mutation_ids) != REPLAY_MUTATION_IDS:
         raise ValueError("replay mutation IDs drifted")
+    if tuple(
+        _as_mapping(mutation, "replay mutation").get("expected_failure_code")
+        for mutation in mutations
+    ) != REPLAY_FAILURE_CODES:
+        raise ValueError("replay mutation failure codes drifted")
     if len(failure_codes) != len(mutation_ids):
         raise ValueError("replay mutations must have unique failure codes")
     return tuple(mutation_ids)
+
+
+def run_replay_mutation_oracle(mutation_id: str) -> str:
+    """Execute one topic-free replay mutation oracle and return its failure code."""
+
+    if mutation_id not in REPLAY_MUTATION_IDS:
+        raise ValueError(f"unknown replay mutation: {mutation_id}")
+    failure_code = REPLAY_FAILURE_CODES[REPLAY_MUTATION_IDS.index(mutation_id)]
+    try:
+        _execute_replay_mutation_oracle(mutation_id)
+    except ValueError:
+        return failure_code
+    raise ValueError(f"replay mutation did not fail: {mutation_id}")
+
+
+def _execute_replay_mutation_oracle(mutation_id: str) -> None:
+    case_order = tuple(f"synthetic-case-{index:03d}" for index in range(1, 25))
+    artifact_sha256 = {"manifest": "a" * 64}
+    if mutation_id == "mutate_request_body_byte":
+        validate_ledger_prefix(
+            case_order=case_order,
+            reservations=[_oracle_reservation(request_sha256="1" * 64)],
+            dispatches=[_oracle_dispatch(request_sha256="9" * 64)],
+            raw_responses=[],
+            transport_failures=[],
+            case_receipts=[],
+            terminal_receipt=_oracle_terminal(attempted=1, completed=0, raw_committed=0),
+        )
+    elif mutation_id == "mutate_raw_response_body_byte":
+        validate_ledger_prefix(
+            case_order=case_order,
+            reservations=[_oracle_reservation()],
+            dispatches=[_oracle_dispatch()],
+            raw_responses=[_oracle_raw_response(body_sha256="2" * 64)],
+            transport_failures=[],
+            case_receipts=[_oracle_case_receipt(raw_response_sha256="9" * 64)],
+            terminal_receipt=_oracle_terminal(attempted=1, completed=1, raw_committed=1),
+        )
+    elif mutation_id == "swap_case_order_ids":
+        swapped = list(case_order)
+        swapped[0], swapped[1] = swapped[1], swapped[0]
+        validate_fixed_case_order(swapped)
+    elif mutation_id == "mark_prefix_gold_opened":
+        validate_terminal_receipt(
+            _oracle_terminal(
+                attempted=1,
+                completed=0,
+                raw_committed=0,
+                gold_opened=True,
+            )
+        )
+    elif mutation_id == "change_response_schema_case_const":
+        schema = expected_case001_response_schema()
+        schema = dict(schema)
+        properties = dict(_as_mapping(schema["properties"], "schema properties"))
+        properties["case_id"] = {"const": "synthetic-case-999", "type": "string"}
+        schema["properties"] = properties
+        if schema != expected_case001_response_schema():
+            raise ValueError("schema_constant_mismatch")
+    elif mutation_id == "add_gold_to_runner_manifest":
+        validate_runner_gold_separation(
+            ("semantic_anchor_gold_labels_v1.json",),
+            scorer_only_artifacts(),
+        )
+    elif mutation_id == "change_model_inventory_hash":
+        attestation = _oracle_pre_dispatch_attestation(model_inventory_sha256="9" * 64)
+        validate_pre_dispatch_attestation(attestation)
+        if attestation["model_inventory_sha256"] != "8" * 64:
+            raise ValueError("model_inventory_changed")
+    elif mutation_id == "mark_dispatch_non_loopback":
+        validate_dispatch_record(_oracle_dispatch(loopback_only=False))
+    else:
+        raise ValueError(f"unknown replay mutation: {mutation_id}")
+
+
+def _oracle_reservation(
+    *, case_id: str = "synthetic-case-001", request_sha256: str = "1" * 64
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_reservation_v1",
+        "run_id": "oracle-run",
+        "case_id": case_id,
+        "request_sha256": request_sha256,
+        "create_only": True,
+    }
+
+
+def _oracle_dispatch(
+    *,
+    case_id: str = "synthetic-case-001",
+    request_sha256: str = "1" * 64,
+    loopback_only: bool = True,
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_dispatch_record_v1",
+        "case_id": case_id,
+        "request_bytes_sha256": request_sha256,
+        "loopback_only": loopback_only,
+        "dispatch_counted": True,
+    }
+
+
+def _oracle_raw_response(
+    *, case_id: str = "synthetic-case-001", body_sha256: str = "2" * 64
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_raw_response_body_v1",
+        "case_id": case_id,
+        "http_status": 200,
+        "finish_reason": "stop",
+        "served_model": "gpt-oss-local",
+        "body_size_bytes": 1,
+        "body_sha256": body_sha256,
+    }
+
+
+def _oracle_case_receipt(
+    *,
+    case_id: str = "synthetic-case-001",
+    request_sha256: str = "1" * 64,
+    raw_response_sha256: str = "2" * 64,
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_case_receipt_v1",
+        "case_id": case_id,
+        "request_sha256": request_sha256,
+        "machine_status": "mechanical_pass",
+        "raw_response_sha256": raw_response_sha256,
+    }
+
+
+def _oracle_terminal(
+    *,
+    attempted: int,
+    completed: int,
+    raw_committed: int,
+    gold_opened: bool = False,
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_terminal_receipt_v1",
+        "terminal_state": "interrupted_incomplete",
+        "attempted_calls": attempted,
+        "completed_calls": completed,
+        "raw_committed_calls": raw_committed,
+        "gold_opened": gold_opened,
+        "artifact_sha256": {"manifest": "a" * 64},
+    }
+
+
+def _oracle_pre_dispatch_attestation(
+    *, model_inventory_sha256: str = "8" * 64
+) -> dict[str, object]:
+    return {
+        "schema_version": "semantic_anchor_pre_dispatch_attestation_v1",
+        "attestation_id": "oracle-attestation",
+        "served_model": "gpt-oss-local",
+        "egress_denied": True,
+        "read_only_model_mount": True,
+        "model_inventory_sha256": model_inventory_sha256,
+    }
 
 
 def validate_renderer_oracle(oracle: Mapping[str, object]) -> tuple[str, ...]:

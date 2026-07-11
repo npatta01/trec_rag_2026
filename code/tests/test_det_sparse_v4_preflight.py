@@ -20,13 +20,14 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     assert report["cost_counters"] == preflight.ZERO_COST_COUNTERS
     assert report["source_audit"]["checker"] == "det_sparse_v4_static_direct_source_audit_v1"
     assert report["source_audit"]["status"] == "pass"
-    assert report["source_audit"]["audited_source_count"] == 3
+    assert report["source_audit"]["audited_source_count"] == 4
     assert report["source_audit"]["unexpected_import_roots"] == []
     assert report["source_audit"]["unexpected_trec_rag_modules"] == []
     assert report["source_audit"]["denied_import_issues"] == []
     assert report["source_audit"]["denied_path_fragment_issues"] == {}
     assert report["source_audit"]["observed_trec_rag_modules"] == [
         "trec_rag.det_sparse_v4_contract",
+        "trec_rag.det_sparse_v4_preflight",
         "trec_rag.query_schema_compat",
     ]
     assert report["schema_compatibility"] == {

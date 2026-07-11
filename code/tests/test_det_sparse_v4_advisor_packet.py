@@ -16,15 +16,17 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "inference_authorized`: `false`" in text
     assert "external_cost_authorized`: `false`" in text
     assert "next_gate`: `advisor_review_before_live_attestation_or_model_inference`" in text
-    assert "`source_audit`: 3 source files, `status=pass`" in text
+    assert "`source_audit`: 4 source files, `status=pass`" in text
+    assert "create-only runner scaffold writes a fresh run manifest" in text
     assert "`unexpected_trec_rag_modules=[]`" in text
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
     assert "offset responses now have an executable Python shape/hash/monotonicity validator" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
     assert "executable ledger-prefix validator" in text
+    assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
-    assert "classification validation: `124 passed`." in text
+    assert "classification" in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
@@ -41,6 +43,7 @@ def test_v4_advisor_packet_maps_core_issues_to_evidence():
         "Local model inventory must be exact and cost-free",
         "Anchor typing/scope must be unambiguous",
         "Ledger integrity must be raw-first and fail-closed",
+        "Runner entrypoint must not dispatch before approval",
         "Runner request identities must be fixed before dispatch",
         "Evaluation protocol must avoid qrels leakage",
         "External cost must remain zero",

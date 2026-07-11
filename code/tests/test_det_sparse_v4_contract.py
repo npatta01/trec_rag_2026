@@ -891,6 +891,16 @@ def test_replay_mutation_registry_freezes_expected_failure_surface():
     assert mutation_ids == v4.REPLAY_MUTATION_IDS
     assert len(mutation_ids) == 8
     assert len({m["expected_failure_code"] for m in registry["mutations"]}) == 8
+    assert tuple(m["expected_failure_code"] for m in registry["mutations"]) == (
+        "request_hash_mismatch",
+        "raw_response_hash_mismatch",
+        "case_order_mismatch",
+        "gold_opened_before_complete",
+        "schema_constant_mismatch",
+        "runner_gold_visibility_violation",
+        "model_inventory_changed",
+        "non_loopback_dispatch",
+    )
 
 
 def test_replay_mutation_registry_rejects_reordered_ids():
@@ -906,6 +916,24 @@ def test_replay_mutation_registry_rejects_reordered_ids():
 
     with pytest.raises(ValueError, match="mutation IDs"):
         v4.validate_replay_mutation_registry(mutated)
+
+
+def test_replay_mutation_oracles_execute_registered_failure_codes():
+    registry = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_replay_mutation_registry_v1.json"
+    )
+
+    observed = {
+        mutation["mutation_id"]: v4.run_replay_mutation_oracle(mutation["mutation_id"])
+        for mutation in registry["mutations"]
+    }
+
+    assert observed == {
+        mutation["mutation_id"]: mutation["expected_failure_code"]
+        for mutation in registry["mutations"]
+    }
+    with pytest.raises(ValueError, match="unknown replay mutation"):
+        v4.run_replay_mutation_oracle("not_registered")
 
 
 def test_renderer_oracle_fixture_is_topic_free_and_ordered():
