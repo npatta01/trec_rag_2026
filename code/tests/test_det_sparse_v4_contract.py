@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from trec_rag import det_sparse_v4_contract as v4
+from trec_rag.query_schema_compat import require_vllm_xgrammar_compatible
 
 
 def test_v4_denied_topic_sets_are_frozen_pairwise_disjoint_and_complete():
@@ -435,6 +436,27 @@ def test_case001_schema_fixture_matches_generated_schema():
     )
 
     assert schema == v4.expected_case001_response_schema()
+    require_vllm_xgrammar_compatible(schema)
+
+
+def test_all_v4_request_fixture_schemas_are_vllm_xgrammar_compatible():
+    request_records = v4.load_jsonl_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_request_fixtures_v1.jsonl"
+    )
+
+    assert len(request_records) == 24
+    for raw_record in request_records:
+        record = raw_record
+        assert isinstance(record, dict)
+        request = record["request"]
+        assert isinstance(request, dict)
+        response_format = request["response_format"]
+        assert isinstance(response_format, dict)
+        json_schema = response_format["json_schema"]
+        assert isinstance(json_schema, dict)
+        schema = json_schema["schema"]
+        assert isinstance(schema, dict)
+        require_vllm_xgrammar_compatible(schema)
 
 
 def test_full_fixture_files_cover_all_registry_cases_in_order():

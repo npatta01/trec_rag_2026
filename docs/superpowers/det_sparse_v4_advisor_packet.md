@@ -73,7 +73,7 @@ deterministically.
 | Query decomposition/facet strategy needs vocabulary-gap handling | V4 tests a semantic exact-span selector only on synthetic cases, then renders deterministic sparse facets. | Proposed; no model call yet. |
 | Dense retrieval is not a practical main option at collection scale | V4 remains sparse/query-expansion oriented and does not require dense indexing or dense ranking. | Strategy-level choice, not yet empirically validated. |
 | Free-running agents could drift or spend | Design and preflight both disallow an agent loop; all counters remain zero. | Enforced as an offline gate. |
-| Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas. | Offline fixtures validated; live compiler attestation still pending. |
+| Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas; all 24 schemas pass the offline vLLM 0.24/XGrammar unsupported-feature linter. | Offline fixtures and schema lint validated; live compiler attestation still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
 | Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, and terminal-state validator are committed. | Shapes validated; real runner/replay still pending. |
 | Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. | Offline separation validated; scorer execution still pending. |
@@ -112,10 +112,11 @@ The offline regression command used for this packet was:
   code/tests/test_det_sparse_v3_preflight.py \
   code/tests/test_det_sparse_v4_contract.py \
   code/tests/test_det_sparse_v4_preflight.py \
+  code/tests/test_det_sparse_v4_advisor_packet.py \
   -q
 ```
 
-Result: `89 passed`.
+Result after adding packet and offline schema-compatibility checks: `92 passed`.
 
 ## What is not yet proven
 
