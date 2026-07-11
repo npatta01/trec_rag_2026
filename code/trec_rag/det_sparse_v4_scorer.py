@@ -21,7 +21,12 @@ from trec_rag import det_sparse_v4_contract as contract
 SEALED_SCORER_INPUT_SCHEMA_VERSION = "semantic_anchor_sealed_scorer_input_v1"
 SCORER_REVIEW_SCHEMA_VERSION = "semantic_anchor_scorer_review_v1"
 SCORER_REVIEW_STATUS = "scorer_review_pass"
+REVIEWER_QUALIFICATION_REVIEW_SCHEMA_VERSION = (
+    "semantic_anchor_reviewer_qualification_review_v1"
+)
+REVIEWER_QUALIFICATION_REVIEW_STATUS = "reviewer_qualification_review_pass"
 GOLD_LABELS_ARTIFACT = "semantic_anchor_gold_labels_v1.json"
+REVIEWER_RUBRIC_ARTIFACT = "semantic_anchor_reviewer_rubric_v1.md"
 SCORER_INPUT_TERMINAL_STATE = "raw_sealed_pending_scorer"
 
 
@@ -130,6 +135,141 @@ def validate_scorer_review(
         raise ValueError("scorer review must not authorize external cost")
     receipt = _require_mapping(review.get("scorer_receipt"), "scorer receipt")
     contract.validate_scorer_receipt(receipt, case_order=expected_case_order)
+
+
+def build_reviewer_qualification_review(
+    scorer_review_path: Path,
+    reviewer_receipt_path: Path,
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Bind reviewer consensus to the exact scorer review and artifact hashes."""
+
+    case_order = _case_order(artifact_dir)
+    scorer_path = scorer_review_path.resolve()
+    reviewer_path = reviewer_receipt_path.resolve()
+    scorer_review = _require_mapping(
+        contract.load_json_no_duplicates(scorer_path),
+        "scorer review",
+    )
+    if scorer_path.read_bytes() != canonical_review_bytes(scorer_review):
+        raise ValueError("scorer review is not canonical JSON bytes")
+    validate_scorer_review(scorer_review, case_order=case_order)
+    reviewer_receipt = _require_mapping(
+        contract.load_json_no_duplicates(reviewer_path),
+        "reviewer receipt",
+    )
+    if reviewer_path.read_bytes() != contract.canonical_json_bytes(reviewer_receipt) + b"\n":
+        raise ValueError("reviewer receipt is not canonical JSON bytes")
+    contract.validate_reviewer_receipt(reviewer_receipt)
+
+    artifact_hashes = contract.validate_artifact_bundle(artifact_dir)
+    artifact_bundle_sha256 = contract.sha256_bytes(
+        contract.canonical_json_bytes(artifact_hashes)
+    )
+    expected_bindings = {
+        "scorer_review_sha256": contract.sha256_file(scorer_path),
+        "sealed_responses_sha256": scorer_review["sealed_responses_sha256"],
+        "gold_sha256": scorer_review["gold_sha256"],
+        "rubric_sha256": artifact_hashes[REVIEWER_RUBRIC_ARTIFACT],
+        "artifact_bundle_sha256": artifact_bundle_sha256,
+    }
+    for key, expected in expected_bindings.items():
+        if reviewer_receipt.get(key) != expected:
+            raise ValueError(f"reviewer receipt {key} binding mismatch")
+
+    scorer_receipt = _require_mapping(scorer_review.get("scorer_receipt"), "scorer receipt")
+    terminal_state = contract.synthetic_qualification_terminal_state(
+        scorer_receipt=scorer_receipt,
+        reviewer_receipt=reviewer_receipt,
+        case_order=case_order,
+    )
+    return {
+        "schema_version": REVIEWER_QUALIFICATION_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": REVIEWER_QUALIFICATION_REVIEW_STATUS,
+        "scorer_review_path": str(scorer_path),
+        "scorer_review_sha256": expected_bindings["scorer_review_sha256"],
+        "reviewer_receipt_path": str(reviewer_path),
+        "reviewer_receipt_sha256": contract.sha256_file(reviewer_path),
+        "sealed_responses_sha256": expected_bindings["sealed_responses_sha256"],
+        "gold_sha256": expected_bindings["gold_sha256"],
+        "rubric_artifact": REVIEWER_RUBRIC_ARTIFACT,
+        "rubric_sha256": expected_bindings["rubric_sha256"],
+        "artifact_bundle_sha256": artifact_bundle_sha256,
+        "reviewer_count": reviewer_receipt["reviewer_count"],
+        "unanimous": reviewer_receipt["unanimous"],
+        "terminal_state": terminal_state,
+        "inference_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+    }
+
+
+def validate_reviewer_qualification_review(
+    review: Mapping[str, object],
+) -> None:
+    _require_exact_keys(
+        review,
+        "reviewer qualification review",
+        {
+            "schema_version",
+            "experiment_id",
+            "status",
+            "scorer_review_path",
+            "scorer_review_sha256",
+            "reviewer_receipt_path",
+            "reviewer_receipt_sha256",
+            "sealed_responses_sha256",
+            "gold_sha256",
+            "rubric_artifact",
+            "rubric_sha256",
+            "artifact_bundle_sha256",
+            "reviewer_count",
+            "unanimous",
+            "terminal_state",
+            "inference_authorized",
+            "dispatch_authorized",
+            "external_cost_authorized",
+        },
+    )
+    if review.get("schema_version") != REVIEWER_QUALIFICATION_REVIEW_SCHEMA_VERSION:
+        raise ValueError("reviewer qualification review schema_version mismatch")
+    if review.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("reviewer qualification review experiment_id mismatch")
+    if review.get("status") != REVIEWER_QUALIFICATION_REVIEW_STATUS:
+        raise ValueError("reviewer qualification review status mismatch")
+    for key in (
+        "scorer_review_path",
+        "reviewer_receipt_path",
+    ):
+        _require_string(review.get(key), key)
+    for key in (
+        "scorer_review_sha256",
+        "reviewer_receipt_sha256",
+        "sealed_responses_sha256",
+        "gold_sha256",
+        "rubric_sha256",
+        "artifact_bundle_sha256",
+    ):
+        _validate_sha256(review.get(key), key)
+    if review.get("rubric_artifact") != REVIEWER_RUBRIC_ARTIFACT:
+        raise ValueError("reviewer qualification review rubric artifact mismatch")
+    if not isinstance(review.get("reviewer_count"), int) or review["reviewer_count"] < 2:
+        raise ValueError("reviewer qualification review requires at least two reviewers")
+    if review.get("unanimous") is not True:
+        raise ValueError("reviewer qualification review must be unanimous")
+    if review.get("terminal_state") not in {
+        contract.TerminalState.COMPLETED_SYNTHETIC_GO.value,
+        contract.TerminalState.COMPLETED_QUALIFICATION_NO_GO.value,
+    }:
+        raise ValueError("reviewer qualification review terminal_state mismatch")
+    if review.get("inference_authorized") is not False:
+        raise ValueError("reviewer qualification review must not authorize inference")
+    if review.get("dispatch_authorized") is not False:
+        raise ValueError("reviewer qualification review must not authorize dispatch")
+    if review.get("external_cost_authorized") is not False:
+        raise ValueError("reviewer qualification review must not authorize external cost")
 
 
 def validate_sealed_scorer_input(
@@ -337,6 +477,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("sealed_responses", type=Path)
     parser.add_argument("--artifact-dir", type=Path, default=contract.ARTIFACT_DIR)
+    parser.add_argument(
+        "--qualification-review",
+        action="store_true",
+        help="Treat the positional path as a scorer review and bind it to a reviewer receipt.",
+    )
+    parser.add_argument("--reviewer-receipt", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--pretty", action="store_true")
     return parser
@@ -344,11 +490,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    review = build_scorer_review(
-        args.sealed_responses,
-        artifact_dir=args.artifact_dir,
-    )
-    validate_scorer_review(review)
+    if args.qualification_review:
+        if args.reviewer_receipt is None:
+            raise SystemExit("--qualification-review requires --reviewer-receipt")
+        review = build_reviewer_qualification_review(
+            args.sealed_responses,
+            args.reviewer_receipt,
+            artifact_dir=args.artifact_dir,
+        )
+        validate_reviewer_qualification_review(review)
+    else:
+        if args.reviewer_receipt is not None:
+            raise SystemExit("--reviewer-receipt requires --qualification-review")
+        review = build_scorer_review(
+            args.sealed_responses,
+            artifact_dir=args.artifact_dir,
+        )
+        validate_scorer_review(review)
     payload = canonical_review_bytes(review, pretty=args.pretty)
     if args.output:
         _create_only(args.output, payload)

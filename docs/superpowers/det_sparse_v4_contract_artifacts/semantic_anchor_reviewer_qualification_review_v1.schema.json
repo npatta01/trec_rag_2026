@@ -1,0 +1,101 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifact_bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "dispatch_authorized": {
+      "const": false,
+      "type": "boolean"
+    },
+    "experiment_id": {
+      "const": "det_sparse_exact_span_synthetic_v4",
+      "type": "string"
+    },
+    "external_cost_authorized": {
+      "const": false,
+      "type": "boolean"
+    },
+    "gold_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "inference_authorized": {
+      "const": false,
+      "type": "boolean"
+    },
+    "reviewer_count": {
+      "minimum": 2,
+      "type": "integer"
+    },
+    "reviewer_receipt_path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "reviewer_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "rubric_artifact": {
+      "const": "semantic_anchor_reviewer_rubric_v1.md",
+      "type": "string"
+    },
+    "rubric_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "semantic_anchor_reviewer_qualification_review_v1",
+      "type": "string"
+    },
+    "scorer_review_path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "scorer_review_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "sealed_responses_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "status": {
+      "const": "reviewer_qualification_review_pass",
+      "type": "string"
+    },
+    "terminal_state": {
+      "enum": [
+        "completed_synthetic_go",
+        "completed_qualification_no_go"
+      ],
+      "type": "string"
+    },
+    "unanimous": {
+      "const": true,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "status",
+    "scorer_review_path",
+    "scorer_review_sha256",
+    "reviewer_receipt_path",
+    "reviewer_receipt_sha256",
+    "sealed_responses_sha256",
+    "gold_sha256",
+    "rubric_artifact",
+    "rubric_sha256",
+    "artifact_bundle_sha256",
+    "reviewer_count",
+    "unanimous",
+    "terminal_state",
+    "inference_authorized",
+    "dispatch_authorized",
+    "external_cost_authorized"
+  ],
+  "type": "object"
+}

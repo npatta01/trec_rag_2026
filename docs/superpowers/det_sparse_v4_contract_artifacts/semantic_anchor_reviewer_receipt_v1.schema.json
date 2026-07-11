@@ -9,6 +9,26 @@
       "const": "semantic_anchor_reviewer_receipt_v1",
       "type": "string"
     },
+    "scorer_review_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "sealed_responses_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "gold_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "rubric_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "artifact_bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "unanimous": {
       "const": true,
       "type": "boolean"
@@ -17,7 +37,12 @@
   "required": [
     "schema_version",
     "reviewer_count",
-    "unanimous"
+    "unanimous",
+    "scorer_review_sha256",
+    "sealed_responses_sha256",
+    "gold_sha256",
+    "rubric_sha256",
+    "artifact_bundle_sha256"
   ],
   "type": "object"
 }

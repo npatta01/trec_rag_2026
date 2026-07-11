@@ -912,6 +912,11 @@ def test_reviewer_receipt_and_synthetic_qualification_gate_are_fail_closed():
         "schema_version": "semantic_anchor_reviewer_receipt_v1",
         "reviewer_count": 2,
         "unanimous": True,
+        "scorer_review_sha256": "1" * 64,
+        "sealed_responses_sha256": "2" * 64,
+        "gold_sha256": "3" * 64,
+        "rubric_sha256": "4" * 64,
+        "artifact_bundle_sha256": "5" * 64,
     }
 
     v4.validate_reviewer_receipt(reviewer_receipt)
@@ -940,6 +945,7 @@ def test_reviewer_receipt_and_synthetic_qualification_gate_are_fail_closed():
         (dict(reviewer_receipt, reviewer_count=1), "at least two"),
         (dict(reviewer_receipt, unanimous=False), "unanimous"),
         (dict(reviewer_receipt, schema_version="future"), "schema_version"),
+        (dict(reviewer_receipt, scorer_review_sha256="not-a-sha"), "scorer_review_sha256"),
     ):
         with pytest.raises(ValueError, match=message):
             v4.synthetic_qualification_terminal_state(
@@ -1374,6 +1380,7 @@ def test_manifest_requires_ledger_and_replay_artifacts():
         assert filename in hashes
     assert "semantic_anchor_replay_mutation_registry_v1.json" in hashes
     assert "semantic_anchor_reviewer_receipt_v1.schema.json" in hashes
+    assert "semantic_anchor_reviewer_qualification_review_v1.schema.json" in hashes
     assert "semantic_anchor_renderer_oracle_v1.json" in hashes
     assert "semantic_anchor_model_inventory_attestation_v1.json" in hashes
     assert "semantic_anchor_import_open_audit_v1.json" in hashes

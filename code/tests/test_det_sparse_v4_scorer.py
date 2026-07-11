@@ -141,6 +141,28 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_bytes(contract.canonical_json_bytes(payload) + b"\n")
 
 
+def _reviewer_receipt_for_scorer_review(
+    scorer_review_path: Path,
+    scorer_review: dict[str, object],
+    *,
+    reviewer_count: int = 2,
+    unanimous: bool = True,
+) -> dict[str, object]:
+    artifact_hashes = contract.validate_artifact_bundle()
+    return {
+        "schema_version": "semantic_anchor_reviewer_receipt_v1",
+        "reviewer_count": reviewer_count,
+        "unanimous": unanimous,
+        "scorer_review_sha256": contract.sha256_file(scorer_review_path),
+        "sealed_responses_sha256": scorer_review["sealed_responses_sha256"],
+        "gold_sha256": scorer_review["gold_sha256"],
+        "rubric_sha256": artifact_hashes["semantic_anchor_reviewer_rubric_v1.md"],
+        "artifact_bundle_sha256": contract.sha256_bytes(
+            contract.canonical_json_bytes(artifact_hashes)
+        ),
+    }
+
+
 def test_scorer_review_builds_case_ordered_receipt_after_seal_checks(tmp_path: Path):
     sealed_path = tmp_path / "sealed-scorer-input.json"
     _write_json(sealed_path, _sealed_scorer_input())
@@ -315,3 +337,150 @@ def test_scorer_cli_writes_create_only_review_without_dispatch(tmp_path: Path):
             text=True,
             capture_output=True,
         )
+
+
+def test_reviewer_qualification_review_binds_consensus_to_scorer_review(
+    tmp_path: Path,
+):
+    sealed_path = tmp_path / "sealed-scorer-input.json"
+    scorer_review_path = tmp_path / "scorer-review.json"
+    reviewer_receipt_path = tmp_path / "reviewer-receipt.json"
+    _write_json(sealed_path, _sealed_scorer_input())
+    scorer_review = scorer.build_scorer_review(sealed_path)
+    _write_json(scorer_review_path, scorer_review)
+    _write_json(
+        reviewer_receipt_path,
+        _reviewer_receipt_for_scorer_review(scorer_review_path, scorer_review),
+    )
+
+    review = scorer.build_reviewer_qualification_review(
+        scorer_review_path,
+        reviewer_receipt_path,
+    )
+
+    scorer.validate_reviewer_qualification_review(review)
+    assert review["schema_version"] == "semantic_anchor_reviewer_qualification_review_v1"
+    assert review["terminal_state"] == "completed_synthetic_go"
+    assert review["dispatch_authorized"] is False
+
+
+@pytest.mark.parametrize(
+    "binding_field",
+    [
+        "scorer_review_sha256",
+        "sealed_responses_sha256",
+        "gold_sha256",
+        "rubric_sha256",
+        "artifact_bundle_sha256",
+    ],
+)
+def test_reviewer_qualification_review_rejects_floating_or_wrong_bindings(
+    tmp_path: Path,
+    binding_field: str,
+):
+    sealed_path = tmp_path / "sealed-scorer-input.json"
+    scorer_review_path = tmp_path / "scorer-review.json"
+    reviewer_receipt_path = tmp_path / "reviewer-receipt.json"
+    _write_json(sealed_path, _sealed_scorer_input())
+    scorer_review = scorer.build_scorer_review(sealed_path)
+    _write_json(scorer_review_path, scorer_review)
+    receipt = _reviewer_receipt_for_scorer_review(scorer_review_path, scorer_review)
+    receipt[binding_field] = "0" * 64
+    _write_json(reviewer_receipt_path, receipt)
+
+    with pytest.raises(ValueError, match=f"{binding_field} binding mismatch"):
+        scorer.build_reviewer_qualification_review(
+            scorer_review_path,
+            reviewer_receipt_path,
+        )
+
+
+def test_scorer_cli_writes_reviewer_qualification_review(tmp_path: Path):
+    sealed_path = tmp_path / "sealed-scorer-input.json"
+    scorer_review_path = tmp_path / "scorer-review.json"
+    reviewer_receipt_path = tmp_path / "reviewer-receipt.json"
+    qualification_path = tmp_path / "qualification-review.json"
+    _write_json(sealed_path, _sealed_scorer_input())
+    scorer_review = scorer.build_scorer_review(sealed_path)
+    _write_json(scorer_review_path, scorer_review)
+    _write_json(
+        reviewer_receipt_path,
+        _reviewer_receipt_for_scorer_review(scorer_review_path, scorer_review),
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_scorer",
+            str(scorer_review_path),
+            "--qualification-review",
+            "--reviewer-receipt",
+            str(reviewer_receipt_path),
+            "--output",
+            str(qualification_path),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    review = contract.load_json_no_duplicates(qualification_path)
+    scorer.validate_reviewer_qualification_review(review)
+    assert review["external_cost_authorized"] is False
+
+
+def test_documented_scorer_then_qualification_cli_path_uses_canonical_files(
+    tmp_path: Path,
+):
+    sealed_path = tmp_path / "sealed-scorer-input.json"
+    scorer_review_path = tmp_path / "scorer-review.json"
+    reviewer_receipt_path = tmp_path / "reviewer-receipt.json"
+    qualification_path = tmp_path / "qualification-review.json"
+    _write_json(sealed_path, _sealed_scorer_input())
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_scorer",
+            str(sealed_path),
+            "--output",
+            str(scorer_review_path),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+    scorer_review = contract.load_json_no_duplicates(scorer_review_path)
+    assert scorer_review_path.read_bytes() == (
+        contract.canonical_json_bytes(scorer_review) + b"\n"
+    )
+    _write_json(
+        reviewer_receipt_path,
+        _reviewer_receipt_for_scorer_review(scorer_review_path, scorer_review),
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_scorer",
+            str(scorer_review_path),
+            "--qualification-review",
+            "--reviewer-receipt",
+            str(reviewer_receipt_path),
+            "--output",
+            str(qualification_path),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    review = contract.load_json_no_duplicates(qualification_path)
+    scorer.validate_reviewer_qualification_review(review)
+    assert review["terminal_state"] == "completed_synthetic_go"

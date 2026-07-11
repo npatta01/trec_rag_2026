@@ -99,7 +99,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "actual live model invocation remains closed" in text
     assert "canonical sealed scorer input" in text
     assert "ledger-bound scorer-only" in text
-    assert "`181 passed`." in text
+    assert "--qualification-review" in text
+    assert "--reviewer-receipt path/to/reviewer-receipt.json" in text
+    assert "`189 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

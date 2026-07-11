@@ -116,6 +116,10 @@
     {
       "path": "semantic_anchor_reviewer_receipt_v1.schema.json",
       "visibility": "scorer"
+    },
+    {
+      "path": "semantic_anchor_reviewer_qualification_review_v1.schema.json",
+      "visibility": "scorer"
     }
   ],
   "schema_version": "semantic_anchor_artifact_manifest_v1"

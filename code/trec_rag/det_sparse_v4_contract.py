@@ -1115,7 +1115,16 @@ def validate_reviewer_receipt(receipt: Mapping[str, object]) -> None:
     _require_exact_mapping_keys(
         receipt,
         "reviewer receipt",
-        {"schema_version", "reviewer_count", "unanimous"},
+        {
+            "schema_version",
+            "reviewer_count",
+            "unanimous",
+            "scorer_review_sha256",
+            "sealed_responses_sha256",
+            "gold_sha256",
+            "rubric_sha256",
+            "artifact_bundle_sha256",
+        },
     )
     if receipt.get("schema_version") != "semantic_anchor_reviewer_receipt_v1":
         raise ValueError("reviewer receipt schema_version mismatch")
@@ -1124,6 +1133,14 @@ def validate_reviewer_receipt(receipt: Mapping[str, object]) -> None:
         raise ValueError("reviewer receipt requires at least two reviewers")
     if receipt.get("unanimous") is not True:
         raise ValueError("reviewer receipt must be unanimous")
+    for key in (
+        "scorer_review_sha256",
+        "sealed_responses_sha256",
+        "gold_sha256",
+        "rubric_sha256",
+        "artifact_bundle_sha256",
+    ):
+        _validate_sha256_string(receipt.get(key), f"reviewer receipt {key}")
 
 
 def synthetic_qualification_terminal_state(
@@ -1758,6 +1775,7 @@ def scorer_only_artifacts() -> tuple[str, ...]:
         "semantic_anchor_scorer_v1.schema.json",
         "semantic_anchor_reviewer_rubric_v1.md",
         "semantic_anchor_reviewer_receipt_v1.schema.json",
+        "semantic_anchor_reviewer_qualification_review_v1.schema.json",
     )
 
 
