@@ -21,6 +21,73 @@ def _offset_health():
     }
 
 
+def _offset_fingerprint():
+    return {
+        "legacy_term_chain_fingerprint_sha256": "a" * 64,
+        "offset_contract_version": "lucene_whole_unit_offsets_v1",
+        "offset_server_class_sha256": "b" * 64,
+        "offset_lucene_jar_sha256": "c" * 64,
+        "offset_runtime_image_digest": "sha256:" + "d" * 64,
+    }
+
+
+def _offset_response(text: str, *, occurrences: list[dict[str, object]] | None = None):
+    if occurrences is None:
+        occurrences = [
+            {
+                "ordinal": 0,
+                "term": "anchor",
+                "start_codepoint": 0,
+                "end_codepoint": 6,
+                "position_increment": 1,
+            }
+        ]
+    return {
+        "schema_version": "lucene_whole_unit_offsets_response_v1",
+        "text_sha256": contract.text_sha256(text),
+        "offset_unit": "unicode_code_points",
+        "fingerprint": _offset_fingerprint(),
+        "occurrences": occurrences,
+    }
+
+
+def _offset_parity_fixtures():
+    fixtures = []
+    for surface_class in preflight.OFFSET_PARITY_SURFACE_CLASSES:
+        for unit_position in preflight.OFFSET_PARITY_UNIT_POSITIONS:
+            for punctuation_context in preflight.OFFSET_PARITY_PUNCTUATION_CONTEXTS:
+                fixture_id = f"{surface_class}-{unit_position}-{punctuation_context}"
+                text = preflight._offset_parity_expected_text(
+                    surface_class=surface_class,
+                    unit_position=unit_position,
+                    punctuation_context=punctuation_context,
+                )
+                if surface_class == "analyzer_zero_stopword":
+                    response = _offset_response(text, occurrences=[])
+                else:
+                    response = _offset_response(text)
+                _request, _body, request_sha256 = contract.build_offset_request(text)
+                fixtures.append(
+                    {
+                        "fixture_id": fixture_id,
+                        "surface_class": surface_class,
+                        "unit_position": unit_position,
+                        "punctuation_context": punctuation_context,
+                        "text": text,
+                        "request_sha256": request_sha256,
+                        "response_sha256": contract.sha256_bytes(
+                            contract.canonical_json_bytes(response)
+                        ),
+                        "response": response,
+                    }
+                )
+    return {
+        "schema_version": "semantic_anchor_offset_parity_fixture_v1",
+        "health": _offset_health(),
+        "fixtures": fixtures,
+    }
+
+
 def _schema_compiler_attestation(request_identity):
     return {
         "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
@@ -271,6 +338,140 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
     observed_paths = {record["path"] for record in runtime_file_access["observed_paths"]}
     assert str(bundle_path.resolve()) in observed_paths
     preflight.validate_live_attestation_review(report)
+
+
+def test_offset_parity_review_validates_48_canonical_fixture_rows(tmp_path: Path):
+    fixtures_path = tmp_path / "offset-parity-fixtures.json"
+    fixtures = _offset_parity_fixtures()
+    fixtures_path.write_bytes(contract.canonical_json_bytes(fixtures) + b"\n")
+
+    review = preflight.build_offset_parity_review(fixtures_path)
+
+    assert review["schema_version"] == "semantic_anchor_offset_parity_review_v1"
+    assert review["status"] == "offset_parity_review_pass"
+    assert review["fixture_path"] == str(fixtures_path.resolve())
+    assert review["fixture_sha256"] == contract.sha256_file(fixtures_path)
+    assert review["fixture_canonical"] is True
+    assert review["fixture_count"] == 48
+    assert review["surface_classes"] == list(preflight.OFFSET_PARITY_SURFACE_CLASSES)
+    assert review["unit_positions"] == list(preflight.OFFSET_PARITY_UNIT_POSITIONS)
+    assert review["punctuation_contexts"] == list(
+        preflight.OFFSET_PARITY_PUNCTUATION_CONTEXTS
+    )
+    assert review["offset_fingerprint_sha256"] == contract.sha256_bytes(
+        contract.canonical_json_bytes(_offset_fingerprint())
+    )
+    assert review["cost_counters"] == preflight.ZERO_COST_COUNTERS
+    assert review["inference_authorized"] is False
+    assert review["dispatch_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    assert review["next_gate"] == "live_model_inventory_and_compiler_attestation"
+
+    preflight.validate_offset_parity_review(review)
+
+
+def test_offset_parity_review_cli_writes_create_only_report(tmp_path: Path):
+    fixtures_path = tmp_path / "offset-parity-fixtures.json"
+    output_path = tmp_path / "offset-parity-review.json"
+    fixtures_path.write_bytes(
+        contract.canonical_json_bytes(_offset_parity_fixtures()) + b"\n"
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_preflight",
+            "--offset-parity-fixtures",
+            str(fixtures_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.stdout == ""
+    review = json.loads(output_path.read_text(encoding="utf-8"))
+    assert review["fixture_count"] == 48
+    assert output_path.read_bytes() == preflight.canonical_report_bytes(review)
+
+    second = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_preflight",
+            "--offset-parity-fixtures",
+            str(fixtures_path),
+            "--output",
+            str(output_path),
+        ],
+        check=False,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+    assert second.returncode != 0
+    assert "File exists" in second.stderr
+
+
+def test_offset_parity_review_rejects_noncanonical_hash_and_grid_drift(tmp_path: Path):
+    fixtures = _offset_parity_fixtures()
+    fixtures_path = tmp_path / "offset-parity-fixtures.json"
+    fixtures_path.write_text(
+        json.dumps(fixtures, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.build_offset_parity_review(fixtures_path)
+
+    fixtures_path.write_bytes(contract.canonical_json_bytes(fixtures) + b"\n")
+    drifted = json.loads(fixtures_path.read_text(encoding="utf-8"))
+    drifted["fixtures"][0]["request_sha256"] = "9" * 64
+    fixtures_path.write_bytes(contract.canonical_json_bytes(drifted) + b"\n")
+    with pytest.raises(ValueError, match="request_sha256"):
+        preflight.build_offset_parity_review(fixtures_path)
+
+    duplicated = _offset_parity_fixtures()
+    duplicated["fixtures"][1] = dict(duplicated["fixtures"][0], fixture_id="duplicate-grid")
+    fixtures_path.write_bytes(contract.canonical_json_bytes(duplicated) + b"\n")
+    with pytest.raises(ValueError, match="duplicate|grid"):
+        preflight.build_offset_parity_review(fixtures_path)
+
+    mislabeled = _offset_parity_fixtures()
+    mislabeled["fixtures"][0] = dict(
+        mislabeled["fixtures"][0],
+        surface_class="curly_apostrophe",
+        fixture_id="mislabeled-curly",
+    )
+    fixtures_path.write_bytes(contract.canonical_json_bytes(mislabeled) + b"\n")
+    with pytest.raises(ValueError, match="text does not match grid cell"):
+        preflight.build_offset_parity_review(fixtures_path)
+
+    zero_with_occurrence = _offset_parity_fixtures()
+    stopword_row = next(
+        row
+        for row in zero_with_occurrence["fixtures"]
+        if row["surface_class"] == "analyzer_zero_stopword"
+    )
+    stopword_response = dict(stopword_row["response"], occurrences=[
+        {
+            "ordinal": 0,
+            "term": "the",
+            "start_codepoint": 0,
+            "end_codepoint": 3,
+            "position_increment": 1,
+        }
+    ])
+    stopword_row["response"] = stopword_response
+    stopword_row["response_sha256"] = contract.sha256_bytes(
+        contract.canonical_json_bytes(stopword_response)
+    )
+    fixtures_path.write_bytes(contract.canonical_json_bytes(zero_with_occurrence) + b"\n")
+    with pytest.raises(ValueError, match="analyzer_zero_stopword"):
+        preflight.build_offset_parity_review(fixtures_path)
 
 
 def test_live_attestation_review_rejects_model_inventory_and_write_drift(tmp_path: Path):

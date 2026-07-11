@@ -25,7 +25,10 @@ LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION = "semantic_anchor_live_attestation_revie
 LIVE_ATTESTATION_REVIEW_STATUS = "live_attestation_review_pass"
 ADVISOR_DISPATCH_GO_REVIEW_SCHEMA_VERSION = "semantic_anchor_advisor_dispatch_go_review_v1"
 ADVISOR_DISPATCH_GO_REVIEW_STATUS = "advisor_dispatch_go_review_pass"
+OFFSET_PARITY_REVIEW_SCHEMA_VERSION = "semantic_anchor_offset_parity_review_v1"
+OFFSET_PARITY_REVIEW_STATUS = "offset_parity_review_pass"
 NEXT_GATE = "advisor_review_before_live_attestation_or_model_inference"
+OFFSET_PARITY_NEXT_GATE = "live_model_inventory_and_compiler_attestation"
 LIVE_ATTESTATION_NEXT_GATE = "advisor_go_before_model_dispatch"
 ADVISOR_DISPATCH_GO_NEXT_GATE = "manual_runner_invocation_still_required"
 ADVISOR_CLOSED_GATES_ACK_KEY = (
@@ -45,6 +48,34 @@ REQUEST_IDENTITY_CHECKER = "semantic_anchor_request_identity_v1"
 SOURCE_AUDIT_CHECKER = "det_sparse_v4_static_direct_source_audit_v1"
 RUNTIME_FILE_ACCESS_CHECKER = "det_sparse_v4_runtime_file_access_audit_v1"
 MODEL_INVENTORY_ARTIFACT = "semantic_anchor_model_inventory_attestation_v1.json"
+OFFSET_PARITY_FIXTURE_SCHEMA_VERSION = "semantic_anchor_offset_parity_fixture_v1"
+OFFSET_PARITY_SURFACE_CLASSES = (
+    "ascii_stemming",
+    "analyzer_zero_stopword",
+    "straight_possessive",
+    "curly_apostrophe",
+    "hyphenated_term",
+    "precomposed_bmp_unicode",
+    "decomposed_combining_sequence",
+    "astral_adjacent_term",
+)
+OFFSET_PARITY_UNIT_POSITIONS = ("u1", "u2", "u3")
+OFFSET_PARITY_PUNCTUATION_CONTEXTS = ("plain", "punctuated")
+OFFSET_PARITY_FIXTURE_COUNT = (
+    len(OFFSET_PARITY_SURFACE_CLASSES)
+    * len(OFFSET_PARITY_UNIT_POSITIONS)
+    * len(OFFSET_PARITY_PUNCTUATION_CONTEXTS)
+)
+OFFSET_PARITY_SURFACE_MARKERS = {
+    "ascii_stemming": "running",
+    "analyzer_zero_stopword": "the",
+    "straight_possessive": "bank's",
+    "curly_apostrophe": "O\u2019Reilly",
+    "hyphenated_term": "co-op",
+    "precomposed_bmp_unicode": "café",
+    "decomposed_combining_sequence": "cafe\u0301",
+    "astral_adjacent_term": "rocket🚀launch",
+}
 ALLOWED_IMPORT_ROOTS = (
     "__future__",
     "argparse",
@@ -280,6 +311,99 @@ def build_advisor_dispatch_go_review_from_files(
     review["advisor_go_receipt_canonical"] = True
     validate_advisor_dispatch_go_review(review)
     return review
+
+
+def build_offset_parity_review(fixtures_path: Path) -> dict[str, object]:
+    """Validate captured live offset parity fixtures without model inference."""
+
+    fixture_file = fixtures_path.resolve()
+    fixture_record = _require_mapping(
+        contract.load_json_no_duplicates(fixture_file),
+        "offset parity fixtures",
+    )
+    if fixture_file.read_bytes() != contract.canonical_json_bytes(fixture_record) + b"\n":
+        raise ValueError("offset parity fixtures are not canonical JSON bytes")
+    summary = _validate_offset_parity_fixture_record(fixture_record)
+    review = {
+        "schema_version": OFFSET_PARITY_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": OFFSET_PARITY_REVIEW_STATUS,
+        "fixture_path": str(fixture_file),
+        "fixture_sha256": contract.sha256_file(fixture_file),
+        "fixture_canonical": True,
+        "fixture_count": OFFSET_PARITY_FIXTURE_COUNT,
+        "surface_classes": list(OFFSET_PARITY_SURFACE_CLASSES),
+        "unit_positions": list(OFFSET_PARITY_UNIT_POSITIONS),
+        "punctuation_contexts": list(OFFSET_PARITY_PUNCTUATION_CONTEXTS),
+        "offset_fingerprint_sha256": contract.sha256_bytes(
+            contract.canonical_json_bytes(summary["fingerprint"])
+        ),
+        "cost_counters": dict(ZERO_COST_COUNTERS),
+        "inference_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+        "next_gate": OFFSET_PARITY_NEXT_GATE,
+    }
+    validate_offset_parity_review(review)
+    return review
+
+
+def validate_offset_parity_review(review: Mapping[str, object]) -> None:
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "fixture_path",
+        "fixture_sha256",
+        "fixture_canonical",
+        "fixture_count",
+        "surface_classes",
+        "unit_positions",
+        "punctuation_contexts",
+        "offset_fingerprint_sha256",
+        "cost_counters",
+        "inference_authorized",
+        "dispatch_authorized",
+        "external_cost_authorized",
+        "next_gate",
+    }
+    actual_keys = set(review)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "offset parity review keys mismatch: "
+            f"missing={expected_keys - actual_keys} extra={actual_keys - expected_keys}"
+        )
+    if review.get("schema_version") != OFFSET_PARITY_REVIEW_SCHEMA_VERSION:
+        raise ValueError("offset parity review schema_version mismatch")
+    if review.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("offset parity review experiment_id mismatch")
+    if review.get("status") != OFFSET_PARITY_REVIEW_STATUS:
+        raise ValueError("offset parity review status mismatch")
+    if not isinstance(review.get("fixture_path"), str) or not review.get("fixture_path"):
+        raise ValueError("offset parity review fixture_path must be nonempty string")
+    for key in ("fixture_sha256", "offset_fingerprint_sha256"):
+        if not _is_sha256_string(review.get(key)):
+            raise ValueError(f"offset parity review {key} must be sha256")
+    if review.get("fixture_canonical") is not True:
+        raise ValueError("offset parity review fixture must be canonical")
+    if review.get("fixture_count") != OFFSET_PARITY_FIXTURE_COUNT:
+        raise ValueError("offset parity review fixture_count mismatch")
+    if review.get("surface_classes") != list(OFFSET_PARITY_SURFACE_CLASSES):
+        raise ValueError("offset parity review surface classes mismatch")
+    if review.get("unit_positions") != list(OFFSET_PARITY_UNIT_POSITIONS):
+        raise ValueError("offset parity review unit positions mismatch")
+    if review.get("punctuation_contexts") != list(OFFSET_PARITY_PUNCTUATION_CONTEXTS):
+        raise ValueError("offset parity review punctuation contexts mismatch")
+    if review.get("cost_counters") != ZERO_COST_COUNTERS:
+        raise ValueError("offset parity review cost counters must all be zero")
+    if review.get("inference_authorized") is not False:
+        raise ValueError("offset parity review must not authorize inference")
+    if review.get("dispatch_authorized") is not False:
+        raise ValueError("offset parity review must not authorize dispatch")
+    if review.get("external_cost_authorized") is not False:
+        raise ValueError("offset parity review must not authorize external cost")
+    if review.get("next_gate") != OFFSET_PARITY_NEXT_GATE:
+        raise ValueError("offset parity review next_gate mismatch")
 
 
 def build_runtime_file_access_summary(
@@ -740,6 +864,145 @@ def _validate_advisor_go_receipt(
         raise ValueError("advisor GO receipt must acknowledge closed external gates")
 
 
+def _validate_offset_parity_fixture_record(
+    record: Mapping[str, object],
+) -> dict[str, Mapping[str, object]]:
+    expected_keys = {"schema_version", "health", "fixtures"}
+    actual_keys = set(record)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "offset parity fixture keys mismatch: "
+            f"missing={expected_keys - actual_keys} extra={actual_keys - expected_keys}"
+        )
+    if record.get("schema_version") != OFFSET_PARITY_FIXTURE_SCHEMA_VERSION:
+        raise ValueError("offset parity fixture schema_version mismatch")
+    contract.validate_offset_health(_require_mapping(record.get("health"), "health"))
+    fixtures = record.get("fixtures")
+    if not isinstance(fixtures, list) or len(fixtures) != OFFSET_PARITY_FIXTURE_COUNT:
+        raise ValueError("offset parity fixtures must contain exactly 48 rows")
+    seen_fixture_ids: set[str] = set()
+    seen_grid: set[tuple[str, str, str]] = set()
+    expected_grid = {
+        (surface_class, unit_position, punctuation_context)
+        for surface_class in OFFSET_PARITY_SURFACE_CLASSES
+        for unit_position in OFFSET_PARITY_UNIT_POSITIONS
+        for punctuation_context in OFFSET_PARITY_PUNCTUATION_CONTEXTS
+    }
+    expected_fingerprint: Mapping[str, object] | None = None
+    for row in fixtures:
+        fixture = _require_mapping(row, "offset parity fixture")
+        _validate_offset_parity_fixture_row(
+            fixture,
+            seen_fixture_ids=seen_fixture_ids,
+            seen_grid=seen_grid,
+            expected_fingerprint=expected_fingerprint,
+        )
+        response = _require_mapping(fixture.get("response"), "offset response")
+        fingerprint = _require_mapping(response.get("fingerprint"), "offset fingerprint")
+        if expected_fingerprint is None:
+            expected_fingerprint = fingerprint
+    if seen_grid != expected_grid:
+        raise ValueError("offset parity fixture grid is incomplete or duplicated")
+    if expected_fingerprint is None:
+        raise ValueError("offset parity fixtures missing fingerprint")
+    return {"fingerprint": expected_fingerprint}
+
+
+def _validate_offset_parity_fixture_row(
+    fixture: Mapping[str, object],
+    *,
+    seen_fixture_ids: set[str],
+    seen_grid: set[tuple[str, str, str]],
+    expected_fingerprint: Mapping[str, object] | None,
+) -> None:
+    expected_keys = {
+        "fixture_id",
+        "surface_class",
+        "unit_position",
+        "punctuation_context",
+        "text",
+        "request_sha256",
+        "response_sha256",
+        "response",
+    }
+    actual_keys = set(fixture)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "offset parity fixture row keys mismatch: "
+            f"missing={expected_keys - actual_keys} extra={actual_keys - expected_keys}"
+        )
+    fixture_id = _require_string(fixture.get("fixture_id"), "fixture_id")
+    if fixture_id in seen_fixture_ids:
+        raise ValueError("duplicate offset parity fixture_id")
+    seen_fixture_ids.add(fixture_id)
+    surface_class = _require_string(fixture.get("surface_class"), "surface_class")
+    unit_position = _require_string(fixture.get("unit_position"), "unit_position")
+    punctuation_context = _require_string(
+        fixture.get("punctuation_context"), "punctuation_context"
+    )
+    grid_key = (surface_class, unit_position, punctuation_context)
+    if surface_class not in OFFSET_PARITY_SURFACE_CLASSES:
+        raise ValueError("offset parity fixture surface_class mismatch")
+    if unit_position not in OFFSET_PARITY_UNIT_POSITIONS:
+        raise ValueError("offset parity fixture unit_position mismatch")
+    if punctuation_context not in OFFSET_PARITY_PUNCTUATION_CONTEXTS:
+        raise ValueError("offset parity fixture punctuation_context mismatch")
+    if grid_key in seen_grid:
+        raise ValueError("duplicate offset parity fixture grid cell")
+    seen_grid.add(grid_key)
+    text = _require_string(fixture.get("text"), "offset parity fixture text")
+    expected_text = _offset_parity_expected_text(
+        surface_class=surface_class,
+        unit_position=unit_position,
+        punctuation_context=punctuation_context,
+    )
+    if text != expected_text:
+        raise ValueError("offset parity fixture text does not match grid cell")
+    _request, _request_body, request_sha256 = contract.build_offset_request(text)
+    if fixture.get("request_sha256") != request_sha256:
+        raise ValueError("offset parity fixture request_sha256 mismatch")
+    response = _require_mapping(fixture.get("response"), "offset response")
+    contract.validate_offset_response_shape(
+        response,
+        text=text,
+        expected_fingerprint=expected_fingerprint,
+    )
+    response_sha256 = contract.sha256_bytes(contract.canonical_json_bytes(response))
+    if fixture.get("response_sha256") != response_sha256:
+        raise ValueError("offset parity fixture response_sha256 mismatch")
+    occurrences = response.get("occurrences")
+    if surface_class == "analyzer_zero_stopword":
+        if occurrences != []:
+            raise ValueError("offset parity analyzer_zero_stopword must have no occurrences")
+    elif not isinstance(occurrences, list) or not occurrences:
+        raise ValueError("offset parity fixture must have at least one occurrence")
+
+
+def _offset_parity_expected_text(
+    *,
+    surface_class: str,
+    unit_position: str,
+    punctuation_context: str,
+) -> str:
+    marker = OFFSET_PARITY_SURFACE_MARKERS.get(surface_class)
+    if marker is None:
+        raise ValueError("offset parity fixture surface_class mismatch")
+    if punctuation_context == "plain":
+        target = marker
+    elif punctuation_context == "punctuated":
+        target = f"({marker}),"
+    else:
+        raise ValueError("offset parity fixture punctuation_context mismatch")
+    units = {
+        "u1": (target, "ordinary context", "tail context"),
+        "u2": ("ordinary context", target, "tail context"),
+        "u3": ("ordinary context", "middle context", target),
+    }.get(unit_position)
+    if units is None:
+        raise ValueError("offset parity fixture unit_position mismatch")
+    return " | ".join(units)
+
+
 def _validate_runtime_file_access_summary(value: object, owner: str) -> None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{owner} runtime_file_access must be an object")
@@ -888,6 +1151,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Canonical advisor GO receipt JSON to bind without dispatch.",
     )
+    parser.add_argument(
+        "--offset-parity-fixtures",
+        type=Path,
+        help="Canonical captured 48-row offset parity fixture JSON to review.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON.")
     return parser
 
@@ -899,19 +1167,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "--advisor-go-receipt requires --live-attestation-review, and vice versa"
             )
-        if args.live_attestation_bundle:
+        if args.live_attestation_bundle or args.offset_parity_fixtures:
             raise ValueError(
-                "--live-attestation-bundle cannot be combined with advisor GO review"
+                "--live-attestation-bundle/--offset-parity-fixtures cannot be "
+                "combined with advisor GO review"
             )
         report = build_advisor_dispatch_go_review_from_files(
             args.live_attestation_review,
             args.advisor_go_receipt,
         )
     elif args.live_attestation_bundle:
+        if args.offset_parity_fixtures:
+            raise ValueError(
+                "--offset-parity-fixtures cannot be combined with live attestation review"
+            )
         report = build_live_attestation_review(
             args.live_attestation_bundle,
             artifact_dir=args.artifact_dir,
         )
+    elif args.offset_parity_fixtures:
+        report = build_offset_parity_review(args.offset_parity_fixtures)
     else:
         report = build_offline_preflight_report(args.artifact_dir)
     payload = canonical_report_bytes(report, pretty=args.pretty)
