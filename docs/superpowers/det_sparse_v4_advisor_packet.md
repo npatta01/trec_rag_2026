@@ -78,7 +78,8 @@ deterministically.
 | Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. | Offline fixture validation strengthened; live local inventory attestation still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
 | Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, and executable ledger-prefix validator are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. | Offline shapes and prefix mechanics validated; real runner/replay still pending. |
-| Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. | Offline separation validated; scorer execution still pending. |
+| Runner request identities must be fixed before dispatch | Preflight reports a `request_identity` block with fixed 24-case order, first scored case, canonical request-body SHA-256s, and request byte sizes. | Reservation and dispatch identities are offline-bound; no runner dispatch yet. |
+| Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. The scorer/gold linter validates case order, U1-bounded acceptable and wrong-referent ranges, abstain reasons, and deterministic response classifications (`correct_select`, `safe_abstain`, `wrong_referent`, `wrong_abstain`, `mechanical_failure`). | Offline separation and scorer mechanics validated; scorer execution still pending. |
 | External cost must remain zero | Preflight reports zero model, retrieval, reranker, network, download, topic-file, and relevance-judgment counters. | Enforced for the offline packet. |
 
 ## Offline preflight evidence
@@ -104,6 +105,8 @@ Observed report summary from the committed tree:
 - `schema_compatibility`: 24 cases, offline
   `vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`,
   `unsupported_feature_issues=[]`
+- `request_identity`: 24 cases, first case `synthetic-case-001`, fixed
+  case-order hash, canonical request SHA-256s, and request byte sizes
 - `inference_authorized`: `false`
 - `external_cost_authorized`: `false`
 - `next_gate`: `advisor_review_before_live_attestation_or_model_inference`
@@ -126,7 +129,8 @@ The offline regression command used for this packet was:
 ```
 
 Result after adding packet, source/import audit, offline schema-compatibility
-checks, offset response validation, and ledger-prefix validation: `119 passed`.
+checks, request identity binding, offset response validation, ledger-prefix
+validation, and scorer/gold classification validation: `124 passed`.
 
 ## What is not yet proven
 

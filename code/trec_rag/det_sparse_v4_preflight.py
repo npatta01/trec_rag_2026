@@ -31,6 +31,7 @@ ZERO_COST_COUNTERS = {
     "network_calls": 0,
 }
 SCHEMA_COMPATIBILITY_CHECKER = "vllm_0_24_xgrammar_unsupported_feature_lint"
+REQUEST_IDENTITY_CHECKER = "semantic_anchor_request_identity_v1"
 SOURCE_AUDIT_CHECKER = "det_sparse_v4_static_direct_source_audit_v1"
 ALLOWED_IMPORT_ROOTS = (
     "__future__",
@@ -87,6 +88,7 @@ def build_offline_preflight_report(
         raise ValueError("v4 preflight source audit failed")
 
     schema_compatibility = build_schema_compatibility_summary(artifact_dir)
+    request_identity = build_request_identity_summary(artifact_dir)
     report: dict[str, object] = {
         "schema_version": PREFLIGHT_REPORT_SCHEMA_VERSION,
         "experiment_id": contract.EXPERIMENT_ID,
@@ -102,6 +104,7 @@ def build_offline_preflight_report(
         "source_path_fragment_issues": {},
         "source_audit": source_audit,
         "schema_compatibility": schema_compatibility,
+        "request_identity": request_identity,
         "cost_counters": dict(ZERO_COST_COUNTERS),
         "inference_authorized": False,
         "external_cost_authorized": False,
@@ -191,6 +194,44 @@ def build_schema_compatibility_summary(
     }
 
 
+def build_request_identity_summary(
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> dict[str, object]:
+    """Bind future runner reservations to fixed canonical request bytes."""
+
+    case_order = _case_order(artifact_dir)
+    request_records = contract.load_jsonl_no_duplicates(
+        artifact_dir / "semantic_anchor_request_fixtures_v1.jsonl"
+    )
+    request_by_case: dict[str, Mapping[str, object]] = {}
+    for raw_record in request_records:
+        record = _require_mapping(raw_record, "request fixture record")
+        case_id = _require_string(record.get("case_id"), "case_id")
+        request = _require_mapping(record.get("request"), "request")
+        if case_id in request_by_case:
+            raise ValueError(f"duplicate request fixture case_id: {case_id}")
+        request_by_case[case_id] = request
+    if tuple(request_by_case) != case_order:
+        raise ValueError("request fixture order differs from fixed case order")
+
+    request_sha256: dict[str, str] = {}
+    request_body_size_bytes: dict[str, int] = {}
+    for case_id in case_order:
+        request_body = contract.canonical_json_bytes(request_by_case[case_id])
+        request_sha256[case_id] = contract.sha256_bytes(request_body)
+        request_body_size_bytes[case_id] = len(request_body)
+    order_body = contract.canonical_json_bytes(list(case_order))
+    return {
+        "checker": REQUEST_IDENTITY_CHECKER,
+        "status": "pass",
+        "case_count": len(case_order),
+        "first_case_id": case_order[0],
+        "case_order_sha256": contract.sha256_bytes(order_body),
+        "request_sha256": request_sha256,
+        "request_body_size_bytes": request_body_size_bytes,
+    }
+
+
 def validate_offline_preflight_report(
     report: Mapping[str, object],
     *,
@@ -250,6 +291,36 @@ def validate_offline_preflight_report(
         raise ValueError("offline preflight schema compatibility must pass")
     if schema_compatibility.get("unsupported_feature_issues") != []:
         raise ValueError("offline preflight schema compatibility issues must be empty")
+    request_identity = report.get("request_identity")
+    if not isinstance(request_identity, Mapping):
+        raise ValueError("offline preflight request_identity must be an object")
+    if request_identity.get("checker") != REQUEST_IDENTITY_CHECKER:
+        raise ValueError("offline preflight request identity checker mismatch")
+    if request_identity.get("status") != "pass":
+        raise ValueError("offline preflight request identity must pass")
+    if request_identity.get("case_count") != 24:
+        raise ValueError("offline preflight request identity case_count mismatch")
+    if request_identity.get("first_case_id") != "synthetic-case-001":
+        raise ValueError("offline preflight first request case mismatch")
+    if not _is_sha256_string(request_identity.get("case_order_sha256")):
+        raise ValueError("offline preflight case_order_sha256 mismatch")
+    request_sha256 = request_identity.get("request_sha256")
+    request_body_size_bytes = request_identity.get("request_body_size_bytes")
+    if not isinstance(request_sha256, Mapping) or not isinstance(
+        request_body_size_bytes, Mapping
+    ):
+        raise ValueError("offline preflight request identity maps must be objects")
+    expected_case_ids = [f"synthetic-case-{index:03d}" for index in range(1, 25)]
+    if list(request_sha256) != expected_case_ids:
+        raise ValueError("offline preflight request identity order mismatch")
+    if list(request_body_size_bytes) != expected_case_ids:
+        raise ValueError("offline preflight request size order mismatch")
+    for case_id in expected_case_ids:
+        if not _is_sha256_string(request_sha256.get(case_id)):
+            raise ValueError("offline preflight request hash mismatch")
+        size = request_body_size_bytes.get(case_id)
+        if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+            raise ValueError("offline preflight request body size mismatch")
 
     artifact_sha256 = report.get("artifact_sha256")
     if not isinstance(artifact_sha256, dict) or not artifact_sha256:
@@ -280,6 +351,23 @@ def _direct_import_modules(path: Path, text: str) -> tuple[str, ...]:
     return tuple(modules)
 
 
+def _case_order(artifact_dir: Path) -> tuple[str, ...]:
+    case_order_record = _require_mapping(
+        contract.load_json_no_duplicates(artifact_dir / "semantic_anchor_case_order_v1.json"),
+        "case order",
+    )
+    raw_case_order = case_order_record.get("case_order")
+    if not isinstance(raw_case_order, list):
+        raise ValueError("case_order must be a list")
+    case_order = tuple(_require_string(value, "case_order entry") for value in raw_case_order)
+    expected_case_order = tuple(f"synthetic-case-{index:03d}" for index in range(1, 25))
+    if case_order != expected_case_order:
+        raise ValueError("fixed case order drifted")
+    if case_order_record.get("smoke_case_id") != case_order[0]:
+        raise ValueError("smoke_case_id must be first fixed case")
+    return case_order
+
+
 def _require_mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
@@ -290,6 +378,14 @@ def _require_string(value: object, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a nonempty string")
     return value
+
+
+def _is_sha256_string(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def canonical_report_bytes(report: Mapping[str, object], *, pretty: bool = False) -> bytes:

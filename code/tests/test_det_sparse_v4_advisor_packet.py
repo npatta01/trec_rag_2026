@@ -21,8 +21,10 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
     assert "offset responses now have an executable Python shape/hash/monotonicity validator" in text
     assert "source/import audit, offline schema-compatibility" in text
+    assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
     assert "executable ledger-prefix validator" in text
-    assert "ledger-prefix validation: `119 passed`." in text
+    assert "scorer/gold linter validates case order" in text
+    assert "classification validation: `124 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
@@ -39,6 +41,7 @@ def test_v4_advisor_packet_maps_core_issues_to_evidence():
         "Local model inventory must be exact and cost-free",
         "Anchor typing/scope must be unambiguous",
         "Ledger integrity must be raw-first and fail-closed",
+        "Runner request identities must be fixed before dispatch",
         "Evaluation protocol must avoid qrels leakage",
         "External cost must remain zero",
     )

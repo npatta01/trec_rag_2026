@@ -108,6 +108,13 @@ RENDERER_ORACLE_IDS = (
     "oracle_select_comparison_pair",
     "oracle_abstain_coequal_subjects",
 )
+SCORER_CLASSIFICATIONS = (
+    "correct_select",
+    "safe_abstain",
+    "wrong_referent",
+    "wrong_abstain",
+    "mechanical_failure",
+)
 ALLOWED_IMPORT_ROOTS = (
     "ast",
     "dataclasses",
@@ -667,6 +674,187 @@ def validate_case_receipt(record: Mapping[str, object]) -> None:
         )
     elif status == "mechanical_pass":
         raise ValueError("mechanical_pass requires raw_response_sha256")
+
+
+def validate_gold_label_case(
+    gold_case: Mapping[str, object], *, case_id: str, u1_token_count: int = 5
+) -> None:
+    _require_exact_mapping_keys(
+        gold_case,
+        "gold label",
+        {
+            "schema_version",
+            "case_id",
+            "decision",
+            "acceptable_ranges",
+            "wrong_referent_ranges",
+        }
+        if gold_case.get("decision") == "select"
+        else {
+            "schema_version",
+            "case_id",
+            "decision",
+            "acceptable_ranges",
+            "wrong_referent_ranges",
+            "abstain_reason",
+        },
+    )
+    if gold_case.get("schema_version") != "semantic_anchor_gold_label_v1":
+        raise ValueError("gold label schema_version mismatch")
+    if gold_case.get("case_id") != case_id:
+        raise ValueError("gold label case_id mismatch")
+    decision = gold_case.get("decision")
+    acceptable_ranges = _range_tuple(
+        gold_case.get("acceptable_ranges"),
+        "acceptable_ranges",
+        u1_token_count=u1_token_count,
+    )
+    wrong_ranges = _range_tuple(
+        gold_case.get("wrong_referent_ranges"),
+        "wrong_referent_ranges",
+        u1_token_count=u1_token_count,
+    )
+    if set(acceptable_ranges).intersection(wrong_ranges):
+        raise ValueError("gold acceptable and wrong ranges overlap")
+    if decision == "select":
+        if not acceptable_ranges:
+            raise ValueError("select gold label requires acceptable ranges")
+        if "abstain_reason" in gold_case:
+            raise ValueError("select gold label must not include abstain_reason")
+    elif decision == "abstain":
+        if acceptable_ranges:
+            raise ValueError("abstain gold label must not include acceptable ranges")
+        _required_enum(gold_case, "abstain_reason", ABSTAIN_REASONS)
+    else:
+        raise ValueError("gold label decision must be select or abstain")
+
+
+def validate_gold_label_bundle(
+    gold: Mapping[str, object],
+    *,
+    case_order: Sequence[str],
+    u1_token_count: int = 5,
+) -> None:
+    if gold.get("schema_version") != "semantic_anchor_gold_labels_v1":
+        raise ValueError("gold labels schema_version mismatch")
+    cases = gold.get("cases")
+    if not isinstance(cases, list):
+        raise ValueError("gold labels cases must be list")
+    if [case.get("case_id") for case in cases if isinstance(case, dict)] != list(case_order):
+        raise ValueError("gold labels case order mismatch")
+    for case_id, raw_case in zip(case_order, cases, strict=True):
+        validate_gold_label_case(
+            _as_mapping(raw_case, "gold label"),
+            case_id=case_id,
+            u1_token_count=u1_token_count,
+        )
+
+
+def classify_model_response(
+    response: Mapping[str, object],
+    *,
+    gold_case: Mapping[str, object],
+    case_id: str,
+    u1_token_count: int = 5,
+) -> str:
+    """Classify one synthetic response against scorer-only gold."""
+
+    validate_gold_label_case(
+        gold_case,
+        case_id=case_id,
+        u1_token_count=u1_token_count,
+    )
+    try:
+        validate_model_response_shape(
+            response,
+            case_id=case_id,
+            u1_token_count=u1_token_count,
+        )
+    except ValueError:
+        return "mechanical_failure"
+
+    gold_decision = gold_case["decision"]
+    response_decision = response["decision"]
+    if response_decision == "abstain":
+        return "safe_abstain" if gold_decision == "abstain" else "wrong_abstain"
+
+    response_range = (int(response["start_token"]), int(response["end_token"]))
+    acceptable_ranges = _range_tuple(
+        gold_case.get("acceptable_ranges"),
+        "acceptable_ranges",
+        u1_token_count=u1_token_count,
+    )
+    if response_range in acceptable_ranges:
+        return "correct_select"
+    wrong_ranges = _range_tuple(
+        gold_case.get("wrong_referent_ranges"),
+        "wrong_referent_ranges",
+        u1_token_count=u1_token_count,
+    )
+    if response_range in wrong_ranges or gold_decision == "abstain":
+        return "wrong_referent"
+    return "wrong_referent"
+
+
+def build_scorer_receipt(
+    responses_by_case_id: Mapping[str, Mapping[str, object]],
+    *,
+    gold: Mapping[str, object],
+    case_order: Sequence[str],
+    u1_token_count: int = 5,
+) -> dict[str, object]:
+    """Build a deterministic scorer receipt from sealed synthetic responses."""
+
+    validate_gold_label_bundle(gold, case_order=case_order, u1_token_count=u1_token_count)
+    gold_by_case = {
+        str(case["case_id"]): _as_mapping(case, "gold label")
+        for case in _as_mapping(gold, "gold labels")["cases"]  # type: ignore[index]
+        if isinstance(case, dict)
+    }
+    case_results = []
+    for case_id in case_order:
+        response = responses_by_case_id.get(case_id)
+        classification = (
+            "mechanical_failure"
+            if response is None
+            else classify_model_response(
+                response,
+                gold_case=gold_by_case[case_id],
+                case_id=case_id,
+                u1_token_count=u1_token_count,
+            )
+        )
+        case_results.append({"case_id": case_id, "classification": classification})
+    receipt = {
+        "schema_version": "semantic_anchor_scorer_receipt_v1",
+        "case_results": case_results,
+    }
+    validate_scorer_receipt(receipt, case_order=case_order)
+    return receipt
+
+
+def validate_scorer_receipt(
+    receipt: Mapping[str, object], *, case_order: Sequence[str]
+) -> None:
+    _require_exact_mapping_keys(receipt, "scorer receipt", {"schema_version", "case_results"})
+    if receipt.get("schema_version") != "semantic_anchor_scorer_receipt_v1":
+        raise ValueError("scorer receipt schema_version mismatch")
+    case_results = receipt.get("case_results")
+    if not isinstance(case_results, list):
+        raise ValueError("scorer receipt case_results must be list")
+    if len(case_results) != len(case_order):
+        raise ValueError("scorer receipt case count mismatch")
+    observed_case_ids: list[str] = []
+    for result in case_results:
+        row = _as_mapping(result, "scorer result")
+        _require_exact_mapping_keys(row, "scorer result", {"case_id", "classification"})
+        case_id = _validate_case_id(row.get("case_id"), "scorer case_id")
+        classification = row.get("classification")
+        if classification not in SCORER_CLASSIFICATIONS:
+            raise ValueError("scorer classification mismatch")
+        observed_case_ids.append(case_id)
+    if tuple(observed_case_ids) != tuple(case_order):
+        raise ValueError("scorer receipt case order mismatch")
 
 
 def validate_ledger_prefix(
@@ -1235,6 +1423,7 @@ def _validate_one_case_fixture(
     decision = registry_case.get("decision")
     if gold_case.get("decision") != decision:
         raise ValueError(f"gold decision differs from registry: {case_id}")
+    validate_gold_label_case(gold_case, case_id=case_id, u1_token_count=5)
     ranges = gold_case.get("acceptable_ranges")
     if not isinstance(ranges, list):
         raise ValueError(f"acceptable_ranges must be list: {case_id}")
@@ -1365,6 +1554,25 @@ def _validate_sha256_mapping(value: object, name: str) -> None:
         if not isinstance(key, str) or not key:
             raise ValueError(f"{name} keys must be nonempty strings")
         _validate_sha256_string(digest, f"{name}[{key}]")
+
+
+def _range_tuple(
+    value: object, name: str, *, u1_token_count: int
+) -> tuple[tuple[int, int], ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be list")
+    ranges: list[tuple[int, int]] = []
+    for raw_range in value:
+        span = _as_mapping(raw_range, name)
+        _require_exact_mapping_keys(span, name, {"start_token", "end_token"})
+        start = _strict_int(span.get("start_token"), f"{name}.start_token")
+        end = _strict_int(span.get("end_token"), f"{name}.end_token")
+        if not (0 <= start < end <= u1_token_count):
+            raise ValueError(f"{name} range must be nonempty and inside U1")
+        ranges.append((start, end))
+    if len(ranges) != len(set(ranges)):
+        raise ValueError(f"{name} contains duplicate ranges")
+    return tuple(ranges)
 
 
 def _require_unique_case_records(

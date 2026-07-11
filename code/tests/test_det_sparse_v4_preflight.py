@@ -35,6 +35,20 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
         "status": "pass",
         "unsupported_feature_issues": [],
     }
+    request_identity = report["request_identity"]
+    assert request_identity["checker"] == "semantic_anchor_request_identity_v1"
+    assert request_identity["status"] == "pass"
+    assert request_identity["case_count"] == 24
+    assert request_identity["first_case_id"] == "synthetic-case-001"
+    assert len(request_identity["case_order_sha256"]) == 64
+    assert list(request_identity["request_sha256"]) == [
+        f"synthetic-case-{index:03d}" for index in range(1, 25)
+    ]
+    assert list(request_identity["request_body_size_bytes"]) == [
+        f"synthetic-case-{index:03d}" for index in range(1, 25)
+    ]
+    assert all(len(value) == 64 for value in request_identity["request_sha256"].values())
+    assert all(value > 0 for value in request_identity["request_body_size_bytes"].values())
     assert report["denied_topic_ids"] == list(contract.DENIED_TOPIC_IDS)
     assert report["runner_visible_artifacts"] == list(contract.runner_visible_artifacts())
     assert report["scorer_only_artifacts"] == list(contract.scorer_only_artifacts())
@@ -69,6 +83,14 @@ def test_offline_preflight_report_rejects_inference_or_cost_authorization():
     schema_compatibility["status"] = "fail"
     report["schema_compatibility"] = schema_compatibility
     with pytest.raises(ValueError, match="schema compatibility"):
+        preflight.validate_offline_preflight_report(report)
+
+    report = preflight.build_offline_preflight_report()
+    request_identity = dict(report["request_identity"])
+    request_identity["request_sha256"] = dict(request_identity["request_sha256"])
+    request_identity["request_sha256"]["synthetic-case-001"] = "not-a-sha"
+    report["request_identity"] = request_identity
+    with pytest.raises(ValueError, match="request hash"):
         preflight.validate_offline_preflight_report(report)
 
 
@@ -141,6 +163,48 @@ def test_offline_preflight_schema_compatibility_reports_unsupported_features(tmp
     assert summary["status"] == "fail"
     assert summary["unsupported_feature_issues"][0]["case_id"] == "synthetic-case-001"
     assert summary["unsupported_feature_issues"][0]["keyword"] == "uniqueItems"
+
+
+def test_offline_preflight_request_identity_binds_fixed_case_order_and_request_hashes(tmp_path: Path):
+    copied = tmp_path / "artifacts"
+    shutil.copytree(contract.ARTIFACT_DIR, copied)
+
+    summary = preflight.build_request_identity_summary(copied)
+
+    assert summary["status"] == "pass"
+    assert summary["first_case_id"] == "synthetic-case-001"
+    assert len(summary["request_sha256"]) == 24
+    assert summary["request_sha256"]["synthetic-case-001"] != summary["request_sha256"][
+        "synthetic-case-002"
+    ]
+
+    case_order_path = copied / "semantic_anchor_case_order_v1.json"
+    case_order = json.loads(case_order_path.read_text(encoding="utf-8"))
+    case_order["case_order"][0], case_order["case_order"][1] = (
+        case_order["case_order"][1],
+        case_order["case_order"][0],
+    )
+    case_order_path.write_text(json.dumps(case_order), encoding="utf-8")
+    with pytest.raises(ValueError, match="case order drifted"):
+        preflight.build_request_identity_summary(copied)
+
+
+def test_offline_preflight_request_identity_rejects_request_order_drift(tmp_path: Path):
+    copied = tmp_path / "artifacts"
+    shutil.copytree(contract.ARTIFACT_DIR, copied)
+    request_path = copied / "semantic_anchor_request_fixtures_v1.jsonl"
+    records = [
+        json.loads(line)
+        for line in request_path.read_text(encoding="utf-8").splitlines()
+    ]
+    records[0], records[1] = records[1], records[0]
+    request_path.write_text(
+        "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="request fixture order"):
+        preflight.build_request_identity_summary(copied)
 
 
 def test_offline_preflight_cli_writes_create_only_json(tmp_path: Path):

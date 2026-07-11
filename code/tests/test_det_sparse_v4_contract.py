@@ -618,6 +618,149 @@ def test_v4_ledger_prefix_accepts_completed_24_case_terminal_state():
     )
 
 
+def _gold_select(case_id="synthetic-case-001"):
+    return {
+        "schema_version": "semantic_anchor_gold_label_v1",
+        "case_id": case_id,
+        "decision": "select",
+        "acceptable_ranges": [{"start_token": 0, "end_token": 2}],
+        "wrong_referent_ranges": [{"start_token": 2, "end_token": 4}],
+    }
+
+
+def _gold_abstain(case_id="synthetic-case-019"):
+    return {
+        "schema_version": "semantic_anchor_gold_label_v1",
+        "case_id": case_id,
+        "decision": "abstain",
+        "acceptable_ranges": [],
+        "wrong_referent_ranges": [],
+        "abstain_reason": "coequal_disjoint_subjects",
+    }
+
+
+def _model_response(
+    case_id="synthetic-case-001",
+    decision="select",
+    start_token=0,
+    end_token=2,
+):
+    return {
+        "schema_version": "semantic_anchor_response_v1",
+        "case_id": case_id,
+        "decision": decision,
+        "start_token": start_token,
+        "end_token": end_token,
+    }
+
+
+def test_gold_label_linter_rejects_leaky_or_ambiguous_ranges():
+    v4.validate_gold_label_case(_gold_select(), case_id="synthetic-case-001")
+    v4.validate_gold_label_case(_gold_abstain(), case_id="synthetic-case-019")
+
+    bad = _gold_select()
+    bad["acceptable_ranges"] = [{"start_token": 4, "end_token": 6}]
+    with pytest.raises(ValueError, match="inside U1"):
+        v4.validate_gold_label_case(bad, case_id="synthetic-case-001")
+
+    bad = _gold_select()
+    bad["wrong_referent_ranges"] = [{"start_token": 0, "end_token": 2}]
+    with pytest.raises(ValueError, match="overlap"):
+        v4.validate_gold_label_case(bad, case_id="synthetic-case-001")
+
+    bad = _gold_abstain()
+    bad["acceptable_ranges"] = [{"start_token": 0, "end_token": 1}]
+    with pytest.raises(ValueError, match="abstain gold"):
+        v4.validate_gold_label_case(bad, case_id="synthetic-case-019")
+
+
+def test_scorer_classifies_select_abstain_and_mechanical_failure():
+    assert (
+        v4.classify_model_response(
+            _model_response(),
+            gold_case=_gold_select(),
+            case_id="synthetic-case-001",
+        )
+        == "correct_select"
+    )
+    assert (
+        v4.classify_model_response(
+            _model_response(start_token=2, end_token=4),
+            gold_case=_gold_select(),
+            case_id="synthetic-case-001",
+        )
+        == "wrong_referent"
+    )
+    assert (
+        v4.classify_model_response(
+            _model_response(decision="abstain", start_token=-1, end_token=-1),
+            gold_case=_gold_select(),
+            case_id="synthetic-case-001",
+        )
+        == "wrong_abstain"
+    )
+    assert (
+        v4.classify_model_response(
+            _model_response(
+                case_id="synthetic-case-019",
+                decision="abstain",
+                start_token=-1,
+                end_token=-1,
+            ),
+            gold_case=_gold_abstain(),
+            case_id="synthetic-case-019",
+        )
+        == "safe_abstain"
+    )
+    assert (
+        v4.classify_model_response(
+            _model_response(start_token=True, end_token=2),
+            gold_case=_gold_select(),
+            case_id="synthetic-case-001",
+        )
+        == "mechanical_failure"
+    )
+
+
+def test_scorer_receipt_is_case_ordered_and_built_from_gold_bundle():
+    case_order = _case_order()
+    gold = {"schema_version": "semantic_anchor_gold_labels_v1", "cases": []}
+    responses = {}
+    for index, case_id in enumerate(case_order, start=1):
+        if index <= 18:
+            gold["cases"].append(_gold_select(case_id))
+            responses[case_id] = _model_response(case_id=case_id)
+        else:
+            gold["cases"].append(_gold_abstain(case_id))
+            responses[case_id] = _model_response(
+                case_id=case_id,
+                decision="abstain",
+                start_token=-1,
+                end_token=-1,
+            )
+
+    receipt = v4.build_scorer_receipt(
+        responses,
+        gold=gold,
+        case_order=case_order,
+    )
+
+    v4.validate_scorer_receipt(receipt, case_order=case_order)
+    assert receipt["case_results"][0] == {
+        "case_id": "synthetic-case-001",
+        "classification": "correct_select",
+    }
+    assert receipt["case_results"][-1] == {
+        "case_id": "synthetic-case-024",
+        "classification": "safe_abstain",
+    }
+
+    bad = dict(receipt)
+    bad["case_results"] = list(reversed(receipt["case_results"]))
+    with pytest.raises(ValueError, match="case order"):
+        v4.validate_scorer_receipt(bad, case_order=case_order)
+
+
 def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight():
     inventory = {
         "schema_version": "semantic_anchor_model_inventory_attestation_v1",
