@@ -155,6 +155,83 @@ def _offset_health():
     }
 
 
+def _offset_fingerprint():
+    return {
+        "legacy_term_chain_fingerprint_sha256": "a" * 64,
+        "offset_contract_version": "lucene_whole_unit_offsets_v1",
+        "offset_server_class_sha256": "b" * 64,
+        "offset_lucene_jar_sha256": "c" * 64,
+        "offset_runtime_image_digest": "sha256:" + "d" * 64,
+    }
+
+
+def _offset_response(text: str, *, occurrences: list[dict[str, object]] | None = None):
+    if occurrences is None:
+        occurrences = [
+            {
+                "ordinal": 0,
+                "term": "anchor",
+                "start_codepoint": 0,
+                "end_codepoint": 6,
+                "position_increment": 1,
+            }
+        ]
+    return {
+        "schema_version": "lucene_whole_unit_offsets_response_v1",
+        "text_sha256": contract.text_sha256(text),
+        "offset_unit": "unicode_code_points",
+        "fingerprint": _offset_fingerprint(),
+        "occurrences": occurrences,
+    }
+
+
+def _write_offset_parity_review(tmp_path: Path) -> Path:
+    fixtures = []
+    for surface_class in preflight.OFFSET_PARITY_SURFACE_CLASSES:
+        for unit_position in preflight.OFFSET_PARITY_UNIT_POSITIONS:
+            for punctuation_context in preflight.OFFSET_PARITY_PUNCTUATION_CONTEXTS:
+                fixture_id = f"{surface_class}-{unit_position}-{punctuation_context}"
+                text = preflight._offset_parity_expected_text(
+                    surface_class=surface_class,
+                    unit_position=unit_position,
+                    punctuation_context=punctuation_context,
+                )
+                if surface_class == "analyzer_zero_stopword":
+                    response = _offset_response(text, occurrences=[])
+                else:
+                    response = _offset_response(text)
+                _request, _body, request_sha256 = contract.build_offset_request(text)
+                fixtures.append(
+                    {
+                        "fixture_id": fixture_id,
+                        "surface_class": surface_class,
+                        "unit_position": unit_position,
+                        "punctuation_context": punctuation_context,
+                        "text": text,
+                        "request_sha256": request_sha256,
+                        "response_sha256": contract.sha256_bytes(
+                            contract.canonical_json_bytes(response)
+                        ),
+                        "response": response,
+                    }
+                )
+    fixtures_path = tmp_path / "offset-parity-fixtures.json"
+    review_path = tmp_path / "offset-parity-review.json"
+    fixtures_path.write_bytes(
+        contract.canonical_json_bytes(
+            {
+                "schema_version": "semantic_anchor_offset_parity_fixture_v1",
+                "health": _offset_health(),
+                "fixtures": fixtures,
+            }
+        )
+        + b"\n"
+    )
+    review = preflight.build_offset_parity_review(fixtures_path)
+    review_path.write_bytes(preflight.canonical_report_bytes(review))
+    return review_path
+
+
 def _schema_compiler_attestation(request_identity):
     return {
         "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
@@ -216,7 +293,10 @@ def _approved_reviews(tmp_path: Path):
         contract.canonical_json_bytes(_live_attestation_bundle(model_inventory_sha256))
         + b"\n"
     )
-    live_review = preflight.build_live_attestation_review(bundle_path)
+    live_review = preflight.build_live_attestation_review(
+        bundle_path,
+        offset_parity_review_path=_write_offset_parity_review(tmp_path),
+    )
     live_review_sha256 = contract.sha256_bytes(
         preflight.canonical_report_bytes(live_review)
     )

@@ -36,6 +36,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "Live attestation records must be exact before dispatch" in text
     assert "vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`" in text
     assert "semantic_anchor_live_attestation_review_v1" in text
+    assert "semantic_anchor_offset_parity_review_v1" in text
+    assert "offset review SHA-256 and offset fingerprint SHA-256" in text
     assert "canonical bundle file" in text
     assert "`bundle_canonical=true`" in text
     assert "semantic_anchor_advisor_dispatch_go_v1" in text
@@ -46,6 +48,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "requires the advisor GO receipt to be canonical JSON bytes" in text
     assert "dispatch_authorized=false" in text
     assert "--live-attestation-bundle path/to/live-attestation-bundle.json" in text
+    assert "--offset-parity-review path/to/offset-parity-review.json" in text
     assert "strict assistant-content extractor" in text
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
@@ -59,7 +62,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "neither dispatches the model,\nopens scorer-only gold" in text
     assert "actual live post-dispatch run still pending" in text
     assert "canonical live-attestation bundle" in text
-    assert "advisor dispatch-GO binding" in text
+    assert "advisor\ndispatch-GO binding" in text
     assert "file-backed advisor-GO review CLI" in text
     assert "semantic_anchor_manual_runner_invocation_v1" in text
     assert "semantic_anchor_manual_runner_invocation_review_v1" in text
@@ -80,9 +83,11 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "code/tests/test_det_sparse_v4_scorer.py" in text
     assert "classification" in text
     assert "runtime file-open tracing, live attestation" in text
-    assert "evidence validators, captured-bundle review" in text
+    assert "evidence validators" in text
+    assert "captured-bundle review" in text
     assert "file-backed offset parity review" in text
-    assert "advisor dispatch-GO binding" in text
+    assert "offset-parity-to-live-attestation binding" in text
+    assert "advisor\ndispatch-GO binding" in text
     assert "file-backed advisor-GO review CLI" in text
     assert "file-backed manual runner invocation review" in text
     assert "runner replay CLI modes" in text
@@ -94,7 +99,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "actual live model invocation remains closed" in text
     assert "canonical sealed scorer input" in text
     assert "ledger-bound scorer-only" in text
-    assert "`180 passed`." in text
+    assert "`181 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

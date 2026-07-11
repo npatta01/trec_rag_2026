@@ -77,7 +77,7 @@ deterministically.
 | Source/import closure must be fail-closed | Preflight reports a static direct source audit over the v4 preflight, contract, schema-compat, default no-dispatch runner CLI paths, and the gated injected dispatch helper; denied imports, denied path fragments, unexpected import roots, and unexpected `trec_rag` modules must all be empty. It also wraps offline preflight in a runtime file-open audit that must observe read-only access, no denied topic/qrels/cache/model path fragments, and zero writes. | Offline direct-source closure and runtime file-open tracing validated, including model-cache and safetensors path denial. |
 | Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas; all 24 schemas pass the offline vLLM 0.24/XGrammar unsupported-feature linter; offset health/error/response schemas are bound to executable Python validators; offset responses validate shape, hash, fingerprint, and monotonicity; a file-backed offset parity review requires the full 48-row live fixture grid and stable offset fingerprint before the model gate; chat completions have a strict assistant-content extractor that rejects non-JSON, duplicate keys, tool calls, wrong roles, wrong case IDs, and malformed ranges; captured live schema-compiler evidence must bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, the fixed case-order hash, and all 24 request hashes. | Offline fixtures, schema lint, offset sidecar schema validation, offset parity review mechanics, assistant-content extraction, and live-evidence validators covered; actual live compiler capture and live Java parity fixture capture are still pending. |
 | Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. Captured runtime evidence must bind served model `gpt-oss-local`, repository `openai/gpt-oss-20b`, revision `6cee5e81ee83917806bbde320786a8fb61efebee`, vLLM/XGrammar versions, backend `xgrammar`, loopback-only serving, egress denial, read-only model mount, and the expected model-inventory SHA-256 before it can be projected into a ledger pre-dispatch attestation. | Offline fixture validation and live-evidence validators strengthened; actual live local inventory capture still pending. |
-| Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. The preflight CLI can validate a captured canonical bundle file into a `semantic_anchor_live_attestation_review_v1` report, bind its SHA-256 with `bundle_canonical=true`, project the pre-dispatch ledger attestation, trace read-only file access, and still leaves `dispatch_authorized=false`. | Attestation record shapes, canonical bundle sealing, and bundle-review path are validated offline; actual live collection still pending. |
+| Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. The preflight CLI can validate a captured canonical bundle file into a `semantic_anchor_live_attestation_review_v1` report only after a canonical `semantic_anchor_offset_parity_review_v1` is supplied; it binds the offset review SHA-256 and offset fingerprint SHA-256, binds the bundle SHA-256 with `bundle_canonical=true`, projects the pre-dispatch ledger attestation, traces read-only file access, and still leaves `dispatch_authorized=false`. | Attestation record shapes, offset-parity-to-live-attestation binding, canonical bundle sealing, and bundle-review path are validated offline; actual live collection still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
 | Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, executable ledger-prefix validator, and offline replay mutation oracles are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. The mutation oracles execute all eight registered failure-code surfaces in memory. The pre-dispatch replay verifier rereads an actual create-only run directory from sealed files and rejects noncanonical bytes, artifact-hash drift, reservation hash drift, extra dispatch artifacts, and nonzero terminal counters. The completed-run replay verifier rereads a 24-case synthetic run directory from sealed files, rejects extra artifacts, missing raw files, terminal counter drift, premature `gold_opened=true`, sealed response order drift, validates reservation/dispatch/raw/receipt ledger links, requires `raw_sealed_pending_scorer` with `gold_opened=false`, and validates the sealed scorer input before scorer-only gold can open. | Offline shapes, prefix mechanics, mutation failure surfaces, actual zero-dispatch run-directory replay, and offline completed synthetic run-directory replay validated; replay against an actual live post-dispatch run still pending. |
 | Runner entrypoint must not dispatch before approval | A create-only runner scaffold writes 24 request-hash reservation records, a fresh run manifest, and a `pre_dispatch_no_go` terminal receipt, validates the zero-call ledger prefix, refuses existing output directories, and performs no model, retrieval, reranking, topic, relevance-judgment, network, download, or model-file access. The replay verifier accepts only that exact file set and terminal state. The post-approval synthetic dispatch function requires a validated live-attestation review, advisor-GO review, and explicit manual runner invocation receipt, accepts only an explicitly injected transport, writes reservation/dispatch/raw-response/case-receipt records, creates a canonical sealed scorer input, leaves scorer-only gold unopened, and seals bad/no-body transport output as `transport_no_body_no_go` before raising. | Offline no-dispatch runner boundary, reservation materialization, no-go replay, fake-transport dispatch implementation, and failed-transport terminal sealing validated; actual live model invocation remains closed. |
@@ -128,13 +128,15 @@ Captured live attestation bundles, once separately produced, are reviewed with:
 ```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_preflight \
   --live-attestation-bundle path/to/live-attestation-bundle.json \
+  --offset-parity-review path/to/offset-parity-review.json \
   --output path/to/live-attestation-review.json \
   --pretty
 ```
 
 That review validates the bundle against the frozen request identity and the
-committed model-inventory artifact SHA-256, emits a pre-dispatch ledger
-attestation, requires canonical JSON bundle bytes, reports
+committed model-inventory artifact SHA-256, validates and binds the canonical
+offset parity review plus offset fingerprint SHA-256, emits a pre-dispatch
+ledger attestation, requires canonical JSON bundle bytes, reports
 `bundle_canonical=true`, traces file opens, and explicitly keeps
 `dispatch_authorized=false`.
 
@@ -262,9 +264,10 @@ Result after adding packet, source/import audit, offline schema-compatibility
 checks, request identity binding, offset response validation, ledger-prefix
 validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
-file-backed offset parity review, runtime file-open tracing, live attestation
-evidence validators, captured-bundle review, canonical live-attestation bundle
-sealing, advisor dispatch-GO binding, file-backed advisor-GO review CLI,
+file-backed offset parity review, offset-parity-to-live-attestation binding,
+runtime file-open tracing, live attestation evidence validators,
+captured-bundle review, canonical live-attestation bundle sealing, advisor
+dispatch-GO binding, file-backed advisor-GO review CLI,
 file-backed manual runner invocation review, pre-dispatch run-directory replay,
 offline completed synthetic run-directory replay, runner replay CLI modes,
 completed replay mutation coverage, runner-visible artifact hashing without
@@ -272,7 +275,7 @@ scorer-only gold opens, reviewed fake-transport dispatch implementation,
 failed-transport terminal sealing, canonical sealed scorer input,
 ledger-bound scorer-only sealed-response review, and reviewer qualification
 terminal-state mapping:
-`180 passed`.
+`181 passed`.
 
 ## What is not yet proven
 

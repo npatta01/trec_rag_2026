@@ -186,6 +186,7 @@ def _build_offline_preflight_report_untraced(
 def build_live_attestation_review(
     bundle_path: Path,
     *,
+    offset_parity_review_path: Path,
     artifact_dir: Path = contract.ARTIFACT_DIR,
 ) -> dict[str, object]:
     """Validate a captured live attestation bundle without opening dispatch."""
@@ -193,6 +194,7 @@ def build_live_attestation_review(
     report = build_runtime_file_access_summary(
         lambda: _build_live_attestation_review_untraced(
             bundle_path,
+            offset_parity_review_path=offset_parity_review_path,
             artifact_dir=artifact_dir,
         )
     )
@@ -203,6 +205,7 @@ def build_live_attestation_review(
 def _build_live_attestation_review_untraced(
     bundle_path: Path,
     *,
+    offset_parity_review_path: Path,
     artifact_dir: Path = contract.ARTIFACT_DIR,
 ) -> dict[str, object]:
     offline_report = _build_offline_preflight_report_untraced(artifact_dir)
@@ -223,6 +226,14 @@ def _build_live_attestation_review_untraced(
     )
     if bundle_file.read_bytes() != contract.canonical_json_bytes(bundle) + b"\n":
         raise ValueError("live attestation bundle is not canonical JSON bytes")
+    offset_review_file = offset_parity_review_path.resolve()
+    offset_parity_review = _require_mapping(
+        contract.load_json_no_duplicates(offset_review_file),
+        "offset parity review",
+    )
+    if offset_review_file.read_bytes() != canonical_report_bytes(offset_parity_review):
+        raise ValueError("offset parity review is not canonical JSON bytes")
+    validate_offset_parity_review(offset_parity_review)
     contract.validate_live_attestation_bundle(
         bundle,
         request_identity=request_identity,
@@ -239,6 +250,12 @@ def _build_live_attestation_review_untraced(
         "bundle_path": str(bundle_file),
         "bundle_sha256": contract.sha256_file(bundle_file),
         "bundle_canonical": True,
+        "offset_parity_review_path": str(offset_review_file),
+        "offset_parity_review_sha256": contract.sha256_file(offset_review_file),
+        "offset_parity_review_status": offset_parity_review["status"],
+        "offset_fingerprint_sha256": offset_parity_review[
+            "offset_fingerprint_sha256"
+        ],
         "offline_preflight_status": offline_report["status"],
         "request_case_order_sha256": request_identity["case_order_sha256"],
         "model_inventory_artifact": MODEL_INVENTORY_ARTIFACT,
@@ -742,11 +759,25 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
         raise ValueError("live attestation review offline preflight status mismatch")
     if report.get("model_inventory_artifact") != MODEL_INVENTORY_ARTIFACT:
         raise ValueError("live attestation review model inventory artifact mismatch")
-    for key in ("bundle_sha256", "request_case_order_sha256", "model_inventory_sha256"):
+    for key in (
+        "bundle_sha256",
+        "offset_parity_review_sha256",
+        "offset_fingerprint_sha256",
+        "request_case_order_sha256",
+        "model_inventory_sha256",
+    ):
         if not _is_sha256_string(report.get(key)):
             raise ValueError(f"live attestation review {key} must be sha256")
     if not isinstance(report.get("bundle_path"), str) or not report.get("bundle_path"):
         raise ValueError("live attestation review bundle_path must be nonempty string")
+    if not isinstance(report.get("offset_parity_review_path"), str) or not report.get(
+        "offset_parity_review_path"
+    ):
+        raise ValueError(
+            "live attestation review offset_parity_review_path must be nonempty string"
+        )
+    if report.get("offset_parity_review_status") != OFFSET_PARITY_REVIEW_STATUS:
+        raise ValueError("live attestation review offset parity status mismatch")
     if report.get("bundle_canonical") is not True:
         raise ValueError("live attestation review bundle must be canonical")
     if report.get("cost_counters") != ZERO_COST_COUNTERS:
@@ -1156,6 +1187,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Canonical captured 48-row offset parity fixture JSON to review.",
     )
+    parser.add_argument(
+        "--offset-parity-review",
+        type=Path,
+        help="Canonical offset parity review required by live-attestation review.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON.")
     return parser
 
@@ -1167,10 +1203,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "--advisor-go-receipt requires --live-attestation-review, and vice versa"
             )
-        if args.live_attestation_bundle or args.offset_parity_fixtures:
+        if (
+            args.live_attestation_bundle
+            or args.offset_parity_fixtures
+            or args.offset_parity_review
+        ):
             raise ValueError(
-                "--live-attestation-bundle/--offset-parity-fixtures cannot be "
-                "combined with advisor GO review"
+                "--live-attestation-bundle/--offset-parity-fixtures/"
+                "--offset-parity-review cannot be combined with advisor GO review"
             )
         report = build_advisor_dispatch_go_review_from_files(
             args.live_attestation_review,
@@ -1181,12 +1221,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "--offset-parity-fixtures cannot be combined with live attestation review"
             )
+        if not args.offset_parity_review:
+            raise ValueError(
+                "--live-attestation-bundle requires --offset-parity-review"
+            )
         report = build_live_attestation_review(
             args.live_attestation_bundle,
+            offset_parity_review_path=args.offset_parity_review,
             artifact_dir=args.artifact_dir,
         )
     elif args.offset_parity_fixtures:
+        if args.offset_parity_review:
+            raise ValueError(
+                "--offset-parity-review cannot be combined with offset parity fixtures"
+            )
         report = build_offset_parity_review(args.offset_parity_fixtures)
+    elif args.offset_parity_review:
+        raise ValueError("--offset-parity-review requires --live-attestation-bundle")
     else:
         report = build_offline_preflight_report(args.artifact_dir)
     payload = canonical_report_bytes(report, pretty=args.pretty)
