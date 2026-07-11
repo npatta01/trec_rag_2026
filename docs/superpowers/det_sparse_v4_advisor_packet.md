@@ -77,7 +77,7 @@ deterministically.
 | Source/import closure must be fail-closed | Preflight reports a static direct source audit over the v4 preflight, contract, schema-compat, and no-dispatch runner modules; denied imports, denied path fragments, unexpected import roots, and unexpected `trec_rag` modules must all be empty. It also wraps offline preflight in a runtime file-open audit that must observe read-only access, no denied topic/qrels/cache/model path fragments, and zero writes. | Offline direct-source closure and runtime file-open tracing validated, including model-cache and safetensors path denial. |
 | Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas; all 24 schemas pass the offline vLLM 0.24/XGrammar unsupported-feature linter; offset health/error/response schemas are bound to executable Python validators; offset responses validate shape, hash, fingerprint, and monotonicity; chat completions have a strict assistant-content extractor that rejects non-JSON, duplicate keys, tool calls, wrong roles, wrong case IDs, and malformed ranges; captured live schema-compiler evidence must bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, the fixed case-order hash, and all 24 request hashes. | Offline fixtures, schema lint, offset sidecar schema validation, assistant-content extraction, and live-evidence validators covered; actual live compiler capture and live Java parity are still pending. |
 | Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. Captured runtime evidence must bind served model `gpt-oss-local`, repository `openai/gpt-oss-20b`, revision `6cee5e81ee83917806bbde320786a8fb61efebee`, vLLM/XGrammar versions, backend `xgrammar`, loopback-only serving, egress denial, read-only model mount, and the expected model-inventory SHA-256 before it can be projected into a ledger pre-dispatch attestation. | Offline fixture validation and live-evidence validators strengthened; actual live local inventory capture still pending. |
-| Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. The preflight CLI can validate a captured bundle file into a `semantic_anchor_live_attestation_review_v1` report, project the pre-dispatch ledger attestation, trace read-only file access, and still leaves `dispatch_authorized=false`. | Attestation record shapes and bundle-review path are validated offline; actual live collection still pending. |
+| Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. The preflight CLI can validate a captured canonical bundle file into a `semantic_anchor_live_attestation_review_v1` report, bind its SHA-256 with `bundle_canonical=true`, project the pre-dispatch ledger attestation, trace read-only file access, and still leaves `dispatch_authorized=false`. | Attestation record shapes, canonical bundle sealing, and bundle-review path are validated offline; actual live collection still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
 | Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, executable ledger-prefix validator, and offline replay mutation oracles are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. The mutation oracles execute all eight registered failure-code surfaces in memory. The pre-dispatch replay verifier rereads an actual create-only run directory from sealed files and rejects noncanonical bytes, artifact-hash drift, reservation hash drift, extra dispatch artifacts, and nonzero terminal counters. The completed-run replay verifier rereads a 24-case synthetic run directory from sealed files, rejects extra artifacts, validates reservation/dispatch/raw/receipt ledger links, requires `raw_sealed_pending_scorer` with `gold_opened=false`, and validates the sealed scorer input before scorer-only gold can open. | Offline shapes, prefix mechanics, mutation failure surfaces, actual zero-dispatch run-directory replay, and offline completed synthetic run-directory replay validated; replay against an actual live post-dispatch run still pending. |
 | Runner entrypoint must not dispatch before approval | A create-only runner scaffold writes 24 request-hash reservation records, a fresh run manifest, and a `pre_dispatch_no_go` terminal receipt, validates the zero-call ledger prefix, refuses existing output directories, and performs no model, retrieval, reranking, topic, relevance-judgment, network, download, or model-file access. The replay verifier accepts only that exact file set and terminal state. | Offline no-dispatch runner boundary, reservation materialization, and no-go replay validated; live dispatch remains closed. |
@@ -134,7 +134,20 @@ Captured live attestation bundles, once separately produced, are reviewed with:
 
 That review validates the bundle against the frozen request identity and the
 committed model-inventory artifact SHA-256, emits a pre-dispatch ledger
-attestation, traces file opens, and explicitly keeps `dispatch_authorized=false`.
+attestation, requires canonical JSON bundle bytes, reports
+`bundle_canonical=true`, traces file opens, and explicitly keeps
+`dispatch_authorized=false`.
+
+A later advisor/user GO receipt is also reviewed offline before any runner
+entrypoint can be invoked. The receipt must use
+`semantic_anchor_advisor_dispatch_go_v1`, name the
+`det_sparse_v4_synthetic_local_dispatch` scope, bind the exact
+`semantic_anchor_live_attestation_review_v1` canonical SHA-256, and acknowledge
+that topic, qrels, retrieval, reranking, and paid-call gates remain closed. The
+derived `semantic_anchor_advisor_dispatch_go_review_v1` report still keeps
+`inference_authorized=false`, `dispatch_authorized=false`, and
+`external_cost_authorized=false`; its next gate is
+`manual_runner_invocation_still_required`.
 
 Sealed synthetic responses are scored only after run-directory replay proves
 all 24 raw responses are committed. The offline completed-run replay verifier
@@ -180,10 +193,11 @@ checks, request identity binding, offset response validation, ledger-prefix
 validation, offline replay mutation oracles, and scorer/gold classification
 validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, captured-bundle
-review, pre-dispatch run-directory replay, offline completed synthetic
-run-directory replay, ledger-bound scorer-only sealed-response review, and
-reviewer qualification terminal-state mapping:
-`157 passed`.
+review, canonical live-attestation bundle sealing, advisor dispatch-GO binding,
+pre-dispatch run-directory replay, offline completed synthetic run-directory
+replay, ledger-bound scorer-only sealed-response review, and reviewer
+qualification terminal-state mapping:
+`159 passed`.
 
 ## What is not yet proven
 

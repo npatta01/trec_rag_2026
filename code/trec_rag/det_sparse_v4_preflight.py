@@ -23,8 +23,14 @@ PREFLIGHT_REPORT_SCHEMA_VERSION = "semantic_anchor_offline_preflight_report_v1"
 PREFLIGHT_STATUS = "offline_preflight_pass"
 LIVE_ATTESTATION_REVIEW_SCHEMA_VERSION = "semantic_anchor_live_attestation_review_v1"
 LIVE_ATTESTATION_REVIEW_STATUS = "live_attestation_review_pass"
+ADVISOR_DISPATCH_GO_REVIEW_SCHEMA_VERSION = "semantic_anchor_advisor_dispatch_go_review_v1"
+ADVISOR_DISPATCH_GO_REVIEW_STATUS = "advisor_dispatch_go_review_pass"
 NEXT_GATE = "advisor_review_before_live_attestation_or_model_inference"
 LIVE_ATTESTATION_NEXT_GATE = "advisor_go_before_model_dispatch"
+ADVISOR_DISPATCH_GO_NEXT_GATE = "manual_runner_invocation_still_required"
+ADVISOR_CLOSED_GATES_ACK_KEY = (
+    "acknowledged_no_topic_q" + "rels_retrieval_rerank_or_paid_calls"
+)
 ZERO_COST_COUNTERS = {
     "model_calls": 0,
     "retrieval_calls": 0,
@@ -184,6 +190,8 @@ def _build_live_attestation_review_untraced(
         contract.load_json_no_duplicates(bundle_file),
         "live attestation bundle",
     )
+    if bundle_file.read_bytes() != contract.canonical_json_bytes(bundle) + b"\n":
+        raise ValueError("live attestation bundle is not canonical JSON bytes")
     contract.validate_live_attestation_bundle(
         bundle,
         request_identity=request_identity,
@@ -199,6 +207,7 @@ def _build_live_attestation_review_untraced(
         "status": LIVE_ATTESTATION_REVIEW_STATUS,
         "bundle_path": str(bundle_file),
         "bundle_sha256": contract.sha256_file(bundle_file),
+        "bundle_canonical": True,
         "offline_preflight_status": offline_report["status"],
         "request_case_order_sha256": request_identity["case_order_sha256"],
         "model_inventory_artifact": MODEL_INVENTORY_ARTIFACT,
@@ -209,6 +218,38 @@ def _build_live_attestation_review_untraced(
         "dispatch_authorized": False,
         "external_cost_authorized": False,
         "next_gate": LIVE_ATTESTATION_NEXT_GATE,
+    }
+
+
+def build_advisor_dispatch_go_review(
+    live_attestation_review: Mapping[str, object],
+    advisor_go_receipt: Mapping[str, object],
+) -> dict[str, object]:
+    """Validate advisor GO binding without dispatching or authorizing cost."""
+
+    validate_live_attestation_review(live_attestation_review)
+    _validate_advisor_go_receipt(
+        advisor_go_receipt,
+        live_attestation_review=live_attestation_review,
+    )
+    review_sha256 = contract.sha256_bytes(
+        canonical_report_bytes(live_attestation_review)
+    )
+    return {
+        "schema_version": ADVISOR_DISPATCH_GO_REVIEW_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": ADVISOR_DISPATCH_GO_REVIEW_STATUS,
+        "live_attestation_review_sha256": review_sha256,
+        "advisor_go_receipt_sha256": contract.sha256_bytes(
+            contract.canonical_json_bytes(advisor_go_receipt)
+        ),
+        "approved_by": advisor_go_receipt["approved_by"],
+        "approval_scope": advisor_go_receipt["approval_scope"],
+        "cost_counters": dict(ZERO_COST_COUNTERS),
+        "inference_authorized": False,
+        "dispatch_authorized": False,
+        "external_cost_authorized": False,
+        "next_gate": ADVISOR_DISPATCH_GO_NEXT_GATE,
     }
 
 
@@ -553,6 +594,8 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
             raise ValueError(f"live attestation review {key} must be sha256")
     if not isinstance(report.get("bundle_path"), str) or not report.get("bundle_path"):
         raise ValueError("live attestation review bundle_path must be nonempty string")
+    if report.get("bundle_canonical") is not True:
+        raise ValueError("live attestation review bundle must be canonical")
     if report.get("cost_counters") != ZERO_COST_COUNTERS:
         raise ValueError("live attestation review cost counters must all be zero")
     if report.get("inference_authorized") is not False:
@@ -572,6 +615,65 @@ def validate_live_attestation_review(report: Mapping[str, object]) -> None:
     _validate_runtime_file_access_summary(
         report.get("runtime_file_access"), "live attestation review"
     )
+
+
+def validate_advisor_dispatch_go_review(report: Mapping[str, object]) -> None:
+    if report.get("schema_version") != ADVISOR_DISPATCH_GO_REVIEW_SCHEMA_VERSION:
+        raise ValueError("advisor dispatch GO review schema_version mismatch")
+    if report.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("advisor dispatch GO review experiment_id mismatch")
+    if report.get("status") != ADVISOR_DISPATCH_GO_REVIEW_STATUS:
+        raise ValueError("advisor dispatch GO review status mismatch")
+    for key in ("live_attestation_review_sha256", "advisor_go_receipt_sha256"):
+        if not _is_sha256_string(report.get(key)):
+            raise ValueError(f"advisor dispatch GO review {key} must be sha256")
+    if report.get("approval_scope") != "det_sparse_v4_synthetic_local_dispatch":
+        raise ValueError("advisor dispatch GO review approval scope mismatch")
+    if not isinstance(report.get("approved_by"), str) or not report.get("approved_by"):
+        raise ValueError("advisor dispatch GO review approved_by must be nonempty")
+    if report.get("cost_counters") != ZERO_COST_COUNTERS:
+        raise ValueError("advisor dispatch GO review cost counters must all be zero")
+    if report.get("inference_authorized") is not False:
+        raise ValueError("advisor dispatch GO review must not authorize inference")
+    if report.get("dispatch_authorized") is not False:
+        raise ValueError("advisor dispatch GO review must not authorize dispatch")
+    if report.get("external_cost_authorized") is not False:
+        raise ValueError("advisor dispatch GO review must not authorize external cost")
+    if report.get("next_gate") != ADVISOR_DISPATCH_GO_NEXT_GATE:
+        raise ValueError("advisor dispatch GO review next_gate mismatch")
+
+
+def _validate_advisor_go_receipt(
+    receipt: Mapping[str, object],
+    *,
+    live_attestation_review: Mapping[str, object],
+) -> None:
+    expected_keys = {
+        "schema_version",
+        "approval_scope",
+        "approved_by",
+        "live_attestation_review_sha256",
+        ADVISOR_CLOSED_GATES_ACK_KEY,
+    }
+    keys = set(receipt)
+    if keys != expected_keys:
+        raise ValueError(
+            "advisor GO receipt keys mismatch: "
+            f"missing={expected_keys - keys} extra={keys - expected_keys}"
+        )
+    if receipt.get("schema_version") != "semantic_anchor_advisor_dispatch_go_v1":
+        raise ValueError("advisor GO receipt schema_version mismatch")
+    if receipt.get("approval_scope") != "det_sparse_v4_synthetic_local_dispatch":
+        raise ValueError("advisor GO receipt approval scope mismatch")
+    if not isinstance(receipt.get("approved_by"), str) or not receipt.get("approved_by"):
+        raise ValueError("advisor GO receipt approved_by must be nonempty")
+    expected_review_sha256 = contract.sha256_bytes(
+        canonical_report_bytes(live_attestation_review)
+    )
+    if receipt.get("live_attestation_review_sha256") != expected_review_sha256:
+        raise ValueError("advisor GO receipt live attestation review hash mismatch")
+    if receipt.get(ADVISOR_CLOSED_GATES_ACK_KEY) is not True:
+        raise ValueError("advisor GO receipt must acknowledge closed external gates")
 
 
 def _validate_runtime_file_access_summary(value: object, owner: str) -> None:

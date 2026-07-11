@@ -30,6 +30,11 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "Live attestation records must be exact before dispatch" in text
     assert "vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`" in text
     assert "semantic_anchor_live_attestation_review_v1" in text
+    assert "canonical bundle file" in text
+    assert "`bundle_canonical=true`" in text
+    assert "semantic_anchor_advisor_dispatch_go_v1" in text
+    assert "semantic_anchor_advisor_dispatch_go_review_v1" in text
+    assert "manual_runner_invocation_still_required" in text
     assert "dispatch_authorized=false" in text
     assert "--live-attestation-bundle path/to/live-attestation-bundle.json" in text
     assert "strict assistant-content extractor" in text
@@ -39,8 +44,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "actual zero-dispatch run-directory replay" in text
     assert "offline completed synthetic run-directory replay validated" in text
     assert "actual live post-dispatch run still pending" in text
-    assert "pre-dispatch run-directory replay, offline completed synthetic" in text
-    assert "offline completed synthetic\nrun-directory replay" in text
+    assert "canonical live-attestation bundle sealing" in text
+    assert "advisor dispatch-GO binding,\npre-dispatch run-directory replay" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "semantic_anchor_scorer_review_v1" in text
@@ -54,8 +59,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "code/tests/test_det_sparse_v4_scorer.py" in text
     assert "classification" in text
     assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
+    assert "advisor dispatch-GO binding" in text
     assert "ledger-bound scorer-only" in text
-    assert "`157 passed`." in text
+    assert "`159 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

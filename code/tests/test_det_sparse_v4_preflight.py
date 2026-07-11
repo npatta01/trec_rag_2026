@@ -251,6 +251,7 @@ def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(t
     assert report["status"] == "live_attestation_review_pass"
     assert report["bundle_path"] == str(bundle_path.resolve())
     assert report["bundle_sha256"] == contract.sha256_file(bundle_path)
+    assert report["bundle_canonical"] is True
     assert report["model_inventory_sha256"] == model_inventory_sha256
     assert report["dispatch_authorized"] is False
     assert report["inference_authorized"] is False
@@ -299,6 +300,24 @@ def test_live_attestation_review_rejects_model_inventory_and_write_drift(tmp_pat
         preflight.validate_live_attestation_review(report)
 
 
+def test_live_attestation_review_rejects_noncanonical_bundle_bytes(tmp_path: Path):
+    artifact_hashes = contract.validate_artifact_bundle()
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle = _live_attestation_bundle(
+        artifact_hashes["semantic_anchor_model_inventory_attestation_v1.json"]
+    )
+    bundle_path.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical JSON"):
+        preflight.build_live_attestation_review(bundle_path)
+
+    bundle_path.write_bytes(contract.canonical_json_bytes(bundle) + b"\n")
+    report = preflight.build_live_attestation_review(bundle_path)
+    report["bundle_canonical"] = False
+    with pytest.raises(ValueError, match="bundle must be canonical"):
+        preflight.validate_live_attestation_review(report)
+
+
 def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
     artifact_hashes = contract.validate_artifact_bundle()
     bundle_path = tmp_path / "live-attestation-bundle.json"
@@ -339,6 +358,54 @@ def test_live_attestation_review_cli_writes_create_only_report(tmp_path: Path):
                 str(output_path),
             ]
         )
+
+
+def test_advisor_dispatch_go_review_binds_live_attestation_review_without_dispatch(tmp_path: Path):
+    artifact_hashes = contract.validate_artifact_bundle()
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(
+            _live_attestation_bundle(
+                artifact_hashes["semantic_anchor_model_inventory_attestation_v1.json"]
+            )
+        )
+        + b"\n"
+    )
+    live_review = preflight.build_live_attestation_review(bundle_path)
+    live_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_review)
+    )
+    advisor_go = {
+        "schema_version": "semantic_anchor_advisor_dispatch_go_v1",
+        "approval_scope": "det_sparse_v4_synthetic_local_dispatch",
+        "approved_by": "advisor-review",
+        "live_attestation_review_sha256": live_review_sha256,
+        "acknowledged_no_topic_qrels_retrieval_rerank_or_paid_calls": True,
+    }
+
+    review = preflight.build_advisor_dispatch_go_review(live_review, advisor_go)
+
+    assert review["schema_version"] == "semantic_anchor_advisor_dispatch_go_review_v1"
+    assert review["status"] == "advisor_dispatch_go_review_pass"
+    assert review["live_attestation_review_sha256"] == live_review_sha256
+    assert review["approval_scope"] == "det_sparse_v4_synthetic_local_dispatch"
+    assert review["approved_by"] == "advisor-review"
+    assert review["inference_authorized"] is False
+    assert review["dispatch_authorized"] is False
+    assert review["external_cost_authorized"] is False
+    assert review["next_gate"] == "manual_runner_invocation_still_required"
+    preflight.validate_advisor_dispatch_go_review(review)
+
+    mutated_go = dict(advisor_go, live_attestation_review_sha256="9" * 64)
+    with pytest.raises(ValueError, match="review hash mismatch"):
+        preflight.build_advisor_dispatch_go_review(live_review, mutated_go)
+
+    mutated_go = dict(
+        advisor_go,
+        acknowledged_no_topic_qrels_retrieval_rerank_or_paid_calls=False,
+    )
+    with pytest.raises(ValueError, match="closed external gates"):
+        preflight.build_advisor_dispatch_go_review(live_review, mutated_go)
 
 
 def test_offline_preflight_fails_on_denied_imports(tmp_path: Path):
