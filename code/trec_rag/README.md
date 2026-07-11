@@ -65,6 +65,149 @@ Run validation:
 .venv/bin/python -m pytest code/tests/test_remote_pyserini.py -q
 ```
 
+## Structured Sparse Query Planning
+
+`query_planner.py` generates an auditable plan before retrieval. The local LLM
+identifies exact narrative anchors, a compact set of lexical expansions,
+adaptive facets, and a coverage map. It does not write free-form BM25 queries.
+The renderer constructs query strings only from literal narrative spans,
+resolved anchors, and provenance-tagged expansion terms.
+
+Inputs:
+
+- TSV or JSONL topics accepted by `topics.py`
+- an OpenAI-compatible `/v1/chat/completions` endpoint
+- a model revision, reasoning effort, seed, and strict JSON response schema
+
+Outputs:
+
+- one validated query plan per topic
+- deterministic global and facet query strings
+- model, prompt, schema, latency, usage, renderer, and analyzer provenance
+- content-addressed caches under the shared checkout's `cache/query_plans/`
+
+The current local smoke-test service uses the existing ROCm vLLM image:
+
+```bash
+podman run --rm --name trec-rag-gpt-oss \
+  --group-add keep-groups \
+  --cap-add SYS_PTRACE \
+  --security-opt seccomp=unconfined \
+  --security-opt label=disable \
+  --device /dev/kfd \
+  --device /dev/dri \
+  --ipc=host \
+  -p 127.0.0.1:8000:8000 \
+  -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+  docker.io/vllm/vllm-openai-rocm:latest \
+  --model openai/gpt-oss-20b \
+  --revision 6cee5e81ee83917806bbde320786a8fb61efebee \
+  --served-model-name gpt-oss-local \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --max-model-len 8192 \
+  --max-num-seqs 1 \
+  --gpu-memory-utilization 0.30 \
+  --structured-outputs-config '{"backend":"xgrammar"}' \
+  --enforce-eager
+```
+
+Generate the five diagnostic development plans without running retrieval:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.query_plan_cli \
+  --topic-ids 144,213,224,407,515 \
+  --model-revision 6cee5e81ee83917806bbde320786a8fb61efebee
+```
+
+The CLI fails the run when any first emission is unparsable, violates exact
+span/reference constraints, exceeds expansion budgets, or cannot be rendered
+deterministically. Semantic coverage and unsupported-entity checks remain a
+separate advisor gate before retrieval.
+
+Run planner validation:
+
+```bash
+.venv/bin/python -m pytest code/tests/test_query_planner.py -q
+```
+
+### Query planner v2
+
+V2 replaces model-copied source strings with exact token ranges, derives
+anchor inheritance and retrieval strings in Python, and uses a pinned local
+Lucene reference analyzer for budgets. The reference implements the documented
+Anserini default chain; it is not presented as a verified fingerprint of the
+hosted ClimbMix deployment.
+
+The current delivered boundary is schema `query_plan_v2_1` with prompt
+`sparse_query_planner_v6`. V2.1 removes decoder-side `uniqueItems` for vLLM
+0.24 compatibility; Python still rejects duplicate references.
+
+Start the local analyzer sidecar:
+
+```bash
+code/tools/run_lucene_analyzer.sh
+```
+
+The v2 runner is serial and raw-first. It preflights the analyzer and the local
+server context, writes exact HTTP bytes before UTF-8/JSON parsing, and commits
+immutable per-topic outcomes. By default it refuses non-loopback model,
+analyzer, and tokenizer endpoints, so the experiment makes no paid API,
+retrieval, or reranker calls.
+
+Before any HTTP request, compile-lint the new synthetic and all five exact
+diagnostic schemas inside the pinned container (no inference):
+
+```bash
+PYTHONPATH=code .venv/bin/python code/tools/query_plan_v2_schema_preflight.py
+```
+
+The resulting `compiler_manifest_xgrammar.json` is accepted only when the
+inspected server launch command explicitly pins backend `xgrammar`.
+
+Run the one synthetic transport/schema smoke (not a development topic):
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.query_plan_v2_cli \
+  --run-kind synthetic_transport_smoke \
+  --run-id query_plan_v2_1_synthetic_smoke_001 \
+  --output outputs/query_planner_v2_1_synthetic_smoke_001/plans.jsonl \
+  --expected-analyzer-fingerprint-sha256 \
+    f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4
+```
+
+Only after that artifact receives advisor approval, run the locked diagnostic
+set. The CLI accepts exactly these five IDs in this order:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.query_plan_v2_cli \
+  --run-kind diagnostic_first_emission \
+  --topic-ids 144,213,224,407,515 \
+  --run-id query_plan_v2_gpt_oss_20b_diagnostic_001 \
+  --output outputs/query_plan_v2_gpt_oss_20b_diagnostic_001/plans.jsonl \
+  --expected-analyzer-fingerprint-sha256 \
+    f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4
+```
+
+Rebuild derived JSONL files and the manifest without contacting any service:
+
+```bash
+PYTHONPATH=code .venv/bin/python -m trec_rag.query_plan_v2_cli \
+  --rebuild-only \
+  --outcome-dir outputs/query_planner_v2_1_synthetic_smoke_001/outcomes/query_plan_v2_1_synthetic_smoke_001 \
+  --output outputs/query_planner_v2_1_synthetic_smoke_001/plans.jsonl
+```
+
+Run all planner, analyzer, and ledger tests:
+
+```bash
+.venv/bin/python -m pytest -q \
+  code/tests/test_query_planner_v2_contract.py \
+  code/tests/test_query_planner_v2_generation_contract.py \
+  code/tests/test_query_plan_v2_cli.py \
+  code/tests/test_query_analyzer_contract.py
+```
+
 ## Config-Driven RAG Pipeline
 
 The pipeline is the preferred path for experiments. It keeps query

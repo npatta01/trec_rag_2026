@@ -1,0 +1,98 @@
+{
+  "incident_id": "query_planner_gpt_oss_smoke_v1_original_harness_incident",
+  "attempt_kind": "first_emission",
+  "classification": "harness_incident",
+  "started_at_evidence": "2026-07-10T23:47:48Z",
+  "ended_at_evidence": "2026-07-10T23:57:53Z",
+  "topic_ids_submitted_in_order": [
+    "144",
+    "213",
+    "224",
+    "407",
+    "515"
+  ],
+  "command": "PYTHONPATH=code .venv/bin/python -m trec_rag.query_plan_cli --topic-ids 144,213,224,407,515 --output outputs/query_planner_gpt_oss_smoke_v1/plans.jsonl --model-revision 6cee5e81ee83917806bbde320786a8fb61efebee --workers 5",
+  "frozen_request_settings": {
+    "model": "gpt-oss-local",
+    "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "prompt_version": "sparse_query_planner_v4",
+    "schema_version": "query_plan_v1",
+    "renderer_version": "deterministic_sparse_renderer_v2",
+    "analyzer_version": "unicode_content_terms_v1",
+    "reasoning_effort": "medium",
+    "max_tokens": 6000,
+    "temperature": 1.0,
+    "seed": 0,
+    "client_timeout_seconds": 600.0,
+    "client_concurrency": 5
+  },
+  "server_runtime": {
+    "image": "docker.io/vllm/vllm-openai-rocm@sha256:3832d79d9e514ce2e072580689da078726454596d833c8ab803f29f3cea5ea28",
+    "image_id": "ee424d681e1d5644fa96f13cced1e511401e67ef04207bb459c1986d35ab84e7",
+    "vllm_version": "0.24.0",
+    "arguments": [
+      "serve",
+      "openai/gpt-oss-20b",
+      "--revision",
+      "6cee5e81ee83917806bbde320786a8fb61efebee",
+      "--served-model-name",
+      "gpt-oss-local",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--max-model-len",
+      "8192",
+      "--max-num-seqs",
+      "5",
+      "--gpu-memory-utilization",
+      "0.30",
+      "--enforce-eager"
+    ]
+  },
+  "incident_outcomes": [
+    {
+      "incident_slot": 1,
+      "topic_id": null,
+      "candidate_topic_ids": ["144", "213", "224", "407", "515"],
+      "status": "http_200_response_lost",
+      "evidence": "The vLLM access log recorded the first HTTP 200 while five requests were running, between its 23:52:03 and 23:52:13 metric lines. The CLI retained the response only in process memory and wrote no per-topic ledger before the later uncaught timeout.",
+      "content_available": false
+    },
+    {
+      "incident_slot": 2,
+      "topic_id": null,
+      "candidate_topic_ids": ["144", "213", "224", "407", "515"],
+      "status": "http_200_response_lost",
+      "evidence": "The vLLM access log recorded the second HTTP 200 between its 23:54:23 and 23:54:33 metric lines. The CLI retained the response only in process memory and wrote no per-topic ledger before the later uncaught timeout.",
+      "content_available": false
+    },
+    {
+      "incident_slot": 3,
+      "topic_id": null,
+      "candidate_topic_ids": ["144", "213", "224", "407", "515"],
+      "status": "client_timeout_while_server_decoding",
+      "evidence": "A per-request urllib TimeoutError escaped at the frozen 600-second timeout; three server requests were still running immediately beforehand.",
+      "content_available": false
+    },
+    {
+      "incident_slot": 4,
+      "topic_id": null,
+      "candidate_topic_ids": ["144", "213", "224", "407", "515"],
+      "status": "client_timeout_while_server_decoding",
+      "evidence": "A per-request urllib TimeoutError escaped at the frozen 600-second timeout; three server requests were still running immediately beforehand.",
+      "content_available": false
+    },
+    {
+      "incident_slot": 5,
+      "topic_id": null,
+      "candidate_topic_ids": ["144", "213", "224", "407", "515"],
+      "status": "client_timeout_while_server_decoding",
+      "evidence": "A per-request urllib TimeoutError escaped at the frozen 600-second timeout; three server requests were still running immediately beforehand.",
+      "content_available": false
+    }
+  ],
+  "root_cause": "The five-way local batch saturated tail decoding. More importantly, the CLI caught only QueryPlanGenerationError inside workers, kept completed outcomes in memory, and wrote the batch ledger only after every future returned. An uncaught TimeoutError from one future aborted the process before any batch artifact was written.",
+  "topic_assignment_limitation": "The original harness did not associate vLLM connection ports with topic IDs in a durable ledger. Assigning either HTTP 200 or any timeout to a specific topic would therefore be an unsupported inference.",
+  "advisor_disposition": "Do not erase or relabel this attempt. After repairing the harness, restart the identical server and make exactly one serial replacement request per topic with a 1200-second client timeout. Call those results the first observable complete outcomes under the repaired harness, not literal first emissions."
+}

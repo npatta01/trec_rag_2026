@@ -1,0 +1,76 @@
+{
+  "concurrency": 1,
+  "failure_output": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_synthetic_smoke_001/plans.failures.jsonl",
+  "frozen_model_settings": {
+    "analyzer_fingerprint": {
+      "analyzer_class": "io.anserini.analysis.DefaultEnglishAnalyzer chain",
+      "contract_version": "lucene_default_english_v1",
+      "filters": [
+        "EnglishPossessiveFilter",
+        "LowerCaseFilter",
+        "StopFilter(EnglishAnalyzer.ENGLISH_STOP_WORDS_SET)",
+        "PorterStemFilter"
+      ],
+      "implementation": "local_lucene_reference_server_v1",
+      "index_id": "hosted_climbmix_unknown_revision",
+      "lucene_version": "10.4.0",
+      "stopword_sha256": "2f66c0e3dde5d31c7e919e2ed4d9d91390696480be361bfa143ca9ae0cb7ca13",
+      "tokenizer": "org.apache.lucene.analysis.standard.StandardTokenizer",
+      "unicode_version": "Lucene-10.4.0-StandardTokenizer-UAX29"
+    },
+    "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+    "analyzer_interpretation": "pinned_upstream_reference_not_verified_hosted",
+    "analyzer_url": "http://127.0.0.1:18081",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "context_preflight": [
+      {
+        "max_model_len": 8192,
+        "max_output_tokens": 5400,
+        "prompt_tokens": 1967,
+        "remaining_context_tokens": 825,
+        "requested_total_tokens": 7367,
+        "tokenizer_url": "http://127.0.0.1:8000/tokenize",
+        "topic_id": "synthetic_transport_v2"
+      }
+    ],
+    "enable_thinking": null,
+    "external_cost_policy": {
+      "model_endpoint_loopback": true,
+      "paid_api_calls_expected": 0,
+      "reranker_calls": 0,
+      "retrieval_calls": 0
+    },
+    "instruction_role": "developer",
+    "max_tokens": 5400,
+    "model": "gpt-oss-local",
+    "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+    "presence_penalty": null,
+    "prompt_version": "sparse_query_planner_v5",
+    "provider": "openai_compatible_chat_completions",
+    "reasoning_effort": "low",
+    "renderer_version": "deterministic_sparse_renderer_v3",
+    "schema_version": "query_plan_v2",
+    "seed": 0,
+    "temperature": 1.0,
+    "timeout_seconds": 1200.0,
+    "tokenizer_version": "narrative_token_tape_v1",
+    "top_k": null,
+    "top_p": null
+  },
+  "outcome_dir": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_synthetic_smoke_001/outcomes/query_plan_v2_synthetic_smoke_001",
+  "output": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/query_planner_v2_synthetic_smoke_001/plans.jsonl",
+  "request_order": [
+    "synthetic_transport_v2"
+  ],
+  "run_id": "query_plan_v2_synthetic_smoke_001",
+  "run_kind": "synthetic_transport_smoke",
+  "run_started_at": "2026-07-11T02:15:49.752Z",
+  "serial_execution": true,
+  "topics": [
+    {
+      "id": "synthetic_transport_v2",
+      "narrative": "Compare maintenance costs for solar-powered irrigation pumps in coastal and inland regions, and identify reported reliability measures for each setting.",
+      "title": "Synthetic transport-only planner check"
+    }
+  ]
+}

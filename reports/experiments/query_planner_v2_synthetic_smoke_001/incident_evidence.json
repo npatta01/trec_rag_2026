@@ -1,0 +1,39 @@
+{
+  "evidence_version": "query_planner_transport_incident_v1",
+  "run_id": "query_plan_v2_synthetic_smoke_001",
+  "run_kind": "synthetic_transport_smoke",
+  "topic_id": "synthetic_transport_v2",
+  "request_started_at": "2026-07-11T02:15:49.755Z",
+  "response_received_at": "2026-07-11T02:15:49.765Z",
+  "outcome_status": "http_error",
+  "http_status": 400,
+  "raw_body_bytes": 125,
+  "raw_body_base64": "eyJlcnJvciI6eyJtZXNzYWdlIjoiR3JhbW1hciBlcnJvcjogVW5pbXBsZW1lbnRlZCBrZXlzOiBbXCJ1bmlxdWVJdGVtc1wiXSIsInR5cGUiOiJCYWRSZXF1ZXN0RXJyb3IiLCJwYXJhbSI6bnVsbCwiY29kZSI6NDAwfX0=",
+  "raw_body_sha256": "939bd0eb124619d6812e66dadc3084c3b778b5a8f175ae1f9d92fa8353fa0afe",
+  "source_artifacts": {
+    "run_metadata": {
+      "path": "outputs/query_planner_v2_synthetic_smoke_001/outcomes/query_plan_v2_synthetic_smoke_001/_run.json",
+      "file_sha256": "d4cda009fddded88718a7f03e3d9cedb59cfe4caa5782f704d6bc436481c3d60"
+    },
+    "terminal_outcome": {
+      "path": "outputs/query_planner_v2_synthetic_smoke_001/outcomes/query_plan_v2_synthetic_smoke_001/01_synthetic_transport_v2-1ecafab2a9.json",
+      "file_sha256": "e5a8f097106e6bb700d9f2e461e044d30cbba479cd06f2c673a22471ce9c8c8f"
+    },
+    "raw_ledger": {
+      "path": "outputs/query_planner_v2_synthetic_smoke_001/outcomes/query_plan_v2_synthetic_smoke_001/raw_responses/01_synthetic_transport_v2-1ecafab2a9.json",
+      "file_sha256": "54b53beb4eea9a8fdb21278cb52ee74acc9604db97f4aaccb858a45886938604"
+    },
+    "derived_manifest_after_rebuild": {
+      "path": "outputs/query_planner_v2_synthetic_smoke_001/plans.manifest.json",
+      "file_sha256": "89175183f5abe8ac8a1283a139f953a2d94c9ddcf2f0ce5700c193a1d1d529d3"
+    }
+  },
+  "durable_archive": {
+    "directory": "reports/experiments/query_planner_v2_synthetic_smoke_001/artifacts",
+    "run_metadata_sha256": "d4cda009fddded88718a7f03e3d9cedb59cfe4caa5782f704d6bc436481c3d60",
+    "terminal_outcome_sha256": "e5a8f097106e6bb700d9f2e461e044d30cbba479cd06f2c673a22471ce9c8c8f",
+    "raw_ledger_sha256": "54b53beb4eea9a8fdb21278cb52ee74acc9604db97f4aaccb858a45886938604",
+    "derived_manifest_sha256": "89175183f5abe8ac8a1283a139f953a2d94c9ddcf2f0ce5700c193a1d1d529d3"
+  },
+  "integrity_note": "The durable archive files are byte-identical to the immutable local ledgers at the hashes above. Decode raw_body_base64, verify its byte length and SHA-256, then compare with the exact body in notes.md."
+}
