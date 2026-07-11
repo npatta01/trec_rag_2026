@@ -77,7 +77,7 @@ deterministically.
 | Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas; all 24 schemas pass the offline vLLM 0.24/XGrammar unsupported-feature linter; offset responses now have an executable Python shape/hash/monotonicity validator. | Offline fixtures, schema lint, and offset response validation covered; live compiler and live Java attestation still pending. |
 | Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. | Offline fixture validation strengthened; live local inventory attestation still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
-| Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, and terminal-state validator are committed. | Shapes validated; real runner/replay still pending. |
+| Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, and executable ledger-prefix validator are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. | Offline shapes and prefix mechanics validated; real runner/replay still pending. |
 | Evaluation protocol must avoid qrels leakage | Gold labels are scorer-only artifacts; runner-visible artifact validation rejects gold/scorer leakage. | Offline separation validated; scorer execution still pending. |
 | External cost must remain zero | Preflight reports zero model, retrieval, reranker, network, download, topic-file, and relevance-judgment counters. | Enforced for the offline packet. |
 
@@ -126,7 +126,7 @@ The offline regression command used for this packet was:
 ```
 
 Result after adding packet, source/import audit, offline schema-compatibility
-checks, and offset response validation: `114 passed`.
+checks, offset response validation, and ledger-prefix validation: `119 passed`.
 
 ## What is not yet proven
 

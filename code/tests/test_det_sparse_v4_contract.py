@@ -373,6 +373,75 @@ def _receipt(**overrides):
     return receipt
 
 
+def _case_order():
+    return tuple(f"synthetic-case-{index:03d}" for index in range(1, 25))
+
+
+def _reservation(case_id="synthetic-case-001", request_sha256="1" * 64):
+    return {
+        "schema_version": "semantic_anchor_reservation_v1",
+        "run_id": "run-001",
+        "case_id": case_id,
+        "request_sha256": request_sha256,
+        "create_only": True,
+    }
+
+
+def _dispatch(case_id="synthetic-case-001", request_sha256="1" * 64):
+    return {
+        "schema_version": "semantic_anchor_dispatch_record_v1",
+        "case_id": case_id,
+        "request_bytes_sha256": request_sha256,
+        "loopback_only": True,
+        "dispatch_counted": True,
+    }
+
+
+def _raw_response(case_id="synthetic-case-001", body_sha256="2" * 64):
+    return {
+        "schema_version": "semantic_anchor_raw_response_body_v1",
+        "case_id": case_id,
+        "http_status": 200,
+        "finish_reason": "stop",
+        "served_model": "gpt-oss-local",
+        "body_size_bytes": 42,
+        "body_sha256": body_sha256,
+    }
+
+
+def _transport_failure(case_id="synthetic-case-001", request_sha256="1" * 64):
+    return {
+        "schema_version": "semantic_anchor_transport_failure_v1",
+        "case_id": case_id,
+        "request_bytes_sha256": request_sha256,
+        "exception_class": "TimeoutError",
+        "exception_message": "synthetic timeout",
+    }
+
+
+def _case_receipt(
+    case_id="synthetic-case-001",
+    request_sha256="1" * 64,
+    raw_response_sha256="2" * 64,
+):
+    return {
+        "schema_version": "semantic_anchor_case_receipt_v1",
+        "case_id": case_id,
+        "request_sha256": request_sha256,
+        "machine_status": "mechanical_pass",
+        "raw_response_sha256": raw_response_sha256,
+    }
+
+
+def _manifest(artifact_sha256=None):
+    return {
+        "schema_version": "semantic_anchor_run_manifest_v1",
+        "case_count": 24,
+        "artifact_sha256": artifact_sha256 or {"manifest": "a" * 64},
+        "terminal_receipt_path": "terminal_receipt.json",
+    }
+
+
 def test_terminal_receipt_counter_and_gold_rules_are_fail_closed():
     v4.validate_terminal_receipt(_receipt())
     v4.validate_terminal_receipt(
@@ -408,6 +477,145 @@ def test_terminal_receipt_counter_and_gold_rules_are_fail_closed():
                 raw_committed_calls=1,
             )
         )
+
+
+def test_v4_ledger_prefix_accepts_raw_first_single_case_prefix():
+    artifact_sha256 = {"manifest": "a" * 64}
+
+    v4.validate_ledger_prefix(
+        case_order=_case_order(),
+        reservations=[_reservation()],
+        dispatches=[_dispatch()],
+        raw_responses=[_raw_response()],
+        transport_failures=[],
+        case_receipts=[_case_receipt()],
+        terminal_receipt=_receipt(
+            terminal_state="interrupted_incomplete",
+            attempted_calls=1,
+            completed_calls=1,
+            raw_committed_calls=1,
+            artifact_sha256=artifact_sha256,
+        ),
+        run_manifest=_manifest(artifact_sha256),
+    )
+
+
+def test_v4_ledger_prefix_accepts_transport_failure_without_raw_response():
+    v4.validate_ledger_prefix(
+        case_order=_case_order(),
+        reservations=[_reservation()],
+        dispatches=[_dispatch()],
+        raw_responses=[],
+        transport_failures=[_transport_failure()],
+        case_receipts=[],
+        terminal_receipt=_receipt(
+            terminal_state="transport_no_body_no_go",
+            attempted_calls=1,
+            completed_calls=0,
+            raw_committed_calls=0,
+        ),
+    )
+
+
+def test_v4_ledger_prefix_rejects_missing_reservation_and_hash_drift():
+    with pytest.raises(ValueError, match="dispatch lacks reservation"):
+        v4.validate_ledger_prefix(
+            case_order=_case_order(),
+            reservations=[],
+            dispatches=[_dispatch()],
+            raw_responses=[],
+            transport_failures=[],
+            case_receipts=[],
+            terminal_receipt=_receipt(
+                terminal_state="interrupted_incomplete",
+                attempted_calls=1,
+                completed_calls=0,
+                raw_committed_calls=0,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="dispatch request hash"):
+        v4.validate_ledger_prefix(
+            case_order=_case_order(),
+            reservations=[_reservation(request_sha256="1" * 64)],
+            dispatches=[_dispatch(request_sha256="9" * 64)],
+            raw_responses=[],
+            transport_failures=[],
+            case_receipts=[],
+            terminal_receipt=_receipt(
+                terminal_state="interrupted_incomplete",
+                attempted_calls=1,
+                completed_calls=0,
+                raw_committed_calls=0,
+            ),
+        )
+
+
+def test_v4_ledger_prefix_rejects_terminal_counter_and_manifest_drift():
+    with pytest.raises(ValueError, match="attempted_calls"):
+        v4.validate_ledger_prefix(
+            case_order=_case_order(),
+            reservations=[_reservation()],
+            dispatches=[_dispatch()],
+            raw_responses=[],
+            transport_failures=[],
+            case_receipts=[],
+            terminal_receipt=_receipt(
+                terminal_state="interrupted_incomplete",
+                attempted_calls=0,
+                completed_calls=0,
+                raw_committed_calls=0,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="artifact hashes differ"):
+        v4.validate_ledger_prefix(
+            case_order=_case_order(),
+            reservations=[_reservation()],
+            dispatches=[_dispatch()],
+            raw_responses=[_raw_response()],
+            transport_failures=[],
+            case_receipts=[_case_receipt()],
+            terminal_receipt=_receipt(
+                terminal_state="interrupted_incomplete",
+                attempted_calls=1,
+                completed_calls=1,
+                raw_committed_calls=1,
+                artifact_sha256={"manifest": "a" * 64},
+            ),
+            run_manifest=_manifest({"manifest": "b" * 64}),
+        )
+
+
+def test_v4_ledger_prefix_accepts_completed_24_case_terminal_state():
+    case_order = _case_order()
+    reservations = []
+    dispatches = []
+    raw_responses = []
+    receipts = []
+    for index, case_id in enumerate(case_order, start=1):
+        request_sha256 = f"{index:064x}"[-64:]
+        body_sha256 = f"{index + 100:064x}"[-64:]
+        reservations.append(_reservation(case_id, request_sha256))
+        dispatches.append(_dispatch(case_id, request_sha256))
+        raw_responses.append(_raw_response(case_id, body_sha256))
+        receipts.append(_case_receipt(case_id, request_sha256, body_sha256))
+
+    v4.validate_ledger_prefix(
+        case_order=case_order,
+        reservations=reservations,
+        dispatches=dispatches,
+        raw_responses=raw_responses,
+        transport_failures=[],
+        case_receipts=receipts,
+        terminal_receipt=_receipt(
+            terminal_state="completed_synthetic_go",
+            attempted_calls=24,
+            completed_calls=24,
+            raw_committed_calls=24,
+            gold_opened=True,
+        ),
+    )
 
 
 def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight():

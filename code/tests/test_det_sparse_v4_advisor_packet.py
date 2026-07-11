@@ -21,7 +21,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
     assert "offset responses now have an executable Python shape/hash/monotonicity validator" in text
     assert "source/import audit, offline schema-compatibility" in text
-    assert "response validation: `114 passed`." in text
+    assert "executable ledger-prefix validator" in text
+    assert "ledger-prefix validation: `119 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 
