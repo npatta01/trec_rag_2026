@@ -62,6 +62,18 @@ REQUEST_IDENTITY_CHECKER = "semantic_anchor_request_identity_v1"
 SOURCE_AUDIT_CHECKER = "det_sparse_v4_static_direct_source_audit_v1"
 RUNTIME_FILE_ACCESS_CHECKER = "det_sparse_v4_runtime_file_access_audit_v1"
 MODEL_INVENTORY_ARTIFACT = "semantic_anchor_model_inventory_attestation_v1.json"
+MODEL_INVENTORY_FILE_SUFFIX = ".safe" + "tensors"
+MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT = "original/model" + MODEL_INVENTORY_FILE_SUFFIX
+MODEL_INVENTORY_EXPECTED_SHARDS = tuple(
+    f"model-{index:05d}-of-00003" + MODEL_INVENTORY_FILE_SUFFIX
+    for index in range(1, 4)
+)
+MODEL_INVENTORY_LOADER_METADATA_FILES = (
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+)
+MODEL_INVENTORY_EXPECTED_TOTAL_SIZE = 13_761_264_768
 OFFSET_PARITY_FIXTURE_SCHEMA_VERSION = "semantic_anchor_offset_parity_fixture_v1"
 OFFSET_PARITY_SURFACE_CLASSES = (
     "ascii_stemming",
@@ -410,6 +422,100 @@ def build_untouched_topic_milestone_approval_review_from_files(
     review["approval_receipt_canonical"] = True
     validate_untouched_topic_milestone_approval_review(review)
     return review
+
+
+def build_model_inventory_attestation_from_snapshot(
+    snapshot_path: Path,
+    *,
+    file_hasher: Callable[[Path], str] | None = None,
+) -> dict[str, object]:
+    """Capture exact local model inventory from an existing read-only snapshot."""
+
+    hasher = file_hasher or contract.sha256_file
+    snapshot = snapshot_path.resolve()
+    if not snapshot.is_dir():
+        raise ValueError("model inventory snapshot path must be an existing directory")
+    if (
+        snapshot.name != contract.EXPECTED_MODEL_REVISION
+        or snapshot.parent.name != "snapshots"
+    ):
+        raise ValueError("model inventory snapshot path must bind expected revision")
+
+    file_paths = sorted(path for path in snapshot.rglob("*") if path.is_file())
+    if not file_paths:
+        raise ValueError("model inventory snapshot must contain files")
+    for path in sorted(snapshot.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("model inventory snapshot must not contain symlinks")
+
+    relative_files = [_relative_snapshot_path(snapshot, path) for path in file_paths]
+    relative_set = set(relative_files)
+    expected_shards = set(MODEL_INVENTORY_EXPECTED_SHARDS)
+    if not expected_shards.issubset(relative_set):
+        raise ValueError("model inventory snapshot missing expected loaded shards")
+    expected_metadata = set(MODEL_INVENTORY_LOADER_METADATA_FILES)
+    if not expected_metadata.issubset(relative_set):
+        raise ValueError("model inventory snapshot missing expected loader metadata")
+    if MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT not in relative_set:
+        raise ValueError("model inventory snapshot missing denied original full weight")
+    allowed_weight_files = expected_shards.union({MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT})
+    unexpected_weight_files = sorted(
+        relative
+        for relative in relative_files
+        if relative.endswith(MODEL_INVENTORY_FILE_SUFFIX)
+        and relative not in allowed_weight_files
+    )
+    if unexpected_weight_files:
+        raise ValueError(
+            f"model inventory snapshot has unexpected weight files: {unexpected_weight_files}"
+        )
+
+    loaded_files = list(MODEL_INVENTORY_LOADER_METADATA_FILES) + list(
+        MODEL_INVENTORY_EXPECTED_SHARDS
+    )
+    unloaded_files = [
+        value
+        for value in relative_files
+        if value not in set(loaded_files)
+    ]
+    shard_sizes = {
+        _relative_snapshot_path(snapshot, path): path.stat().st_size
+        for path in file_paths
+        if _relative_snapshot_path(snapshot, path) in expected_shards
+    }
+    total_size = sum(shard_sizes.values())
+    if total_size != MODEL_INVENTORY_EXPECTED_TOTAL_SIZE:
+        raise ValueError("model inventory loaded shard total size mismatch")
+
+    file_sha256 = {
+        relative: _validate_capture_sha256(hasher(snapshot / relative), relative)
+        for relative in relative_files
+    }
+    inventory = {
+        "schema_version": "semantic_anchor_model_inventory_attestation_v1",
+        "repository": contract.EXPECTED_MODEL_REPOSITORY,
+        "revision": contract.EXPECTED_MODEL_REVISION,
+        "quantization_method": "mxfp4",
+        "safetensors_index_total_size": total_size,
+        "snapshot_path": str(snapshot),
+        "loaded_shards": list(MODEL_INVENTORY_EXPECTED_SHARDS),
+        "loaded_files": loaded_files,
+        "unloaded_files": unloaded_files,
+        "denied_files": [MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT],
+        "file_sha256": file_sha256,
+    }
+    contract.validate_model_inventory(inventory)
+    return inventory
+
+
+def _relative_snapshot_path(snapshot: Path, path: Path) -> str:
+    return path.relative_to(snapshot).as_posix()
+
+
+def _validate_capture_sha256(value: object, relative_path: str) -> str:
+    if not _is_sha256_string(value):
+        raise ValueError(f"model inventory capture invalid sha256 for {relative_path}")
+    return str(value)
 
 
 def build_offset_parity_review(fixtures_path: Path) -> dict[str, object]:
@@ -1469,6 +1575,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Canonical advisor receipt approving only untouched-topic/v5 milestone design.",
     )
     parser.add_argument(
+        "--model-inventory-snapshot",
+        type=Path,
+        help="Existing local model snapshot directory to inventory read-only.",
+    )
+    parser.add_argument(
         "--offset-parity-fixtures",
         type=Path,
         help="Canonical captured 48-row offset parity fixture JSON to review.",
@@ -1484,7 +1595,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    if args.milestone_approval_receipt or args.reviewer_qualification_review:
+    if args.model_inventory_snapshot:
+        if (
+            args.milestone_approval_receipt
+            or args.reviewer_qualification_review
+            or args.live_attestation_bundle
+            or args.live_attestation_review
+            or args.advisor_go_receipt
+            or args.offset_parity_fixtures
+            or args.offset_parity_review
+        ):
+            raise ValueError(
+                "model inventory capture cannot be combined with live attestation, "
+                "advisor GO, milestone approval, or offset parity review"
+            )
+        report = build_model_inventory_attestation_from_snapshot(
+            args.model_inventory_snapshot
+        )
+    elif args.milestone_approval_receipt or args.reviewer_qualification_review:
         if not (args.milestone_approval_receipt and args.reviewer_qualification_review):
             raise ValueError(
                 "--milestone-approval-receipt requires "

@@ -76,7 +76,7 @@ deterministically.
 | Free-running agents could drift or spend | Design and preflight both disallow an agent loop; all counters remain zero. | Enforced as an offline gate. |
 | Source/import closure must be fail-closed | Preflight reports a static direct source audit over the v4 preflight, contract, schema-compat, default no-dispatch runner CLI paths, and the gated injected dispatch helper; denied imports, denied path fragments, unexpected import roots, and unexpected `trec_rag` modules must all be empty. It also wraps offline preflight in a runtime file-open audit that must observe read-only access, no denied topic/qrels/cache/model path fragments, and zero writes. | Offline direct-source closure and runtime file-open tracing validated, including model-cache and safetensors path denial. |
 | Schema/runtime compatibility must be explicit | `semantic_anchor_response_v1` is a five-field strict schema; request fixtures embed per-case JSON schemas; all 24 schemas pass the offline vLLM 0.24/XGrammar unsupported-feature linter; offset health/error/response schemas are bound to executable Python validators; offset responses validate shape, hash, fingerprint, and monotonicity; a file-backed offset parity review requires the full 48-row live fixture grid and stable offset fingerprint before the model gate; chat completions have a strict assistant-content extractor that rejects non-JSON, duplicate keys, tool calls, wrong roles, wrong case IDs, and malformed ranges; captured live schema-compiler evidence must bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, the fixed case-order hash, all 24 request hashes, and all 24 per-case response-schema hashes. | Offline fixtures, schema lint, offset sidecar schema validation, offset parity review mechanics, assistant-content extraction, request/schema identity binding, and live-evidence validators covered; actual live compiler capture and live Java parity fixture capture are still pending. |
-| Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. Captured runtime evidence must bind served model `gpt-oss-local`, repository `openai/gpt-oss-20b`, revision `6cee5e81ee83917806bbde320786a8fb61efebee`, vLLM/XGrammar versions, backend `xgrammar`, loopback-only serving, egress denial, read-only model mount, and the expected model-inventory SHA-256 before it can be projected into a ledger pre-dispatch attestation. | Offline fixture validation and live-evidence validators strengthened; actual live local inventory capture still pending. |
+| Local model inventory must be exact and cost-free | The committed inventory fixture is validated for schema version, repository, revision-bound snapshot path, quantization, total safetensors size, three loaded shards, loaded/unloaded/denied disjointness, and lowercase SHA-256 coverage for every listed loaded, unloaded, and denied file. A read-only local snapshot inventory capture command now emits the same attestation shape from an existing caller-supplied cached snapshot, rejects wrong revisions, missing/extra loader-shard shape, symlinks, wrong shard total size, and original full-weight loading, and performs no model inference, network, or download. Captured runtime evidence must bind served model `gpt-oss-local`, repository `openai/gpt-oss-20b`, revision `6cee5e81ee83917806bbde320786a8fb61efebee`, vLLM/XGrammar versions, backend `xgrammar`, loopback-only serving, egress denial, read-only model mount, and the expected model-inventory SHA-256 before it can be projected into a ledger pre-dispatch attestation. | Offline fixture validation, read-only capture mechanics, and live-evidence validators strengthened; actual capture against the real local snapshot is still pending. |
 | Live attestation records must be exact before dispatch | Offline validators now define the required schema compiler attestation, live model runtime attestation, and combined live-attestation bundle. They bind vLLM `0.24.0`, XGrammar `0.2.3`, backend `xgrammar`, served model `gpt-oss-local`, repository/revision, request identity hashes, loopback-only serving, egress denial, read-only model mount, and model-inventory SHA-256. The preflight CLI can validate a captured canonical bundle file into a `semantic_anchor_live_attestation_review_v1` report only after a canonical `semantic_anchor_offset_parity_review_v1` is supplied; it binds the offset review SHA-256 and offset fingerprint SHA-256, binds the bundle SHA-256 with `bundle_canonical=true`, projects the pre-dispatch ledger attestation, traces read-only file access, and still leaves `dispatch_authorized=false`. | Attestation record shapes, offset-parity-to-live-attestation binding, canonical bundle sealing, and bundle-review path are validated offline; actual live collection still pending. |
 | Anchor typing/scope must be unambiguous | Synthetic registry covers exact `3 x 3 x 2` select grid plus six mandatory abstentions. | Offline fixtures validated; model behavior unknown. |
 | Ledger integrity must be raw-first and fail-closed | Ledger schemas, terminal receipt schema, replay mutation registry, terminal-state validator, executable ledger-prefix validator, and offline replay mutation oracles are committed. The prefix validator checks reservation/dispatch/raw/receipt hash links, terminal counters, manifest drift, transport-failure no-body handling, and completed 24-case terminal states. The mutation oracles execute all eight registered failure-code surfaces in memory. The pre-dispatch replay verifier rereads an actual create-only run directory from sealed files and rejects noncanonical bytes, artifact-hash drift, reservation hash drift, extra dispatch artifacts, and nonzero terminal counters. The completed-run replay verifier rereads a 24-case synthetic run directory from sealed files, rejects extra artifacts, missing raw files, terminal counter drift, premature `gold_opened=true`, sealed response order drift, validates reservation/dispatch/raw/receipt ledger links, requires `raw_sealed_pending_scorer` with `gold_opened=false`, and validates the sealed scorer input before scorer-only gold can open. | Offline shapes, prefix mechanics, mutation failure surfaces, actual zero-dispatch run-directory replay, and offline completed synthetic run-directory replay validated; replay against an actual live post-dispatch run still pending. |
@@ -159,6 +159,23 @@ occurrences, nonzero rows with at least one occurrence, unique fixture IDs,
 stable offset fingerprint across every response, canonical request/response
 SHA-256 binding, executable offset response validation, zero cost counters, and
 no inference or dispatch authorization.
+
+An already-cached local model snapshot can be inventoried read-only without
+loading the model:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_preflight \
+  --model-inventory-snapshot path/to/gpt-oss-20b/snapshots/6cee5e81ee83917806bbde320786a8fb61efebee \
+  --output path/to/model-inventory-attestation.json
+```
+
+That capture hashes only files already present under the supplied snapshot,
+requires the expected revision path, three expected local shard files with the
+expected combined size, keeps `original/model.safetensors` denied/unloaded, and
+does not authorize model inference, network, download, retrieval, reranking, or
+topic/qrels access. Running this command against the real local model cache is
+still a separately approved local cache-read gate because it hashes large model
+files.
 
 A later advisor/user GO receipt is also reviewed offline before any runner
 entrypoint can be invoked. The receipt must use
@@ -305,9 +322,10 @@ completed replay mutation coverage, runner-visible artifact hashing without
 scorer-only gold opens, reviewed fake-transport dispatch implementation,
 failed-transport terminal sealing, canonical sealed scorer input,
 ledger-bound scorer-only sealed-response review, bound reviewer qualification
-review, reviewer qualification terminal-state mapping, and executable
-untouched-topic/v5 milestone approval gating:
-`193 passed`.
+review, reviewer qualification terminal-state mapping, executable
+untouched-topic/v5 milestone approval gating, and read-only model inventory
+capture mechanics:
+`198 passed`.
 
 ## What is not yet proven
 

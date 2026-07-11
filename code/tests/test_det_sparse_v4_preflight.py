@@ -192,6 +192,46 @@ def _live_attestation_bundle(model_inventory_sha256: str):
     }
 
 
+def _write_sparse_model_snapshot(tmp_path: Path, *, valid_total_size: bool = True) -> Path:
+    snapshot = (
+        tmp_path
+        / "models"
+        / "openai"
+        / "gpt-oss-20b"
+        / "snapshots"
+        / contract.EXPECTED_MODEL_REVISION
+    )
+    snapshot.mkdir(parents=True)
+    for name, text in {
+        "config.json": "{}\n",
+        "generation_config.json": "{}\n",
+        "tokenizer.json": "{}\n",
+        "README.md": "fixture\n",
+    }.items():
+        (snapshot / name).write_text(text, encoding="utf-8")
+    shard_sizes = [
+        preflight.MODEL_INVENTORY_EXPECTED_TOTAL_SIZE // 3,
+        preflight.MODEL_INVENTORY_EXPECTED_TOTAL_SIZE // 3,
+        preflight.MODEL_INVENTORY_EXPECTED_TOTAL_SIZE
+        - 2 * (preflight.MODEL_INVENTORY_EXPECTED_TOTAL_SIZE // 3),
+    ]
+    if not valid_total_size:
+        shard_sizes[0] -= 1
+    for name, size in zip(preflight.MODEL_INVENTORY_EXPECTED_SHARDS, shard_sizes, strict=True):
+        with (snapshot / name).open("wb") as shard:
+            shard.truncate(size)
+    original = snapshot / "original" / ("model" + preflight.MODEL_INVENTORY_FILE_SUFFIX)
+    original.parent.mkdir()
+    original.write_text("denied original weight placeholder\n", encoding="utf-8")
+    return snapshot
+
+
+def _fake_snapshot_hasher(path: Path) -> str:
+    relative = path.as_posix()
+    digest_seed = sum(ord(character) for character in relative) % 16
+    return f"{digest_seed:x}" * 64
+
+
 def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     report = preflight.build_offline_preflight_report()
 
@@ -371,6 +411,138 @@ def test_runtime_file_access_summary_catches_model_snapshot_reads(tmp_path: Path
         "models--openai--gpt-oss-20b",
         ".safetensors",
     ]
+
+
+def test_model_inventory_capture_reads_existing_snapshot_without_inference(
+    tmp_path: Path,
+):
+    snapshot = _write_sparse_model_snapshot(tmp_path)
+
+    inventory = preflight.build_model_inventory_attestation_from_snapshot(
+        snapshot,
+        file_hasher=_fake_snapshot_hasher,
+    )
+
+    contract.validate_model_inventory(inventory)
+    assert inventory["schema_version"] == "semantic_anchor_model_inventory_attestation_v1"
+    assert inventory["snapshot_path"] == str(snapshot.resolve())
+    assert inventory["repository"] == contract.EXPECTED_MODEL_REPOSITORY
+    assert inventory["revision"] == contract.EXPECTED_MODEL_REVISION
+    assert inventory["loaded_shards"] == list(preflight.MODEL_INVENTORY_EXPECTED_SHARDS)
+    assert inventory["denied_files"] == [
+        preflight.MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT
+    ]
+    assert preflight.MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT in inventory["unloaded_files"]
+    assert preflight.MODEL_INVENTORY_ORIGINAL_FULL_WEIGHT not in inventory["loaded_files"]
+    assert inventory["safetensors_index_total_size"] == (
+        preflight.MODEL_INVENTORY_EXPECTED_TOTAL_SIZE
+    )
+
+
+def test_model_inventory_capture_rejects_bad_snapshot_shapes(tmp_path: Path):
+    snapshot = _write_sparse_model_snapshot(tmp_path, valid_total_size=False)
+    with pytest.raises(ValueError, match="total size"):
+        preflight.build_model_inventory_attestation_from_snapshot(
+            snapshot,
+            file_hasher=_fake_snapshot_hasher,
+        )
+
+    no_revision = tmp_path / "wrong-revision"
+    no_revision.mkdir()
+    with pytest.raises(ValueError, match="expected revision"):
+        preflight.build_model_inventory_attestation_from_snapshot(
+            no_revision,
+            file_hasher=_fake_snapshot_hasher,
+        )
+
+    contains_revision = tmp_path / "snapshots" / f"prefix-{contract.EXPECTED_MODEL_REVISION}"
+    contains_revision.mkdir(parents=True)
+    with pytest.raises(ValueError, match="expected revision"):
+        preflight.build_model_inventory_attestation_from_snapshot(
+            contains_revision,
+            file_hasher=_fake_snapshot_hasher,
+        )
+
+    missing_metadata = _write_sparse_model_snapshot(tmp_path / "missing-metadata")
+    (missing_metadata / "tokenizer.json").unlink()
+    with pytest.raises(ValueError, match="loader metadata"):
+        preflight.build_model_inventory_attestation_from_snapshot(
+            missing_metadata,
+            file_hasher=_fake_snapshot_hasher,
+        )
+
+    extra_weight = _write_sparse_model_snapshot(tmp_path / "extra-weight")
+    (extra_weight / ("model-00004-of-00004" + preflight.MODEL_INVENTORY_FILE_SUFFIX)).write_text(
+        "unexpected\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unexpected weight files"):
+        preflight.build_model_inventory_attestation_from_snapshot(
+            extra_weight,
+            file_hasher=_fake_snapshot_hasher,
+        )
+
+
+def test_model_inventory_capture_rejects_symlinks_when_supported(tmp_path: Path):
+    snapshot = _write_sparse_model_snapshot(tmp_path)
+    target = snapshot / "config.json"
+    link = snapshot / "linked-config.json"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks are unavailable in this environment")
+
+    with pytest.raises(ValueError, match="symlinks"):
+        preflight.build_model_inventory_attestation_from_snapshot(
+            snapshot,
+            file_hasher=_fake_snapshot_hasher,
+        )
+
+
+def test_model_inventory_capture_cli_rejects_combined_modes(tmp_path: Path):
+    snapshot = _write_sparse_model_snapshot(tmp_path)
+    with pytest.raises(ValueError, match="cannot be combined"):
+        preflight.main(
+            [
+                "--model-inventory-snapshot",
+                str(snapshot),
+                "--offset-parity-fixtures",
+                str(tmp_path / "fixtures.json"),
+            ]
+        )
+
+
+def test_model_inventory_capture_cli_writes_create_only_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    snapshot = _write_sparse_model_snapshot(tmp_path)
+    output_path = tmp_path / "model-inventory.json"
+    monkeypatch.setattr(preflight.contract, "sha256_file", _fake_snapshot_hasher)
+
+    assert preflight.main(
+        [
+            "--model-inventory-snapshot",
+            str(snapshot),
+            "--output",
+            str(output_path),
+        ]
+    ) == 0
+
+    inventory = contract.load_json_no_duplicates(output_path)
+    contract.validate_model_inventory(inventory)
+    assert inventory["schema_version"] == "semantic_anchor_model_inventory_attestation_v1"
+    assert inventory["snapshot_path"] == str(snapshot.resolve())
+    assert output_path.read_bytes() == contract.canonical_json_bytes(inventory) + b"\n"
+    with pytest.raises(FileExistsError):
+        preflight.main(
+            [
+                "--model-inventory-snapshot",
+                str(snapshot),
+                "--output",
+                str(output_path),
+            ]
+        )
 
 
 def test_live_attestation_review_validates_bundle_without_authorizing_dispatch(tmp_path: Path):
