@@ -24,6 +24,7 @@ OFFSET_REQUEST_SCHEMA_VERSION = "lucene_whole_unit_offsets_request_v1"
 OFFSET_RESPONSE_SCHEMA_VERSION = "lucene_whole_unit_offsets_response_v1"
 SYNTHETIC_CORPUS_VERSION = "semantic_anchor_synthetic_corpus_v1"
 QUALIFICATION_LEDGER_VERSION = "semantic_anchor_qualification_ledger_v1"
+CASE_REGISTRY_VERSION = "semantic_anchor_case_registry_v1"
 
 KNOWN_FIVE_TOPIC_IDS = ("144", "213", "224", "407", "515")
 V1_TOPIC_IDS = ("200", "225", "707", "897")
@@ -64,6 +65,22 @@ ARTIFACT_DIR = (
     / "det_sparse_v4_contract_artifacts"
 )
 ARTIFACT_MANIFEST = ARTIFACT_DIR / "semantic_anchor_artifact_manifest_v1.json"
+
+SELECT_POSITIONS = ("leading", "middle", "trailing")
+SELECT_ANCHOR_CLASSES = (
+    "multiword_entity_topic",
+    "punctuation_unicode_phrase",
+    "comparison_pair",
+)
+SELECT_CHILD_REFERENCE_STYLES = ("pronoun", "ellipsis_generic")
+ABSTAIN_REASONS = (
+    "coequal_disjoint_subjects",
+    "generic_boilerplate_no_referent",
+    "referent_only_outside_u1",
+    "only_one_eligible_anchor_term",
+    "all_ranges_violate_span_or_occurrence_cap",
+    "adversarial_instruction_no_unambiguous_referent",
+)
 
 
 class TerminalState(str, Enum):
@@ -351,6 +368,61 @@ def validate_model_inventory(inventory: Mapping[str, object]) -> None:
             raise ValueError(f"model inventory missing {key}")
 
 
+def validate_case_registry(registry: Mapping[str, object]) -> tuple[str, ...]:
+    if registry.get("schema_version") != CASE_REGISTRY_VERSION:
+        raise ValueError("case registry schema_version mismatch")
+    cases = registry.get("cases")
+    if not isinstance(cases, list):
+        raise ValueError("case registry cases must be a list")
+    if len(cases) != 24:
+        raise ValueError(f"case registry must contain 24 cases, got {len(cases)}")
+
+    case_ids: list[str] = []
+    select_cells: set[tuple[str, str, str]] = set()
+    abstain_reasons: list[str] = []
+    for index, value in enumerate(cases, start=1):
+        case = _as_mapping(value, "case registry entry")
+        case_id = case.get("case_id")
+        expected_case_id = f"synthetic-case-{index:03d}"
+        if case_id != expected_case_id:
+            raise ValueError(f"case registry expected {expected_case_id}, got {case_id}")
+        case_ids.append(expected_case_id)
+        decision = case.get("decision")
+        if decision == "select":
+            position = _required_enum(case, "u1_anchor_position", SELECT_POSITIONS)
+            anchor_class = _required_enum(case, "anchor_class", SELECT_ANCHOR_CLASSES)
+            reference_style = _required_enum(
+                case, "child_reference_style", SELECT_CHILD_REFERENCE_STYLES
+            )
+            select_cells.add((position, anchor_class, reference_style))
+            if "abstain_reason" in case:
+                raise ValueError(f"select case must not have abstain_reason: {case_id}")
+        elif decision == "abstain":
+            reason = _required_enum(case, "abstain_reason", ABSTAIN_REASONS)
+            abstain_reasons.append(reason)
+            for forbidden in (
+                "u1_anchor_position",
+                "anchor_class",
+                "child_reference_style",
+            ):
+                if forbidden in case:
+                    raise ValueError(f"abstain case must not have {forbidden}: {case_id}")
+        else:
+            raise ValueError(f"case decision must be select or abstain: {case_id}")
+
+    expected_cells = {
+        (position, anchor_class, reference_style)
+        for position in SELECT_POSITIONS
+        for anchor_class in SELECT_ANCHOR_CLASSES
+        for reference_style in SELECT_CHILD_REFERENCE_STYLES
+    }
+    if select_cells != expected_cells:
+        raise ValueError("select registry must be exact 3x3x2 Cartesian product")
+    if tuple(abstain_reasons) != ABSTAIN_REASONS:
+        raise ValueError("abstain registry reasons drifted")
+    return tuple(case_ids)
+
+
 def validate_artifact_bundle(
     artifact_dir: Path = ARTIFACT_DIR,
 ) -> dict[str, str]:
@@ -406,6 +478,7 @@ def runner_visible_artifacts() -> tuple[str, ...]:
         "lucene_whole_unit_offsets_health_v1.schema.json",
         "lucene_whole_unit_offsets_error_v1.schema.json",
         "semantic_anchor_response_v1.case001.schema.json",
+        "semantic_anchor_case_registry_v1.json",
         "semantic_anchor_synthetic_corpus_v1.json",
         "semantic_anchor_case_order_v1.json",
         "semantic_anchor_prompt_v1.system.txt",
@@ -490,7 +563,12 @@ def _validate_artifact_cross_file_consistency(artifact_dir: Path) -> None:
         load_json_no_duplicates(artifact_dir / "semantic_anchor_case_order_v1.json"),
         "case order",
     )
-    if case_order.get("case_order") != ["synthetic-case-001"]:
+    registry = _as_mapping(
+        load_json_no_duplicates(artifact_dir / "semantic_anchor_case_registry_v1.json"),
+        "case registry",
+    )
+    registry_order = validate_case_registry(registry)
+    if case_order.get("case_order") != list(registry_order):
         raise ValueError("case order fixture mismatch")
     if case_order.get("smoke_case_id") != "synthetic-case-001":
         raise ValueError("smoke case fixture mismatch")
@@ -539,6 +617,15 @@ def _as_mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+def _required_enum(
+    value: Mapping[str, object], key: str, allowed: Sequence[str]
+) -> str:
+    candidate = value.get(key)
+    if not isinstance(candidate, str) or candidate not in allowed:
+        raise ValueError(f"{key} must be one of {tuple(allowed)}")
+    return candidate
 
 
 def _strict_int(value: object, name: str) -> int:

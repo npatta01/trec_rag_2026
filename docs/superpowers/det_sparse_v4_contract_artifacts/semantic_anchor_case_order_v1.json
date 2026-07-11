@@ -1,6 +1,29 @@
 {
   "case_order": [
-    "synthetic-case-001"
+    "synthetic-case-001",
+    "synthetic-case-002",
+    "synthetic-case-003",
+    "synthetic-case-004",
+    "synthetic-case-005",
+    "synthetic-case-006",
+    "synthetic-case-007",
+    "synthetic-case-008",
+    "synthetic-case-009",
+    "synthetic-case-010",
+    "synthetic-case-011",
+    "synthetic-case-012",
+    "synthetic-case-013",
+    "synthetic-case-014",
+    "synthetic-case-015",
+    "synthetic-case-016",
+    "synthetic-case-017",
+    "synthetic-case-018",
+    "synthetic-case-019",
+    "synthetic-case-020",
+    "synthetic-case-021",
+    "synthetic-case-022",
+    "synthetic-case-023",
+    "synthetic-case-024"
   ],
   "schema_version": "semantic_anchor_case_order_v1",
   "smoke_case_id": "synthetic-case-001"

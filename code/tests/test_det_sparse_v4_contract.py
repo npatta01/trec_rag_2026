@@ -304,9 +304,51 @@ def test_committed_artifact_bundle_is_offline_smoke_only_and_internally_consiste
     hashes = v4.validate_artifact_bundle()
 
     assert "semantic_anchor_artifact_manifest_v1.json" not in hashes
+    assert "semantic_anchor_case_registry_v1.json" in hashes
     assert "semantic_anchor_request_fixture.case001.json" in hashes
     assert "semantic_anchor_gold_labels_v1.json" in hashes
     assert len(hashes["semantic_anchor_request_fixture.case001.json"]) == 64
+
+
+def test_case_registry_freezes_24_case_shape_and_category_arithmetic():
+    registry = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_case_registry_v1.json"
+    )
+
+    case_ids = v4.validate_case_registry(registry)
+    assert len(case_ids) == 24
+    assert case_ids[:3] == (
+        "synthetic-case-001",
+        "synthetic-case-002",
+        "synthetic-case-003",
+    )
+    cases = registry["cases"]
+    selects = [case for case in cases if case["decision"] == "select"]
+    abstains = [case for case in cases if case["decision"] == "abstain"]
+    assert len(selects) == 18
+    assert len(abstains) == 6
+    assert {
+        (case["u1_anchor_position"], case["anchor_class"], case["child_reference_style"])
+        for case in selects
+    } == {
+        (position, anchor_class, reference_style)
+        for position in v4.SELECT_POSITIONS
+        for anchor_class in v4.SELECT_ANCHOR_CLASSES
+        for reference_style in v4.SELECT_CHILD_REFERENCE_STYLES
+    }
+    assert tuple(case["abstain_reason"] for case in abstains) == v4.ABSTAIN_REASONS
+
+
+def test_case_registry_rejects_missing_cartesian_cell():
+    registry = v4.load_json_no_duplicates(
+        v4.ARTIFACT_DIR / "semantic_anchor_case_registry_v1.json"
+    )
+    mutated = dict(registry)
+    mutated["cases"] = [dict(case) for case in registry["cases"]]
+    mutated["cases"][0]["child_reference_style"] = "ellipsis_generic"
+
+    with pytest.raises(ValueError, match="Cartesian"):
+        v4.validate_case_registry(mutated)
 
 
 def test_case001_schema_fixture_matches_generated_schema():

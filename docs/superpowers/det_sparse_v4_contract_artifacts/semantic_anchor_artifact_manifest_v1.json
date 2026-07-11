@@ -42,6 +42,10 @@
       "visibility": "runner"
     },
     {
+      "path": "semantic_anchor_case_registry_v1.json",
+      "visibility": "runner"
+    },
+    {
       "path": "semantic_anchor_request_fixture.case001.json",
       "visibility": "runner"
     },

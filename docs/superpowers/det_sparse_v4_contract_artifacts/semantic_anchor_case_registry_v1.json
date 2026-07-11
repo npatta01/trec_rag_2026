@@ -1,0 +1,162 @@
+{
+  "cases": [
+    {
+      "anchor_class": "multiword_entity_topic",
+      "case_id": "synthetic-case-001",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "leading"
+    },
+    {
+      "anchor_class": "multiword_entity_topic",
+      "case_id": "synthetic-case-002",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "leading"
+    },
+    {
+      "anchor_class": "punctuation_unicode_phrase",
+      "case_id": "synthetic-case-003",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "leading"
+    },
+    {
+      "anchor_class": "punctuation_unicode_phrase",
+      "case_id": "synthetic-case-004",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "leading"
+    },
+    {
+      "anchor_class": "comparison_pair",
+      "case_id": "synthetic-case-005",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "leading"
+    },
+    {
+      "anchor_class": "comparison_pair",
+      "case_id": "synthetic-case-006",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "leading"
+    },
+    {
+      "anchor_class": "multiword_entity_topic",
+      "case_id": "synthetic-case-007",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "middle"
+    },
+    {
+      "anchor_class": "multiword_entity_topic",
+      "case_id": "synthetic-case-008",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "middle"
+    },
+    {
+      "anchor_class": "punctuation_unicode_phrase",
+      "case_id": "synthetic-case-009",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "middle"
+    },
+    {
+      "anchor_class": "punctuation_unicode_phrase",
+      "case_id": "synthetic-case-010",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "middle"
+    },
+    {
+      "anchor_class": "comparison_pair",
+      "case_id": "synthetic-case-011",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "middle"
+    },
+    {
+      "anchor_class": "comparison_pair",
+      "case_id": "synthetic-case-012",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "middle"
+    },
+    {
+      "anchor_class": "multiword_entity_topic",
+      "case_id": "synthetic-case-013",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "trailing"
+    },
+    {
+      "anchor_class": "multiword_entity_topic",
+      "case_id": "synthetic-case-014",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "trailing"
+    },
+    {
+      "anchor_class": "punctuation_unicode_phrase",
+      "case_id": "synthetic-case-015",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "trailing"
+    },
+    {
+      "anchor_class": "punctuation_unicode_phrase",
+      "case_id": "synthetic-case-016",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "trailing"
+    },
+    {
+      "anchor_class": "comparison_pair",
+      "case_id": "synthetic-case-017",
+      "child_reference_style": "pronoun",
+      "decision": "select",
+      "u1_anchor_position": "trailing"
+    },
+    {
+      "anchor_class": "comparison_pair",
+      "case_id": "synthetic-case-018",
+      "child_reference_style": "ellipsis_generic",
+      "decision": "select",
+      "u1_anchor_position": "trailing"
+    },
+    {
+      "abstain_reason": "coequal_disjoint_subjects",
+      "case_id": "synthetic-case-019",
+      "decision": "abstain"
+    },
+    {
+      "abstain_reason": "generic_boilerplate_no_referent",
+      "case_id": "synthetic-case-020",
+      "decision": "abstain"
+    },
+    {
+      "abstain_reason": "referent_only_outside_u1",
+      "case_id": "synthetic-case-021",
+      "decision": "abstain"
+    },
+    {
+      "abstain_reason": "only_one_eligible_anchor_term",
+      "case_id": "synthetic-case-022",
+      "decision": "abstain"
+    },
+    {
+      "abstain_reason": "all_ranges_violate_span_or_occurrence_cap",
+      "case_id": "synthetic-case-023",
+      "decision": "abstain"
+    },
+    {
+      "abstain_reason": "adversarial_instruction_no_unambiguous_referent",
+      "case_id": "synthetic-case-024",
+      "decision": "abstain"
+    }
+  ],
+  "schema_version": "semantic_anchor_case_registry_v1",
+  "status": "finite_24_case_registry_pending_full_prompt_and_gold_expansion"
+}
