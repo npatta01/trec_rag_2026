@@ -430,20 +430,58 @@ def _fsync_directory(path: Path) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Create a deterministic sparse v4 pre-dispatch no-go run boundary."
+        description=(
+            "Create or replay deterministic sparse v4 run-directory boundaries "
+            "without model dispatch."
+        )
     )
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--artifact-dir", type=Path, default=contract.ARTIFACT_DIR)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--replay-pre-dispatch-no-go",
+        action="store_true",
+        help="Replay an existing zero-dispatch no-go run directory.",
+    )
+    mode.add_argument(
+        "--replay-completed-synthetic",
+        action="store_true",
+        help=(
+            "Replay an existing 24-case sealed synthetic run directory and "
+            "validate its scorer input without opening gold."
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    result = build_pre_dispatch_no_go_run(
-        args.output_dir,
-        artifact_dir=args.artifact_dir,
-    )
-    print(f"Wrote v4 pre-dispatch no-go run under {result.output_dir}")
+    if args.replay_pre_dispatch_no_go:
+        result = replay_pre_dispatch_no_go_run(
+            args.output_dir,
+            artifact_dir=args.artifact_dir,
+        )
+        print(
+            "Replayed v4 pre-dispatch no-go run under "
+            f"{result.output_dir}: reservations={len(result.reservation_paths)}"
+        )
+    elif args.replay_completed_synthetic:
+        result = replay_completed_synthetic_run(
+            args.output_dir,
+            artifact_dir=args.artifact_dir,
+        )
+        print(
+            "Replayed v4 completed synthetic run under "
+            f"{result.output_dir}: reservations={len(result.reservation_paths)} "
+            f"dispatches={len(result.dispatch_paths)} "
+            f"raw_responses={len(result.raw_response_paths)}"
+        )
+    else:
+        result = build_pre_dispatch_no_go_run(
+            args.output_dir,
+            artifact_dir=args.artifact_dir,
+        )
+        print(f"Wrote v4 pre-dispatch no-go run under {result.output_dir}")
     return 0
 
 

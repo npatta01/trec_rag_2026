@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -108,6 +110,29 @@ def test_pre_dispatch_no_go_replay_rejects_reservation_hash_drift(tmp_path: Path
 
     with pytest.raises(ValueError, match="reservations do not match request identity"):
         runner.replay_pre_dispatch_no_go_run(output_dir)
+
+
+def test_runner_cli_replays_pre_dispatch_no_go_without_dispatch(tmp_path: Path):
+    output_dir = tmp_path / "v4-no-go"
+    runner.build_pre_dispatch_no_go_run(output_dir)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_runner",
+            "--replay-pre-dispatch-no-go",
+            str(output_dir),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    assert "Replayed v4 pre-dispatch no-go run" in completed.stdout
+    assert "reservations=24" in completed.stdout
+    assert not (output_dir / "dispatches").exists()
 
 
 def _gold_driven_response(case: dict[str, object]) -> dict[str, object]:
@@ -296,3 +321,29 @@ def test_completed_synthetic_replay_rejects_extra_dispatch_artifact_and_sealed_h
     _write_record(sealed_path, sealed)
     with pytest.raises(ValueError, match="hash differs from raw record|raw hash mismatch"):
         runner.replay_completed_synthetic_run(output_dir)
+
+
+def test_runner_cli_replays_completed_synthetic_run_without_scoring(tmp_path: Path):
+    output_dir = tmp_path / "completed-v4"
+    _build_completed_run(output_dir)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trec_rag.det_sparse_v4_runner",
+            "--replay-completed-synthetic",
+            str(output_dir),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+
+    assert "Replayed v4 completed synthetic run" in completed.stdout
+    assert "reservations=24" in completed.stdout
+    assert "dispatches=24" in completed.stdout
+    assert "raw_responses=24" in completed.stdout
+    terminal = json.loads((output_dir / "terminal_receipt.json").read_text(encoding="utf-8"))
+    assert terminal["gold_opened"] is False

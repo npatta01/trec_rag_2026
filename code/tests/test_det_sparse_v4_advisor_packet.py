@@ -46,6 +46,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "executable ledger-prefix validator" in text
     assert "actual zero-dispatch run-directory replay" in text
     assert "offline completed synthetic run-directory replay validated" in text
+    assert "--replay-completed-synthetic path/to/run-directory" in text
+    assert "--replay-pre-dispatch-no-go path/to/run-directory" in text
+    assert "neither dispatches the model,\nopens scorer-only gold" in text
     assert "actual live post-dispatch run still pending" in text
     assert "canonical live-attestation bundle sealing" in text
     assert "advisor dispatch-GO binding,\nfile-backed advisor-GO review CLI" in text
@@ -64,8 +67,9 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "runtime file-open tracing, live attestation evidence validators, captured-bundle" in text
     assert "advisor dispatch-GO binding" in text
     assert "file-backed advisor-GO review CLI" in text
+    assert "runner replay CLI modes" in text
     assert "ledger-bound scorer-only" in text
-    assert "`161 passed`." in text
+    assert "`163 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

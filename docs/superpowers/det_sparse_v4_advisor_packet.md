@@ -168,6 +168,21 @@ already exercises that boundary on a sealed synthetic run directory; an actual
 live post-dispatch run remains a later gate. Scoring is then invoked with:
 
 ```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_runner \
+  --replay-completed-synthetic path/to/run-directory
+```
+
+The same runner module can also replay a zero-dispatch no-go directory:
+
+```bash
+.venv/bin/python -m trec_rag.det_sparse_v4_runner \
+  --replay-pre-dispatch-no-go path/to/run-directory
+```
+
+Both replay modes are file-backed validators; neither dispatches the model,
+opens scorer-only gold, or changes the terminal receipt.
+
+```bash
 .venv/bin/python -m trec_rag.det_sparse_v4_scorer \
   path/to/sealed-scorer-input.json \
   --output path/to/scorer-review.json \
@@ -208,9 +223,10 @@ validation, assistant-content extraction, offset health/error schema checks,
 runtime file-open tracing, live attestation evidence validators, captured-bundle
 review, canonical live-attestation bundle sealing, advisor dispatch-GO binding,
 file-backed advisor-GO review CLI, pre-dispatch run-directory replay, offline
-completed synthetic run-directory replay, ledger-bound scorer-only
-sealed-response review, and reviewer qualification terminal-state mapping:
-`161 passed`.
+completed synthetic run-directory replay, runner replay CLI modes,
+ledger-bound scorer-only sealed-response review, and reviewer qualification
+terminal-state mapping:
+`163 passed`.
 
 ## What is not yet proven
 
