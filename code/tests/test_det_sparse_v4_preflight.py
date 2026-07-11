@@ -30,6 +30,17 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
         "trec_rag.det_sparse_v4_preflight",
         "trec_rag.query_schema_compat",
     ]
+    runtime_file_access = report["runtime_file_access"]
+    assert runtime_file_access["checker"] == "det_sparse_v4_runtime_file_access_audit_v1"
+    assert runtime_file_access["status"] == "pass"
+    assert runtime_file_access["observed_open_count"] >= report["artifact_count"]
+    assert runtime_file_access["observed_read_path_count"] >= report["artifact_count"]
+    assert runtime_file_access["observed_write_path_count"] == 0
+    assert runtime_file_access["denied_path_fragment_issues"] == {}
+    assert runtime_file_access["denied_write_paths"] == []
+    observed_paths = {record["path"] for record in runtime_file_access["observed_paths"]}
+    assert str(contract.ARTIFACT_MANIFEST.resolve()) in observed_paths
+    assert str(Path(preflight.__file__).resolve()) in observed_paths
     assert report["schema_compatibility"] == {
         "checker": "vllm_0_24_xgrammar_unsupported_feature_lint",
         "case_count": 24,
@@ -93,6 +104,43 @@ def test_offline_preflight_report_rejects_inference_or_cost_authorization():
     report["request_identity"] = request_identity
     with pytest.raises(ValueError, match="request hash"):
         preflight.validate_offline_preflight_report(report)
+
+    report = preflight.build_offline_preflight_report()
+    runtime_file_access = dict(report["runtime_file_access"])
+    runtime_file_access["observed_paths"] = [
+        {
+            "path": str((Path.cwd() / "cache" / "retrieval" / "bad.jsonl").resolve()),
+            "accesses": ["read"],
+        }
+    ]
+    runtime_file_access["denied_path_fragment_issues"] = {
+        runtime_file_access["observed_paths"][0]["path"]: ["cache/retrieval"]
+    }
+    runtime_file_access["status"] = "fail"
+    report["runtime_file_access"] = runtime_file_access
+    with pytest.raises(ValueError, match="runtime file access"):
+        preflight.validate_offline_preflight_report(report)
+
+
+def test_runtime_file_access_summary_catches_denied_reads_and_writes(tmp_path: Path):
+    denied_dir = tmp_path / "qrels"
+    denied_dir.mkdir()
+    denied_file = denied_dir / "synthetic.txt"
+    denied_file.write_text("do not read through preflight\n", encoding="utf-8")
+    write_file = tmp_path / "runtime-write.txt"
+
+    def builder():
+        denied_file.read_text(encoding="utf-8")
+        write_file.write_text("write should fail the audit\n", encoding="utf-8")
+        return {"status": "placeholder"}
+
+    report = preflight.build_runtime_file_access_summary(builder)
+    summary = report["runtime_file_access"]
+
+    assert summary["status"] == "fail"
+    assert str(denied_file.resolve()) in summary["denied_path_fragment_issues"]
+    assert summary["denied_path_fragment_issues"][str(denied_file.resolve())] == ["qrels"]
+    assert str(write_file.resolve()) in summary["denied_write_paths"]
 
 
 def test_offline_preflight_fails_on_denied_imports(tmp_path: Path):

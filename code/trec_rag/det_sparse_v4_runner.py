@@ -104,6 +104,83 @@ def build_pre_dispatch_no_go_run(
     )
 
 
+def replay_pre_dispatch_no_go_run(
+    output_dir: Path,
+    *,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> PreDispatchNoGoRun:
+    """Replay and validate a zero-dispatch v4 run directory from sealed files."""
+
+    report = preflight.build_offline_preflight_report(artifact_dir)
+    request_identity = _require_mapping(report["request_identity"], "request_identity")
+    case_order = _case_order_from_request_identity(request_identity)
+    expected_reservations = _reservations_from_request_identity(
+        request_identity,
+        run_id=destination_run_id(output_dir),
+    )
+    expected_request_sha256 = _string_mapping(
+        request_identity.get("request_sha256"), "request_sha256"
+    )
+    artifact_sha256 = _string_mapping(report["artifact_sha256"], "artifact_sha256")
+
+    destination = output_dir.resolve()
+    if not destination.is_dir():
+        raise ValueError("pre-dispatch replay requires an existing run directory")
+    reservations_dir = destination / RESERVATIONS_DIR
+    if not reservations_dir.is_dir():
+        raise ValueError("pre-dispatch replay requires reservations directory")
+    _require_exact_run_directory(destination)
+
+    run_manifest_path = destination / RUN_MANIFEST_PATH
+    terminal_receipt_path = destination / TERMINAL_RECEIPT_PATH
+    run_manifest = _read_canonical_json_mapping(run_manifest_path, "run manifest")
+    terminal_receipt = _read_canonical_json_mapping(
+        terminal_receipt_path, "terminal receipt"
+    )
+    if run_manifest.get("artifact_sha256") != artifact_sha256:
+        raise ValueError("pre-dispatch replay artifact hash mismatch")
+    if terminal_receipt.get("artifact_sha256") != artifact_sha256:
+        raise ValueError("pre-dispatch replay terminal artifact hash mismatch")
+    if terminal_receipt.get("terminal_state") != "pre_dispatch_no_go":
+        raise ValueError("pre-dispatch replay terminal state mismatch")
+
+    reservation_paths = tuple(
+        reservations_dir / f"{case_id}.json" for case_id in case_order
+    )
+    actual_reservation_names = sorted(path.name for path in reservations_dir.iterdir())
+    expected_reservation_names = sorted(path.name for path in reservation_paths)
+    if actual_reservation_names != expected_reservation_names:
+        raise ValueError("pre-dispatch replay reservation file set mismatch")
+
+    reservations = tuple(
+        _read_canonical_json_mapping(path, f"reservation {path.name}")
+        for path in reservation_paths
+    )
+    if reservations != expected_reservations:
+        raise ValueError("pre-dispatch replay reservations do not match request identity")
+    for reservation in reservations:
+        case_id = str(reservation["case_id"])
+        if reservation.get("request_sha256") != expected_request_sha256.get(case_id):
+            raise ValueError("pre-dispatch replay reservation request hash mismatch")
+
+    contract.validate_ledger_prefix(
+        case_order=case_order,
+        reservations=reservations,
+        dispatches=[],
+        raw_responses=[],
+        transport_failures=[],
+        case_receipts=[],
+        terminal_receipt=terminal_receipt,
+        run_manifest=run_manifest,
+    )
+    return PreDispatchNoGoRun(
+        output_dir=destination,
+        run_manifest_path=run_manifest_path,
+        terminal_receipt_path=terminal_receipt_path,
+        reservation_paths=reservation_paths,
+    )
+
+
 def destination_run_id(output_dir: Path) -> str:
     run_id = output_dir.resolve().name
     if not run_id:
@@ -154,6 +231,21 @@ def _require_mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+def _require_exact_run_directory(destination: Path) -> None:
+    actual_names = sorted(path.name for path in destination.iterdir())
+    expected_names = sorted((RUN_MANIFEST_PATH, TERMINAL_RECEIPT_PATH, RESERVATIONS_DIR))
+    if actual_names != expected_names:
+        raise ValueError("pre-dispatch replay run directory file set mismatch")
+
+
+def _read_canonical_json_mapping(path: Path, name: str) -> Mapping[str, object]:
+    value = contract.load_json_no_duplicates(path)
+    mapping = _require_mapping(value, name)
+    if path.read_bytes() != contract.canonical_json_bytes(mapping) + b"\n":
+        raise ValueError(f"{name} is not canonical JSON bytes")
+    return mapping
 
 
 def _create_only(path: Path, payload: bytes) -> None:

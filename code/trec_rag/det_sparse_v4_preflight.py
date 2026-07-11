@@ -11,8 +11,9 @@ import argparse
 import ast
 import json
 import os
+import sys
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from trec_rag import det_sparse_v4_contract as contract
 from trec_rag import query_schema_compat
@@ -33,6 +34,7 @@ ZERO_COST_COUNTERS = {
 SCHEMA_COMPATIBILITY_CHECKER = "vllm_0_24_xgrammar_unsupported_feature_lint"
 REQUEST_IDENTITY_CHECKER = "semantic_anchor_request_identity_v1"
 SOURCE_AUDIT_CHECKER = "det_sparse_v4_static_direct_source_audit_v1"
+RUNTIME_FILE_ACCESS_CHECKER = "det_sparse_v4_runtime_file_access_audit_v1"
 ALLOWED_IMPORT_ROOTS = (
     "__future__",
     "argparse",
@@ -43,6 +45,7 @@ ALLOWED_IMPORT_ROOTS = (
     "json",
     "os",
     "pathlib",
+    "sys",
     "trec_rag",
     "typing",
 )
@@ -54,6 +57,23 @@ ALLOWED_TREC_RAG_MODULES = (
 
 
 def build_offline_preflight_report(
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+    *,
+    source_paths: Sequence[Path] | None = None,
+) -> dict[str, object]:
+    """Validate v4 offline artifacts and return a traced non-inference report."""
+
+    report = build_runtime_file_access_summary(
+        lambda: _build_offline_preflight_report_untraced(
+            artifact_dir,
+            source_paths=source_paths,
+        )
+    )
+    validate_offline_preflight_report(report)
+    return report
+
+
+def _build_offline_preflight_report_untraced(
     artifact_dir: Path = contract.ARTIFACT_DIR,
     *,
     source_paths: Sequence[Path] | None = None,
@@ -112,7 +132,52 @@ def build_offline_preflight_report(
         "external_cost_authorized": False,
         "next_gate": NEXT_GATE,
     }
-    validate_offline_preflight_report(report, expected_artifact_hashes=artifact_hashes)
+    validate_offline_preflight_report(
+        report,
+        expected_artifact_hashes=artifact_hashes,
+        require_runtime_file_access=False,
+    )
+    return report
+
+
+def build_runtime_file_access_summary(
+    builder: Callable[[], dict[str, object]],
+) -> dict[str, object]:
+    """Run ``builder`` under an audit hook and attach observed file opens."""
+
+    events: list[dict[str, object]] = []
+    active = True
+
+    def audit_hook(event: str, args: tuple[object, ...]) -> None:
+        if not active or event != "open" or not args:
+            return
+        raw_path = args[0]
+        if isinstance(raw_path, int):
+            return
+        if isinstance(raw_path, bytes):
+            path = os.fsdecode(raw_path)
+        elif isinstance(raw_path, os.PathLike):
+            path = os.fspath(raw_path)
+        elif isinstance(raw_path, str):
+            path = raw_path
+        else:
+            return
+        mode = args[1] if len(args) > 1 else None
+        flags = args[2] if len(args) > 2 else None
+        events.append(
+            {
+                "path": path,
+                "access": _classify_open_access(mode, flags),
+            }
+        )
+
+    sys.addaudithook(audit_hook)
+    try:
+        report = builder()
+    finally:
+        active = False
+
+    report["runtime_file_access"] = _summarize_runtime_file_access(events)
     return report
 
 
@@ -165,6 +230,62 @@ def build_source_audit_summary(source_paths: Sequence[Path]) -> dict[str, object
         "unexpected_trec_rag_modules": unexpected_trec_rag_modules,
         "denied_import_issues": denied_import_issues,
         "denied_path_fragment_issues": fragment_issues,
+    }
+
+
+def _classify_open_access(mode: object, flags: object) -> str:
+    if isinstance(flags, int):
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+        if flags & write_flags:
+            return "write"
+    if isinstance(mode, str) and any(marker in mode for marker in ("w", "a", "x", "+")):
+        return "write"
+    return "read"
+
+
+def _summarize_runtime_file_access(
+    events: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    observed_paths: dict[str, set[str]] = {}
+    denied_path_fragment_issues: dict[str, list[str]] = {}
+    denied_write_paths: list[str] = []
+    for event in events:
+        path_value = event.get("path")
+        access_value = event.get("access")
+        if not isinstance(path_value, str) or access_value not in {"read", "write"}:
+            continue
+        path = Path(path_value).resolve().as_posix()
+        observed_paths.setdefault(path, set()).add(str(access_value))
+        denied_fragments = contract.audit_denied_path_fragments(path)
+        if denied_fragments:
+            denied_path_fragment_issues[path] = list(denied_fragments)
+        if access_value == "write":
+            denied_write_paths.append(path)
+
+    observed_records = [
+        {
+            "path": path,
+            "accesses": sorted(accesses),
+        }
+        for path, accesses in sorted(observed_paths.items())
+    ]
+    read_count = sum("read" in record["accesses"] for record in observed_records)
+    write_count = sum("write" in record["accesses"] for record in observed_records)
+    status = (
+        "pass"
+        if not denied_path_fragment_issues and not denied_write_paths
+        else "fail"
+    )
+    return {
+        "checker": RUNTIME_FILE_ACCESS_CHECKER,
+        "status": status,
+        "observed_open_count": len(events),
+        "observed_unique_path_count": len(observed_records),
+        "observed_read_path_count": read_count,
+        "observed_write_path_count": write_count,
+        "observed_paths": observed_records,
+        "denied_path_fragment_issues": denied_path_fragment_issues,
+        "denied_write_paths": sorted(set(denied_write_paths)),
     }
 
 
@@ -238,6 +359,7 @@ def validate_offline_preflight_report(
     report: Mapping[str, object],
     *,
     expected_artifact_hashes: Mapping[str, str] | None = None,
+    require_runtime_file_access: bool = True,
 ) -> None:
     """Validate that a v4 offline preflight report remains non-inference."""
 
@@ -282,6 +404,41 @@ def validate_offline_preflight_report(
         raise ValueError("offline preflight source audit denied imports must be empty")
     if source_audit.get("denied_path_fragment_issues") != {}:
         raise ValueError("offline preflight source audit denied paths must be empty")
+    runtime_file_access = report.get("runtime_file_access")
+    if require_runtime_file_access:
+        if not isinstance(runtime_file_access, Mapping):
+            raise ValueError("offline preflight runtime_file_access must be an object")
+        if runtime_file_access.get("checker") != RUNTIME_FILE_ACCESS_CHECKER:
+            raise ValueError("offline preflight runtime file access checker mismatch")
+        if runtime_file_access.get("status") != "pass":
+            raise ValueError("offline preflight runtime file access must pass")
+        if runtime_file_access.get("denied_path_fragment_issues") != {}:
+            raise ValueError("offline preflight runtime denied paths must be empty")
+        if runtime_file_access.get("denied_write_paths") != []:
+            raise ValueError("offline preflight runtime writes must be empty")
+        for key in (
+            "observed_open_count",
+            "observed_unique_path_count",
+            "observed_read_path_count",
+            "observed_write_path_count",
+        ):
+            value = runtime_file_access.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"offline preflight runtime {key} must be nonnegative int")
+        if runtime_file_access.get("observed_write_path_count") != 0:
+            raise ValueError("offline preflight runtime write count must be zero")
+        observed_paths = runtime_file_access.get("observed_paths")
+        if not isinstance(observed_paths, list) or not observed_paths:
+            raise ValueError("offline preflight runtime observed_paths must be nonempty list")
+        for record in observed_paths:
+            if not isinstance(record, Mapping):
+                raise ValueError("offline preflight runtime observed path must be object")
+            path = record.get("path")
+            accesses = record.get("accesses")
+            if not isinstance(path, str) or not path:
+                raise ValueError("offline preflight runtime observed path must be string")
+            if accesses != ["read"]:
+                raise ValueError("offline preflight runtime observed path must be read-only")
     schema_compatibility = report.get("schema_compatibility")
     if not isinstance(schema_compatibility, Mapping):
         raise ValueError("offline preflight schema_compatibility must be an object")

@@ -17,6 +17,8 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "external_cost_authorized`: `false`" in text
     assert "next_gate`: `advisor_review_before_live_attestation_or_model_inference`" in text
     assert "`source_audit`: 4 source files, `status=pass`" in text
+    assert "`runtime_file_access`: `status=pass`" in text
+    assert "runtime file-open tracing validated" in text
     assert "create-only runner scaffold writes 24 request-hash reservation records" in text
     assert "`unexpected_trec_rag_modules=[]`" in text
     assert "`vllm_0_24_xgrammar_unsupported_feature_lint`, `status=pass`" in text
@@ -29,11 +31,14 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "source/import audit, offline schema-compatibility" in text
     assert "`request_identity`: 24 cases, first case `synthetic-case-001`" in text
     assert "executable ledger-prefix validator" in text
+    assert "actual zero-dispatch run-directory replay validated" in text
+    assert "pre-dispatch run-directory replay:" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
     assert "classification" in text
-    assert "live attestation evidence validators:" in text
-    assert "`141 passed`." in text
+    assert "runtime file-open tracing, live attestation evidence validators, and" in text
+    assert "pre-dispatch run-directory replay:" in text
+    assert "`144 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

@@ -57,6 +57,8 @@ def test_pre_dispatch_no_go_runner_writes_create_only_reservations_and_zero_call
         terminal_receipt=terminal,
         run_manifest=manifest,
     )
+    replayed = runner.replay_pre_dispatch_no_go_run(output_dir)
+    assert replayed == result
 
 
 def test_pre_dispatch_no_go_runner_refuses_existing_output_dir(tmp_path: Path):
@@ -65,3 +67,44 @@ def test_pre_dispatch_no_go_runner_refuses_existing_output_dir(tmp_path: Path):
 
     with pytest.raises(FileExistsError):
         runner.build_pre_dispatch_no_go_run(output_dir)
+
+
+def test_pre_dispatch_no_go_replay_rejects_drift_and_noncanonical_files(tmp_path: Path):
+    output_dir = tmp_path / "v4-no-go"
+    result = runner.build_pre_dispatch_no_go_run(output_dir)
+
+    terminal = json.loads(result.terminal_receipt_path.read_text(encoding="utf-8"))
+    result.terminal_receipt_path.write_bytes(
+        contract.canonical_json_bytes(dict(terminal, attempted_calls=1)) + b"\n"
+    )
+    with pytest.raises(ValueError, match="terminal state|zero attempted"):
+        runner.replay_pre_dispatch_no_go_run(output_dir)
+    result.terminal_receipt_path.write_bytes(
+        contract.canonical_json_bytes(terminal) + b"\n"
+    )
+
+    first_reservation = result.reservation_paths[0]
+    reservation = json.loads(first_reservation.read_text(encoding="utf-8"))
+    first_reservation.write_text(
+        json.dumps(reservation, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="canonical JSON"):
+        runner.replay_pre_dispatch_no_go_run(output_dir)
+    first_reservation.write_bytes(contract.canonical_json_bytes(reservation) + b"\n")
+
+    (output_dir / "dispatches").mkdir()
+    with pytest.raises(ValueError, match="run directory file set"):
+        runner.replay_pre_dispatch_no_go_run(output_dir)
+
+
+def test_pre_dispatch_no_go_replay_rejects_reservation_hash_drift(tmp_path: Path):
+    output_dir = tmp_path / "v4-no-go"
+    result = runner.build_pre_dispatch_no_go_run(output_dir)
+    first_reservation = result.reservation_paths[0]
+    reservation = json.loads(first_reservation.read_text(encoding="utf-8"))
+    reservation["request_sha256"] = "9" * 64
+    first_reservation.write_bytes(contract.canonical_json_bytes(reservation) + b"\n")
+
+    with pytest.raises(ValueError, match="reservations do not match request identity"):
+        runner.replay_pre_dispatch_no_go_run(output_dir)
