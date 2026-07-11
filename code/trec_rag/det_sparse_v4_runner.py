@@ -1,21 +1,23 @@
-"""Create-only runner scaffold for deterministic sparse v4.
+"""Runner scaffold and replay validators for deterministic sparse v4.
 
-This module deliberately stops before model dispatch. Its current purpose is
-to materialize the pre-dispatch ledger boundary for review: validate the
-offline v4 preflight, create a fresh run directory, write a run manifest and a
-terminal ``pre_dispatch_no_go`` receipt, and validate the resulting zero-call
-ledger prefix.
+The default CLI paths are replay/create-only boundaries and deliberately stop
+before model dispatch.  The post-approval helper requires sealed attestation
+reviews plus an explicit manual invocation receipt and an injected local
+transport; this module does not create a network client or provide a live
+dispatch CLI.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from trec_rag import det_sparse_v4_contract as contract
+from trec_rag import det_sparse_v4_preflight as preflight
 from trec_rag import det_sparse_v4_scorer as scorer
 
 
@@ -24,6 +26,7 @@ TERMINAL_RECEIPT_PATH = "terminal_receipt.json"
 RESERVATIONS_DIR = "reservations"
 DISPATCHES_DIR = "dispatches"
 RAW_RESPONSES_DIR = "raw_responses"
+TRANSPORT_FAILURES_DIR = "transport_failures"
 CASE_RECEIPTS_DIR = "case_receipts"
 SEALED_SCORER_INPUT_PATH = "sealed_scorer_input.json"
 
@@ -46,6 +49,25 @@ class CompletedSyntheticReplay:
     raw_response_paths: tuple[Path, ...]
     case_receipt_paths: tuple[Path, ...]
     sealed_scorer_input_path: Path
+
+
+@dataclass(frozen=True)
+class SyntheticDispatchRun:
+    output_dir: Path
+    run_manifest_path: Path
+    terminal_receipt_path: Path
+    reservation_paths: tuple[Path, ...]
+    dispatch_paths: tuple[Path, ...]
+    raw_response_paths: tuple[Path, ...]
+    case_receipt_paths: tuple[Path, ...]
+    sealed_scorer_input_path: Path
+
+
+SyntheticTransport = Callable[[str, Mapping[str, object]], str]
+MANUAL_RUNNER_INVOCATION_SCHEMA_VERSION = "semantic_anchor_manual_runner_invocation_v1"
+MANUAL_RUNNER_INVOCATION_STATUS = "manual_runner_invocation_go"
+MANUAL_RUNNER_INVOCATION_SCOPE = "det_sparse_v4_synthetic_local_dispatch"
+MANUAL_RUNNER_TRANSPORT_KIND = "injected_local_loopback"
 
 
 def build_pre_dispatch_no_go_run(
@@ -196,6 +218,367 @@ def replay_pre_dispatch_no_go_run(
     )
 
 
+def build_synthetic_dispatch_run(
+    output_dir: Path,
+    *,
+    live_attestation_review: Mapping[str, object],
+    advisor_dispatch_go_review: Mapping[str, object],
+    manual_runner_invocation: Mapping[str, object],
+    transport: SyntheticTransport,
+    artifact_dir: Path = contract.ARTIFACT_DIR,
+) -> SyntheticDispatchRun:
+    """Dispatch all 24 synthetic requests through an explicitly supplied transport.
+
+    This is the post-approval runner implementation boundary.  The function
+    requires previously reviewed live-attestation, advisor-GO, and manual
+    runner invocation records, writes raw-first ledger artifacts, and leaves
+    scorer-only gold unopened.  It does not provide a network CLI or create a
+    transport; callers must inject a local loopback transport only after the
+    separate manual gate.
+    """
+
+    preflight.validate_live_attestation_review(live_attestation_review)
+    preflight.validate_advisor_dispatch_go_review(advisor_dispatch_go_review)
+    live_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_attestation_review)
+    )
+    if advisor_dispatch_go_review.get("live_attestation_review_sha256") != live_review_sha256:
+        raise ValueError("advisor dispatch GO review is not bound to live attestation review")
+    advisor_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(advisor_dispatch_go_review)
+    )
+    validate_manual_runner_invocation(
+        manual_runner_invocation,
+        live_attestation_review_sha256=live_review_sha256,
+        advisor_dispatch_go_review_sha256=advisor_review_sha256,
+    )
+
+    request_identity = _runner_request_identity(artifact_dir)
+    case_order = _case_order_from_request_identity(request_identity)
+    request_by_case = _runner_requests(artifact_dir, case_order=case_order)
+    reservations = _reservations_from_request_identity(
+        request_identity,
+        run_id=destination_run_id(output_dir),
+    )
+    request_sha256 = _string_mapping(
+        request_identity.get("request_sha256"), "request_sha256"
+    )
+    artifact_sha256 = contract.validate_runner_artifact_bundle(artifact_dir)
+
+    destination = output_dir.resolve()
+    destination.mkdir(parents=True, exist_ok=False)
+    reservations_dir = destination / RESERVATIONS_DIR
+    dispatches_dir = destination / DISPATCHES_DIR
+    raw_responses_dir = destination / RAW_RESPONSES_DIR
+    case_receipts_dir = destination / CASE_RECEIPTS_DIR
+    for directory in (
+        reservations_dir,
+        dispatches_dir,
+        raw_responses_dir,
+        case_receipts_dir,
+    ):
+        directory.mkdir(exist_ok=False)
+
+    run_manifest = {
+        "schema_version": "semantic_anchor_run_manifest_v1",
+        "case_count": 24,
+        "artifact_sha256": artifact_sha256,
+        "terminal_receipt_path": TERMINAL_RECEIPT_PATH,
+    }
+    run_manifest_path = destination / RUN_MANIFEST_PATH
+    _create_only(run_manifest_path, contract.canonical_json_bytes(run_manifest) + b"\n")
+
+    reservation_paths: list[Path] = []
+    for reservation in reservations:
+        case_id = str(reservation["case_id"])
+        path = reservations_dir / f"{case_id}.json"
+        _create_only(path, contract.canonical_json_bytes(reservation) + b"\n")
+        reservation_paths.append(path)
+
+    dispatches: list[dict[str, object]] = []
+    raw_responses: list[dict[str, object]] = []
+    case_receipts: list[dict[str, object]] = []
+    sealed_responses: list[dict[str, object]] = []
+    dispatch_paths: list[Path] = []
+    raw_response_paths: list[Path] = []
+    case_receipt_paths: list[Path] = []
+
+    for case_id in case_order:
+        request = request_by_case[case_id]
+        request_body = contract.canonical_json_bytes(request)
+        request_hash = contract.sha256_bytes(request_body)
+        if request_hash != request_sha256[case_id]:
+            raise ValueError("dispatch request hash differs from frozen request identity")
+
+        dispatch = {
+            "schema_version": "semantic_anchor_dispatch_record_v1",
+            "case_id": case_id,
+            "request_bytes_sha256": request_hash,
+            "loopback_only": True,
+            "dispatch_counted": True,
+        }
+        contract.validate_dispatch_record(dispatch)
+        dispatch_path = dispatches_dir / f"{case_id}.json"
+        _create_only(dispatch_path, contract.canonical_json_bytes(dispatch) + b"\n")
+        dispatches.append(dispatch)
+        dispatch_paths.append(dispatch_path)
+
+        try:
+            raw_body = transport(case_id, request)
+            if not isinstance(raw_body, str) or not raw_body:
+                raise ValueError(
+                    "synthetic transport must return a nonempty raw body string"
+                )
+            finish_reason = _finish_reason_from_chat_completion(raw_body)
+        except Exception as exc:
+            _seal_transport_no_body_no_go(
+                destination=destination,
+                run_manifest=run_manifest,
+                artifact_sha256=artifact_sha256,
+                case_order=case_order,
+                reservations=reservations,
+                dispatches=dispatches,
+                raw_responses=raw_responses,
+                case_receipts=case_receipts,
+                failed_case_id=case_id,
+                failed_request_sha256=request_hash,
+                exception=exc,
+            )
+            raise ValueError(
+                "synthetic transport failed; sealed transport_no_body_no_go terminal receipt"
+            ) from exc
+        raw_body_bytes = raw_body.encode("utf-8")
+        raw_hash = contract.sha256_bytes(raw_body_bytes)
+        raw_response = {
+            "schema_version": "semantic_anchor_raw_response_body_v1",
+            "case_id": case_id,
+            "http_status": 200,
+            "finish_reason": finish_reason,
+            "served_model": "gpt-oss-local",
+            "body_size_bytes": len(raw_body_bytes),
+            "body_sha256": raw_hash,
+        }
+        contract.validate_raw_response_record(raw_response)
+        raw_response_path = raw_responses_dir / f"{case_id}.json"
+        _create_only(
+            raw_response_path,
+            contract.canonical_json_bytes(raw_response) + b"\n",
+        )
+        raw_responses.append(raw_response)
+        raw_response_paths.append(raw_response_path)
+
+        case_receipt = {
+            "schema_version": "semantic_anchor_case_receipt_v1",
+            "case_id": case_id,
+            "request_sha256": request_hash,
+            "machine_status": "mechanical_pass",
+            "raw_response_sha256": raw_hash,
+        }
+        contract.validate_case_receipt(case_receipt)
+        case_receipt_path = case_receipts_dir / f"{case_id}.json"
+        _create_only(
+            case_receipt_path,
+            contract.canonical_json_bytes(case_receipt) + b"\n",
+        )
+        case_receipts.append(case_receipt)
+        case_receipt_paths.append(case_receipt_path)
+        sealed_responses.append(
+            {
+                "case_id": case_id,
+                "raw_response_sha256": raw_hash,
+                "raw_response_body": raw_body,
+            }
+        )
+
+    terminal_receipt = {
+        "schema_version": "semantic_anchor_terminal_receipt_v1",
+        "terminal_state": "raw_sealed_pending_scorer",
+        "attempted_calls": len(dispatches),
+        "completed_calls": len(raw_responses),
+        "raw_committed_calls": len(raw_responses),
+        "gold_opened": False,
+        "artifact_sha256": artifact_sha256,
+    }
+    contract.validate_ledger_prefix(
+        case_order=case_order,
+        reservations=reservations,
+        dispatches=dispatches,
+        raw_responses=raw_responses,
+        transport_failures=[],
+        case_receipts=case_receipts,
+        terminal_receipt=terminal_receipt,
+        run_manifest=run_manifest,
+    )
+    terminal_receipt_path = destination / TERMINAL_RECEIPT_PATH
+    _create_only(
+        terminal_receipt_path,
+        contract.canonical_json_bytes(terminal_receipt) + b"\n",
+    )
+
+    sealed_input = {
+        "schema_version": scorer.SEALED_SCORER_INPUT_SCHEMA_VERSION,
+        "run_manifest": run_manifest,
+        "terminal_receipt": terminal_receipt,
+        "reservations": list(reservations),
+        "dispatches": dispatches,
+        "raw_responses": raw_responses,
+        "case_receipts": case_receipts,
+        "responses": sealed_responses,
+    }
+    scorer.validate_sealed_scorer_input(sealed_input, case_order=case_order)
+    sealed_scorer_input_path = destination / SEALED_SCORER_INPUT_PATH
+    _create_only(
+        sealed_scorer_input_path,
+        contract.canonical_json_bytes(sealed_input) + b"\n",
+    )
+    _fsync_directory(destination)
+    return SyntheticDispatchRun(
+        output_dir=destination,
+        run_manifest_path=run_manifest_path,
+        terminal_receipt_path=terminal_receipt_path,
+        reservation_paths=tuple(reservation_paths),
+        dispatch_paths=tuple(dispatch_paths),
+        raw_response_paths=tuple(raw_response_paths),
+        case_receipt_paths=tuple(case_receipt_paths),
+        sealed_scorer_input_path=sealed_scorer_input_path,
+    )
+
+
+def _seal_transport_no_body_no_go(
+    *,
+    destination: Path,
+    run_manifest: Mapping[str, object],
+    artifact_sha256: Mapping[str, str],
+    case_order: Sequence[str],
+    reservations: Sequence[Mapping[str, object]],
+    dispatches: Sequence[Mapping[str, object]],
+    raw_responses: Sequence[Mapping[str, object]],
+    case_receipts: Sequence[Mapping[str, object]],
+    failed_case_id: str,
+    failed_request_sha256: str,
+    exception: Exception,
+) -> None:
+    """Write a terminal no-go prefix after a transport/body failure.
+
+    The failed case has already been dispatched, so the ledger must seal that
+    attempt explicitly instead of leaving a partial directory that cannot be
+    audited without interpreting stack traces.
+    """
+
+    transport_failures_dir = destination / TRANSPORT_FAILURES_DIR
+    transport_failures_dir.mkdir(exist_ok=False)
+    failure_record = {
+        "schema_version": "semantic_anchor_transport_failure_v1",
+        "case_id": failed_case_id,
+        "request_bytes_sha256": failed_request_sha256,
+        "exception_class": type(exception).__name__,
+        "exception_message": str(exception),
+    }
+    contract.validate_transport_failure_record(failure_record)
+    _create_only(
+        transport_failures_dir / f"{failed_case_id}.json",
+        contract.canonical_json_bytes(failure_record) + b"\n",
+    )
+
+    failure_case_receipt = {
+        "schema_version": "semantic_anchor_case_receipt_v1",
+        "case_id": failed_case_id,
+        "request_sha256": failed_request_sha256,
+        "machine_status": "mechanical_no_go",
+    }
+    contract.validate_case_receipt(failure_case_receipt)
+    _create_only(
+        destination / CASE_RECEIPTS_DIR / f"{failed_case_id}.json",
+        contract.canonical_json_bytes(failure_case_receipt) + b"\n",
+    )
+    terminal_receipt = {
+        "schema_version": "semantic_anchor_terminal_receipt_v1",
+        "terminal_state": "transport_no_body_no_go",
+        "attempted_calls": len(dispatches),
+        "completed_calls": len(raw_responses),
+        "raw_committed_calls": len(raw_responses),
+        "gold_opened": False,
+        "artifact_sha256": artifact_sha256,
+    }
+    contract.validate_ledger_prefix(
+        case_order=case_order,
+        reservations=reservations,
+        dispatches=dispatches,
+        raw_responses=raw_responses,
+        transport_failures=[failure_record],
+        case_receipts=[*case_receipts, failure_case_receipt],
+        terminal_receipt=terminal_receipt,
+        run_manifest=run_manifest,
+    )
+    _create_only(
+        destination / TERMINAL_RECEIPT_PATH,
+        contract.canonical_json_bytes(terminal_receipt) + b"\n",
+    )
+    _fsync_directory(destination)
+
+
+def validate_manual_runner_invocation(
+    receipt: Mapping[str, object],
+    *,
+    live_attestation_review_sha256: str,
+    advisor_dispatch_go_review_sha256: str,
+) -> None:
+    """Validate the final manual invocation gate before injected local transport.
+
+    Earlier advisor-GO review deliberately keeps ``dispatch_authorized=false``
+    and points here as the next gate.  This receipt is the explicit handoff
+    from "reviewed and ready" to "invoke the local loopback runner now".
+    """
+
+    expected_keys = {
+        "schema_version",
+        "experiment_id",
+        "status",
+        "live_attestation_review_sha256",
+        "advisor_dispatch_go_review_sha256",
+        "approval_scope",
+        "transport_kind",
+        "egress_allowed",
+        "external_cost_authorized",
+        "inference_authorized",
+        "dispatch_authorized",
+        "approved_by",
+    }
+    actual_keys = set(receipt)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "manual runner invocation keys mismatch: "
+            f"missing={expected_keys - actual_keys} extra={actual_keys - expected_keys}"
+        )
+    if receipt.get("schema_version") != MANUAL_RUNNER_INVOCATION_SCHEMA_VERSION:
+        raise ValueError("manual runner invocation schema_version mismatch")
+    if receipt.get("experiment_id") != contract.EXPERIMENT_ID:
+        raise ValueError("manual runner invocation experiment_id mismatch")
+    if receipt.get("status") != MANUAL_RUNNER_INVOCATION_STATUS:
+        raise ValueError("manual runner invocation status mismatch")
+    if receipt.get("live_attestation_review_sha256") != live_attestation_review_sha256:
+        raise ValueError("manual runner invocation live review hash mismatch")
+    if (
+        receipt.get("advisor_dispatch_go_review_sha256")
+        != advisor_dispatch_go_review_sha256
+    ):
+        raise ValueError("manual runner invocation advisor review hash mismatch")
+    if receipt.get("approval_scope") != MANUAL_RUNNER_INVOCATION_SCOPE:
+        raise ValueError("manual runner invocation approval scope mismatch")
+    if receipt.get("transport_kind") != MANUAL_RUNNER_TRANSPORT_KIND:
+        raise ValueError("manual runner invocation transport kind mismatch")
+    if receipt.get("egress_allowed") is not False:
+        raise ValueError("manual runner invocation must keep egress closed")
+    if receipt.get("external_cost_authorized") is not False:
+        raise ValueError("manual runner invocation must not authorize external cost")
+    if receipt.get("inference_authorized") is not True:
+        raise ValueError("manual runner invocation must authorize local inference")
+    if receipt.get("dispatch_authorized") is not True:
+        raise ValueError("manual runner invocation must authorize local dispatch")
+    if not isinstance(receipt.get("approved_by"), str) or not receipt.get("approved_by"):
+        raise ValueError("manual runner invocation approved_by must be nonempty")
+
+
 def replay_completed_synthetic_run(
     output_dir: Path,
     *,
@@ -330,6 +713,29 @@ def _runner_request_identity(artifact_dir: Path) -> Mapping[str, object]:
     }
 
 
+def _runner_requests(
+    artifact_dir: Path,
+    *,
+    case_order: Sequence[str],
+) -> dict[str, Mapping[str, object]]:
+    request_records = contract.load_jsonl_no_duplicates(
+        artifact_dir / "semantic_anchor_request_fixtures_v1.jsonl"
+    )
+    request_by_case: dict[str, Mapping[str, object]] = {}
+    for raw_record in request_records:
+        record = _require_mapping(raw_record, "request fixture record")
+        case_id = record.get("case_id")
+        request = _require_mapping(record.get("request"), "request")
+        if not isinstance(case_id, str):
+            raise ValueError("request fixture case_id must be string")
+        if case_id in request_by_case:
+            raise ValueError(f"duplicate request fixture case_id: {case_id}")
+        request_by_case[case_id] = request
+    if tuple(request_by_case) != tuple(case_order):
+        raise ValueError("request fixture order differs from fixed case order")
+    return request_by_case
+
+
 def _read_case_order(artifact_dir: Path) -> tuple[str, ...]:
     case_order = _require_mapping(
         contract.load_json_no_duplicates(
@@ -458,6 +864,36 @@ def _validate_sealed_scorer_input_links(
             raise ValueError("sealed scorer input response lacks case receipt")
         if record.get("raw_response_sha256") != receipt.get("raw_response_sha256"):
             raise ValueError("sealed scorer input raw hash mismatch")
+
+
+def _finish_reason_from_chat_completion(raw_body: str) -> str:
+    payload = _loads_object_no_duplicates(raw_body, "raw response body")
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise ValueError("raw response body must contain exactly one choice")
+    choice = _require_mapping(choices[0], "raw response choice")
+    finish_reason = choice.get("finish_reason")
+    if not isinstance(finish_reason, str):
+        raise ValueError("raw response finish_reason must be string")
+    if finish_reason != "stop":
+        raise ValueError("raw response finish_reason must be stop")
+    return finish_reason
+
+
+def _loads_object_no_duplicates(text: str, name: str) -> Mapping[str, object]:
+    def reject_duplicates(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"{name} contains duplicate key: {key}")
+            result[key] = item
+        return result
+
+    try:
+        value = json.loads(text, object_pairs_hook=reject_duplicates)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} is not valid JSON") from exc
+    return _require_mapping(value, name)
 
 
 def _create_only(path: Path, payload: bytes) -> None:

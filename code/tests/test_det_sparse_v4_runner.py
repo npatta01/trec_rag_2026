@@ -146,6 +146,337 @@ def test_runner_cli_replays_pre_dispatch_no_go_without_dispatch(tmp_path: Path):
     assert not (output_dir / "dispatches").exists()
 
 
+def _offset_health():
+    return {
+        "schema_version": "lucene_whole_unit_offsets_health_v1",
+        "status": "ok",
+        "legacy_analyzer_port": 18081,
+        "offset_analyzer_port": 18082,
+    }
+
+
+def _schema_compiler_attestation(request_identity):
+    return {
+        "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
+        "compiler": {
+            "vllm_version": "0.24.0",
+            "xgrammar_version": "0.2.3",
+            "structured_outputs_backend": "xgrammar",
+        },
+        "case_order_sha256": request_identity["case_order_sha256"],
+        "cases": [
+            {
+                "case_id": case_id,
+                "request_sha256": request_sha256,
+                "schema_sha256": f"{index:064x}"[-64:],
+                "xgrammar_strict": "pass",
+            }
+            for index, (case_id, request_sha256) in enumerate(
+                request_identity["request_sha256"].items(),
+                start=1,
+            )
+        ],
+    }
+
+
+def _model_runtime_attestation(model_inventory_sha256: str):
+    return {
+        "schema_version": "semantic_anchor_live_model_runtime_attestation_v1",
+        "attestation_id": "runtime-attestation-001",
+        "served_model": "gpt-oss-local",
+        "repository": "openai/gpt-oss-20b",
+        "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+        "vllm_version": "0.24.0",
+        "xgrammar_version": "0.2.3",
+        "structured_outputs_backend": "xgrammar",
+        "loopback_only": True,
+        "egress_denied": True,
+        "read_only_model_mount": True,
+        "model_inventory_sha256": model_inventory_sha256,
+    }
+
+
+def _live_attestation_bundle(model_inventory_sha256: str):
+    request_identity = preflight.build_request_identity_summary(contract.ARTIFACT_DIR)
+    return {
+        "schema_version": "semantic_anchor_live_attestation_bundle_v1",
+        "offset_health": _offset_health(),
+        "schema_compiler": _schema_compiler_attestation(request_identity),
+        "model_runtime": _model_runtime_attestation(model_inventory_sha256),
+    }
+
+
+def _approved_reviews(tmp_path: Path):
+    offline_report = preflight.build_offline_preflight_report()
+    model_inventory_sha256 = offline_report["artifact_sha256"][
+        "semantic_anchor_model_inventory_attestation_v1.json"
+    ]
+    bundle_path = tmp_path / "live-attestation-bundle.json"
+    bundle_path.write_bytes(
+        contract.canonical_json_bytes(_live_attestation_bundle(model_inventory_sha256))
+        + b"\n"
+    )
+    live_review = preflight.build_live_attestation_review(bundle_path)
+    live_review_sha256 = contract.sha256_bytes(
+        preflight.canonical_report_bytes(live_review)
+    )
+    advisor_go = {
+        "schema_version": "semantic_anchor_advisor_dispatch_go_v1",
+        "approval_scope": "det_sparse_v4_synthetic_local_dispatch",
+        "approved_by": "advisor",
+        "live_attestation_review_sha256": live_review_sha256,
+        preflight.ADVISOR_CLOSED_GATES_ACK_KEY: True,
+    }
+    advisor_review = preflight.build_advisor_dispatch_go_review(
+        live_review,
+        advisor_go,
+    )
+    return live_review, advisor_review
+
+
+def _manual_runner_invocation(live_review, advisor_review):
+    return {
+        "schema_version": runner.MANUAL_RUNNER_INVOCATION_SCHEMA_VERSION,
+        "experiment_id": contract.EXPERIMENT_ID,
+        "status": runner.MANUAL_RUNNER_INVOCATION_STATUS,
+        "live_attestation_review_sha256": contract.sha256_bytes(
+            preflight.canonical_report_bytes(live_review)
+        ),
+        "advisor_dispatch_go_review_sha256": contract.sha256_bytes(
+            preflight.canonical_report_bytes(advisor_review)
+        ),
+        "approval_scope": runner.MANUAL_RUNNER_INVOCATION_SCOPE,
+        "transport_kind": runner.MANUAL_RUNNER_TRANSPORT_KIND,
+        "egress_allowed": False,
+        "external_cost_authorized": False,
+        "inference_authorized": True,
+        "dispatch_authorized": True,
+        "approved_by": "advisor",
+    }
+
+
+def test_synthetic_dispatch_run_writes_raw_first_ledger_with_fake_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    seen: list[str] = []
+
+    def fake_transport(case_id: str, request: dict[str, object]) -> str:
+        seen.append(case_id)
+        assert request["model"] == "gpt-oss-local"
+        return _raw_body_for_response(
+            {
+                "schema_version": "semantic_anchor_response_v1",
+                "case_id": case_id,
+                "decision": "abstain",
+                "start_token": -1,
+                "end_token": -1,
+            }
+        )
+
+    output_dir = tmp_path / "dispatch-v4"
+    _deny_gold_json_open(monkeypatch)
+
+    result = runner.build_synthetic_dispatch_run(
+        output_dir,
+        live_attestation_review=live_review,
+        advisor_dispatch_go_review=advisor_review,
+        manual_runner_invocation=manual_invocation,
+        transport=fake_transport,
+    )
+
+    assert seen == [f"synthetic-case-{index:03d}" for index in range(1, 25)]
+    assert len(result.dispatch_paths) == 24
+    assert len(result.raw_response_paths) == 24
+    assert len(result.case_receipt_paths) == 24
+    terminal = json.loads(result.terminal_receipt_path.read_text(encoding="utf-8"))
+    assert terminal["terminal_state"] == "raw_sealed_pending_scorer"
+    assert terminal["attempted_calls"] == 24
+    assert terminal["completed_calls"] == 24
+    assert terminal["raw_committed_calls"] == 24
+    assert terminal["gold_opened"] is False
+    sealed = json.loads(result.sealed_scorer_input_path.read_text(encoding="utf-8"))
+    assert sealed["terminal_receipt"] == terminal
+    assert [row["case_id"] for row in sealed["responses"]] == seen
+    replayed = runner.replay_completed_synthetic_run(output_dir)
+    assert replayed.output_dir == result.output_dir
+
+
+def test_synthetic_dispatch_run_rejects_unbound_advisor_review_before_writing(
+    tmp_path: Path,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    advisor_review = dict(advisor_review, live_attestation_review_sha256="9" * 64)
+    output_dir = tmp_path / "dispatch-v4"
+
+    with pytest.raises(ValueError, match="not bound"):
+        runner.build_synthetic_dispatch_run(
+            output_dir,
+            live_attestation_review=live_review,
+            advisor_dispatch_go_review=advisor_review,
+            manual_runner_invocation=manual_invocation,
+            transport=lambda _case_id, _request: "{}",
+        )
+
+    assert not output_dir.exists()
+
+
+def test_synthetic_dispatch_run_requires_manual_invocation_before_transport(
+    tmp_path: Path,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = dict(
+        _manual_runner_invocation(live_review, advisor_review),
+        dispatch_authorized=False,
+    )
+    output_dir = tmp_path / "dispatch-v4"
+    seen: list[str] = []
+
+    def fake_transport(case_id: str, request: dict[str, object]) -> str:
+        seen.append(case_id)
+        return "{}"
+
+    with pytest.raises(ValueError, match="must authorize local dispatch"):
+        runner.build_synthetic_dispatch_run(
+            output_dir,
+            live_attestation_review=live_review,
+            advisor_dispatch_go_review=advisor_review,
+            manual_runner_invocation=manual_invocation,
+            transport=fake_transport,
+        )
+
+    assert seen == []
+    assert not output_dir.exists()
+
+
+def test_synthetic_dispatch_run_seals_transport_no_body_no_go_on_bad_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    output_dir = tmp_path / "dispatch-v4"
+    seen: list[str] = []
+
+    def fake_transport(case_id: str, request: dict[str, object]) -> str:
+        seen.append(case_id)
+        assert request["model"] == "gpt-oss-local"
+        return ""
+
+    _deny_gold_json_open(monkeypatch)
+
+    with pytest.raises(ValueError, match="transport_no_body_no_go"):
+        runner.build_synthetic_dispatch_run(
+            output_dir,
+            live_attestation_review=live_review,
+            advisor_dispatch_go_review=advisor_review,
+            manual_runner_invocation=manual_invocation,
+            transport=fake_transport,
+        )
+
+    assert seen == ["synthetic-case-001"]
+    assert not (output_dir / "sealed_scorer_input.json").exists()
+    terminal = json.loads(
+        (output_dir / "terminal_receipt.json").read_text(encoding="utf-8")
+    )
+    assert terminal["terminal_state"] == "transport_no_body_no_go"
+    assert terminal["attempted_calls"] == 1
+    assert terminal["completed_calls"] == 0
+    assert terminal["raw_committed_calls"] == 0
+    assert terminal["gold_opened"] is False
+    failure = json.loads(
+        (
+            output_dir
+            / "transport_failures"
+            / "synthetic-case-001.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert failure["exception_class"] == "ValueError"
+    assert failure["request_bytes_sha256"] == json.loads(
+        (
+            output_dir
+            / "dispatches"
+            / "synthetic-case-001.json"
+        ).read_text(encoding="utf-8")
+    )["request_bytes_sha256"]
+    case_receipt = json.loads(
+        (
+            output_dir
+            / "case_receipts"
+            / "synthetic-case-001.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert case_receipt["machine_status"] == "mechanical_no_go"
+
+
+def test_synthetic_dispatch_run_seals_transport_no_body_no_go_on_non_stop_finish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    live_review, advisor_review = _approved_reviews(tmp_path)
+    manual_invocation = _manual_runner_invocation(live_review, advisor_review)
+    output_dir = tmp_path / "dispatch-v4"
+    seen: list[str] = []
+
+    def fake_transport(case_id: str, request: dict[str, object]) -> str:
+        seen.append(case_id)
+        assert request["model"] == "gpt-oss-local"
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "role": "assistant",
+                            "content": "{}",
+                        },
+                    }
+                ]
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    _deny_gold_json_open(monkeypatch)
+
+    with pytest.raises(ValueError, match="transport_no_body_no_go"):
+        runner.build_synthetic_dispatch_run(
+            output_dir,
+            live_attestation_review=live_review,
+            advisor_dispatch_go_review=advisor_review,
+            manual_runner_invocation=manual_invocation,
+            transport=fake_transport,
+        )
+
+    assert seen == ["synthetic-case-001"]
+    assert not (output_dir / "sealed_scorer_input.json").exists()
+    terminal = json.loads(
+        (output_dir / "terminal_receipt.json").read_text(encoding="utf-8")
+    )
+    assert terminal["terminal_state"] == "transport_no_body_no_go"
+    assert terminal["attempted_calls"] == 1
+    assert terminal["completed_calls"] == 0
+    assert terminal["raw_committed_calls"] == 0
+    failure = json.loads(
+        (
+            output_dir
+            / "transport_failures"
+            / "synthetic-case-001.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert failure["exception_message"] == "raw response finish_reason must be stop"
+    case_receipt = json.loads(
+        (
+            output_dir
+            / "case_receipts"
+            / "synthetic-case-001.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert case_receipt["machine_status"] == "mechanical_no_go"
+
+
 def _gold_driven_response(case: dict[str, object]) -> dict[str, object]:
     if case["decision"] == "select":
         acceptable = case["acceptable_ranges"][0]

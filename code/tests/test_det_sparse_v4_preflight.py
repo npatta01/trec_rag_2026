@@ -89,6 +89,7 @@ def test_offline_preflight_report_is_non_inference_and_binds_artifacts():
     assert report["source_audit"]["denied_path_fragment_issues"] == {}
     assert report["source_audit"]["observed_trec_rag_modules"] == [
         "trec_rag.det_sparse_v4_contract",
+        "trec_rag.det_sparse_v4_preflight",
         "trec_rag.det_sparse_v4_scorer",
         "trec_rag.query_schema_compat",
     ]

@@ -38,6 +38,8 @@ def build_scorer_review(
         contract.load_json_no_duplicates(sealed_path),
         "sealed scorer input",
     )
+    if sealed_path.read_bytes() != contract.canonical_json_bytes(sealed_input) + b"\n":
+        raise ValueError("sealed scorer input is not canonical JSON bytes")
     responses_by_case = validate_sealed_scorer_input(
         sealed_input,
         case_order=case_order,

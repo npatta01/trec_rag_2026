@@ -56,6 +56,7 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "advisor dispatch-GO binding,\nfile-backed advisor-GO review CLI" in text
     assert "offline replay mutation oracles" in text
     assert "scorer/gold linter validates case order" in text
+    assert "accepts only canonical sealed synthetic responses" in text
     assert "semantic_anchor_scorer_review_v1" in text
     assert "`raw_sealed_pending_scorer` 24-response terminal state" in text
     assert "`gold_opened=false`, validates ledger-prefix evidence" in text
@@ -72,8 +73,13 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "runner replay CLI modes" in text
     assert "completed replay mutation coverage" in text
     assert "runner-visible artifact hashes without opening scorer-only gold" in text
+    assert "explicit manual runner invocation receipt" in text
+    assert "reviewed fake-transport dispatch implementation" in text
+    assert "failed-transport terminal sealing" in text
+    assert "actual live model invocation remains closed" in text
+    assert "canonical sealed scorer input" in text
     assert "ledger-bound scorer-only" in text
-    assert "`169 passed`." in text
+    assert "`175 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

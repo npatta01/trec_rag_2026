@@ -206,6 +206,30 @@ def test_scorer_review_does_not_open_gold_when_seal_is_incomplete(
     assert "semantic_anchor_gold_labels_v1.json" not in opened
 
 
+def test_scorer_review_rejects_noncanonical_sealed_input_before_gold_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    sealed_path = tmp_path / "sealed-scorer-input.json"
+    sealed_path.write_text(
+        json.dumps(_sealed_scorer_input(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    opened: list[str] = []
+    original_loader = scorer.contract.load_json_no_duplicates
+
+    def recording_loader(path: Path):
+        opened.append(path.name)
+        return original_loader(path)
+
+    monkeypatch.setattr(scorer.contract, "load_json_no_duplicates", recording_loader)
+
+    with pytest.raises(ValueError, match="canonical JSON"):
+        scorer.build_scorer_review(sealed_path)
+
+    assert "sealed-scorer-input.json" in opened
+    assert "semantic_anchor_gold_labels_v1.json" not in opened
+
+
 def test_scorer_review_classifies_malformed_sealed_response(tmp_path: Path):
     sealed = _sealed_scorer_input()
     bad_body = _raw_body_for_response(
