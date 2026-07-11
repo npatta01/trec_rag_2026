@@ -990,6 +990,10 @@ def test_model_inventory_requires_three_loaded_shards_and_denied_original_weight
 
     v4.validate_model_inventory(inventory)
     bad = dict(inventory)
+    bad["extra_field"] = True
+    with pytest.raises(ValueError, match="model inventory keys mismatch"):
+        v4.validate_model_inventory(bad)
+    bad = dict(inventory)
     bad["loaded_shards"] = ["model-00001.safetensors", "model-00002.safetensors"]
     with pytest.raises(ValueError, match="exactly three"):
         v4.validate_model_inventory(bad)

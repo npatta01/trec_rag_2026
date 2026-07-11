@@ -232,6 +232,15 @@ def _write_offset_parity_review(tmp_path: Path) -> Path:
     return review_path
 
 
+def _write_model_inventory_attestation(tmp_path: Path) -> tuple[Path, str]:
+    inventory_path = tmp_path / "model-inventory-attestation.json"
+    inventory = contract.load_json_no_duplicates(
+        contract.ARTIFACT_DIR / "semantic_anchor_model_inventory_attestation_v1.json"
+    )
+    inventory_path.write_bytes(contract.canonical_json_bytes(inventory) + b"\n")
+    return inventory_path, contract.sha256_file(inventory_path)
+
+
 def _schema_compiler_attestation(request_identity):
     return {
         "schema_version": "semantic_anchor_schema_compiler_attestation_v1",
@@ -284,10 +293,7 @@ def _live_attestation_bundle(model_inventory_sha256: str):
 
 
 def _approved_reviews(tmp_path: Path):
-    offline_report = preflight.build_offline_preflight_report()
-    model_inventory_sha256 = offline_report["artifact_sha256"][
-        "semantic_anchor_model_inventory_attestation_v1.json"
-    ]
+    inventory_path, model_inventory_sha256 = _write_model_inventory_attestation(tmp_path)
     bundle_path = tmp_path / "live-attestation-bundle.json"
     bundle_path.write_bytes(
         contract.canonical_json_bytes(_live_attestation_bundle(model_inventory_sha256))
@@ -296,6 +302,7 @@ def _approved_reviews(tmp_path: Path):
     live_review = preflight.build_live_attestation_review(
         bundle_path,
         offset_parity_review_path=_write_offset_parity_review(tmp_path),
+        model_inventory_attestation_path=inventory_path,
     )
     live_review_sha256 = contract.sha256_bytes(
         preflight.canonical_report_bytes(live_review)

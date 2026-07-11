@@ -131,15 +131,16 @@ Captured live attestation bundles, once separately produced, are reviewed with:
 .venv/bin/python -m trec_rag.det_sparse_v4_preflight \
   --live-attestation-bundle path/to/live-attestation-bundle.json \
   --offset-parity-review path/to/offset-parity-review.json \
+  --model-inventory-attestation path/to/model-inventory-attestation.json \
   --output path/to/live-attestation-review.json \
   --pretty
 ```
 
 That review validates the bundle against the frozen request identity and the
-committed model-inventory artifact SHA-256, validates and binds the canonical
-offset parity review plus offset fingerprint SHA-256, emits a pre-dispatch
-ledger attestation, requires canonical JSON bundle bytes, reports
-`bundle_canonical=true`, traces file opens, and explicitly keeps
+canonical file-backed model-inventory attestation SHA-256, validates and binds
+the canonical offset parity review plus offset fingerprint SHA-256, emits a
+pre-dispatch ledger attestation, requires canonical JSON bundle bytes, reports
+`bundle_canonical=true`, traces file opens for all three evidence files, and explicitly keeps
 `dispatch_authorized=false`.
 
 Captured live offset parity fixtures, once produced by the loopback sidecar, are
@@ -325,7 +326,7 @@ ledger-bound scorer-only sealed-response review, bound reviewer qualification
 review, reviewer qualification terminal-state mapping, executable
 untouched-topic/v5 milestone approval gating, and read-only model inventory
 capture mechanics:
-`198 passed`.
+`199 passed`.
 
 ## What is not yet proven
 

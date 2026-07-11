@@ -108,8 +108,10 @@ def test_v4_advisor_packet_preserves_no_inference_gate_and_review_questions():
     assert "--milestone-approval-receipt path/to/milestone-approval-receipt.json" in text
     assert "does not authorize topic access, retrieval,\nreranking, or external cost" in text
     assert "--model-inventory-snapshot" in text
+    assert "--model-inventory-attestation path/to/model-inventory-attestation.json" in text
+    assert "canonical file-backed model-inventory attestation SHA-256" in text
     assert "read-only model inventory\ncapture mechanics" in text
-    assert "`198 passed`." in text
+    assert "`199 passed`." in text
     assert "Advisor questions" in text
     assert "What is not yet proven" in text
 

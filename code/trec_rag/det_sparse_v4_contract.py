@@ -1288,6 +1288,23 @@ def validate_ledger_prefix(
 
 
 def validate_model_inventory(inventory: Mapping[str, object]) -> None:
+    _require_exact_mapping_keys(
+        inventory,
+        "model inventory",
+        {
+            "schema_version",
+            "repository",
+            "revision",
+            "quantization_method",
+            "safetensors_index_total_size",
+            "snapshot_path",
+            "loaded_shards",
+            "loaded_files",
+            "unloaded_files",
+            "denied_files",
+            "file_sha256",
+        },
+    )
     if inventory.get("schema_version") != "semantic_anchor_model_inventory_attestation_v1":
         raise ValueError("model inventory schema_version mismatch")
     if inventory.get("repository") != "openai/gpt-oss-20b":
