@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from .env_config import env_get, env_int, env_queries
-from .remote_client import RemotePyseriniClient, extract_text, normalize_candidates
+from .remote_client import (
+    RemotePyseriniClient,
+    RemotePyseriniThrottled,
+    RemoteSearchResponse,
+    extract_text,
+    normalize_candidates,
+    rate_limited_session,
+)
 from .remote_config import (
     DEFAULT_QUERIES,
     DEFAULT_QUERY_SOURCE,
@@ -18,6 +25,8 @@ __all__ = [
     "DEFAULT_QUERIES",
     "DEFAULT_QUERY_SOURCE",
     "RemotePyseriniClient",
+    "RemotePyseriniThrottled",
+    "RemoteSearchResponse",
     "RemotePyseriniConfig",
     "_env_get",
     "env_get",
@@ -28,6 +37,7 @@ __all__ = [
     "load_dotenv",
     "load_repo_env",
     "normalize_candidates",
+    "rate_limited_session",
     "remote_index_url",
     "shared_checkout_root",
 ]

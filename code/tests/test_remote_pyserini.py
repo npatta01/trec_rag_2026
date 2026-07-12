@@ -1,17 +1,21 @@
 import json
 import os
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 
 from trec_rag.remote_pyserini import (
     RemotePyseriniClient,
     RemotePyseriniConfig,
+    RemotePyseriniThrottled,
     extract_text,
     load_dotenv,
     load_repo_env,
     normalize_candidates,
+    rate_limited_session,
 )
 
 
@@ -124,20 +128,17 @@ def test_client_builds_authenticated_search_request():
     captured = {}
 
     class FakeResponse:
-        def __enter__(self):
-            return self
+        content = json.dumps({"candidates": []}).encode("utf-8")
+        status_code = 200
+        headers = {}
 
-        def __exit__(self, *_args):
-            return False
+        def raise_for_status(self):
+            return None
 
-        def read(self):
-            return json.dumps({"candidates": []}).encode("utf-8")
-
-    def fake_urlopen(request, timeout):
-        captured["url"] = request.full_url
-        captured["timeout"] = timeout
-        captured["headers"] = dict(request.header_items())
-        return FakeResponse()
+    class FakeSession:
+        def get(self, url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return FakeResponse()
 
     config = RemotePyseriniConfig(
         index_url="http://api.example.test/v1/climbmix-400b/search",
@@ -146,17 +147,84 @@ def test_client_builds_authenticated_search_request():
         queries=("wildfire smoke",),
     )
 
-    response = RemotePyseriniClient(config, opener=fake_urlopen).search("wildfire smoke")
+    response = RemotePyseriniClient(config, session=FakeSession()).search("wildfire smoke")
 
     parsed_url = urlparse(captured["url"])
     assert response == {"candidates": []}
     assert parsed_url.scheme == "http"
     assert parsed_url.netloc == "api.example.test"
     assert parsed_url.path == "/v1/climbmix-400b/search"
-    assert parse_qs(parsed_url.query) == {"query": ["wildfire smoke"], "hits": ["3"]}
+    assert captured["params"] == {"query": "wildfire smoke", "hits": "3"}
     assert captured["headers"]["Accept"] == "application/json"
     assert captured["headers"]["Authorization"] == "Bearer secret-token"
     assert captured["timeout"] == 30
+    assert captured["allow_redirects"] is False
+
+
+def test_client_persists_raw_bytes_before_decoding():
+    events = []
+
+    class Response:
+        content = b"not-json"
+        status_code = 200
+        headers = {}
+        def raise_for_status(self): pass
+
+    class Session:
+        def get(self, *_args, **_kwargs): return Response()
+
+    config = RemotePyseriniConfig("https://api.test/search", None, 3, ())
+    with pytest.raises(json.JSONDecodeError):
+        RemotePyseriniClient(config, session=Session()).search_raw(
+            "query", raw_sink=lambda raw: events.append(raw)
+        )
+    assert events == [b"not-json"]
+
+
+def test_client_429_exposes_retry_after_without_hidden_retry():
+    calls = []
+
+    class Response:
+        content = b'{"error":"slow down"}'
+        status_code = 429
+        headers = {"Retry-After": "1"}
+
+    class Session:
+        def get(self, *_args, **kwargs):
+            calls.append(kwargs)
+            return Response()
+
+    config = RemotePyseriniConfig("https://api.test/search", "do-not-log", 3, ())
+    with pytest.raises(RemotePyseriniThrottled, match="no retry") as exc:
+        RemotePyseriniClient(config, session=Session()).search("query")
+    assert exc.value.retry_after_seconds == 1
+    assert len(calls) == 1
+    assert "do-not-log" not in str(exc.value)
+
+
+def test_rate_limiter_delays_before_second_transport_entry(tmp_path):
+    entered = []
+
+    class RecordingAdapter(requests.adapters.BaseAdapter):
+        def send(self, request, **kwargs):
+            entered.append(time.monotonic())
+            response = requests.Response()
+            response.status_code = 200
+            response._content = b"{}"
+            response.request = request
+            return response
+        def close(self): pass
+
+    config = RemotePyseriniConfig(
+        "https://api.test/search", None, 3, (),
+        min_interval_seconds=1,
+        limiter_state_path=tmp_path / "rate.sqlite",
+    )
+    session = rate_limited_session(config)
+    session.mount("https://", RecordingAdapter())
+    session.get(config.index_url)
+    session.get(config.index_url)
+    assert entered[1] - entered[0] >= 0.9
 
 
 def test_extract_text_and_normalize_candidates():
