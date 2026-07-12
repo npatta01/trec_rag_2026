@@ -1,0 +1,1302 @@
+{
+  "schema_version": "sparse-relevance-repair-manifest-v1",
+  "renderer": "R1",
+  "planner_version": "coverage-first-bm25-v4",
+  "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+  "protected_topic_ids": [
+    "144",
+    "213",
+    "224",
+    "407",
+    "515"
+  ],
+  "max_external_requests": 22,
+  "streams": [
+    {
+      "topic_id": "200",
+      "stream_id": "f01",
+      "base_facet_id": "f01",
+      "coverage_refs": [
+        "c01"
+      ],
+      "query": "Holocaust history European Jewry overview",
+      "source_terms": [
+        "holocaust",
+        "european",
+        "jewry"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "history",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "histori"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "overview",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "overview"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "histor",
+          "event"
+        ],
+        [
+          "european",
+          "jewri",
+          "jew"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f02",
+      "base_facet_id": "f02",
+      "coverage_refs": [
+        "c02"
+      ],
+      "query": "Holocaust historical origins why transpired",
+      "source_terms": [
+        "holocaust",
+        "historical",
+        "why",
+        "transpired"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "origins",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "origin"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "caus",
+          "origin",
+          "why"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f03",
+      "base_facet_id": "f03",
+      "coverage_refs": [
+        "c03"
+      ],
+      "query": "Holocaust systematic process how transpired",
+      "source_terms": [
+        "holocaust",
+        "process",
+        "how",
+        "transpired"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "systematic",
+          "source": "audited_stable_vocabulary",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "systemat"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "process",
+          "implement",
+          "how"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f04",
+      "base_facet_id": "f04",
+      "coverage_refs": [
+        "c04"
+      ],
+      "query": "Holocaust perpetrators responsibility",
+      "source_terms": [
+        "holocaust",
+        "responsibility"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "perpetrators",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "perpetr"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "respons",
+          "perpetr"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f05a",
+      "base_facet_id": "f05",
+      "coverage_refs": [
+        "c05"
+      ],
+      "query": "Holocaust historical consequences European Jews",
+      "source_terms": [
+        "holocaust",
+        "historical",
+        "european"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "consequences",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "consequ"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "Jews",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "jew"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "impact",
+          "consequ"
+        ],
+        [
+          "european",
+          "jewri",
+          "jew"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f05b",
+      "base_facet_id": "f05",
+      "coverage_refs": [
+        "c05"
+      ],
+      "query": "Holocaust social consequences",
+      "source_terms": [
+        "holocaust"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "social",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "social"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "consequences",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "consequ"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "societ",
+          "social"
+        ],
+        [
+          "impact",
+          "consequ"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f06",
+      "base_facet_id": "f06",
+      "coverage_refs": [
+        "c06"
+      ],
+      "query": "Holocaust historical ending",
+      "source_terms": [
+        "holocaust",
+        "historical"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "ending",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "end"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "end",
+          "conclus"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f07a",
+      "base_facet_id": "f07",
+      "coverage_refs": [
+        "c07"
+      ],
+      "query": "Holocaust enduring effects European Jews",
+      "source_terms": [
+        "holocaust",
+        "effects",
+        "european"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "enduring",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "endur"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "Jews",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "jew"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "last",
+          "effect",
+          "endur"
+        ],
+        [
+          "european",
+          "jewri",
+          "jew"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "200",
+      "stream_id": "f07b",
+      "base_facet_id": "f07",
+      "coverage_refs": [
+        "c07"
+      ],
+      "query": "Holocaust enduring social consequences",
+      "source_terms": [
+        "holocaust"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "enduring",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "endur"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "social",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "social"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "consequences",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "consequ"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "holocaust"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "last",
+          "effect",
+          "consequ"
+        ],
+        [
+          "societ",
+          "social"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "game",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f01",
+      "base_facet_id": "f01",
+      "coverage_refs": [
+        "c01"
+      ],
+      "query": "violent video games exposure aggressive behavior research",
+      "source_terms": [
+        "violent",
+        "video",
+        "games",
+        "exposure",
+        "aggressive"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "behavior",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "behavior"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "research",
+          "source": "audited_stable_vocabulary",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "research"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "game"
+        ],
+        [
+          "violent",
+          "gori"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "aggress"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f02",
+      "base_facet_id": "f02",
+      "coverage_refs": [
+        "c02"
+      ],
+      "query": "violent video games exposure desensitization violence research",
+      "source_terms": [
+        "violent",
+        "video",
+        "games",
+        "exposure",
+        "desensitization",
+        "violence"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "research",
+          "source": "audited_stable_vocabulary",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "research"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "game"
+        ],
+        [
+          "violent",
+          "gori"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "desensit"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f03",
+      "base_facet_id": "f03",
+      "coverage_refs": [
+        "c03"
+      ],
+      "query": "video gaming addiction disorder risk",
+      "source_terms": [
+        "video",
+        "gaming",
+        "addiction"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "disorder",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "disord"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "risk",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "risk"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "game"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "addict"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f04",
+      "base_facet_id": "f04",
+      "coverage_refs": [
+        "c04"
+      ],
+      "query": "aggressive behavior children risk factors psychology",
+      "source_terms": [
+        "aggressive",
+        "children"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "behavior",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "behavior"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "risk",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "risk"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "factors",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "factor"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "psychology",
+          "source": "audited_stable_vocabulary",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "psycholog"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "aggress"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "caus",
+          "factor"
+        ],
+        [
+          "children",
+          "child"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f05",
+      "base_facet_id": "f05",
+      "coverage_refs": [
+        "c05"
+      ],
+      "query": "aggressive behavior adults risk factors psychology",
+      "source_terms": [
+        "aggressive",
+        "adults"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "behavior",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "behavior"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "risk",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "risk"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "factors",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "factor"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "psychology",
+          "source": "audited_stable_vocabulary",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "psycholog"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "aggress"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "caus",
+          "factor"
+        ],
+        [
+          "adult"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "707",
+      "stream_id": "f02",
+      "base_facet_id": "f02",
+      "coverage_refs": [
+        "c02"
+      ],
+      "query": "sorbitol human health adverse effects safety",
+      "source_terms": [
+        "sorbitol",
+        "health"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "human",
+          "source": "audited_stable_vocabulary",
+          "purpose": "population_binding",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "human"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "adverse",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "advers"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "effects",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "effect"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "safety",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "safeti"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "sorbitol"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "health",
+          "risk",
+          "effect",
+          "safeti"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f02a",
+      "base_facet_id": "f02",
+      "coverage_refs": [
+        "c02"
+      ],
+      "query": "alcohol dependence genetic risk factors",
+      "source_terms": [
+        "alcohol",
+        "dependence",
+        "genetic",
+        "factors"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "risk",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "risk"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "alcohol"
+        ],
+        [
+          "depend"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "genet"
+        ],
+        [
+          "factor",
+          "risk"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f02b",
+      "base_facet_id": "f02",
+      "coverage_refs": [
+        "c03"
+      ],
+      "query": "alcohol dependence gender differences",
+      "source_terms": [
+        "alcohol",
+        "dependence",
+        "gender"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "differences",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "differ"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "alcohol"
+        ],
+        [
+          "depend"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "gender",
+          "sex"
+        ],
+        [
+          "factor",
+          "differ"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f03",
+      "base_facet_id": "f03",
+      "coverage_refs": [
+        "c04"
+      ],
+      "query": "alcohol drug misuse addiction risk factors",
+      "source_terms": [
+        "alcohol",
+        "drug"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "misuse",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "misus"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "addiction",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "addict"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "risk",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "risk"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "factors",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "factor"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "alcohol"
+        ],
+        [
+          "drug"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "caus",
+          "factor",
+          "risk",
+          "addict"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f04a",
+      "base_facet_id": "f04",
+      "coverage_refs": [
+        "c05"
+      ],
+      "query": "alcohol misuse health harms",
+      "source_terms": [
+        "alcohol",
+        "health"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "misuse",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "misus"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "harms",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "harm"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "alcohol"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "health",
+          "risk",
+          "harm"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f04b",
+      "base_facet_id": "f04",
+      "coverage_refs": [
+        "c05"
+      ],
+      "query": "drug misuse health harms",
+      "source_terms": [
+        "drug",
+        "health"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "misuse",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "misus"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "harms",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "harm"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "drug"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "health",
+          "risk",
+          "harm"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f05",
+      "base_facet_id": "f05",
+      "coverage_refs": [
+        "c06"
+      ],
+      "query": "alcohol drug mortality deaths",
+      "source_terms": [
+        "alcohol",
+        "drug"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "mortality",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "mortal"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "deaths",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "death"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "alcohol"
+        ],
+        [
+          "drug"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "fatal",
+          "death",
+          "mortal"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    },
+    {
+      "topic_id": "897",
+      "stream_id": "f06",
+      "base_facet_id": "f06",
+      "coverage_refs": [
+        "c07"
+      ],
+      "query": "alcohol drug misuse public health community impact",
+      "source_terms": [
+        "alcohol",
+        "drug",
+        "health",
+        "community"
+      ],
+      "bridge_terms": [
+        {
+          "surface": "misuse",
+          "source": "audited_stable_vocabulary",
+          "purpose": "standard_concept_name",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "misus"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "public",
+          "source": "audited_stable_vocabulary",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "public"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        },
+        {
+          "surface": "impact",
+          "source": "audited_stable_vocabulary",
+          "purpose": "relation_paraphrase",
+          "scope_rationale": "Disambiguates or paraphrases the existing requested subject or relation without adding a narrower answer.",
+          "analyzer_output": [
+            "impact"
+          ],
+          "not_candidate_answer_rationale": "The term names the requested domain or relation, not a responsive fact, cause, example, or outcome."
+        }
+      ],
+      "anchor_groups": [
+        [
+          "alcohol"
+        ],
+        [
+          "drug"
+        ]
+      ],
+      "intent_groups": [
+        [
+          "commun"
+        ],
+        [
+          "health",
+          "effect",
+          "impact"
+        ]
+      ],
+      "forbidden_drift_groups": [
+        [
+          "dog",
+          "canin",
+          "pet"
+        ]
+      ]
+    }
+  ]
+}

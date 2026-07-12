@@ -8,11 +8,6 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from trec_rag.sparse_relevance_manifest import (
-    ManifestValidationError,
-    load_repair_manifest,
-)
-
 
 SCHEMA_VERSION = "facet-retrieval-control-manifest-v1"
 R1_MANIFEST_SHA256 = (
@@ -59,6 +54,23 @@ _ARM_SPEC = (
     ("W2", 0.4, 0.0, True),
 )
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_ROOT_KEYS = frozenset(
+    {
+        "schema_version",
+        "r1_manifest_sha256",
+        "r1_planner_version",
+        "analyzer_fingerprint_sha256",
+        "protected_topic_ids",
+        "hits",
+        "min_interval_seconds",
+        "max_external_requests",
+        "streams",
+    }
+)
+_STREAM_KEYS = frozenset(
+    {"topic_id", "stream_id", "baseline_query", "reweighted_query", "arms"}
+)
+_ARM_KEYS = frozenset({"arm_id", "k1", "b", "external"})
 
 
 class ControlManifestError(ValueError):
@@ -97,10 +109,6 @@ class ControlManifest:
         """Return the canonical JSON-ready representation."""
 
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _analyzed_vocabulary(text: str) -> frozenset[str]:
@@ -185,24 +193,41 @@ def build_control_manifest(r1_path: Path | None = None) -> ControlManifest:
     """Build the frozen control manifest from the exact prior R1 manifest."""
 
     source_path = Path(r1_path) if r1_path is not None else _DEFAULT_R1_PATH
-    if _sha256(source_path) != R1_MANIFEST_SHA256:
+    try:
+        source_bytes = source_path.read_bytes()
+    except OSError as exc:
+        raise ControlManifestError(
+            f"cannot load exact R1 baseline namespace: {exc}"
+        ) from exc
+    if hashlib.sha256(source_bytes).hexdigest() != R1_MANIFEST_SHA256:
         raise ControlManifestError("input differs from exact R1 baseline namespace")
     try:
-        r1 = load_repair_manifest(source_path)
-    except (ManifestValidationError, json.JSONDecodeError) as exc:
+        r1 = json.loads(source_bytes)
+    except json.JSONDecodeError as exc:
         raise ControlManifestError(
             f"input differs from exact R1 baseline namespace: {exc}"
         ) from exc
+    if not isinstance(r1, dict):
+        raise ControlManifestError("input differs from exact R1 baseline namespace")
+    protected = r1.get("protected_topic_ids")
     if (
-        r1.renderer != "R1"
-        or r1.planner_version != R1_PLANNER_VERSION
-        or r1.analyzer_fingerprint_sha256 != ANALYZER_FINGERPRINT_SHA256
-        or r1.protected_topic_ids != PROTECTED_TOPIC_IDS
+        r1.get("renderer") != "R1"
+        or r1.get("planner_version") != R1_PLANNER_VERSION
+        or r1.get("analyzer_fingerprint_sha256")
+        != ANALYZER_FINGERPRINT_SHA256
+        or not isinstance(protected, list)
+        or tuple(protected) != PROTECTED_TOPIC_IDS
     ):
         raise ControlManifestError("input differs from exact R1 baseline namespace")
 
+    raw_streams = r1.get("streams")
+    if not isinstance(raw_streams, list) or not all(
+        isinstance(stream, dict) for stream in raw_streams
+    ):
+        raise ControlManifestError("input differs from exact R1 baseline namespace")
     r1_queries = {
-        (stream.topic_id, stream.stream_id): stream.query for stream in r1.streams
+        (stream.get("topic_id"), stream.get("stream_id")): stream.get("query")
+        for stream in raw_streams
     }
     if any(
         r1_queries.get(boundary) != baseline
@@ -250,8 +275,17 @@ def _require_number(value: object, field: str) -> float:
     return float(value)
 
 
+def _reject_unknown_keys(
+    row: dict[str, object], allowed: frozenset[str], field: str
+) -> None:
+    unknown = sorted(set(row) - allowed)
+    if unknown:
+        raise ControlManifestError(f"unknown {field} key(s): {', '.join(unknown)}")
+
+
 def _parse_arm(value: object, index: int) -> ControlArm:
     row = _require_object(value, f"arms[{index}]")
+    _reject_unknown_keys(row, _ARM_KEYS, "arm")
     external = row.get("external")
     if not isinstance(external, bool):
         raise ControlManifestError(f"arms[{index}].external must be boolean")
@@ -265,6 +299,7 @@ def _parse_arm(value: object, index: int) -> ControlArm:
 
 def _parse_stream(value: object, index: int) -> ControlStream:
     row = _require_object(value, f"streams[{index}]")
+    _reject_unknown_keys(row, _STREAM_KEYS, "stream")
     raw_arms = row.get("arms")
     if not isinstance(raw_arms, list):
         raise ControlManifestError(f"streams[{index}].arms must be a list")
@@ -291,6 +326,7 @@ def load_control_manifest(path: Path) -> ControlManifest:
     except (OSError, json.JSONDecodeError) as exc:
         raise ControlManifestError(f"cannot load control manifest: {exc}") from exc
     row = _require_object(payload, "manifest")
+    _reject_unknown_keys(row, _ROOT_KEYS, "manifest")
     if row.get("schema_version") != SCHEMA_VERSION:
         raise ControlManifestError(f"schema_version must be {SCHEMA_VERSION}")
     raw_protected = row.get("protected_topic_ids")

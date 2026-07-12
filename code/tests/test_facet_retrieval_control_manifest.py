@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from dataclasses import FrozenInstanceError
@@ -6,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from trec_rag.facet_retrieval_control_manifest import (
+    R1_MANIFEST_SHA256,
     ControlManifestError,
     build_control_manifest,
     load_control_manifest,
@@ -112,7 +114,13 @@ def test_manifest_dataclasses_are_immutable():
 
 
 def test_generated_manifest_round_trips_exactly():
-    assert load_control_manifest(MANIFEST_PATH) == build_control_manifest(R1_PATH)
+    loaded = load_control_manifest(MANIFEST_PATH)
+
+    assert loaded == build_control_manifest(R1_PATH)
+    assert MANIFEST_PATH.read_text(encoding="utf-8") == (
+        json.dumps(loaded.to_dict(), ensure_ascii=False, indent=2) + "\n"
+    )
+    assert hashlib.sha256(R1_PATH.read_bytes()).hexdigest() == R1_MANIFEST_SHA256
 
 
 def test_duplicate_stream_is_rejected(tmp_path):
@@ -142,3 +150,27 @@ def test_build_rejects_tampered_r1_baseline_namespace(tmp_path):
 
     with pytest.raises(ControlManifestError, match="exact R1 baseline namespace"):
         build_control_manifest(_write_json(tmp_path, payload, "r1_manifest.json"))
+
+
+def test_unknown_root_key_is_rejected(tmp_path):
+    payload = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    payload["unexpected"] = "root"
+
+    with pytest.raises(ControlManifestError, match="unknown manifest key.*unexpected"):
+        load_control_manifest(_write_json(tmp_path, payload))
+
+
+def test_unknown_stream_key_is_rejected(tmp_path):
+    payload = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    payload["streams"][0]["unexpected"] = "stream"
+
+    with pytest.raises(ControlManifestError, match="unknown stream key.*unexpected"):
+        load_control_manifest(_write_json(tmp_path, payload))
+
+
+def test_unknown_arm_key_is_rejected(tmp_path):
+    payload = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    payload["streams"][0]["arms"][0]["unexpected"] = "arm"
+
+    with pytest.raises(ControlManifestError, match="unknown arm key.*unexpected"):
+        load_control_manifest(_write_json(tmp_path, payload))

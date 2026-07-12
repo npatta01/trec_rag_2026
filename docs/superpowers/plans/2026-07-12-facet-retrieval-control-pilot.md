@@ -101,6 +101,7 @@ git commit -m "Add BM25 parameters to retrieval identity"
 ### Task 2: Freeze the exact control manifest
 
 **Files:**
+- Commit prerequisite: `reports/experiments/sparse_relevance_pilot_v1/r1_manifest.json`
 - Create: `code/trec_rag/facet_retrieval_control_manifest.py`
 - Create: `code/tools/build_facet_retrieval_control_manifest.py`
 - Create: `code/tests/test_facet_retrieval_control_manifest.py`
