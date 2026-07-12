@@ -23,7 +23,7 @@
 
 ## File map
 
-- Modify `code/trec_rag/det_sparse_ledger.py`, `sparse_relevance_inspector.py`, and their tests.
+- Modify `code/trec_rag/det_sparse_ledger.py` and its tests; create a control-specific inspector rather than depending on untracked historical pilot modules.
 - Create `code/trec_rag/facet_retrieval_control_manifest.py`, `facet_retrieval_control_run.py`, `facet_retrieval_control_experiment.py`, `facet_retrieval_control_freeze.py`, and `facet_retrieval_control_evaluate.py`.
 - Create matching tests, `code/tools/build_facet_retrieval_control_manifest.py`, and `code/trec_rag/build_facet_retrieval_control_report.py`.
 - Create durable experiment artifacts under `reports/experiments/facet_retrieval_control_pilot_v1/`.
@@ -216,15 +216,17 @@ Expected: all targeted tests pass.
 ### Task 4: Extend inspection and freeze 25 alternatives
 
 **Files:**
-- Modify: `code/trec_rag/sparse_relevance_inspector.py`
-- Modify: `code/tests/test_sparse_relevance_inspector.py`
+- Create: `code/trec_rag/facet_retrieval_control_inspector.py`
+- Create: `code/tests/test_facet_retrieval_control_inspector.py`
 - Create: `code/trec_rag/facet_retrieval_control_experiment.py`
 - Create: `code/trec_rag/facet_retrieval_control_freeze.py`
 - Create: `code/tests/test_facet_retrieval_control_experiment.py`
 
 **Interfaces:**
-- Consumes: prior O/F0/R1 candidates, new W candidates, the manifest, and `family_balanced_rrf`.
+- Consumes: prior O/F0/R1 candidates, new W candidates, the tracked R1 source manifest, and `ranking.reciprocal_rank_fusion`.
 - Produces: top-5/top-10 inspection, `build_topic_alternatives`, and `facet-control-ranking-freeze-v1`.
+
+The Task 4 implementation must be clean-checkout self-contained. It must not import or stage the untracked historical `sparse_relevance_manifest.py`, `sparse_relevance_inspector.py`, `sparse_relevance_experiment.py`, or `sparse_relevance_freeze.py`. Parse the committed R1 source manifest for inspection groups, and implement the small family-balanced topic fusion locally using the tracked reciprocal-rank-fusion primitive.
 
 - [ ] **Step 1: Add failing top-10 inspection test**
 
@@ -270,8 +272,8 @@ The CLI verifies the prior freeze and ledgers, inspects B0/W0/W1/W2 without qrel
 - [ ] **Step 5: Test and commit**
 
 ```bash
-.venv/bin/python -m pytest code/tests/test_sparse_relevance_inspector.py code/tests/test_facet_retrieval_control_experiment.py -q
-git add code/trec_rag/sparse_relevance_inspector.py code/tests/test_sparse_relevance_inspector.py code/trec_rag/facet_retrieval_control_experiment.py code/trec_rag/facet_retrieval_control_freeze.py code/tests/test_facet_retrieval_control_experiment.py
+.venv/bin/python -m pytest code/tests/test_facet_retrieval_control_inspector.py code/tests/test_facet_retrieval_control_experiment.py -q
+git add code/trec_rag/facet_retrieval_control_inspector.py code/tests/test_facet_retrieval_control_inspector.py code/trec_rag/facet_retrieval_control_experiment.py code/trec_rag/facet_retrieval_control_freeze.py code/tests/test_facet_retrieval_control_experiment.py
 git commit -m "Freeze facet control ranking alternatives"
 ```
 
@@ -493,7 +495,7 @@ git commit -m "Report facet retrieval control findings"
 - [ ] **Step 1: Run targeted tests**
 
 ```bash
-.venv/bin/python -m pytest code/tests/test_det_sparse_ledger.py code/tests/test_sparse_relevance_inspector.py code/tests/test_facet_retrieval_control_manifest.py code/tests/test_facet_retrieval_control_run.py code/tests/test_facet_retrieval_control_experiment.py code/tests/test_build_facet_retrieval_control_report.py -q
+.venv/bin/python -m pytest code/tests/test_det_sparse_ledger.py code/tests/test_facet_retrieval_control_inspector.py code/tests/test_facet_retrieval_control_manifest.py code/tests/test_facet_retrieval_control_run.py code/tests/test_facet_retrieval_control_experiment.py code/tests/test_build_facet_retrieval_control_report.py -q
 ```
 
 Expected: all targeted tests pass.
