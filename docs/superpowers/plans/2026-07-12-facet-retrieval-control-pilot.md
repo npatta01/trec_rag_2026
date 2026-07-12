@@ -224,7 +224,7 @@ Expected: all targeted tests pass.
 
 **Interfaces:**
 - Consumes: prior O/F0/R1 candidates, new W candidates, the tracked R1 source manifest, and `ranking.reciprocal_rank_fusion`.
-- Produces: top-5/top-10 inspection, `build_topic_alternatives`, and `facet-control-ranking-freeze-v1`.
+- Produces: top-5/top-10 inspection, `build_topic_alternatives`, and the self-contained `facet-control-ranking-freeze-v2`.
 
 The Task 4 implementation must be clean-checkout self-contained. It must not import or stage the untracked historical `sparse_relevance_manifest.py`, `sparse_relevance_inspector.py`, `sparse_relevance_experiment.py`, or `sparse_relevance_freeze.py`. Parse the committed R1 source manifest for inspection groups, and implement the small family-balanced topic fusion locally using the tracked reciprocal-rank-fusion primitive.
 
@@ -267,7 +267,7 @@ Replace only the registered stream, preserve the facet count, run family-balance
 
 - [ ] **Step 4: Implement the create-only freezer**
 
-The CLI verifies the prior freeze and ledgers, inspects B0/W0/W1/W2 without qrels, writes 25 ranking files, and binds manifest/prior-freeze/request/response/candidate/inspection/fusion/ranking hashes. Create `freeze.json` with `O_EXCL`, status `frozen_before_qrels`, and no qrels CLI argument.
+The CLI verifies the prior freeze and ledgers, inspects B0/W0/W1/W2 without qrels, writes 25 ranking files, and binds manifest/prior-freeze/request/response/candidate/inspection/fusion/ranking hashes. It also writes a canonical, hash-bound leaf snapshot: `candidate_streams.json` plus `candidates.jsonl`, containing exactly four original-query streams and B0/W0/W1/W2 for each of the four registered facet streams (20 streams, 2,000 rows). Candidate rows contain only schema version, topic, stream, arm, query hash, rank, and document ID; omit text and BM25 scores. Copy original/B0 rows from the exact verified in-memory candidates already used by the freezer, retain prior/request/cache lineage, and validate exact ranks, unique document IDs, query hashes, stream set, and protected-topic exclusion. Create a new `facet-control-ranking-freeze-v2` `freeze.json` with atomic create-only publication, status `frozen_before_qrels`, and no qrels CLI argument. Preserve v1 artifacts/readers; do not migrate or overwrite a v1 directory.
 
 - [ ] **Step 5: Test and commit**
 
@@ -287,7 +287,7 @@ Expected: passing tests and exactly 25 deterministic topic alternatives.
 - Modify: `code/tests/test_facet_retrieval_control_experiment.py`
 
 **Interfaces:**
-- Consumes: verified control freeze, frozen stream candidates, prior O/F0/R1 rankings, and projected qrels.
+- Consumes: verified v2 control freeze (including its self-contained leaf-candidate snapshot), prior O/F0/R1 rankings, and projected qrels.
 - Produces: `stream_evaluation.json`, `selection.json`, `evaluation.json`, and `decision.json`.
 
 - [ ] **Step 1: Write failing selection/firewall tests**
@@ -310,6 +310,15 @@ def test_corrupt_freeze_fails_before_qrels_open(monkeypatch):
 ```
 
 Also test rejection when both noise families increase, exact-tie preference B0/W0/W1/W2, protected qrels skipping, and selected ranking references.
+
+The evaluator CLI is exactly `--freeze-dir`, `--prior-freeze`, `--qrels`, and
+`--output`. It must not accept or reopen retrieval ledgers/caches. Before the
+first qrels read, verify the v2 schema/root binding, complete inspection schema
+and derived consistency, candidate snapshot hashes/counts/ranks/uniqueness,
+exact 20-stream set, prior-freeze binding, and every fused ranking hash. The
+exact verified bytes/decoded rows must be the data used after verification;
+do not verify and then reopen a mutable path. Reject all lexical output-path
+collisions, including broken symlinks, before qrels access.
 
 - [ ] **Step 2: Implement stream metrics and selection**
 

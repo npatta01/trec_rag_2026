@@ -110,6 +110,28 @@ for topic 897. Fuse each alternative with the existing family-balanced weighted
 RRF (`k=60`, depth 100, original family weight 0.5, facet family weight 0.5
 divided across active facets).
 
+The evaluator must not reopen live retrieval ledgers or caches. Version the
+control freeze as `facet-control-ranking-freeze-v2` and make it self-contained
+for marginal-value metrics with two additional canonical artifacts:
+
+- `candidate_streams.json`, recording exact stream/query/request lineage,
+  expected depth, row count, and the per-stream row hash; and
+- `candidates.jsonl`, recording only schema version, topic, stream, arm, query
+  hash, rank, and document ID in canonical order.
+
+The snapshot contains exactly 20 depth-100 leaf streams (2,000 rows): the four
+unchanged original-query streams used by the topic rankings plus B0, W0, W1,
+and W2 for each of the four registered facet streams. It omits document text
+and retrieval scores. Copy original and B0 rows from the exact hash-verified
+in-memory candidates used by the freezer, retaining prior-freeze and
+request/cache lineage; W rows retain the verified control-run lineage. Bind
+both snapshot files, every per-stream hash, the prior freeze, inspections,
+fusion definition, and all 25 ranking hashes transitively into `freeze.json`.
+Validate the exact stream set, ranks 1--100, unique document IDs, query hashes,
+and protected-topic exclusion before publication. Preserve v1 artifacts
+unchanged; evaluation requiring marginal stream metrics must fail clearly on a
+v1 freeze rather than migrate it in place.
+
 After evaluation selects one arm per stream, define `R2` as references to the
 matching already-frozen topic rankings. Do not perform retrieval, fusion, or
 ranking construction after qrels access. Aggregate metrics are calculated from
@@ -163,6 +185,8 @@ Tests must verify:
 - no redirects, retries, or recursive rewrites;
 - protected-topic rejection at every boundary;
 - deterministic inspection and selection under input reordering;
+- a self-contained v2 candidate snapshot with exactly 20 streams and 2,000
+  rows, verified before qrels access;
 - all 25 topic-level R2 alternatives freeze before qrels access;
 - R2 changes only the four selected streams;
 - RRF family weights total exactly 1.0; and
