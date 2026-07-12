@@ -100,11 +100,18 @@ second. Qrels are used only after every arm and selection rule has frozen.
 
 ## Repaired system comparison
 
-Create `R2` by replacing only the four selected R1 streams with their chosen
-arms. Leave all other R1 streams unchanged. Fuse the original narrative and R2
-facets with the existing family-balanced weighted RRF (`k=60`, depth 100,
-original family weight 0.5, facet family weight 0.5 divided across active
-facets).
+Before opening qrels, freeze every topic-level R2 alternative produced by
+replacing only the four tested R1 streams while leaving all other R1 streams
+unchanged. This produces four alternatives for topic 200, sixteen combinations
+for topic 225, four alternatives for topic 707, and the unchanged R1 ranking
+for topic 897. Fuse each alternative with the existing family-balanced weighted
+RRF (`k=60`, depth 100, original family weight 0.5, facet family weight 0.5
+divided across active facets).
+
+After evaluation selects one arm per stream, define `R2` as references to the
+matching already-frozen topic rankings. Do not perform retrieval, fusion, or
+ranking construction after qrels access. Aggregate metrics are calculated from
+the four selected frozen topic rankings.
 
 Compare `R2` with frozen `O`, `F0`, and `R1`. Report aggregate and per-topic
 nDCG@10, graded Recall@100, Recall@100, precision@10, relevant documents at 10,
@@ -154,7 +161,7 @@ Tests must verify:
 - no redirects, retries, or recursive rewrites;
 - protected-topic rejection at every boundary;
 - deterministic inspection and selection under input reordering;
-- rankings freeze before qrels access;
+- all 25 topic-level R2 alternatives freeze before qrels access;
 - R2 changes only the four selected streams;
 - RRF family weights total exactly 1.0; and
 - the HTML report reproduces saved metrics and decisions.
