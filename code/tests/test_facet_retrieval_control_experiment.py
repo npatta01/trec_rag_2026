@@ -164,6 +164,12 @@ def _snapshot_bindings(lineage):
     return {
         "manifest_sha256": "a" * 64,
         "prior_freeze_sha256": "b" * 64,
+        "ledger_sha256": {
+            "base": "1" * 64,
+            "r1": "2" * 64,
+            "control": "3" * 64,
+        },
+        "r1_arm_sha256": "4" * 64,
         "request_sha256": {
             value["request_sha256"]: value["request_sha256"]
             for value in lineage.values()
@@ -278,6 +284,21 @@ def _rewrite_inspections(freeze_dir, inspections):
     payload = json.loads((freeze_dir / "freeze.json").read_bytes())
     payload["inspection_sha256"] = hashlib.sha256(content).hexdigest()
     _rewrite_control_root(freeze_dir, payload)
+
+
+def _convert_to_valid_v1(freeze_dir):
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["schema_version"] = FREEZE_SCHEMA_VERSION
+    for field in (
+        "candidate_streams_sha256",
+        "candidates_sha256",
+        "candidate_stream_rows_sha256",
+    ):
+        payload["bindings"].pop(field)
+    _rewrite_control_root(freeze_dir, payload)
+    (freeze_dir / "candidate_streams.json").unlink()
+    (freeze_dir / "candidates.jsonl").unlink()
+    return payload
 
 
 def _write_synthetic_prior_freeze(tmp_path, matrix, monkeypatch):
@@ -603,32 +624,64 @@ def test_control_freeze_schema_dispatch_preserves_v1_and_writes_v2():
 
 
 def test_candidate_snapshot_reader_accepts_legacy_v1_without_snapshot(tmp_path):
-    r1_arm, control_rows = _candidate_inputs()
-    matrix = build_topic_alternatives(
-        r1_arm, control_rows, build_control_manifest()
-    )
-    freeze_dir = tmp_path / "legacy-v1"
-    create_control_freeze(freeze_dir, matrix, inspections={})
-    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
-    payload["schema_version"] = FREEZE_SCHEMA_VERSION
-    for field in (
-        "candidate_streams_sha256",
-        "candidates_sha256",
-        "candidate_stream_rows_sha256",
-    ):
-        payload["bindings"].pop(field)
-    payload.pop("freeze_sha256")
-    payload["freeze_sha256"] = __import__("hashlib").sha256(
-        (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
-    ).hexdigest()
-    (freeze_dir / "freeze.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (freeze_dir / "candidate_streams.json").unlink()
-    (freeze_dir / "candidates.jsonl").unlink()
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    _convert_to_valid_v1(freeze_dir)
 
     assert verify_control_freeze_candidate_snapshot(freeze_dir) is None
+
+
+def test_candidate_snapshot_reader_rejects_minimal_self_hashed_v1(tmp_path):
+    freeze_dir = tmp_path / "minimal-v1"
+    freeze_dir.mkdir()
+    payload = {
+        "schema_version": FREEZE_SCHEMA_VERSION,
+        "status": "frozen_before_qrels",
+    }
+    _rewrite_control_root(freeze_dir, payload)
+
+    with pytest.raises(ValueError, match="control freeze"):
+        verify_control_freeze_candidate_snapshot(freeze_dir)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("unknown", "missing", "status", "binding", "ranking_index"),
+)
+def test_candidate_snapshot_reader_rejects_rehashed_v1_root_mutations(
+    tmp_path, mutation
+):
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    payload = _convert_to_valid_v1(freeze_dir)
+    if mutation == "unknown":
+        payload["unknown"] = True
+    elif mutation == "missing":
+        payload.pop("fusion_sha256")
+    elif mutation == "status":
+        payload["status"] = "draft"
+    elif mutation == "binding":
+        payload["bindings"].pop("manifest_sha256")
+    else:
+        payload["rankings"].pop(next(iter(payload["rankings"])))
+    _rewrite_control_root(freeze_dir, payload)
+
+    with pytest.raises(ValueError, match="control freeze|bindings|rankings"):
+        verify_control_freeze_candidate_snapshot(freeze_dir)
+
+
+@pytest.mark.parametrize("artifact", ("inspection.json", "fusion.json", "ranking"))
+def test_candidate_snapshot_reader_rejects_v1_artifact_tampering(
+    tmp_path, artifact
+):
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    _convert_to_valid_v1(freeze_dir)
+    if artifact == "ranking":
+        path = next((freeze_dir / "rankings").glob("*.jsonl"))
+    else:
+        path = freeze_dir / artifact
+    path.write_bytes(path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="inspection|fusion|ranking"):
+        verify_control_freeze_candidate_snapshot(freeze_dir)
 
 
 def test_candidate_snapshot_reader_rejects_query_tamper_with_recomputed_root_hash(
@@ -807,6 +860,39 @@ def test_freeze_rejects_snapshot_source_hash_substitution_before_publication(tmp
             candidate_snapshot=snapshot,
         )
     assert not (tmp_path / "freeze").exists()
+
+
+@pytest.mark.parametrize(
+    "missing",
+    (
+        "manifest_sha256",
+        "prior_freeze_sha256",
+        "request_sha256",
+        "response_sha256",
+        "candidate_sha256",
+        "ledger_sha256",
+        "r1_arm_sha256",
+    ),
+)
+def test_v2_writer_requires_every_official_source_binding_before_staging(
+    tmp_path, missing
+):
+    r1_arm, control_rows, lineage, snapshot = _candidate_snapshot_fixture()
+    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
+    bindings = _snapshot_bindings(lineage)
+    bindings.pop(missing)
+    output = tmp_path / f"missing-{missing}"
+
+    with pytest.raises(ValueError, match="bindings"):
+        _production_create_control_freeze(
+            output,
+            matrix,
+            inspections={},
+            bindings=bindings,
+            candidate_snapshot=snapshot,
+        )
+    assert not output.exists()
+    assert list(tmp_path.glob(f".{output.name}.staging-*")) == []
 
 
 @pytest.mark.parametrize("mutation", ("renamed", "missing", "swapped"))

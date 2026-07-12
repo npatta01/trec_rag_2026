@@ -12,7 +12,7 @@ import os
 import shutil
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -26,7 +26,11 @@ from .facet_retrieval_control_experiment import (
     build_topic_alternatives,
     index_control_streams,
 )
-from .facet_retrieval_control_inspector import inspect_stream, load_inspection_streams
+from .facet_retrieval_control_inspector import (
+    InspectionResult,
+    inspect_stream,
+    load_inspection_streams,
+)
 from .facet_retrieval_control_manifest import (
     ANALYZER_FINGERPRINT_SHA256,
     R1_MANIFEST_SHA256,
@@ -193,6 +197,44 @@ _CANDIDATE_MANIFEST_FIELDS = frozenset(
         "streams",
     }
 )
+_CONTROL_FREEZE_ROOT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "bindings",
+        "inspection_sha256",
+        "fusion_sha256",
+        "rankings",
+        "freeze_sha256",
+    }
+)
+_V1_SOURCE_BINDING_FIELDS = frozenset(
+    {
+        "manifest_sha256",
+        "prior_freeze_sha256",
+        "request_sha256",
+        "response_sha256",
+        "candidate_sha256",
+        "ledger_sha256",
+        "r1_arm_sha256",
+    }
+)
+_V2_SOURCE_BINDING_FIELDS = _V1_SOURCE_BINDING_FIELDS
+_V2_FINAL_BINDING_FIELDS = _V2_SOURCE_BINDING_FIELDS | {
+    "candidate_streams_sha256",
+    "candidates_sha256",
+    "candidate_stream_rows_sha256",
+}
+_V1_REQUIRED_BINDING_FIELDS = frozenset(
+    {
+        "manifest_sha256",
+        "prior_freeze_sha256",
+        "request_sha256",
+        "response_sha256",
+        "candidate_sha256",
+    }
+)
+_V1_INSPECTION_FIELDS = frozenset(field.name for field in fields(InspectionResult))
 
 
 @dataclass(frozen=True)
@@ -743,6 +785,234 @@ def _validate_candidate_snapshot_source_bindings(
             raise ValueError("candidate snapshot source hashes differ from freeze bindings")
 
 
+def _control_freeze_artifact_path(
+    directory: Path,
+    relative: object,
+    expected: str,
+) -> Path:
+    if relative != expected:
+        raise ValueError(f"control freeze artifact path differs for {expected}")
+    candidate = directory / expected
+    try:
+        candidate.resolve().relative_to(directory.resolve())
+    except ValueError as exc:
+        raise ValueError("control freeze artifact path escapes its directory") from exc
+    return candidate
+
+
+def _validate_v1_inspections(decoded: object) -> None:
+    expected = {
+        f"{topic_id}/{stream_id}/{arm_id}"
+        for topic_id, stream_id in _CONTROL_QUERY_SPEC
+        for arm_id, _k1, _b, _external in _CONTROL_ARM_SPEC
+    }
+    if not isinstance(decoded, dict) or set(decoded) != expected:
+        raise ValueError("control freeze v1 inspections differ from the exact 16-arm set")
+    count_fields = (
+        "inspected_top5",
+        "inspected_top10",
+        "anchor_top5_count",
+        "anchor_top10_count",
+        "anchor_intent_cohit_top5_count",
+        "anchor_intent_cohit_top10_count",
+        "domain_drift_top5_count",
+        "domain_drift_top10_count",
+        "content_quality_top5_count",
+        "content_quality_top10_count",
+    )
+    boolean_fields = (
+        "coherence_failed",
+        "domain_drift_warning",
+        "content_quality_warning",
+        "rejected",
+    )
+    for key in sorted(expected):
+        raw = decoded[key]
+        stream_key, arm_id = key.rsplit("/", 1)
+        topic_id, stream_id = stream_key.split("/", 1)
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != _V1_INSPECTION_FIELDS
+            or raw.get("topic_id") != topic_id
+            or raw.get("stream_id") != stream_id
+            or arm_id not in {arm[0] for arm in _CONTROL_ARM_SPEC}
+            or any(
+                isinstance(raw.get(field), bool)
+                or not isinstance(raw.get(field), int)
+                or raw[field] < 0
+                for field in count_fields
+            )
+            or any(not isinstance(raw.get(field), bool) for field in boolean_fields)
+        ):
+            raise ValueError(f"control freeze v1 inspection is invalid for {key}")
+        top_docids = raw.get("top_docids")
+        top_snippets = raw.get("top_snippets")
+        if (
+            raw["inspected_top5"] != 5
+            or raw["inspected_top10"] != 10
+            or any(raw[field] > 5 for field in count_fields if "top5" in field)
+            or any(raw[field] > 10 for field in count_fields if "top10" in field)
+            or raw["anchor_top5_count"] > raw["anchor_top10_count"]
+            or raw["anchor_intent_cohit_top5_count"]
+            > raw["anchor_intent_cohit_top10_count"]
+            or raw["domain_drift_top5_count"] > raw["domain_drift_top10_count"]
+            or raw["content_quality_top5_count"]
+            > raw["content_quality_top10_count"]
+            or not isinstance(top_docids, list)
+            or len(top_docids) != 10
+            or len(set(top_docids)) != 10
+            or not all(isinstance(value, str) and value for value in top_docids)
+            or not isinstance(top_snippets, list)
+            or len(top_snippets) != 10
+            or not all(
+                isinstance(value, str) and len(value) <= 400 for value in top_snippets
+            )
+        ):
+            raise ValueError(f"control freeze v1 inspection counts differ for {key}")
+        coherence = (
+            raw["inspected_top5"] < 5
+            or raw["anchor_top5_count"] < 3
+            or raw["anchor_intent_cohit_top5_count"] < 3
+        )
+        domain_warning = raw["domain_drift_top5_count"] >= 2
+        content_warning = raw["content_quality_top5_count"] >= 2
+        rejected = coherence or (domain_warning and content_warning)
+        if coherence:
+            decision = "reject_coherence"
+        elif domain_warning and content_warning:
+            decision = "reject_independent_warnings"
+        elif domain_warning or content_warning:
+            decision = "keep_with_warning"
+        else:
+            decision = "keep"
+        if (
+            raw["coherence_failed"] is not coherence
+            or raw["domain_drift_warning"] is not domain_warning
+            or raw["content_quality_warning"] is not content_warning
+            or raw["rejected"] is not rejected
+            or raw.get("decision") != decision
+        ):
+            raise ValueError(f"control freeze v1 inspection decision differs for {key}")
+
+
+def _validate_v1_ranking(
+    key: str,
+    content: bytes,
+    record: Mapping[str, object],
+) -> None:
+    if (
+        set(record) != {"path", "rows", "sha256", "file_sha256"}
+        or record.get("rows") != RANKING_DEPTH
+        or hashlib.sha256(content).hexdigest() != record.get("file_sha256")
+    ):
+        raise ValueError(f"control freeze v1 ranking metadata differs for {key}")
+    try:
+        decoded = [json.loads(line) for line in content.splitlines() if line]
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"control freeze v1 ranking is invalid JSONL for {key}") from exc
+    if len(decoded) != RANKING_DEPTH:
+        raise ValueError(f"control freeze v1 ranking row count differs for {key}")
+    topic_id = key.split(":", 2)[1]
+    rows: list[RankedCandidate] = []
+    for rank, raw in enumerate(decoded, start=1):
+        if not isinstance(raw, dict) or set(raw) != {
+            "topic_id",
+            "docid",
+            "rank",
+            "score",
+            "text",
+            "provenance",
+        }:
+            raise ValueError(f"control freeze v1 ranking row differs for {key}")
+        try:
+            row = RankedCandidate(**raw)
+        except TypeError as exc:
+            raise ValueError(f"control freeze v1 ranking row differs for {key}") from exc
+        if (
+            row.topic_id != topic_id
+            or row.topic_id not in _PRIOR_TOPIC_IDS
+            or row.topic_id in PROTECTED_TOPIC_IDS
+            or not isinstance(row.docid, str)
+            or not row.docid
+            or isinstance(row.rank, bool)
+            or row.rank != rank
+            or isinstance(row.score, bool)
+            or not isinstance(row.score, (int, float))
+            or not math.isfinite(float(row.score))
+            or not isinstance(row.text, str)
+            or not isinstance(row.provenance, list)
+            or not all(isinstance(item, dict) for item in row.provenance)
+        ):
+            raise ValueError(f"control freeze v1 ranking row differs for {key}")
+        rows.append(row)
+    if (
+        len({row.docid for row in rows}) != RANKING_DEPTH
+        or _ranking_bytes(rows) != content
+        or _ranking_sha256(rows) != record.get("sha256")
+    ):
+        raise ValueError(f"control freeze v1 ranking hashes differ for {key}")
+
+
+def _verify_v1_control_freeze(
+    directory: Path,
+    payload: Mapping[str, object],
+) -> None:
+    bindings = payload.get("bindings")
+    if not isinstance(bindings, Mapping):
+        raise ValueError("control freeze v1 bindings are corrupt or incomplete")
+    frozen_bindings = _validate_bindings(bindings)
+    if (
+        not _V1_REQUIRED_BINDING_FIELDS <= set(frozen_bindings)
+        or not set(frozen_bindings) <= _V1_SOURCE_BINDING_FIELDS
+    ):
+        raise ValueError("control freeze v1 bindings are corrupt or incomplete")
+
+    try:
+        inspection_bytes = (directory / "inspection.json").read_bytes()
+        fusion_bytes = (directory / "fusion.json").read_bytes()
+    except OSError as exc:
+        raise ValueError("control freeze v1 artifact is unreadable") from exc
+    if hashlib.sha256(inspection_bytes).hexdigest() != payload.get("inspection_sha256"):
+        raise ValueError("control freeze v1 inspection SHA-256 differs")
+    if hashlib.sha256(fusion_bytes).hexdigest() != payload.get("fusion_sha256"):
+        raise ValueError("control freeze v1 fusion SHA-256 differs")
+    try:
+        inspections = json.loads(inspection_bytes)
+        fusion = json.loads(fusion_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("control freeze v1 artifact is invalid JSON") from exc
+    _validate_v1_inspections(inspections)
+    if fusion != {
+        "k": RRF_K,
+        "limit": RANKING_DEPTH,
+        "original_family_weight": ORIGINAL_FAMILY_WEIGHT,
+        "facet_family_weight": FACET_FAMILY_WEIGHT,
+        "facet_stream_weight": "0.5 / active topic facet streams",
+    }:
+        raise ValueError("control freeze v1 fusion contract differs")
+
+    records = payload.get("rankings")
+    if not isinstance(records, dict) or set(records) != set(EXPECTED_ALTERNATIVE_NAMES):
+        raise ValueError("control freeze v1 rankings differ from the exact 25-name set")
+    observed_topics: set[str] = set()
+    for key in EXPECTED_ALTERNATIVE_NAMES:
+        record = records[key]
+        if not isinstance(record, Mapping):
+            raise ValueError(f"control freeze v1 ranking metadata differs for {key}")
+        relative = f"rankings/{key.replace(':', '__')}.jsonl"
+        ranking_path = _control_freeze_artifact_path(
+            directory, record.get("path"), relative
+        )
+        try:
+            ranking_bytes = ranking_path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"control freeze v1 ranking is unreadable for {key}") from exc
+        _validate_v1_ranking(key, ranking_bytes, record)
+        observed_topics.add(key.split(":", 2)[1])
+    if observed_topics != set(_PRIOR_TOPIC_IDS):
+        raise ValueError("control freeze v1 topic IDs differ")
+
+
 def verify_control_freeze_candidate_snapshot(
     path: Path,
 ) -> CandidateSnapshot | None:
@@ -758,8 +1028,13 @@ def verify_control_freeze_candidate_snapshot(
         raise ValueError(f"control freeze is unreadable: {freeze_path}") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("control freeze is not valid canonical JSON") from exc
-    if not isinstance(payload, dict) or _canonical_json(payload) != source:
-        raise ValueError("control freeze is not valid canonical JSON")
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != _CONTROL_FREEZE_ROOT_FIELDS
+        or _canonical_json(payload) != source
+        or payload.get("status") != "frozen_before_qrels"
+    ):
+        raise ValueError("control freeze metadata is corrupt or incomplete")
     schema_version = validate_control_freeze_schema(payload.get("schema_version"))
     expected_self = payload.get("freeze_sha256")
     _validate_sha256(expected_self, "control freeze.freeze_sha256")
@@ -768,12 +1043,15 @@ def verify_control_freeze_candidate_snapshot(
     if hashlib.sha256(_canonical_json(without_self)).hexdigest() != expected_self:
         raise ValueError("control freeze self SHA-256 differs")
     if schema_version == FREEZE_SCHEMA_VERSION:
+        _verify_v1_control_freeze(freeze_path.parent, payload)
         return None
 
     bindings = payload.get("bindings")
     if not isinstance(bindings, Mapping):
         raise ValueError("candidate snapshot bindings are missing")
     frozen_bindings = _validate_bindings(bindings)
+    if set(frozen_bindings) != _V2_FINAL_BINDING_FIELDS:
+        raise ValueError("candidate snapshot v2 bindings are incomplete")
     directory = freeze_path.parent
     try:
         manifest_bytes = (directory / "candidate_streams.json").read_bytes()
@@ -833,6 +1111,8 @@ def create_control_freeze(
     }
     if set(bindings) & snapshot_binding_fields:
         raise ValueError("candidate snapshot bindings are freezer-owned")
+    if set(bindings) != _V2_SOURCE_BINDING_FIELDS:
+        raise ValueError("control freeze v2 source bindings are incomplete")
     source_bindings = _validate_bindings(bindings)
     _validate_candidate_snapshot_source_bindings(snapshot_manifest, source_bindings)
     stream_hashes = {
