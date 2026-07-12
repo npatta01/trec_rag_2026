@@ -1,0 +1,146 @@
+{
+  "schema_version": "facet-retrieval-control-manifest-v1",
+  "r1_manifest_sha256": "769388cd828167667657549ca86137f1c7eb774a0ab6ee7ad211769fdae9115a",
+  "r1_planner_version": "coverage-first-bm25-v4",
+  "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+  "protected_topic_ids": [
+    "144",
+    "213",
+    "224",
+    "407",
+    "515"
+  ],
+  "hits": 100,
+  "min_interval_seconds": 10.0,
+  "max_external_requests": 12,
+  "streams": [
+    {
+      "topic_id": "200",
+      "stream_id": "f07a",
+      "baseline_query": "Holocaust enduring effects European Jews",
+      "reweighted_query": "Holocaust Holocaust enduring effects European European Jews Jews",
+      "arms": [
+        {
+          "arm_id": "B0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": false
+        },
+        {
+          "arm_id": "W0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W1",
+          "k1": 0.4,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W2",
+          "k1": 0.4,
+          "b": 0.0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f02",
+      "baseline_query": "violent video games exposure desensitization violence research",
+      "reweighted_query": "violent video games violent video games exposure desensitization violence research",
+      "arms": [
+        {
+          "arm_id": "B0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": false
+        },
+        {
+          "arm_id": "W0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W1",
+          "k1": 0.4,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W2",
+          "k1": 0.4,
+          "b": 0.0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "topic_id": "225",
+      "stream_id": "f04",
+      "baseline_query": "aggressive behavior children risk factors psychology",
+      "reweighted_query": "aggressive aggressive behavior children children risk factors psychology",
+      "arms": [
+        {
+          "arm_id": "B0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": false
+        },
+        {
+          "arm_id": "W0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W1",
+          "k1": 0.4,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W2",
+          "k1": 0.4,
+          "b": 0.0,
+          "external": true
+        }
+      ]
+    },
+    {
+      "topic_id": "707",
+      "stream_id": "f02",
+      "baseline_query": "sorbitol human health adverse effects safety",
+      "reweighted_query": "sorbitol sorbitol human human health adverse effects safety",
+      "arms": [
+        {
+          "arm_id": "B0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": false
+        },
+        {
+          "arm_id": "W0",
+          "k1": 0.9,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W1",
+          "k1": 0.4,
+          "b": 0.4,
+          "external": true
+        },
+        {
+          "arm_id": "W2",
+          "k1": 0.4,
+          "b": 0.0,
+          "external": true
+        }
+      ]
+    }
+  ]
+}
