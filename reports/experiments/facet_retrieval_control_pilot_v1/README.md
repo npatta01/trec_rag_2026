@@ -17,3 +17,52 @@ must preserve these gates and freeze results before opening qrels.
 
 No external retrieval, qrels access, model inference, reranking, or paid call
 is performed while building this manifest.
+
+## Portable report source
+
+`code/trec_rag/build_facet_retrieval_control_report.py` builds the canonical
+Data Analytics report source. It does not hand-author HTML and does not run
+retrieval, read qrels, or call a reranker. Cross-encoder not run.
+
+The builder consumes only saved, verified artifacts:
+
+- this directory's `manifest.json`;
+- the control freeze's `freeze.json`, `candidate_streams.json`, and
+  `inspection.json`; and
+- the post-freeze evaluation's `stream_evaluation.json`, `selection.json`,
+  `evaluation.json`, and `decision.json`.
+
+It validates the exact four-stream boundary, the 25 pre-qrels ranking
+alternatives, the self-contained v2 candidate snapshot bindings, the four
+original narrative hashes, the selected ranking references, O/F0/R1/R2
+metrics, and the saved mechanical decision. Missing, corrupt, or inconsistent
+decision inputs fail closed; the report never fills in a value. The bounded
+snapshot includes only report-ready aggregate rows and twelve representative
+selected-arm results. Raw candidate lists, qrels rows, endpoint details,
+credentials, and protected topics are excluded.
+
+Task 7 creates `artifact.json` with:
+
+```bash
+.venv/bin/python -m trec_rag.build_facet_retrieval_control_report \
+  --manifest reports/experiments/facet_retrieval_control_pilot_v1/manifest.json \
+  --freeze-dir outputs/rag25_facet_retrieval_control_v1/freeze_v1 \
+  --evaluation-dir outputs/rag25_facet_retrieval_control_v1/evaluation_v1 \
+  --output reports/experiments/facet_retrieval_control_pilot_v1/artifact.json
+```
+
+The output is the exact top-level contract accepted by `validate_artifact`:
+`surface`, `manifest`, `snapshot`, and `sources`, with `surface: report`. It
+contains native markdown, chart, and table blocks plus canonical repo-relative
+source provenance. Task 7 then runs the packaged Data Analytics delivery tool,
+which revalidates the same artifact and generates the self-contained
+`report.html` without a second report runtime:
+
+```bash
+node <DATA_ANALYTICS_PLUGIN_ROOT>/skills/build-report/scripts/deliver_portable_artifact.mjs \
+  --input reports/experiments/facet_retrieval_control_pilot_v1/artifact.json \
+  --output reports/experiments/facet_retrieval_control_pilot_v1/report.html
+```
+
+Task 6 deliberately does not create either final file. Task 7 owns generation,
+portable packaging, and rendered desktop/mobile verification.
