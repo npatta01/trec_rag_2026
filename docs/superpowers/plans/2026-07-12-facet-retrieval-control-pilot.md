@@ -23,7 +23,7 @@
 
 ## File map
 
-- Modify `code/trec_rag/det_sparse_ledger.py`, `sparse_relevance_run.py`, `sparse_relevance_inspector.py`, and their tests.
+- Modify `code/trec_rag/det_sparse_ledger.py`, `sparse_relevance_inspector.py`, and their tests.
 - Create `code/trec_rag/facet_retrieval_control_manifest.py`, `facet_retrieval_control_run.py`, `facet_retrieval_control_experiment.py`, `facet_retrieval_control_freeze.py`, and `facet_retrieval_control_evaluate.py`.
 - Create matching tests, `code/tools/build_facet_retrieval_control_manifest.py`, and `code/trec_rag/build_facet_retrieval_control_report.py`.
 - Create durable experiment artifacts under `reports/experiments/facet_retrieval_control_pilot_v1/`.
@@ -34,9 +34,7 @@
 
 **Files:**
 - Modify: `code/trec_rag/det_sparse_ledger.py:39-151`
-- Modify: `code/trec_rag/sparse_relevance_run.py:112-151`
 - Modify: `code/tests/test_det_sparse_ledger.py:20-103`
-- Modify: `code/tests/test_sparse_relevance_run.py`
 
 **Interfaces:**
 - Consumes: existing `RetrievalRequest.from_query` callers and v1 artifacts.
@@ -85,18 +83,18 @@ if self.bm25_k1 is not None:
     value["bm25_b"] = float(self.bm25_b)
 ```
 
-- [ ] **Step 4: Test and implement HTTP transmission**
+- [ ] **Step 4: Verify identity and ledger compatibility**
 
-Add a fake-session assertion for `{"query": query, "hits": "100", "k1": "0.4", "b": "0.0"}`. Change `RateLimitedLedgerTransport.__call__` to send both identity values when present.
+Round-trip an explicit BM25 identity through ledger artifacts while retaining coverage for legacy identities and v1 artifacts.
 
-Run: `.venv/bin/python -m pytest code/tests/test_det_sparse_ledger.py code/tests/test_sparse_relevance_run.py -q`
+Run: `.venv/bin/python -m pytest code/tests/test_det_sparse_ledger.py -q`
 
 Expected: all tests pass, including legacy-ledger tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add code/trec_rag/det_sparse_ledger.py code/trec_rag/sparse_relevance_run.py code/tests/test_det_sparse_ledger.py code/tests/test_sparse_relevance_run.py
+git add code/trec_rag/det_sparse_ledger.py code/tests/test_det_sparse_ledger.py
 git commit -m "Add BM25 parameters to retrieval identity"
 ```
 
@@ -163,8 +161,8 @@ git commit -m "Freeze facet retrieval control manifest"
 - Create: `code/tests/test_facet_retrieval_control_run.py`
 
 **Interfaces:**
-- Consumes: `ControlManifest`, `RetrievalLedger`, and `RateLimitedLedgerTransport`.
-- Produces: `build_control_requests`, `preflight_control`, `execute_control`, and a CLI.
+- Consumes: `ControlManifest`, `RetrievalLedger`, `RemotePyseriniConfig`, and `rate_limited_session`.
+- Produces: `RateLimitedControlTransport`, `build_control_requests`, `preflight_control`, `execute_control`, and a CLI.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -186,6 +184,8 @@ def test_first_failure_stops_without_retry_or_later_calls(tmp_path):
     assert ledger.validate_run().failures == 1
 ```
 
+Also test exact fake-session transmission of `{"query": query, "hits": "100", "k1": "0.4", "b": "0.0"}`, rejection of every protected topic before request construction, cache probing, or transport creation, and rejection of any thirteenth planned or external attempt.
+
 - [ ] **Step 2: Verify failure**
 
 Run: `.venv/bin/python -m pytest code/tests/test_facet_retrieval_control_run.py -q`
@@ -194,16 +194,16 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement request construction and preflight**
 
-Build only W0/W1/W2 requests using names such as `facet_control_v1:W0:f07a`, retriever version `pyserini_remote_bm25_controls_v1`, depth 100, and explicit parameters. Preflight uses `has_verified_cache()` without recording an invocation and rejects more than 12 external attempts.
+Build only W0/W1/W2 requests using names such as `facet_control_v1:W0:f07a`, retriever version `pyserini_remote_bm25_controls_v1`, depth 100, and explicit parameters. Reject protected topics before request construction or cache access. Preflight uses `has_verified_cache()` without recording an invocation and rejects more than 12 planned or external attempts.
 
 - [ ] **Step 4: Implement CLI execution**
 
-Use one ledger with `max_calls=12` and `max_calls_per_topic=6`. Enforce the 10-second minimum, stop on the first exception, and write `preflight.json` plus `retrieval_summary.json` with manifest/code hashes. A complete run requires zero failures/pending and 12 planned invocations including cache hits.
+Implement the control-specific transport in `facet_retrieval_control_run.py`; it sends only query text, `hits=100`, and the explicit identity `k1`/`b`, with redirects and automatic retries disabled. Use one ledger with `max_calls=12` and `max_calls_per_topic=6`. Enforce the 10-second minimum, stop on the first exception, and write `preflight.json` plus `retrieval_summary.json` with manifest/code hashes. A complete run requires zero failures/pending and exactly 12 planned invocations including cache hits.
 
 - [ ] **Step 5: Test and commit**
 
 ```bash
-.venv/bin/python -m pytest code/tests/test_facet_retrieval_control_run.py code/tests/test_sparse_relevance_run.py code/tests/test_det_sparse_ledger.py -q
+.venv/bin/python -m pytest code/tests/test_facet_retrieval_control_run.py code/tests/test_det_sparse_ledger.py -q
 git add code/trec_rag/facet_retrieval_control_run.py code/tests/test_facet_retrieval_control_run.py
 git commit -m "Add rate-limited facet control runner"
 ```
@@ -490,7 +490,7 @@ git commit -m "Report facet retrieval control findings"
 - [ ] **Step 1: Run targeted tests**
 
 ```bash
-.venv/bin/python -m pytest code/tests/test_det_sparse_ledger.py code/tests/test_sparse_relevance_run.py code/tests/test_sparse_relevance_inspector.py code/tests/test_facet_retrieval_control_manifest.py code/tests/test_facet_retrieval_control_run.py code/tests/test_facet_retrieval_control_experiment.py code/tests/test_build_facet_retrieval_control_report.py -q
+.venv/bin/python -m pytest code/tests/test_det_sparse_ledger.py code/tests/test_sparse_relevance_inspector.py code/tests/test_facet_retrieval_control_manifest.py code/tests/test_facet_retrieval_control_run.py code/tests/test_facet_retrieval_control_experiment.py code/tests/test_build_facet_retrieval_control_report.py -q
 ```
 
 Expected: all targeted tests pass.
