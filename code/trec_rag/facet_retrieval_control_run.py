@@ -27,6 +27,7 @@ from .facet_retrieval_control_manifest import (
     PROTECTED_TOPIC_IDS,
     ControlManifest,
     _validate_manifest as _validate_exact_manifest,
+    build_control_manifest,
     load_control_manifest,
 )
 from .remote_client import rate_limited_session
@@ -195,11 +196,20 @@ class RateLimitedControlTransport:
         allowed_by_key = {
             request.identity.request_key: request for request in allowed_requests
         }
+        canonical_requests = build_control_requests(
+            build_control_manifest(),
+            endpoint=self.endpoint_url,
+        )
+        canonical_by_key = {
+            request.identity.request_key: request for request in canonical_requests
+        }
         if (
-            len(allowed_requests) != MAX_EXTERNAL_REQUESTS
-            or len(allowed_by_key) != MAX_EXTERNAL_REQUESTS
+            len(allowed_requests) != len(canonical_requests)
+            or allowed_by_key != canonical_by_key
         ):
-            raise ValueError("control transport requires the exact 12-request allowlist")
+            raise ValueError(
+                "control transport allowlist differs from the canonical 12 requests"
+            )
         self._allowed_requests = allowed_by_key
         self.session = session if session is not None else rate_limited_session(config)
 

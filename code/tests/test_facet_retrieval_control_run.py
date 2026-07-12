@@ -291,6 +291,88 @@ class _FakeSession:
         return _FakeResponse()
 
 
+def _forge_control_request(request, mutation):
+    identity = request.identity
+    query_text = request.query_text
+    topic_id = identity.topic_id
+    bm25_k1 = identity.bm25_k1
+    if mutation == "topic":
+        topic_id = "999"
+    elif mutation == "protected":
+        topic_id = PROTECTED_TOPIC_IDS[0]
+    elif mutation == "k1":
+        bm25_k1 = 9.0
+    elif mutation == "query":
+        query_text = f"{query_text} tampered"
+    else:
+        raise AssertionError(f"unknown request mutation: {mutation}")
+    return RetrievalRequest.from_query(
+        topic_id=topic_id,
+        variant_name=identity.variant_name,
+        query_text=query_text,
+        index_url=identity.index_url,
+        index_id=identity.index_id,
+        hits=identity.hits,
+        analyzer_fingerprint_sha256=identity.analyzer_fingerprint_sha256,
+        retriever_version=identity.retriever_version,
+        bm25_k1=bm25_k1,
+        bm25_b=identity.bm25_b,
+    )
+
+
+@pytest.mark.parametrize("mutation", ("topic", "protected", "k1", "query"))
+def test_transport_rejects_forged_twelve_entry_allowlist_before_session_creation(
+    tmp_path,
+    mutation,
+    monkeypatch,
+):
+    allowed_requests = list(
+        build_control_requests(build_control_manifest(), endpoint=ENDPOINT)
+    )
+    allowed_requests[0] = _forge_control_request(allowed_requests[0], mutation)
+    session_builds = []
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_run.rate_limited_session",
+        lambda config: session_builds.append(config),
+    )
+
+    with pytest.raises(ValueError, match="canonical"):
+        RateLimitedControlTransport(
+            build_control_live_config(
+                ENDPOINT,
+                None,
+                tmp_path / "limit.sqlite",
+                10.0,
+            ),
+            allowed_requests=tuple(allowed_requests),
+        )
+    assert session_builds == []
+
+
+def test_transport_rejects_canonical_mapping_with_extra_duplicate_before_session(
+    tmp_path,
+    monkeypatch,
+):
+    canonical = build_control_requests(build_control_manifest(), endpoint=ENDPOINT)
+    session_builds = []
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_run.rate_limited_session",
+        lambda config: session_builds.append(config),
+    )
+
+    with pytest.raises(ValueError, match="canonical"):
+        RateLimitedControlTransport(
+            build_control_live_config(
+                ENDPOINT,
+                None,
+                tmp_path / "limit.sqlite",
+                10.0,
+            ),
+            allowed_requests=(*canonical, canonical[0]),
+        )
+    assert session_builds == []
+
+
 def test_transport_sends_only_exact_explicit_http_parameters(tmp_path):
     session = _FakeSession()
     config = build_control_live_config(
