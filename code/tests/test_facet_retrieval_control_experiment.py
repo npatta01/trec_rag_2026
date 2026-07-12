@@ -17,7 +17,9 @@ from trec_rag.facet_retrieval_control_experiment import (
     selected_ranking_references,
 )
 from trec_rag.facet_retrieval_control_evaluate import (
+    _parser as _evaluation_parser,
     evaluate_control_freeze,
+    main as evaluation_main,
     publish_control_evaluation,
     verify_control_freeze,
 )
@@ -45,7 +47,7 @@ from trec_rag.facet_retrieval_control_manifest import (
     build_control_manifest,
 )
 from trec_rag.facet_retrieval_control_run import build_control_requests
-from trec_rag.pipeline_models import RetrievedCandidate
+from trec_rag.pipeline_models import RetrievedCandidate, jsonable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -193,6 +195,160 @@ def create_control_freeze(output, rankings, *, inspections, bindings=None):
         bindings=source_bindings,
         candidate_snapshot=snapshot,
     )
+
+
+def _complete_inspections(r1_arm, control_rows):
+    manifest = build_control_manifest()
+    indexed = index_control_streams(r1_arm, control_rows, manifest)
+    return {
+        f"{stream.topic_id}/{stream.stream_id}/{arm_id}": {
+            "topic_id": stream.topic_id,
+            "stream_id": stream.stream_id,
+            "inspected_top5": 5,
+            "inspected_top10": 10,
+            "anchor_top5_count": 5,
+            "anchor_top10_count": 10,
+            "anchor_intent_cohit_top5_count": 5,
+            "anchor_intent_cohit_top10_count": 10,
+            "domain_drift_top5_count": 0,
+            "domain_drift_top10_count": 0,
+            "content_quality_top5_count": 0,
+            "content_quality_top10_count": 0,
+            "coherence_failed": False,
+            "domain_drift_warning": False,
+            "content_quality_warning": False,
+            "rejected": False,
+            "decision": "keep",
+            "top_docids": [
+                row.docid
+                for row in indexed[(stream.topic_id, stream.stream_id, arm_id)][:10]
+            ],
+            "top_snippets": ["synthetic evidence"] * 10,
+        }
+        for stream in manifest.streams
+        for arm_id in ("B0", "W0", "W1", "W2")
+    }
+
+
+def _create_evaluation_freeze(tmp_path):
+    r1_arm, control_rows = _candidate_inputs()
+    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
+    output = tmp_path / "freeze"
+    create_control_freeze(
+        output,
+        matrix,
+        inspections=_complete_inspections(r1_arm, control_rows),
+        bindings={
+            "manifest_sha256": "a" * 64,
+            "prior_freeze_sha256": "b" * 64,
+            "request_sha256": {"unused": "c" * 64},
+            "response_sha256": {"unused": "d" * 64},
+            "candidate_sha256": {"unused": "e" * 64},
+            "ledger_sha256": {
+                "base": "1" * 64,
+                "r1": "2" * 64,
+                "control": "3" * 64,
+            },
+            "r1_arm_sha256": "4" * 64,
+        },
+    )
+    return output, matrix
+
+
+def _rewrite_control_root(freeze_dir, payload):
+    import hashlib
+
+    from trec_rag.facet_retrieval_control_freeze import _canonical_json
+
+    without_self = dict(payload)
+    without_self.pop("freeze_sha256", None)
+    payload["freeze_sha256"] = hashlib.sha256(
+        _canonical_json(without_self)
+    ).hexdigest()
+    (freeze_dir / "freeze.json").write_bytes(_canonical_json(payload))
+
+
+def _rewrite_inspections(freeze_dir, inspections):
+    import hashlib
+
+    from trec_rag.facet_retrieval_control_freeze import _canonical_json
+
+    content = _canonical_json(inspections)
+    (freeze_dir / "inspection.json").write_bytes(content)
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["inspection_sha256"] = hashlib.sha256(content).hexdigest()
+    _rewrite_control_root(freeze_dir, payload)
+
+
+def _write_synthetic_prior_freeze(tmp_path, matrix, monkeypatch):
+    import hashlib
+
+    import trec_rag.facet_retrieval_control_freeze as freeze_module
+
+    references = {
+        "200": "R2:200:B0",
+        "225": "R2:225:B0-B0",
+        "707": "R2:707:B0",
+        "897": "R2:897:B0",
+    }
+    rows = [
+        row
+        for topic_id in ("200", "225", "707", "897")
+        for row in matrix[references[topic_id]]
+    ]
+    raw_rows = [jsonable(row) for row in rows]
+    semantic = hashlib.sha256(
+        (json.dumps(raw_rows, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    prior = tmp_path / "prior"
+    rankings_dir = prior / "rankings"
+    rankings_dir.mkdir(parents=True)
+    ranking_records = {}
+    ranking_names = (
+        f"{arm}:{fusion}"
+        for arm in ("ALL", "F0", "O", "R0", "R1")
+        for fusion in ("family_rrf", "interleave", "uniform_rrf")
+    )
+    content = b"".join(
+        json.dumps(raw, ensure_ascii=False, sort_keys=True).encode() + b"\n"
+        for raw in raw_rows
+    )
+    for key in ranking_names:
+        relative = f"rankings/{key.replace(':', '__')}.jsonl"
+        (prior / relative).write_bytes(content)
+        ranking_records[key] = {"path": relative, "rows": 400, "sha256": semantic}
+    fusion = {"synthetic": "family-balanced"}
+    fusion_sha256 = hashlib.sha256(
+        (json.dumps(fusion, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    manifest_sha256 = {"R0": "5" * 64, "R1": "6" * 64}
+    payload = {
+        "schema_version": "sparse-relevance-ranking-freeze-v1",
+        "status": "frozen_before_qrels",
+        "topic_ids": ["200", "225", "707", "897"],
+        "manifest_sha256": manifest_sha256,
+        "fusion_definitions": fusion,
+        "fusion_definitions_sha256": fusion_sha256,
+        "rankings": ranking_records,
+    }
+    compact = (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode()
+    payload["freeze_sha256"] = hashlib.sha256(compact).hexdigest()
+    freeze_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    (prior / "freeze.json").write_bytes(freeze_bytes)
+    monkeypatch.setattr(
+        freeze_module,
+        "PRIOR_FREEZE_FILE_SHA256",
+        hashlib.sha256(freeze_bytes).hexdigest(),
+    )
+    monkeypatch.setattr(
+        freeze_module, "_PRIOR_FREEZE_INTERNAL_SHA256", payload["freeze_sha256"]
+    )
+    monkeypatch.setattr(freeze_module, "_PRIOR_FUSION_SHA256", fusion_sha256)
+    monkeypatch.setattr(freeze_module, "_PRIOR_MANIFEST_SHA256", manifest_sha256)
+    return prior, references
 
 
 def _provenance_variants(rows):
@@ -1197,31 +1353,7 @@ def test_final_output_collision_fails_before_qrels_open(tmp_path, monkeypatch):
 
 
 def test_control_freeze_verifier_rejects_tampered_ranking(tmp_path):
-    r1_arm, control_rows = _candidate_inputs()
-    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
-    freeze_dir = tmp_path / "freeze"
-    create_control_freeze(
-        freeze_dir,
-        matrix,
-        inspections={
-            f"{stream.topic_id}/{stream.stream_id}/{arm}": {
-                "topic_id": stream.topic_id,
-                "stream_id": stream.stream_id,
-                "coherence_failed": False,
-                "domain_drift_top10_count": 0,
-                "content_quality_top10_count": 0,
-            }
-            for stream in build_control_manifest().streams
-            for arm in ("B0", "W0", "W1", "W2")
-        },
-        bindings={
-            "manifest_sha256": "a" * 64,
-            "prior_freeze_sha256": "b" * 64,
-            "request_sha256": {"request": "c" * 64},
-            "response_sha256": {"request": "d" * 64},
-            "candidate_sha256": {"request": "e" * 64},
-        },
-    )
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
     ranking = next((freeze_dir / "rankings").glob("*.jsonl"))
     ranking.write_bytes(ranking.read_bytes() + b"\n")
 
@@ -1259,70 +1391,149 @@ def test_publish_evaluation_is_create_only_and_cleans_up_on_failure(tmp_path, mo
         publish_control_evaluation(output, payloads)
 
 
-def test_valid_evaluation_uses_only_frozen_rankings_and_skips_protected_qrels(
-    tmp_path, monkeypatch
+def test_evaluation_cli_has_exact_task7_arguments():
+    parser = _evaluation_parser()
+    options = {
+        option
+        for action in parser._actions
+        for option in action.option_strings
+        if option != "--help" and option != "-h"
+    }
+    assert options == {"--freeze-dir", "--prior-freeze", "--qrels", "--output"}
+
+
+def test_valid_v1_freeze_requires_candidate_snapshot(tmp_path):
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["schema_version"] = FREEZE_SCHEMA_VERSION
+    for field in (
+        "candidate_streams_sha256",
+        "candidates_sha256",
+        "candidate_stream_rows_sha256",
+    ):
+        payload["bindings"].pop(field)
+    _rewrite_control_root(freeze_dir, payload)
+
+    with pytest.raises(ValueError, match="candidate snapshot required"):
+        verify_control_freeze(freeze_dir)
+
+
+@pytest.mark.parametrize("mutation", ("truncated", "inconsistent"))
+def test_inspection_schema_and_derived_decision_verify_before_qrels(
+    tmp_path, mutation
 ):
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    inspections = json.loads((freeze_dir / "inspection.json").read_bytes())
+    record = inspections["200/f07a/B0"]
+    if mutation == "truncated":
+        record.pop("top_snippets")
+    else:
+        record["coherence_failed"] = True
+    _rewrite_inspections(freeze_dir, inspections)
+
+    with pytest.raises(ValueError, match="inspection"):
+        evaluate_control_freeze(
+            freeze_dir,
+            tmp_path / "must-not-open.qrels",
+            prior_freeze_path=tmp_path / "unused-prior",
+        )
+
+
+def test_rehashed_candidate_snapshot_corruption_fails_before_qrels(tmp_path):
     import hashlib
 
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    rows = [
+        json.loads(line)
+        for line in (freeze_dir / "candidates.jsonl").read_bytes().splitlines()
+        if line
+    ]
+    rows[0]["docid"] = rows[1]["docid"]
+    candidate_bytes = b"".join(
+        json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+        for row in rows
+    )
+    (freeze_dir / "candidates.jsonl").write_bytes(candidate_bytes)
+    manifest = json.loads((freeze_dir / "candidate_streams.json").read_bytes())
+    manifest["candidate_file_sha256"] = hashlib.sha256(candidate_bytes).hexdigest()
+    manifest_bytes = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    (freeze_dir / "candidate_streams.json").write_bytes(manifest_bytes)
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["bindings"]["candidate_streams_sha256"] = hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+    payload["bindings"]["candidates_sha256"] = hashlib.sha256(
+        candidate_bytes
+    ).hexdigest()
+    _rewrite_control_root(freeze_dir, payload)
+
+    with pytest.raises(ValueError, match="candidate snapshot"):
+        evaluate_control_freeze(
+            freeze_dir,
+            tmp_path / "must-not-open.qrels",
+            prior_freeze_path=tmp_path / "unused-prior",
+        )
+
+
+def test_broken_symlink_output_collisions_fail_before_qrels(tmp_path, monkeypatch):
+    output = tmp_path / "evaluation"
+    output.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    qrels = tmp_path / "qrels"
+    opens = []
+    original_open = Path.open
+
+    def spy(path, *args, **kwargs):
+        if path == qrels:
+            opens.append(path)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+    with pytest.raises(FileExistsError, match="create-only"):
+        evaluate_control_freeze(
+            tmp_path / "missing-freeze",
+            qrels,
+            prior_freeze_path=tmp_path / "missing-prior",
+            output_dir=output,
+        )
+    with pytest.raises(FileExistsError, match="create-only"):
+        publish_control_evaluation(
+            output,
+            {
+                "stream_evaluation.json": {},
+                "selection.json": {},
+                "evaluation.json": {},
+                "decision.json": {},
+            },
+        )
+    assert opens == []
+
+
+def test_task7_cli_uses_verified_immutable_snapshots_end_to_end(tmp_path, monkeypatch):
+    import hashlib
+
+    import trec_rag.facet_retrieval_control_freeze as freeze_module
     from trec_rag.facet_retrieval_control_freeze import _canonical_json
 
-    r1_arm, control_rows = _candidate_inputs()
-    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
-    inspections = {
-        f"{stream.topic_id}/{stream.stream_id}/{arm}": {
-            "topic_id": stream.topic_id,
-            "stream_id": stream.stream_id,
-            "anchor_top5_count": 5,
-            "anchor_top10_count": 10,
-            "anchor_intent_cohit_top5_count": 5,
-            "anchor_intent_cohit_top10_count": 10,
-            "domain_drift_top5_count": 0,
-            "domain_drift_top10_count": 0,
-            "content_quality_top5_count": 0,
-            "content_quality_top10_count": 0,
-            "coherence_failed": False,
-        }
-        for stream in build_control_manifest().streams
-        for arm in ("B0", "W0", "W1", "W2")
-    }
-    freeze_dir = tmp_path / "freeze"
-    create_control_freeze(
-        freeze_dir,
-        matrix,
-        inspections=inspections,
-        bindings={
-            "manifest_sha256": "a" * 64,
-            "prior_freeze_sha256": "b" * 64,
-            "request_sha256": {"request": "c" * 64},
-            "response_sha256": {"request": "d" * 64},
-            "candidate_sha256": {"request": "e" * 64},
-        },
+    freeze_dir, matrix = _create_evaluation_freeze(tmp_path)
+    prior, baseline_references = _write_synthetic_prior_freeze(
+        tmp_path, matrix, monkeypatch
     )
-    baseline_references = {
-        "200": "R2:200:B0",
-        "225": "R2:225:B0-B0",
-        "707": "R2:707:B0",
-        "897": "R2:897:B0",
-    }
-    baseline = tuple(
-        row
-        for topic_id in ("200", "225", "707", "897")
-        for row in matrix[baseline_references[topic_id]]
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["bindings"]["prior_freeze_sha256"] = (
+        freeze_module.PRIOR_FREEZE_FILE_SHA256
     )
-    prior_rankings = {arm: baseline for arm in ("O", "F0", "R1")}
-    monkeypatch.setattr(
-        "trec_rag.facet_retrieval_control_evaluate._verified_source_rows",
-        lambda **_kwargs: (r1_arm, control_rows, prior_rankings, "a" * 64, "b" * 64),
-    )
-    monkeypatch.setattr(
-        "trec_rag.facet_retrieval_control_experiment.reciprocal_rank_fusion",
-        lambda *args, **kwargs: pytest.fail("post-qrels fusion is forbidden"),
-    )
+    _rewrite_control_root(freeze_dir, payload)
     qrels = tmp_path / "synthetic.qrels"
     qrels.write_text(
         "\n".join(
             [
-                *(f"{topic_id} 0 {topic_id}-doc-001 4" for topic_id in ("200", "225", "707", "897")),
+                *(
+                    f"{topic_id} 0 {topic_id}-doc-001 4"
+                    for topic_id in ("200", "225", "707", "897")
+                ),
                 f"{PROTECTED_TOPIC_IDS[0]} 0 protected-doc 4",
             ]
         )
@@ -1330,48 +1541,72 @@ def test_valid_evaluation_uses_only_frozen_rankings_and_skips_protected_qrels(
         encoding="utf-8",
     )
     output = tmp_path / "evaluation"
-    manifest_path = (
-        REPO_ROOT
-        / "reports"
-        / "experiments"
-        / "facet_retrieval_control_pilot_v1"
-        / "manifest.json"
-    )
+    original_open = Path.open
+    mutated = []
 
-    result = evaluate_control_freeze(
-        freeze_dir,
-        qrels,
-        output_dir=output,
-        manifest_path=manifest_path,
-        prior_freeze_path=tmp_path / "unused-prior",
-        base_run=tmp_path / "unused-base-run",
-        base_cache=tmp_path / "unused-base-cache",
-        r1_run=tmp_path / "unused-r1-run",
-        r1_cache=tmp_path / "unused-r1-cache",
-        control_run=tmp_path / "unused-control-run",
-        control_cache=tmp_path / "unused-control-cache",
-    )
+    def mutate_after_verification(path, *args, **kwargs):
+        if path == qrels and not mutated:
+            mutated.append(True)
+            control_ranking = freeze_dir / "rankings" / "R2__200__B0.jsonl"
+            control_ranking.write_bytes(b"mutated after verification\n")
+            prior_ranking = prior / "rankings" / "R1__family_rrf.jsonl"
+            prior_ranking.write_bytes(b"mutated after verification\n")
+            (freeze_dir / "inspection.json").write_bytes(b"{}\n")
+            (freeze_dir / "candidates.jsonl").write_bytes(b"{}\n")
+        return original_open(path, *args, **kwargs)
 
+    monkeypatch.setattr(Path, "open", mutate_after_verification)
+    assert evaluation_main(
+        [
+            "--freeze-dir",
+            str(freeze_dir),
+            "--prior-freeze",
+            str(prior),
+            "--qrels",
+            str(qrels),
+            "--output",
+            str(output),
+        ]
+    ) == 0
+
+    result = {
+        name: json.loads((output / name).read_text(encoding="utf-8"))
+        for name in (
+            "stream_evaluation.json",
+            "selection.json",
+            "evaluation.json",
+            "decision.json",
+        )
+    }
+    assert mutated == [True]
     assert result["selection.json"]["selected_rankings"] == baseline_references
     assert result["selection.json"]["frozen_alternative_count"] == 25
     assert result["stream_evaluation.json"]["qrels_policy"][
         "protected_qrels_topics_skipped"
     ] == [PROTECTED_TOPIC_IDS[0]]
-    assert set(result["evaluation.json"]["systems"]["R2"]["per_topic"]) == {
-        "200",
-        "225",
-        "707",
-        "897",
-    }
     arm = result["stream_evaluation.json"]["streams"]["200/f07a"]["arms"]["B0"]
-    assert arm["inspection"]["anchor_top10_count"] == 10
+    assert set(arm["inspection"]) == {
+        "topic_id",
+        "stream_id",
+        "inspected_top5",
+        "inspected_top10",
+        "anchor_top5_count",
+        "anchor_top10_count",
+        "anchor_intent_cohit_top5_count",
+        "anchor_intent_cohit_top10_count",
+        "domain_drift_top5_count",
+        "domain_drift_top10_count",
+        "content_quality_top5_count",
+        "content_quality_top10_count",
+        "coherence_failed",
+        "domain_drift_warning",
+        "content_quality_warning",
+        "rejected",
+        "decision",
+        "top_docids",
+        "top_snippets",
+    }
     assert arm["metrics"]["unique_graded_gain"] == 0
-    for name in (
-        "stream_evaluation.json",
-        "selection.json",
-        "evaluation.json",
-        "decision.json",
-    ):
-        saved = json.loads((output / name).read_text(encoding="utf-8"))
+    for name, saved in result.items():
         expected_hash = saved.pop("artifact_sha256")
         assert hashlib.sha256(_canonical_json(saved)).hexdigest() == expected_hash
