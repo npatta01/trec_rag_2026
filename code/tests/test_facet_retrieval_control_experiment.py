@@ -684,6 +684,26 @@ def test_candidate_snapshot_reader_rejects_v1_artifact_tampering(
         verify_control_freeze_candidate_snapshot(freeze_dir)
 
 
+@pytest.mark.parametrize("depth", (5, 10))
+def test_candidate_snapshot_reader_rejects_v1_cohit_above_anchor(tmp_path, depth):
+    freeze_dir, _matrix = _create_evaluation_freeze(tmp_path)
+    _convert_to_valid_v1(freeze_dir)
+    inspections = json.loads((freeze_dir / "inspection.json").read_bytes())
+    record = inspections["200/f07a/B0"]
+    if depth == 5:
+        record["anchor_top5_count"] = 3
+        record["anchor_intent_cohit_top5_count"] = 5
+    else:
+        record["anchor_top5_count"] = 3
+        record["anchor_intent_cohit_top5_count"] = 3
+        record["anchor_top10_count"] = 3
+        record["anchor_intent_cohit_top10_count"] = 5
+    _rewrite_inspections(freeze_dir, inspections)
+
+    with pytest.raises(ValueError, match="inspection"):
+        verify_control_freeze_candidate_snapshot(freeze_dir)
+
+
 def test_candidate_snapshot_reader_rejects_query_tamper_with_recomputed_root_hash(
     tmp_path,
 ):

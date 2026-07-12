@@ -858,6 +858,8 @@ def _validate_v1_inspections(decoded: object) -> None:
             or raw["domain_drift_top5_count"] > raw["domain_drift_top10_count"]
             or raw["content_quality_top5_count"]
             > raw["content_quality_top10_count"]
+            or raw["anchor_intent_cohit_top5_count"] > raw["anchor_top5_count"]
+            or raw["anchor_intent_cohit_top10_count"] > raw["anchor_top10_count"]
             or not isinstance(top_docids, list)
             or len(top_docids) != 10
             or len(set(top_docids)) != 10
