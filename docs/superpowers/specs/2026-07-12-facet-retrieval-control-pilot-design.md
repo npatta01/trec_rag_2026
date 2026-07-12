@@ -59,10 +59,12 @@ Each stream has one cached control and three new arms:
 | `W1` | Reweighted | 0.4 | 0.4 | Reduce the advantage of repeated terms in documents |
 | `W2` | Reweighted | 0.4 | 0.0 | Also remove document-length normalization |
 
-Both `k1` and `b` must be sent together for every non-default request. Request
-identity and cache identity must include query text, hit depth, endpoint, index,
-analyzer fingerprint, `k1`, and `b`; results from different scoring settings
-must never share an identity.
+Both `k1` and `b` must be sent together for every new W request. Its request and
+cache identity must include query text, hit depth, endpoint, index, analyzer
+fingerprint, `k1`, and `b`; results from different scoring settings must never
+share an identity. B0 reuses the verified legacy cache identity and is bound to
+effective defaults `k1=0.9` and `b=0.4` by the control manifest plus its prior
+request, response, and candidate hashes.
 
 All arms retrieve depth 100. No query is rewritten after observing its results.
 
