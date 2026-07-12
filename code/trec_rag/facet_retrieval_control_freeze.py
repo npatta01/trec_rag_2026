@@ -5,12 +5,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import shutil
+import tempfile
+from collections import defaultdict
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from .det_sparse_ledger import RetrievalLedger
+from .det_sparse_ledger import RetrievalLedger, RetrievalRequest
 from .facet_retrieval_control_experiment import (
+    EXPECTED_ALTERNATIVE_NAMES,
     FACET_FAMILY_WEIGHT,
     ORIGINAL_FAMILY_WEIGHT,
     RANKING_DEPTH,
@@ -20,8 +25,11 @@ from .facet_retrieval_control_experiment import (
 )
 from .facet_retrieval_control_inspector import inspect_stream, load_inspection_streams
 from .facet_retrieval_control_manifest import (
+    ANALYZER_FINGERPRINT_SHA256,
+    R1_MANIFEST_SHA256,
     PROTECTED_TOPIC_IDS,
     ControlManifest,
+    _validate_manifest,
     load_control_manifest,
 )
 from .facet_retrieval_control_run import build_control_requests
@@ -29,6 +37,104 @@ from .pipeline_models import RankedCandidate, RetrievedCandidate, jsonable
 
 
 FREEZE_SCHEMA_VERSION = "facet-control-ranking-freeze-v1"
+PRIOR_FREEZE_FILE_SHA256 = (
+    "4a78b44ede4b979a3cb3ec96348088e4e08626e2cc4c92b464c6e36097a71389"
+)
+_PRIOR_FREEZE_INTERNAL_SHA256 = (
+    "ba820c7cce7b3a1d85b7ff184d3be2c7a3b88af31cdb86e7b406a34e1e6c53f2"
+)
+_PRIOR_FUSION_SHA256 = (
+    "8b1092d37376ce986950e00c3bedf51e31f50aa9c9bc9f7f82705e428eb3d3c9"
+)
+_PRIOR_MANIFEST_SHA256 = {
+    "R0": "6dd55352786cf696391181a718f5d9ef7a9a3768cb229d18e3a8a12c6a8ea1ce",
+    "R1": R1_MANIFEST_SHA256,
+}
+_PRIOR_TOPIC_IDS = ("200", "225", "707", "897")
+_PRIOR_RANKING_NAMES = frozenset(
+    f"{arm}:{fusion}"
+    for arm in ("ALL", "F0", "O", "R0", "R1")
+    for fusion in ("family_rrf", "interleave", "uniform_rrf")
+)
+_PRIOR_ENDPOINT = "http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search"
+_PRIOR_INDEX_ID = "climbmix-400b"
+_PRIOR_RETRIEVER_VERSION = "pyserini_remote_raw_first_v1"
+_R1_SOURCE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "reports"
+    / "experiments"
+    / "sparse_relevance_pilot_v1"
+    / "r1_manifest.json"
+)
+_BASE_ARM_QUERIES = (
+    (
+        "200",
+        "prompt_lab_v1:original",
+        "I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah.",
+    ),
+    (
+        "225",
+        "prompt_lab_v1:original",
+        "I'm exploring how exposure to violent video games and gory content affects human aggression, desensitization, and addiction. I'm also interested in the broader causes of aggression in both children and adults, the positive sides of gaming, and the historical background of these media trends.",
+    ),
+    ("225", "prompt_lab_v1:facet:f06", "video games benefits"),
+    ("225", "prompt_lab_v1:facet:f07", "violent video games gory content history"),
+    (
+        "707",
+        "prompt_lab_v1:original",
+        "I'm trying to understand the health risks and potential dangers of various chemicals and substances, such as those found in antiperspirants, sorbitol, and organophosphate poisoning. I'd also like to know how integrating different actions at the operational level might impact health outcomes.",
+    ),
+    ("707", "prompt_lab_v1:facet:f01", "antiperspirants health risks"),
+    (
+        "707",
+        "prompt_lab_v1:facet:f03",
+        "organophosphate poisoning health risks",
+    ),
+    (
+        "897",
+        "prompt_lab_v1:original",
+        "I'm trying to understand how alcohol use affects neighborhood quality of life, including genetic and gender factors in dependency. I also need to grasp the main causes, risks, and fatal consequences of alcohol and drug use, and their connection to broader community health issues.",
+    ),
+    ("897", "prompt_lab_v1:facet:f01", "alcohol use neighborhood quality life"),
+)
+_ALL_BASE_QUERIES = (
+    *_BASE_ARM_QUERIES,
+    ("200", "prompt_lab_v1:facet:f01", "Holocaust definition"),
+    ("200", "prompt_lab_v1:facet:f02", "Holocaust causes"),
+    ("200", "prompt_lab_v1:facet:f03", "Holocaust implementation process"),
+    ("200", "prompt_lab_v1:facet:f04", "Holocaust responsibility"),
+    (
+        "200",
+        "prompt_lab_v1:facet:f05",
+        "Holocaust historical societal impact European Jewry",
+    ),
+    ("200", "prompt_lab_v1:facet:f06", "Holocaust conclusion end"),
+    ("200", "prompt_lab_v1:facet:f07", "Holocaust lasting effects"),
+    ("225", "prompt_lab_v1:facet:f01", "violent video games gory content aggression"),
+    (
+        "225",
+        "prompt_lab_v1:facet:f02",
+        "violent video games gory content desensitization",
+    ),
+    ("225", "prompt_lab_v1:facet:f03", "violent video games gory content addiction"),
+    ("225", "prompt_lab_v1:facet:f04", "human aggression causes children"),
+    ("225", "prompt_lab_v1:facet:f05", "human aggression causes adults"),
+    ("707", "prompt_lab_v1:facet:f02", "sorbitol health risks"),
+    (
+        "897",
+        "prompt_lab_v1:facet:f02",
+        "alcohol dependence genetic gender factors",
+    ),
+    ("897", "prompt_lab_v1:facet:f03", "alcohol drug use causes"),
+    ("897", "prompt_lab_v1:facet:f04", "alcohol drug use health risks"),
+    ("897", "prompt_lab_v1:facet:f05", "alcohol drug use fatal consequences"),
+    (
+        "897",
+        "prompt_lab_v1:facet:f06",
+        "alcohol drug use community health effects",
+    ),
+)
+_EXPECTED_R1_ARM_STREAMS_BY_TOPIC = {"200": 10, "225": 8, "707": 4, "897": 9}
 
 
 def _canonical_json(value: object) -> bytes:
@@ -97,7 +203,7 @@ def _validate_bindings(bindings: Mapping[str, object]) -> dict[str, object]:
         "response_sha256",
         "candidate_sha256",
     }
-    allowed = required | {"prior_ledger_sha256", "r1_arm_sha256"}
+    allowed = required | {"ledger_sha256", "r1_arm_sha256"}
     if not required <= set(bindings) or not set(bindings) <= allowed:
         raise ValueError(
             f"freeze bindings must include exactly the required hashes {sorted(required)!r}"
@@ -115,22 +221,10 @@ def create_control_freeze(
     inspections: Mapping[str, object],
     bindings: Mapping[str, object],
 ) -> dict[str, object]:
-    """Write all ranking evidence once and commit ``freeze.json`` with O_EXCL."""
+    """Precompute every byte, stage privately, then atomically publish once."""
 
-    if len(rankings) != 25:
-        raise ValueError("control freeze requires exactly 25 ranking alternatives")
-    expected_counts = {
-        "200": 4,
-        "225": 16,
-        "707": 4,
-        "897": 1,
-    }
-    for topic_id, expected in expected_counts.items():
-        observed = sum(key.startswith(f"R2:{topic_id}:") for key in rankings)
-        if observed != expected:
-            raise ValueError(
-                f"control freeze requires {expected} alternatives for topic {topic_id}"
-            )
+    if frozenset(rankings) != frozenset(EXPECTED_ALTERNATIVE_NAMES):
+        raise ValueError("control freeze rankings differ from the exact 25-name set")
     for key, rows in rankings.items():
         topic_id = key.split(":", 2)[1]
         if len(rows) != RANKING_DEPTH or any(row.topic_id != topic_id for row in rows):
@@ -138,17 +232,14 @@ def create_control_freeze(
         if [row.rank for row in rows] != list(range(1, RANKING_DEPTH + 1)):
             raise ValueError(f"ranking {key} has non-canonical final ranks")
 
+    # Serialization and hashing deliberately precede any destination creation.
     frozen_bindings = _validate_bindings(bindings)
-    output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=False)
-    rankings_dir = output / "rankings"
-    rankings_dir.mkdir()
-
+    artifacts: dict[str, bytes] = {}
     ranking_manifest: dict[str, dict[str, object]] = {}
     for key in sorted(rankings):
         filename = key.replace(":", "__") + ".jsonl"
         content = _ranking_bytes(rankings[key])
-        _exclusive_write(rankings_dir / filename, content)
+        artifacts[f"rankings/{filename}"] = content
         ranking_manifest[key] = {
             "path": f"rankings/{filename}",
             "rows": len(rankings[key]),
@@ -157,7 +248,7 @@ def create_control_freeze(
         }
 
     inspection_bytes = _canonical_json(inspections)
-    _exclusive_write(output / "inspection.json", inspection_bytes)
+    artifacts["inspection.json"] = inspection_bytes
     fusion = {
         "k": RRF_K,
         "limit": RANKING_DEPTH,
@@ -166,7 +257,7 @@ def create_control_freeze(
         "facet_stream_weight": "0.5 / active topic facet streams",
     }
     fusion_bytes = _canonical_json(fusion)
-    _exclusive_write(output / "fusion.json", fusion_bytes)
+    artifacts["fusion.json"] = fusion_bytes
 
     payload: dict[str, object] = {
         "schema_version": FREEZE_SCHEMA_VERSION,
@@ -177,25 +268,84 @@ def create_control_freeze(
         "rankings": ranking_manifest,
     }
     payload["freeze_sha256"] = hashlib.sha256(_canonical_json(payload)).hexdigest()
-    _exclusive_write(output / "freeze.json", _canonical_json(payload))
+    artifacts["freeze.json"] = _canonical_json(payload)
+
+    output = Path(output_dir)
+    if output.exists():
+        raise FileExistsError(f"create-only output already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(
+        tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent)
+    )
+    try:
+        (stage / "rankings").mkdir()
+        for relative, content in artifacts.items():
+            _exclusive_write(stage / relative, content)
+        os.rename(stage, output)
+    except BaseException:
+        if stage.exists():
+            shutil.rmtree(stage)
+        raise
     return payload
 
 
-def verify_sha256(path: Path, expected_sha256: str) -> str:
-    """Verify one input before any freeze output is created."""
-
-    _validate_sha256(expected_sha256, str(path))
-    actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    if actual != expected_sha256:
-        raise ValueError(f"input SHA-256 mismatch for {path}")
-    return actual
+def _validate_prior_ranked_rows(key: str, decoded: object) -> list[dict[str, object]]:
+    if not isinstance(decoded, list) or len(decoded) != 400:
+        raise ValueError(f"prior ranking {key} must contain exactly 400 rows")
+    rows: list[dict[str, object]] = []
+    for index, raw in enumerate(decoded):
+        if not isinstance(raw, dict) or set(raw) != {
+            "topic_id",
+            "docid",
+            "rank",
+            "score",
+            "text",
+            "provenance",
+        }:
+            raise ValueError(f"prior ranking {key} row {index} is not RankedCandidate")
+        try:
+            candidate = RankedCandidate(**raw)
+        except TypeError as exc:
+            raise ValueError(
+                f"prior ranking {key} row {index} is not RankedCandidate"
+            ) from exc
+        if (
+            not isinstance(candidate.topic_id, str)
+            or candidate.topic_id not in _PRIOR_TOPIC_IDS
+            or not isinstance(candidate.docid, str)
+            or not candidate.docid
+            or isinstance(candidate.rank, bool)
+            or not isinstance(candidate.rank, int)
+            or isinstance(candidate.score, bool)
+            or not isinstance(candidate.score, (int, float))
+            or not math.isfinite(float(candidate.score))
+            or not isinstance(candidate.text, str)
+            or not isinstance(candidate.provenance, list)
+            or not all(isinstance(item, dict) for item in candidate.provenance)
+        ):
+            raise ValueError(f"prior ranking {key} contains invalid RankedCandidate")
+        rows.append(raw)
+    for topic_id in _PRIOR_TOPIC_IDS:
+        topic_rows = [row for row in rows if row["topic_id"] == topic_id]
+        if len(topic_rows) != 100:
+            raise ValueError(f"prior ranking {key}/{topic_id} depth is not 100")
+        if [row["rank"] for row in topic_rows] != list(range(1, 101)):
+            raise ValueError(f"prior ranking {key}/{topic_id} ranks are invalid")
+        if len({row["docid"] for row in topic_rows}) != 100:
+            raise ValueError(f"prior ranking {key}/{topic_id} docids are not unique")
+    return rows
 
 
 def verify_prior_freeze(path: Path) -> str:
-    """Verify the prior qrels-blind freeze and every ranking it names."""
+    """Verify the one exact immutable prior freeze and all 15 rankings."""
 
     freeze_path = Path(path)
+    if freeze_path.is_dir():
+        freeze_path = freeze_path / "freeze.json"
     source = freeze_path.read_bytes()
+    actual_file_sha256 = hashlib.sha256(source).hexdigest()
+    if actual_file_sha256 != PRIOR_FREEZE_FILE_SHA256:
+        raise ValueError("input differs from the exact immutable prior freeze")
     try:
         payload = json.loads(source)
     except json.JSONDecodeError as exc:
@@ -204,8 +354,21 @@ def verify_prior_freeze(path: Path) -> str:
         not isinstance(payload, dict)
         or payload.get("schema_version") != "sparse-relevance-ranking-freeze-v1"
         or payload.get("status") != "frozen_before_qrels"
+        or payload.get("freeze_sha256") != _PRIOR_FREEZE_INTERNAL_SHA256
+        or payload.get("topic_ids") != list(_PRIOR_TOPIC_IDS)
+        or payload.get("manifest_sha256") != _PRIOR_MANIFEST_SHA256
+        or payload.get("fusion_definitions_sha256") != _PRIOR_FUSION_SHA256
     ):
-        raise ValueError("prior freeze has an invalid frozen-before-qrels contract")
+        raise ValueError("exact immutable prior freeze contract differs")
+    fusion = payload.get("fusion_definitions")
+    fusion_sha256 = hashlib.sha256(
+        json.dumps(fusion, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+        + b"\n"
+    ).hexdigest()
+    if fusion_sha256 != _PRIOR_FUSION_SHA256:
+        raise ValueError("exact immutable prior fusion definitions differ")
     expected_self = payload.get("freeze_sha256")
     _validate_sha256(expected_self, "prior freeze_sha256")
     without_self = dict(payload)
@@ -222,8 +385,8 @@ def verify_prior_freeze(path: Path) -> str:
     if actual_self != expected_self:
         raise ValueError("prior freeze self SHA-256 is invalid")
     rankings = payload.get("rankings")
-    if not isinstance(rankings, dict) or "R1:family_rrf" not in rankings:
-        raise ValueError("prior freeze lacks the required R1 family ranking")
+    if not isinstance(rankings, dict) or frozenset(rankings) != _PRIOR_RANKING_NAMES:
+        raise ValueError("exact immutable prior freeze must name exactly 15 rankings")
     for key, raw_record in rankings.items():
         if not isinstance(key, str) or not isinstance(raw_record, dict):
             raise ValueError("prior freeze ranking records are invalid")
@@ -237,14 +400,17 @@ def verify_prior_freeze(path: Path) -> str:
         )
         try:
             decoded_rows = [
-                json.loads(line) for line in ranking_path.read_text(encoding="utf-8").splitlines() if line
+                json.loads(line)
+                for line in ranking_path.read_text(encoding="utf-8").splitlines()
+                if line
             ]
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"prior ranking is unreadable for {key}") from exc
+        validated_rows = _validate_prior_ranked_rows(key, decoded_rows)
         actual = hashlib.sha256(
             (
                 json.dumps(
-                    decoded_rows,
+                    validated_rows,
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
@@ -255,26 +421,11 @@ def verify_prior_freeze(path: Path) -> str:
         if actual != expected:
             raise ValueError(f"prior ranking SHA-256 mismatch for {key}")
         rows = raw_record.get("rows")
-        if not isinstance(rows, int) or rows < 1:
+        if rows != 400:
             raise ValueError(f"prior ranking row count is invalid for {key}")
-        if len(decoded_rows) != rows:
+        if len(validated_rows) != rows:
             raise ValueError(f"prior ranking row count mismatch for {key}")
-    return hashlib.sha256(source).hexdigest()
-
-
-def _load_candidates_jsonl(path: Path) -> list[RetrievedCandidate]:
-    rows: list[RetrievedCandidate] = []
-    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
-        if not line:
-            continue
-        try:
-            raw = json.loads(line)
-            rows.append(RetrievedCandidate(**raw))
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError(f"invalid candidate JSONL row {line_number} in {path}") from exc
-    if not rows:
-        raise ValueError(f"candidate JSONL is empty: {path}")
-    return rows
+    return actual_file_sha256
 
 
 def _ledger_from_existing(run_dir: Path, shared_cache: Path | None) -> RetrievalLedger:
@@ -311,16 +462,135 @@ def _ledger_tree_sha256(run_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_control_candidates(
+def _prior_request(
+    topic_id: str, variant_name: str, query_text: str
+) -> RetrievalRequest:
+    return RetrievalRequest.from_query(
+        topic_id=topic_id,
+        variant_name=variant_name,
+        query_text=query_text,
+        index_url=_PRIOR_ENDPOINT,
+        index_id=_PRIOR_INDEX_ID,
+        hits=100,
+        analyzer_fingerprint_sha256=ANALYZER_FINGERPRINT_SHA256,
+        retriever_version=_PRIOR_RETRIEVER_VERSION,
+    )
+
+
+def build_expected_r1_requests(
     manifest: ControlManifest,
-    ledger_dir: Path,
-    shared_cache: Path,
-    endpoint: str,
+    r1_source_path: Path = _R1_SOURCE_PATH,
+) -> tuple[tuple[RetrievalRequest, ...], tuple[RetrievalRequest, ...]]:
+    """Build the exact nine base and 22 repair requests that form frozen R1."""
+
+    protected = sorted(
+        {stream.topic_id for stream in manifest.streams} & set(PROTECTED_TOPIC_IDS)
+    )
+    if protected:
+        raise ValueError(f"protected topic {protected[0]} is forbidden")
+    _validate_manifest(manifest)
+    source = Path(r1_source_path).read_bytes()
+    if hashlib.sha256(source).hexdigest() != R1_MANIFEST_SHA256:
+        raise ValueError("R1 source manifest SHA-256 differs from the frozen source")
+    try:
+        payload = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError("R1 source manifest is not valid JSON") from exc
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    if (
+        not isinstance(streams, list)
+        or len(streams) != 22
+        or not all(isinstance(stream, dict) for stream in streams)
+    ):
+        raise ValueError("R1 source manifest must contain exactly 22 repair streams")
+    base_requests = tuple(_prior_request(*spec) for spec in _BASE_ARM_QUERIES)
+    r1_requests: list[RetrievalRequest] = []
+    seen: set[tuple[str, str]] = set()
+    for stream in streams:
+        topic_id = stream.get("topic_id")
+        stream_id = stream.get("stream_id")
+        query = stream.get("query")
+        if not all(isinstance(value, str) and value for value in (topic_id, stream_id, query)):
+            raise ValueError("R1 source contains an invalid repair request")
+        boundary = (topic_id, stream_id)
+        if boundary in seen:
+            raise ValueError(f"R1 source contains duplicate stream {boundary!r}")
+        seen.add(boundary)
+        r1_requests.append(
+            _prior_request(topic_id, f"sparse_relevance_v1:R1:{stream_id}", query)
+        )
+    return base_requests, tuple(r1_requests)
+
+
+def _request_stream_key(request: RetrievalRequest) -> tuple[str, str, str, str]:
+    return (
+        request.identity.topic_id,
+        request.identity.variant_name,
+        request.identity.retriever_version,
+        request.query_text,
+    )
+
+
+def validate_verified_r1_arm(
+    rows: Sequence[RetrievedCandidate],
+    base_requests: Sequence[RetrievalRequest],
+    r1_requests: Sequence[RetrievalRequest],
+) -> list[RetrievedCandidate]:
+    """Reject any missing, extra, substituted, shallow, or duplicate R1 stream."""
+
+    protected = sorted({row.topic_id for row in rows} & set(PROTECTED_TOPIC_IDS))
+    if protected:
+        raise ValueError(f"protected topic {protected[0]} is forbidden")
+    expected_requests = (*base_requests, *r1_requests)
+    if len(base_requests) != 9 or len(r1_requests) != 22:
+        raise ValueError("R1 arm request lineage must contain exactly 9 base and 22 repairs")
+    expected = {_request_stream_key(request) for request in expected_requests}
+    if len(expected) != 31:
+        raise ValueError("R1 arm request lineage contains duplicate streams")
+    grouped: dict[tuple[str, str, str, str], list[RetrievedCandidate]] = defaultdict(list)
+    for row in rows:
+        grouped[(row.topic_id, row.variant_name, row.retriever_name, row.query_text)].append(
+            row
+        )
+    if set(grouped) != expected:
+        raise ValueError("R1 arm streams differ from the exact frozen lineage")
+    for key, candidates in grouped.items():
+        ordered = sorted(candidates, key=lambda row: (row.rank, row.docid, -row.score))
+        if len(ordered) != 100 or [row.rank for row in ordered] != list(range(1, 101)):
+            raise ValueError(f"R1 arm stream {key!r} does not have exact depth 100")
+        if len({row.docid for row in ordered}) != 100:
+            raise ValueError(f"R1 arm stream {key!r} has duplicate document IDs")
+        if any(
+            not row.docid
+            or isinstance(row.score, bool)
+            or not isinstance(row.score, (int, float))
+            or not math.isfinite(float(row.score))
+            or not isinstance(row.text, str)
+            for row in ordered
+        ):
+            raise ValueError(f"R1 arm stream {key!r} has invalid candidates")
+    observed_counts = {
+        topic_id: sum(key[0] == topic_id for key in grouped)
+        for topic_id in _PRIOR_TOPIC_IDS
+    }
+    if observed_counts != _EXPECTED_R1_ARM_STREAMS_BY_TOPIC:
+        raise ValueError("R1 arm per-topic stream counts differ from 10/8/4/9")
+    return sorted(
+        rows,
+        key=lambda row: (
+            row.topic_id,
+            row.variant_name,
+            row.retriever_name,
+            row.rank,
+            row.docid,
+        ),
+    )
+
+
+def _load_requests_from_ledger(
+    ledger: RetrievalLedger,
+    requests: Sequence[RetrievalRequest],
 ) -> tuple[list[RetrievedCandidate], dict[str, str], dict[str, str], dict[str, str]]:
-    ledger = _ledger_from_existing(ledger_dir, shared_cache)
-    requests = build_control_requests(manifest, endpoint=endpoint)
-    if ledger.validate_run().planned_requests != len(requests):
-        raise ValueError("control ledger does not contain exactly the 12 frozen requests")
     rows: list[RetrievedCandidate] = []
     request_hashes: dict[str, str] = {}
     response_hashes: dict[str, str] = {}
@@ -345,6 +615,64 @@ def _load_control_candidates(
             for candidate in result.candidates
         )
     return rows, request_hashes, response_hashes, candidate_hashes
+
+
+def load_verified_r1_arm(
+    manifest: ControlManifest,
+    *,
+    base_run: Path,
+    base_cache: Path,
+    r1_run: Path,
+    r1_cache: Path,
+    r1_source_path: Path = _R1_SOURCE_PATH,
+) -> tuple[list[RetrievedCandidate], dict[str, object]]:
+    """Reconstruct R1 solely from its exact independently verified ledgers."""
+
+    base_requests, r1_requests = build_expected_r1_requests(manifest, r1_source_path)
+    all_base_requests = tuple(_prior_request(*spec) for spec in _ALL_BASE_QUERIES)
+    if len({_request_stream_key(request) for request in all_base_requests}) != 27:
+        raise AssertionError("frozen base request namespace must contain exactly 27 streams")
+    base_ledger = _ledger_from_existing(base_run, base_cache)
+    if base_ledger.validate_run().planned_requests != 27:
+        raise ValueError("base ledger must contain exactly 27 frozen requests")
+    r1_ledger = _ledger_from_existing(r1_run, r1_cache)
+    if r1_ledger.validate_run().planned_requests != 22:
+        raise ValueError("R1 ledger must contain exactly 22 frozen requests")
+    all_base = _load_requests_from_ledger(base_ledger, all_base_requests)
+    repairs = _load_requests_from_ledger(r1_ledger, r1_requests)
+    selected_base_keys = {_request_stream_key(request) for request in base_requests}
+    selected_base_rows = [
+        row
+        for row in all_base[0]
+        if (row.topic_id, row.variant_name, row.retriever_name, row.query_text)
+        in selected_base_keys
+    ]
+    rows = validate_verified_r1_arm(
+        [*selected_base_rows, *repairs[0]], base_requests, r1_requests
+    )
+    encoded = _canonical_json(rows)
+    return rows, {
+        "r1_arm_sha256": hashlib.sha256(encoded).hexdigest(),
+        "ledger_sha256": {
+            "base": _ledger_tree_sha256(base_run),
+            "r1": _ledger_tree_sha256(r1_run),
+        },
+        "request_sha256": {**all_base[1], **repairs[1]},
+        "response_sha256": {**all_base[2], **repairs[2]},
+        "candidate_sha256": {**all_base[3], **repairs[3]},
+    }
+
+
+def _load_control_candidates(
+    manifest: ControlManifest,
+    ledger_dir: Path,
+    shared_cache: Path,
+) -> tuple[list[RetrievedCandidate], dict[str, str], dict[str, str], dict[str, str]]:
+    ledger = _ledger_from_existing(ledger_dir, shared_cache)
+    requests = build_control_requests(manifest, endpoint=_PRIOR_ENDPOINT)
+    if ledger.validate_run().planned_requests != len(requests):
+        raise ValueError("control ledger does not contain exactly the 12 frozen requests")
+    return _load_requests_from_ledger(ledger, requests)
 
 
 def freeze_control_experiment(
@@ -382,14 +710,13 @@ def freeze_control_experiment(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--r1-source-manifest", type=Path, required=True)
     parser.add_argument("--prior-freeze", type=Path, required=True)
-    parser.add_argument("--prior-ledger", type=Path, action="append", required=True)
-    parser.add_argument("--r1-candidates", type=Path, required=True)
-    parser.add_argument("--r1-candidates-sha256", required=True)
-    parser.add_argument("--control-ledger", type=Path, required=True)
-    parser.add_argument("--shared-cache", type=Path, required=True)
-    parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--base-run", type=Path, required=True)
+    parser.add_argument("--base-cache", type=Path, required=True)
+    parser.add_argument("--r1-run", type=Path, required=True)
+    parser.add_argument("--r1-cache", type=Path, required=True)
+    parser.add_argument("--control-run", type=Path, required=True)
+    parser.add_argument("--control-cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -408,40 +735,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     manifest_sha256 = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
     prior_freeze_sha256 = verify_prior_freeze(args.prior_freeze)
-    verify_sha256(args.r1_candidates, args.r1_candidates_sha256)
-    r1_arm = _load_candidates_jsonl(args.r1_candidates)
-    candidate_protected = sorted(
-        {row.topic_id for row in r1_arm} & set(PROTECTED_TOPIC_IDS)
+    r1_arm, lineage = load_verified_r1_arm(
+        manifest,
+        base_run=args.base_run,
+        base_cache=args.base_cache,
+        r1_run=args.r1_run,
+        r1_cache=args.r1_cache,
     )
-    if candidate_protected:
-        raise ValueError(f"protected topic {candidate_protected[0]} is forbidden")
-    prior_ledgers: dict[str, str] = {}
-    for path in sorted(args.prior_ledger):
-        _ledger_from_existing(path, args.shared_cache)
-        prior_ledgers[str(path)] = _ledger_tree_sha256(path)
     control_rows, request_hashes, response_hashes, candidate_hashes = (
         _load_control_candidates(
             manifest,
-            args.control_ledger,
-            args.shared_cache,
-            args.endpoint,
+            args.control_run,
+            args.control_cache,
         )
     )
     bindings: dict[str, object] = {
         "manifest_sha256": manifest_sha256,
         "prior_freeze_sha256": prior_freeze_sha256,
-        "prior_ledger_sha256": prior_ledgers,
-        "r1_arm_sha256": args.r1_candidates_sha256,
-        "request_sha256": request_hashes,
-        "response_sha256": response_hashes,
-        "candidate_sha256": {
-            "r1_arm": args.r1_candidates_sha256,
-            **candidate_hashes,
+        "ledger_sha256": {
+            **lineage["ledger_sha256"],
+            "control": _ledger_tree_sha256(args.control_run),
         },
+        "r1_arm_sha256": lineage["r1_arm_sha256"],
+        "request_sha256": {**lineage["request_sha256"], **request_hashes},
+        "response_sha256": {**lineage["response_sha256"], **response_hashes},
+        "candidate_sha256": {**lineage["candidate_sha256"], **candidate_hashes},
     }
     freeze = freeze_control_experiment(
         output_dir=args.output,
-        r1_source_manifest=args.r1_source_manifest,
+        r1_source_manifest=_R1_SOURCE_PATH,
         r1_arm=r1_arm,
         control_rows=control_rows,
         manifest=manifest,

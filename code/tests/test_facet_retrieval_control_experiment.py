@@ -6,16 +6,19 @@ from pathlib import Path
 import pytest
 
 from trec_rag.facet_retrieval_control_experiment import (
+    EXPECTED_ALTERNATIVE_NAMES,
     build_topic_alternatives,
     index_control_streams,
 )
 from trec_rag.facet_retrieval_control_freeze import (
     FREEZE_SCHEMA_VERSION,
+    PRIOR_FREEZE_FILE_SHA256,
     _parser,
+    build_expected_r1_requests,
     create_control_freeze,
     main,
+    validate_verified_r1_arm,
     verify_prior_freeze,
-    verify_sha256,
 )
 from trec_rag.facet_retrieval_control_manifest import (
     PROTECTED_TOPIC_IDS,
@@ -55,6 +58,17 @@ def _candidate_inputs():
             _row(topic_id, "prompt_lab_v1:original", rank)
             for rank in range(1, 101)
         )
+    kept_base = {
+        "225": ("f06", "f07"),
+        "707": ("f01", "f03"),
+        "897": ("f01",),
+    }
+    for topic_id, stream_ids in kept_base.items():
+        for stream_id in stream_ids:
+            r1_arm.extend(
+                _row(topic_id, f"prompt_lab_v1:facet:{stream_id}", rank)
+                for rank in range(1, 101)
+            )
     for stream in source["streams"]:
         variant = f"sparse_relevance_v1:R1:{stream['stream_id']}"
         r1_arm.extend(
@@ -84,11 +98,7 @@ def test_topic_alternative_matrix_is_complete():
 
     matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
 
-    assert len(matrix) == 25
-    assert sum(key.startswith("R2:200:") for key in matrix) == 4
-    assert sum(key.startswith("R2:225:") for key in matrix) == 16
-    assert sum(key.startswith("R2:707:") for key in matrix) == 4
-    assert [key for key in matrix if key.startswith("R2:897:")] == ["R2:897:B0"]
+    assert tuple(matrix) == EXPECTED_ALTERNATIVE_NAMES
     assert all(len(rows) == 100 for rows in matrix.values())
 
 
@@ -103,7 +113,9 @@ def test_only_registered_streams_are_replaced_and_facet_count_is_preserved():
     assert "sparse_relevance_v1:R1:f01" in variants
     assert "sparse_relevance_v1:R1:f03" in variants
     assert "sparse_relevance_v1:R1:f05" in variants
-    assert len(variants - {"prompt_lab_v1:original"}) == 5
+    assert "prompt_lab_v1:facet:f06" in variants
+    assert "prompt_lab_v1:facet:f07" in variants
+    assert len(variants - {"prompt_lab_v1:original"}) == 7
 
 
 def test_family_weights_are_half_original_and_half_across_facets():
@@ -193,23 +205,216 @@ def test_freeze_is_create_only_and_binds_all_ranking_hashes(tmp_path):
         )
 
 
+@pytest.mark.parametrize("mutation", ("renamed", "missing", "swapped"))
+def test_freeze_requires_the_complete_exact_alternative_name_and_topic_matrix(
+    tmp_path, mutation
+):
+    r1_arm, control_rows = _candidate_inputs()
+    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
+    mutated = dict(matrix)
+    if mutation == "renamed":
+        mutated["R2:200:NOT-AN-ARM"] = mutated.pop("R2:200:W0")
+    elif mutation == "missing":
+        mutated.pop("R2:225:W2-W2")
+    else:
+        mutated["R2:200:W0"], mutated["R2:707:W0"] = (
+            mutated["R2:707:W0"],
+            mutated["R2:200:W0"],
+        )
+
+    with pytest.raises(ValueError, match="exact 25|target-topic"):
+        create_control_freeze(
+            tmp_path / mutation,
+            mutated,
+            inspections={},
+            bindings={
+                "manifest_sha256": "a" * 64,
+                "prior_freeze_sha256": "b" * 64,
+                "request_sha256": {"request": "c" * 64},
+                "response_sha256": {"request": "d" * 64},
+                "candidate_sha256": {"request": "e" * 64},
+            },
+        )
+    assert not (tmp_path / mutation).exists()
+
+
+def test_unserializable_inspection_leaves_final_output_absent_and_retryable(tmp_path):
+    r1_arm, control_rows = _candidate_inputs()
+    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
+    output = tmp_path / "freeze"
+    bindings = {
+        "manifest_sha256": "a" * 64,
+        "prior_freeze_sha256": "b" * 64,
+        "request_sha256": {"request": "c" * 64},
+        "response_sha256": {"request": "d" * 64},
+        "candidate_sha256": {"request": "e" * 64},
+    }
+
+    with pytest.raises(TypeError):
+        create_control_freeze(
+            output,
+            matrix,
+            inspections={"bad": object()},
+            bindings=bindings,
+        )
+    assert not output.exists()
+
+    freeze = create_control_freeze(
+        output,
+        matrix,
+        inspections={"good": True},
+        bindings=bindings,
+    )
+    assert freeze["status"] == "frozen_before_qrels"
+
+
 def test_freezer_cli_has_no_qrels_boundary():
     parser = _parser()
 
-    assert all("qrel" not in option for action in parser._actions for option in action.option_strings)
+    options = {
+        option for action in parser._actions for option in action.option_strings
+    }
+    assert not {"--qrels", "--r1-candidates", "--r1-candidates-sha256"} & options
+    assert {
+        "--base-run",
+        "--base-cache",
+        "--r1-run",
+        "--r1-cache",
+        "--control-run",
+        "--control-cache",
+    } <= options
 
 
-def test_input_hash_mismatch_fails_before_output_creation(tmp_path):
-    input_path = tmp_path / "input.json"
-    input_path.write_text("{}\n", encoding="utf-8")
-    output = tmp_path / "freeze"
+def test_cli_rejects_protected_manifest_before_freeze_ledger_cache_or_fusion(
+    tmp_path, monkeypatch
+):
+    manifest = build_control_manifest()
+    protected_manifest = replace(
+        manifest,
+        streams=(
+            replace(manifest.streams[0], topic_id=PROTECTED_TOPIC_IDS[0]),
+            *manifest.streams[1:],
+        ),
+    )
+    accesses = []
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.load_control_manifest",
+        lambda _path: protected_manifest,
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.verify_prior_freeze",
+        lambda _path: accesses.append("freeze"),
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze._ledger_from_existing",
+        lambda *args: accesses.append("ledger"),
+    )
 
-    with pytest.raises(ValueError, match="SHA-256"):
-        verify_sha256(input_path, "0" * 64)
-    assert not output.exists()
+    with pytest.raises(ValueError, match=f"protected topic {PROTECTED_TOPIC_IDS[0]}"):
+        main(
+            [
+                "--manifest",
+                str(tmp_path / "manifest.json"),
+                "--prior-freeze",
+                str(tmp_path / "prior"),
+                "--base-run",
+                str(tmp_path / "base-run"),
+                "--base-cache",
+                str(tmp_path / "base-cache"),
+                "--r1-run",
+                str(tmp_path / "r1-run"),
+                "--r1-cache",
+                str(tmp_path / "r1-cache"),
+                "--control-run",
+                str(tmp_path / "control-run"),
+                "--control-cache",
+                str(tmp_path / "control-cache"),
+                "--output",
+                str(tmp_path / "output"),
+            ]
+        )
+    assert accesses == []
+    assert not (tmp_path / "output").exists()
 
 
-def test_prior_freeze_verifies_self_and_ranking_hashes(tmp_path):
+def test_cli_keeps_base_r1_and_control_runs_bound_to_their_own_caches(
+    tmp_path, monkeypatch
+):
+    manifest_path = (
+        REPO_ROOT
+        / "reports"
+        / "experiments"
+        / "facet_retrieval_control_pilot_v1"
+        / "manifest.json"
+    )
+    captured = {}
+    empty_lineage = {
+        "ledger_sha256": {"base": "1" * 64, "r1": "2" * 64},
+        "r1_arm_sha256": "3" * 64,
+        "request_sha256": {"base": "4" * 64},
+        "response_sha256": {"base": "5" * 64},
+        "candidate_sha256": {"base": "6" * 64},
+    }
+
+    def fake_r1(_manifest, **kwargs):
+        captured["r1"] = kwargs
+        return [], empty_lineage
+
+    def fake_control(_manifest, run, cache):
+        captured["control"] = (run, cache)
+        return [], {"control": "7" * 64}, {"control": "8" * 64}, {"control": "9" * 64}
+
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.verify_prior_freeze",
+        lambda _path: "a" * 64,
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.load_verified_r1_arm", fake_r1
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze._load_control_candidates",
+        fake_control,
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze._ledger_tree_sha256",
+        lambda path: "b" * 64,
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.freeze_control_experiment",
+        lambda **kwargs: {"status": "frozen_before_qrels"},
+    )
+
+    paths = {name: tmp_path / name for name in (
+        "base-run", "base-cache", "r1-run", "r1-cache", "control-run", "control-cache"
+    )}
+    assert main(
+        [
+            "--manifest", str(manifest_path),
+            "--prior-freeze", str(tmp_path / "prior"),
+            "--base-run", str(paths["base-run"]),
+            "--base-cache", str(paths["base-cache"]),
+            "--r1-run", str(paths["r1-run"]),
+            "--r1-cache", str(paths["r1-cache"]),
+            "--control-run", str(paths["control-run"]),
+            "--control-cache", str(paths["control-cache"]),
+            "--output", str(tmp_path / "output"),
+        ]
+    ) == 0
+    assert captured["r1"] == {
+        "base_run": paths["base-run"],
+        "base_cache": paths["base-cache"],
+        "r1_run": paths["r1-run"],
+        "r1_cache": paths["r1-cache"],
+    }
+    assert captured["control"] == (paths["control-run"], paths["control-cache"])
+
+
+def test_minimal_self_rehashed_prior_freeze_substitution_is_rejected(
+    tmp_path, monkeypatch
+):
+    assert PRIOR_FREEZE_FILE_SHA256 == (
+        "4a78b44ede4b979a3cb3ec96348088e4e08626e2cc4c92b464c6e36097a71389"
+    )
     prior = tmp_path / "prior"
     rankings = prior / "rankings"
     rankings.mkdir(parents=True)
@@ -217,9 +422,7 @@ def test_prior_freeze_verifies_self_and_ranking_hashes(tmp_path):
     ranking_path.write_text('{"rank": 1}\n', encoding="utf-8")
     import hashlib
 
-    ranking_sha = hashlib.sha256(
-        (json.dumps([{"rank": 1}], separators=(",", ":"), sort_keys=True) + "\n").encode()
-    ).hexdigest()
+    ranking_sha = hashlib.sha256(ranking_path.read_bytes()).hexdigest()
     payload = {
         "schema_version": "sparse-relevance-ranking-freeze-v1",
         "status": "frozen_before_qrels",
@@ -235,64 +438,65 @@ def test_prior_freeze_verifies_self_and_ranking_hashes(tmp_path):
     payload["freeze_sha256"] = hashlib.sha256(compact.encode()).hexdigest()
     freeze_path = prior / "freeze.json"
     freeze_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.PRIOR_FREEZE_FILE_SHA256",
+        hashlib.sha256(freeze_path.read_bytes()).hexdigest(),
+    )
 
-    assert verify_prior_freeze(freeze_path) == hashlib.sha256(
-        freeze_path.read_bytes()
-    ).hexdigest()
-
-    ranking_path.write_text('{"rank": 2}\n', encoding="utf-8")
-    with pytest.raises(ValueError, match="prior ranking SHA-256"):
+    with pytest.raises(ValueError, match="exact immutable prior freeze contract"):
         verify_prior_freeze(freeze_path)
 
 
-def test_cli_rejects_protected_candidate_before_any_ledger_access(tmp_path, monkeypatch):
-    manifest_path = (
-        REPO_ROOT
-        / "reports"
-        / "experiments"
-        / "facet_retrieval_control_pilot_v1"
-        / "manifest.json"
+def test_exact_r1_arm_request_lineage_and_stream_counts():
+    base_requests, r1_requests = build_expected_r1_requests(
+        build_control_manifest(), R1_PATH
     )
-    candidate_path = tmp_path / "r1.jsonl"
-    protected = _row(PROTECTED_TOPIC_IDS[0], "prompt_lab_v1:original", 1)
-    candidate_path.write_text(json.dumps(protected.__dict__) + "\n", encoding="utf-8")
-    import hashlib
+    assert len(base_requests) == 9
+    assert len(r1_requests) == 22
+    assert {
+        (request.identity.topic_id, request.identity.variant_name)
+        for request in base_requests
+    } == {
+        ("200", "prompt_lab_v1:original"),
+        ("225", "prompt_lab_v1:original"),
+        ("225", "prompt_lab_v1:facet:f06"),
+        ("225", "prompt_lab_v1:facet:f07"),
+        ("707", "prompt_lab_v1:original"),
+        ("707", "prompt_lab_v1:facet:f01"),
+        ("707", "prompt_lab_v1:facet:f03"),
+        ("897", "prompt_lab_v1:original"),
+        ("897", "prompt_lab_v1:facet:f01"),
+    }
+    assert all(request.identity.request_key for request in (*base_requests, *r1_requests))
 
-    candidate_sha = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
-    ledger_access = []
-    monkeypatch.setattr(
-        "trec_rag.facet_retrieval_control_freeze.verify_prior_freeze",
-        lambda _path: "b" * 64,
-    )
-    monkeypatch.setattr(
-        "trec_rag.facet_retrieval_control_freeze._ledger_from_existing",
-        lambda *args: ledger_access.append(args),
-    )
 
-    with pytest.raises(ValueError, match=f"protected topic {PROTECTED_TOPIC_IDS[0]}"):
-        main(
-            [
-                "--manifest",
-                str(manifest_path),
-                "--r1-source-manifest",
-                str(R1_PATH),
-                "--prior-freeze",
-                str(tmp_path / "prior.json"),
-                "--prior-ledger",
-                str(tmp_path / "prior-ledger"),
-                "--r1-candidates",
-                str(candidate_path),
-                "--r1-candidates-sha256",
-                candidate_sha,
-                "--control-ledger",
-                str(tmp_path / "control-ledger"),
-                "--shared-cache",
-                str(tmp_path / "cache"),
-                "--endpoint",
-                "https://example.test/search",
-                "--output",
-                str(tmp_path / "output"),
-            ]
+@pytest.mark.parametrize("mutation", ("missing", "extra", "substituted", "protected"))
+def test_r1_arm_rejects_any_lineage_mutation(mutation):
+    base_requests, r1_requests = build_expected_r1_requests(
+        build_control_manifest(), R1_PATH
+    )
+    rows = [
+        RetrievedCandidate(
+            topic_id=request.identity.topic_id,
+            variant_name=request.identity.variant_name,
+            retriever_name=request.identity.retriever_version,
+            query_text=request.query_text,
+            docid=f"{request.identity.request_key}-{rank:03d}",
+            rank=rank,
+            score=float(101 - rank),
+            text="evidence",
         )
-    assert ledger_access == []
-    assert not (tmp_path / "output").exists()
+        for request in (*base_requests, *r1_requests)
+        for rank in range(1, 101)
+    ]
+    if mutation == "missing":
+        rows.pop()
+    elif mutation == "extra":
+        rows.append(rows[0])
+    elif mutation == "substituted":
+        rows[0] = replace(rows[0], query_text="substituted")
+    else:
+        rows[0] = replace(rows[0], topic_id=PROTECTED_TOPIC_IDS[0])
+
+    with pytest.raises(ValueError, match="R1 arm|protected topic"):
+        validate_verified_r1_arm(rows, base_requests, r1_requests)

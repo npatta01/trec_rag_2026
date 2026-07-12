@@ -20,6 +20,17 @@ RANKING_DEPTH = 100
 ORIGINAL_FAMILY_WEIGHT = 0.5
 FACET_FAMILY_WEIGHT = 0.5
 _EXPECTED_TOPIC_IDS = ("200", "225", "707", "897")
+_ARM_IDS = ("B0", "W0", "W1", "W2")
+EXPECTED_ALTERNATIVE_NAMES = (
+    *(f"R2:200:{arm}" for arm in _ARM_IDS),
+    *(
+        f"R2:225:{first}-{second}"
+        for first in _ARM_IDS
+        for second in _ARM_IDS
+    ),
+    *(f"R2:707:{arm}" for arm in _ARM_IDS),
+    "R2:897:B0",
+)
 
 
 def _candidate_key(row: RetrievedCandidate) -> tuple[object, ...]:
@@ -171,11 +182,14 @@ def build_topic_alternatives(
     baseline_by_topic: dict[str, list[RetrievedCandidate]] = defaultdict(list)
     for row in sorted(r1_arm, key=_candidate_key):
         baseline_by_topic[row.topic_id].append(row)
-    arm_ids = ("B0", "W0", "W1", "W2")
     alternatives: dict[str, list[RankedCandidate]] = {}
     for topic_id in _EXPECTED_TOPIC_IDS:
         stream_ids = controlled_by_topic.get(topic_id, [])
-        combinations = itertools.product(arm_ids, repeat=len(stream_ids)) if stream_ids else [("B0",)]
+        combinations = (
+            itertools.product(_ARM_IDS, repeat=len(stream_ids))
+            if stream_ids
+            else [("B0",)]
+        )
         for selected_arms in combinations:
             label = "-".join(selected_arms)
             pool = list(baseline_by_topic[topic_id])
@@ -189,6 +203,6 @@ def build_topic_alternatives(
             alternatives[f"R2:{topic_id}:{label}"] = _family_balanced_topic_fusion(
                 topic_id, pool
             )
-    if len(alternatives) != 25:
-        raise AssertionError(f"expected 25 topic alternatives, built {len(alternatives)}")
+    if tuple(alternatives) != EXPECTED_ALTERNATIVE_NAMES:
+        raise AssertionError("topic alternatives differ from the exact frozen 25-name set")
     return alternatives
