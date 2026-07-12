@@ -26,6 +26,7 @@ from .facet_retrieval_control_manifest import (
     MIN_INTERVAL_SECONDS,
     PROTECTED_TOPIC_IDS,
     ControlManifest,
+    _validate_manifest as _validate_exact_manifest,
     load_control_manifest,
 )
 from .remote_client import rate_limited_session
@@ -53,10 +54,14 @@ def _validate_endpoint(endpoint: str) -> str:
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError("endpoint must be an HTTP(S) URL without query or fragment")
+        raise ValueError(
+            "endpoint must be an HTTP(S) URL without userinfo, query, or fragment"
+        )
     return endpoint
 
 
@@ -82,9 +87,9 @@ def _create_json(path: Path, payload: Mapping[str, object]) -> None:
         handle.write("\n")
 
 
-def _reject_existing_outputs(ledger: RetrievalLedger) -> None:
+def _reject_existing_outputs(run_dir: Path) -> None:
     for name in ("preflight.json", "retrieval_summary.json"):
-        path = ledger.run_dir / name
+        path = Path(run_dir) / name
         if path.exists():
             raise FileExistsError(f"create-only output already exists: {path}")
 
@@ -109,6 +114,7 @@ def build_control_requests(
             "control run requires exactly 12 planned W0/W1/W2 requests; "
             f"found {len(planned)}"
         )
+    _validate_exact_manifest(manifest)
     if any(
         tuple(arm.arm_id for arm in stream.arms if arm.external)
         != _CONTROL_ARM_IDS
@@ -173,6 +179,7 @@ class RateLimitedControlTransport:
         self,
         config: RemotePyseriniConfig,
         *,
+        allowed_requests: Sequence[RetrievalRequest],
         session: requests.Session | None = None,
         timeout_seconds: float = _TIMEOUT_SECONDS,
     ) -> None:
@@ -185,10 +192,21 @@ class RateLimitedControlTransport:
         self.config = config
         self.endpoint_url = _validate_endpoint(config.index_url)
         self.timeout_seconds = timeout_seconds
+        allowed_by_key = {
+            request.identity.request_key: request for request in allowed_requests
+        }
+        if (
+            len(allowed_requests) != MAX_EXTERNAL_REQUESTS
+            or len(allowed_by_key) != MAX_EXTERNAL_REQUESTS
+        ):
+            raise ValueError("control transport requires the exact 12-request allowlist")
+        self._allowed_requests = allowed_by_key
         self.session = session if session is not None else rate_limited_session(config)
 
     def __call__(self, request: RetrievalRequest) -> RawTransportResponse:
         identity = request.identity
+        if self._allowed_requests.get(identity.request_key) != request:
+            raise ValueError("request is not in the frozen control allowlist")
         if identity.topic_id in PROTECTED_TOPIC_IDS:
             raise ValueError(f"protected topic {identity.topic_id} is forbidden")
         if identity.index_url != self.endpoint_url:
@@ -247,6 +265,7 @@ def preflight_control(
     """Probe exact cache identities without recording planned invocations."""
 
     _reject_protected(manifest)
+    _validate_exact_manifest(manifest)
     requests_to_run = build_control_requests(manifest, endpoint=endpoint)
     cache_status = tuple(
         ledger.has_verified_cache(request) for request in requests_to_run
@@ -336,7 +355,7 @@ def execute_control(
     """Execute the 12 planned invocations, stopping on the first exception."""
 
     _reject_protected(manifest)
-    _reject_existing_outputs(ledger)
+    _reject_existing_outputs(ledger.run_dir)
     preflight_path = ledger.run_dir / "preflight.json"
     preflight = preflight_control(manifest, ledger, endpoint)
     _create_json(preflight_path, preflight)
@@ -366,6 +385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.limiter_state,
         args.min_interval_seconds,
     )
+    _reject_existing_outputs(args.output)
     ledger = RetrievalLedger(
         args.output,
         shared_cache_dir=args.shared_cache,
@@ -374,15 +394,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         min_results=50,
         required_text_results=50,
     )
-    _reject_existing_outputs(ledger)
     preflight = preflight_control(manifest, ledger, args.endpoint)
-    _create_json(ledger.run_dir / "preflight.json", preflight)
     if args.preflight_only:
         print(json.dumps(preflight, indent=2, sort_keys=True))
         return 0
 
     # Constructing the real rate-limited session happens only after every preflight gate.
-    transport = RateLimitedControlTransport(config)
+    allowed_requests = build_control_requests(manifest, endpoint=args.endpoint)
+    transport = RateLimitedControlTransport(
+        config,
+        allowed_requests=allowed_requests,
+    )
+    _create_json(ledger.run_dir / "preflight.json", preflight)
     summary = _execute_preflighted(
         manifest,
         ledger,

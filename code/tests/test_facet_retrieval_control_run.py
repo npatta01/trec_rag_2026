@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -10,8 +11,10 @@ from trec_rag.det_sparse_ledger import (
     RawTransportResponse,
     RetrievalLedger,
     RetrievalLedgerError,
+    RetrievalRequest,
 )
 from trec_rag.facet_retrieval_control_manifest import (
+    ControlManifestError,
     PROTECTED_TOPIC_IDS,
     build_control_manifest,
 )
@@ -27,6 +30,14 @@ from trec_rag.facet_retrieval_control_run import (
 
 
 ENDPOINT = "http://api.example.test/v1/climbmix-400b/search"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_PATH = (
+    REPO_ROOT
+    / "reports"
+    / "experiments"
+    / "facet_retrieval_control_pilot_v1"
+    / "manifest.json"
+)
 
 
 def _body(count: int = 100) -> bytes:
@@ -60,6 +71,41 @@ def _protected_manifest(topic_id: str):
     manifest = build_control_manifest()
     first = replace(manifest.streams[0], topic_id=topic_id)
     return replace(manifest, streams=(first, *manifest.streams[1:]))
+
+
+def _tampered_manifest(kind: str):
+    manifest = build_control_manifest()
+    first = manifest.streams[0]
+    if kind == "topic":
+        first = replace(first, topic_id="999")
+    elif kind == "query":
+        first = replace(first, reweighted_query=f"{first.reweighted_query} tampered")
+    elif kind == "variant":
+        first = replace(first, stream_id="f07a-tampered")
+    elif kind == "bm25":
+        arms = list(first.arms)
+        arms[1] = replace(arms[1], k1=9.0, b=1.0)
+        first = replace(first, arms=tuple(arms))
+    else:
+        raise AssertionError(f"unknown test mutation: {kind}")
+    return replace(manifest, streams=(first, *manifest.streams[1:]))
+
+
+def _cli_args(tmp_path, *, endpoint: str = ENDPOINT):
+    return [
+        "--manifest",
+        str(MANIFEST_PATH),
+        "--endpoint",
+        endpoint,
+        "--shared-cache",
+        str(tmp_path / "cache"),
+        "--output",
+        str(tmp_path / "output"),
+        "--limiter-state",
+        str(tmp_path / "limit.sqlite"),
+        "--min-interval-seconds",
+        "10",
+    ]
 
 
 def test_requests_are_exactly_twelve_and_parameterized():
@@ -104,6 +150,22 @@ def test_thirteenth_planned_request_is_rejected_before_construction(monkeypatch)
     assert constructed == []
 
 
+@pytest.mark.parametrize("kind", ("topic", "query", "variant", "bm25"))
+def test_build_rejects_any_exact_manifest_tampering_before_construction(
+    kind,
+    monkeypatch,
+):
+    constructed = []
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_run.RetrievalRequest.from_query",
+        lambda **kwargs: constructed.append(kwargs),
+    )
+
+    with pytest.raises(ControlManifestError):
+        build_control_requests(_tampered_manifest(kind), endpoint=ENDPOINT)
+    assert constructed == []
+
+
 @pytest.mark.parametrize("topic_id", PROTECTED_TOPIC_IDS)
 def test_every_protected_topic_is_rejected_before_request_construction(
     topic_id,
@@ -136,6 +198,19 @@ def test_every_protected_topic_is_rejected_before_cache_probe(topic_id):
 
     with pytest.raises(ValueError, match=f"protected topic {topic_id}"):
         preflight_control(_protected_manifest(topic_id), HostileLedger(), ENDPOINT)
+
+
+@pytest.mark.parametrize("kind", ("topic", "query", "variant", "bm25"))
+def test_preflight_rejects_any_exact_manifest_tampering_before_cache_probe(kind):
+    class HostileLedger:
+        def has_verified_cache(self, _request):
+            raise AssertionError("cache must remain untouched")
+
+        def call_count(self):
+            raise AssertionError("ledger attempts must remain untouched")
+
+    with pytest.raises(ControlManifestError):
+        preflight_control(_tampered_manifest(kind), HostileLedger(), ENDPOINT)
 
 
 def test_preflight_probes_cache_without_recording_an_invocation(tmp_path):
@@ -178,6 +253,28 @@ def test_interval_below_ten_seconds_is_rejected(tmp_path):
         )
 
 
+def test_endpoint_userinfo_is_rejected_before_output_or_session_creation(
+    tmp_path,
+    monkeypatch,
+):
+    session_calls = []
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_run.rate_limited_session",
+        lambda config: session_calls.append(config),
+    )
+
+    with pytest.raises(ValueError, match="userinfo"):
+        main(
+            _cli_args(
+                tmp_path,
+                endpoint="https://user:password@api.example.test/search",
+            )
+        )
+
+    assert session_calls == []
+    assert not (tmp_path / "output").exists()
+
+
 class _FakeResponse:
     status_code = 200
     headers = {"Content-Type": "application/json"}
@@ -202,8 +299,16 @@ def test_transport_sends_only_exact_explicit_http_parameters(tmp_path):
         tmp_path / "limit.sqlite",
         10.0,
     )
-    transport = RateLimitedControlTransport(config, session=session)
-    request = build_control_requests(build_control_manifest(), endpoint=ENDPOINT)[2]
+    allowed_requests = build_control_requests(
+        build_control_manifest(),
+        endpoint=ENDPOINT,
+    )
+    transport = RateLimitedControlTransport(
+        config,
+        allowed_requests=allowed_requests,
+        session=session,
+    )
+    request = allowed_requests[2]
 
     result = transport(request)
 
@@ -224,6 +329,40 @@ def test_transport_sends_only_exact_explicit_http_parameters(tmp_path):
     }
     assert transport.one_shot_no_retry is True
     assert transport.redirects_allowed is False
+
+
+def test_transport_rejects_protocol_valid_nonallowlisted_request_before_session(
+    tmp_path,
+):
+    manifest = build_control_manifest()
+    allowed_requests = build_control_requests(manifest, endpoint=ENDPOINT)
+    session = _FakeSession()
+    transport = RateLimitedControlTransport(
+        build_control_live_config(
+            ENDPOINT,
+            None,
+            tmp_path / "limit.sqlite",
+            10.0,
+        ),
+        allowed_requests=allowed_requests,
+        session=session,
+    )
+    request = RetrievalRequest.from_query(
+        topic_id="200",
+        variant_name="facet_control_v1:W2:generic-but-not-frozen",
+        query_text="generic protocol valid query",
+        index_url=ENDPOINT,
+        index_id="climbmix-400b",
+        hits=100,
+        analyzer_fingerprint_sha256=manifest.analyzer_fingerprint_sha256,
+        retriever_version=RETRIEVER_VERSION,
+        bm25_k1=0.4,
+        bm25_b=0.0,
+    )
+
+    with pytest.raises(ValueError, match="allowlist"):
+        transport(request)
+    assert session.calls == []
 
 
 def test_first_failure_stops_without_retry_or_later_calls(tmp_path):
@@ -286,6 +425,76 @@ def test_existing_summary_is_rejected_before_any_invocation(tmp_path):
 
     assert calls == []
     assert not (ledger.run_dir / "preflight.json").exists()
+
+
+def test_cli_rejects_existing_final_before_creating_output_or_session(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "output"
+    summary_path = output / "retrieval_summary.json"
+    real_exists = Path.exists
+    session_calls = []
+
+    def synthetic_collision(path):
+        if path == summary_path:
+            return True
+        return real_exists(path)
+
+    monkeypatch.setattr(Path, "exists", synthetic_collision)
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_run.rate_limited_session",
+        lambda config: session_calls.append(config),
+    )
+
+    with pytest.raises(FileExistsError, match="retrieval_summary.json"):
+        main(_cli_args(tmp_path))
+
+    assert session_calls == []
+    assert not real_exists(output)
+
+
+def test_preflight_only_stdout_then_execution_reuses_same_output(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    transport_builds = []
+
+    def fake_transport_factory(config, *, allowed_requests):
+        transport_builds.append((config, allowed_requests))
+
+        def transport(_request):
+            return RawTransportResponse(
+                200,
+                {"X-Synthetic": "true"},
+                _body(),
+                0.01,
+            )
+
+        return transport
+
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_run.RateLimitedControlTransport",
+        fake_transport_factory,
+    )
+    args = _cli_args(tmp_path)
+    output = tmp_path / "output"
+
+    assert main([*args, "--preflight-only"]) == 0
+    preflight = json.loads(capsys.readouterr().out)
+    assert preflight["planned_requests"] == 12
+    assert transport_builds == []
+    assert not (output / "preflight.json").exists()
+    assert not (output / "retrieval_summary.json").exists()
+
+    assert main(args) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["complete"] is True
+    assert len(transport_builds) == 1
+    assert len(transport_builds[0][1]) == 12
+    assert (output / "preflight.json").is_file()
+    assert (output / "retrieval_summary.json").is_file()
 
 
 @pytest.mark.parametrize("topic_id", PROTECTED_TOPIC_IDS)

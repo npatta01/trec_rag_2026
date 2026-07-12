@@ -201,6 +201,8 @@ Build only W0/W1/W2 requests using names such as `facet_control_v1:W0:f07a`, ret
 
 Implement the control-specific transport in `facet_retrieval_control_run.py`; it sends only query text, `hits=100`, and the explicit identity `k1`/`b`, with redirects and automatic retries disabled. Use one ledger with `max_calls=12` and `max_calls_per_topic=6`. Enforce the 10-second minimum, stop on the first exception, and write `preflight.json` plus `retrieval_summary.json` with manifest/code hashes. A complete run requires zero failures/pending and exactly 12 planned invocations including cache hits.
 
+The transport must receive the exact request-key allowlist produced from the fully validated frozen manifest and reject any other request before entering the session. `--preflight-only` is a no-final-artifact probe: print the preflight JSON to stdout without creating `preflight.json` or `retrieval_summary.json`. A later execution invocation on the same `--output` creates both final artifacts exactly once.
+
 - [ ] **Step 5: Test and commit**
 
 ```bash
@@ -420,11 +422,11 @@ Expected: artifact tests pass.
   --min-interval-seconds 10 --preflight-only
 ```
 
-Expected: 12 planned requests, zero to 12 verified cache hits, no protected topic, and no more than 12 external attempts. Stop if identities differ.
+Expected: stdout reports 12 planned requests, zero to 12 verified cache hits, no protected topic, and no more than 12 external attempts. The probe creates neither `preflight.json` nor `retrieval_summary.json`, so the same `--output` remains valid for execution. Stop if identities differ.
 
 - [ ] **Step 2: Execute through the limiter**
 
-Run the same command without `--preflight-only`. Expected: at least 10 seconds between external starts and zero failures/pending. If any request fails, preserve the ledger and stop without retry.
+Run the same command without `--preflight-only`. Execution binds the transport to the exact validated 12-request allowlist and creates `preflight.json` plus `retrieval_summary.json` exactly once. Expected: at least 10 seconds between external starts and zero failures/pending. If any request fails, preserve the ledger and stop without retry.
 
 - [ ] **Step 3: Freeze all alternatives before qrels**
 
