@@ -22,14 +22,17 @@ from trec_rag.facet_retrieval_control_evaluate import (
     verify_control_freeze,
 )
 from trec_rag.facet_retrieval_control_freeze import (
+    CandidateSnapshot,
     FREEZE_SCHEMA_VERSION,
     PRIOR_FREEZE_FILE_SHA256,
     _parser,
     _publish_directory_noreplace,
+    build_candidate_snapshot,
     build_expected_r1_requests,
-    create_control_freeze,
+    create_control_freeze as _production_create_control_freeze,
     main,
     validate_verified_r1_arm,
+    validate_candidate_snapshot,
     verify_prior_freeze,
 )
 from trec_rag.facet_retrieval_control_manifest import (
@@ -95,6 +98,76 @@ def _candidate_inputs():
                 _row(stream.topic_id, variant, rank) for rank in range(1, 101)
             )
     return r1_arm, control_rows
+
+
+def _source_lineage(r1_arm, control_rows):
+    import hashlib
+
+    result = {}
+    for row in (*r1_arm, *control_rows):
+        key = (row.topic_id, row.variant_name)
+        if key in result:
+            continue
+        request_sha256 = hashlib.sha256("|".join(key).encode()).hexdigest()
+        result[key] = {
+            "request_sha256": request_sha256,
+            "response_sha256": hashlib.sha256(
+                f"response|{request_sha256}".encode()
+            ).hexdigest(),
+            "candidate_sha256": hashlib.sha256(
+                f"candidates|{request_sha256}".encode()
+            ).hexdigest(),
+        }
+    return result
+
+
+def _candidate_snapshot_fixture():
+    r1_arm, control_rows = _candidate_inputs()
+    lineage = _source_lineage(r1_arm, control_rows)
+    snapshot = build_candidate_snapshot(
+        r1_arm,
+        control_rows,
+        build_control_manifest(),
+        lineage,
+    )
+    return r1_arm, control_rows, lineage, snapshot
+
+
+def _snapshot_bindings(lineage):
+    return {
+        "manifest_sha256": "a" * 64,
+        "prior_freeze_sha256": "b" * 64,
+        "request_sha256": {
+            value["request_sha256"]: value["request_sha256"]
+            for value in lineage.values()
+        },
+        "response_sha256": {
+            value["request_sha256"]: value["response_sha256"]
+            for value in lineage.values()
+        },
+        "candidate_sha256": {
+            value["request_sha256"]: value["candidate_sha256"]
+            for value in lineage.values()
+        },
+    }
+
+
+def create_control_freeze(output, rankings, *, inspections, bindings=None):
+    _r1, _control, lineage, snapshot = _candidate_snapshot_fixture()
+    source_bindings = _snapshot_bindings(lineage)
+    if bindings is not None:
+        source_bindings["manifest_sha256"] = bindings["manifest_sha256"]
+        source_bindings["prior_freeze_sha256"] = bindings["prior_freeze_sha256"]
+        for optional in ("ledger_sha256", "r1_arm_sha256"):
+            if optional in bindings:
+                source_bindings[optional] = bindings[optional]
+    return _production_create_control_freeze(
+        output,
+        rankings,
+        inspections=inspections,
+        bindings=source_bindings,
+        candidate_snapshot=snapshot,
+    )
 
 
 def _provenance_variants(rows):
@@ -191,6 +264,116 @@ def test_control_index_contains_exact_four_arms_for_four_streams():
     assert all(len(rows) == 100 for rows in indexed.values())
 
 
+def test_candidate_snapshot_is_exactly_twenty_streams_and_two_thousand_rows():
+    _r1, _control, _lineage, snapshot = _candidate_snapshot_fixture()
+
+    manifest, rows = validate_candidate_snapshot(snapshot)
+
+    assert snapshot.schema_version == "facet-control-candidate-snapshot-v1"
+    assert manifest["stream_count"] == 20
+    assert manifest["row_count"] == 2000
+    assert len(manifest["streams"]) == 20
+    assert len(rows) == 2000
+    assert set(rows[0]) == {
+        "schema_version",
+        "topic_id",
+        "stream_id",
+        "arm_id",
+        "query_sha256",
+        "rank",
+        "docid",
+    }
+    assert all("text" not in row and "score" not in row for row in rows)
+    assert rows == sorted(
+        rows,
+        key=lambda row: (
+            row["topic_id"],
+            row["stream_id"],
+            row["arm_id"],
+            row["rank"],
+        ),
+    )
+    assert {(entry["role"], entry["source_kind"]) for entry in manifest["streams"]} == {
+        ("original", "prior_base"),
+        ("facet", "prior_r1"),
+        ("facet", "control"),
+    }
+
+
+def test_candidate_snapshot_is_deterministic_under_source_reordering():
+    r1_arm, control_rows = _candidate_inputs()
+    lineage = _source_lineage(r1_arm, control_rows)
+    expected = build_candidate_snapshot(
+        r1_arm, control_rows, build_control_manifest(), lineage
+    )
+    random.Random(31).shuffle(r1_arm)
+    random.Random(37).shuffle(control_rows)
+
+    actual = build_candidate_snapshot(
+        r1_arm, control_rows, build_control_manifest(), lineage
+    )
+
+    assert actual == expected
+
+
+@pytest.mark.parametrize("mutation", ("omission", "corruption", "wrong_query"))
+def test_candidate_snapshot_validation_rejects_corrupt_bytes(mutation):
+    _r1, _control, _lineage, snapshot = _candidate_snapshot_fixture()
+    lines = snapshot.candidate_bytes.splitlines(keepends=True)
+    if mutation == "omission":
+        candidate_bytes = b"".join(lines[:-1])
+    elif mutation == "corruption":
+        candidate_bytes = snapshot.candidate_bytes + b"not-json\n"
+    else:
+        row = json.loads(lines[0])
+        row["query_sha256"] = "0" * 64
+        lines[0] = (
+            json.dumps(row, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
+        candidate_bytes = b"".join(lines)
+
+    with pytest.raises(ValueError, match="candidate snapshot"):
+        validate_candidate_snapshot(replace(snapshot, candidate_bytes=candidate_bytes))
+
+
+def test_candidate_snapshot_validation_rejects_manifest_stream_omission():
+    _r1, _control, _lineage, snapshot = _candidate_snapshot_fixture()
+    manifest = json.loads(snapshot.manifest_bytes)
+    manifest["streams"].pop()
+    manifest_bytes = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="candidate snapshot"):
+        validate_candidate_snapshot(replace(snapshot, manifest_bytes=manifest_bytes))
+
+
+@pytest.mark.parametrize(
+    "mutation", ("protected", "wrong_source", "wrong_query", "wrong_rank", "duplicate")
+)
+def test_candidate_snapshot_builder_rejects_invalid_in_memory_sources(mutation):
+    r1_arm, control_rows = _candidate_inputs()
+    lineage = _source_lineage(r1_arm, control_rows)
+    if mutation == "protected":
+        r1_arm[0] = replace(r1_arm[0], topic_id=PROTECTED_TOPIC_IDS[0])
+    elif mutation == "wrong_source":
+        lineage.pop(("200", "prompt_lab_v1:original"))
+    elif mutation == "wrong_query":
+        r1_arm[0] = replace(r1_arm[0], query_text="substituted")
+    elif mutation == "wrong_rank":
+        control_rows[0] = replace(control_rows[0], rank=101)
+    else:
+        control_rows[1] = replace(control_rows[1], docid=control_rows[0].docid)
+
+    with pytest.raises(ValueError, match="candidate snapshot|protected topic|source lineage"):
+        build_candidate_snapshot(
+            r1_arm,
+            control_rows,
+            build_control_manifest(),
+            lineage,
+        )
+
+
 @pytest.mark.parametrize("topic_id", PROTECTED_TOPIC_IDS)
 def test_protected_ids_fail_before_fusion_access(topic_id, monkeypatch):
     r1_arm, control_rows = _candidate_inputs()
@@ -225,12 +408,18 @@ def test_freeze_is_create_only_and_binds_all_ranking_hashes(tmp_path):
     )
 
     assert freeze["schema_version"] == FREEZE_SCHEMA_VERSION
+    assert FREEZE_SCHEMA_VERSION == "facet-control-ranking-freeze-v2"
     assert freeze["status"] == "frozen_before_qrels"
     assert len(freeze["rankings"]) == 25
     assert all(len(value["sha256"]) == 64 for value in freeze["rankings"].values())
     assert len(freeze["inspection_sha256"]) == 64
     assert len(freeze["fusion_sha256"]) == 64
     assert (output / "freeze.json").is_file()
+    assert (output / "candidate_streams.json").is_file()
+    assert len((output / "candidates.jsonl").read_text(encoding="utf-8").splitlines()) == 2000
+    assert freeze["bindings"]["candidate_streams_sha256"]
+    assert freeze["bindings"]["candidates_sha256"]
+    assert len(freeze["bindings"]["candidate_stream_rows_sha256"]) == 20
     assert len(list((output / "rankings").glob("*.jsonl"))) == 25
 
     with pytest.raises(FileExistsError):
@@ -240,6 +429,24 @@ def test_freeze_is_create_only_and_binds_all_ranking_hashes(tmp_path):
             inspections={},
             bindings=freeze["bindings"],
         )
+
+
+def test_freeze_rejects_snapshot_source_hash_substitution_before_publication(tmp_path):
+    r1_arm, control_rows, lineage, snapshot = _candidate_snapshot_fixture()
+    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
+    bindings = _snapshot_bindings(lineage)
+    first_key = next(iter(bindings["candidate_sha256"]))
+    bindings["candidate_sha256"][first_key] = "0" * 64
+
+    with pytest.raises(ValueError, match="candidate snapshot source hashes"):
+        _production_create_control_freeze(
+            tmp_path / "freeze",
+            matrix,
+            inspections={},
+            bindings=bindings,
+            candidate_snapshot=snapshot,
+        )
+    assert not (tmp_path / "freeze").exists()
 
 
 @pytest.mark.parametrize("mutation", ("renamed", "missing", "swapped"))
@@ -500,6 +707,10 @@ def test_cli_keeps_base_r1_and_control_runs_bound_to_their_own_caches(
     monkeypatch.setattr(
         "trec_rag.facet_retrieval_control_freeze._ledger_tree_sha256",
         lambda path: "b" * 64,
+    )
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze._source_lineage_for_requests",
+        lambda *args: {},
     )
     monkeypatch.setattr(
         "trec_rag.facet_retrieval_control_freeze.freeze_control_experiment",
