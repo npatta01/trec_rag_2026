@@ -63,6 +63,8 @@ class RetrievalRequestIdentity:
     index_id: str
     hits: int
     analyzer_fingerprint_sha256: str
+    bm25_k1: float | None = None
+    bm25_b: float | None = None
 
     def __post_init__(self) -> None:
         _require_nonempty(self.topic_id, "topic_id")
@@ -77,6 +79,23 @@ class RetrievalRequestIdentity:
             self.analyzer_fingerprint_sha256,
             "analyzer_fingerprint_sha256",
         )
+        if (self.bm25_k1 is None) != (self.bm25_b is None):
+            raise ValueError("bm25_k1 and bm25_b must be provided together")
+        if self.bm25_k1 is not None:
+            if (
+                isinstance(self.bm25_k1, bool)
+                or not isinstance(self.bm25_k1, (int, float))
+                or not math.isfinite(float(self.bm25_k1))
+                or self.bm25_k1 < 0
+            ):
+                raise ValueError("bm25_k1 must be a finite non-negative number")
+            if (
+                isinstance(self.bm25_b, bool)
+                or not isinstance(self.bm25_b, (int, float))
+                or not math.isfinite(float(self.bm25_b))
+                or not 0 <= self.bm25_b <= 1
+            ):
+                raise ValueError("bm25_b must be a finite number between zero and one")
 
     @classmethod
     def from_query(
@@ -90,6 +109,8 @@ class RetrievalRequestIdentity:
         hits: int,
         analyzer_fingerprint_sha256: str,
         retriever_version: str = RETRIEVER_VERSION,
+        bm25_k1: float | None = None,
+        bm25_b: float | None = None,
     ) -> "RetrievalRequestIdentity":
         if not isinstance(query_text, str):
             raise TypeError("query_text must be a string")
@@ -103,10 +124,12 @@ class RetrievalRequestIdentity:
             index_id=index_id,
             hits=hits,
             analyzer_fingerprint_sha256=analyzer_fingerprint_sha256,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
         )
 
     def canonical_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "analyzer_fingerprint_sha256": self.analyzer_fingerprint_sha256,
             "hits": self.hits,
             "index_id": self.index_id,
@@ -116,6 +139,10 @@ class RetrievalRequestIdentity:
             "topic_id": self.topic_id,
             "variant_name": self.variant_name,
         }
+        if self.bm25_k1 is not None:
+            value["bm25_k1"] = float(self.bm25_k1)
+            value["bm25_b"] = float(self.bm25_b)
+        return value
 
     @property
     def request_key(self) -> str:
@@ -149,6 +176,8 @@ class RetrievalRequest:
         hits: int,
         analyzer_fingerprint_sha256: str,
         retriever_version: str = RETRIEVER_VERSION,
+        bm25_k1: float | None = None,
+        bm25_b: float | None = None,
     ) -> "RetrievalRequest":
         identity = RetrievalRequestIdentity.from_query(
             topic_id=topic_id,
@@ -159,6 +188,8 @@ class RetrievalRequest:
             hits=hits,
             analyzer_fingerprint_sha256=analyzer_fingerprint_sha256,
             retriever_version=retriever_version,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
         )
         return cls(identity=identity, query_text=query_text)
 
@@ -334,6 +365,14 @@ class RetrievalLedger:
 
         with self._run_lock():
             return len(self._validated_reservations())
+
+    def has_verified_cache(self, request: RetrievalRequest) -> bool:
+        """Check an exact shared-cache entry without recording an invocation."""
+
+        if self.shared_cache_dir is None:
+            return False
+        with self._shared_cache_lock(request.identity.request_key):
+            return self._load_cache(request) is not None
 
     def retrieve(
         self,
@@ -1563,7 +1602,8 @@ def _identity_from_mapping(value: object) -> RetrievalRequestIdentity:
         "hits",
         "analyzer_fingerprint_sha256",
     }
-    if set(value) != expected:
+    bm25_fields = {"bm25_k1", "bm25_b"}
+    if set(value) not in (expected, expected | bm25_fields):
         raise LedgerIntegrityError("artifact identity fields are not exact")
     try:
         return RetrievalRequestIdentity(
@@ -1575,6 +1615,8 @@ def _identity_from_mapping(value: object) -> RetrievalRequestIdentity:
             index_id=value["index_id"],  # type: ignore[arg-type]
             hits=_strict_int(value["hits"], "identity.hits"),
             analyzer_fingerprint_sha256=value["analyzer_fingerprint_sha256"],  # type: ignore[arg-type]
+            bm25_k1=value.get("bm25_k1"),  # type: ignore[arg-type]
+            bm25_b=value.get("bm25_b"),  # type: ignore[arg-type]
         )
     except (TypeError, ValueError) as exc:
         raise LedgerIntegrityError("artifact identity is invalid") from exc

@@ -110,6 +110,49 @@ def test_request_identity_hashes_exact_query_and_all_retrieval_fields():
         RetrievalRequest(identity=mismatched, query_text=request.query_text)
 
 
+def test_explicit_bm25_settings_change_identity_without_changing_legacy_identity():
+    legacy = _request(query="weighted query")
+    explicit = RetrievalRequest.from_query(
+        topic_id=legacy.identity.topic_id, variant_name=legacy.identity.variant_name,
+        query_text=legacy.query_text, index_url=legacy.identity.index_url,
+        index_id=legacy.identity.index_id, hits=100,
+        analyzer_fingerprint_sha256=ANALYZER_SHA, bm25_k1=0.9, bm25_b=0.4,
+    )
+    assert "bm25_k1" not in legacy.identity.canonical_dict()
+    assert explicit.identity.request_key != legacy.identity.request_key
+
+
+@pytest.mark.parametrize(("k1", "b"), [(0.4, None), (None, 0.4), (-0.1, 0.4), (0.4, 1.1)])
+def test_invalid_bm25_pairs_are_rejected(k1, b):
+    with pytest.raises(ValueError):
+        RetrievalRequest.from_query(
+            topic_id="200", variant_name="W1", query_text="query",
+            index_url="https://example.test/search", index_id="climbmix-400b",
+            hits=100, analyzer_fingerprint_sha256=ANALYZER_SHA,
+            bm25_k1=k1, bm25_b=b,
+        )
+
+
+def test_explicit_bm25_identity_round_trips_ledger_artifacts(tmp_path: Path):
+    request = RetrievalRequest.from_query(
+        topic_id="200",
+        variant_name="W1",
+        query_text="weighted query",
+        index_url="https://example.test/search",
+        index_id="climbmix-400b",
+        hits=100,
+        analyzer_fingerprint_sha256=ANALYZER_SHA,
+        bm25_k1=0.4,
+        bm25_b=0.0,
+    )
+    ledger = RetrievalLedger(tmp_path / "run")
+
+    result = ledger.retrieve(request, _transport())
+
+    assert ledger.validate_run().successes == 1
+    assert ledger.load_verified_result(request) == result
+
+
 def test_blank_query_and_impossible_hits_are_rejected_before_reservation(tmp_path: Path):
     with pytest.raises(ValueError, match="query_text"):
         _request(query="   ")
@@ -200,6 +243,20 @@ def test_exact_verified_shared_cache_hit_costs_zero_and_makes_no_reservation(
     assert validation.external_calls == 0
     assert validation.planned_requests == 1
     assert second.load_verified_result(request) == cached
+
+
+def test_verified_cache_probe_is_read_only(tmp_path: Path):
+    request = _request()
+    shared = tmp_path / "shared"
+    RetrievalLedger(tmp_path / "seed", shared_cache_dir=shared).retrieve(
+        request, _transport()
+    )
+    ledger = RetrievalLedger(tmp_path / "probe", shared_cache_dir=shared)
+
+    assert ledger.has_verified_cache(request) is True
+    assert ledger.has_verified_cache(_request(2)) is False
+    assert ledger.call_count() == 0
+    assert list(ledger.cache_hits_dir.glob("*.json")) == []
 
 
 def test_same_key_concurrent_cache_miss_makes_only_one_billed_call(tmp_path: Path):
