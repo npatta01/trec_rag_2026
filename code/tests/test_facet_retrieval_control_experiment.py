@@ -1,5 +1,6 @@
 import json
 import random
+import errno
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from trec_rag.facet_retrieval_control_freeze import (
     FREEZE_SCHEMA_VERSION,
     PRIOR_FREEZE_FILE_SHA256,
     _parser,
+    _publish_directory_noreplace,
     build_expected_r1_requests,
     create_control_freeze,
     main,
@@ -266,6 +268,91 @@ def test_unserializable_inspection_leaves_final_output_absent_and_retryable(tmp_
         bindings=bindings,
     )
     assert freeze["status"] == "frozen_before_qrels"
+
+
+def test_atomic_publish_never_replaces_concurrently_created_destination(
+    tmp_path, monkeypatch
+):
+    r1_arm, control_rows = _candidate_inputs()
+    matrix = build_topic_alternatives(r1_arm, control_rows, build_control_manifest())
+    output = tmp_path / "freeze"
+    bindings = {
+        "manifest_sha256": "a" * 64,
+        "prior_freeze_sha256": "b" * 64,
+        "request_sha256": {"request": "c" * 64},
+        "response_sha256": {"request": "d" * 64},
+        "candidate_sha256": {"request": "e" * 64},
+    }
+    raced = {}
+
+    def race_before_publish(stage, destination):
+        destination.mkdir(mode=0o711)
+        raced["inode"] = destination.stat().st_ino
+        raced["mode"] = destination.stat().st_mode
+        _publish_directory_noreplace(stage, destination)
+
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze._publish_directory_noreplace",
+        race_before_publish,
+    )
+
+    with pytest.raises(FileExistsError):
+        create_control_freeze(
+            output,
+            matrix,
+            inspections={"good": True},
+            bindings=bindings,
+        )
+    assert output.is_dir()
+    assert list(output.iterdir()) == []
+    assert output.stat().st_ino == raced["inode"]
+    assert output.stat().st_mode == raced["mode"]
+    assert list(tmp_path.glob(".freeze.staging-*")) == []
+
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze._publish_directory_noreplace",
+        _publish_directory_noreplace,
+    )
+    retry = tmp_path / "retry"
+    freeze = create_control_freeze(
+        retry,
+        matrix,
+        inspections={"good": True},
+        bindings=bindings,
+    )
+    assert freeze["status"] == "frozen_before_qrels"
+    assert (retry / "freeze.json").is_file()
+
+
+def test_atomic_no_replace_helper_publishes_normally(tmp_path):
+    stage = tmp_path / "stage"
+    output = tmp_path / "published"
+    stage.mkdir()
+    (stage / "marker").write_text("staged", encoding="utf-8")
+
+    _publish_directory_noreplace(stage, output)
+
+    assert not stage.exists()
+    assert (output / "marker").read_text(encoding="utf-8") == "staged"
+
+
+def test_atomic_no_replace_helper_fails_closed_when_renameat2_is_unavailable(
+    tmp_path, monkeypatch
+):
+    stage = tmp_path / "stage"
+    output = tmp_path / "published"
+    stage.mkdir()
+    monkeypatch.setattr(
+        "trec_rag.facet_retrieval_control_freeze.ctypes.CDLL",
+        lambda *args, **kwargs: object(),
+    )
+
+    with pytest.raises(OSError) as error:
+        _publish_directory_noreplace(stage, output)
+
+    assert error.value.errno == errno.ENOSYS
+    assert stage.is_dir()
+    assert not output.exists()
 
 
 def test_freezer_cli_has_no_qrels_boundary():

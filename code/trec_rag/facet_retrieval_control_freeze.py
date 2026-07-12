@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import math
@@ -135,6 +137,8 @@ _ALL_BASE_QUERIES = (
     ),
 )
 _EXPECTED_R1_ARM_STREAMS_BY_TOPIC = {"200": 10, "225": 8, "707": 4, "897": 9}
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
 
 
 def _canonical_json(value: object) -> bytes:
@@ -162,6 +166,45 @@ def _exclusive_write(path: Path, content: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+def _publish_directory_noreplace(stage: Path, destination: Path) -> None:
+    """Atomically publish a directory with Linux ``RENAME_NOREPLACE``."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as exc:
+        raise OSError(
+            errno.ENOSYS,
+            "atomic no-replace directory publication is unavailable",
+            destination,
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        _AT_FDCWD,
+        os.fsencode(stage),
+        _AT_FDCWD,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(
+            error_number,
+            os.strerror(error_number),
+            destination,
+        )
+    raise OSError(error_number, os.strerror(error_number), destination)
 
 
 def _ranking_bytes(rows: Sequence[RankedCandidate]) -> bytes:
@@ -281,7 +324,7 @@ def create_control_freeze(
         (stage / "rankings").mkdir()
         for relative, content in artifacts.items():
             _exclusive_write(stage / relative, content)
-        os.rename(stage, output)
+        _publish_directory_noreplace(stage, output)
     except BaseException:
         if stage.exists():
             shutil.rmtree(stage)
