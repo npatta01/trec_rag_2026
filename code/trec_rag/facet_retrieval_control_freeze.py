@@ -32,14 +32,26 @@ from .facet_retrieval_control_manifest import (
     R1_MANIFEST_SHA256,
     PROTECTED_TOPIC_IDS,
     ControlManifest,
+    _ARM_SPEC as _CONTROL_ARM_SPEC,
+    _QUERY_SPEC as _CONTROL_QUERY_SPEC,
     _validate_manifest,
     load_control_manifest,
 )
-from .facet_retrieval_control_run import build_control_requests
+from .facet_retrieval_control_run import (
+    INDEX_ID as _CONTROL_INDEX_ID,
+    RETRIEVER_VERSION as _CONTROL_RETRIEVER_VERSION,
+    build_control_requests,
+)
 from .pipeline_models import RankedCandidate, RetrievedCandidate, jsonable
 
 
-FREEZE_SCHEMA_VERSION = "facet-control-ranking-freeze-v2"
+FREEZE_SCHEMA_VERSION = "facet-control-ranking-freeze-v1"
+FREEZE_SCHEMA_VERSION_V2 = "facet-control-ranking-freeze-v2"
+FREEZE_WRITER_SCHEMA_VERSION = FREEZE_SCHEMA_VERSION_V2
+SUPPORTED_FREEZE_SCHEMA_VERSIONS = {
+    FREEZE_SCHEMA_VERSION,
+    FREEZE_SCHEMA_VERSION_V2,
+}
 CANDIDATE_SNAPSHOT_SCHEMA_VERSION = "facet-control-candidate-snapshot-v1"
 _CANDIDATE_MANIFEST_SCHEMA_VERSION = "facet-control-candidate-streams-v1"
 _CANDIDATE_ROW_SCHEMA_VERSION = "facet-control-candidate-row-v1"
@@ -192,6 +204,27 @@ class CandidateSnapshot:
     candidate_bytes: bytes
 
 
+@dataclass(frozen=True)
+class _CandidateStreamExpectation:
+    role: str
+    source_kind: str
+    query_text: str
+    variant_name: str
+    retriever_name: str
+    request_sha256: str
+
+
+def validate_control_freeze_schema(schema_version: object) -> str:
+    """Dispatch a generic freeze reader across the preserved v1/v2 schemas."""
+
+    if (
+        not isinstance(schema_version, str)
+        or schema_version not in SUPPORTED_FREEZE_SCHEMA_VERSIONS
+    ):
+        raise ValueError(f"unsupported control freeze schema: {schema_version!r}")
+    return str(schema_version)
+
+
 def _canonical_json(value: object) -> bytes:
     return (
         json.dumps(
@@ -289,22 +322,71 @@ def _snapshot_stream_key(row: Mapping[str, object]) -> tuple[str, str, str]:
     return (str(row["topic_id"]), str(row["stream_id"]), str(row["arm_id"]))
 
 
-def _expected_snapshot_streams() -> dict[tuple[str, str, str], tuple[str, str]]:
-    expected: dict[tuple[str, str, str], tuple[str, str]] = {
-        (topic_id, "original", "O"): ("original", "prior_base")
-        for topic_id in _PRIOR_TOPIC_IDS
-    }
-    for topic_id, stream_id in (
-        ("200", "f07a"),
-        ("225", "f02"),
-        ("225", "f04"),
-        ("707", "f02"),
+def _candidate_stream_expectation(
+    request: RetrievalRequest,
+    *,
+    role: str,
+    source_kind: str,
+) -> _CandidateStreamExpectation:
+    return _CandidateStreamExpectation(
+        role=role,
+        source_kind=source_kind,
+        query_text=request.query_text,
+        variant_name=request.identity.variant_name,
+        retriever_name=request.identity.retriever_version,
+        request_sha256=request.identity.request_key,
+    )
+
+
+def _expected_snapshot_streams(
+) -> dict[tuple[str, str, str], _CandidateStreamExpectation]:
+    """Derive exact stream identities from the frozen request specifications."""
+
+    expected: dict[tuple[str, str, str], _CandidateStreamExpectation] = {}
+    for topic_id, variant_name, query_text in _BASE_ARM_QUERIES:
+        if variant_name != "prompt_lab_v1:original":
+            continue
+        expected[(topic_id, "original", "O")] = _candidate_stream_expectation(
+            _prior_request(topic_id, variant_name, query_text),
+            role="original",
+            source_kind="prior_base",
+        )
+    for (topic_id, stream_id), (baseline_query, reweighted_query) in (
+        _CONTROL_QUERY_SPEC.items()
     ):
-        for arm_id in ("B0", "W0", "W1", "W2"):
-            expected[(topic_id, stream_id, arm_id)] = (
-                "facet",
-                "prior_r1" if arm_id == "B0" else "control",
+        expected[(topic_id, stream_id, "B0")] = _candidate_stream_expectation(
+            _prior_request(
+                topic_id,
+                f"sparse_relevance_v1:R1:{stream_id}",
+                baseline_query,
+            ),
+            role="facet",
+            source_kind="prior_r1",
+        )
+        for arm_id, k1, b, external in _CONTROL_ARM_SPEC:
+            if arm_id == "B0":
+                continue
+            if not external:
+                raise AssertionError(f"frozen control arm {arm_id} must be external")
+            request = RetrievalRequest.from_query(
+                topic_id=topic_id,
+                variant_name=f"facet_control_v1:{arm_id}:{stream_id}",
+                query_text=reweighted_query,
+                index_url=_PRIOR_ENDPOINT,
+                index_id=_CONTROL_INDEX_ID,
+                hits=100,
+                analyzer_fingerprint_sha256=ANALYZER_FINGERPRINT_SHA256,
+                retriever_version=_CONTROL_RETRIEVER_VERSION,
+                bm25_k1=k1,
+                bm25_b=b,
             )
+            expected[(topic_id, stream_id, arm_id)] = _candidate_stream_expectation(
+                request,
+                role="facet",
+                source_kind="control",
+            )
+    if len(expected) != 20:
+        raise AssertionError("frozen candidate snapshot must define exactly 20 streams")
     return expected
 
 
@@ -313,6 +395,7 @@ def _validate_snapshot_source_rows(
     rows: Sequence[RetrievedCandidate],
     *,
     topic_id: str,
+    expectation: _CandidateStreamExpectation,
 ) -> tuple[RetrievedCandidate, ...]:
     ordered = tuple(sorted(rows, key=lambda row: (row.rank, row.docid, -row.score)))
     if (
@@ -321,6 +404,9 @@ def _validate_snapshot_source_rows(
         or len({row.docid for row in ordered}) != 100
         or any(
             row.topic_id != topic_id
+            or row.variant_name != expectation.variant_name
+            or row.retriever_name != expectation.retriever_name
+            or row.query_text != expectation.query_text
             or not isinstance(row.docid, str)
             or not row.docid
             or isinstance(row.rank, bool)
@@ -360,10 +446,12 @@ def build_candidate_snapshot(
     except ValueError as exc:
         raise ValueError(f"candidate snapshot source is invalid: {exc}") from exc
 
+    expected = _expected_snapshot_streams()
     sources: list[
         tuple[str, str, str, str, str, tuple[RetrievedCandidate, ...]]
     ] = []
     for topic_id in _PRIOR_TOPIC_IDS:
+        expectation = expected[(topic_id, "original", "O")]
         rows = _validate_snapshot_source_rows(
             f"{topic_id}/original/O",
             [
@@ -373,27 +461,38 @@ def build_candidate_snapshot(
                 and row.variant_name == "prompt_lab_v1:original"
             ],
             topic_id=topic_id,
+            expectation=expectation,
         )
-        sources.append((topic_id, "original", "O", "original", "prior_base", rows))
+        sources.append(
+            (
+                topic_id,
+                "original",
+                "O",
+                expectation.role,
+                expectation.source_kind,
+                rows,
+            )
+        )
     for stream in manifest.streams:
         for arm_id in ("B0", "W0", "W1", "W2"):
+            expectation = expected[(stream.topic_id, stream.stream_id, arm_id)]
             rows = _validate_snapshot_source_rows(
                 f"{stream.topic_id}/{stream.stream_id}/{arm_id}",
                 indexed[(stream.topic_id, stream.stream_id, arm_id)],
                 topic_id=stream.topic_id,
+                expectation=expectation,
             )
             sources.append(
                 (
                     stream.topic_id,
                     stream.stream_id,
                     arm_id,
-                    "facet",
-                    "prior_r1" if arm_id == "B0" else "control",
+                    expectation.role,
+                    expectation.source_kind,
                     rows,
                 )
             )
 
-    expected = _expected_snapshot_streams()
     observed = {(topic, stream, arm) for topic, stream, arm, *_rest in sources}
     if observed != set(expected) or len(sources) != 20:
         raise ValueError("candidate snapshot differs from the exact 20-stream set")
@@ -403,19 +502,25 @@ def build_candidate_snapshot(
     for topic_id, stream_id, arm_id, role, source_kind, rows in sorted(
         sources, key=lambda item: item[:3]
     ):
-        variant_name = rows[0].variant_name
-        lineage = source_lineage.get((topic_id, variant_name))
+        expectation = expected[(topic_id, stream_id, arm_id)]
+        lineage = source_lineage.get((topic_id, expectation.variant_name))
         if not isinstance(lineage, Mapping) or set(lineage) != {
             "request_sha256",
             "response_sha256",
             "candidate_sha256",
         }:
             raise ValueError(
-                f"candidate snapshot source lineage is missing for {topic_id}/{variant_name}"
+                "candidate snapshot source lineage is missing for "
+                f"{topic_id}/{expectation.variant_name}"
             )
         for field, value in lineage.items():
             _validate_sha256(value, f"candidate snapshot {topic_id}/{stream_id}/{arm_id}.{field}")
-        query_sha256 = hashlib.sha256(rows[0].query_text.encode("utf-8")).hexdigest()
+        if lineage["request_sha256"] != expectation.request_sha256:
+            raise ValueError(
+                "candidate snapshot source lineage request differs for "
+                f"{topic_id}/{stream_id}/{arm_id}"
+            )
+        query_sha256 = hashlib.sha256(expectation.query_text.encode("utf-8")).hexdigest()
         candidate_rows = [
             {
                 "schema_version": _CANDIDATE_ROW_SCHEMA_VERSION,
@@ -546,11 +651,14 @@ def validate_candidate_snapshot(
         raise ValueError("candidate snapshot rows omit or add a stream")
     for entry in entries:
         key = _snapshot_stream_key(entry)
-        role, source_kind = expected[key]
+        expectation = expected[key]
         stream_rows = grouped[key]
         if (
-            entry.get("role") != role
-            or entry.get("source_kind") != source_kind
+            entry.get("role") != expectation.role
+            or entry.get("source_kind") != expectation.source_kind
+            or entry.get("query_sha256")
+            != hashlib.sha256(expectation.query_text.encode("utf-8")).hexdigest()
+            or entry.get("request_sha256") != expectation.request_sha256
             or entry.get("expected_depth") != 100
             or entry.get("row_count") != 100
             or len(stream_rows) != 100
@@ -612,6 +720,91 @@ def _validate_bindings(bindings: Mapping[str, object]) -> dict[str, object]:
     return result
 
 
+def _validate_candidate_snapshot_source_bindings(
+    snapshot_manifest: Mapping[str, object],
+    bindings: Mapping[str, object],
+) -> None:
+    request_hashes = bindings["request_sha256"]
+    response_hashes = bindings["response_sha256"]
+    candidate_hashes = bindings["candidate_sha256"]
+    if not all(
+        isinstance(mapping, Mapping)
+        for mapping in (request_hashes, response_hashes, candidate_hashes)
+    ):
+        raise ValueError("candidate snapshot source bindings must be mappings")
+    for entry in snapshot_manifest["streams"]:
+        request_sha256 = entry["request_sha256"]
+        if (
+            request_hashes.get(request_sha256) != request_sha256
+            or response_hashes.get(request_sha256) != entry["response_sha256"]
+            or candidate_hashes.get(request_sha256)
+            != entry["source_candidates_sha256"]
+        ):
+            raise ValueError("candidate snapshot source hashes differ from freeze bindings")
+
+
+def verify_control_freeze_candidate_snapshot(
+    path: Path,
+) -> CandidateSnapshot | None:
+    """Verify the v2 snapshot boundary; preserve v1 generic-reader behavior."""
+
+    freeze_path = Path(path)
+    if freeze_path.is_dir():
+        freeze_path = freeze_path / "freeze.json"
+    try:
+        source = freeze_path.read_bytes()
+        payload = json.loads(source)
+    except OSError as exc:
+        raise ValueError(f"control freeze is unreadable: {freeze_path}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("control freeze is not valid canonical JSON") from exc
+    if not isinstance(payload, dict) or _canonical_json(payload) != source:
+        raise ValueError("control freeze is not valid canonical JSON")
+    schema_version = validate_control_freeze_schema(payload.get("schema_version"))
+    expected_self = payload.get("freeze_sha256")
+    _validate_sha256(expected_self, "control freeze.freeze_sha256")
+    without_self = dict(payload)
+    without_self.pop("freeze_sha256")
+    if hashlib.sha256(_canonical_json(without_self)).hexdigest() != expected_self:
+        raise ValueError("control freeze self SHA-256 differs")
+    if schema_version == FREEZE_SCHEMA_VERSION:
+        return None
+
+    bindings = payload.get("bindings")
+    if not isinstance(bindings, Mapping):
+        raise ValueError("candidate snapshot bindings are missing")
+    frozen_bindings = _validate_bindings(bindings)
+    directory = freeze_path.parent
+    try:
+        manifest_bytes = (directory / "candidate_streams.json").read_bytes()
+        candidate_bytes = (directory / "candidates.jsonl").read_bytes()
+    except OSError as exc:
+        raise ValueError("candidate snapshot artifact is unreadable") from exc
+    if (
+        hashlib.sha256(manifest_bytes).hexdigest()
+        != frozen_bindings.get("candidate_streams_sha256")
+        or hashlib.sha256(candidate_bytes).hexdigest()
+        != frozen_bindings.get("candidates_sha256")
+    ):
+        raise ValueError("candidate snapshot file SHA-256 differs from freeze bindings")
+    snapshot = CandidateSnapshot(
+        schema_version=CANDIDATE_SNAPSHOT_SCHEMA_VERSION,
+        manifest_bytes=manifest_bytes,
+        candidate_bytes=candidate_bytes,
+    )
+    snapshot_manifest, _rows = validate_candidate_snapshot(snapshot)
+    _validate_candidate_snapshot_source_bindings(snapshot_manifest, frozen_bindings)
+    stream_hashes = {
+        f"{entry['topic_id']}/{entry['stream_id']}/{entry['arm_id']}": entry[
+            "stream_rows_sha256"
+        ]
+        for entry in snapshot_manifest["streams"]
+    }
+    if frozen_bindings.get("candidate_stream_rows_sha256") != stream_hashes:
+        raise ValueError("candidate snapshot stream hashes differ from freeze bindings")
+    return snapshot
+
+
 def create_control_freeze(
     output_dir: Path,
     rankings: Mapping[str, Sequence[RankedCandidate]],
@@ -641,23 +834,7 @@ def create_control_freeze(
     if set(bindings) & snapshot_binding_fields:
         raise ValueError("candidate snapshot bindings are freezer-owned")
     source_bindings = _validate_bindings(bindings)
-    request_hashes = source_bindings["request_sha256"]
-    response_hashes = source_bindings["response_sha256"]
-    candidate_hashes = source_bindings["candidate_sha256"]
-    if not all(
-        isinstance(mapping, Mapping)
-        for mapping in (request_hashes, response_hashes, candidate_hashes)
-    ):
-        raise ValueError("candidate snapshot source bindings must be mappings")
-    for entry in snapshot_manifest["streams"]:
-        request_sha256 = entry["request_sha256"]
-        if (
-            request_hashes.get(request_sha256) != request_sha256
-            or response_hashes.get(request_sha256) != entry["response_sha256"]
-            or candidate_hashes.get(request_sha256)
-            != entry["source_candidates_sha256"]
-        ):
-            raise ValueError("candidate snapshot source hashes differ from freeze bindings")
+    _validate_candidate_snapshot_source_bindings(snapshot_manifest, source_bindings)
     stream_hashes = {
         f"{entry['topic_id']}/{entry['stream_id']}/{entry['arm_id']}": entry[
             "stream_rows_sha256"
@@ -703,7 +880,7 @@ def create_control_freeze(
     artifacts["fusion.json"] = fusion_bytes
 
     payload: dict[str, object] = {
-        "schema_version": FREEZE_SCHEMA_VERSION,
+        "schema_version": FREEZE_WRITER_SCHEMA_VERSION,
         "status": "frozen_before_qrels",
         "bindings": frozen_bindings,
         "inspection_sha256": hashlib.sha256(inspection_bytes).hexdigest(),

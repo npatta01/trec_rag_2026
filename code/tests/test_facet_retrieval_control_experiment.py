@@ -24,7 +24,10 @@ from trec_rag.facet_retrieval_control_evaluate import (
 from trec_rag.facet_retrieval_control_freeze import (
     CandidateSnapshot,
     FREEZE_SCHEMA_VERSION,
+    FREEZE_SCHEMA_VERSION_V2,
+    FREEZE_WRITER_SCHEMA_VERSION,
     PRIOR_FREEZE_FILE_SHA256,
+    SUPPORTED_FREEZE_SCHEMA_VERSIONS,
     _parser,
     _publish_directory_noreplace,
     build_candidate_snapshot,
@@ -33,12 +36,15 @@ from trec_rag.facet_retrieval_control_freeze import (
     main,
     validate_verified_r1_arm,
     validate_candidate_snapshot,
+    validate_control_freeze_schema,
+    verify_control_freeze_candidate_snapshot,
     verify_prior_freeze,
 )
 from trec_rag.facet_retrieval_control_manifest import (
     PROTECTED_TOPIC_IDS,
     build_control_manifest,
 )
+from trec_rag.facet_retrieval_control_run import build_control_requests
 from trec_rag.pipeline_models import RetrievedCandidate
 
 
@@ -52,12 +58,19 @@ R1_PATH = (
 )
 
 
-def _row(topic_id: str, variant: str, rank: int) -> RetrievedCandidate:
+def _row(
+    topic_id: str,
+    variant: str,
+    rank: int,
+    *,
+    query_text: str | None = None,
+    retriever_name: str = "synthetic",
+) -> RetrievedCandidate:
     return RetrievedCandidate(
         topic_id=topic_id,
         variant_name=variant,
-        retriever_name="synthetic",
-        query_text=variant,
+        retriever_name=retriever_name,
+        query_text=variant if query_text is None else query_text,
         docid=f"{topic_id}-doc-{rank:03d}",
         rank=rank,
         score=float(101 - rank),
@@ -66,49 +79,61 @@ def _row(topic_id: str, variant: str, rank: int) -> RetrievedCandidate:
 
 
 def _candidate_inputs():
-    source = json.loads(R1_PATH.read_text(encoding="utf-8"))
+    manifest = build_control_manifest()
+    base_requests, r1_requests = build_expected_r1_requests(manifest, R1_PATH)
     r1_arm = []
-    for topic_id in ("200", "225", "707", "897"):
+    for request in (*base_requests, *r1_requests):
         r1_arm.extend(
-            _row(topic_id, "prompt_lab_v1:original", rank)
-            for rank in range(1, 101)
-        )
-    kept_base = {
-        "225": ("f06", "f07"),
-        "707": ("f01", "f03"),
-        "897": ("f01",),
-    }
-    for topic_id, stream_ids in kept_base.items():
-        for stream_id in stream_ids:
-            r1_arm.extend(
-                _row(topic_id, f"prompt_lab_v1:facet:{stream_id}", rank)
-                for rank in range(1, 101)
+            _row(
+                request.identity.topic_id,
+                request.identity.variant_name,
+                rank,
+                query_text=request.query_text,
+                retriever_name=request.identity.retriever_version,
             )
-    for stream in source["streams"]:
-        variant = f"sparse_relevance_v1:R1:{stream['stream_id']}"
-        r1_arm.extend(
-            _row(stream["topic_id"], variant, rank) for rank in range(1, 101)
+            for rank in range(1, 101)
         )
 
     control_rows = []
-    for stream in build_control_manifest().streams:
-        for arm_id in ("W0", "W1", "W2"):
-            variant = f"facet_control_v1:{arm_id}:{stream.stream_id}"
-            control_rows.extend(
-                _row(stream.topic_id, variant, rank) for rank in range(1, 101)
+    for request in build_control_requests(
+        manifest,
+        endpoint="http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search",
+    ):
+        control_rows.extend(
+            _row(
+                request.identity.topic_id,
+                request.identity.variant_name,
+                rank,
+                query_text=request.query_text,
+                retriever_name=request.identity.retriever_version,
             )
+            for rank in range(1, 101)
+        )
     return r1_arm, control_rows
 
 
 def _source_lineage(r1_arm, control_rows):
     import hashlib
 
+    manifest = build_control_manifest()
+    base_requests, r1_requests = build_expected_r1_requests(manifest, R1_PATH)
+    control_requests = build_control_requests(
+        manifest,
+        endpoint="http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search",
+    )
+    requests = {
+        (request.identity.topic_id, request.identity.variant_name): request
+        for request in (*base_requests, *r1_requests, *control_requests)
+    }
     result = {}
     for row in (*r1_arm, *control_rows):
         key = (row.topic_id, row.variant_name)
         if key in result:
             continue
-        request_sha256 = hashlib.sha256("|".join(key).encode()).hexdigest()
+        request = requests[key]
+        assert request.query_text == row.query_text
+        assert request.identity.retriever_version == row.retriever_name
+        request_sha256 = request.identity.request_key
         result[key] = {
             "request_sha256": request_sha256,
             "response_sha256": hashlib.sha256(
@@ -348,8 +373,182 @@ def test_candidate_snapshot_validation_rejects_manifest_stream_omission():
         validate_candidate_snapshot(replace(snapshot, manifest_bytes=manifest_bytes))
 
 
+@pytest.mark.parametrize("mutation", ("query", "role", "source_kind", "lineage"))
+def test_candidate_snapshot_validation_rejects_fully_rehashed_identity_tampering(
+    mutation,
+):
+    import hashlib
+
+    _r1, _control, _lineage, snapshot = _candidate_snapshot_fixture()
+    manifest = json.loads(snapshot.manifest_bytes)
+    rows = [json.loads(line) for line in snapshot.candidate_bytes.splitlines()]
+    target = manifest["streams"][0]
+    target_key = (target["topic_id"], target["stream_id"], target["arm_id"])
+    if mutation == "query":
+        target["query_sha256"] = "0" * 64
+        for row in rows:
+            if (row["topic_id"], row["stream_id"], row["arm_id"]) == target_key:
+                row["query_sha256"] = "0" * 64
+    elif mutation == "role":
+        target["role"] = "facet" if target["role"] == "original" else "original"
+    elif mutation == "source_kind":
+        target["source_kind"] = "control"
+    else:
+        target["request_sha256"] = manifest["streams"][1]["request_sha256"]
+
+    candidate_bytes = b"".join(
+        json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+        for row in rows
+    )
+    stream_rows = [
+        row
+        for row in rows
+        if (row["topic_id"], row["stream_id"], row["arm_id"]) == target_key
+    ]
+    target["stream_rows_sha256"] = hashlib.sha256(
+        b"".join(
+            json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+            + b"\n"
+            for row in stream_rows
+        )
+    ).hexdigest()
+    manifest["candidate_file_sha256"] = hashlib.sha256(candidate_bytes).hexdigest()
+    manifest_bytes = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="candidate snapshot"):
+        validate_candidate_snapshot(
+            replace(
+                snapshot,
+                manifest_bytes=manifest_bytes,
+                candidate_bytes=candidate_bytes,
+            )
+        )
+
+
+def test_control_freeze_schema_dispatch_preserves_v1_and_writes_v2():
+    assert FREEZE_SCHEMA_VERSION == "facet-control-ranking-freeze-v1"
+    assert FREEZE_SCHEMA_VERSION_V2 == "facet-control-ranking-freeze-v2"
+    assert FREEZE_WRITER_SCHEMA_VERSION == FREEZE_SCHEMA_VERSION_V2
+    assert SUPPORTED_FREEZE_SCHEMA_VERSIONS == {
+        FREEZE_SCHEMA_VERSION,
+        FREEZE_SCHEMA_VERSION_V2,
+    }
+    assert validate_control_freeze_schema(FREEZE_SCHEMA_VERSION) == FREEZE_SCHEMA_VERSION
+    assert (
+        validate_control_freeze_schema(FREEZE_SCHEMA_VERSION_V2)
+        == FREEZE_SCHEMA_VERSION_V2
+    )
+    for invalid in ("facet-control-ranking-freeze-v3", None, []):
+        with pytest.raises(ValueError, match="unsupported control freeze schema"):
+            validate_control_freeze_schema(invalid)
+
+
+def test_candidate_snapshot_reader_accepts_legacy_v1_without_snapshot(tmp_path):
+    r1_arm, control_rows = _candidate_inputs()
+    matrix = build_topic_alternatives(
+        r1_arm, control_rows, build_control_manifest()
+    )
+    freeze_dir = tmp_path / "legacy-v1"
+    create_control_freeze(freeze_dir, matrix, inspections={})
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["schema_version"] = FREEZE_SCHEMA_VERSION
+    for field in (
+        "candidate_streams_sha256",
+        "candidates_sha256",
+        "candidate_stream_rows_sha256",
+    ):
+        payload["bindings"].pop(field)
+    payload.pop("freeze_sha256")
+    payload["freeze_sha256"] = __import__("hashlib").sha256(
+        (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    (freeze_dir / "freeze.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (freeze_dir / "candidate_streams.json").unlink()
+    (freeze_dir / "candidates.jsonl").unlink()
+
+    assert verify_control_freeze_candidate_snapshot(freeze_dir) is None
+
+
+def test_candidate_snapshot_reader_rejects_query_tamper_with_recomputed_root_hash(
+    tmp_path,
+):
+    import hashlib
+
+    r1_arm, control_rows = _candidate_inputs()
+    matrix = build_topic_alternatives(
+        r1_arm, control_rows, build_control_manifest()
+    )
+    freeze_dir = tmp_path / "tampered-v2"
+    create_control_freeze(freeze_dir, matrix, inspections={})
+    manifest = json.loads((freeze_dir / "candidate_streams.json").read_bytes())
+    rows = [
+        json.loads(line)
+        for line in (freeze_dir / "candidates.jsonl").read_bytes().splitlines()
+    ]
+    target = manifest["streams"][0]
+    target_key = (target["topic_id"], target["stream_id"], target["arm_id"])
+    target["query_sha256"] = "0" * 64
+    for row in rows:
+        if (row["topic_id"], row["stream_id"], row["arm_id"]) == target_key:
+            row["query_sha256"] = "0" * 64
+    candidate_bytes = b"".join(
+        json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+        for row in rows
+    )
+    stream_bytes = b"".join(
+        json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+        for row in rows
+        if (row["topic_id"], row["stream_id"], row["arm_id"]) == target_key
+    )
+    target["stream_rows_sha256"] = hashlib.sha256(stream_bytes).hexdigest()
+    manifest["candidate_file_sha256"] = hashlib.sha256(candidate_bytes).hexdigest()
+    manifest_bytes = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    (freeze_dir / "candidate_streams.json").write_bytes(manifest_bytes)
+    (freeze_dir / "candidates.jsonl").write_bytes(candidate_bytes)
+
+    payload = json.loads((freeze_dir / "freeze.json").read_bytes())
+    payload["bindings"]["candidate_streams_sha256"] = hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+    payload["bindings"]["candidates_sha256"] = hashlib.sha256(
+        candidate_bytes
+    ).hexdigest()
+    payload["bindings"]["candidate_stream_rows_sha256"][
+        "/".join(target_key)
+    ] = target["stream_rows_sha256"]
+    payload.pop("freeze_sha256")
+    payload["freeze_sha256"] = hashlib.sha256(
+        (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    (freeze_dir / "freeze.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="candidate snapshot"):
+        verify_control_freeze_candidate_snapshot(freeze_dir)
+
+
 @pytest.mark.parametrize(
-    "mutation", ("protected", "wrong_source", "wrong_query", "wrong_rank", "duplicate")
+    "mutation",
+    (
+        "protected",
+        "wrong_source",
+        "wrong_lineage",
+        "wrong_query",
+        "wrong_rank",
+        "duplicate",
+    ),
 )
 def test_candidate_snapshot_builder_rejects_invalid_in_memory_sources(mutation):
     r1_arm, control_rows = _candidate_inputs()
@@ -358,6 +557,10 @@ def test_candidate_snapshot_builder_rejects_invalid_in_memory_sources(mutation):
         r1_arm[0] = replace(r1_arm[0], topic_id=PROTECTED_TOPIC_IDS[0])
     elif mutation == "wrong_source":
         lineage.pop(("200", "prompt_lab_v1:original"))
+    elif mutation == "wrong_lineage":
+        lineage[("200", "prompt_lab_v1:original")]["request_sha256"] = lineage[
+            ("225", "prompt_lab_v1:original")
+        ]["request_sha256"]
     elif mutation == "wrong_query":
         r1_arm[0] = replace(r1_arm[0], query_text="substituted")
     elif mutation == "wrong_rank":
@@ -407,8 +610,8 @@ def test_freeze_is_create_only_and_binds_all_ranking_hashes(tmp_path):
         },
     )
 
-    assert freeze["schema_version"] == FREEZE_SCHEMA_VERSION
-    assert FREEZE_SCHEMA_VERSION == "facet-control-ranking-freeze-v2"
+    assert freeze["schema_version"] == FREEZE_WRITER_SCHEMA_VERSION
+    assert FREEZE_WRITER_SCHEMA_VERSION == "facet-control-ranking-freeze-v2"
     assert freeze["status"] == "frozen_before_qrels"
     assert len(freeze["rankings"]) == 25
     assert all(len(value["sha256"]) == 64 for value in freeze["rankings"].values())
@@ -421,6 +624,7 @@ def test_freeze_is_create_only_and_binds_all_ranking_hashes(tmp_path):
     assert freeze["bindings"]["candidates_sha256"]
     assert len(freeze["bindings"]["candidate_stream_rows_sha256"]) == 20
     assert len(list((output / "rankings").glob("*.jsonl"))) == 25
+    assert isinstance(verify_control_freeze_candidate_snapshot(output), CandidateSnapshot)
 
     with pytest.raises(FileExistsError):
         create_control_freeze(
