@@ -6,16 +6,21 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.parse
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
+
+from filelock import FileLock
 
 from trec_rag.pipeline_config import RetrieverConfig
 from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
 from trec_rag.remote_pyserini import (
     RemotePyseriniClient,
     RemotePyseriniConfig,
+    RemotePyseriniThrottled,
     normalize_candidates,
 )
 
@@ -109,10 +114,14 @@ class PyseriniRemoteRetriever:
         *,
         cache_dir: Path,
         client: RemotePyseriniClient | None = None,
+        continuation_ticket: str | None = None,
     ) -> None:
         self.config = config
         self.cache_dir = cache_dir
         self.client = client or RemotePyseriniClient(_remote_config(config))
+        self.continuation_ticket = continuation_ticket or os.environ.get(
+            "PYSERINI_CONTINUATION_TICKET"
+        )
         self.cache_stats = RetrieverCacheStats()
         self.cache_hit_artifacts: list[dict[str, object]] = []
 
@@ -139,8 +148,23 @@ class PyseriniRemoteRetriever:
         )
         if self.config.cache and cache_file.exists():
             cache_bytes = cache_file.read_bytes()
+            metadata_file = cache_file.with_suffix(".meta.json")
+            if not metadata_file.exists():
+                raise ValueError(f"unverified cache missing provenance sidecar: {cache_file}")
+            metadata = json.loads(metadata_file.read_bytes())
+            expected_identity = {
+                "cache_key": request_key,
+                "query": query.query_text,
+                "index": self.config.index,
+                "index_url": self.client.config.index_url,
+                "hits": self.config.hits,
+            }
+            if any(metadata.get(key) != value for key, value in expected_identity.items()):
+                raise ValueError(f"cache provenance identity mismatch: {metadata_file}")
+            if metadata.get("response_sha256") != hashlib.sha256(cache_bytes).hexdigest():
+                raise ValueError(f"cache response hash mismatch: {cache_file}")
             payload = json.loads(cache_bytes)
-            response = payload.get("response")
+            response = payload.get("response") if "response" in payload else payload
             if not isinstance(response, dict):
                 raise ValueError(f"cache file missing response object: {cache_file}")
             candidates = normalize_retrieved_candidates(
@@ -161,10 +185,113 @@ class PyseriniRemoteRetriever:
             self.cache_stats.misses += 1
         else:
             self.cache_stats.bypasses += 1
-        response = self.client.search(query.query_text)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        identity = {
+            "cache_key": request_key,
+            "query": query.query_text,
+            "index": self.config.index,
+            "index_url": self.client.config.index_url,
+            "hits": self.config.hits,
+        }
+        ticket_file = self.cache_dir / "continuation-ticket.json"
+        consumed_ticket_file = self.cache_dir / "continuation-in-progress.json"
+        attempt_id = uuid.uuid4().hex
+        ledger_file = self.cache_dir / "external-call-ledger.jsonl"
+        ledger_lock = FileLock(str(ledger_file) + ".lock")
+        with ledger_lock:
+            continuation_provenance = {}
+            if ticket_file.exists():
+                ticket = json.loads(ticket_file.read_bytes())
+                if self.continuation_ticket != ticket.get("ticket"):
+                    raise RuntimeError(
+                        f"explicit continuation required; use ticket {ticket.get('ticket')}"
+                    )
+                if any(ticket.get(key) != value for key, value in identity.items()):
+                    raise RuntimeError("continuation ticket request identity mismatch")
+                if time.time() < float(ticket.get("not_before_unix", 0)):
+                    raise RuntimeError("Retry-After delay has not elapsed for continuation")
+                continuation_provenance = {
+                    "continuation_of": ticket["failed_attempt_id"],
+                    "continuation_ticket_sha256": hashlib.sha256(
+                        ticket["ticket"].encode("utf-8")
+                    ).hexdigest(),
+                }
+                ticket_file.replace(consumed_ticket_file)
+            elif consumed_ticket_file.exists():
+                raise RuntimeError("a continuation for this external budget is already in progress")
+            elif self.continuation_ticket:
+                raise RuntimeError("continuation ticket is invalid or has already been consumed")
+            ledger_record = {
+                "event": "reserved",
+                "attempt_id": attempt_id,
+                "reserved_unix": time.time(),
+                **continuation_provenance,
+                **identity,
+            }
+            with ledger_file.open("a", encoding="utf-8") as ledger:
+                ledger.write(json.dumps(ledger_record, sort_keys=True) + "\n")
+        raw_result = None
+        if hasattr(self.client, "search_raw"):
+            attempt_dir = self.cache_dir / "attempts"
+            attempt_dir.mkdir(exist_ok=True)
+            attempt_file = attempt_dir / f"{attempt_id}.response"
+            try:
+                raw_result = self.client.search_raw(
+                    query.query_text,
+                    raw_sink=attempt_file.write_bytes,
+                )
+            except RemotePyseriniThrottled as exc:
+                ticket = uuid.uuid4().hex
+                retry_after = exc.retry_after_seconds or 0.0
+                with ledger_lock:
+                    ticket_file.write_text(
+                        json.dumps(
+                            {
+                                "ticket": ticket,
+                                "not_before_unix": time.time() + retry_after,
+                                "retry_after_seconds": exc.retry_after_seconds,
+                                "failed_attempt_id": attempt_id,
+                                **identity,
+                            },
+                            sort_keys=True,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    consumed_ticket_file.unlink(missing_ok=True)
+                exc.continuation_ticket = ticket
+                raise
+            except Exception as exc:
+                ticket = uuid.uuid4().hex
+                with ledger_lock:
+                    ticket_file.write_text(
+                        json.dumps(
+                            {
+                                "ticket": ticket,
+                                "not_before_unix": time.time(),
+                                "retry_after_seconds": None,
+                                "failed_attempt_id": attempt_id,
+                                "failure_type": type(exc).__name__,
+                                **identity,
+                            },
+                            sort_keys=True,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    consumed_ticket_file.unlink(missing_ok=True)
+                setattr(exc, "continuation_ticket", ticket)
+                raise
+            if self.config.cache:
+                cache_file.write_bytes(attempt_file.read_bytes())
+        response = raw_result.payload if raw_result is not None else self.client.search(query.query_text)
         if self.config.cache:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(
+            raw_bytes = raw_result.raw if raw_result is not None else json.dumps(response).encode("utf-8")
+            if raw_result is None:
+                cache_file.write_bytes(raw_bytes)
+            # The primary artifact is byte-for-byte transport output. The client invokes
+            # its sink before decoding; identity/provenance lives in a separate sidecar.
+            cache_file.with_suffix(".meta.json").write_text(
                 json.dumps(
                     {
                         "cache_key": request_key,
@@ -176,15 +303,18 @@ class PyseriniRemoteRetriever:
                         "index": self.config.index,
                         "index_url": self.client.config.index_url,
                         "hits": self.config.hits,
-                        "response": response,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+                        "response_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                        "rate_policy": {
+                            "min_interval_seconds": self.client.config.min_interval_seconds,
+                            "burst": self.client.config.burst,
+                            "per_host": True,
+                        },
+                    }, sort_keys=True, indent=2,
+                ), encoding="utf-8",
             )
             self.cache_stats.writes += 1
+        with ledger_lock:
+            consumed_ticket_file.unlink(missing_ok=True)
         return normalize_retrieved_candidates(response, query=query, retriever_name=self.config.name)
 
 

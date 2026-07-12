@@ -10,6 +10,32 @@ by responsibility:
 - `repo_env.py` loads `.env` / `.env.local` from the worktree or shared checkout.
 - `env_config.py` holds typed environment helpers.
 - `remote_config.py` builds `RemotePyseriniConfig`.
+
+### Hosted API rate and continuation policy
+
+Hosted requests use `requests` plus `requests-ratelimiter`. The default policy is
+one request start per origin every three seconds with burst `1`. The per-host
+limiter is stored in `cache/retrieval/pyserini_remote/rate-limit.sqlite`, so
+cooperating processes and restarts share the budget. Override the interval or
+state location with `PYSERINI_MIN_INTERVAL_SECONDS` and
+`PYSERINI_LIMITER_STATE_PATH`; burst values other than `1` are rejected.
+
+Each transport entry is one immutable attempt: redirects and automatic retries
+are disabled and the timeout is 30 seconds. Before transport entry, an
+identity-complete reservation is appended to `external-call-ledger.jsonl`.
+Every response is captured under `attempts/`, even when reusable response
+caching is disabled. A `429` raises
+`RemotePyseriniThrottled` with the parsed `Retry-After` delay but does not sleep
+and retry within that attempt. It writes an identity-bound continuation ticket;
+set `PYSERINI_CONTINUATION_TICKET` to that value after the recorded not-before
+time. A continuation must use the same endpoint, index, exact query text, and hit depth. The
+request-keyed cache verifies that identity and reuses successful raw response
+files, so only missing requests reach the transport.
+
+Successful response bytes are written before JSON decoding. The exact bytes are
+the primary `.json` cache file; the adjacent `.meta.json` records its SHA-256,
+request identity, and effective rate policy. Never put bearer tokens in either
+artifact or in continuation records.
 - `remote_client.py` sends search requests and normalizes candidate rows.
 
 Inputs:

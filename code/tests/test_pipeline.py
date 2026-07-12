@@ -16,7 +16,11 @@ from trec_rag.pipeline_models import (
 )
 from trec_rag.query_understanding import build_query_variants
 from trec_rag.ranking import coverage_aware_long_doc_rank, passthrough_rank
-from trec_rag.remote_pyserini import RemotePyseriniConfig
+from trec_rag.remote_pyserini import (
+    RemotePyseriniConfig,
+    RemotePyseriniThrottled,
+    RemoteSearchResponse,
+)
 from trec_rag.retrievers import (
     PyseriniRemoteRetriever,
     cache_path,
@@ -542,6 +546,21 @@ def test_pyserini_remote_retriever_reads_cached_response_when_cache_enabled(tmp_
         ),
         encoding="utf-8",
     )
+    cache_file.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "cache_key": request_cache_key(
+                    config, query, index_url=FailingClient.config.index_url
+                ),
+                "query": query.query_text,
+                "index": config.index,
+                "index_url": FailingClient.config.index_url,
+                "hits": config.hits,
+                "response_sha256": hashlib.sha256(cache_file.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=FailingClient())
 
@@ -565,7 +584,117 @@ def test_pyserini_remote_retriever_reads_cached_response_when_cache_enabled(tmp_
     }
 
 
-def test_pyserini_remote_retriever_cache_false_bypasses_cache_and_does_not_write(tmp_path):
+def test_pyserini_continuation_reuses_verified_success_and_sends_only_missing(tmp_path):
+    config = RetrieverConfig(
+        name="climbmix_bm25", type="pyserini_remote", query_variants=("original",),
+        hits=10, index="climbmix-400b",
+    )
+
+    class Client:
+        config = RemotePyseriniConfig("https://pyserini.test/search", None, 10, ())
+        def __init__(self): self.calls = []
+        def search_raw(self, query_text, *, raw_sink=None):
+            self.calls.append(query_text)
+            raw = json.dumps({"candidates": [{"docid": query_text, "score": 1}]}).encode()
+            if raw_sink: raw_sink(raw)
+            return RemoteSearchResponse(raw, json.loads(raw), hashlib.sha256(raw).hexdigest())
+
+    client = Client()
+    first = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client)
+    first.retrieve(QueryVariant("1", "original", "already done", "topic"))
+
+    continuation = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client)
+    continuation.retrieve(QueryVariant("1", "original", "already done", "topic"))
+    continuation.retrieve(QueryVariant("2", "original", "still missing", "topic"))
+
+    assert client.calls == ["already done", "still missing"]
+    assert continuation.cache_stats.hits == 1
+    assert continuation.cache_stats.misses == 1
+
+
+def test_pyserini_429_requires_ticket_and_reserves_ledger_before_transport(tmp_path):
+    query = QueryVariant("15", "original", "throttled query", "topic")
+    config = RetrieverConfig(
+        name="climbmix_bm25", type="pyserini_remote", query_variants=("original",),
+        hits=10, index="climbmix-400b",
+    )
+
+    class Client:
+        config = RemotePyseriniConfig("https://pyserini.test/search", None, 10, ())
+        def __init__(self): self.throttle = True
+        def search_raw(self, _query, *, raw_sink):
+            ledger = tmp_path / "external-call-ledger.jsonl"
+            assert json.loads(ledger.read_text().splitlines()[-1])["event"] == "reserved"
+            raw_sink(b'{"error":"slow down"}' if self.throttle else b'{"candidates":[]}')
+            if self.throttle:
+                raise RemotePyseriniThrottled(0)
+            raw = b'{"candidates":[]}'
+            return RemoteSearchResponse(raw, {"candidates": []}, hashlib.sha256(raw).hexdigest())
+
+    client = Client()
+    with pytest.raises(RemotePyseriniThrottled) as exc:
+        PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(query)
+    ticket = exc.value.continuation_ticket
+    assert list((tmp_path / "attempts").glob("*.response"))
+
+    client.throttle = False
+    with pytest.raises(RuntimeError, match="explicit continuation"):
+        PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(query)
+    PyseriniRemoteRetriever(
+        config, cache_dir=tmp_path, client=client, continuation_ticket=ticket
+    ).retrieve(query)
+    assert not (tmp_path / "continuation-ticket.json").exists()
+    ledger = [
+        json.loads(line)
+        for line in (tmp_path / "external-call-ledger.jsonl").read_text().splitlines()
+    ]
+    assert ledger[-1]["continuation_of"] == ledger[0]["attempt_id"]
+    assert ledger[-1]["continuation_ticket_sha256"] == hashlib.sha256(ticket.encode()).hexdigest()
+    assert ticket not in json.dumps(ledger)
+    with pytest.raises(RuntimeError, match="invalid or has already been consumed"):
+        PyseriniRemoteRetriever(
+            config, cache_dir=tmp_path, client=client, continuation_ticket=ticket
+        ).retrieve(QueryVariant("16", "original", "another query", "topic"))
+
+
+def test_failed_continuation_mints_new_explicit_recovery_ticket(tmp_path):
+    query = QueryVariant("15", "original", "query", "topic")
+    config = RetrieverConfig(
+        name="bm25", type="pyserini_remote", query_variants=("original",),
+        hits=10, index="climbmix-400b",
+    )
+
+    class Client:
+        config = RemotePyseriniConfig("https://pyserini.test/search", None, 10, ())
+        mode = "throttle"
+        def search_raw(self, _query, *, raw_sink):
+            raw_sink(b"{}")
+            if self.mode == "throttle":
+                raise RemotePyseriniThrottled(0)
+            if self.mode == "error":
+                raise ValueError("malformed response")
+            return RemoteSearchResponse(b"{}", {}, hashlib.sha256(b"{}").hexdigest())
+
+    client = Client()
+    with pytest.raises(RemotePyseriniThrottled) as first:
+        PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(query)
+    client.mode = "error"
+    with pytest.raises(ValueError) as second:
+        PyseriniRemoteRetriever(
+            config, cache_dir=tmp_path, client=client,
+            continuation_ticket=first.value.continuation_ticket,
+        ).retrieve(query)
+    assert second.value.continuation_ticket != first.value.continuation_ticket
+    assert not (tmp_path / "continuation-in-progress.json").exists()
+
+    client.mode = "success"
+    PyseriniRemoteRetriever(
+        config, cache_dir=tmp_path, client=client,
+        continuation_ticket=second.value.continuation_ticket,
+    ).retrieve(query)
+
+
+def test_pyserini_remote_retriever_cache_false_bypasses_response_cache(tmp_path):
     query = QueryVariant("31", "original", "e-waste narrative", "original_topic")
     config = RetrieverConfig(
         name="climbmix_bm25",
@@ -622,7 +751,8 @@ def test_pyserini_remote_retriever_cache_false_bypasses_cache_and_does_not_write
     assert client.calls == ["e-waste narrative"]
     assert [candidate.docid for candidate in candidates] == ["doc-fresh"]
     assert stale_cache.read_text(encoding="utf-8") == original_cache_text
-    assert sorted(path.name for path in tmp_path.iterdir()) == [stale_cache.name]
+    assert not stale_cache.with_suffix(".meta.json").exists()
+    assert (tmp_path / "external-call-ledger.jsonl").exists()
     assert retriever.cache_summary()["bypasses"] == 1
 
 
