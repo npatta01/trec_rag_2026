@@ -827,6 +827,7 @@ def _validate_benchmark_approval(
     if (
         not isinstance(approved_limit, int)
         or isinstance(approved_limit, bool)
+        or approved_limit < 1
         or approved_limit > MAX_BENCHMARK_PAIRS
         or pair_limit > approved_limit
     ):
@@ -1785,10 +1786,22 @@ def _authenticate_benchmark_provenance(
         backend = str(telemetry["execution_backend"])
         forward_count = int(telemetry["forward_pair_count"])
 
-        consumption, _consumption_source = _load_canonical_artifact(
+        consumption, consumption_source = _load_canonical_artifact(
             output / "approval_consumption.json",
             "benchmark approval consumption",
         )
+        _registry_marker, registry_source = _load_canonical_artifact(
+            inputs.score_cache_root
+            / ".facet-local-minilm-approval-consumptions"
+            / f"{approval_sha256}.json",
+            "benchmark approval consumption registry marker",
+        )
+        if (
+            registry_source != consumption_source
+            or _sha256_bytes(registry_source)
+            != _sha256_bytes(consumption_source)
+        ):
+            raise ValueError("approval consumption registry marker mismatch")
         if set(consumption) != _APPROVAL_CONSUMPTION_FIELDS:
             raise ValueError("approval consumption fields mismatch")
         consumption_expected = {
@@ -1808,20 +1821,17 @@ def _authenticate_benchmark_provenance(
             or approval_file != str(Path(approval_file).resolve())
         ):
             raise ValueError("approval consumption file path mismatch")
-        approval_payload, approval_source, _approval_path = _load_receipt(
+        _approval_payload, approval_source, _approval_path = _load_receipt(
             approval_file,
             expected_sha256=approval_sha256,
             label="benchmark approval receipt",
             required_message="benchmark approval receipt is required",
         )
-        approved_limit = approval_payload.get("pair_limit")
-        if not isinstance(approved_limit, int) or isinstance(approved_limit, bool):
-            raise ValueError("benchmark approval pair limit is invalid")
         _validate_benchmark_approval(
             inputs,
             approval_file,
             expected_approval_sha256=approval_sha256,
-            pair_limit=approved_limit,
+            pair_limit=forward_count,
             device=device,
             output_dir=output,
         )

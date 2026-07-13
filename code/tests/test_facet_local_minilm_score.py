@@ -169,6 +169,7 @@ def _benchmark_approval(
     *,
     device: str = "cuda",
     run_id: str = "benchmark-test-run",
+    pair_limit: int = 256,
 ):
     payload = {
         "schema_version": (
@@ -187,7 +188,7 @@ def _benchmark_approval(
         "approved_by": "unit-test-user",
         "device": device,
         "execution_backend": "cpu" if device == "cpu" else "rocm",
-        "pair_limit": 256,
+        "pair_limit": pair_limit,
         "preflight_sha256": inputs.preflight_sha256,
         "windows_sha256": inputs.windows_sha256,
         "model_materialization_receipt_sha256": (
@@ -243,6 +244,7 @@ def _write_full_request(
     inputs: ScoringInputs,
     *,
     device: str = "cuda",
+    approval_pair_limit: int = 256,
 ) -> tuple[Path, dict[str, object]]:
     plan = inputs.benchmark
     forward_count = int(plan["forward_pair_count"])
@@ -325,6 +327,7 @@ def _write_full_request(
             output,
             device=device,
             run_id=f"persisted-benchmark-{device}",
+            pair_limit=approval_pair_limit,
         ),
     )
     telemetry["benchmark_approval_sha256"] = approval_sha256
@@ -377,19 +380,23 @@ def _write_full_request(
         for record in records
     )
     (output / "planned_reservations.jsonl").write_bytes(records_source)
-    (output / "approval_consumption.json").write_bytes(
-        _pretty(
-            {
-                "schema_version": "facet-local-minilm-approval-consumption-v1",
-                "status": "consumed",
-                "action": "benchmark",
-                "run_id": telemetry["run_id"],
-                "approval_file": str(approval_path.resolve()),
-                "approval_sha256": approval_sha256,
-                "output_path": str(output.resolve()),
-            }
-        )
+    consumption_source = _pretty(
+        {
+            "schema_version": "facet-local-minilm-approval-consumption-v1",
+            "status": "consumed",
+            "action": "benchmark",
+            "run_id": telemetry["run_id"],
+            "approval_file": str(approval_path.resolve()),
+            "approval_sha256": approval_sha256,
+            "output_path": str(output.resolve()),
+        }
     )
+    (output / "approval_consumption.json").write_bytes(consumption_source)
+    registry = (
+        inputs.score_cache_root / ".facet-local-minilm-approval-consumptions"
+    )
+    registry.mkdir(parents=True, exist_ok=True)
+    (registry / f"{approval_sha256}.json").write_bytes(consumption_source)
     (output / "run_reservation.json").write_bytes(
         _pretty(
             {
@@ -1555,6 +1562,83 @@ def test_rereview_authentic_complete_benchmark_provenance_builds_request(tmp_pat
     _request_path, expected = _write_full_request(tmp_path, inputs)
     telemetry_path = Path(expected["benchmark_telemetry_file"])
 
+    assert build_full_inference_request(
+        inputs,
+        telemetry_path,
+        expected_telemetry_sha256=_sha256(telemetry_path.read_bytes()),
+    ) == expected
+
+
+@pytest.mark.parametrize("pair_limit", (-1, 0))
+def test_final_review_provenance_rejects_nonpositive_approval_pair_limit(
+    tmp_path,
+    pair_limit,
+):
+    inputs = _inputs(
+        windows=(_window(1),), score_cache_root=tmp_path / "cache"
+    )
+
+    with pytest.raises(ValueError, match="benchmark provenance.*pair limit"):
+        _write_full_request(
+            tmp_path,
+            inputs,
+            approval_pair_limit=pair_limit,
+        )
+
+
+def test_final_review_provenance_rejects_forward_count_above_approval_limit(
+    tmp_path,
+):
+    windows = tuple(_window(index) for index in range(100))
+    inputs = _inputs(windows=windows, score_cache_root=tmp_path / "cache")
+    assert inputs.benchmark["forward_pair_count"] == 224
+
+    with pytest.raises(ValueError, match="benchmark provenance.*pair limit"):
+        _write_full_request(tmp_path, inputs, approval_pair_limit=1)
+
+
+@pytest.mark.parametrize("corruption", ("missing", "mismatched"))
+def test_final_review_provenance_requires_matching_replay_registry_marker(
+    tmp_path,
+    corruption,
+):
+    inputs = _inputs(
+        windows=(_window(1),), score_cache_root=tmp_path / "cache"
+    )
+    _request_path, request = _write_full_request(tmp_path, inputs)
+    telemetry_path = Path(request["benchmark_telemetry_file"])
+    telemetry = json.loads(telemetry_path.read_text())
+    marker = (
+        inputs.score_cache_root
+        / ".facet-local-minilm-approval-consumptions"
+        / f"{telemetry['benchmark_approval_sha256']}.json"
+    )
+    if corruption == "missing":
+        marker.unlink()
+    else:
+        payload = json.loads(marker.read_text())
+        payload["run_id"] = "different-run"
+        marker.write_bytes(_pretty(payload))
+
+    with pytest.raises(ValueError, match="benchmark provenance.*registry"):
+        build_full_inference_request(
+            inputs,
+            telemetry_path,
+            expected_telemetry_sha256=_sha256(telemetry_path.read_bytes()),
+        )
+
+
+def test_final_review_valid_224_of_256_benchmark_lineage_passes(tmp_path):
+    windows = tuple(_window(index) for index in range(100))
+    inputs = _inputs(windows=windows, score_cache_root=tmp_path / "cache")
+    _request_path, expected = _write_full_request(
+        tmp_path,
+        inputs,
+        approval_pair_limit=256,
+    )
+    telemetry_path = Path(expected["benchmark_telemetry_file"])
+
+    assert inputs.benchmark["forward_pair_count"] == 224
     assert build_full_inference_request(
         inputs,
         telemetry_path,
