@@ -542,9 +542,27 @@ def freeze_labels(
 
 
 def unmask_review(
-    label_freeze: Mapping[str, object], secret: Mapping[str, object]
+    label_freeze: Mapping[str, object],
+    secret: Mapping[str, object],
+    *,
+    packet: Sequence[Mapping[str, object]] | None = None,
+    labels_a: Sequence[Mapping[str, object]] | None = None,
+    labels_b: Sequence[Mapping[str, object]] | None = None,
+    adjudication: Sequence[Mapping[str, object]] | Mapping[str, object] | None = None,
+    source_hashes: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     _validate_label_freeze(label_freeze)
+    if packet is None or labels_a is None or labels_b is None or adjudication is None:
+        raise ValueError("verified raw reviewer sources are required before unmasking")
+    replayed = freeze_labels(
+        packet,
+        labels_a,
+        labels_b,
+        adjudication,
+        _source_hashes=source_hashes,
+    )
+    if replayed != dict(label_freeze):
+        raise ValueError("label freeze differs from raw reviewer sources")
     labels_raw = label_freeze.get("items")
     secret_raw = secret.get("items")
     if not isinstance(labels_raw, list) or not isinstance(secret_raw, list):
@@ -606,7 +624,14 @@ def freeze_review(
     label_freeze = freeze_labels(packet, labels_a, labels_b, adjudication)
     if secret is None:
         raise ValueError("secret map is required after labels are frozen")
-    unmasked = unmask_review(label_freeze, secret)
+    unmasked = unmask_review(
+        label_freeze,
+        secret,
+        packet=packet,
+        labels_a=labels_a,
+        labels_b=labels_b,
+        adjudication=adjudication,
+    )
     return {
         **unmasked,
         "label_freeze": label_freeze,
@@ -797,10 +822,20 @@ def freeze_review_directory(
     _retry_safe_leaf(root / "labels_a.jsonl", labels_a_source)
     _retry_safe_leaf(root / "labels_b.jsonl", labels_b_source)
     _retry_safe_leaf(root / "adjudication.jsonl", adjudication_source)
+    # Commit the independently derived label state before any private read.
+    _retry_safe_leaf(root / "label_freeze.json", _pretty_bytes(label_freeze))
     verify_review_create(root)
     secret_source = (root / "secret_map.json").read_bytes()
     secret = _read_json(root / "secret_map.json")
-    unmasked_result = unmask_review(label_freeze, secret)
+    unmasked_result = unmask_review(
+        label_freeze,
+        secret,
+        packet=packet,
+        labels_a=labels_a,
+        labels_b=labels_b,
+        adjudication=adjudication,
+        source_hashes=source_hashes,
+    )
     unmasked = unmasked_result["unmasked_items"]
     unmasked_bytes = _jsonl_bytes(unmasked)  # type: ignore[arg-type]
     bindings = {
@@ -823,16 +858,19 @@ def freeze_review_directory(
         "status": "review_frozen_before_qrels",
     }
     review_payload["review_freeze_sha256"] = _sha256_bytes(_pretty_bytes(review_payload))
-    _retry_safe_leaf(root / "label_freeze.json", _pretty_bytes(label_freeze))
     _retry_safe_leaf(root / "unmasked_items.jsonl", unmasked_bytes)
     # Root commit marker is always published last.
     _retry_safe_leaf(root / "review_freeze.json", _pretty_bytes(review_payload))
     return review_payload
 
 
-def verify_review_freeze(review_dir: Path) -> dict[str, object]:
+def verify_review_freeze(
+    review_dir: Path, *, ranking_freeze_dir: Path | None = None
+) -> dict[str, object]:
     root = Path(review_dir)
-    create_verified = verify_review_create(root)
+    create_verified = verify_review_create(
+        root, ranking_freeze_dir=ranking_freeze_dir
+    )
     receipt_source = (root / "create_receipt.json").read_bytes()
     receipt = _read_json(root / "create_receipt.json")
     label_freeze = _read_json(root / "label_freeze.json")
@@ -878,8 +916,33 @@ def verify_review_freeze(review_dir: Path) -> dict[str, object]:
     ):
         if _sha256_bytes((root / name).read_bytes()) != bindings[binding_name]:
             raise ValueError(f"{name} source hash mismatch")
+    packet = _read_jsonl(root / "packet.jsonl")
+    labels_a = _read_jsonl(root / "labels_a.jsonl")
+    labels_b = _read_jsonl(root / "labels_b.jsonl")
+    adjudication = _read_jsonl(root / "adjudication.jsonl")
+    replayed = freeze_labels(
+        packet,
+        labels_a,
+        labels_b,
+        adjudication,
+        _source_hashes={
+            "labels_a_sha256": bindings["labels_a_sha256"],
+            "labels_b_sha256": bindings["labels_b_sha256"],
+            "adjudication_sha256": bindings["adjudication_sha256"],
+        },
+    )
+    if replayed != label_freeze:
+        raise ValueError("label freeze differs from raw reviewer sources")
     secret = _read_json(root / "secret_map.json")
-    recomputed = unmask_review(label_freeze, secret)
+    recomputed = unmask_review(
+        label_freeze,
+        secret,
+        packet=packet,
+        labels_a=labels_a,
+        labels_b=labels_b,
+        adjudication=adjudication,
+        source_hashes=label_freeze["source_hashes"],
+    )
     if _jsonl_bytes(recomputed["unmasked_items"]) != unmasked_source:
         raise ValueError("unmasked items hash mismatch")
     if recomputed["aggregate_counts"] != review_freeze.get("aggregate_counts"):
@@ -903,6 +966,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--adjudication", type=Path, required=True)
     verify = sub.add_parser("verify")
     verify.add_argument("--review", type=Path, required=True)
+    verify.add_argument("--ranking-freeze", type=Path)
     return parser
 
 
@@ -918,9 +982,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             adjudication_path=args.adjudication,
         )
     else:
-        try:
-            result = verify_review_freeze(args.review)
-        except FileNotFoundError:
+        if (args.review / "review_freeze.json").exists():
+            if args.ranking_freeze is None:
+                raise ValueError("final review verification requires --ranking-freeze")
+            result = verify_review_freeze(
+                args.review, ranking_freeze_dir=args.ranking_freeze
+            )
+        else:
             result = verify_review_create(args.review)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

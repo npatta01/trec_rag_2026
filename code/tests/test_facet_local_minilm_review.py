@@ -600,6 +600,49 @@ def test_fixture_freeze_directory_persists_bound_label_and_unmask_artifacts(
     ]
 
 
+def test_final_verifier_replays_raw_labels_not_self_hashed_derivation(
+    tmp_path, packet_and_secret
+):
+    packet, secret = packet_and_secret
+    review = tmp_path / "review_v1"
+    write_review_create(review, packet, secret)
+    for name, rows in (
+        ("labels_a.jsonl", _labels(packet, "reviewer-a")),
+        ("labels_b.jsonl", _labels(packet, "reviewer-b")),
+        ("adjudication.jsonl", []),
+    ):
+        (review / name).write_bytes(_jsonl_bytes(rows))
+    freeze_review_directory(
+        review,
+        labels_a_path=review / "labels_a.jsonl",
+        labels_b_path=review / "labels_b.jsonl",
+        adjudication_path=review / "adjudication.jsonl",
+    )
+    label_path = review / "label_freeze.json"
+    label = json.loads(label_path.read_text())
+    label["adjudicated_disagreement_count"] = 1
+    label_without_hash = {
+        key: value for key, value in label.items() if key != "label_freeze_sha256"
+    }
+    label["label_freeze_sha256"] = hashlib.sha256(
+        (json.dumps(label_without_hash, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    label_path.write_text(json.dumps(label, indent=2, sort_keys=True) + "\n")
+    root_path = review / "review_freeze.json"
+    root = json.loads(root_path.read_text())
+    root["bindings"]["label_freeze_sha256"] = label["label_freeze_sha256"]
+    root_without_hash = {
+        key: value for key, value in root.items() if key != "review_freeze_sha256"
+    }
+    root["review_freeze_sha256"] = hashlib.sha256(
+        (json.dumps(root_without_hash, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    root_path.write_text(json.dumps(root, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ValueError, match="raw reviewer sources"):
+        verify_review_freeze(review)
+
+
 def test_real_ranking_freeze_builds_exact_create_stage_without_external_work(tmp_path):
     before = hashlib.sha256((DURABLE_FREEZE / "freeze.json").read_bytes()).hexdigest()
     review = tmp_path / "real_review_v1"
