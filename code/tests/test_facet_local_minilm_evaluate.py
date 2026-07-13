@@ -668,6 +668,31 @@ def test_prior_payload_revalidates_embedded_topic_declarations_and_rows(
         module.load_authenticated_prior_evaluation(manifest, prior)
 
 
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+@pytest.mark.parametrize("collection_key", ["topics", "per_topic"])
+@pytest.mark.parametrize("collection_shape", ["mapping", "sequence"])
+def test_prior_topic_collections_reject_protected_and_extra_ids(
+    tmp_path, bad_topic, collection_key, collection_shape
+):
+    topic_ids = [*PILOT_TOPIC_IDS, bad_topic]
+    collection = (
+        {topic_id: {} for topic_id in topic_ids}
+        if collection_shape == "mapping"
+        else topic_ids
+    )
+    prior, manifest = _write_prior_fixture(
+        tmp_path,
+        prior_payload={
+            "schema_version": "prior-fixture-v1",
+            "topic_ids": list(PILOT_TOPIC_IDS),
+            collection_key: collection,
+        },
+    )
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        module.load_authenticated_prior_evaluation(manifest, prior)
+
+
 def _synthetic_frozen_evaluation_inputs():
     original = {}
     control_facets = {}

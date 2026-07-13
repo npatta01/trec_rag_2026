@@ -811,6 +811,28 @@ def _read_authenticated_bytes(
 def _validate_prior_embedded_topics(value: Any) -> None:
     """Validate every explicit topic declaration in an authenticated prior."""
 
+    def validate_collection(collection: Any, label: str) -> None:
+        if isinstance(collection, Mapping):
+            topic_ids = list(collection)
+        elif isinstance(collection, Sequence) and not isinstance(
+            collection, (str, bytes, bytearray)
+        ):
+            topic_ids = []
+            for entry in collection:
+                if isinstance(entry, Mapping):
+                    if "topic_id" not in entry:
+                        raise ValueError(f"{label} topic boundary shape is invalid")
+                    topic_ids.append(entry["topic_id"])
+                elif isinstance(entry, (str, int)):
+                    topic_ids.append(entry)
+                else:
+                    raise ValueError(f"{label} topic boundary shape is invalid")
+        else:
+            raise ValueError(f"{label} topic boundary shape is invalid")
+        observed = _validate_topic_boundary(topic_ids, label, exact=True)
+        if len(topic_ids) != len(observed):
+            raise ValueError(f"{label} topic boundary contains duplicate topics")
+
     def visit(child: Any) -> None:
         if isinstance(child, Mapping):
             if "topic_id" in child:
@@ -833,12 +855,9 @@ def _validate_prior_embedded_topics(value: Any) -> None:
                         "prior evaluation topic boundary must declare the exact pilot order"
                     )
             for key in ("topics", "per_topic"):
-                declared_rows = child.get(key)
-                if isinstance(declared_rows, Mapping):
-                    _validate_topic_boundary(
-                        declared_rows,
-                        f"prior evaluation {key}",
-                        exact=True,
+                if key in child:
+                    validate_collection(
+                        child[key], f"prior evaluation {key}"
                     )
             for nested in child.values():
                 visit(nested)
