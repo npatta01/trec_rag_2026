@@ -14,6 +14,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import stat
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -44,7 +45,7 @@ APPROVAL_SCOPE = "facet_local_minilm_model_materialization_v1"
 MATERIALIZATION_SCHEMA_VERSION = "facet-local-minilm-materialization-v1"
 WINDOW_SCHEMA_VERSION = "facet-local-minilm-window-plan-row-v1"
 WINDOW_POLICY_VERSION = "facet-local-minilm-window-policy-v1"
-PREFLIGHT_SCHEMA_VERSION = "facet-local-minilm-preflight-v1"
+PREFLIGHT_SCHEMA_VERSION = "facet-local-minilm-preflight-v2"
 
 PAIR_MAX_TOKENS = 512
 QUERY_MAX_TOKENS = 192
@@ -200,27 +201,42 @@ def _load_and_validate_approval(path: Path) -> tuple[dict[str, object], bytes]:
 def _safe_snapshot_file_records(snapshot: Path) -> list[dict[str, object]]:
     if not snapshot.is_dir():
         raise ValueError("resolved model snapshot is not a directory")
-    observed = sorted(
-        path.relative_to(snapshot).as_posix()
-        for path in snapshot.rglob("*")
-        if path.is_file()
-    )
+    try:
+        entries = tuple(sorted(snapshot.iterdir(), key=lambda path: path.name))
+    except OSError as exc:
+        raise ValueError("cannot enumerate resolved model snapshot") from exc
+    observed = tuple(path.name for path in entries)
     pickle_suffixes = (".bin", ".pt", ".pth", ".pickle", ".pkl")
     unexpected = [
-        name
-        for name in observed
-        if name not in ALLOW_PATTERNS or name.lower().endswith(pickle_suffixes)
+        path.name
+        for path in entries
+        if (
+            path.name not in ALLOW_PATTERNS
+            or path.name.lower().endswith(pickle_suffixes)
+        )
+        and path.is_file()
     ]
     if unexpected:
         raise ValueError(
             "pickle or unexpected model files are forbidden: " + ", ".join(unexpected)
         )
-    missing = [name for name in ALLOW_PATTERNS if name not in observed]
-    if missing:
-        raise ValueError("allowlisted model files are missing: " + ", ".join(missing))
+    if set(observed) != set(ALLOW_PATTERNS) or len(observed) != len(ALLOW_PATTERNS):
+        raise ValueError(
+            "model snapshot must contain exactly six allowed snapshot leaf files"
+        )
     records: list[dict[str, object]] = []
     for name in ALLOW_PATTERNS:
         path = snapshot / name
+        try:
+            resolved_stat = path.stat()
+        except OSError as exc:
+            raise ValueError(
+                "model snapshot must contain exactly six allowed snapshot leaf files"
+            ) from exc
+        if not stat.S_ISREG(resolved_stat.st_mode) or not os.access(path, os.R_OK):
+            raise ValueError(
+                "model snapshot must contain exactly six allowed snapshot leaf files"
+            )
         records.append(
             {
                 "path": name,
@@ -286,8 +302,17 @@ def materialize_model(
     return receipt
 
 
-def verify_materialization_receipt(path: Path) -> Path:
-    """Verify receipt, approval, exact snapshot file set, bytes, and hashes."""
+@dataclass(frozen=True)
+class VerifiedMaterialization:
+    receipt_path: Path
+    source: bytes
+    sha256: str
+    payload: dict[str, object]
+    snapshot: Path
+
+
+def load_verified_materialization(path: Path) -> VerifiedMaterialization:
+    """Load one authenticated receipt payload and retain its exact input bytes."""
 
     receipt_path = Path(path)
     try:
@@ -339,7 +364,36 @@ def verify_materialization_receipt(path: Path) -> Path:
         canonical_compact_json_bytes(files)
     ):
         raise ValueError("materialized snapshot hash mismatch")
-    return snapshot
+    return VerifiedMaterialization(
+        receipt_path=receipt_path.resolve(),
+        source=source,
+        sha256=_sha256_bytes(source),
+        payload=receipt,
+        snapshot=snapshot,
+    )
+
+
+def verify_materialization_receipt(path: Path) -> Path:
+    """Verify receipt, approval, exact snapshot file set, bytes, and hashes."""
+
+    return load_verified_materialization(path).snapshot
+
+
+def _load_tokenizer_from_verified(
+    verified: VerifiedMaterialization,
+    *,
+    auto_tokenizer_cls: object | None = None,
+) -> object:
+    if auto_tokenizer_cls is None:
+        from transformers import AutoTokenizer
+
+        auto_tokenizer_cls = AutoTokenizer
+    return auto_tokenizer_cls.from_pretrained(  # type: ignore[attr-defined]
+        verified.snapshot,
+        local_files_only=True,
+        trust_remote_code=False,
+        use_fast=True,
+    )
 
 
 def load_verified_tokenizer(
@@ -349,16 +403,9 @@ def load_verified_tokenizer(
 ) -> object:
     """Load only a tokenizer from a freshly verified local snapshot."""
 
-    snapshot = verify_materialization_receipt(materialization_receipt_path)
-    if auto_tokenizer_cls is None:
-        from transformers import AutoTokenizer
-
-        auto_tokenizer_cls = AutoTokenizer
-    return auto_tokenizer_cls.from_pretrained(  # type: ignore[attr-defined]
-        snapshot,
-        local_files_only=True,
-        trust_remote_code=False,
-        use_fast=True,
+    verified = load_verified_materialization(materialization_receipt_path)
+    return _load_tokenizer_from_verified(
+        verified, auto_tokenizer_cls=auto_tokenizer_cls
     )
 
 
@@ -693,12 +740,12 @@ def build_window_plan(
         values["window_id"] = _window_id(values)
         rows.append(WindowPlanRow(**values))  # type: ignore[arg-type]
     result = tuple(rows)
-    verify_window_plan(result)
+    verify_window_plan_structure(result)
     return result
 
 
-def verify_window_plan(rows: Sequence[WindowPlanRow]) -> None:
-    """Recompute all policy positions and content identities for one document."""
+def verify_window_plan_structure(rows: Sequence[WindowPlanRow]) -> None:
+    """Check self-consistency only; this does not authenticate source/tokenizer."""
 
     if not rows:
         raise ValueError("window plan must contain at least one row")
@@ -787,6 +834,81 @@ def verify_window_plan(rows: Sequence[WindowPlanRow]) -> None:
             raise ValueError("window pair token count is invalid")
         if not isinstance(row.cache_hit, bool):
             raise ValueError("window cache_hit must be boolean")
+
+
+def verify_window_plan(
+    rows: Sequence[WindowPlanRow],
+    *,
+    tokenizer: object,
+    candidate: Mapping[str, object] | object,
+) -> None:
+    """Authenticate a window plan against the verified tokenizer and source row."""
+
+    verify_window_plan_structure(rows)
+    first = rows[0]
+    source_topic_id = _required_candidate_text(candidate, "topic_id")
+    if source_topic_id in PROTECTED_TOPIC_IDS:
+        raise ValueError(f"protected topic {source_topic_id} is forbidden")
+    source_query = _required_candidate_text(candidate, "query")
+    source_text = _required_candidate_text(candidate, "text")
+    source_document_sha256 = _sha256_bytes(source_text.encode("utf-8"))
+    if _candidate_value(candidate, "text_sha256") != source_document_sha256:
+        raise ValueError("authenticated source candidate text hash mismatch")
+    if first.document_sha256 != source_document_sha256:
+        raise ValueError("authenticated source document hash mismatch")
+    source_query_sha256 = _sha256_bytes(source_query.encode("utf-8"))
+    if (
+        _candidate_value(candidate, "query_sha256") != source_query_sha256
+        or first.query != source_query
+        or first.query_sha256 != source_query_sha256
+    ):
+        raise ValueError("authenticated source query binding mismatch")
+    source_rank = _candidate_value(candidate, "rank")
+    source_fields = {
+        "topic_id": source_topic_id,
+        "family": _required_candidate_text(candidate, "family"),
+        "variant": _required_candidate_text(candidate, "variant"),
+        "rank": source_rank,
+        "document_id": _required_candidate_text(candidate, "document_id"),
+    }
+    if any(getattr(first, field) != value for field, value in source_fields.items()):
+        raise ValueError("authenticated source candidate identity mismatch")
+
+    query_tokens = tokenizer.encode(  # type: ignore[attr-defined]
+        source_query, add_special_tokens=False, truncation=False
+    )
+    if first.query_token_count != len(query_tokens):
+        raise ValueError("authenticated query token count mismatch")
+    special_token_count = tokenizer.num_special_tokens_to_add(pair=True)  # type: ignore[attr-defined]
+    if first.pair_special_token_count != special_token_count:
+        raise ValueError("authenticated special token count mismatch")
+    document_tokens = tokenizer.encode(  # type: ignore[attr-defined]
+        source_text, add_special_tokens=False, truncation=False
+    )
+    if first.document_token_count != len(document_tokens):
+        raise ValueError("authenticated document token count mismatch")
+    for row in rows:
+        passage_tokens = tokenizer.encode(  # type: ignore[attr-defined]
+            row.window_text, add_special_tokens=False, truncation=False
+        )
+        expected_pair_count = (
+            len(query_tokens) + len(passage_tokens) + special_token_count
+        )
+        if row.pair_token_count != expected_pair_count:
+            raise ValueError("authenticated pair token count mismatch")
+
+    expected_rows = build_window_plan(candidate, tokenizer, query=source_query)
+    if len(expected_rows) != len(rows):
+        raise ValueError("authenticated selected window count mismatch")
+    for expected, observed in zip(expected_rows, rows, strict=True):
+        if (
+            expected.document_start_token != observed.document_start_token
+            or expected.document_end_token != observed.document_end_token
+            or expected.window_text != observed.window_text
+        ):
+            raise ValueError("authenticated window span/text mismatch")
+        if replace(expected, cache_hit=observed.cache_hit) != observed:
+            raise ValueError("authenticated window plan differs from replay")
 
 
 def _topic_sort_key(topic_id: str) -> tuple[int, int | str]:
@@ -946,7 +1068,9 @@ def build_preflight(
             cached_rows.append(
                 replace(row, cache_hit=cache_key in score_cache.scores)  # type: ignore[attr-defined]
             )
-        verify_window_plan(cached_rows)
+        verify_window_plan(
+            cached_rows, tokenizer=tokenizer, candidate=candidate
+        )
         windows.extend(cached_rows)
         first = cached_rows[0]
         documents.append(
@@ -1026,9 +1150,43 @@ def _window_jsonl_bytes(rows: Sequence[WindowPlanRow]) -> bytes:
     )
 
 
-def _materialization_payload(path: Path) -> dict[str, object]:
-    source = Path(path).read_bytes()
-    return _loads_object_no_duplicates(source, "model materialization receipt")
+def _score_cache_file_binding(path: Path) -> dict[str, object]:
+    cache_path = Path(path).resolve()
+    if not cache_path.exists():
+        if os.path.lexists(cache_path):
+            raise ValueError("score cache path is not a readable regular file")
+        return {
+            "state": "absent",
+            "path": str(cache_path),
+            "bytes": 0,
+            "sha256": None,
+        }
+    if not cache_path.is_file() or not os.access(cache_path, os.R_OK):
+        raise ValueError("score cache path is not a readable regular file")
+    return {
+        "state": "present",
+        "path": str(cache_path),
+        "bytes": cache_path.stat().st_size,
+        "sha256": _sha256_file(cache_path),
+    }
+
+
+def _require_persisted_inputs_unchanged(
+    *,
+    materialization: VerifiedMaterialization,
+    score_cache_binding: Mapping[str, object],
+) -> None:
+    try:
+        current_receipt = materialization.receipt_path.read_bytes()
+    except OSError as exc:
+        raise ValueError("materialization receipt changed during preflight") from exc
+    if current_receipt != materialization.source:
+        raise ValueError("materialization receipt changed during preflight")
+    cache_path = score_cache_binding.get("path")
+    if not isinstance(cache_path, str) or (
+        _score_cache_file_binding(Path(cache_path)) != dict(score_cache_binding)
+    ):
+        raise ValueError("score cache state changed during preflight")
 
 
 def run_preflight(
@@ -1038,6 +1196,8 @@ def run_preflight(
     materialization_receipt_path: Path,
     score_cache_root: Path,
     output_dir: Path,
+    auto_tokenizer_cls: object | None = None,
+    score_cache_cls: Callable[..., object] = GlobalScoreCache,
 ) -> dict[str, object]:
     """Run and persist the complete tokenizer-only, qrels-free preflight."""
 
@@ -1047,12 +1207,22 @@ def run_preflight(
     manifest: FacetLocalManifest = load_facet_local_manifest(Path(manifest_path))
     rows, source_receipt = load_facet_local_source_snapshot(Path(source_dir), manifest)
     _reject_protected_candidates(rows)
-    tokenizer = load_verified_tokenizer(Path(materialization_receipt_path))
-    cache = GlobalScoreCache(Path(score_cache_root), score_cache_context())
+    materialization = load_verified_materialization(
+        Path(materialization_receipt_path)
+    )
+    tokenizer = _load_tokenizer_from_verified(
+        materialization, auto_tokenizer_cls=auto_tokenizer_cls
+    )
+    context = score_cache_context()
+    expected_cache_path = Path(score_cache_root).joinpath(*context.path_parts)
+    cache_binding = _score_cache_file_binding(expected_cache_path)
+    cache = score_cache_cls(Path(score_cache_root), context)
+    if Path(cache.path).resolve() != expected_cache_path.resolve():  # type: ignore[attr-defined]
+        raise ValueError("score cache resolved path differs from frozen context")
+    if _score_cache_file_binding(expected_cache_path) != cache_binding:
+        raise ValueError("score cache state changed while loading")
     plan = build_preflight(rows, tokenizer, cache)
     windows_bytes = _window_jsonl_bytes(plan.windows)
-    materialization = _materialization_payload(Path(materialization_receipt_path))
-    context = score_cache_context()
     payload: dict[str, object] = {
         "schema_version": PREFLIGHT_SCHEMA_VERSION,
         "status": "tokenizer_only_preflight_complete",
@@ -1062,13 +1232,9 @@ def run_preflight(
         "source_receipt_sha256": manifest.source_receipt_sha256,
         "source_candidates_sha256": manifest.candidates_sha256,
         "source_candidate_rows": manifest.candidate_rows,
-        "model_materialization_receipt": str(
-            Path(materialization_receipt_path).resolve()
-        ),
-        "model_materialization_receipt_sha256": _sha256_file(
-            Path(materialization_receipt_path)
-        ),
-        "model_materialization": materialization,
+        "model_materialization_receipt": str(materialization.receipt_path),
+        "model_materialization_receipt_sha256": materialization.sha256,
+        "model_materialization": materialization.payload,
         "tokenizer": {
             "class": type(tokenizer).__name__,
             "local_files_only": True,
@@ -1079,6 +1245,7 @@ def run_preflight(
             "root": str(Path(score_cache_root).resolve()),
             "path": str(cache.path.resolve()),
             "context": context.artifact_metadata,
+            "binding": cache_binding,
         },
         "window_policy": {
             "version": WINDOW_POLICY_VERSION,
@@ -1107,6 +1274,10 @@ def run_preflight(
     # Retain the authenticated source receipt binding without reopening any ledger.
     if source_receipt.get("candidates_sha256") != payload["source_candidates_sha256"]:
         raise ValueError("preflight source receipt binding changed")
+    _require_persisted_inputs_unchanged(
+        materialization=materialization,
+        score_cache_binding=cache_binding,
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         destination.mkdir()

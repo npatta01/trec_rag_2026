@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -134,6 +136,26 @@ def _safe_snapshot(path: Path) -> Path:
     return path
 
 
+def _materialization_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
+    approval_path = tmp_path / "approval.json"
+    snapshot = _safe_snapshot(tmp_path / "snapshot")
+    output = tmp_path / "model-v1"
+    _write_approval(approval_path)
+    receipt = materialize_model(
+        model_id=MODEL_ID,
+        revision=MODEL_REVISION,
+        approval_path=approval_path,
+        output_dir=output,
+        snapshot_download_fn=lambda **_kwargs: str(snapshot),
+    )
+    return output / "materialization.json", snapshot, receipt
+
+
+def _restamp_window(row: WindowPlanRow, **changes) -> WindowPlanRow:
+    updated = replace(row, **changes)
+    return replace(updated, window_id=module._window_id(updated.__dict__))
+
+
 def test_window_policy_is_bounded_and_covers_document_edges():
     tokenizer = WordTokenizer()
     candidate = _candidate()
@@ -144,7 +166,7 @@ def test_window_policy_is_bounded_and_covers_document_edges():
     assert rows[0].document_start_token == 0
     assert rows[-1].document_end_token == rows[-1].document_token_count == 900
     assert all(row.pair_token_count <= 512 for row in rows)
-    verify_window_plan(rows)
+    verify_window_plan(rows, tokenizer=tokenizer, candidate=candidate)
 
 
 def test_overlong_query_fails_without_truncation():
@@ -332,6 +354,40 @@ def test_materialization_rejects_pickle_and_unexpected_files(tmp_path):
         )
 
 
+@pytest.mark.parametrize(
+    "entry_kind",
+    ("broken_symlink", "fifo", "symlink_to_directory", "unexpected_directory"),
+)
+def test_materialization_rejects_every_nonregular_or_extra_snapshot_entry(
+    tmp_path, entry_kind
+):
+    approval_path = tmp_path / "approval.json"
+    _write_approval(approval_path)
+    snapshot = _safe_snapshot(tmp_path / "snapshot")
+    if entry_kind == "unexpected_directory":
+        (snapshot / "unexpected-directory").mkdir()
+    else:
+        target = snapshot / "config.json"
+        target.unlink()
+        if entry_kind == "broken_symlink":
+            target.symlink_to(snapshot / "missing-target")
+        elif entry_kind == "fifo":
+            os.mkfifo(target)
+        else:
+            directory = tmp_path / "directory-target"
+            directory.mkdir()
+            target.symlink_to(directory, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="exactly six allowed snapshot leaf files"):
+        materialize_model(
+            model_id=MODEL_ID,
+            revision=MODEL_REVISION,
+            approval_path=approval_path,
+            output_dir=tmp_path / "model-v1",
+            snapshot_download_fn=lambda **_kwargs: str(snapshot),
+        )
+
+
 def test_verified_tokenizer_load_is_local_only_and_receipt_first(tmp_path):
     approval_path = tmp_path / "approval.json"
     output = tmp_path / "model-v1"
@@ -486,13 +542,217 @@ def test_small_and_zero_miss_benchmark_rules_are_deterministic():
 
 
 def test_window_row_schema_round_trips_and_verifier_detects_drift():
-    row = build_window_plan(_candidate(10), WordTokenizer(), query="facet")[0]
+    candidate = _candidate(10, query="facet")
+    tokenizer = WordTokenizer()
+    row = build_window_plan(candidate, tokenizer, query="facet")[0]
     loaded = WindowPlanRow.from_dict(row.to_dict())
     assert loaded == row
-    verify_window_plan((loaded,))
+    module.verify_window_plan_structure((loaded,))
+    verify_window_plan((loaded,), tokenizer=tokenizer, candidate=candidate)
 
     with pytest.raises(ValueError, match="window hash mismatch"):
-        verify_window_plan((replace(row, window_sha256="0" * 64),))
+        module.verify_window_plan_structure(
+            (replace(row, window_sha256="0" * 64),)
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("query_token_count", 0, "authenticated query token count mismatch"),
+        ("pair_special_token_count", 0, "authenticated special token count mismatch"),
+        ("pair_token_count", 1, "authenticated pair token count mismatch"),
+    ),
+)
+def test_authenticated_window_verification_rejects_low_counts(
+    field, value, message
+):
+    candidate = _candidate(10)
+    tokenizer = WordTokenizer()
+    row = build_window_plan(candidate, tokenizer, query=candidate["query"])[0]
+    tampered = replace(row, **{field: value})
+
+    module.verify_window_plan_structure((tampered,))
+    with pytest.raises(ValueError, match=message):
+        verify_window_plan((tampered,), tokenizer=tokenizer, candidate=candidate)
+
+
+def test_authenticated_window_verification_rejects_span_tamper():
+    candidate = _candidate(900)
+    tokenizer = WordTokenizer()
+    rows = build_window_plan(candidate, tokenizer, query=candidate["query"])
+    tampered = (
+        _restamp_window(rows[0], document_end_token=rows[0].document_end_token - 1),
+        _restamp_window(rows[1], document_start_token=rows[1].document_start_token - 1),
+    )
+
+    module.verify_window_plan_structure(tampered)
+    with pytest.raises(ValueError, match="authenticated window span/text mismatch"):
+        verify_window_plan(tampered, tokenizer=tokenizer, candidate=candidate)
+
+
+def test_authenticated_window_verification_rejects_serialized_text_tamper():
+    candidate = _candidate(10)
+    tokenizer = WordTokenizer()
+    row = build_window_plan(candidate, tokenizer, query=candidate["query"])[0]
+    changed_text = row.window_text + " changed"
+    tampered = _restamp_window(
+        row,
+        window_text=changed_text,
+        window_sha256=_sha256(changed_text.encode("utf-8")),
+        cache_key=module._score_cache_key(row.query, changed_text),
+        pair_token_count=row.pair_token_count + 1,
+    )
+
+    module.verify_window_plan_structure((tampered,))
+    with pytest.raises(ValueError, match="authenticated window span/text mismatch"):
+        verify_window_plan((tampered,), tokenizer=tokenizer, candidate=candidate)
+
+
+def test_authenticated_window_verification_rejects_source_document_tamper():
+    candidate = _candidate(10)
+    tokenizer = WordTokenizer()
+    row = build_window_plan(candidate, tokenizer, query=candidate["query"])[0]
+    changed_candidate = dict(candidate)
+    changed_candidate["text"] = candidate["text"] + " changed"
+    changed_candidate["text_sha256"] = _sha256(
+        changed_candidate["text"].encode("utf-8")
+    )
+
+    with pytest.raises(ValueError, match="authenticated source document hash mismatch"):
+        verify_window_plan(
+            (row,), tokenizer=tokenizer, candidate=changed_candidate
+        )
+
+
+class _StubScoreCache:
+    def __init__(self, root_dir, context):
+        self.context = context
+        self.path = Path(root_dir).joinpath(*context.path_parts)
+        self.scores = {}
+
+    def cache_key(self, *, query_text, text):
+        return module._score_cache_key(query_text, text)
+
+
+class _AutoTokenizerReturning:
+    tokenizer = WordTokenizer()
+
+    @classmethod
+    def from_pretrained(cls, _path, **_kwargs):
+        return cls.tokenizer
+
+
+@pytest.mark.parametrize("cache_present", (False, True))
+def test_run_preflight_persists_receipt_and_exact_cache_state(
+    tmp_path, monkeypatch, cache_present
+):
+    receipt_path, _snapshot, receipt = _materialization_fixture(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(b"frozen-manifest\n")
+    manifest = SimpleNamespace(
+        source_receipt_sha256="1" * 64,
+        candidates_sha256="2" * 64,
+        candidate_rows=1,
+    )
+    candidate = _candidate(10)
+    monkeypatch.setattr(module, "load_facet_local_manifest", lambda _path: manifest)
+    monkeypatch.setattr(
+        module,
+        "load_facet_local_source_snapshot",
+        lambda _path, _manifest: (
+            (candidate,),
+            {"candidates_sha256": manifest.candidates_sha256},
+        ),
+    )
+    context = score_cache_context()
+    cache_root = tmp_path / "score-cache"
+    cache_path = cache_root.joinpath(*context.path_parts)
+    if cache_present:
+        cache_path.parent.mkdir(parents=True)
+        cache_path.write_bytes(b"exact-cache-state\n")
+    output = tmp_path / "preflight"
+
+    payload = module.run_preflight(
+        manifest_path=manifest_path,
+        source_dir=tmp_path / "source",
+        materialization_receipt_path=receipt_path,
+        score_cache_root=cache_root,
+        output_dir=output,
+        auto_tokenizer_cls=_AutoTokenizerReturning,
+        score_cache_cls=_StubScoreCache,
+    )
+
+    assert payload["schema_version"] == "facet-local-minilm-preflight-v2"
+    receipt_bytes = receipt_path.read_bytes()
+    assert payload["model_materialization"] == receipt
+    assert payload["model_materialization_receipt_sha256"] == _sha256(receipt_bytes)
+    expected_binding = {
+        "state": "present" if cache_present else "absent",
+        "path": str(cache_path.resolve()),
+        "bytes": len(b"exact-cache-state\n") if cache_present else 0,
+        "sha256": _sha256(b"exact-cache-state\n") if cache_present else None,
+    }
+    assert payload["score_cache"]["binding"] == expected_binding
+    assert payload["summary"]["inference_count"] == 0
+    assert payload["summary"]["qrels_access_count"] == 0
+    assert payload["summary"]["retrieval_call_count"] == 0
+    assert _sha256((output / "windows.jsonl").read_bytes()) == payload[
+        "windows_sha256"
+    ]
+    with pytest.raises(FileExistsError, match="create-only"):
+        module.run_preflight(
+            manifest_path=manifest_path,
+            source_dir=tmp_path / "source",
+            materialization_receipt_path=receipt_path,
+            score_cache_root=cache_root,
+            output_dir=output,
+            auto_tokenizer_cls=_AutoTokenizerReturning,
+            score_cache_cls=_StubScoreCache,
+        )
+
+
+def test_run_preflight_rejects_materialization_receipt_mutation_before_publish(
+    tmp_path, monkeypatch
+):
+    receipt_path, _snapshot, _receipt = _materialization_fixture(tmp_path)
+    original_receipt = receipt_path.read_bytes()
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(b"frozen-manifest\n")
+    manifest = SimpleNamespace(
+        source_receipt_sha256="1" * 64,
+        candidates_sha256="2" * 64,
+        candidate_rows=1,
+    )
+    candidate = _candidate(10)
+    monkeypatch.setattr(module, "load_facet_local_manifest", lambda _path: manifest)
+    monkeypatch.setattr(
+        module,
+        "load_facet_local_source_snapshot",
+        lambda _path, _manifest: (
+            (candidate,),
+            {"candidates_sha256": manifest.candidates_sha256},
+        ),
+    )
+
+    class MutatingAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, _path, **_kwargs):
+            receipt_path.write_bytes(original_receipt + b" ")
+            return WordTokenizer()
+
+    output = tmp_path / "preflight"
+    with pytest.raises(ValueError, match="materialization receipt changed during preflight"):
+        module.run_preflight(
+            manifest_path=manifest_path,
+            source_dir=tmp_path / "source",
+            materialization_receipt_path=receipt_path,
+            score_cache_root=tmp_path / "score-cache",
+            output_dir=output,
+            auto_tokenizer_cls=MutatingAutoTokenizer,
+            score_cache_cls=_StubScoreCache,
+        )
+    assert not output.exists()
 
 
 def test_cli_has_no_qrels_retrieval_or_inference_input():
