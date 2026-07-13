@@ -16,7 +16,9 @@ from typing import Mapping, Sequence
 
 from .facet_retrieval_control_experiment import (
     EXPECTED_ALTERNATIVE_NAMES,
+    StreamArmEvaluation,
     retrieval_repair_decision,
+    select_stream_arm,
     selected_ranking_references,
 )
 from .facet_retrieval_control_freeze import _BASE_ARM_QUERIES
@@ -113,6 +115,49 @@ def _sha256(value: object, label: str) -> str:
     ):
         raise ValueError(f"{label} must be a lowercase SHA-256")
     return value
+
+
+def _verify_loaded_json_bytes(
+    payload: Mapping[str, object], raw: object, label: str, *, canonical: bool
+) -> str:
+    if not isinstance(raw, bytes):
+        raise ValueError(f"{label} file bytes are required")
+    try:
+        decoded = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} file is invalid JSON") from exc
+    if decoded != payload:
+        raise ValueError(f"{label} payload differs from loaded file")
+    if canonical and raw != _canonical_json(payload):
+        raise ValueError(f"{label} file is not canonical JSON")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _verify_control_freeze_identity(
+    control_freeze: Mapping[str, object], raw: object
+) -> tuple[str, str]:
+    file_sha256 = _verify_loaded_json_bytes(
+        control_freeze, raw, "control freeze", canonical=True
+    )
+    claimed = _sha256(control_freeze.get("freeze_sha256"), "control freeze self-hash")
+    without_self = dict(control_freeze)
+    without_self.pop("freeze_sha256", None)
+    actual = hashlib.sha256(_canonical_json(without_self)).hexdigest()
+    if claimed != actual:
+        raise ValueError("control freeze self-hash differs")
+    return file_sha256, actual
+
+
+def _verify_evaluation_self_hash(
+    payload: Mapping[str, object], label: str
+) -> str:
+    claimed = _sha256(payload.get("artifact_sha256"), f"{label} self-hash")
+    without_self = dict(payload)
+    without_self.pop("artifact_sha256", None)
+    actual = hashlib.sha256(_canonical_json(without_self)).hexdigest()
+    if claimed != actual:
+        raise ValueError(f"{label} self-hash differs")
+    return actual
 
 
 def _validate_manifest(manifest: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -327,18 +372,86 @@ def _validate_stream_evaluation(
     return streams
 
 
-def _validate_selection(selection: Mapping[str, object]) -> tuple[Mapping[str, object], Mapping[str, object]]:
+def _canonical_eligibility(
+    arms: Mapping[str, StreamArmEvaluation],
+) -> dict[str, dict[str, object]]:
+    baseline = arms["B0"]
+    result: dict[str, dict[str, object]] = {}
+    for arm_id in ARM_IDS:
+        arm = arms[arm_id]
+        reasons = []
+        if arm.coherence_failed:
+            reasons.append("coherence_failed")
+        if (
+            arm.domain_drift_top10_count > baseline.domain_drift_top10_count
+            and arm.content_quality_top10_count
+            > baseline.content_quality_top10_count
+        ):
+            reasons.append("both_noise_families_increased_vs_B0")
+        result[arm_id] = {
+            "eligible": not reasons,
+            "exclusion_reasons": reasons,
+        }
+    return result
+
+
+def _validate_selection(
+    selection: Mapping[str, object], stream_rows: Mapping[str, object]
+) -> tuple[
+    Mapping[str, object],
+    Mapping[str, object],
+    Mapping[str, Mapping[str, object]],
+]:
     if selection.get("schema_version") != "facet-control-selection-v1":
         raise ValueError("selection schema differs")
     selected = _object(selection.get("selected"), "selection selected arms")
     if set(selected) != set(STREAM_IDS) or any(selected[key] not in ARM_IDS for key in selected):
         raise ValueError("selection differs from the exact four-stream boundary")
+    canonical_selected: dict[str, str] = {}
+    canonical_eligibility: dict[str, Mapping[str, object]] = {}
+    for stream_id in STREAM_IDS:
+        records = _object(
+            _object(stream_rows[stream_id], stream_id).get("arms"),
+            f"{stream_id}.arms",
+        )
+        try:
+            arms = {
+                arm_id: StreamArmEvaluation(
+                    **dict(
+                        _object(
+                            _object(records[arm_id], f"{stream_id}/{arm_id}").get(
+                                "metrics"
+                            ),
+                            f"{stream_id}/{arm_id}.metrics",
+                        )
+                    )
+                )
+                for arm_id in ARM_IDS
+            }
+        except TypeError as exc:
+            raise ValueError(
+                f"stream evaluation cannot reconstruct Task5 metrics for {stream_id}"
+            ) from exc
+        canonical_selected[stream_id] = select_stream_arm(arms).arm_id
+        canonical_eligibility[stream_id] = _canonical_eligibility(arms)
+    if dict(selected) != canonical_selected:
+        raise ValueError("saved selected arm differs from canonical Task5 selection")
+    saved_eligibility = _object(selection.get("eligibility"), "selection eligibility")
+    if saved_eligibility != canonical_eligibility:
+        raise ValueError("saved selection eligibility differs from canonical Task5 eligibility")
     references = _object(selection.get("selected_rankings"), "selection ranking references")
-    if references != selected_ranking_references({key: str(value) for key, value in selected.items()}):
+    if references != selected_ranking_references(canonical_selected):
         raise ValueError("selection ranking references are inconsistent")
     if selection.get("frozen_alternative_count") != 25:
         raise ValueError("selection frozen alternative count differs")
-    return selected, references
+    ranking_hashes = _object(
+        selection.get("selected_ranking_sha256"), "selection ranking hashes"
+    )
+    if set(ranking_hashes) != set(TOPIC_IDS):
+        raise ValueError("selection ranking hash boundary differs")
+    for topic_id in TOPIC_IDS:
+        _sha256(ranking_hashes[topic_id], f"selection ranking hash {topic_id}")
+    return selected, references, canonical_eligibility
 
 
 def _validate_system_evaluation(system_evaluation: Mapping[str, object]) -> Mapping[str, object]:
@@ -359,6 +472,15 @@ def _validate_system_evaluation(system_evaluation: Mapping[str, object]) -> Mapp
             topic = _object(per_topic[topic_id], f"system evaluation {system_id}.{topic_id}")
             for field in SYSTEM_METRICS:
                 _number(topic.get(field), f"system evaluation {system_id}.{topic_id}.{field}")
+        for field in SYSTEM_METRICS:
+            expected_aggregate = sum(
+                float(_object(per_topic[topic_id], f"{system_id}/{topic_id}")[field])
+                for topic_id in TOPIC_IDS
+            ) / len(TOPIC_IDS)
+            if metrics[field] != expected_aggregate:
+                raise ValueError(
+                    f"system evaluation {system_id} aggregate {field} differs from per-topic mean"
+                )
     deltas = _object(
         system_evaluation.get("per_topic_ndcg_delta_vs_r1"),
         "system evaluation per-topic deltas",
@@ -370,7 +492,7 @@ def _validate_system_evaluation(system_evaluation: Mapping[str, object]) -> Mapp
             float(_object(_object(systems["R2"], "R2").get("per_topic"), "R2 per-topic")[topic_id]["ndcg@10"])
             - float(_object(_object(systems["R1"], "R1").get("per_topic"), "R1 per-topic")[topic_id]["ndcg@10"])
         )
-        if not math.isclose(_number(deltas[topic_id], f"system delta {topic_id}"), expected, abs_tol=1e-12):
+        if _number(deltas[topic_id], f"system delta {topic_id}") != expected:
             raise ValueError(f"system evaluation per-topic delta is inconsistent for {topic_id}")
     return systems
 
@@ -398,7 +520,7 @@ def _validate_decision(
         "r1_ndcg_at_10": r1["ndcg@10"],
     }
     for field, expected in expected_values.items():
-        if not math.isclose(_number(evidence.get(field), f"decision {field}"), float(expected), abs_tol=1e-12):
+        if _number(evidence.get(field), f"decision {field}") != float(expected):
             raise ValueError(f"decision evidence is inconsistent for {field}")
     selected_noise = 0
     b0_noise = 0
@@ -423,10 +545,30 @@ def _validate_decision(
         raise ValueError("decision classification is inconsistent")
 
 
-def _validate_provenance(*payloads: Mapping[str, object]) -> None:
+def _validate_provenance(
+    *payloads: Mapping[str, object],
+    manifest_file_sha256: str,
+    control_freeze_file_sha256: str,
+    control_freeze_sha256: str,
+    prior_freeze_sha256: str,
+) -> None:
     provenances = [_object(payload.get("provenance"), "evaluation provenance") for payload in payloads]
     if any(provenance != provenances[0] for provenance in provenances[1:]):
         raise ValueError("evaluation provenance is inconsistent")
+    expected = {
+        "manifest_sha256": manifest_file_sha256,
+        "control_freeze_file_sha256": control_freeze_file_sha256,
+        "control_freeze_sha256": control_freeze_sha256,
+        "prior_freeze_sha256": prior_freeze_sha256,
+    }
+    for field, value in expected.items():
+        if provenances[0].get(field) != value:
+            raise ValueError(f"evaluation provenance {field} binding differs")
+    _sha256(provenances[0].get("qrels_sha256"), "evaluation provenance qrels hash")
+    if not isinstance(provenances[0].get("qrels_name"), str) or not provenances[0][
+        "qrels_name"
+    ]:
+        raise ValueError("evaluation provenance qrels name is missing")
 
 
 def _source(
@@ -562,7 +704,7 @@ def _artifact_rows(
     inspection: Mapping[str, object],
     stream_rows: Mapping[str, object],
     selected: Mapping[str, object],
-    selection: Mapping[str, object],
+    eligibility: Mapping[str, Mapping[str, object]],
     references: Mapping[str, object],
     systems: Mapping[str, object],
     system_evaluation: Mapping[str, object],
@@ -605,7 +747,6 @@ def _artifact_rows(
     noise_rows: list[dict[str, object]] = []
     representative_results: list[dict[str, object]] = []
     facet_evidence: list[dict[str, object]] = []
-    eligibility = _object(selection.get("eligibility"), "selection eligibility")
     for stream_id in STREAM_IDS:
         topic_id, facet_id = stream_id.split("/", 1)
         chosen = str(selected[stream_id])
@@ -741,7 +882,9 @@ def _artifact_rows(
 def build_artifact(
     *,
     manifest: Mapping[str, object],
+    manifest_bytes: bytes,
     control_freeze: Mapping[str, object],
+    control_freeze_bytes: bytes,
     candidate_streams: Mapping[str, object],
     inspection: Mapping[str, object],
     stream_evaluation: Mapping[str, object],
@@ -764,15 +907,52 @@ def build_artifact(
     selection = _object(selection, "selection")
     system_evaluation = _object(system_evaluation, "system evaluation")
     decision = _object(decision, "decision")
+    manifest_file_sha256 = _verify_loaded_json_bytes(
+        manifest, manifest_bytes, "manifest", canonical=False
+    )
+    control_freeze_file_sha256, control_freeze_sha256 = (
+        _verify_control_freeze_identity(control_freeze, control_freeze_bytes)
+    )
     manifest_streams = _validate_manifest(manifest)
+    bindings = _object(control_freeze.get("bindings"), "control freeze bindings")
+    if bindings.get("manifest_sha256") != manifest_file_sha256:
+        raise ValueError("control freeze manifest file binding differs")
     _validate_candidate_snapshot(control_freeze, candidate_streams, manifest_streams)
     _validate_inspection(inspection)
+    if control_freeze.get("inspection_sha256") != hashlib.sha256(
+        _canonical_json(inspection)
+    ).hexdigest():
+        raise ValueError("inspection hash differs from control freeze binding")
+    for payload, label in (
+        (stream_evaluation, "stream evaluation"),
+        (selection, "selection"),
+        (system_evaluation, "system evaluation"),
+        (decision, "decision"),
+    ):
+        _verify_evaluation_self_hash(payload, label)
+    _validate_provenance(
+        stream_evaluation,
+        selection,
+        system_evaluation,
+        decision,
+        manifest_file_sha256=manifest_file_sha256,
+        control_freeze_file_sha256=control_freeze_file_sha256,
+        control_freeze_sha256=control_freeze_sha256,
+        prior_freeze_sha256=_sha256(
+            bindings.get("prior_freeze_sha256"), "control freeze prior-freeze hash"
+        ),
+    )
     stream_rows = _validate_stream_evaluation(stream_evaluation, inspection)
-    selected, references = _validate_selection(selection)
+    selected, references, canonical_eligibility = _validate_selection(
+        selection, stream_rows
+    )
     systems = _validate_system_evaluation(system_evaluation)
     if system_evaluation.get("r2_selected_rankings") != references:
         raise ValueError("system evaluation and selection ranking references differ")
-    _validate_provenance(stream_evaluation, selection, system_evaluation, decision)
+    if system_evaluation.get("r2_selected_ranking_sha256") != selection.get(
+        "selected_ranking_sha256"
+    ):
+        raise ValueError("system evaluation and selection ranking hashes differ")
     _validate_decision(decision, systems, stream_rows, selected)
 
     rows = _artifact_rows(
@@ -780,7 +960,7 @@ def build_artifact(
         inspection,
         stream_rows,
         selected,
-        selection,
+        canonical_eligibility,
         references,
         systems,
         system_evaluation,
@@ -1033,10 +1213,21 @@ def build_artifact(
 
 def _load_json(path: Path, label: str) -> Mapping[str, object]:
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = json.loads(Path(path).read_bytes())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is unreadable or invalid JSON") from exc
     return _object(value, label)
+
+
+def _load_json_with_bytes(
+    path: Path, label: str
+) -> tuple[Mapping[str, object], bytes]:
+    try:
+        raw = Path(path).read_bytes()
+        value = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable or invalid JSON") from exc
+    return _object(value, label), raw
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1050,9 +1241,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    manifest, manifest_bytes = _load_json_with_bytes(args.manifest, "manifest")
+    control_freeze, control_freeze_bytes = _load_json_with_bytes(
+        args.freeze_dir / "freeze.json", "control freeze"
+    )
     artifact = build_artifact(
-        manifest=_load_json(args.manifest, "manifest"),
-        control_freeze=_load_json(args.freeze_dir / "freeze.json", "control freeze"),
+        manifest=manifest,
+        manifest_bytes=manifest_bytes,
+        control_freeze=control_freeze,
+        control_freeze_bytes=control_freeze_bytes,
         candidate_streams=_load_json(
             args.freeze_dir / "candidate_streams.json", "candidate streams"
         ),

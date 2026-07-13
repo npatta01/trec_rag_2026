@@ -9,6 +9,8 @@ import pytest
 from trec_rag.build_facet_retrieval_control_report import build_artifact
 from trec_rag.facet_retrieval_control_experiment import (
     EXPECTED_ALTERNATIVE_NAMES,
+    StreamArmEvaluation,
+    select_stream_arm,
     selected_ranking_references,
 )
 from trec_rag.facet_retrieval_control_freeze import _BASE_ARM_QUERIES
@@ -43,6 +45,22 @@ def _canonical_json(value):
         json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         + "\n"
     ).encode()
+
+
+def _seal(payload):
+    sealed = copy.deepcopy(payload)
+    sealed.pop("artifact_sha256", None)
+    sealed["artifact_sha256"] = hashlib.sha256(_canonical_json(sealed)).hexdigest()
+    return sealed
+
+
+def _reseal(data, *names):
+    for name in names:
+        data[name] = _seal(data[name])
+
+
+def _mean_metric(per_topic, metric):
+    return sum(per_topic[topic_id][metric] for topic_id in TOPIC_IDS) / len(TOPIC_IDS)
 
 
 def _narratives():
@@ -185,7 +203,7 @@ def _arm_metrics(stream_id, arm_id, ordinal, inspection):
 
 
 def _system_metrics(system_id):
-    base = {"O": 0.34, "F0": 0.35, "R1": 0.40, "R2": 0.39}[system_id]
+    base = {"O": 0.34, "F0": 0.35, "R1": 0.40, "R2": 0.395}[system_id]
     graded = {"O": 0.48, "F0": 0.49, "R1": 0.50, "R2": 0.52}[system_id]
     per_topic_ndcg = {
         "O": (0.32, 0.34, 0.35, 0.35),
@@ -193,66 +211,27 @@ def _system_metrics(system_id):
         "R1": (0.40, 0.40, 0.40, 0.40),
         "R2": (0.41, 0.38, 0.39, 0.40),
     }[system_id]
-    aggregate = {
-        "ndcg@10": base,
-        "graded_recall@100": graded,
-        "recall@100": graded - 0.05,
-        "precision@10": 0.25 + base / 10,
-        "relevant_count@10": 11 + SYSTEM_IDS.index(system_id),
-        "judged_rate@10": 0.80,
-        "judged_rate@100": 0.55,
-    }
     per_topic = {}
     for index, topic_id in enumerate(TOPIC_IDS):
         per_topic[topic_id] = {
-            **aggregate,
             "ndcg@10": per_topic_ndcg[index],
             "graded_recall@100": graded + (index - 1.5) * 0.01,
-            "relevant_count@10": 2 + index,
+            "recall@100": graded - 0.05 + index * 0.002,
+            "precision@10": 0.25 + base / 10 + index * 0.001,
+            "relevant_count@10": 2 + index + SYSTEM_IDS.index(system_id),
+            "judged_rate@10": 0.78 + index * 0.01,
+            "judged_rate@100": 0.53 + index * 0.01,
         }
+    aggregate = {metric: _mean_metric(per_topic, metric) for metric in METRICS}
     return {"metrics": aggregate, "per_topic": per_topic}
 
 
 @pytest.fixture
 def report_inputs():
-    manifest = json.loads(MANIFEST_PATH.read_text())
+    manifest_bytes = MANIFEST_PATH.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    manifest_file_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     candidate_streams = _candidate_streams()
-    stream_hashes = {
-        f"{row['topic_id']}/{row['stream_id']}/{row['arm_id']}": row[
-            "stream_rows_sha256"
-        ]
-        for row in candidate_streams["streams"]
-    }
-    freeze = {
-        "schema_version": "facet-control-ranking-freeze-v2",
-        "status": "frozen_before_qrels",
-        "bindings": {
-            "manifest_sha256": manifest["r1_manifest_sha256"],
-            "prior_freeze_sha256": "b" * 64,
-            "request_sha256": {},
-            "response_sha256": {},
-            "candidate_sha256": {},
-            "ledger_sha256": {"base": "c" * 64, "r1": "d" * 64, "control": "e" * 64},
-            "r1_arm_sha256": "f" * 64,
-            "candidate_streams_sha256": hashlib.sha256(
-                _canonical_json(candidate_streams)
-            ).hexdigest(),
-            "candidates_sha256": "1" * 64,
-            "candidate_stream_rows_sha256": stream_hashes,
-        },
-        "inspection_sha256": "2" * 64,
-        "fusion_sha256": "3" * 64,
-        "rankings": {
-            name: {
-                "path": f"rankings/{name.replace(':', '__')}.jsonl",
-                "rows": 100,
-                "sha256": "4" * 64,
-                "file_sha256": "5" * 64,
-            }
-            for name in EXPECTED_ALTERNATIVE_NAMES
-        },
-        "freeze_sha256": "6" * 64,
-    }
     inspections = {}
     stream_eval = {}
     for ordinal, stream_id in enumerate(STREAM_IDS):
@@ -265,22 +244,66 @@ def report_inputs():
                 "inspection": copy.deepcopy(inspection),
             }
         stream_eval[stream_id] = {"arms": arms}
-    selected = {
-        "200/f07a": "W1",
-        "225/f02": "W0",
-        "225/f04": "W2",
-        "707/f02": "B0",
+    stream_hashes = {
+        f"{row['topic_id']}/{row['stream_id']}/{row['arm_id']}": row[
+            "stream_rows_sha256"
+        ]
+        for row in candidate_streams["streams"]
     }
+    freeze = {
+        "schema_version": "facet-control-ranking-freeze-v2",
+        "status": "frozen_before_qrels",
+        "bindings": {
+            "manifest_sha256": manifest_file_sha256,
+            "prior_freeze_sha256": "b" * 64,
+            "request_sha256": {},
+            "response_sha256": {},
+            "candidate_sha256": {},
+            "ledger_sha256": {"base": "c" * 64, "r1": "d" * 64, "control": "e" * 64},
+            "r1_arm_sha256": "f" * 64,
+            "candidate_streams_sha256": hashlib.sha256(
+                _canonical_json(candidate_streams)
+            ).hexdigest(),
+            "candidates_sha256": "1" * 64,
+            "candidate_stream_rows_sha256": stream_hashes,
+        },
+        "inspection_sha256": hashlib.sha256(_canonical_json(inspections)).hexdigest(),
+        "fusion_sha256": "3" * 64,
+        "rankings": {
+            name: {
+                "path": f"rankings/{name.replace(':', '__')}.jsonl",
+                "rows": 100,
+                "sha256": "4" * 64,
+                "file_sha256": "5" * 64,
+            }
+            for name in EXPECTED_ALTERNATIVE_NAMES
+        },
+    }
+    freeze["freeze_sha256"] = hashlib.sha256(_canonical_json(freeze)).hexdigest()
+    control_freeze_bytes = _canonical_json(freeze)
+    control_freeze_file_sha256 = hashlib.sha256(control_freeze_bytes).hexdigest()
+    selected = {
+        stream_id: select_stream_arm(
+            {
+                arm_id: StreamArmEvaluation(
+                    **stream_eval[stream_id]["arms"][arm_id]["metrics"]
+                )
+                for arm_id in ARM_IDS
+            }
+        ).arm_id
+        for stream_id in STREAM_IDS
+    }
+    assert selected == {stream_id: "W2" for stream_id in STREAM_IDS}
     references = selected_ranking_references(selected)
     provenance = {
-        "control_freeze_file_sha256": "7" * 64,
+        "control_freeze_file_sha256": control_freeze_file_sha256,
         "control_freeze_sha256": freeze["freeze_sha256"],
-        "manifest_sha256": manifest["r1_manifest_sha256"],
+        "manifest_sha256": manifest_file_sha256,
         "prior_freeze_sha256": freeze["bindings"]["prior_freeze_sha256"],
         "qrels_sha256": "8" * 64,
         "qrels_name": "projected_qrels.tsv",
     }
-    stream_evaluation = {
+    stream_evaluation = _seal({
         "schema_version": "facet-control-stream-evaluation-v1",
         "provenance": provenance,
         "qrels_policy": {
@@ -291,36 +314,50 @@ def report_inputs():
             "protected_qrels_topics_skipped": [],
         },
         "streams": stream_eval,
-    }
-    selection = {
+    })
+    eligibility = {}
+    for stream_id in STREAM_IDS:
+        baseline = stream_eval[stream_id]["arms"]["B0"]["metrics"]
+        eligibility[stream_id] = {}
+        for arm_id in ARM_IDS:
+            metrics = stream_eval[stream_id]["arms"][arm_id]["metrics"]
+            reasons = []
+            if metrics["coherence_failed"]:
+                reasons.append("coherence_failed")
+            if (
+                metrics["domain_drift_top10_count"]
+                > baseline["domain_drift_top10_count"]
+                and metrics["content_quality_top10_count"]
+                > baseline["content_quality_top10_count"]
+            ):
+                reasons.append("both_noise_families_increased_vs_B0")
+            eligibility[stream_id][arm_id] = {
+                "eligible": not reasons,
+                "exclusion_reasons": reasons,
+            }
+    selection = _seal({
         "schema_version": "facet-control-selection-v1",
         "provenance": provenance,
         "selected": selected,
-        "eligibility": {
-            stream_id: {
-                arm_id: {"eligible": True, "exclusion_reasons": []}
-                for arm_id in ARM_IDS
-            }
-            for stream_id in STREAM_IDS
-        },
+        "eligibility": eligibility,
         "selected_rankings": references,
         "selected_ranking_sha256": {topic_id: "9" * 64 for topic_id in TOPIC_IDS},
         "frozen_alternative_count": 25,
-    }
+    })
     systems = {system_id: _system_metrics(system_id) for system_id in SYSTEM_IDS}
     deltas = {
         topic_id: systems["R2"]["per_topic"][topic_id]["ndcg@10"]
         - systems["R1"]["per_topic"][topic_id]["ndcg@10"]
         for topic_id in TOPIC_IDS
     }
-    system_evaluation = {
+    system_evaluation = _seal({
         "schema_version": "facet-control-system-evaluation-v1",
         "provenance": provenance,
         "systems": systems,
         "r2_selected_rankings": references,
         "r2_selected_ranking_sha256": selection["selected_ranking_sha256"],
         "per_topic_ndcg_delta_vs_r1": deltas,
-    }
+    })
     selected_noise = sum(
         stream_eval[stream_id]["arms"][selected[stream_id]]["metrics"][
             "domain_drift_top10_count"
@@ -339,7 +376,7 @@ def report_inputs():
         ]
         for stream_id in STREAM_IDS
     )
-    decision = {
+    decision = _seal({
         "schema_version": "facet-control-decision-v1",
         "provenance": provenance,
         "decision": "retrieval_repair_success",
@@ -353,16 +390,75 @@ def report_inputs():
             "selected_top10_noise": selected_noise,
             "b0_top10_noise": b0_noise,
         },
-    }
+    })
     return {
         "manifest": manifest,
+        "manifest_bytes": manifest_bytes,
         "control_freeze": freeze,
+        "control_freeze_bytes": control_freeze_bytes,
         "candidate_streams": candidate_streams,
         "inspection": inspections,
         "stream_evaluation": stream_evaluation,
         "selection": selection,
         "system_evaluation": system_evaluation,
         "decision": decision,
+    }
+
+
+def _refresh_integrity(data):
+    freeze = data["control_freeze"]
+    freeze["bindings"]["candidate_streams_sha256"] = hashlib.sha256(
+        _canonical_json(data["candidate_streams"])
+    ).hexdigest()
+    freeze["bindings"]["candidate_stream_rows_sha256"] = {
+        f"{row['topic_id']}/{row['stream_id']}/{row['arm_id']}": row[
+            "stream_rows_sha256"
+        ]
+        for row in data["candidate_streams"]["streams"]
+    }
+    freeze["inspection_sha256"] = hashlib.sha256(
+        _canonical_json(data["inspection"])
+    ).hexdigest()
+    freeze.pop("freeze_sha256", None)
+    freeze["freeze_sha256"] = hashlib.sha256(_canonical_json(freeze)).hexdigest()
+    data["control_freeze_bytes"] = _canonical_json(freeze)
+    provenance = copy.deepcopy(data["stream_evaluation"]["provenance"])
+    provenance.update(
+        {
+            "control_freeze_file_sha256": hashlib.sha256(
+                data["control_freeze_bytes"]
+            ).hexdigest(),
+            "control_freeze_sha256": freeze["freeze_sha256"],
+            "manifest_sha256": hashlib.sha256(data["manifest_bytes"]).hexdigest(),
+            "prior_freeze_sha256": freeze["bindings"]["prior_freeze_sha256"],
+        }
+    )
+    for name in ("stream_evaluation", "selection", "system_evaluation", "decision"):
+        data[name]["provenance"] = copy.deepcopy(provenance)
+        data[name] = _seal(data[name])
+
+
+def _set_saved_selection(data, stream_id, arm_id):
+    data["selection"]["selected"][stream_id] = arm_id
+    references = selected_ranking_references(data["selection"]["selected"])
+    data["selection"]["selected_rankings"] = references
+    data["system_evaluation"]["r2_selected_rankings"] = copy.deepcopy(references)
+    selected = data["selection"]["selected"]
+    streams = data["stream_evaluation"]["streams"]
+    data["decision"]["evidence"]["selected_top10_noise"] = sum(
+        streams[key]["arms"][selected[key]]["metrics"]["domain_drift_top10_count"]
+        + streams[key]["arms"][selected[key]]["metrics"][
+            "content_quality_top10_count"
+        ]
+        for key in STREAM_IDS
+    )
+    _refresh_integrity(data)
+
+
+def _refresh_system_aggregate(data, system_id):
+    system = data["system_evaluation"]["systems"][system_id]
+    system["metrics"] = {
+        metric: _mean_metric(system["per_topic"], metric) for metric in METRICS
     }
 
 
@@ -428,9 +524,7 @@ def test_narratives_are_bound_to_verified_original_snapshot_hashes(report_inputs
         if row["topic_id"] == "200" and row["stream_id"] == "original"
     )
     original["query_sha256"] = "0" * 64
-    tampered["control_freeze"]["bindings"]["candidate_streams_sha256"] = hashlib.sha256(
-        _canonical_json(tampered["candidate_streams"])
-    ).hexdigest()
+    _refresh_integrity(tampered)
     with pytest.raises(ValueError, match="narrative.*snapshot"):
         build_artifact(**tampered)
 
@@ -545,12 +639,168 @@ def test_report_is_bounded_safe_and_deterministic_under_input_reordering(report_
     assert len(first["snapshot"]["datasets"]["representative_results"]) == 12
 
 
+def test_saved_selection_is_recomputed_from_canonical_task5_semantics(report_inputs):
+    assert report_inputs["selection"]["selected"]["200/f07a"] == "W2"
+    broken = copy.deepcopy(report_inputs)
+    _set_saved_selection(broken, "200/f07a", "W1")
+
+    with pytest.raises(ValueError, match="canonical.*selection|selected arm"):
+        build_artifact(**broken)
+
+
+def test_ineligible_high_gain_arm_cannot_be_selected(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    key = "200/f07a/W2"
+    broken["inspection"][key]["coherence_failed"] = True
+    broken["stream_evaluation"]["streams"]["200/f07a"]["arms"]["W2"][
+        "inspection"
+    ]["coherence_failed"] = True
+    broken["stream_evaluation"]["streams"]["200/f07a"]["arms"]["W2"][
+        "metrics"
+    ]["coherence_failed"] = True
+    _refresh_integrity(broken)
+
+    with pytest.raises(ValueError, match="canonical.*selection|selected arm"):
+        build_artifact(**broken)
+
+
+def test_exact_tie_uses_b0_w0_w1_w2_preference(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    stream_id = "200/f07a"
+    arms = broken["stream_evaluation"]["streams"][stream_id]["arms"]
+    baseline = arms["B0"]["metrics"]
+    for arm_id in ARM_IDS:
+        for field in (
+            "unique_graded_gain",
+            "graded_recall_at_100",
+            "ndcg_at_10",
+            "domain_drift_top10_count",
+            "content_quality_top10_count",
+        ):
+            arms[arm_id]["metrics"][field] = baseline[field]
+        arms[arm_id]["metrics"]["coherence_failed"] = False
+        for field in (
+            "domain_drift_top10_count",
+            "content_quality_top10_count",
+            "coherence_failed",
+        ):
+            arms[arm_id]["inspection"][field] = arms[arm_id]["metrics"][field]
+            broken["inspection"][f"{stream_id}/{arm_id}"][field] = arms[arm_id][
+                "metrics"
+            ][field]
+    _set_saved_selection(broken, stream_id, "W0")
+
+    with pytest.raises(ValueError, match="canonical.*selection|selected arm"):
+        build_artifact(**broken)
+
+
+def test_aggregate_metrics_are_exact_means_of_per_topic_rows(report_inputs):
+    assert report_inputs["system_evaluation"]["systems"]["R2"]["metrics"][
+        "ndcg@10"
+    ] == 0.395
+    broken = copy.deepcopy(report_inputs)
+    broken["system_evaluation"]["systems"]["R2"]["metrics"]["ndcg@10"] = 0.39
+    _reseal(broken, "system_evaluation")
+
+    with pytest.raises(ValueError, match="aggregate.*ndcg@10"):
+        build_artifact(**broken)
+
+
+def test_decision_flip_is_recomputed_from_per_topic_metrics(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    systems = broken["system_evaluation"]["systems"]
+    systems["R2"]["per_topic"]["200"]["ndcg@10"] = 0.29
+    _refresh_system_aggregate(broken, "R2")
+    deltas = {
+        topic_id: systems["R2"]["per_topic"][topic_id]["ndcg@10"]
+        - systems["R1"]["per_topic"][topic_id]["ndcg@10"]
+        for topic_id in TOPIC_IDS
+    }
+    broken["system_evaluation"]["per_topic_ndcg_delta_vs_r1"] = deltas
+    broken["decision"]["evidence"].update(
+        {
+            "r2_ndcg_at_10": systems["R2"]["metrics"]["ndcg@10"],
+            "per_topic_ndcg_deltas": deltas,
+        }
+    )
+    assert broken["decision"]["decision"] == "retrieval_repair_success"
+    _refresh_integrity(broken)
+
+    with pytest.raises(ValueError, match="decision classification"):
+        build_artifact(**broken)
+
+
+def test_evaluation_self_hash_rejects_stale_zero(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    broken["selection"]["artifact_sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="selection.*self-hash"):
+        build_artifact(**broken)
+
+
+def test_tampered_payload_with_stale_hash_fails_before_selection(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    broken["selection"]["selected"]["200/f07a"] = "W1"
+
+    with pytest.raises(ValueError, match="selection.*self-hash"):
+        build_artifact(**broken)
+
+
+def test_all_evaluation_files_cannot_agree_on_wrong_manifest_hash(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    wrong = "a" * 64
+    broken["control_freeze"]["bindings"]["manifest_sha256"] = wrong
+    for name in ("stream_evaluation", "selection", "system_evaluation", "decision"):
+        broken[name]["provenance"]["manifest_sha256"] = wrong
+    _refresh_integrity(broken)
+    # Reapply the wrong cross-binding after refresh and authentically reseal everything.
+    broken["control_freeze"]["bindings"]["manifest_sha256"] = wrong
+    broken["control_freeze"].pop("freeze_sha256")
+    broken["control_freeze"]["freeze_sha256"] = hashlib.sha256(
+        _canonical_json(broken["control_freeze"])
+    ).hexdigest()
+    broken["control_freeze_bytes"] = _canonical_json(broken["control_freeze"])
+    for name in ("stream_evaluation", "selection", "system_evaluation", "decision"):
+        broken[name]["provenance"].update(
+            {
+                "manifest_sha256": wrong,
+                "control_freeze_sha256": broken["control_freeze"]["freeze_sha256"],
+                "control_freeze_file_sha256": hashlib.sha256(
+                    broken["control_freeze_bytes"]
+                ).hexdigest(),
+            }
+        )
+        broken[name] = _seal(broken[name])
+
+    with pytest.raises(ValueError, match="manifest.*file|manifest.*binding"):
+        build_artifact(**broken)
+
+
+@pytest.mark.parametrize(
+    ("name", "field"),
+    [
+        ("selection", "control_freeze_sha256"),
+        ("system_evaluation", "manifest_sha256"),
+        ("decision", "qrels_sha256"),
+    ],
+)
+def test_wrong_cross_artifact_binding_fails_even_with_valid_self_hash(
+    report_inputs, name, field
+):
+    broken = copy.deepcopy(report_inputs)
+    broken[name]["provenance"][field] = "0" * 64
+    broken[name] = _seal(broken[name])
+
+    with pytest.raises(ValueError, match="provenance|binding"):
+        build_artifact(**broken)
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (lambda data: data.pop("decision"), "decision"),
         (
-            lambda data: data["selection"]["selected"].__setitem__("200/f07a", "W2"),
+            lambda data: data["selection"]["selected"].__setitem__("200/f07a", "W1"),
             "selection",
         ),
         (
@@ -586,5 +836,9 @@ def test_readme_documents_report_inputs_validation_and_task7_packaging():
         "deliver_portable_artifact.mjs",
         "validate_artifact",
         "Cross-encoder not run",
+        "canonical Task 5 selection",
+        "arithmetic mean",
+        "self-hash",
+        "qrels SHA-256",
     ):
         assert required in text

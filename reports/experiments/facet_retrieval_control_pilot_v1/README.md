@@ -41,6 +41,24 @@ snapshot includes only report-ready aggregate rows and twelve representative
 selected-arm results. Raw candidate lists, qrels rows, endpoint details,
 credentials, and protected topics are excluded.
 
+The ready-state gate also recomputes the canonical Task 5 selection from every
+saved arm record, including eligibility and the B0/W0/W1/W2 tie-break. Each
+aggregate system metric must equal the exact arithmetic mean of its four
+per-topic rows before the Task 5 decision rule is recomputed. The manifest and
+freeze are authenticated against their loaded file bytes; the freeze root,
+candidate-stream manifest, inspection, and all four evaluation JSON files are
+checked using their canonical self-hash or bound hash contract. Manifest,
+freeze, prior-freeze, selected-ranking, and qrels SHA-256 bindings must agree
+across the loaded artifacts.
+
+Task 5 does not save an independent qrels attestation outside those four
+self-hashed evaluation files. Because Task 6 must not reopen qrels, it can
+prove that the saved qrels SHA-256 and name agree across intact evaluation
+artifacts, but it cannot independently rehash an all-files-consistent qrels
+claim. Task 7 must retain the already verified Task 5 evaluation directory as
+the trust boundary rather than treating the report builder as a second qrels
+verifier.
+
 Task 7 creates `artifact.json` with:
 
 ```bash
