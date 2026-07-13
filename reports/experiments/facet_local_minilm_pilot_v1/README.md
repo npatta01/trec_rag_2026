@@ -25,7 +25,10 @@ network call, model inference, or qrels access.
 create-only, so an existing report is never overwritten. The report is built only
 from authenticated saved artifacts: the v2 tokenizer-only preflight, completed
 local scoring and benchmark receipts, ranking freeze, v3 blinded-review freeze,
-and the one-time evaluation outputs. It does not reopen the qrels projection,
+the approval-scoped qrels-consumption registry, the one-time evaluation outputs,
+and `derived_v2/representative_provenance_v2.json`. The latter is an offline,
+self-hashed derivation that binds each saved representative to its qualifying
+facet ranks and selected MiniLM window. It does not reopen the qrels projection,
 candidate snapshot, retrieval ledgers, ranking rows, private review mappings, or
 inference cache.
 
@@ -46,6 +49,17 @@ Build the create-only artifact from the repository root:
 
 The builder invokes that pinned portable renderer into a private temporary file,
 verifies the package, then atomically publishes the HTML without replacement.
+The stable consumption registry lives beside the approval as
+`outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json`;
+unlike the legacy output-local receipt, it blocks reuse of that approval with a
+different output directory. Existing completed evaluations can adopt the guard
+offline with `adopt_qrels_consumption_registry`, and representative v2 can be
+rebuilt offline with `derive_representative_provenance_v2`; both helpers are in
+`trec_rag.facet_local_minilm_evaluate` and neither reads qrels.
+The adoption CLI is `code/tools/adopt_facet_local_minilm_qrels_consumption.py`;
+it accepts only the saved approval, saved access receipt, and completed
+evaluation directory, with no qrels argument.
+
 The report's decision is `B_filters_but_fusion_blocks`: MiniLM improves blinded
 facet relevance and promotes relevant candidates before fusion, but the current
 family-balanced RRF retains no novel relevant document versus corrected C0.

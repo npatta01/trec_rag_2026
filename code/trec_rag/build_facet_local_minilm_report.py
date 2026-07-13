@@ -52,7 +52,10 @@ SOURCE_PATHS = {
     "gains_losses": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/gains_losses.json",
     "review_metrics": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json",
     "representatives": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json",
+    "representative_provenance": "outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json",
     "decision": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json",
+    "qrels_access_approval": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json",
+    "qrels_consumption_registry": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
     "qrels_access_receipt": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
 }
 SOURCE_LABELS = {
@@ -74,7 +77,10 @@ SOURCE_LABELS = {
     "gains_losses": "Relevant-document gain/loss evaluation",
     "review_metrics": "Blinded facet-review metrics",
     "representatives": "Bounded representative passages",
+    "representative_provenance": "Facet-event representative provenance",
     "decision": "Mechanical experiment decision",
+    "qrels_access_approval": "One-time qrels-access approval",
+    "qrels_consumption_registry": "Approval-scoped qrels-consumption registry",
     "qrels_access_receipt": "One-time qrels-access receipt",
 }
 MATERIAL_SOURCE_IDS = {
@@ -88,9 +94,17 @@ MATERIAL_SOURCE_IDS = {
     ),
     "qrels_access_receipt": (
         "qrels_access_receipt",
+        "qrels_access_approval",
+        "qrels_consumption_registry",
         "ranking_freeze",
         "review_freeze",
         "review_create_receipt",
+    ),
+    "representative_provenance": (
+        "representative_provenance",
+        "representatives",
+        "prefusion",
+        "ranking_freeze",
     ),
 }
 SOURCE_METRIC_DEFINITIONS = {
@@ -124,6 +138,10 @@ SOURCE_METRIC_DEFINITIONS = {
     "representatives": [
         "At most three saved rows per promoted/demoted/gained/lost class; passage text is bounded to 700 characters.",
     ],
+    "representative_provenance": [
+        "Each row is an offline derivation from the saved representative class, qualifying pre-fusion facet event, and authenticated frozen MiniLM stream.",
+        "Facet C0/BF ranks and the selected highest-logit MiniLM window are preserved; no qrels projection was reopened.",
+    ],
     "preflight": [
         "Coverage percentages equal saved coverage fractions × 100; model identity and window cap are copied from authenticated preflight fields.",
     ],
@@ -135,6 +153,7 @@ SOURCE_METRIC_DEFINITIONS = {
     ],
     "qrels_access_receipt": [
         "Qrels access count is one iff the bound receipt status is qrels_access_consumed.",
+        "Approval-scoped consumption is true only when the stable registry binds the approval, receipt, freezes, projection hashes, and canonical evaluation output.",
         "Ranking/review frozen flags require qrels_opened=false in their authenticated freezes; shared memberships = membership_count - item_count.",
     ],
 }
@@ -380,6 +399,14 @@ def _validate_contract(
     assert bindings is not None
     receipt = loaded["qrels_access_receipt"]
     _verify_self_hash(receipt, "artifact_sha256", "qrels access receipt")
+    approval = loaded["qrels_access_approval"]
+    registry = loaded["qrels_consumption_registry"]
+    _verify_self_hash(
+        registry, "artifact_sha256", "qrels consumption registry"
+    )
+    canonical_evaluation = (
+        REPO_ROOT / "outputs/rag25_facet_local_minilm_v1/evaluation_v1"
+    ).resolve()
     if (
         bindings.get("ranking_freeze_sha256") != ranking_hash
         or bindings.get("review_freeze_sha256") != review_hash
@@ -387,6 +414,18 @@ def _validate_contract(
         or receipt.get("review_freeze_sha256") != review_hash
         or receipt.get("status") != "qrels_access_consumed"
         or tuple(receipt.get("topic_ids", ())) != PILOT_TOPICS
+        or approval.get("schema_version") != "pilot-qrels-access-approval-v1"
+        or approval.get("status") != "approved"
+        or tuple(approval.get("topic_ids", ())) != PILOT_TOPICS
+        or registry.get("schema_version")
+        != "facet-local-minilm-qrels-consumption-v1"
+        or registry.get("status") != "qrels_access_consumed"
+        or tuple(registry.get("topic_ids", ())) != PILOT_TOPICS
+        or registry.get("qrels_approval_sha256")
+        != hashlib.sha256(raw["qrels_access_approval"]).hexdigest()
+        or registry.get("canonical_output_path") != str(canonical_evaluation)
+        or registry.get("output_receipt_path")
+        != str((canonical_evaluation / "qrels_access_receipt.json").resolve())
         or any(
             receipt.get(field) != bindings.get(field)
             for field in (
@@ -396,8 +435,61 @@ def _validate_contract(
                 "review_freeze_sha256",
             )
         )
+        or any(
+            registry.get(field) != receipt.get(field)
+            or approval.get(field) != receipt.get(field)
+            for field in (
+                "qrels_manifest_sha256",
+                "qrels_projection_sha256",
+                "ranking_freeze_sha256",
+                "review_freeze_sha256",
+            )
+        )
     ):
         raise ValueError("one-time qrels evaluation binding differs")
+
+    provenance = loaded["representative_provenance"]
+    provenance_hash = _verify_self_hash(
+        provenance, "artifact_sha256", "representative provenance"
+    )
+    provenance_bindings = _object(
+        provenance.get("bindings"), "representative provenance bindings"
+    )
+    if (
+        not provenance_hash
+        or provenance.get("schema_version")
+        != "facet-local-minilm-representative-provenance-v2"
+        or provenance.get("status") != "offline_derived_from_frozen_artifacts"
+        or tuple(provenance.get("topic_ids", ())) != PILOT_TOPICS
+        or provenance_bindings.get("ranking_freeze_sha256") != ranking_hash
+        or provenance_bindings.get("review_freeze_sha256") != review_hash
+        or provenance_bindings.get("source_prefusion_artifact_sha256")
+        != loaded["prefusion"].get("artifact_sha256")
+        or provenance_bindings.get("source_representatives_artifact_sha256")
+        != loaded["representatives"].get("artifact_sha256")
+    ):
+        raise ValueError("representative provenance authentication differs")
+    for evidence_class in ("promoted", "demoted", "gained", "lost"):
+        source_rows = _list(
+            loaded["representatives"].get(evidence_class),
+            f"source representatives {evidence_class}",
+        )
+        derived_rows = _list(
+            provenance.get(evidence_class),
+            f"derived representatives {evidence_class}",
+        )
+        source_ids = [
+            (str(_object(row, "source representative").get("topic_id")),
+             str(_object(row, "source representative").get("document_id")))
+            for row in source_rows
+        ]
+        derived_ids = [
+            (str(_object(row, "derived representative").get("topic_id")),
+             str(_object(row, "derived representative").get("document_id")))
+            for row in derived_rows
+        ]
+        if source_ids != derived_ids:
+            raise ValueError("representative provenance class membership differs")
 
 
 def _source_sql(source_id: str, paths: Sequence[str]) -> str:
@@ -500,7 +592,7 @@ SELECT candidate_id, baseline.key AS baseline_id,
 FROM candidates, json_each(candidates.comparisons) AS baseline
 WHERE candidate_id = 'BF100_TOPIC_LOCAL'
   AND baseline.key IN ('C0_TOPIC_LOCAL', 'R1_LEGACY');"""
-    if source_id == "representatives":
+    if source_id in {"representatives", "representative_provenance"}:
         return f"""WITH source AS (
   SELECT content::JSON AS doc FROM read_text('{path}')
 ), classes(evidence_class, rows) AS (
@@ -533,13 +625,24 @@ FROM read_json_auto('{path}');"""
        projected_full_run_wall_seconds AS projected_wall_seconds
 FROM read_json_auto('{path}');"""
     if source_id == "qrels_access_receipt":
-        receipt_path, ranking_path, review_path, create_path = paths
+        (
+            receipt_path,
+            approval_path,
+            registry_path,
+            ranking_path,
+            review_path,
+            create_path,
+        ) = paths
         return f"""SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+       g.status = 'qrels_access_consumed'
+         AND g.qrels_approval_sha256 = sha256(read_blob('{approval_path}'))
+         AS approval_scoped_consumption_registry,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto('{receipt_path}') q
+CROSS JOIN read_json_auto('{registry_path}') g
 CROSS JOIN read_json_auto('{ranking_path}') r
 CROSS JOIN read_json_auto('{review_path}') v
 CROSS JOIN read_json_auto('{create_path}') c
@@ -757,9 +860,12 @@ def _representative_rows(representatives: Mapping[str, object]) -> list[dict[str
                     "evidence_class": label,
                     "topic_id": "All four",
                     "document_id": "None",
+                    "facet": "n/a",
+                    "c0_facet_rank": None,
+                    "bf_facet_rank": None,
                     "passage": f"No {key} final-ranking passage exists in this comparison.",
-                    "provenance": "Saved evaluation contains an empty representative set.",
-                    "source_artifact": "representatives.json",
+                    "provenance": "The authenticated offline derivation contains an empty representative set.",
+                    "source_artifact": "representative_provenance_v2.json",
                 }
             )
             continue
@@ -767,23 +873,39 @@ def _representative_rows(representatives: Mapping[str, object]) -> list[dict[str
             topic_id = str(value.get("topic_id"))
             if topic_id not in PILOT_TOPIC_SET:
                 raise ValueError("representative topic boundary differs")
-            provenance = value.get("provenance", [])
-            if not isinstance(provenance, list):
-                raise ValueError("representative provenance must be a list")
-            provenance_text = "; ".join(
-                f"{item.get('variant_name', 'unknown stream')} · source rank {item.get('source_rank', 'n/a')} · RRF weight {item.get('rrf_weight', 'n/a')}"
-                for raw_item in provenance
-                for item in [_object(raw_item, "representative provenance")]
-            ) or "No frozen fusion-contribution provenance was recorded for this pre-fusion item."
+            facet = value.get("facet_variant")
+            control_rank = value.get("facet_control_rank")
+            bf_rank = value.get("facet_bf_rank")
+            if control_rank is not None:
+                control_rank = _integer(control_rank, "representative C0 facet rank")
+            if bf_rank is not None:
+                bf_rank = _integer(bf_rank, "representative BF facet rank")
+            stream = _object(
+                value.get("stream_provenance", {}),
+                "representative stream provenance",
+            )
+            window = value.get("selected_minilm_window")
+            if window is not None:
+                window = _object(window, "representative selected MiniLM window")
+            provenance_text = (
+                f"Facet {facet or 'n/a'} · C0 facet rank {control_rank or 'not retrieved'}"
+                f" · BF facet rank {bf_rank or 'not retrieved'}"
+                f" · MiniLM window {window.get('window_id', 'n/a') if window else 'n/a'}"
+                f" · source BM25 rank {stream.get('prior_rank', 'n/a')}"
+                f" · query SHA-256 {stream.get('query_sha256', 'n/a')}"
+            )
             passage = str(value.get("passage", ""))
             rows.append(
                 {
                     "evidence_class": label,
                     "topic_id": topic_id,
                     "document_id": str(value.get("document_id")),
+                    "facet": str(facet or "n/a"),
+                    "c0_facet_rank": control_rank,
+                    "bf_facet_rank": bf_rank,
                     "passage": passage[:697] + ("…" if len(passage) > 697 else ""),
                     "provenance": provenance_text,
-                    "source_artifact": "representatives.json",
+                    "source_artifact": "representative_provenance_v2.json",
                 }
             )
     return rows
@@ -1002,11 +1124,15 @@ def _artifact_rows(loaded: Mapping[str, Mapping[str, object]]) -> dict[str, list
     ]
 
     receipt = loaded["qrels_access_receipt"]
+    registry = loaded["qrels_consumption_registry"]
     create = loaded["review_create_receipt"]
     firewall_rows = [
         {
             "qrels_access_status": receipt["status"],
             "qrels_access_count": 1,
+            "approval_scoped_consumption_registry": (
+                registry["status"] == "qrels_access_consumed"
+            ),
             "ranking_frozen_before_qrels": loaded["ranking_freeze"]["qrels_opened"] is False,
             "review_frozen_before_qrels": loaded["review_freeze"]["qrels_opened"] is False,
             "review_unique_items": create["item_count"],
@@ -1025,7 +1151,9 @@ def _artifact_rows(loaded: Mapping[str, Mapping[str, object]]) -> dict[str, list
         "topic_ndcg_rows": topic_ndcg_rows,
         "system_rows": system_rows,
         "gain_loss_rows": gain_loss_rows,
-        "representative_rows": _representative_rows(loaded["representatives"]),
+        "representative_rows": _representative_rows(
+            loaded["representative_provenance"]
+        ),
         "runtime_rows": runtime_rows,
         "model_rows": model_rows,
         "scoring_rows": scoring_rows,
@@ -1226,8 +1354,8 @@ def build_artifact(
             "id": "representative_note",
             "type": "markdown",
             "layout": "full",
-            "sourceId": "representatives",
-            "body": "**Bounded promoted, demoted, gained, and lost examples connect the counts to saved passages.** Passages are truncated to 700 characters; provenance summarizes frozen stream contributions. Empty gained/lost classes are retained rather than hidden.",
+            "sourceId": "representative_provenance",
+            "body": "**Bounded promoted, demoted, gained, and lost examples connect the counts to facet-specific MiniLM passages.** The offline v2 provenance selects the qualifying facet event and highest-logit saved window without reopening qrels. Passages are truncated to 700 characters; empty gained/lost classes are retained rather than hidden.",
         },
         {"id": "representatives_block", "type": "table", "tableId": "representatives", "layout": "full"},
         {
@@ -1477,11 +1605,11 @@ def build_artifact(
         _table("gain_loss", "Relevant-document gains and losses", "BF100 compared separately with corrected C0 and legacy R1 at aggregate and topic grain.", "gain_loss_rows", "gains_losses", (("row_label", "Comparison", "text"), ("baseline_relevant", "Baseline relevant", "number"), ("candidate_relevant", "BF100 relevant", "number"), ("gained", "Gained", "number"), ("lost", "Lost", "number"), ("net_change", "Net change", "number")), "row_label"),
         _table("facet_review", "Per-facet blinded review evidence", "Two memberships per arm/facet cell; rates and flags remain visible for all 27 facets.", "facet_review_rows", "review_metrics", (("topic_id", "Topic", "text"), ("facet", "Facet or variant", "text"), ("arm", "Arm", "text"), ("direct_answer", "Direct answers", "number"), ("direct_answer_percent", "Direct answer (%)", "number"), ("partial_or_related", "Partial/related", "number"), ("irrelevant", "Irrelevant", "number"), ("wrong_domain", "Wrong domain", "number"), ("low_quality", "Low quality", "number")), "topic_id", density="dense"),
         _table("facet_retention", "Per-facet relevant retention by cutoff", "Independent relevant-document counts for all 27 facets in corrected C0 and BF100.", "facet_retention_rows", "facet_retention", (("topic_id", "Topic", "text"), ("facet", "Facet or variant", "text"), ("arm", "Arm", "text"), ("relevant_at_k20", "Relevant at K20", "number"), ("relevant_at_k50", "Relevant at K50", "number"), ("relevant_at_k100", "Relevant at K100", "number")), "topic_id", density="dense"),
-        _table("representatives", "Bounded representative passage evidence", "Up to three saved examples per evidence class; passage text capped at 700 characters.", "representative_rows", "representatives", (("evidence_class", "Evidence class", "text"), ("topic_id", "Topic", "text"), ("document_id", "Document", "text"), ("passage", "Passage excerpt", "text"), ("provenance", "Frozen provenance", "text")), "evidence_class"),
+        _table("representatives", "Bounded representative passage evidence", "Up to three saved examples per evidence class with the exact facet event and MiniLM window; passage text capped at 700 characters.", "representative_rows", "representative_provenance", (("evidence_class", "Evidence class", "text"), ("topic_id", "Topic", "text"), ("document_id", "Document", "text"), ("facet", "Qualifying facet", "text"), ("c0_facet_rank", "C0 facet rank", "number"), ("bf_facet_rank", "BF facet rank", "number"), ("passage", "Passage excerpt", "text"), ("provenance", "Frozen provenance", "text")), "evidence_class"),
         _table("model_preflight", "Pinned model and capped-window coverage", "Tokenizer-only preflight evidence for the actual model identity, safe files, and bounded coverage.", "model_rows", "preflight", (("model", "Model", "text"), ("revision", "Revision", "text"), ("safe_files", "Safe-file allowlist", "text"), ("window_cap", "Window cap per document", "number"), ("capped_documents", "Capped documents", "number"), ("coverage_min_percent", "Minimum coverage (%)", "number"), ("coverage_p95_percent", "p95 coverage (%)", "number")), "model"),
         _table("scoring_runtime", "Completed local scoring", "Authenticated raw-logit scoring receipt; all planned windows completed.", "scoring_rows", "scoring_receipt", (("model", "Model", "text"), ("revision", "Revision", "text"), ("dtype", "Inference dtype", "text"), ("planned_windows", "Planned windows", "number"), ("completed_windows", "Completed windows", "number"), ("unique_scores", "Unique scores", "number"), ("failed_windows", "Failed windows", "number")), "model"),
         _table("benchmark_runtime", "ROCm benchmark evidence", "Bounded benchmark used for full-run approval and runtime projection.", "benchmark_rows", "benchmark", (("backend", "Backend", "text"), ("device", "Device", "text"), ("pairs_per_second", "Median pairs/s", "number"), ("peak_device_memory_mb", "Peak device memory (MB)", "number"), ("projected_wall_seconds", "Projected full wall time (s)", "number")), "backend"),
-        _table("evaluation_firewall", "Evaluation firewall and blinded-review audit", "One-time qrels access and pre-qrels ranking/review freeze evidence.", "firewall_rows", "qrels_access_receipt", (("qrels_access_status", "Qrels access status", "text"), ("qrels_access_count", "Access count", "number"), ("ranking_frozen_before_qrels", "Ranking frozen first", "boolean"), ("review_frozen_before_qrels", "Review frozen first", "boolean"), ("review_unique_items", "Unique review items", "number"), ("review_memberships", "Arm/facet memberships", "number"), ("shared_items_attributed_to_both_arms", "Shared memberships", "number")), "qrels_access_status"),
+        _table("evaluation_firewall", "Evaluation firewall and blinded-review audit", "Approval-scoped one-time qrels consumption and pre-qrels ranking/review freeze evidence.", "firewall_rows", "qrels_access_receipt", (("qrels_access_status", "Qrels access status", "text"), ("qrels_access_count", "Access count", "number"), ("approval_scoped_consumption_registry", "Approval consumed globally", "boolean"), ("ranking_frozen_before_qrels", "Ranking frozen first", "boolean"), ("review_frozen_before_qrels", "Review frozen first", "boolean"), ("review_unique_items", "Unique review items", "number"), ("review_memberships", "Arm/facet memberships", "number"), ("shared_items_attributed_to_both_arms", "Shared memberships", "number")), "qrels_access_status"),
     ]
 
     sources = [_source(key, artifact_bytes) for key in SOURCE_PATHS]
@@ -1607,7 +1735,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "gains_losses": args.evaluation / "gains_losses.json",
         "review_metrics": args.evaluation / "review_metrics.json",
         "representatives": args.evaluation / "representatives.json",
+        "representative_provenance": root
+        / "derived_v2/representative_provenance_v2.json",
         "decision": args.evaluation / "decision.json",
+        "qrels_access_approval": root / "approvals/qrels_access_v1.json",
+        "qrels_consumption_registry": root
+        / "approvals/qrels_access_v1.json.consumed.json",
         "qrels_access_receipt": args.evaluation / "qrels_access_receipt.json",
     }
     for key, path in paths.items():

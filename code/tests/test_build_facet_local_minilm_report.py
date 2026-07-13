@@ -39,7 +39,12 @@ SOURCE_FILES = {
     "gains_losses": OUTPUT_ROOT / "evaluation_v1/gains_losses.json",
     "review_metrics": OUTPUT_ROOT / "evaluation_v1/review_metrics.json",
     "representatives": OUTPUT_ROOT / "evaluation_v1/representatives.json",
+    "representative_provenance": OUTPUT_ROOT
+    / "derived_v2/representative_provenance_v2.json",
     "decision": OUTPUT_ROOT / "evaluation_v1/decision.json",
+    "qrels_access_approval": OUTPUT_ROOT / "approvals/qrels_access_v1.json",
+    "qrels_consumption_registry": OUTPUT_ROOT
+    / "approvals/qrels_access_v1.json.consumed.json",
     "qrels_access_receipt": OUTPUT_ROOT
     / "evaluation_v1/qrels_access_receipt.json",
 }
@@ -55,9 +60,17 @@ MATERIAL_INPUTS = {
     ),
     "qrels_access_receipt": (
         "qrels_access_receipt",
+        "qrels_access_approval",
+        "qrels_consumption_registry",
         "ranking_freeze",
         "review_freeze",
         "review_create_receipt",
+    ),
+    "representative_provenance": (
+        "representative_provenance",
+        "representatives",
+        "prefusion",
+        "ranking_freeze",
     ),
 }
 
@@ -286,7 +299,24 @@ def test_representative_passages_are_bounded_and_keep_provenance(artifact):
     }
     assert all("provenance" in row for row in rows)
     assert all(len(row["passage"]) <= 700 for row in rows)
-    assert all(row["source_artifact"] == "representatives.json" for row in rows)
+    assert all(
+        row["source_artifact"] == "representative_provenance_v2.json"
+        for row in rows
+    )
+    promoted = [row for row in rows if row["evidence_class"] == "Promoted before fusion"]
+    assert promoted
+    assert all(row["facet"] != "n/a" for row in promoted)
+    assert all(row["bf_facet_rank"] <= 20 for row in promoted)
+    assert all(
+        row["c0_facet_rank"] is None or row["c0_facet_rank"] > 20
+        for row in promoted
+    )
+
+
+def test_firewall_exposes_approval_scoped_consumption_registry(artifact):
+    row = artifact["snapshot"]["datasets"]["firewall_rows"][0]
+    assert row["approval_scoped_consumption_registry"] is True
+    assert row["qrels_access_status"] == "qrels_access_consumed"
 
 
 def test_native_chart_contracts_match_the_four_required_visuals(artifact):

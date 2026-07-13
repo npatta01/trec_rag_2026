@@ -496,9 +496,9 @@
       {
         "id": "representatives",
         "title": "Bounded representative passage evidence",
-        "subtitle": "Up to three saved examples per evidence class; passage text capped at 700 characters.",
+        "subtitle": "Up to three saved examples per evidence class with the exact facet event and MiniLM window; passage text capped at 700 characters.",
         "dataset": "representative_rows",
-        "sourceId": "representatives",
+        "sourceId": "representative_provenance",
         "density": "spacious",
         "layout": "full",
         "defaultSort": {
@@ -520,6 +520,21 @@
             "field": "document_id",
             "label": "Document",
             "type": "text"
+          },
+          {
+            "field": "facet",
+            "label": "Qualifying facet",
+            "type": "text"
+          },
+          {
+            "field": "c0_facet_rank",
+            "label": "C0 facet rank",
+            "type": "number"
+          },
+          {
+            "field": "bf_facet_rank",
+            "label": "BF facet rank",
+            "type": "number"
           },
           {
             "field": "passage",
@@ -676,7 +691,7 @@
       {
         "id": "evaluation_firewall",
         "title": "Evaluation firewall and blinded-review audit",
-        "subtitle": "One-time qrels access and pre-qrels ranking/review freeze evidence.",
+        "subtitle": "Approval-scoped one-time qrels consumption and pre-qrels ranking/review freeze evidence.",
         "dataset": "firewall_rows",
         "sourceId": "qrels_access_receipt",
         "density": "spacious",
@@ -695,6 +710,11 @@
             "field": "qrels_access_count",
             "label": "Access count",
             "type": "number"
+          },
+          {
+            "field": "approval_scoped_consumption_registry",
+            "label": "Approval consumed globally",
+            "type": "boolean"
           },
           {
             "field": "ranking_frozen_before_qrels",
@@ -816,9 +836,24 @@
         "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json"
       },
       {
+        "id": "representative_provenance",
+        "label": "Facet-event representative provenance",
+        "path": "outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json"
+      },
+      {
         "id": "decision",
         "label": "Mechanical experiment decision",
         "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json"
+      },
+      {
+        "id": "qrels_access_approval",
+        "label": "One-time qrels-access approval",
+        "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json"
+      },
+      {
+        "id": "qrels_consumption_registry",
+        "label": "Approval-scoped qrels-consumption registry",
+        "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json"
       },
       {
         "id": "qrels_access_receipt",
@@ -987,8 +1022,8 @@
         "id": "representative_note",
         "type": "markdown",
         "layout": "full",
-        "sourceId": "representatives",
-        "body": "**Bounded promoted, demoted, gained, and lost examples connect the counts to saved passages.** Passages are truncated to 700 characters; provenance summarizes frozen stream contributions. Empty gained/lost classes are retained rather than hidden."
+        "sourceId": "representative_provenance",
+        "body": "**Bounded promoted, demoted, gained, and lost examples connect the counts to facet-specific MiniLM passages.** The offline v2 provenance selects the qualifying facet event and highest-logit saved window without reopening qrels. Passages are truncated to 700 characters; empty gained/lost classes are retained rather than hidden."
       },
       {
         "id": "representatives_block",
@@ -3629,65 +3664,89 @@
           "evidence_class": "Promoted before fusion",
           "topic_id": "200",
           "document_id": "shard_00836_57292",
+          "facet": "sparse_relevance_v1:R1:f05a",
+          "c0_facet_rank": 42,
+          "bf_facet_rank": 9,
           "passage": "implementation : deportations : the final solution began with the mass deportation of jews from across nazi - occupied europe to concentration camps and extermination centers in eastern europe. trains packed with men, women, and children were sent to these death camps under brutal conditions, with many perishing en route. ghettoization : jews were often confined to overcrowded ghettos in major cities, where they were subjected to starvation, disease, and forced labor. these ghettos served as staging areas for deportations to death camps and were part of the systematic isolation and dehumanization of jews. extermination camps : the nazis constructed extermination camps equipped with gas ch…",
-          "provenance": "No frozen fusion-contribution provenance was recorded for this pre-fusion item.",
-          "source_artifact": "representatives.json"
+          "provenance": "Facet sparse_relevance_v1:R1:f05a · C0 facet rank 42 · BF facet rank 9 · MiniLM window 30f90f15e137a5f13d1e5e61d61cc550ad9d181ad2b1b77b67e7c5689b29edfa · source BM25 rank 42 · query SHA-256 efe3172f3ec49e40901bd11bccda079af9160b3a564b429e1ed529b5ebf5f8b7",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Promoted before fusion",
           "topic_id": "200",
           "document_id": "shard_02534_42532",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "c0_facet_rank": 26,
+          "bf_facet_rank": 13,
           "passage": "understanding the holocaust : a historical and psychological analysis introduction the holocaust was one of the most tragic and devastating events in human history. between 1941 and 1945, nazi germany systematically executed approximately six million jews as well as millions of other minorities, including romas, disabled individuals, and homosexuals. the impact of the holocaust can still be felt today, and it is important to understand why it happened to prevent similar tragedies from occurring in the future. this article examines the causes of the holocaust from historical and psychological perspectives, as well as the experiences of both victims and perpetrators. it also explores what w…",
-          "provenance": "No frozen fusion-contribution provenance was recorded for this pre-fusion item.",
-          "source_artifact": "representatives.json"
+          "provenance": "Facet sparse_relevance_v1:R1:f04 · C0 facet rank 26 · BF facet rank 13 · MiniLM window 04d95d4b8661b311c6a3d193b9b7dce4904f75a6300b915aa8740bf3303533e2 · source BM25 rank 26 · query SHA-256 e1965511fd2220e5bb1d14f56cd2ad6c7f20d9f2d9940dfbdcbd08a0fdb71478",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Promoted before fusion",
           "topic_id": "200",
           "document_id": "shard_02640_71592",
-          "passage": "an analysis of systematic oppression and mass murder of jews by the nazis in an extensive rewrite when the book was translated into english, with additional sourcing, longerich ( modern german history, royal holloway, univ of london ) presents an expanded english - language edition of his famous 1998 study of the holocaust, politik der vernichtung. offers an analysis of the descent of the nazi persecution of the jews into mass murder arguing that genocide was not a preconceived plan, this book explains how the decision to murder the jews en masse emerged in stages and by a process of elimination that gradually foreclosed plans for their expulsion from europe. holocaust history the holocau…",
-          "provenance": "No frozen fusion-contribution provenance was recorded for this pre-fusion item.",
-          "source_artifact": "representatives.json"
+          "facet": "sparse_relevance_v1:R1:f03",
+          "c0_facet_rank": 23,
+          "bf_facet_rank": 3,
+          "passage": "if they paid a bribe ( anti semitism = jews had few places to go ) - 1000 refugees on ss st louis sailed to havana cuba and hoped to enter as tourists to immigrate to us - cuban gov. this book is a detailed, scholarly synthesis of the evolutionary process by which the nazis progressed from persecution to mass murder to complete genocide. an analysis of systematic oppression and mass murder of jews by the nazis in anticipation of the 80th year since kristallnacht, we will remember the nationwide pogrom committed against german jews, the ghettoization of jews in the german occupied territories, and the systematic mass murder of nearly six million jews. in addition to the murder of approxima…",
+          "provenance": "Facet sparse_relevance_v1:R1:f03 · C0 facet rank 23 · BF facet rank 3 · MiniLM window cd372efcd4db9a38887b7c1202533d04fce1db524eb5f21a167d2cd07a777ab8 · source BM25 rank 23 · query SHA-256 a0f8d0de335247834952ea7188a988551a04ab4130547c54af9066793e5f8d39",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Demoted in final ranking",
           "topic_id": "200",
           "document_id": "shard_01244_59327",
-          "passage": "Holocaust Representations: Facts and Issues Hungary has so far created three permanent exhibitions devoted to the genocide that affected also the Jews of Hungary: one in the territory of Auschwitz-Birkenau (2004), another one in Hódmezővásárhely (2004), and a third one in the Holocaust Memorial Center in Budapest (2006). A fourth exhibition entitled House of Fates, focusing on the children's Holocaust, is in preparation. Auschwitz The exhibition in Auschwitz was created by the Hungarian government in 2004. The Hungarian national exhibition presents the history of the Holocaust in Hungary over a floor space of 600 m² on the upper floor of a former barracks building. The title of the exhibi…",
-          "provenance": "prompt_lab_v1:original · source rank 71 · RRF weight 0.5; sparse_relevance_v1:R1:f05a · source rank 23 · RRF weight 0.05555555555555555",
-          "source_artifact": "representatives.json"
+          "facet": "sparse_relevance_v1:R1:f05a",
+          "c0_facet_rank": 23,
+          "bf_facet_rank": 63,
+          "passage": "emotions that make us hate hatred and indignantly reject mass murder or genocide. applied art has already done a lot about it and there is still a lot to be done. it would be even more effective if the various branches of art were integrated into the exhibition representations of the holocaust. in this context, professionals would provide the indispensable raw materials, while information and knowledge would be organized into a composition of creative works of art, taking our human qualities into account. the holocaust is not an issue for specialists, but an issue of our culture as a whole ; and to understand and process it both our rationality and our emotions are needed. the holocaust w…",
+          "provenance": "Facet sparse_relevance_v1:R1:f05a · C0 facet rank 23 · BF facet rank 63 · MiniLM window 0040608449d3f621fc981789e870fe0c7c66cc6b0773ace1b73e015397dfcbd1 · source BM25 rank 23 · query SHA-256 efe3172f3ec49e40901bd11bccda079af9160b3a564b429e1ed529b5ebf5f8b7",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Demoted in final ranking",
           "topic_id": "200",
           "document_id": "shard_01478_67852",
-          "passage": "The Darwin-Hitler claim as a form of Holocaust denial, revisited Yesterday, I did a rather long post that used as its introduction an assertion by bioethicist Arthur Caplan in a review of the anti-evolution propaganda movie Expelled! that the claim that Darwinism led more or less directly to the Holocaust is a form of Holocaust denial. In my post, I concluded that I don't agree with that assertion and that likening Ben Stein's claims in the movie actually weakened his otherwise excellent article that appropriately pointed out the inherent immorality and dishonesty in the way the movie links Darwinism to the Holocaust. To my surprise, Dr. Caplan actually showed up in the comments and respo…",
-          "provenance": "prompt_lab_v1:original · source rank 20 · RRF weight 0.5; sparse_relevance_v1:R1:f05a · source rank 7 · RRF weight 0.05555555555555555; sparse_relevance_v1:R1:f06 · source rank 4 · RRF weight 0.0625",
-          "source_artifact": "representatives.json"
+          "facet": "sparse_relevance_v1:R1:f06",
+          "c0_facet_rank": 4,
+          "bf_facet_rank": 56,
+          "passage": "in order to determine whether current understanding of historical events fits with the evidence. what distinguishes scholarly historical revisionism from holocaust denial is that the conclusion is not foreordained. in holocaust denial, as in all forms of denialism and many forms of crankery, the evidence is cherry - picked to support the desired conclusion. again, mcfee describes this well : revisionists \" depart from the conclusion that the holocaust did not occur and work backwards through the facts to adapt them to that preordained conclusion. put another way, they reverse the proper methodology described above, thus turning the proper historical method of investigation and analysis on…",
+          "provenance": "Facet sparse_relevance_v1:R1:f06 · C0 facet rank 4 · BF facet rank 56 · MiniLM window acca6105df2f718ebfd2eebaedaf7b6a2e7c8ef158fd2f1646e5e8b85c45e11d · source BM25 rank 4 · query SHA-256 094fe85abfbaa1746b53202e01dd64c21aa3ded6d57baa94b6b08cc15a5d3de3",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Demoted in final ranking",
           "topic_id": "200",
           "document_id": "shard_02653_40154",
-          "passage": "The Holocaust was one of the most significant atrocities in human history, and the impact of this dark chapter still reverberates today. To better understand this period and its aftermath, many have turned to books as a way of gaining insight and perspective. In this article, we will take a closer look at the best books about the Holocaust that provide a comprehensive understanding of this terrible tragedy. Understanding the Holocaust: A Brief Overview Before delving into the best books about the Holocaust, it is essential to have a basic understanding of what happened. The Holocaust, also known as the Shoah, was a state-sponsored genocide of six million Jews, along with other targeted gr…",
-          "provenance": "prompt_lab_v1:original · source rank 84 · RRF weight 0.5; sparse_relevance_v1:R1:f05a · source rank 62 · RRF weight 0.05555555555555555; sparse_relevance_v1:R1:f07a · source rank 62 · RRF weight 0.05555555555555555; sparse_relevance_v1:R1:f07b · source rank 26 · RRF weight 0.05555555555555555",
-          "source_artifact": "representatives.json"
+          "facet": "sparse_relevance_v1:R1:f07b",
+          "c0_facet_rank": 26,
+          "bf_facet_rank": 55,
+          "passage": ", and ultimately to the gas chambers. the holocaust was not an isolated event but was part of a broader system of oppression and genocide. the nazi regime also targeted other minority groups, including romani people, disabled individuals, lgbtq + people, and slavic peoples. these groups were subjected to similar persecution, with many also being sent to concentration camps and killed. the impact of the holocaust on the world the holocaust had a profound impact on the world, shaping global politics and society, and influencing perceptions of human rights, tolerance, and diversity. this section will explore some of the legacies of the holocaust. one of the most significant legacies of the h…",
+          "provenance": "Facet sparse_relevance_v1:R1:f07b · C0 facet rank 26 · BF facet rank 55 · MiniLM window 763b4278ba0a9e8e231c9d0c5a327347e6301f40b3fe586293774bd905c827a2 · source BM25 rank 26 · query SHA-256 405aece1b31f2789b1b8330bba2c6374fc34db3f3d04179fcd12a363ed659170",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Gained in final ranking",
           "topic_id": "All four",
           "document_id": "None",
+          "facet": "n/a",
+          "c0_facet_rank": null,
+          "bf_facet_rank": null,
           "passage": "No gained final-ranking passage exists in this comparison.",
-          "provenance": "Saved evaluation contains an empty representative set.",
-          "source_artifact": "representatives.json"
+          "provenance": "The authenticated offline derivation contains an empty representative set.",
+          "source_artifact": "representative_provenance_v2.json"
         },
         {
           "evidence_class": "Lost from final ranking",
           "topic_id": "All four",
           "document_id": "None",
+          "facet": "n/a",
+          "c0_facet_rank": null,
+          "bf_facet_rank": null,
           "passage": "No lost final-ranking passage exists in this comparison.",
-          "provenance": "Saved evaluation contains an empty representative set.",
-          "source_artifact": "representatives.json"
+          "provenance": "The authenticated offline derivation contains an empty representative set.",
+          "source_artifact": "representative_provenance_v2.json"
         }
       ],
       "runtime_rows": [
@@ -3744,6 +3803,7 @@
         {
           "qrels_access_status": "qrels_access_consumed",
           "qrels_access_count": 1,
+          "approval_scoped_consumption_registry": true,
           "ranking_frozen_before_qrels": true,
           "review_frozen_before_qrels": true,
           "review_unique_items": 101,
@@ -4226,6 +4286,39 @@
       }
     },
     {
+      "id": "representative_provenance",
+      "label": "Facet-event representative provenance",
+      "path": "outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:ee2154979d2cfdc8a08e7dcaeab8bbdd3692594f1378a80cde0f9f45fca1ac94",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated facet-event representative provenance input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json')\n), classes(evidence_class, rows) AS (\n  SELECT 'promoted', json_extract(doc, '$.promoted') FROM source UNION ALL\n  SELECT 'demoted', json_extract(doc, '$.demoted') FROM source UNION ALL\n  SELECT 'gained', json_extract(doc, '$.gained') FROM source UNION ALL\n  SELECT 'lost', json_extract(doc, '$.lost') FROM source\n)\nSELECT evidence_class, item.key AS saved_order, item.value AS saved_evidence\nFROM classes, json_each(classes.rows) AS item;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json",
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json": "6ee60ee6b3ffabffb2699c118648df65b62f380a44be84a8ba67b1eed005833b",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json": "de0f74f0784941761e7dc7eee234f05b0feeaf45f1fea19a04f3273b058a2427",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json": "3eae8183efd75f37934e93e4357e3ff4b90fc4f57cc8a2a65bdb7ef10a50f5d3",
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json": "185a8e917f1d0c90efaa2625ec749c3eb6b470a32e7e131d05a55ff27a30bb71"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Each row is an offline derivation from the saved representative class, qualifying pre-fusion facet event, and authenticated frozen MiniLM stream.",
+          "Facet C0/BF ranks and the selected highest-logit MiniLM window are preserved; no qrels projection was reopened."
+        ]
+      }
+    },
+    {
       "id": "decision",
       "label": "Mechanical experiment decision",
       "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json",
@@ -4265,23 +4358,79 @@
       }
     },
     {
+      "id": "qrels_access_approval",
+      "label": "One-time qrels-access approval",
+      "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:2233e36c27ed5eff95abbfa959fbdede96b354dcd17f73317d91a869eb48e218",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated one-time qrels-access approval input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json": "2233e36c27ed5eff95abbfa959fbdede96b354dcd17f73317d91a869eb48e218"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "qrels_consumption_registry",
+      "label": "Approval-scoped qrels-consumption registry",
+      "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:9b9b6f8df7e34b9e71a6dad670c1a1523cf8e2419ebe6ef8267a6013ec52eaf9",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated approval-scoped qrels-consumption registry input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json": "9b9b6f8df7e34b9e71a6dad670c1a1523cf8e2419ebe6ef8267a6013ec52eaf9"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
       "id": "qrels_access_receipt",
       "label": "One-time qrels-access receipt",
       "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
       "query": {
         "engine": "duckdb",
-        "id": "sha256:160c4dd24d4330d828061744f0ca5d42342dd1c4bee39a96f08c7ae3bacef202",
+        "id": "sha256:3bd3a64a9c0f8222adf760e95b99b1ae85dd3a766063b0663c7a1fd91672c0ec",
         "language": "sql",
         "description": "Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.",
-        "sql": "SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,\n       r.qrels_opened = false AS ranking_frozen_before_qrels,\n       v.qrels_opened = false AS review_frozen_before_qrels,\n       c.item_count AS review_unique_items, c.membership_count AS review_memberships,\n       c.membership_count - c.item_count AS shared_items_attributed_to_both_arms\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json') q\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json') r\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json') v\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json') c\nWHERE q.status = 'qrels_access_consumed'\n  AND q.ranking_freeze_sha256 = r.freeze_sha256\n  AND q.review_freeze_sha256 = v.review_freeze_sha256;",
+        "sql": "SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,\n       g.status = 'qrels_access_consumed'\n         AND g.qrels_approval_sha256 = sha256(read_blob('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json'))\n         AS approval_scoped_consumption_registry,\n       r.qrels_opened = false AS ranking_frozen_before_qrels,\n       v.qrels_opened = false AS review_frozen_before_qrels,\n       c.item_count AS review_unique_items, c.membership_count AS review_memberships,\n       c.membership_count - c.item_count AS shared_items_attributed_to_both_arms\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json') q\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json') g\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json') r\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json') v\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json') c\nWHERE q.status = 'qrels_access_consumed'\n  AND q.ranking_freeze_sha256 = r.freeze_sha256\n  AND q.review_freeze_sha256 = v.review_freeze_sha256;",
         "tables_used": [
           "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json",
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
           "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json",
           "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json",
           "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json"
         ],
         "input_sha256": {
           "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json": "f3f7dbdef013bf843a4daef17c9b6a6ef8102613656de6bb5dc23702356b422f",
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json": "2233e36c27ed5eff95abbfa959fbdede96b354dcd17f73317d91a869eb48e218",
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json": "9b9b6f8df7e34b9e71a6dad670c1a1523cf8e2419ebe6ef8267a6013ec52eaf9",
           "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json": "185a8e917f1d0c90efaa2625ec749c3eb6b470a32e7e131d05a55ff27a30bb71",
           "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json": "0b51d3c55dc3cc020272aeeab7d725ac412a6f43d964956dcbf5a538878289c3",
           "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json": "4bfce5ce8ee0758b44dc05ddf29e011153166eec3601beff3004fef447f829ac"
@@ -4293,6 +4442,7 @@
         ],
         "metric_definitions": [
           "Qrels access count is one iff the bound receipt status is qrels_access_consumed.",
+          "Approval-scoped consumption is true only when the stable registry binds the approval, receipt, freezes, projection hashes, and canonical evaluation output.",
           "Ranking/review frozen flags require qrels_opened=false in their authenticated freezes; shared memberships = membership_count - item_count."
         ]
       }

@@ -1153,6 +1153,7 @@ def load_frozen_inputs(
     original: dict[str, list[str]] = {}
     control_facets: dict[tuple[str, str], list[str]] = {}
     bf_facets: dict[tuple[str, str], list[str]] = {}
+    facet_stream_details: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for raw_record in stream_records:
         aggregation = str(raw_record.get("aggregation"))
         family = str(raw_record.get("family"))
@@ -1190,6 +1191,8 @@ def load_frozen_inputs(
             if key in destination:
                 raise ValueError("ranking freeze contains duplicate facet streams")
             destination[key] = document_ids
+            for row in ordered_rows:
+                facet_stream_details[(topic_id, variant, aggregation, docid(row))] = row
     if set(original) != set(PILOT_TOPIC_IDS) or set(control_facets) != set(bf_facets):
         raise ValueError("ranking freeze stream population is incomplete")
 
@@ -1276,6 +1279,7 @@ def load_frozen_inputs(
         "bf_facets": bf_facets,
         "control_facets": control_facets,
         "document_details": document_details,
+        "facet_stream_details": facet_stream_details,
         "original": original,
         **prior_binding,
         "ranking_rows": ranking_rows,
@@ -1339,7 +1343,12 @@ def validate_qrels_authorization(
             "qrels projection path must remain inside its authorized directory"
         ) from exc
 
-    approval = _read_json_object(Path(qrels_approval), "qrels access approval")
+    approval_path = Path(qrels_approval)
+    try:
+        approval_bytes = approval_path.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("qrels access approval is missing or invalid") from exc
+    approval = _parse_json_object_bytes(approval_bytes, "qrels access approval")
     if (
         approval.get("schema_version") != "pilot-qrels-access-approval-v1"
         or approval.get("status") != "approved"
@@ -1359,12 +1368,146 @@ def validate_qrels_authorization(
         raise ValueError("review freeze hash binding differs")
 
     return {
+        "approval_path": approval_path,
+        "approval_sha256": hashlib.sha256(approval_bytes).hexdigest(),
         "manifest_path": manifest_path,
         "manifest_sha256": manifest_sha256,
         "projection_path": projection_path,
         "projection_sha256": projection_sha256,
         "topic_ids": list(PILOT_TOPIC_IDS),
     }
+
+
+def qrels_consumption_registry_path(qrels_approval: Path) -> Path:
+    """Return the stable, approval-scoped one-time-consumption record path."""
+
+    approval_path = Path(qrels_approval)
+    return approval_path.with_name(f"{approval_path.name}.consumed.json")
+
+
+def _qrels_consumption_payload(
+    *,
+    approval_sha256: str,
+    qrels_manifest_sha256: str,
+    qrels_projection_sha256: str,
+    ranking_freeze_sha256: str,
+    review_freeze_sha256: str,
+    output: Path,
+    output_receipt: Path,
+) -> dict[str, Any]:
+    return add_self_hash(
+        {
+            "schema_version": "facet-local-minilm-qrels-consumption-v1",
+            "status": "qrels_access_consumed",
+            "topic_ids": list(PILOT_TOPIC_IDS),
+            "qrels_approval_sha256": _validated_sha256(
+                approval_sha256, "qrels approval hash"
+            ),
+            "qrels_manifest_sha256": _validated_sha256(
+                qrels_manifest_sha256, "qrels manifest hash"
+            ),
+            "qrels_projection_sha256": _validated_sha256(
+                qrels_projection_sha256, "qrels projection hash"
+            ),
+            "ranking_freeze_sha256": _validated_sha256(
+                ranking_freeze_sha256, "ranking freeze hash"
+            ),
+            "review_freeze_sha256": _validated_sha256(
+                review_freeze_sha256, "review freeze hash"
+            ),
+            "canonical_output_path": str(Path(output).resolve()),
+            "output_receipt_path": str(Path(output_receipt).resolve()),
+        }
+    )
+
+
+def _create_qrels_consumption_registry(
+    registry_path: Path, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Atomically consume an approval before any output or qrels access."""
+
+    registry = dict(payload)
+    validate_self_hash(registry)
+    try:
+        with Path(registry_path).open("x", encoding="utf-8") as stream:
+            stream.write(_canonical_json_bytes(registry, newline=True).decode("utf-8"))
+    except FileExistsError as exc:
+        raise FileExistsError("qrels approval was already consumed") from exc
+    return registry
+
+
+def adopt_qrels_consumption_registry(
+    qrels_approval: Path,
+    *,
+    qrels_access_receipt: Path,
+    evaluation_output: Path,
+) -> dict[str, Any]:
+    """Adopt a verified completed evaluation without opening qrels again."""
+
+    approval_path = Path(qrels_approval)
+    registry_path = qrels_consumption_registry_path(approval_path)
+    if registry_path.exists() or registry_path.is_symlink():
+        raise FileExistsError("qrels approval was already consumed")
+    try:
+        approval_bytes = approval_path.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("qrels access approval is missing or invalid") from exc
+    approval = _parse_json_object_bytes(approval_bytes, "qrels access approval")
+    if (
+        approval.get("schema_version") != "pilot-qrels-access-approval-v1"
+        or approval.get("status") != "approved"
+        or approval.get("topic_ids") != list(PILOT_TOPIC_IDS)
+    ):
+        raise ValueError("qrels access approval contract differs")
+
+    output_path = Path(evaluation_output)
+    receipt_path = Path(qrels_access_receipt)
+    if receipt_path.resolve() != (output_path / "qrels_access_receipt.json").resolve():
+        raise ValueError("qrels access receipt must belong to the evaluation output")
+    receipt = _read_json_object(receipt_path, "qrels access receipt")
+    validate_self_hash(receipt)
+    if (
+        receipt.get("schema_version")
+        != "facet-local-minilm-qrels-access-receipt-v1"
+        or receipt.get("status") != "qrels_access_consumed"
+        or receipt.get("topic_ids") != list(PILOT_TOPIC_IDS)
+    ):
+        raise ValueError("qrels access receipt contract differs")
+    for field in (
+        "qrels_manifest_sha256",
+        "qrels_projection_sha256",
+        "ranking_freeze_sha256",
+        "review_freeze_sha256",
+    ):
+        approval_value = _validated_sha256(approval.get(field), f"approval {field}")
+        receipt_value = _validated_sha256(receipt.get(field), f"receipt {field}")
+        if not hmac.compare_digest(approval_value, receipt_value):
+            raise ValueError(f"qrels approval and receipt {field} binding differs")
+    for name in EVALUATION_ARTIFACT_NAMES:
+        artifact = _read_json_object(output_path / name, f"evaluation artifact {name}")
+        validate_self_hash(artifact)
+        bindings = artifact.get("bindings")
+        if not isinstance(bindings, Mapping) or any(
+            bindings.get(field) != receipt.get(field)
+            for field in (
+                "qrels_manifest_sha256",
+                "qrels_projection_sha256",
+                "ranking_freeze_sha256",
+                "review_freeze_sha256",
+            )
+        ):
+            raise ValueError("evaluation artifact qrels binding differs")
+
+    payload = _qrels_consumption_payload(
+        approval_sha256=hashlib.sha256(approval_bytes).hexdigest(),
+        qrels_manifest_sha256=str(receipt["qrels_manifest_sha256"]),
+        qrels_projection_sha256=str(receipt["qrels_projection_sha256"]),
+        ranking_freeze_sha256=str(receipt["ranking_freeze_sha256"]),
+        review_freeze_sha256=str(receipt["review_freeze_sha256"]),
+        output=output_path,
+        output_receipt=receipt_path,
+    )
+    return _create_qrels_consumption_registry(registry_path, payload)
 
 
 def read_qrels(
@@ -1472,6 +1615,241 @@ def _bound_artifact(
         )
     )
     return add_self_hash(normalized)
+
+
+def _representative_provenance_row(
+    qualified_docid: str,
+    *,
+    evidence_class: str,
+    prefusion: Mapping[str, Any],
+    frozen_inputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Select provenance from the facet event that explains a representative."""
+
+    topic_id, document_id = qualified_docid.split("/", 1)
+    _validate_topic_boundary((topic_id,), "representative provenance")
+    raw_facet_rows = prefusion.get("facet_rows", ())
+    candidate_events = [
+        row
+        for row in raw_facet_rows
+        if isinstance(row, Mapping)
+        and str(row.get("topic_id")) == topic_id
+        and str(row.get("docid")) == document_id
+    ] if isinstance(raw_facet_rows, Sequence) else []
+
+    def event_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+        control_rank = row.get("control_rank")
+        bf_rank = row.get("bf_rank")
+        control_value = int(control_rank) if control_rank is not None else 10**9
+        bf_value = int(bf_rank) if bf_rank is not None else 10**9
+        if evidence_class in {"promoted", "gained"}:
+            qualifying = bf_value <= 20 and control_value > 20
+            return (
+                not qualifying,
+                bf_value,
+                -control_value,
+                str(row.get("variant_name", "")),
+            )
+        demoting = control_value < bf_value
+        return (
+            not demoting,
+            control_value,
+            -bf_value,
+            str(row.get("variant_name", "")),
+        )
+
+    event = min(candidate_events, key=event_key) if candidate_events else {}
+    variant = str(event.get("variant_name", ""))
+    facet_stream_details = frozen_inputs.get("facet_stream_details", {})
+    raw_stream = (
+        facet_stream_details.get((topic_id, variant, "top4", document_id), {})
+        if isinstance(facet_stream_details, Mapping) and variant
+        else {}
+    )
+    stream = raw_stream if isinstance(raw_stream, Mapping) else {}
+    raw_windows = stream.get("selected_windows", ())
+    windows = (
+        [window for window in raw_windows if isinstance(window, Mapping)]
+        if isinstance(raw_windows, Sequence)
+        and not isinstance(raw_windows, (str, bytes, bytearray))
+        else []
+    )
+    selected_window = (
+        max(
+            windows,
+            key=lambda window: (
+                float(window.get("score", float("-inf"))),
+                str(window.get("window_id", "")),
+            ),
+        )
+        if windows
+        else None
+    )
+    details = frozen_inputs.get("document_details", {})
+    raw_detail = (
+        details.get((topic_id, document_id), {})
+        if isinstance(details, Mapping)
+        else {}
+    )
+    detail = raw_detail if isinstance(raw_detail, Mapping) else {}
+    passage = (
+        str(selected_window.get("window_text", ""))
+        if selected_window is not None
+        else str(
+            stream.get(
+                "passage",
+                stream.get("text", detail.get("text", detail.get("passage", ""))),
+            )
+        )
+    )
+    stream_provenance = {
+        key: stream[key]
+        for key in (
+            "aggregation",
+            "family",
+            "prior_rank",
+            "query",
+            "query_sha256",
+            "rank",
+            "retriever_name",
+            "score",
+            "source_score",
+        )
+        if key in stream
+    }
+    rankings = frozen_inputs.get("rankings", {})
+
+    def final_rank(arm: str) -> int | None:
+        raw_arm = rankings.get(arm, {}) if isinstance(rankings, Mapping) else {}
+        raw_ranking = raw_arm.get(topic_id, ()) if isinstance(raw_arm, Mapping) else ()
+        ranking = [str(value) for value in raw_ranking]
+        try:
+            return ranking.index(document_id) + 1
+        except ValueError:
+            return None
+
+    return {
+        "topic_id": topic_id,
+        "document_id": document_id,
+        "evidence_class": evidence_class,
+        "facet_variant": variant or None,
+        "facet_control_rank": event.get("control_rank"),
+        "facet_bf_rank": event.get("bf_rank"),
+        "c0_final_rank": final_rank("C0_TOPIC_LOCAL"),
+        "bf_final_rank": final_rank("BF100_TOPIC_LOCAL"),
+        "passage": passage,
+        "selected_minilm_window": dict(selected_window)
+        if selected_window is not None
+        else None,
+        "stream_provenance": stream_provenance,
+        "provenance": [stream_provenance] if stream_provenance else detail.get(
+            "provenance", detail.get("selected_windows", [])
+        ),
+    }
+
+
+def derive_representative_provenance_v2(
+    freeze: Path,
+    *,
+    review_freeze: Path,
+    prior_evaluation: Path,
+    prior_evaluation_manifest: Path,
+    prefusion: Path,
+    representatives: Path,
+    output: Path,
+) -> dict[str, Any]:
+    """Create authenticated representative provenance without opening qrels."""
+
+    output_path = Path(output)
+    if output_path.exists() or output_path.is_symlink():
+        raise FileExistsError("representative provenance output already exists")
+    ranking = verify_ranking_freeze(Path(freeze))
+    review = verify_blinded_review_freeze(Path(review_freeze), Path(freeze))
+    ranking_hash = _validated_sha256(
+        ranking.get("freeze_sha256"), "ranking freeze hash"
+    )
+    review_hash = _validated_sha256(
+        review.get("review_freeze_sha256"), "review freeze hash"
+    )
+    frozen_inputs = load_frozen_inputs(
+        Path(freeze),
+        Path(review_freeze),
+        Path(prior_evaluation),
+        prior_evaluation_manifest=Path(prior_evaluation_manifest),
+        ranking_freeze_sha256=ranking_hash,
+        review_freeze_sha256=review_hash,
+    )
+    prefusion_payload = _read_json_object(Path(prefusion), "prefusion artifact")
+    representatives_payload = _read_json_object(
+        Path(representatives), "representatives artifact"
+    )
+    validate_self_hash(prefusion_payload)
+    validate_self_hash(representatives_payload)
+    for label, payload in (
+        ("prefusion", prefusion_payload),
+        ("representatives", representatives_payload),
+    ):
+        bindings = payload.get("bindings")
+        if not isinstance(bindings, Mapping):
+            raise ValueError(f"{label} artifact lacks freeze bindings")
+        if (
+            bindings.get("ranking_freeze_sha256") != ranking_hash
+            or bindings.get("review_freeze_sha256") != review_hash
+        ):
+            raise ValueError(f"{label} artifact freeze binding differs")
+
+    derived_rows: dict[str, list[dict[str, Any]]] = {}
+    for evidence_class in ("promoted", "demoted", "gained", "lost"):
+        raw_rows = representatives_payload.get(evidence_class, ())
+        if not isinstance(raw_rows, Sequence) or isinstance(
+            raw_rows, (str, bytes, bytearray)
+        ):
+            raise ValueError("representative class rows are invalid")
+        qualified_docids: list[str] = []
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, Mapping):
+                raise ValueError("representative row is invalid")
+            topic_id = str(raw_row.get("topic_id", ""))
+            document_id = str(raw_row.get("document_id", ""))
+            _validate_topic_boundary((topic_id,), "representative provenance")
+            if not document_id:
+                raise ValueError("representative row lacks a document ID")
+            qualified_docids.append(f"{topic_id}/{document_id}")
+        derived_rows[evidence_class] = [
+            _representative_provenance_row(
+                qualified_docid,
+                evidence_class=evidence_class,
+                prefusion=prefusion_payload,
+                frozen_inputs=frozen_inputs,
+            )
+            for qualified_docid in qualified_docids
+        ]
+
+    payload = add_self_hash(
+        {
+            "schema_version": "facet-local-minilm-representative-provenance-v2",
+            "status": "offline_derived_from_frozen_artifacts",
+            "topic_ids": list(PILOT_TOPIC_IDS),
+            "bindings": {
+                "ranking_freeze_sha256": ranking_hash,
+                "review_freeze_sha256": review_hash,
+                "source_prefusion_artifact_sha256": prefusion_payload[
+                    "artifact_sha256"
+                ],
+                "source_representatives_artifact_sha256": representatives_payload[
+                    "artifact_sha256"
+                ],
+            },
+            **derived_rows,
+        }
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with output_path.open("x", encoding="utf-8") as stream:
+            stream.write(_canonical_json_bytes(payload, newline=True).decode("utf-8"))
+    except FileExistsError as exc:
+        raise FileExistsError("representative provenance output already exists") from exc
+    return payload
 
 
 def build_evaluation_artifacts(
@@ -1756,24 +2134,6 @@ def build_evaluation_artifacts(
         per_topic_deltas_vs_legacy_r1=per_topic_vs_legacy,
     )
 
-    details = frozen_inputs.get("document_details", {})
-    def representative(qualified_docid: str) -> dict[str, Any]:
-        topic_id, document_id = qualified_docid.split("/", 1)
-        raw_detail = (
-            details.get((topic_id, document_id), {})
-            if isinstance(details, Mapping)
-            else {}
-        )
-        detail = raw_detail if isinstance(raw_detail, Mapping) else {}
-        return {
-            "topic_id": topic_id,
-            "document_id": document_id,
-            "passage": str(detail.get("text", detail.get("passage", ""))),
-            "provenance": detail.get(
-                "provenance", detail.get("selected_windows", [])
-            ),
-        }
-
     control_ranks = {
         (topic_id, docid): rank
         for topic_id in PILOT_TOPIC_IDS
@@ -1797,13 +2157,39 @@ def build_evaluation_artifacts(
     )
     representatives = {
         "promoted": [
-            representative(docid)
+            _representative_provenance_row(
+                docid,
+                evidence_class="promoted",
+                prefusion=prefusion,
+                frozen_inputs=frozen_inputs,
+            )
             for docid in prefusion["pre_fusion_promoted_novel_docids"][:3]
         ],
-        "demoted": [representative(docid) for docid in demoted_docids[:3]],
-        "gained": [representative(docid) for docid in final_novel_docids[:3]],
+        "demoted": [
+            _representative_provenance_row(
+                docid,
+                evidence_class="demoted",
+                prefusion=prefusion,
+                frozen_inputs=frozen_inputs,
+            )
+            for docid in demoted_docids[:3]
+        ],
+        "gained": [
+            _representative_provenance_row(
+                docid,
+                evidence_class="gained",
+                prefusion=prefusion,
+                frozen_inputs=frozen_inputs,
+            )
+            for docid in final_novel_docids[:3]
+        ],
         "lost": [
-            representative(docid)
+            _representative_provenance_row(
+                docid,
+                evidence_class="lost",
+                prefusion=prefusion,
+                frozen_inputs=frozen_inputs,
+            )
             for docid in sorted(control_relevant_all - bf_relevant_all)[:3]
         ],
     }
@@ -1884,6 +2270,9 @@ def evaluate(
 ) -> dict[str, Any]:
     """Cross the qrels firewall once, only after every frozen input verifies."""
 
+    consumption_path = qrels_consumption_registry_path(Path(qrels_approval))
+    if consumption_path.exists() or consumption_path.is_symlink():
+        raise FileExistsError("qrels approval was already consumed")
     output_path = Path(output) if output is not None else None
     receipt_path = output_path / "qrels_access_receipt.json" if output_path else None
     if receipt_path is not None and (
@@ -1936,6 +2325,18 @@ def evaluate(
     )
 
     projection_path = Path(authorization["projection_path"])
+    consumption = _create_qrels_consumption_registry(
+        consumption_path,
+        _qrels_consumption_payload(
+            approval_sha256=str(authorization["approval_sha256"]),
+            qrels_manifest_sha256=str(authorization["manifest_sha256"]),
+            qrels_projection_sha256=str(authorization["projection_sha256"]),
+            ranking_freeze_sha256=ranking_hash,
+            review_freeze_sha256=review_hash,
+            output=output_path,
+            output_receipt=receipt_path,
+        ),
+    )
     output_path.mkdir(parents=True, exist_ok=True)
     receipt = _create_qrels_access_receipt(
         receipt_path,
@@ -1970,6 +2371,7 @@ def evaluate(
     return {
         "qrels": qrels,
         "qrels_access_receipt": receipt,
+        "qrels_consumption_registry": consumption,
         "artifacts": artifacts,
     }
 
@@ -1986,6 +2388,28 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qrels-approval", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
+
+
+def build_adoption_argument_parser() -> argparse.ArgumentParser:
+    """Build the qrels-free CLI for adopting an already-completed evaluation."""
+
+    parser = argparse.ArgumentParser(
+        description="Adopt an existing qrels evaluation into the stable guard"
+    )
+    parser.add_argument("--qrels-approval", type=Path, required=True)
+    parser.add_argument("--qrels-access-receipt", type=Path, required=True)
+    parser.add_argument("--evaluation-output", type=Path, required=True)
+    return parser
+
+
+def adoption_main(argv: Sequence[str] | None = None) -> int:
+    args = build_adoption_argument_parser().parse_args(argv)
+    adopt_qrels_consumption_registry(
+        args.qrels_approval,
+        qrels_access_receipt=args.qrels_access_receipt,
+        evaluation_output=args.evaluation_output,
+    )
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

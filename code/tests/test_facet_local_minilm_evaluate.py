@@ -13,13 +13,17 @@ import trec_rag.facet_local_minilm_review as review_owner
 from trec_rag.facet_local_minilm_evaluate import (
     PILOT_TOPIC_IDS,
     add_self_hash,
+    adopt_qrels_consumption_registry,
     aggregate_review_metrics,
     build_facet_retention,
+    build_adoption_argument_parser,
     build_union_curves,
     compare_docid_sets,
     compute_prefusion_evidence,
+    derive_representative_provenance_v2,
     evaluate,
     evaluate_ranking,
+    qrels_consumption_registry_path,
     select_diagnostic_outcome,
     validate_self_hash,
 )
@@ -603,6 +607,22 @@ def test_cli_has_no_all_topic_qrels_argument():
     assert "--qrels" not in options
 
 
+def test_offline_adoption_cli_accepts_only_saved_approval_receipt_and_output():
+    options = {
+        action.option_strings[0]
+        for action in build_adoption_argument_parser()._actions
+        if action.option_strings
+    }
+
+    assert options == {
+        "-h",
+        "--qrels-approval",
+        "--qrels-access-receipt",
+        "--evaluation-output",
+    }
+    assert "--qrels" not in options
+
+
 @pytest.mark.parametrize("bad_topic", ["144", "999"])
 def test_prior_manifest_topics_fail_before_prior_json_reader(
     monkeypatch, tmp_path, bad_topic
@@ -700,6 +720,7 @@ def _synthetic_frozen_evaluation_inputs():
     rankings = {arm: {} for arm in EXACT_RANKING_ARMS}
     ranking_rows = {arm: {} for arm in rankings}
     details = {}
+    facet_stream_details = {}
     review_rows = []
     for topic_id in PILOT_TOPIC_IDS:
         original_docid = f"o-{topic_id}"
@@ -717,6 +738,30 @@ def _synthetic_frozen_evaluation_inputs():
                 novel_docid,
                 control_docid,
             ]
+            facet_stream_details[(topic_id, variant, "top4", novel_docid)] = {
+                "aggregation": "top4",
+                "document_id": novel_docid,
+                "family": "facet",
+                "passage": "facet-specific MiniLM passage for novel-200",
+                "prior_rank": 21,
+                "query": "facet-specific query",
+                "query_sha256": "9" * 64,
+                "rank": 1,
+                "retriever_name": "pyserini_bm25",
+                "score": 4.25,
+                "selected_windows": [
+                    {
+                        "document_end_token": 220,
+                        "document_start_token": 20,
+                        "score": 4.25,
+                        "window_id": "8" * 64,
+                        "window_text": "facet-specific MiniLM passage for novel-200",
+                    }
+                ],
+                "source_score": 7.5,
+                "topic_id": topic_id,
+                "variant": variant,
+            }
         else:
             control_facets[facet_key] = [control_docid]
             bf_facets[facet_key] = [control_docid]
@@ -785,6 +830,7 @@ def _synthetic_frozen_evaluation_inputs():
         "bf_facets": bf_facets,
         "control_facets": control_facets,
         "document_details": details,
+        "facet_stream_details": facet_stream_details,
         "original": original,
         "prior_evaluation": {
             "schema_version": "prior-fixture-v1",
@@ -1260,6 +1306,7 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
     def guarded_read_bytes(path):
         if path == projection:
             assert (output / "qrels_access_receipt.json").exists()
+            assert qrels_consumption_registry_path(approval).exists()
             projection_reads.append(path)
         return original_read_bytes(path)
 
@@ -1348,6 +1395,332 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
         result["qrels"],
         bindings=result["artifacts"]["decision.json"]["bindings"],
     )
+
+
+def test_same_approval_cannot_be_replayed_to_a_different_output_before_qrels(
+    monkeypatch, tmp_path
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
+    manifest, approval = _write_synthetic_qrels_authorization(
+        tmp_path,
+        ranking_freeze_sha256=frozen["freeze_sha256"],
+        review_freeze_sha256=frozen["review_freeze_sha256"],
+    )
+    first_output = tmp_path / "evaluation-one"
+    evaluate(
+        frozen["freeze"],
+        review_freeze=frozen["review"],
+        prior_evaluation=frozen["prior"],
+        prior_evaluation_manifest=frozen["prior_manifest"],
+        qrels_manifest=manifest,
+        qrels_approval=approval,
+        output=first_output,
+    )
+    registry = json.loads(qrels_consumption_registry_path(approval).read_text())
+    assert registry["canonical_output_path"] == str(first_output.resolve())
+    assert registry["output_receipt_path"] == str(
+        (first_output / "qrels_access_receipt.json").resolve()
+    )
+    assert registry["qrels_approval_sha256"] == hashlib.sha256(
+        approval.read_bytes()
+    ).hexdigest()
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels reopened")
+    )
+
+    with pytest.raises(FileExistsError, match="approval was already consumed"):
+        evaluate(
+            frozen["freeze"],
+            review_freeze=frozen["review"],
+            prior_evaluation=frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
+            qrels_manifest=manifest,
+            qrels_approval=approval,
+            output=tmp_path / "evaluation-two",
+        )
+
+
+def test_preexisting_consumption_registry_blocks_before_any_output_or_qrels_work(
+    monkeypatch, tmp_path
+):
+    approval = tmp_path / "approval.json"
+    registry = qrels_consumption_registry_path(approval)
+    registry.write_text("{}")
+    monkeypatch.setattr(
+        module,
+        "verify_ranking_freeze",
+        lambda *args, **kwargs: pytest.fail("freeze verified after replay"),
+    )
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels reopened")
+    )
+
+    with pytest.raises(FileExistsError, match="approval was already consumed"):
+        evaluate(
+            tmp_path / "freeze",
+            review_freeze=tmp_path / "review",
+            prior_evaluation=tmp_path / "prior.json",
+            prior_evaluation_manifest=tmp_path / "prior-manifest.json",
+            qrels_manifest=tmp_path / "manifest.json",
+            qrels_approval=approval,
+            output=tmp_path / "evaluation",
+        )
+
+    assert not (tmp_path / "evaluation").exists()
+
+
+@pytest.mark.parametrize("binding_mismatch", [False, True])
+def test_offline_registry_adoption_is_create_only_and_does_not_open_qrels(
+    monkeypatch, tmp_path, binding_mismatch
+):
+    approval = tmp_path / "approval.json"
+    approval_payload = {
+        "schema_version": "pilot-qrels-access-approval-v1",
+        "status": "approved",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "qrels_manifest_sha256": "a" * 64,
+        "qrels_projection_sha256": "b" * 64,
+        "ranking_freeze_sha256": "c" * 64,
+        "review_freeze_sha256": "d" * 64,
+    }
+    approval.write_text(json.dumps(approval_payload))
+    output = tmp_path / "existing-evaluation"
+    output.mkdir()
+    receipt = add_self_hash(
+        {
+            "schema_version": "facet-local-minilm-qrels-access-receipt-v1",
+            "status": "qrels_access_consumed",
+            "topic_ids": list(PILOT_TOPIC_IDS),
+            "qrels_manifest_sha256": "a" * 64,
+            "qrels_projection_sha256": "b" * 64,
+            "ranking_freeze_sha256": "c" * 64,
+            "review_freeze_sha256": "d" * 64,
+        }
+    )
+    receipt_path = output / "qrels_access_receipt.json"
+    receipt_path.write_bytes(_pretty_json_bytes(receipt))
+    receipt_bindings = {
+        field: receipt[field]
+        for field in (
+            "qrels_manifest_sha256",
+            "qrels_projection_sha256",
+            "ranking_freeze_sha256",
+            "review_freeze_sha256",
+        )
+    }
+    for index, name in enumerate(module.EVALUATION_ARTIFACT_NAMES):
+        bindings = dict(receipt_bindings)
+        if binding_mismatch and index == 0:
+            bindings["qrels_projection_sha256"] = "e" * 64
+        (output / name).write_bytes(
+            _pretty_json_bytes(
+                add_self_hash(
+                    {"schema_version": "fixture-v1", "bindings": bindings}
+                )
+            )
+        )
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels opened")
+    )
+
+    if binding_mismatch:
+        with pytest.raises(ValueError, match="evaluation artifact qrels binding"):
+            adopt_qrels_consumption_registry(
+                approval,
+                qrels_access_receipt=receipt_path,
+                evaluation_output=output,
+            )
+        assert not qrels_consumption_registry_path(approval).exists()
+        return
+
+    adopted = adopt_qrels_consumption_registry(
+        approval,
+        qrels_access_receipt=receipt_path,
+        evaluation_output=output,
+    )
+    registry_path = qrels_consumption_registry_path(approval)
+    first_bytes = registry_path.read_bytes()
+    assert adopted["status"] == "qrels_access_consumed"
+    assert validate_self_hash(adopted) is True
+
+    with pytest.raises(FileExistsError, match="approval was already consumed"):
+        adopt_qrels_consumption_registry(
+            approval,
+            qrels_access_receipt=receipt_path,
+            evaluation_output=output,
+        )
+    assert registry_path.read_bytes() == first_bytes
+
+
+def test_consumption_remains_closed_if_output_receipt_creation_fails(
+    monkeypatch, tmp_path
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
+    manifest, approval = _write_synthetic_qrels_authorization(
+        tmp_path,
+        ranking_freeze_sha256=frozen["freeze_sha256"],
+        review_freeze_sha256=frozen["review_freeze_sha256"],
+    )
+    monkeypatch.setattr(
+        module,
+        "_create_qrels_access_receipt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk failed")),
+    )
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels opened")
+    )
+
+    with pytest.raises(OSError, match="disk failed"):
+        evaluate(
+            frozen["freeze"],
+            review_freeze=frozen["review"],
+            prior_evaluation=frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
+            qrels_manifest=manifest,
+            qrels_approval=approval,
+            output=tmp_path / "evaluation",
+        )
+    assert qrels_consumption_registry_path(approval).exists()
+
+    with pytest.raises(FileExistsError, match="approval was already consumed"):
+        evaluate(
+            frozen["freeze"],
+            review_freeze=frozen["review"],
+            prior_evaluation=frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
+            qrels_manifest=manifest,
+            qrels_approval=approval,
+            output=tmp_path / "evaluation-two",
+        )
+
+
+def test_promoted_representative_uses_qualifying_facet_event_and_minilm_window():
+    artifacts = module.build_evaluation_artifacts(
+        _synthetic_frozen_evaluation_inputs(),
+        _synthetic_qrels(),
+        bindings=_artifact_bindings(),
+    )
+
+    promoted = artifacts["representatives.json"]["promoted"][0]
+    assert promoted["topic_id"] == "200"
+    assert promoted["document_id"] == "novel-200"
+    assert promoted["facet_variant"] == "facet:200:01"
+    assert promoted["facet_control_rank"] == 21
+    assert promoted["facet_bf_rank"] == 1
+    assert promoted["selected_minilm_window"]["window_text"] == (
+        "facet-specific MiniLM passage for novel-200"
+    )
+    assert promoted["passage"] == "facet-specific MiniLM passage for novel-200"
+    assert promoted["stream_provenance"]["aggregation"] == "top4"
+    assert promoted["stream_provenance"]["query"] == "facet-specific query"
+
+
+def test_offline_representative_v2_derivation_authenticates_inputs_without_qrels(
+    monkeypatch, tmp_path
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
+    loaded = module.load_frozen_inputs(
+        frozen["freeze"],
+        frozen["review"],
+        frozen["prior"],
+        prior_evaluation_manifest=frozen["prior_manifest"],
+        ranking_freeze_sha256=frozen["freeze_sha256"],
+        review_freeze_sha256=frozen["review_freeze_sha256"],
+    )
+    topic_id, variant, _family = next(
+        identity
+        for identity in sorted(rank_owner._AUTHENTICATED_STREAMS)
+        if identity[0] == "200" and identity[2] == "facet"
+    )
+    document_id = loaded["bf_facets"][(topic_id, variant)][0]
+    prefusion = module._bound_artifact(
+        "facet-local-minilm-prefusion-v1",
+        {
+            "ranking_freeze_sha256": frozen["freeze_sha256"],
+            "review_freeze_sha256": frozen["review_freeze_sha256"],
+        },
+        {
+            "facet_rows": [
+                {
+                    "topic_id": topic_id,
+                    "variant_name": variant,
+                    "docid": document_id,
+                    "control_rank": 49,
+                    "bf_rank": 11,
+                    "qrel_grade": 2,
+                    "is_relevant": True,
+                    "stream_weight": 0.1,
+                    "rrf_contribution": 0.01,
+                }
+            ]
+        },
+    )
+    representatives = module._bound_artifact(
+        "facet-local-minilm-representatives-v1",
+        {
+            "ranking_freeze_sha256": frozen["freeze_sha256"],
+            "review_freeze_sha256": frozen["review_freeze_sha256"],
+        },
+        {
+            "promoted": [
+                {
+                    "topic_id": topic_id,
+                    "document_id": document_id,
+                    "passage": "old non-specific passage",
+                    "provenance": [],
+                }
+            ],
+            "demoted": [],
+            "gained": [],
+            "lost": [],
+        },
+    )
+    evaluation = tmp_path / "immutable-evaluation"
+    evaluation.mkdir()
+    prefusion_path = evaluation / "prefusion.json"
+    representatives_path = evaluation / "representatives.json"
+    prefusion_path.write_bytes(_pretty_json_bytes(prefusion))
+    representatives_path.write_bytes(_pretty_json_bytes(representatives))
+    output = tmp_path / "derived" / "representative_provenance_v2.json"
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels opened")
+    )
+
+    derived = derive_representative_provenance_v2(
+        frozen["freeze"],
+        review_freeze=frozen["review"],
+        prior_evaluation=frozen["prior"],
+        prior_evaluation_manifest=frozen["prior_manifest"],
+        prefusion=prefusion_path,
+        representatives=representatives_path,
+        output=output,
+    )
+
+    promoted = derived["promoted"][0]
+    assert promoted["facet_variant"] == variant
+    assert promoted["facet_control_rank"] == 49
+    assert promoted["facet_bf_rank"] == 11
+    assert promoted["selected_minilm_window"]["window_text"].startswith(
+        "synthetic passage 200"
+    )
+    assert derived["bindings"]["source_prefusion_artifact_sha256"] == prefusion[
+        "artifact_sha256"
+    ]
+    assert derived["bindings"]["source_representatives_artifact_sha256"] == (
+        representatives["artifact_sha256"]
+    )
+    assert validate_self_hash(derived) is True
+
+    with pytest.raises(FileExistsError, match="representative provenance"):
+        derive_representative_provenance_v2(
+            frozen["freeze"],
+            review_freeze=frozen["review"],
+            prior_evaluation=frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
+            prefusion=prefusion_path,
+            representatives=representatives_path,
+            output=output,
+        )
 
 
 def test_mutation_after_freeze_verification_is_rejected_before_qrels(
