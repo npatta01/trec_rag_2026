@@ -207,6 +207,23 @@ def test_serialization_is_deterministic_and_round_trips(tmp_path, frozen_source)
         manifest.streams[0].query = "changed"
 
 
+def test_manifest_rejects_compensating_noncanonical_stream_depths(
+    tmp_path, frozen_source
+):
+    manifest, _rows, _receipt = frozen_source
+    payload = manifest.to_dict()
+    payload["streams"][0]["expected_rows"] = 99
+    payload["streams"][1]["expected_rows"] = 101
+    path = tmp_path / "malformed-depths.json"
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected_rows must be exactly 100"):
+        load_facet_local_manifest(path)
+
+
 def test_source_and_manifest_outputs_are_create_only(
     tmp_path, frozen_inputs, frozen_source
 ):

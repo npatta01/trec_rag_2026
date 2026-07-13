@@ -784,6 +784,8 @@ def _validate_manifest(manifest: FacetLocalManifest) -> FacetLocalManifest:
     ):
         raise ValueError("manifest candidate counts differ from the frozen contract")
     for stream in manifest.streams:
+        if stream.expected_rows != EXPECTED_DEPTH:
+            raise ValueError("stream expected_rows must be exactly 100")
         expected_family = "original" if stream.variant == ORIGINAL_VARIANT else "facet"
         expected_source = "base" if stream.variant.startswith("prompt_lab_v1:") else "r1"
         expected_ledger = str(
