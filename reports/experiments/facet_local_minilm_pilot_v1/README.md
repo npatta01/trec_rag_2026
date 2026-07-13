@@ -17,3 +17,36 @@ source-candidate, and copied-candidate hashes.
 Downstream pilot code must read only the candidate snapshot plus its receipt; it
 must not reopen either retrieval ledger. The freeze step performs no retrieval,
 network call, model inference, or qrels access.
+
+## Technical report
+
+`artifact.json` is the canonical, source-backed Data Analytics report input and
+`report.html` is its generated self-contained reader. Both files are published
+create-only, so an existing report is never overwritten. The report is built only
+from authenticated saved artifacts: the v2 tokenizer-only preflight, completed
+local scoring and benchmark receipts, ranking freeze, v3 blinded-review freeze,
+and the one-time evaluation outputs. It does not reopen the qrels projection,
+candidate snapshot, retrieval ledgers, ranking rows, private review mappings, or
+inference cache.
+
+Build the create-only artifact from the repository root:
+
+```bash
+.venv/bin/python -m trec_rag.build_facet_local_minilm_report \
+  --manifest reports/experiments/facet_local_minilm_pilot_v1/manifest.json \
+  --preflight outputs/rag25_facet_local_minilm_v1/preflight_v2 \
+  --scoring outputs/rag25_facet_local_minilm_v1/full_scoring_v1 \
+  --freeze outputs/rag25_facet_local_minilm_v1/freeze_v1 \
+  --review outputs/rag25_facet_local_minilm_v1/review_v3 \
+  --evaluation outputs/rag25_facet_local_minilm_v1/evaluation_v1 \
+  --output reports/experiments/facet_local_minilm_pilot_v1/artifact.json \
+  --html-output reports/experiments/facet_local_minilm_pilot_v1/report.html \
+  --renderer /home/npatta01/.codex/plugins/cache/openai-curated-remote/data-analytics/0.2.8-13ceeea1f599/skills/build-report/scripts/deliver_portable_artifact.mjs
+```
+
+The builder invokes that pinned portable renderer into a private temporary file,
+verifies the package, then atomically publishes the HTML without replacement.
+The report's decision is `B_filters_but_fusion_blocks`: MiniLM improves blinded
+facet relevance and promotes relevant candidates before fusion, but the current
+family-balanced RRF retains no novel relevant document versus corrected C0.
+This is a four-topic descriptive pilot; Stage A was neither permitted nor run.

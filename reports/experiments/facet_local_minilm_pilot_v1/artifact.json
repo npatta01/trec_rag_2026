@@ -1,0 +1,4301 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Facet-local MiniLM Pilot: Better Facet Evidence, Blocked by Fusion",
+    "description": "Technical four-topic facet-local MiniLM diagnostic report.",
+    "charts": [
+      {
+        "id": "facet_review_rates",
+        "title": "Blinded facet-review rates by label and arm",
+        "subtitle": "Two-arm comparison; 54 arm/facet memberships per arm, rates in percent.",
+        "type": "bar",
+        "dataset": "review_rate_rows",
+        "sourceId": "review_metrics",
+        "valueFormat": "number",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "label",
+            "type": "nominal",
+            "label": "Review label"
+          },
+          "y": {
+            "field": "rate_percent",
+            "type": "quantitative",
+            "label": "Rate (%)",
+            "format": "number"
+          },
+          "color": {
+            "field": "arm",
+            "type": "nominal",
+            "label": "Arm"
+          },
+          "label": {
+            "field": "rate_percent",
+            "type": "quantitative",
+            "label": "Rate (%)"
+          },
+          "tooltip": [
+            {
+              "field": "count",
+              "type": "quantitative",
+              "label": "Count"
+            },
+            {
+              "field": "denominator",
+              "type": "quantitative",
+              "label": "Membership denominator"
+            }
+          ]
+        }
+      },
+      {
+        "id": "candidate_union_retention",
+        "title": "Relevant raw-union documents at K20, K50, and K100",
+        "subtitle": "Unique relevant documents in O@100 plus facet streams at K; C0 versus BF100.",
+        "type": "bar",
+        "dataset": "candidate_union_rows",
+        "sourceId": "raw_union",
+        "valueFormat": "number",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "depth",
+            "type": "nominal",
+            "label": "Facet-stream depth"
+          },
+          "y": {
+            "field": "relevant_documents",
+            "type": "quantitative",
+            "label": "Relevant documents",
+            "format": "number"
+          },
+          "color": {
+            "field": "arm",
+            "type": "nominal",
+            "label": "Arm"
+          },
+          "label": {
+            "field": "relevant_documents",
+            "type": "quantitative",
+            "label": "Relevant documents"
+          },
+          "tooltip": [
+            {
+              "field": "unique_candidate_documents",
+              "type": "quantitative",
+              "label": "Unique candidate documents"
+            },
+            {
+              "field": "macro_recall",
+              "type": "quantitative",
+              "label": "Macro recall"
+            },
+            {
+              "field": "macro_graded_recall",
+              "type": "quantitative",
+              "label": "Macro graded recall"
+            }
+          ]
+        }
+      },
+      {
+        "id": "promotion_funnel",
+        "title": "Relevant-document survival from headroom to final ranking",
+        "subtitle": "Raw-union headroom, pre-fusion promotion, and final novelty versus corrected C0.",
+        "type": "bar",
+        "dataset": "stage_set_rows",
+        "sourceId": "decision",
+        "valueFormat": "number",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "stage",
+            "type": "nominal",
+            "label": "Stage"
+          },
+          "y": {
+            "field": "relevant_documents",
+            "type": "quantitative",
+            "label": "Relevant documents",
+            "format": "number"
+          },
+          "label": {
+            "field": "relevant_documents",
+            "type": "quantitative",
+            "label": "Relevant documents"
+          },
+          "tooltip": [
+            {
+              "field": "document_set_sha256",
+              "type": "nominal",
+              "label": "Set SHA-256"
+            }
+          ]
+        }
+      },
+      {
+        "id": "topic_ndcg_delta",
+        "title": "Per-topic nDCG@10 delta, BF100 minus corrected C0",
+        "subtitle": "Signed ordering change across the four descriptive pilot topics; zero is no change.",
+        "type": "bar",
+        "dataset": "topic_ndcg_rows",
+        "sourceId": "decision",
+        "valueFormat": "number",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "topic_id",
+            "type": "nominal",
+            "label": "Topic"
+          },
+          "y": {
+            "field": "ndcg_delta",
+            "type": "quantitative",
+            "label": "nDCG@10 delta",
+            "format": "number"
+          },
+          "label": {
+            "field": "ndcg_delta",
+            "type": "quantitative",
+            "label": "Signed delta"
+          },
+          "tooltip": [
+            {
+              "field": "c0_ndcg_at_10",
+              "type": "quantitative",
+              "label": "C0 nDCG@10"
+            },
+            {
+              "field": "bf100_ndcg_at_10",
+              "type": "quantitative",
+              "label": "BF100 nDCG@10"
+            },
+            {
+              "field": "recall_delta",
+              "type": "quantitative",
+              "label": "Recall@100 delta"
+            }
+          ]
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "narratives",
+        "title": "Full narrative by topic",
+        "subtitle": "All four evaluated pilot narratives, reproduced without truncation.",
+        "dataset": "narrative_rows",
+        "sourceId": "manifest",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "facet_count",
+            "label": "Facet streams",
+            "type": "number"
+          },
+          {
+            "field": "full_narrative",
+            "label": "Full narrative",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "query_streams",
+        "title": "Exact original and facet query streams",
+        "subtitle": "Thirty-one frozen streams: four originals and 27 facets, each with 100 candidates.",
+        "dataset": "query_rows",
+        "sourceId": "manifest",
+        "density": "dense",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "family",
+            "label": "Family",
+            "type": "text"
+          },
+          {
+            "field": "variant",
+            "label": "Facet or variant",
+            "type": "text"
+          },
+          {
+            "field": "full_query",
+            "label": "Full query",
+            "type": "text"
+          },
+          {
+            "field": "candidate_rows",
+            "label": "Candidate rows",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "system_primary",
+        "title": "Primary system effectiveness metrics",
+        "subtitle": "Macro and per-topic nDCG@10, graded Recall@100, and Recall@100 for every evaluated system.",
+        "dataset": "system_rows",
+        "sourceId": "systems",
+        "density": "dense",
+        "layout": "full",
+        "defaultSort": {
+          "field": "row_label",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "row_label",
+            "label": "System and scope",
+            "type": "text"
+          },
+          {
+            "field": "ndcg_at_10",
+            "label": "nDCG@10",
+            "type": "number"
+          },
+          {
+            "field": "graded_recall_at_100",
+            "label": "Graded Recall@100",
+            "type": "number"
+          },
+          {
+            "field": "recall_at_100",
+            "label": "Recall@100",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "system_diagnostics",
+        "title": "Diagnostic system metrics",
+        "subtitle": "Top-10 precision, relevant counts, judgment coverage, and candidate-oracle ordering diagnostics.",
+        "dataset": "system_rows",
+        "sourceId": "systems",
+        "density": "dense",
+        "layout": "full",
+        "defaultSort": {
+          "field": "row_label",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "row_label",
+            "label": "System and scope",
+            "type": "text"
+          },
+          {
+            "field": "precision_at_10",
+            "label": "P@10",
+            "type": "number"
+          },
+          {
+            "field": "relevant_count_at_10",
+            "label": "Relevant@10",
+            "type": "number"
+          },
+          {
+            "field": "relevant_count_at_100",
+            "label": "Relevant@100",
+            "type": "number"
+          },
+          {
+            "field": "judged_rate_at_10",
+            "label": "Judged rate@10",
+            "type": "number"
+          },
+          {
+            "field": "judged_rate_at_100",
+            "label": "Judged rate@100",
+            "type": "number"
+          },
+          {
+            "field": "oracle_ndcg_at_10_from_top50",
+            "label": "Oracle nDCG@10 from top 50",
+            "type": "number"
+          },
+          {
+            "field": "oracle_ndcg_at_10_from_top100",
+            "label": "Oracle nDCG@10 from top 100",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "gain_loss",
+        "title": "Relevant-document gains and losses",
+        "subtitle": "BF100 compared separately with corrected C0 and legacy R1 at aggregate and topic grain.",
+        "dataset": "gain_loss_rows",
+        "sourceId": "gains_losses",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "row_label",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "row_label",
+            "label": "Comparison",
+            "type": "text"
+          },
+          {
+            "field": "baseline_relevant",
+            "label": "Baseline relevant",
+            "type": "number"
+          },
+          {
+            "field": "candidate_relevant",
+            "label": "BF100 relevant",
+            "type": "number"
+          },
+          {
+            "field": "gained",
+            "label": "Gained",
+            "type": "number"
+          },
+          {
+            "field": "lost",
+            "label": "Lost",
+            "type": "number"
+          },
+          {
+            "field": "net_change",
+            "label": "Net change",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "facet_review",
+        "title": "Per-facet blinded review evidence",
+        "subtitle": "Two memberships per arm/facet cell; rates and flags remain visible for all 27 facets.",
+        "dataset": "facet_review_rows",
+        "sourceId": "review_metrics",
+        "density": "dense",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "facet",
+            "label": "Facet or variant",
+            "type": "text"
+          },
+          {
+            "field": "arm",
+            "label": "Arm",
+            "type": "text"
+          },
+          {
+            "field": "direct_answer",
+            "label": "Direct answers",
+            "type": "number"
+          },
+          {
+            "field": "direct_answer_percent",
+            "label": "Direct answer (%)",
+            "type": "number"
+          },
+          {
+            "field": "partial_or_related",
+            "label": "Partial/related",
+            "type": "number"
+          },
+          {
+            "field": "irrelevant",
+            "label": "Irrelevant",
+            "type": "number"
+          },
+          {
+            "field": "wrong_domain",
+            "label": "Wrong domain",
+            "type": "number"
+          },
+          {
+            "field": "low_quality",
+            "label": "Low quality",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "facet_retention",
+        "title": "Per-facet relevant retention by cutoff",
+        "subtitle": "Independent relevant-document counts for all 27 facets in corrected C0 and BF100.",
+        "dataset": "facet_retention_rows",
+        "sourceId": "facet_retention",
+        "density": "dense",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "facet",
+            "label": "Facet or variant",
+            "type": "text"
+          },
+          {
+            "field": "arm",
+            "label": "Arm",
+            "type": "text"
+          },
+          {
+            "field": "relevant_at_k20",
+            "label": "Relevant at K20",
+            "type": "number"
+          },
+          {
+            "field": "relevant_at_k50",
+            "label": "Relevant at K50",
+            "type": "number"
+          },
+          {
+            "field": "relevant_at_k100",
+            "label": "Relevant at K100",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "representatives",
+        "title": "Bounded representative passage evidence",
+        "subtitle": "Up to three saved examples per evidence class; passage text capped at 700 characters.",
+        "dataset": "representative_rows",
+        "sourceId": "representatives",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "evidence_class",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "evidence_class",
+            "label": "Evidence class",
+            "type": "text"
+          },
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "document_id",
+            "label": "Document",
+            "type": "text"
+          },
+          {
+            "field": "passage",
+            "label": "Passage excerpt",
+            "type": "text"
+          },
+          {
+            "field": "provenance",
+            "label": "Frozen provenance",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "model_preflight",
+        "title": "Pinned model and capped-window coverage",
+        "subtitle": "Tokenizer-only preflight evidence for the actual model identity, safe files, and bounded coverage.",
+        "dataset": "model_rows",
+        "sourceId": "preflight",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "model",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "model",
+            "label": "Model",
+            "type": "text"
+          },
+          {
+            "field": "revision",
+            "label": "Revision",
+            "type": "text"
+          },
+          {
+            "field": "safe_files",
+            "label": "Safe-file allowlist",
+            "type": "text"
+          },
+          {
+            "field": "window_cap",
+            "label": "Window cap per document",
+            "type": "number"
+          },
+          {
+            "field": "capped_documents",
+            "label": "Capped documents",
+            "type": "number"
+          },
+          {
+            "field": "coverage_min_percent",
+            "label": "Minimum coverage (%)",
+            "type": "number"
+          },
+          {
+            "field": "coverage_p95_percent",
+            "label": "p95 coverage (%)",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "scoring_runtime",
+        "title": "Completed local scoring",
+        "subtitle": "Authenticated raw-logit scoring receipt; all planned windows completed.",
+        "dataset": "scoring_rows",
+        "sourceId": "scoring_receipt",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "model",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "model",
+            "label": "Model",
+            "type": "text"
+          },
+          {
+            "field": "revision",
+            "label": "Revision",
+            "type": "text"
+          },
+          {
+            "field": "dtype",
+            "label": "Inference dtype",
+            "type": "text"
+          },
+          {
+            "field": "planned_windows",
+            "label": "Planned windows",
+            "type": "number"
+          },
+          {
+            "field": "completed_windows",
+            "label": "Completed windows",
+            "type": "number"
+          },
+          {
+            "field": "unique_scores",
+            "label": "Unique scores",
+            "type": "number"
+          },
+          {
+            "field": "failed_windows",
+            "label": "Failed windows",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "benchmark_runtime",
+        "title": "ROCm benchmark evidence",
+        "subtitle": "Bounded benchmark used for full-run approval and runtime projection.",
+        "dataset": "benchmark_rows",
+        "sourceId": "benchmark",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "backend",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "backend",
+            "label": "Backend",
+            "type": "text"
+          },
+          {
+            "field": "device",
+            "label": "Device",
+            "type": "text"
+          },
+          {
+            "field": "pairs_per_second",
+            "label": "Median pairs/s",
+            "type": "number"
+          },
+          {
+            "field": "peak_device_memory_mb",
+            "label": "Peak device memory (MB)",
+            "type": "number"
+          },
+          {
+            "field": "projected_wall_seconds",
+            "label": "Projected full wall time (s)",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "evaluation_firewall",
+        "title": "Evaluation firewall and blinded-review audit",
+        "subtitle": "One-time qrels access and pre-qrels ranking/review freeze evidence.",
+        "dataset": "firewall_rows",
+        "sourceId": "qrels_access_receipt",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "qrels_access_status",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "qrels_access_status",
+            "label": "Qrels access status",
+            "type": "text"
+          },
+          {
+            "field": "qrels_access_count",
+            "label": "Access count",
+            "type": "number"
+          },
+          {
+            "field": "ranking_frozen_before_qrels",
+            "label": "Ranking frozen first",
+            "type": "boolean"
+          },
+          {
+            "field": "review_frozen_before_qrels",
+            "label": "Review frozen first",
+            "type": "boolean"
+          },
+          {
+            "field": "review_unique_items",
+            "label": "Unique review items",
+            "type": "number"
+          },
+          {
+            "field": "review_memberships",
+            "label": "Arm/facet memberships",
+            "type": "number"
+          },
+          {
+            "field": "shared_items_attributed_to_both_arms",
+            "label": "Shared memberships",
+            "type": "number"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "manifest",
+        "label": "Frozen 31-stream source manifest",
+        "path": "reports/experiments/facet_local_minilm_pilot_v1/manifest.json"
+      },
+      {
+        "id": "preflight",
+        "label": "Authenticated tokenizer-only preflight",
+        "path": "outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json"
+      },
+      {
+        "id": "scoring_receipt",
+        "label": "Completed local MiniLM scoring receipt",
+        "path": "outputs/rag25_facet_local_minilm_v1/full_scoring_v1/scoring_receipt.json"
+      },
+      {
+        "id": "benchmark",
+        "label": "ROCm benchmark telemetry",
+        "path": "outputs/rag25_facet_local_minilm_v1/benchmark_v1/benchmark_telemetry.json"
+      },
+      {
+        "id": "model_download_approval",
+        "label": "Pinned safe-file model download approval",
+        "path": "outputs/rag25_facet_local_minilm_v1/approvals/model_download_v1.json"
+      },
+      {
+        "id": "benchmark_approval",
+        "label": "Bounded benchmark approval",
+        "path": "outputs/rag25_facet_local_minilm_v1/approvals/benchmark_v1.json"
+      },
+      {
+        "id": "full_scoring_approval",
+        "label": "Full local scoring approval",
+        "path": "outputs/rag25_facet_local_minilm_v1/approvals/full_scoring_v1.json"
+      },
+      {
+        "id": "ranking_freeze",
+        "label": "Pre-qrels ranking freeze",
+        "path": "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json"
+      },
+      {
+        "id": "legacy_corrected_diff",
+        "label": "Legacy versus corrected fusion audit",
+        "path": "outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json"
+      },
+      {
+        "id": "review_freeze",
+        "label": "Pre-qrels blinded-review freeze",
+        "path": "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json"
+      },
+      {
+        "id": "review_create_receipt",
+        "label": "Blinded-review pool receipt",
+        "path": "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json"
+      },
+      {
+        "id": "raw_union",
+        "label": "Relevant candidate-union curves",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json"
+      },
+      {
+        "id": "prefusion",
+        "label": "Pre-fusion promotion evidence",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json"
+      },
+      {
+        "id": "facet_retention",
+        "label": "Per-facet retention evidence",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/facet_retention.json"
+      },
+      {
+        "id": "systems",
+        "label": "System effectiveness evaluation",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json"
+      },
+      {
+        "id": "gains_losses",
+        "label": "Relevant-document gain/loss evaluation",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/gains_losses.json"
+      },
+      {
+        "id": "review_metrics",
+        "label": "Blinded facet-review metrics",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json"
+      },
+      {
+        "id": "representatives",
+        "label": "Bounded representative passages",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json"
+      },
+      {
+        "id": "decision",
+        "label": "Mechanical experiment decision",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json"
+      },
+      {
+        "id": "qrels_access_receipt",
+        "label": "One-time qrels-access receipt",
+        "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# Facet-local MiniLM Pilot: Better Facet Evidence, Blocked by Fusion"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision",
+        "body": "## Technical summary\n\n**MiniLM materially cleans facet-local results, but the current family-balanced reciprocal-rank fusion (RRF) erases the coverage gain.** The raw union contains **220 relevant documents absent from corrected C0's final top 100**; reranking promotes **22** of them before fusion, yet **0** remain novel after fusion. The mechanical outcome is `B_filters_but_fusion_blocks`.\n\n**Fix fusion before Stage A or new retrieval.** Blinded review shows that BF50 improves direct answers and reduces wrong-domain, irrelevant, and low-quality results. Because useful candidates already exist and MiniLM promotes some locally, candidate absence and local reranking are not the binding failure; the final fusion block is. Stage A was not permitted and was not executed.\n\n**nDCG@10 is a guardrail, not evidence of coverage.** BF100 changes macro nDCG@10 by only **+0.0025617**, while macro Recall@100 and graded Recall@100 are unchanged. This is a four-topic descriptive pilot with no inferential claim."
+      },
+      {
+        "id": "review_heading",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "review_metrics",
+        "body": "## Blinded review shows cleaner facet-local evidence\n\n**BF50's direct-answer rate is 75.93% versus 59.26% for C0 (+16.67 percentage points).** Wrong-domain falls to 1.85% from 7.41% (-5.56 points), irrelevant-to-facet to 5.56% from 18.52%, and low-quality to 31.48% from 38.89%. Rates use 54 arm/facet memberships per arm; quality flags can overlap relevance labels."
+      },
+      {
+        "id": "review_chart_block",
+        "type": "chart",
+        "chartId": "facet_review_rates",
+        "layout": "full"
+      },
+      {
+        "id": "candidate_heading",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "raw_union",
+        "body": "## Candidate coverage improves early, then converges by K100\n\n**The BF100 union retains more relevant documents at the shallower cutoffs:** 295 versus 292 at K20 and 360 versus 352 at K50. Every point is the original O@100 plus facet streams at K; both arms reach 462 at K100. This is headroom for ordering and fusion, not a final-ranking win."
+      },
+      {
+        "id": "candidate_chart_block",
+        "type": "chart",
+        "chartId": "candidate_union_retention",
+        "layout": "full"
+      },
+      {
+        "id": "retention_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "facet_retention",
+        "body": "**Per-facet retention shows where each cutoff changes the evidence pool.** The table reports relevant documents retained independently within every frozen facet stream for corrected C0 and BF100 at K20, K50, and K100; it does not add counts across overlapping facets."
+      },
+      {
+        "id": "retention_block",
+        "type": "table",
+        "tableId": "facet_retention",
+        "layout": "full"
+      },
+      {
+        "id": "fusion_heading",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision",
+        "body": "## Fusion blocks every novel relevant promotion\n\n**The separation between raw union, local reranking, and final ranking identifies the failure stage.** Of 220 relevant documents outside corrected C0's final top 100, MiniLM places 22 into the local top-20 promotion window (BF best facet rank ≤20 and C0 best facet rank >20); all 22 are fusion-blocked, leaving zero final novel relevant documents. The implication is to change fusion before collecting new candidates."
+      },
+      {
+        "id": "fusion_chart_block",
+        "type": "chart",
+        "chartId": "promotion_funnel",
+        "layout": "full"
+      },
+      {
+        "id": "system_heading",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision",
+        "body": "## Final effectiveness is flat on coverage and mixed by topic\n\n**BF100 versus corrected C0 is +0.0025617 nDCG@10 with 0 change in Recall@100 and graded Recall@100.** Topic nDCG@10 deltas are +0.0097987 (200), -0.0216612 (225), +0.0221092 (707), and 0 (897). BF100 has two relevant documents beyond legacy R1, but corrected C0 has those same two; that difference comes from the fusion correction, not MiniLM."
+      },
+      {
+        "id": "topic_delta_chart_block",
+        "type": "chart",
+        "chartId": "topic_ndcg_delta",
+        "layout": "full"
+      },
+      {
+        "id": "primary_metrics_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "systems",
+        "body": "**Primary values remain available at macro and topic grain for every preregistered system.** nDCG@10 describes top-rank ordering; Recall@100 and graded Recall@100 describe final coverage."
+      },
+      {
+        "id": "primary_metrics_block",
+        "type": "table",
+        "tableId": "system_primary",
+        "layout": "full"
+      },
+      {
+        "id": "diagnostic_metrics_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "systems",
+        "body": "**Diagnostic metrics show top-10 precision, relevant counts, judgment coverage, and the best possible nDCG@10 available inside each frozen candidate cutoff.** They are diagnostics, not promotion criteria."
+      },
+      {
+        "id": "diagnostic_metrics_block",
+        "type": "table",
+        "tableId": "system_diagnostics",
+        "layout": "full"
+      },
+      {
+        "id": "gain_loss_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "gains_losses",
+        "body": "**Relevant gains and losses are reported explicitly, including zeros.** BF100 gains no final relevant documents and loses none versus corrected C0; the legacy comparison is shown separately so the fusion correction cannot be misattributed."
+      },
+      {
+        "id": "gain_loss_block",
+        "type": "table",
+        "tableId": "gain_loss",
+        "layout": "full"
+      },
+      {
+        "id": "scope_heading",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "manifest",
+        "body": "## Full narratives and exact query scope\n\n**All four original narratives and all 31 frozen query streams are reproduced below.** The experiment contains four originals and 27 facets, each with 100 candidates (3,100 rows total)."
+      },
+      {
+        "id": "narratives_block",
+        "type": "table",
+        "tableId": "narratives",
+        "layout": "full"
+      },
+      {
+        "id": "queries_block",
+        "type": "table",
+        "tableId": "query_streams",
+        "layout": "full"
+      },
+      {
+        "id": "scope_isolation_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "ranking_freeze",
+        "body": "**MiniLM reranks facet streams only; original-query order is unchanged in every BF arm.**"
+      },
+      {
+        "id": "facet_review_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "review_metrics",
+        "body": "**Per-facet counts keep heterogeneous outcomes visible.** Each row uses two reviewed memberships for one arm/facet pairing; aggregate rates should not be read as uniform improvement across every facet."
+      },
+      {
+        "id": "facet_review_block",
+        "type": "table",
+        "tableId": "facet_review",
+        "layout": "full"
+      },
+      {
+        "id": "representative_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "representatives",
+        "body": "**Bounded promoted, demoted, gained, and lost examples connect the counts to saved passages.** Passages are truncated to 700 characters; provenance summarizes frozen stream contributions. Empty gained/lost classes are retained rather than hidden."
+      },
+      {
+        "id": "representatives_block",
+        "type": "table",
+        "tableId": "representatives",
+        "layout": "full"
+      },
+      {
+        "id": "definition_population",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "manifest",
+        "body": "## Scope, data, metrics, and experimental design\n\n**Population.** The descriptive pilot contains topics 200, 225, 707, and 897; protected topics are excluded."
+      },
+      {
+        "id": "definition_baseline",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision",
+        "body": "**Baseline.** Corrected `C0_TOPIC_LOCAL` is the primary B comparison. `R1_LEGACY` is diagnostic only, and its difference from corrected C0 is audited separately."
+      },
+      {
+        "id": "definition_relevance_review",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "qrels_access_receipt",
+        "body": "**Relevance and review.** Topic relevance comes from the one-time authorized Umbrela projection; raw qrels rows are not included. Facet relevance comes from a qrels-blind, system-masked review: 101 unique passages map to 108 arm/facet memberships. Seven shared passages are attributed to both arm memberships, preserving the preregistered denominators."
+      },
+      {
+        "id": "definition_metrics",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision",
+        "body": "**Metrics.** Raw-union relevant documents count unique topic-qualified relevant documents from the original O@100 plus facet streams at K20/K50/K100. Pre-fusion promoted novel counts documents moved into the local top-20 promotion window (BF best facet rank ≤20 and C0 best facet rank >20) that are absent from corrected C0's final top 100. Final novel counts relevant documents in BF100's final top 100 but absent from corrected C0. Recall@100 is binary relevant coverage; graded Recall@100 weights relevance grades; nDCG@10 measures graded ordering in the first ten ranks."
+      },
+      {
+        "id": "definition_isolation",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "ranking_freeze",
+        "body": "**Isolation.** BF changes facet-local ordering only. Raw MiniLM logits stay within query streams; RRF consumes ranks. Candidate generation, local reranking, fusion, and final ranking are measured separately."
+      },
+      {
+        "id": "firewall_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "qrels_access_receipt",
+        "body": "## Evaluation firewall stayed closed until both freezes\n\n**The exact four-topic projection was opened once, only after rankings and the blinded review were frozen.** The one-time qrels access receipt binds the same ranking and review freeze hashes as every evaluation artifact. The table also preserves the 101-item/108-membership review audit and the seven shared memberships attributed to both arms."
+      },
+      {
+        "id": "firewall_block",
+        "type": "table",
+        "tableId": "evaluation_firewall",
+        "layout": "full"
+      },
+      {
+        "id": "model_heading",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "preflight",
+        "body": "## Model and bounded-window execution stayed within the preregistered envelope\n\n**The actual cross-encoder is `cross-encoder/ms-marco-MiniLM-L6-v2` at the pinned revision shown below, materialized through a six-file safe-file allowlist.** A tokenizer-only preflight created bounded windows before approved local ROCm scoring. Thirty long documents hit the 32-window cap; minimum token coverage was 29.52%, while median and p95 coverage were 100%."
+      },
+      {
+        "id": "model_block",
+        "type": "table",
+        "tableId": "model_preflight",
+        "layout": "full"
+      },
+      {
+        "id": "scoring_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "scoring_receipt",
+        "body": "**Approved scoring completed all 14,720 planned windows with no failed windows and 14,459 unique raw-logit scores.**"
+      },
+      {
+        "id": "scoring_block",
+        "type": "table",
+        "tableId": "scoring_runtime",
+        "layout": "full"
+      },
+      {
+        "id": "ranking_freeze_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "ranking_freeze",
+        "body": "**No retrieval, hosted inference, or qrels access occurred during ranking freeze.**"
+      },
+      {
+        "id": "benchmark_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "benchmark",
+        "body": "**The preregistered bounded benchmark ran on the local ROCm device before full scoring approval.** Its throughput and resource envelope are retained below as runtime evidence, not effectiveness evidence."
+      },
+      {
+        "id": "benchmark_block",
+        "type": "table",
+        "tableId": "benchmark_runtime",
+        "layout": "full"
+      },
+      {
+        "id": "limitations_title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Limitations and robustness"
+      },
+      {
+        "id": "limitation_pilot",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "manifest",
+        "body": "- **Descriptive pilot only.** Four topics cannot support an inferential or production-generalization claim."
+      },
+      {
+        "id": "limitation_judgments",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "qrels_access_receipt",
+        "body": "- **Pooled judgments are incomplete.** Umbrela judgments are pooled and non-exhaustive; unjudged documents are not proof of irrelevance."
+      },
+      {
+        "id": "limitation_review",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "qrels_access_receipt",
+        "body": "- **Review estimates are small and dependent.** The 101 unique passages produce 108 arm/facet memberships, with seven shared passages attributed to both arms. No confidence interval or significance test is claimed."
+      },
+      {
+        "id": "limitation_window",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "preflight",
+        "body": "- **Window capping is a sensitivity risk.** Thirty long documents were sampled at a maximum of 32 windows; minimum retained token coverage was 29.52%."
+      },
+      {
+        "id": "limitation_fusion",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision",
+        "body": "- **The fusion diagnosis is configuration-specific.** The evidence isolates the current family-balanced RRF, not every possible rank-fusion design."
+      },
+      {
+        "id": "recommendation",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Recommended next step\n\n1. Modify the topic-local fusion so facet-local promotions can survive without changing the frozen original-query order.\n2. Reuse the saved rankings and scores to test fusion-only alternatives; do not run new retrieval or inference for that diagnosis.\n3. Require positive final novel relevant coverage versus the identical corrected C0 fusion before permitting Stage A.\n4. Preserve nDCG@10 and per-topic losses as guardrails while optimizing coverage promotion."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Which fusion rule retains the 22 pre-fusion relevant promotions without harming topic 225?\n- Are gains robust to excluding the 30 capped documents or increasing their bounded window coverage in a separately approved run?\n- Do facet families need topic-specific weights, fewer correlated streams, or explicit novelty credit?\n- After fusion is fixed, does the same pattern replicate on untouched topics under a new preregistered evaluation?"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "datasets": {
+      "narrative_rows": [
+        {
+          "topic_id": "200",
+          "facet_count": 9,
+          "full_narrative": "I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah."
+        },
+        {
+          "topic_id": "225",
+          "facet_count": 7,
+          "full_narrative": "I'm exploring how exposure to violent video games and gory content affects human aggression, desensitization, and addiction. I'm also interested in the broader causes of aggression in both children and adults, the positive sides of gaming, and the historical background of these media trends."
+        },
+        {
+          "topic_id": "707",
+          "facet_count": 3,
+          "full_narrative": "I'm trying to understand the health risks and potential dangers of various chemicals and substances, such as those found in antiperspirants, sorbitol, and organophosphate poisoning. I'd also like to know how integrating different actions at the operational level might impact health outcomes."
+        },
+        {
+          "topic_id": "897",
+          "facet_count": 8,
+          "full_narrative": "I'm trying to understand how alcohol use affects neighborhood quality of life, including genetic and gender factors in dependency. I also need to grasp the main causes, risks, and fatal consequences of alcohol and drug use, and their connection to broader community health issues."
+        }
+      ],
+      "query_rows": [
+        {
+          "topic_id": "200",
+          "family": "original",
+          "variant": "prompt_lab_v1:original",
+          "full_query": "I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah.",
+          "candidate_rows": 100,
+          "query_sha256": "2375e7c8ddf0b7f36dbc525b1344489725c4e0da4e05ac03da03ba1b44119723"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f01",
+          "full_query": "Holocaust history European Jewry overview",
+          "candidate_rows": 100,
+          "query_sha256": "00e10836450f45e53238bceddb01360f158370a95f8892b4f4b3892a7008b0bf"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f02",
+          "full_query": "Holocaust historical origins why transpired",
+          "candidate_rows": 100,
+          "query_sha256": "ff50408450082a7121e907b65df8a3b9ccdb7c65a0d82921f73e0bbb75889a60"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f03",
+          "full_query": "Holocaust systematic process how transpired",
+          "candidate_rows": 100,
+          "query_sha256": "a0f8d0de335247834952ea7188a988551a04ab4130547c54af9066793e5f8d39"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f04",
+          "full_query": "Holocaust perpetrators responsibility",
+          "candidate_rows": 100,
+          "query_sha256": "e1965511fd2220e5bb1d14f56cd2ad6c7f20d9f2d9940dfbdcbd08a0fdb71478"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f05a",
+          "full_query": "Holocaust historical consequences European Jews",
+          "candidate_rows": 100,
+          "query_sha256": "efe3172f3ec49e40901bd11bccda079af9160b3a564b429e1ed529b5ebf5f8b7"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f05b",
+          "full_query": "Holocaust social consequences",
+          "candidate_rows": 100,
+          "query_sha256": "8f355938db0db16e2e9fe7133b597cf40c480dca39df717cc57f108b6c9a35ae"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f06",
+          "full_query": "Holocaust historical ending",
+          "candidate_rows": 100,
+          "query_sha256": "094fe85abfbaa1746b53202e01dd64c21aa3ded6d57baa94b6b08cc15a5d3de3"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f07a",
+          "full_query": "Holocaust enduring effects European Jews",
+          "candidate_rows": 100,
+          "query_sha256": "5be7ca982e4a9ca94c58ffd2f28d60f29b5cb4c8ebc2d26032ba995f9e257923"
+        },
+        {
+          "topic_id": "200",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f07b",
+          "full_query": "Holocaust enduring social consequences",
+          "candidate_rows": 100,
+          "query_sha256": "405aece1b31f2789b1b8330bba2c6374fc34db3f3d04179fcd12a363ed659170"
+        },
+        {
+          "topic_id": "225",
+          "family": "original",
+          "variant": "prompt_lab_v1:original",
+          "full_query": "I'm exploring how exposure to violent video games and gory content affects human aggression, desensitization, and addiction. I'm also interested in the broader causes of aggression in both children and adults, the positive sides of gaming, and the historical background of these media trends.",
+          "candidate_rows": 100,
+          "query_sha256": "0a9f8ac28b2a95616e97c0d45e96de04fd0b81e13903161379aa2fffb9422ff6"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "prompt_lab_v1:facet:f06",
+          "full_query": "video games benefits",
+          "candidate_rows": 100,
+          "query_sha256": "40ee82e0a94bfc6c3128fe80137e6835c05377cef63a064043bb406a7820598c"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "prompt_lab_v1:facet:f07",
+          "full_query": "violent video games gory content history",
+          "candidate_rows": 100,
+          "query_sha256": "f94132bfbe326dbb8e83cbfe656cc77a523721de1693cd117e2aafc467c32c0d"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f01",
+          "full_query": "violent video games exposure aggressive behavior research",
+          "candidate_rows": 100,
+          "query_sha256": "807987213db95f4b7befcc06d7ac89686c6e61f9bdea81c0a4ae71f72a254e98"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f02",
+          "full_query": "violent video games exposure desensitization violence research",
+          "candidate_rows": 100,
+          "query_sha256": "bd9b5986ffeb1c00a96b0bee58946f30d697ec5d7051980f33143ae7a25d97c5"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f03",
+          "full_query": "video gaming addiction disorder risk",
+          "candidate_rows": 100,
+          "query_sha256": "4b219aa8f5e18829f514303b6d7894e2f80927c62d575709105e1ff87b634132"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f04",
+          "full_query": "aggressive behavior children risk factors psychology",
+          "candidate_rows": 100,
+          "query_sha256": "6c279d027a648a3dd8f1140228ccc348887e1321bd1c23cafb62227d8fcf42be"
+        },
+        {
+          "topic_id": "225",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f05",
+          "full_query": "aggressive behavior adults risk factors psychology",
+          "candidate_rows": 100,
+          "query_sha256": "caeb73ad5634ab58066fff31ea05a76197afb422bd55aac44acf31227bdef556"
+        },
+        {
+          "topic_id": "707",
+          "family": "original",
+          "variant": "prompt_lab_v1:original",
+          "full_query": "I'm trying to understand the health risks and potential dangers of various chemicals and substances, such as those found in antiperspirants, sorbitol, and organophosphate poisoning. I'd also like to know how integrating different actions at the operational level might impact health outcomes.",
+          "candidate_rows": 100,
+          "query_sha256": "eb10d9785b06047e2204dcb625e955f1ce70eb69ac6dff61e3e07fcc036a0e86"
+        },
+        {
+          "topic_id": "707",
+          "family": "facet",
+          "variant": "prompt_lab_v1:facet:f01",
+          "full_query": "antiperspirants health risks",
+          "candidate_rows": 100,
+          "query_sha256": "67c1d482efcb02453335dacce0ad7dd1942e7e0b1e757f7b486418cdb609fc3a"
+        },
+        {
+          "topic_id": "707",
+          "family": "facet",
+          "variant": "prompt_lab_v1:facet:f03",
+          "full_query": "organophosphate poisoning health risks",
+          "candidate_rows": 100,
+          "query_sha256": "1fa17362c983a031350025379c5ab14615c309c72bb6a10d8d57581194a03532"
+        },
+        {
+          "topic_id": "707",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f02",
+          "full_query": "sorbitol human health adverse effects safety",
+          "candidate_rows": 100,
+          "query_sha256": "da3e72c552fbfa8969575a7f6eaa4c98c6e589daea8145a051808f1c98eb6a6a"
+        },
+        {
+          "topic_id": "897",
+          "family": "original",
+          "variant": "prompt_lab_v1:original",
+          "full_query": "I'm trying to understand how alcohol use affects neighborhood quality of life, including genetic and gender factors in dependency. I also need to grasp the main causes, risks, and fatal consequences of alcohol and drug use, and their connection to broader community health issues.",
+          "candidate_rows": 100,
+          "query_sha256": "c18ebfef01b7d717a69f605f90b1c725545be26532409723c160b112ecefce0c"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "prompt_lab_v1:facet:f01",
+          "full_query": "alcohol use neighborhood quality life",
+          "candidate_rows": 100,
+          "query_sha256": "1fa6c973da2f645061dd6c3d9b706dc7d9e17ff28118532ce80c564da932ed10"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f02a",
+          "full_query": "alcohol dependence genetic risk factors",
+          "candidate_rows": 100,
+          "query_sha256": "c849a47e1eecd78adb60fa2c772f1c3d2e52971a8270b7dde53b055c42a66602"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f02b",
+          "full_query": "alcohol dependence gender differences",
+          "candidate_rows": 100,
+          "query_sha256": "6aaa2cc522a63cae65b6a5f53d63156f6384e4bf57ba5872250e8c9e93aa82f9"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f03",
+          "full_query": "alcohol drug misuse addiction risk factors",
+          "candidate_rows": 100,
+          "query_sha256": "5480642f504541781f2a84b1cdc3758361608f092d0427c33c405cb9bf86ee3d"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f04a",
+          "full_query": "alcohol misuse health harms",
+          "candidate_rows": 100,
+          "query_sha256": "579c6750d94488c70caeac1b9647a3b7227e32345a50a87c734831bcc55dd42e"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f04b",
+          "full_query": "drug misuse health harms",
+          "candidate_rows": 100,
+          "query_sha256": "e08b237a3eb27f9eea8aec9dc7a2ebd60bb4498d0789460d34c46500d5139fdc"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f05",
+          "full_query": "alcohol drug mortality deaths",
+          "candidate_rows": 100,
+          "query_sha256": "7162608fd17fa75e8d064e564910b74d5800557856df7fb73ab55b337d0f36fd"
+        },
+        {
+          "topic_id": "897",
+          "family": "facet",
+          "variant": "sparse_relevance_v1:R1:f06",
+          "full_query": "alcohol drug misuse public health community impact",
+          "candidate_rows": 100,
+          "query_sha256": "0deaa370daf13147368ae0a535797ef980e49dc4152be1bca168e789176c47c4"
+        }
+      ],
+      "review_rate_rows": [
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "label": "Direct answer",
+          "count": 32,
+          "denominator": 54,
+          "rate_percent": 59.25925925925925
+        },
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "label": "Partial or related",
+          "count": 12,
+          "denominator": 54,
+          "rate_percent": 22.22222222222222
+        },
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "label": "Irrelevant to facet",
+          "count": 10,
+          "denominator": 54,
+          "rate_percent": 18.51851851851852
+        },
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "label": "Wrong domain",
+          "count": 4,
+          "denominator": 54,
+          "rate_percent": 7.4074074074074066
+        },
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "label": "Low quality",
+          "count": 21,
+          "denominator": 54,
+          "rate_percent": 38.88888888888889
+        },
+        {
+          "arm": "BF50",
+          "arm_id": "BF50_TOPIC_LOCAL",
+          "label": "Direct answer",
+          "count": 41,
+          "denominator": 54,
+          "rate_percent": 75.92592592592592
+        },
+        {
+          "arm": "BF50",
+          "arm_id": "BF50_TOPIC_LOCAL",
+          "label": "Partial or related",
+          "count": 10,
+          "denominator": 54,
+          "rate_percent": 18.51851851851852
+        },
+        {
+          "arm": "BF50",
+          "arm_id": "BF50_TOPIC_LOCAL",
+          "label": "Irrelevant to facet",
+          "count": 3,
+          "denominator": 54,
+          "rate_percent": 5.555555555555555
+        },
+        {
+          "arm": "BF50",
+          "arm_id": "BF50_TOPIC_LOCAL",
+          "label": "Wrong domain",
+          "count": 1,
+          "denominator": 54,
+          "rate_percent": 1.8518518518518516
+        },
+        {
+          "arm": "BF50",
+          "arm_id": "BF50_TOPIC_LOCAL",
+          "label": "Low quality",
+          "count": 17,
+          "denominator": 54,
+          "rate_percent": 31.48148148148148
+        }
+      ],
+      "facet_review_rows": [
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 0,
+          "irrelevant": 2,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 0,
+          "irrelevant": 1,
+          "wrong_domain": 1,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 1,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05a",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 1,
+          "irrelevant": 1,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05b",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 2,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 0,
+          "irrelevant": 1,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07a",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 0,
+          "irrelevant": 1,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07b",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 2,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f06",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 1,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f07",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 1,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 1,
+          "irrelevant": 1,
+          "wrong_domain": 1,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f03",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "707",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 0,
+          "irrelevant": 2,
+          "wrong_domain": 2,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02a",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02b",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 1,
+          "irrelevant": 1,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04a",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04b",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 2,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "C0",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 0,
+          "irrelevant": 1,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 1,
+          "irrelevant": 1,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05a",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 2,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05b",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 2,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 1,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07a",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 0,
+          "direct_answer_percent": 0.0,
+          "partial_or_related": 2,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07b",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 1,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f06",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f07",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 0,
+          "irrelevant": 1,
+          "wrong_domain": 1,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 1,
+          "direct_answer_percent": 50.0,
+          "partial_or_related": 1,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 2
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f03",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "707",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02a",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02b",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04a",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04b",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "BF50",
+          "denominator": 2,
+          "direct_answer": 2,
+          "direct_answer_percent": 100.0,
+          "partial_or_related": 0,
+          "irrelevant": 0,
+          "wrong_domain": 0,
+          "low_quality": 0
+        }
+      ],
+      "candidate_union_rows": [
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "depth": "K20",
+          "depth_value": 20,
+          "relevant_documents": 292,
+          "unique_candidate_documents": 900,
+          "macro_recall": 0.12480312239790652,
+          "macro_graded_recall": 0.11658838471372789
+        },
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "depth": "K50",
+          "depth_value": 50,
+          "relevant_documents": 352,
+          "unique_candidate_documents": 1628,
+          "macro_recall": 0.1522591346764929,
+          "macro_graded_recall": 0.14321195660997144
+        },
+        {
+          "arm": "C0",
+          "arm_id": "C0_TOPIC_LOCAL",
+          "depth": "K100",
+          "depth_value": 100,
+          "relevant_documents": 462,
+          "unique_candidate_documents": 2839,
+          "macro_recall": 0.2013709215446589,
+          "macro_graded_recall": 0.18798641271783578
+        },
+        {
+          "arm": "BF100",
+          "arm_id": "BF100_TOPIC_LOCAL",
+          "depth": "K20",
+          "depth_value": 20,
+          "relevant_documents": 295,
+          "unique_candidate_documents": 905,
+          "macro_recall": 0.12613064445921698,
+          "macro_graded_recall": 0.11726109542781243
+        },
+        {
+          "arm": "BF100",
+          "arm_id": "BF100_TOPIC_LOCAL",
+          "depth": "K50",
+          "depth_value": 50,
+          "relevant_documents": 360,
+          "unique_candidate_documents": 1623,
+          "macro_recall": 0.15571164098576856,
+          "macro_graded_recall": 0.14504773621210743
+        },
+        {
+          "arm": "BF100",
+          "arm_id": "BF100_TOPIC_LOCAL",
+          "depth": "K100",
+          "depth_value": 100,
+          "relevant_documents": 462,
+          "unique_candidate_documents": 2839,
+          "macro_recall": 0.2013709215446589,
+          "macro_graded_recall": 0.18798641271783578
+        }
+      ],
+      "facet_retention_rows": [
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "C0",
+          "relevant_at_k20": 4,
+          "relevant_at_k50": 7,
+          "relevant_at_k100": 17
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 6,
+          "relevant_at_k100": 9
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "C0",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 4,
+          "relevant_at_k100": 9
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05a",
+          "arm": "C0",
+          "relevant_at_k20": 4,
+          "relevant_at_k50": 14,
+          "relevant_at_k100": 23
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05b",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 4,
+          "relevant_at_k100": 6
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "C0",
+          "relevant_at_k20": 3,
+          "relevant_at_k50": 4,
+          "relevant_at_k100": 7
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07a",
+          "arm": "C0",
+          "relevant_at_k20": 4,
+          "relevant_at_k50": 12,
+          "relevant_at_k100": 21
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07b",
+          "arm": "C0",
+          "relevant_at_k20": 3,
+          "relevant_at_k50": 5,
+          "relevant_at_k100": 10
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f06",
+          "arm": "C0",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f07",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 2,
+          "relevant_at_k100": 9
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "C0",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 15,
+          "relevant_at_k100": 38
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "C0",
+          "relevant_at_k20": 5,
+          "relevant_at_k50": 12,
+          "relevant_at_k100": 21
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "C0",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 4,
+          "relevant_at_k100": 12
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "C0",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "C0",
+          "relevant_at_k20": 3,
+          "relevant_at_k50": 4,
+          "relevant_at_k100": 7
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f03",
+          "arm": "C0",
+          "relevant_at_k20": 14,
+          "relevant_at_k50": 36,
+          "relevant_at_k100": 69
+        },
+        {
+          "topic_id": "707",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 2
+        },
+        {
+          "topic_id": "897",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "C0",
+          "relevant_at_k20": 11,
+          "relevant_at_k50": 13,
+          "relevant_at_k100": 19
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02a",
+          "arm": "C0",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 8
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02b",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 3
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "C0",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 2,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04a",
+          "arm": "C0",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04b",
+          "arm": "C0",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "C0",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "C0",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "BF100",
+          "relevant_at_k20": 3,
+          "relevant_at_k50": 6,
+          "relevant_at_k100": 17
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "BF100",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 9
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 6,
+          "relevant_at_k100": 9
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05a",
+          "arm": "BF100",
+          "relevant_at_k20": 4,
+          "relevant_at_k50": 15,
+          "relevant_at_k100": 23
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f05b",
+          "arm": "BF100",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 4,
+          "relevant_at_k100": 6
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "BF100",
+          "relevant_at_k20": 3,
+          "relevant_at_k50": 5,
+          "relevant_at_k100": 7
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07a",
+          "arm": "BF100",
+          "relevant_at_k20": 7,
+          "relevant_at_k50": 14,
+          "relevant_at_k100": 21
+        },
+        {
+          "topic_id": "200",
+          "facet": "sparse_relevance_v1:R1:f07b",
+          "arm": "BF100",
+          "relevant_at_k20": 3,
+          "relevant_at_k50": 8,
+          "relevant_at_k100": 10
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f06",
+          "arm": "BF100",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "prompt_lab_v1:facet:f07",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 6,
+          "relevant_at_k100": 9
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f01",
+          "arm": "BF100",
+          "relevant_at_k20": 5,
+          "relevant_at_k50": 14,
+          "relevant_at_k100": 38
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 7,
+          "relevant_at_k100": 21
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "BF100",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 0
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f04",
+          "arm": "BF100",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 5,
+          "relevant_at_k100": 12
+        },
+        {
+          "topic_id": "225",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "BF100",
+          "relevant_at_k20": 2,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 7
+        },
+        {
+          "topic_id": "707",
+          "facet": "prompt_lab_v1:facet:f03",
+          "arm": "BF100",
+          "relevant_at_k20": 15,
+          "relevant_at_k50": 37,
+          "relevant_at_k100": 69
+        },
+        {
+          "topic_id": "707",
+          "facet": "sparse_relevance_v1:R1:f02",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 2,
+          "relevant_at_k100": 2
+        },
+        {
+          "topic_id": "897",
+          "facet": "prompt_lab_v1:facet:f01",
+          "arm": "BF100",
+          "relevant_at_k20": 10,
+          "relevant_at_k50": 15,
+          "relevant_at_k100": 19
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02a",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 2,
+          "relevant_at_k100": 8
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f02b",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 3
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f03",
+          "arm": "BF100",
+          "relevant_at_k20": 1,
+          "relevant_at_k50": 3,
+          "relevant_at_k100": 4
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04a",
+          "arm": "BF100",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f04b",
+          "arm": "BF100",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 1
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f05",
+          "arm": "BF100",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 0,
+          "relevant_at_k100": 0
+        },
+        {
+          "topic_id": "897",
+          "facet": "sparse_relevance_v1:R1:f06",
+          "arm": "BF100",
+          "relevant_at_k20": 0,
+          "relevant_at_k50": 1,
+          "relevant_at_k100": 4
+        }
+      ],
+      "stage_set_rows": [
+        {
+          "stage": "Raw-union headroom",
+          "relevant_documents": 220,
+          "document_set_sha256": "5e082ec6f49312d402299d8e1d6cb43a3076656aa5949bf0e810002b19a251f6"
+        },
+        {
+          "stage": "Pre-fusion promoted novel",
+          "relevant_documents": 22,
+          "document_set_sha256": "c8bb49bdb3a0e3ff4240f5ea0cbd08c24545b23647189e129096497ebdf7b711"
+        },
+        {
+          "stage": "Final novel vs corrected C0",
+          "relevant_documents": 0,
+          "document_set_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "topic_ndcg_rows": [
+        {
+          "topic_id": "200",
+          "ndcg_delta": 0.009798697787694877,
+          "recall_delta": 0.0,
+          "graded_recall_delta": 0.0,
+          "c0_ndcg_at_10": 0.28275832582265964,
+          "bf100_ndcg_at_10": 0.2925570236103545
+        },
+        {
+          "topic_id": "225",
+          "ndcg_delta": -0.02166115264654017,
+          "recall_delta": 0.0,
+          "graded_recall_delta": 0.0,
+          "c0_ndcg_at_10": 0.3128881866802083,
+          "bf100_ndcg_at_10": 0.2912270340336681
+        },
+        {
+          "topic_id": "707",
+          "ndcg_delta": 0.022109152967867918,
+          "recall_delta": 0.0,
+          "graded_recall_delta": 0.0,
+          "c0_ndcg_at_10": 0.30858670306906943,
+          "bf100_ndcg_at_10": 0.33069585603693735
+        },
+        {
+          "topic_id": "897",
+          "ndcg_delta": 0.0,
+          "recall_delta": 0.0,
+          "graded_recall_delta": 0.0,
+          "c0_ndcg_at_10": 0.3048742399056817,
+          "bf100_ndcg_at_10": 0.3048742399056817
+        }
+      ],
+      "system_rows": [
+        {
+          "row_label": "BB100_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BB100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.331979906172941,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.85,
+          "relevant_count_at_10": 8.5,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7536346816968685,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BB100_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BB100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.32764729748949023,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.9,
+          "relevant_count_at_10": 9.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.8937033420852705,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BB100_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BB100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.31757875448823136,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6581089120915385,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BB100_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BB100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.37011265954302486,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.7,
+          "relevant_count_at_10": 7.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BB100_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BB100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3125809131710175,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.8545759169656117,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "BF100_LEGACY_FUSION · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BF100_LEGACY_FUSION",
+          "ndcg_at_10": 0.29822709996401064,
+          "graded_recall_at_100": 0.09516372333885802,
+          "recall_at_100": 0.10235535667977479,
+          "precision_at_10": 0.825,
+          "relevant_count_at_10": 8.25,
+          "relevant_count_at_100": 60.25,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.985,
+          "oracle_ndcg_at_10_from_top50": 0.6330453376586438,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BF100_LEGACY_FUSION · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BF100_LEGACY_FUSION",
+          "ndcg_at_10": 0.2799356945882063,
+          "graded_recall_at_100": 0.055342465753424656,
+          "recall_at_100": 0.05668016194331984,
+          "precision_at_10": 0.5,
+          "relevant_count_at_10": 5.0,
+          "relevant_count_at_100": 28.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.94,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BF100_LEGACY_FUSION · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BF100_LEGACY_FUSION",
+          "ndcg_at_10": 0.27740260932521726,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.5840489420256428,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BF100_LEGACY_FUSION · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BF100_LEGACY_FUSION",
+          "ndcg_at_10": 0.33069585603693735,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BF100_LEGACY_FUSION · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BF100_LEGACY_FUSION",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7168000497710266,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "BF100_MAXP_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BF100_MAXP_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2934799651902449,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.825,
+          "relevant_count_at_10": 8.25,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6330453376586438,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BF100_MAXP_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BF100_MAXP_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2976264417188949,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.5,
+          "relevant_count_at_10": 5.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BF100_MAXP_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BF100_MAXP_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2912270340336681,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.5840489420256428,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BF100_MAXP_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BF100_MAXP_TOPIC_LOCAL",
+          "ndcg_at_10": 0.28019214510273494,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BF100_MAXP_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BF100_MAXP_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7168000497710266,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "BF100_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BF100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3048385383966604,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.825,
+          "relevant_count_at_10": 8.25,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6330453376586438,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BF100_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BF100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2925570236103545,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.5,
+          "relevant_count_at_10": 5.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BF100_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BF100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2912270340336681,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.5840489420256428,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BF100_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BF100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.33069585603693735,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BF100_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BF100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7168000497710266,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "BF20_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BF20_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2504053446966558,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.7,
+          "relevant_count_at_10": 7.0,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.5890269843990277,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BF20_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BF20_TOPIC_LOCAL",
+          "ndcg_at_10": 0.14211304189418242,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.3,
+          "relevant_count_at_10": 3.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BF20_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BF20_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2572640430261628,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 0.9,
+          "relevant_count_at_10": 9.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.4666666666666667,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BF20_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BF20_TOPIC_LOCAL",
+          "ndcg_at_10": 0.2973700539605964,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.6,
+          "relevant_count_at_10": 6.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BF20_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BF20_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6581089120915385,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "BF50_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BF50_TOPIC_LOCAL",
+          "ndcg_at_10": 0.26941344904301284,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.775,
+          "relevant_count_at_10": 7.75,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6036997688188998,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BF50_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BF50_TOPIC_LOCAL",
+          "ndcg_at_10": 0.16458379757567504,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.3,
+          "relevant_count_at_10": 3.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BF50_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BF50_TOPIC_LOCAL",
+          "ndcg_at_10": 0.27749990265375735,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.4666666666666667,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BF50_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BF50_TOPIC_LOCAL",
+          "ndcg_at_10": 0.33069585603693735,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BF50_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BF50_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7168000497710266,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "BO100_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "BO100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.33364569912878494,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.875,
+          "relevant_count_at_10": 8.75,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7536346816968685,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "BO100_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "BO100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3192780535837187,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.9,
+          "relevant_count_at_10": 9.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.8937033420852705,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "BO100_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "BO100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.31602930549147784,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6581089120915385,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "BO100_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "BO100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.38669452426892575,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "BO100_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "BO100_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3125809131710175,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.8545759169656117,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "C0_TOPIC_LOCAL · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "C0_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3022768638694048,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.85,
+          "relevant_count_at_10": 8.5,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6330453376586438,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "C0_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "C0_TOPIC_LOCAL",
+          "ndcg_at_10": 0.28275832582265964,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.6,
+          "relevant_count_at_10": 6.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "C0_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "C0_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3128881866802083,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.5840489420256428,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "C0_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "C0_TOPIC_LOCAL",
+          "ndcg_at_10": 0.30858670306906943,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "C0_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "C0_TOPIC_LOCAL",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7168000497710266,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "O · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "O",
+          "ndcg_at_10": 0.22622208133460384,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.65,
+          "relevant_count_at_10": 6.5,
+          "relevant_count_at_100": 60.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.5890269843990277,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "O · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "O",
+          "ndcg_at_10": 0.1400835882196266,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.2,
+          "relevant_count_at_10": 2.0,
+          "relevant_count_at_100": 29.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "O · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "O",
+          "ndcg_at_10": 0.2572640430261628,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 0.9,
+          "relevant_count_at_10": 9.0,
+          "relevant_count_at_100": 79.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.4666666666666667,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "O · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "O",
+          "ndcg_at_10": 0.2026664541869443,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.5,
+          "relevant_count_at_10": 5.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "O · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "O",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6581089120915385,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        },
+        {
+          "row_label": "R1_LEGACY · All four",
+          "scope": "Macro",
+          "topic_id": "All four",
+          "system": "R1_LEGACY",
+          "ndcg_at_10": 0.3011163809843572,
+          "graded_recall_at_100": 0.09500814088657077,
+          "recall_at_100": 0.10190490622932434,
+          "precision_at_10": 0.85,
+          "relevant_count_at_10": 8.5,
+          "relevant_count_at_100": 60.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.9875,
+          "oracle_ndcg_at_10_from_top50": 0.6330453376586438,
+          "oracle_ndcg_at_10_from_top100": 0.8382278186566643
+        },
+        {
+          "row_label": "R1_LEGACY · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "system": "R1_LEGACY",
+          "ndcg_at_10": 0.2919408189909204,
+          "graded_recall_at_100": 0.05589041095890411,
+          "recall_at_100": 0.05668016194331984,
+          "precision_at_10": 0.6,
+          "relevant_count_at_10": 6.0,
+          "relevant_count_at_100": 28.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.96,
+          "oracle_ndcg_at_10_from_top50": 0.6231818031928523,
+          "oracle_ndcg_at_10_from_top100": 0.8937033420852705
+        },
+        {
+          "row_label": "R1_LEGACY · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "system": "R1_LEGACY",
+          "ndcg_at_10": 0.29906376197175744,
+          "graded_recall_at_100": 0.12463428905792862,
+          "recall_at_100": 0.14054054054054055,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 78.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.99,
+          "oracle_ndcg_at_10_from_top50": 0.5840489420256428,
+          "oracle_ndcg_at_10_from_top100": 0.7673538441014537
+        },
+        {
+          "row_label": "R1_LEGACY · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "system": "R1_LEGACY",
+          "ndcg_at_10": 0.30858670306906943,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_count_at_10": 8.0,
+          "relevant_count_at_100": 52.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.6081505556450533,
+          "oracle_ndcg_at_10_from_top100": 0.7611207613217147
+        },
+        {
+          "row_label": "R1_LEGACY · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "system": "R1_LEGACY",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_count_at_10": 10.0,
+          "relevant_count_at_100": 82.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "oracle_ndcg_at_10_from_top50": 0.7168000497710266,
+          "oracle_ndcg_at_10_from_top100": 0.9307333271182184
+        }
+      ],
+      "gain_loss_rows": [
+        {
+          "row_label": "BF100 vs C0_TOPIC_LOCAL · All four",
+          "scope": "Aggregate",
+          "topic_id": "All four",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "C0_TOPIC_LOCAL",
+          "baseline_relevant": 242,
+          "candidate_relevant": 242,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        },
+        {
+          "row_label": "BF100 vs C0_TOPIC_LOCAL · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "C0_TOPIC_LOCAL",
+          "baseline_relevant": 29,
+          "candidate_relevant": 29,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        },
+        {
+          "row_label": "BF100 vs C0_TOPIC_LOCAL · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "C0_TOPIC_LOCAL",
+          "baseline_relevant": 79,
+          "candidate_relevant": 79,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        },
+        {
+          "row_label": "BF100 vs C0_TOPIC_LOCAL · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "C0_TOPIC_LOCAL",
+          "baseline_relevant": 52,
+          "candidate_relevant": 52,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        },
+        {
+          "row_label": "BF100 vs C0_TOPIC_LOCAL · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "C0_TOPIC_LOCAL",
+          "baseline_relevant": 82,
+          "candidate_relevant": 82,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        },
+        {
+          "row_label": "BF100 vs R1_LEGACY · All four",
+          "scope": "Aggregate",
+          "topic_id": "All four",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "R1_LEGACY",
+          "baseline_relevant": 240,
+          "candidate_relevant": 242,
+          "gained": 2,
+          "lost": 0,
+          "net_change": 2
+        },
+        {
+          "row_label": "BF100 vs R1_LEGACY · 200",
+          "scope": "Topic",
+          "topic_id": "200",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "R1_LEGACY",
+          "baseline_relevant": 28,
+          "candidate_relevant": 29,
+          "gained": 1,
+          "lost": 0,
+          "net_change": 1
+        },
+        {
+          "row_label": "BF100 vs R1_LEGACY · 225",
+          "scope": "Topic",
+          "topic_id": "225",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "R1_LEGACY",
+          "baseline_relevant": 78,
+          "candidate_relevant": 79,
+          "gained": 1,
+          "lost": 0,
+          "net_change": 1
+        },
+        {
+          "row_label": "BF100 vs R1_LEGACY · 707",
+          "scope": "Topic",
+          "topic_id": "707",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "R1_LEGACY",
+          "baseline_relevant": 52,
+          "candidate_relevant": 52,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        },
+        {
+          "row_label": "BF100 vs R1_LEGACY · 897",
+          "scope": "Topic",
+          "topic_id": "897",
+          "candidate": "BF100_TOPIC_LOCAL",
+          "baseline": "R1_LEGACY",
+          "baseline_relevant": 82,
+          "candidate_relevant": 82,
+          "gained": 0,
+          "lost": 0,
+          "net_change": 0
+        }
+      ],
+      "representative_rows": [
+        {
+          "evidence_class": "Promoted before fusion",
+          "topic_id": "200",
+          "document_id": "shard_00836_57292",
+          "passage": "implementation : deportations : the final solution began with the mass deportation of jews from across nazi - occupied europe to concentration camps and extermination centers in eastern europe. trains packed with men, women, and children were sent to these death camps under brutal conditions, with many perishing en route. ghettoization : jews were often confined to overcrowded ghettos in major cities, where they were subjected to starvation, disease, and forced labor. these ghettos served as staging areas for deportations to death camps and were part of the systematic isolation and dehumanization of jews. extermination camps : the nazis constructed extermination camps equipped with gas ch…",
+          "provenance": "No frozen fusion-contribution provenance was recorded for this pre-fusion item.",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Promoted before fusion",
+          "topic_id": "200",
+          "document_id": "shard_02534_42532",
+          "passage": "understanding the holocaust : a historical and psychological analysis introduction the holocaust was one of the most tragic and devastating events in human history. between 1941 and 1945, nazi germany systematically executed approximately six million jews as well as millions of other minorities, including romas, disabled individuals, and homosexuals. the impact of the holocaust can still be felt today, and it is important to understand why it happened to prevent similar tragedies from occurring in the future. this article examines the causes of the holocaust from historical and psychological perspectives, as well as the experiences of both victims and perpetrators. it also explores what w…",
+          "provenance": "No frozen fusion-contribution provenance was recorded for this pre-fusion item.",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Promoted before fusion",
+          "topic_id": "200",
+          "document_id": "shard_02640_71592",
+          "passage": "an analysis of systematic oppression and mass murder of jews by the nazis in an extensive rewrite when the book was translated into english, with additional sourcing, longerich ( modern german history, royal holloway, univ of london ) presents an expanded english - language edition of his famous 1998 study of the holocaust, politik der vernichtung. offers an analysis of the descent of the nazi persecution of the jews into mass murder arguing that genocide was not a preconceived plan, this book explains how the decision to murder the jews en masse emerged in stages and by a process of elimination that gradually foreclosed plans for their expulsion from europe. holocaust history the holocau…",
+          "provenance": "No frozen fusion-contribution provenance was recorded for this pre-fusion item.",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Demoted in final ranking",
+          "topic_id": "200",
+          "document_id": "shard_01244_59327",
+          "passage": "Holocaust Representations: Facts and Issues Hungary has so far created three permanent exhibitions devoted to the genocide that affected also the Jews of Hungary: one in the territory of Auschwitz-Birkenau (2004), another one in Hódmezővásárhely (2004), and a third one in the Holocaust Memorial Center in Budapest (2006). A fourth exhibition entitled House of Fates, focusing on the children's Holocaust, is in preparation. Auschwitz The exhibition in Auschwitz was created by the Hungarian government in 2004. The Hungarian national exhibition presents the history of the Holocaust in Hungary over a floor space of 600 m² on the upper floor of a former barracks building. The title of the exhibi…",
+          "provenance": "prompt_lab_v1:original · source rank 71 · RRF weight 0.5; sparse_relevance_v1:R1:f05a · source rank 23 · RRF weight 0.05555555555555555",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Demoted in final ranking",
+          "topic_id": "200",
+          "document_id": "shard_01478_67852",
+          "passage": "The Darwin-Hitler claim as a form of Holocaust denial, revisited Yesterday, I did a rather long post that used as its introduction an assertion by bioethicist Arthur Caplan in a review of the anti-evolution propaganda movie Expelled! that the claim that Darwinism led more or less directly to the Holocaust is a form of Holocaust denial. In my post, I concluded that I don't agree with that assertion and that likening Ben Stein's claims in the movie actually weakened his otherwise excellent article that appropriately pointed out the inherent immorality and dishonesty in the way the movie links Darwinism to the Holocaust. To my surprise, Dr. Caplan actually showed up in the comments and respo…",
+          "provenance": "prompt_lab_v1:original · source rank 20 · RRF weight 0.5; sparse_relevance_v1:R1:f05a · source rank 7 · RRF weight 0.05555555555555555; sparse_relevance_v1:R1:f06 · source rank 4 · RRF weight 0.0625",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Demoted in final ranking",
+          "topic_id": "200",
+          "document_id": "shard_02653_40154",
+          "passage": "The Holocaust was one of the most significant atrocities in human history, and the impact of this dark chapter still reverberates today. To better understand this period and its aftermath, many have turned to books as a way of gaining insight and perspective. In this article, we will take a closer look at the best books about the Holocaust that provide a comprehensive understanding of this terrible tragedy. Understanding the Holocaust: A Brief Overview Before delving into the best books about the Holocaust, it is essential to have a basic understanding of what happened. The Holocaust, also known as the Shoah, was a state-sponsored genocide of six million Jews, along with other targeted gr…",
+          "provenance": "prompt_lab_v1:original · source rank 84 · RRF weight 0.5; sparse_relevance_v1:R1:f05a · source rank 62 · RRF weight 0.05555555555555555; sparse_relevance_v1:R1:f07a · source rank 62 · RRF weight 0.05555555555555555; sparse_relevance_v1:R1:f07b · source rank 26 · RRF weight 0.05555555555555555",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Gained in final ranking",
+          "topic_id": "All four",
+          "document_id": "None",
+          "passage": "No gained final-ranking passage exists in this comparison.",
+          "provenance": "Saved evaluation contains an empty representative set.",
+          "source_artifact": "representatives.json"
+        },
+        {
+          "evidence_class": "Lost from final ranking",
+          "topic_id": "All four",
+          "document_id": "None",
+          "passage": "No lost final-ranking passage exists in this comparison.",
+          "provenance": "Saved evaluation contains an empty representative set.",
+          "source_artifact": "representatives.json"
+        }
+      ],
+      "runtime_rows": [
+        {
+          "model": "cross-encoder/ms-marco-MiniLM-L6-v2",
+          "revision": "c5ee24cb16019beea0893ab7796b1df96625c6b8",
+          "safe_file_count": 6,
+          "safe_files_only": true,
+          "execution_backend": "rocm",
+          "device": "Radeon 8060S Graphics",
+          "inference_dtype": "float32",
+          "planned_windows": 14720,
+          "completed_windows": 14720,
+          "unique_scored_pairs": 14459,
+          "capped_documents": 30,
+          "maximum_windows_per_document": 32,
+          "coverage_min_percent": 29.52450621799561,
+          "coverage_median_percent": 100.0,
+          "coverage_p95_percent": 100.0
+        }
+      ],
+      "model_rows": [
+        {
+          "model": "cross-encoder/ms-marco-MiniLM-L6-v2",
+          "revision": "c5ee24cb16019beea0893ab7796b1df96625c6b8",
+          "safe_files": "config.json, model.safetensors, special_tokens_map.json, tokenizer.json, tokenizer_config.json, vocab.txt",
+          "window_cap": 32,
+          "capped_documents": 30,
+          "coverage_min_percent": 29.52450621799561,
+          "coverage_p95_percent": 100.0
+        }
+      ],
+      "scoring_rows": [
+        {
+          "model": "cross-encoder/ms-marco-MiniLM-L6-v2",
+          "revision": "c5ee24cb16019beea0893ab7796b1df96625c6b8",
+          "dtype": "float32",
+          "planned_windows": 14720,
+          "completed_windows": 14720,
+          "unique_scores": 14459,
+          "failed_windows": 0
+        }
+      ],
+      "benchmark_rows": [
+        {
+          "backend": "rocm",
+          "device": "Radeon 8060S Graphics",
+          "pairs_per_second": 341.5032634706856,
+          "peak_device_memory_mb": 489.7152,
+          "projected_wall_seconds": 53.53943717396396
+        }
+      ],
+      "firewall_rows": [
+        {
+          "qrels_access_status": "qrels_access_consumed",
+          "qrels_access_count": 1,
+          "ranking_frozen_before_qrels": true,
+          "review_frozen_before_qrels": true,
+          "review_unique_items": 101,
+          "review_memberships": 108,
+          "shared_items_attributed_to_both_arms": 7
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "manifest",
+      "label": "Frozen 31-stream source manifest",
+      "path": "reports/experiments/facet_local_minilm_pilot_v1/manifest.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:c34f3a380d5d2742cca462e607fb4fca75b78e6d2841096bdfa4c972ec4ccfb8",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated frozen 31-stream source manifest input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('reports/experiments/facet_local_minilm_pilot_v1/manifest.json')\n)\nSELECT\n  json_extract_string(stream.value, '$.topic_id') AS topic_id,\n  json_extract_string(stream.value, '$.family') AS family,\n  json_extract_string(stream.value, '$.variant') AS variant,\n  json_extract_string(stream.value, '$.query') AS full_query,\n  CAST(json_extract(stream.value, '$.expected_rows') AS INTEGER) AS candidate_rows,\n  json_extract_string(stream.value, '$.query_sha256') AS query_sha256\nFROM source, json_each(source.doc, '$.streams') AS stream;",
+        "tables_used": [
+          "reports/experiments/facet_local_minilm_pilot_v1/manifest.json"
+        ],
+        "input_sha256": {
+          "reports/experiments/facet_local_minilm_pilot_v1/manifest.json": "c34f3a380d5d2742cca462e607fb4fca75b78e6d2841096bdfa4c972ec4ccfb8"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "One query-stream row per manifest.streams item; narrative rows are the family='original' subset.",
+          "Candidate rows equal expected_rows and must sum to 3,100 across exactly 31 streams."
+        ]
+      }
+    },
+    {
+      "id": "preflight",
+      "label": "Authenticated tokenizer-only preflight",
+      "path": "outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:91e6b040a5ef4dac1e352cf39b644209320d0f06bea93e4b6887c7a16a02f764",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated authenticated tokenizer-only preflight input boundary.",
+        "sql": "SELECT model_materialization.model_id AS model,\n       model_materialization.revision AS revision,\n       model_materialization.allow_patterns AS safe_files,\n       window_policy.maximum_windows_per_document AS window_cap,\n       summary.capped_document_count AS capped_documents,\n       summary.coverage_min * 100 AS coverage_min_percent,\n       summary.coverage_p95 * 100 AS coverage_p95_percent\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json": "91e6b040a5ef4dac1e352cf39b644209320d0f06bea93e4b6887c7a16a02f764"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Coverage percentages equal saved coverage fractions × 100; model identity and window cap are copied from authenticated preflight fields."
+        ]
+      }
+    },
+    {
+      "id": "scoring_receipt",
+      "label": "Completed local MiniLM scoring receipt",
+      "path": "outputs/rag25_facet_local_minilm_v1/full_scoring_v1/scoring_receipt.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:d8d3f86d16bd25d0f92c682f3707273b08279489636481b18f694e9dd673df00",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated completed local minilm scoring receipt input boundary.",
+        "sql": "SELECT model, model_revision AS revision, inference_dtype AS dtype,\n       planned_window_count AS planned_windows,\n       completed_window_count AS completed_windows,\n       unique_score_count AS unique_scores, failed_window_count AS failed_windows\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/full_scoring_v1/scoring_receipt.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/full_scoring_v1/scoring_receipt.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/full_scoring_v1/scoring_receipt.json": "d8d3f86d16bd25d0f92c682f3707273b08279489636481b18f694e9dd673df00"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Planned, completed, unique-score, and failed-window counts are copied from the completed scoring receipt."
+        ]
+      }
+    },
+    {
+      "id": "benchmark",
+      "label": "ROCm benchmark telemetry",
+      "path": "outputs/rag25_facet_local_minilm_v1/benchmark_v1/benchmark_telemetry.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:445fa1982213b00adb38b40d1b8df72b09e507f070df966aa91399ec4037214a",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated rocm benchmark telemetry input boundary.",
+        "sql": "SELECT execution_backend AS backend, device_probe.device_name AS device,\n       median_pairs_per_second AS pairs_per_second,\n       peak_device_memory_bytes / 1000000.0 AS peak_device_memory_mb,\n       projected_full_run_wall_seconds AS projected_wall_seconds\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/benchmark_v1/benchmark_telemetry.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/benchmark_v1/benchmark_telemetry.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/benchmark_v1/benchmark_telemetry.json": "445fa1982213b00adb38b40d1b8df72b09e507f070df966aa91399ec4037214a"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Pairs per second and projected wall time are copied from benchmark telemetry; device bytes are divided by 1,000,000 for MB."
+        ]
+      }
+    },
+    {
+      "id": "model_download_approval",
+      "label": "Pinned safe-file model download approval",
+      "path": "outputs/rag25_facet_local_minilm_v1/approvals/model_download_v1.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:40c2144fe6898634c13dcac8c0b3a726082d52122e94bf953b91639b60eba7b6",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated pinned safe-file model download approval input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/model_download_v1.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/approvals/model_download_v1.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/approvals/model_download_v1.json": "40c2144fe6898634c13dcac8c0b3a726082d52122e94bf953b91639b60eba7b6"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "benchmark_approval",
+      "label": "Bounded benchmark approval",
+      "path": "outputs/rag25_facet_local_minilm_v1/approvals/benchmark_v1.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:4568ace7d241b86c5ee58588ee60d10112266fcc001117de74ed542f0628462c",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated bounded benchmark approval input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/benchmark_v1.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/approvals/benchmark_v1.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/approvals/benchmark_v1.json": "4568ace7d241b86c5ee58588ee60d10112266fcc001117de74ed542f0628462c"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "full_scoring_approval",
+      "label": "Full local scoring approval",
+      "path": "outputs/rag25_facet_local_minilm_v1/approvals/full_scoring_v1.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:10253a8e3f4fdffdb9a7181223005ffedc9ce5bf813e9b923b637c5c79ae2ae4",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated full local scoring approval input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/full_scoring_v1.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/approvals/full_scoring_v1.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/approvals/full_scoring_v1.json": "10253a8e3f4fdffdb9a7181223005ffedc9ce5bf813e9b923b637c5c79ae2ae4"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "ranking_freeze",
+      "label": "Pre-qrels ranking freeze",
+      "path": "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:185a8e917f1d0c90efaa2625ec749c3eb6b470a32e7e131d05a55ff27a30bb71",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated pre-qrels ranking freeze input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json": "185a8e917f1d0c90efaa2625ec749c3eb6b470a32e7e131d05a55ff27a30bb71"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "legacy_corrected_diff",
+      "label": "Legacy versus corrected fusion audit",
+      "path": "outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:5ddbf0dc2ef7a69bf2a4f7ce50529f3adc00cce0c2f85ebf11d9e53f1ba5bc37",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated legacy versus corrected fusion audit input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json": "5ddbf0dc2ef7a69bf2a4f7ce50529f3adc00cce0c2f85ebf11d9e53f1ba5bc37"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "review_freeze",
+      "label": "Pre-qrels blinded-review freeze",
+      "path": "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:0b51d3c55dc3cc020272aeeab7d725ac412a6f43d964956dcbf5a538878289c3",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated pre-qrels blinded-review freeze input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json": "0b51d3c55dc3cc020272aeeab7d725ac412a6f43d964956dcbf5a538878289c3"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "review_create_receipt",
+      "label": "Blinded-review pool receipt",
+      "path": "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:4bfce5ce8ee0758b44dc05ddf29e011153166eec3601beff3004fef447f829ac",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated blinded-review pool receipt input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json": "4bfce5ce8ee0758b44dc05ddf29e011153166eec3601beff3004fef447f829ac"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "raw_union",
+      "label": "Relevant candidate-union curves",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:d630fbe4b2218e552f3cbb2aac84cd9f578f9d5d34349add47868a73b58a5b0e",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated relevant candidate-union curves input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json')\n), arms AS (\n  SELECT arm.key AS arm_id, arm.value AS depths\n  FROM source, json_each(source.doc, '$.curves') AS arm\n)\nSELECT arm_id, CAST(depth.key AS INTEGER) AS facet_depth,\n       json_extract(depth.value, '$.aggregate') AS aggregate_metrics\nFROM arms, json_each(arms.depths) AS depth\nWHERE arm_id IN ('C0_TOPIC_LOCAL', 'BF100_TOPIC_LOCAL')\n  AND CAST(depth.key AS INTEGER) IN (20, 50, 100);",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json": "d630fbe4b2218e552f3cbb2aac84cd9f578f9d5d34349add47868a73b58a5b0e"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Each cutoff is the unique topic-qualified relevant union of original O@100 plus the named arm's facet streams at K.",
+          "Headroom is the unique relevant raw-union document set absent from corrected C0's final top 100."
+        ]
+      }
+    },
+    {
+      "id": "prefusion",
+      "label": "Pre-fusion promotion evidence",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:3eae8183efd75f37934e93e4357e3ff4b90fc4f57cc8a2a65bdb7ef10a50f5d3",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated pre-fusion promotion evidence input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json": "3eae8183efd75f37934e93e4357e3ff4b90fc4f57cc8a2a65bdb7ef10a50f5d3"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "facet_retention",
+      "label": "Per-facet retention evidence",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/facet_retention.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:b39d683c51ed276c31a53614c94d1bffc1c278be37b63ae2852d01124f3790ed",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated per-facet retention evidence input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/facet_retention.json')\n), arms AS (\n  SELECT arm.key AS arm_id, arm.value AS facets\n  FROM source, json_each(source.doc, '$.arms') AS arm\n)\nSELECT arm_id, facet.key AS facet_id,\n       CAST(json_extract(facet.value, '$.relevant_retained.20') AS INTEGER) AS relevant_at_k20,\n       CAST(json_extract(facet.value, '$.relevant_retained.50') AS INTEGER) AS relevant_at_k50,\n       CAST(json_extract(facet.value, '$.relevant_retained.100') AS INTEGER) AS relevant_at_k100\nFROM arms, json_each(arms.facets) AS facet;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/facet_retention.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/facet_retention.json": "b39d683c51ed276c31a53614c94d1bffc1c278be37b63ae2852d01124f3790ed"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Relevant at K is relevant_retained[K] for one frozen arm/facet stream; values are not added across overlapping facets."
+        ]
+      }
+    },
+    {
+      "id": "systems",
+      "label": "System effectiveness evaluation",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:56a0460434e3c1325abfb3893b8696a0123c8807f4af554a1896b34bf6b9181d",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated system effectiveness evaluation input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json')\n)\nSELECT system.key AS system_id,\n       json_extract(system.value, '$.metrics') AS macro_metrics,\n       json_extract(system.value, '$.per_topic') AS per_topic_metrics\nFROM source, json_each(source.doc, '$.systems') AS system;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json": "56a0460434e3c1325abfb3893b8696a0123c8807f4af554a1896b34bf6b9181d"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Macro and per-topic report rows flatten each systems entry's metrics and per_topic objects without recomputation."
+        ]
+      }
+    },
+    {
+      "id": "gains_losses",
+      "label": "Relevant-document gain/loss evaluation",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/gains_losses.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:584c4007694f38900a889443301744c6b7187af8d5cbd419a86e8a4c7e682ba6",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated relevant-document gain/loss evaluation input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/gains_losses.json')\n), candidates AS (\n  SELECT candidate.key AS candidate_id, candidate.value AS comparisons\n  FROM source, json_each(source.doc, '$.systems') AS candidate\n)\nSELECT candidate_id, baseline.key AS baseline_id,\n       json_extract(baseline.value, '$.aggregate') AS aggregate,\n       json_extract(baseline.value, '$.per_topic') AS per_topic\nFROM candidates, json_each(candidates.comparisons) AS baseline\nWHERE candidate_id = 'BF100_TOPIC_LOCAL'\n  AND baseline.key IN ('C0_TOPIC_LOCAL', 'R1_LEGACY');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/gains_losses.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/gains_losses.json": "584c4007694f38900a889443301744c6b7187af8d5cbd419a86e8a4c7e682ba6"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Gained and lost are set cardinalities; net change must equal gained minus lost for BF100 versus each baseline."
+        ]
+      }
+    },
+    {
+      "id": "review_metrics",
+      "label": "Blinded facet-review metrics",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:c24a0dd6bbe6588c2ec9f85d11e6a0999f25e01e6bb55b56fc97352eb69af2a0",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated blinded facet-review metrics input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json')\n), arm_rows AS (\n  SELECT arm.key AS arm_id, arm.value AS metrics\n  FROM source, json_each(source.doc, '$.macro_by_arm') AS arm\n), facet_arms AS (\n  SELECT arm.key AS arm_id, arm.value AS facets\n  FROM source, json_each(source.doc, '$.per_facet_by_arm') AS arm\n), facet_rows AS (\n  SELECT arm_id, facet.key AS facet_id, facet.value AS metrics\n  FROM facet_arms, json_each(facet_arms.facets) AS facet\n)\nSELECT 'arm' AS grain, arm_id, NULL::VARCHAR AS facet_id, metrics FROM arm_rows\nUNION ALL\nSELECT 'facet' AS grain, arm_id, facet_id, metrics FROM facet_rows;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json": "c24a0dd6bbe6588c2ec9f85d11e6a0999f25e01e6bb55b56fc97352eb69af2a0"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Arm label rate (%) = macro_by_arm label rate × 100; count and denominator come from counts_by_arm.",
+          "Per-facet rows preserve each per_facet_by_arm denominator, mutually exclusive relevance labels, and overlapping low_quality flag."
+        ]
+      }
+    },
+    {
+      "id": "representatives",
+      "label": "Bounded representative passages",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:de0f74f0784941761e7dc7eee234f05b0feeaf45f1fea19a04f3273b058a2427",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated bounded representative passages input boundary.",
+        "sql": "WITH source AS (\n  SELECT content::JSON AS doc FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json')\n), classes(evidence_class, rows) AS (\n  SELECT 'promoted', json_extract(doc, '$.promoted') FROM source UNION ALL\n  SELECT 'demoted', json_extract(doc, '$.demoted') FROM source UNION ALL\n  SELECT 'gained', json_extract(doc, '$.gained') FROM source UNION ALL\n  SELECT 'lost', json_extract(doc, '$.lost') FROM source\n)\nSELECT evidence_class, item.key AS saved_order, item.value AS saved_evidence\nFROM classes, json_each(classes.rows) AS item;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/representatives.json": "de0f74f0784941761e7dc7eee234f05b0feeaf45f1fea19a04f3273b058a2427"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "At most three saved rows per promoted/demoted/gained/lost class; passage text is bounded to 700 characters."
+        ]
+      }
+    },
+    {
+      "id": "decision",
+      "label": "Mechanical experiment decision",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:d3a1e6d123d7150de18a2569247cc307c2b37db0e8bcbdd5b1b79fae520c3abc",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated mechanical experiment decision input boundary.",
+        "sql": "WITH joined AS (\n  SELECT d.content::JSON AS decision, r.content::JSON AS raw_union,\n         p.content::JSON AS prefusion, s.content::JSON AS systems,\n         c.content::JSON AS control_diff, v.content::JSON AS review\n  FROM read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json') d\n  CROSS JOIN read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json') r\n  CROSS JOIN read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json') p\n  CROSS JOIN read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json') s\n  CROSS JOIN read_text('outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json') c\n  CROSS JOIN read_text('outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json') v\n)\nSELECT\n  json_array_length(json_extract(raw_union, '$.headroom_docids')) AS raw_headroom,\n  json_array_length(json_extract(prefusion, '$.pre_fusion_promoted_novel_docids')) AS promoted_top20,\n  json_array_length(json_extract(prefusion, '$.fusion_blocked_novel_docids')) AS fusion_blocked,\n  json_array_length(json_extract(prefusion, '$.final_novel_docids')) AS final_novel,\n  json_extract(decision, '$.evidence.per_topic_deltas_vs_control') AS per_topic_deltas,\n  json_extract(systems, '$.systems.C0_TOPIC_LOCAL') AS c0_metrics,\n  json_extract(systems, '$.systems.BF100_TOPIC_LOCAL') AS bf100_metrics,\n  json_extract(decision, '$.evidence.final_novel_vs_legacy_r1_docids') AS novel_vs_legacy,\n  json_extract(control_diff, '$.topics') AS corrected_legacy_audit,\n  json_extract(review, '$.macro_by_arm') AS blinded_review_rates\nFROM joined;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json",
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json": "becfe1f6c4b7ee59a7060f98beb28eb893baa1ca7da4c16639106dfcb6438f19",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/raw_union.json": "d630fbe4b2218e552f3cbb2aac84cd9f578f9d5d34349add47868a73b58a5b0e",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/prefusion.json": "3eae8183efd75f37934e93e4357e3ff4b90fc4f57cc8a2a65bdb7ef10a50f5d3",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/systems.json": "56a0460434e3c1325abfb3893b8696a0123c8807f4af554a1896b34bf6b9181d",
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/legacy_corrected_diff.json": "5ddbf0dc2ef7a69bf2a4f7ce50529f3adc00cce0c2f85ebf11d9e53f1ba5bc37",
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/review_metrics.json": "c24a0dd6bbe6588c2ec9f85d11e6a0999f25e01e6bb55b56fc97352eb69af2a0"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Promotion-funnel counts are lengths of raw_union.headroom_docids, prefusion.pre_fusion_promoted_novel_docids, and prefusion.final_novel_docids, checked against decision.evidence.",
+          "The promotion window is BF best facet rank <=20 and C0 best facet rank >20.",
+          "Per-topic deltas come from decision.evidence.per_topic_deltas_vs_control; absolute C0 and BF100 nDCG@10 tooltips come from systems.",
+          "Legacy attribution requires decision final_novel_vs_legacy_r1_docids to be contained in legacy_corrected_diff corrected_only sets."
+        ]
+      }
+    },
+    {
+      "id": "qrels_access_receipt",
+      "label": "One-time qrels-access receipt",
+      "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:160c4dd24d4330d828061744f0ca5d42342dd1c4bee39a96f08c7ae3bacef202",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.",
+        "sql": "SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,\n       r.qrels_opened = false AS ranking_frozen_before_qrels,\n       v.qrels_opened = false AS review_frozen_before_qrels,\n       c.item_count AS review_unique_items, c.membership_count AS review_memberships,\n       c.membership_count - c.item_count AS shared_items_attributed_to_both_arms\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json') q\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json') r\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json') v\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json') c\nWHERE q.status = 'qrels_access_consumed'\n  AND q.ranking_freeze_sha256 = r.freeze_sha256\n  AND q.review_freeze_sha256 = v.review_freeze_sha256;",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json",
+          "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json",
+          "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json": "f3f7dbdef013bf843a4daef17c9b6a6ef8102613656de6bb5dc23702356b422f",
+          "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json": "185a8e917f1d0c90efaa2625ec749c3eb6b470a32e7e131d05a55ff27a30bb71",
+          "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json": "0b51d3c55dc3cc020272aeeab7d725ac412a6f43d964956dcbf5a538878289c3",
+          "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json": "4bfce5ce8ee0758b44dc05ddf29e011153166eec3601beff3004fef447f829ac"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Qrels access count is one iff the bound receipt status is qrels_access_consumed.",
+          "Ranking/review frozen flags require qrels_opened=false in their authenticated freezes; shared memberships = membership_count - item_count."
+        ]
+      }
+    }
+  ]
+}
