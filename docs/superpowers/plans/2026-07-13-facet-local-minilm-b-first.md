@@ -28,6 +28,25 @@
 - Use `.venv/bin/python` for qrels-free utilities and `.venv/bin/python-rocm` only for approved inference.
 - Stage only files named by the active task; preserve unrelated untracked files.
 
+### Frozen fusion-correction amendment
+
+Task 4 reconstruction proved that the historical R1 artifact used a global
+weight map keyed only by `(variant_name, retriever_name)`. Repeated facet names
+therefore received cross-topic overwritten weights. Preserve the exact prior
+ranking as `R1_LEGACY`, but do not use it as the primary causal control.
+
+The primary control is `C0_TOPIC_LOCAL`, reconstructed from the same 31 BM25
+streams with `family_rrf_topic_local_v2`, keyed by
+`(topic_id, variant_name, retriever_name)`. Every topic must have original
+weight `0.5`, total facet weight `0.5`, exact total weight `1.0`, and
+input-order invariance. Every substantive B arm uses this corrected fusion.
+The primary comparison is `BF100_TOPIC_LOCAL - C0_TOPIC_LOCAL`.
+`C0_TOPIC_LOCAL - R1_LEGACY` measures the fusion correction;
+`BF100_TOPIC_LOCAL - R1_LEGACY` measures the total operational change; and
+`BF100_LEGACY_FUSION - R1_LEGACY` is a secondary no-new-inference diagnostic.
+The detailed naming, novelty definitions, and promotion guards in the design
+specification supersede older unsuffixed C0/BF references below.
+
 ## File map
 
 - `code/trec_rag/facet_local_minilm_manifest.py`: rebuild and authenticate the exact R1 stream population.
@@ -287,8 +306,8 @@ git commit -m "Add gated facet-local MiniLM scoring"
 - Create: `code/tests/test_facet_local_minilm_rank.py`
 
 **Interfaces:**
-- Consumes: authenticated source candidates, complete MiniLM scores, and the frozen fusion definition.
-- Produces: per-stream top-four and MaxP rankings plus frozen `C0`, `BF100`, `BF50`, `BF20`, `BO100`, `BB100`, and `BF100_MAXP` system rankings.
+- Consumes: authenticated source candidates, complete MiniLM scores, the byte-identical legacy R1 ranking, and both frozen fusion definitions.
+- Produces: per-stream top-four and MaxP rankings plus frozen `R1_LEGACY`, `C0_TOPIC_LOCAL`, `BF100_TOPIC_LOCAL`, `BF50_TOPIC_LOCAL`, `BF20_TOPIC_LOCAL`, `BO100_TOPIC_LOCAL`, `BB100_TOPIC_LOCAL`, `BF100_MAXP_TOPIC_LOCAL`, and `BF100_LEGACY_FUSION` system rankings.
 
 - [ ] **Step 1: Write failing aggregation and matrix tests**
 
@@ -301,11 +320,11 @@ def test_top4_span_distinct_aggregation_uses_frozen_weights():
 
 def test_primary_arm_reranks_facets_only(frozen_candidates, scores):
     arms = build_b_arms(frozen_candidates, scores)
-    assert original_order(arms["BF100"]) == original_order(arms["C0"])
-    assert facet_order(arms["BF100"]) != facet_order(arms["C0"])
+    assert original_order(arms["BF100_TOPIC_LOCAL"]) == original_order(arms["C0_TOPIC_LOCAL"])
+    assert facet_order(arms["BF100_TOPIC_LOCAL"]) != facet_order(arms["C0_TOPIC_LOCAL"])
 ```
 
-Also test 128-new-token span eligibility, fewer-than-four weight renormalization, MaxP sensitivity, prior-rank/docid tie-breaks, exact retention depths, 31-stream preservation for BF100, facet-only removal for BF50/BF20, family weights summing to 1.0 for every topic, original weight 0.5, no raw-score comparison across streams, deterministic RRF/provenance, output depth 100, protected-topic rejection, ranking stability under input reordering, and byte/hash identity between C0 and the prior frozen R1 family-RRF baseline.
+Also test 128-new-token span eligibility, fewer-than-four weight renormalization, MaxP sensitivity, prior-rank/docid tie-breaks, exact retention depths, 31-stream preservation for BF100, facet-only removal for BF50/BF20, topic-qualified stream identities, corrected family weights summing to exactly 1.0 for every topic, original weight 0.5, legacy effective weight-table reconstruction, no raw-score comparison across streams, deterministic RRF/provenance, output depth 100, protected-topic rejection, ranking stability under input reordering, byte/hash identity between `R1_LEGACY` and the prior frozen R1 family-RRF baseline, and a non-qrels legacy-versus-corrected per-topic rank/set diff audit.
 
 - [ ] **Step 2: Verify failure**
 
@@ -315,21 +334,21 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement stream aggregation and the exact arm matrix**
 
-Use within-stream MiniLM ranks as the only cross-stream input. BF50/BF20 truncate each facet after MiniLM reranking but keep the original depth-100 BM25 stream. BO100 reranks only originals. BB100 reranks both families. BF100_MAXP changes only aggregation. Publish C0 as a byte-for-byte copy of the prior verified `R1__family_rrf.jsonl`. Independently recompute its canonical `(topic_id, rank, document_id)` projection from the 31 frozen streams and require that hash to match the corresponding canonical projection of prior R1.
+Use within-stream MiniLM ranks as the only cross-stream input. BF50/BF20 truncate each facet after MiniLM reranking but keep the original depth-100 BM25 stream. BO100 reranks only originals. BB100 reranks both families. BF100_MAXP changes only aggregation. Publish `R1_LEGACY` as a byte-for-byte copy of the prior verified `R1__family_rrf.jsonl` and independently reconstruct its canonical projection using the frozen global-key v1 table. Build `C0_TOPIC_LOCAL` and all primary B arms with topic-local v2 weights. Save both complete weight tables, per-topic sum checks, implementation identities, tie-break/dedup definitions, and a qrels-free legacy-versus-corrected audit. Build `BF100_LEGACY_FUSION` from the same MiniLM stream orders with the frozen v1 table; do not perform new inference.
 
 - [ ] **Step 4: Create and independently verify the pre-qrels ranking freeze**
 
 ```bash
 .venv/bin/python -m trec_rag.facet_local_minilm_rank \
   --manifest reports/experiments/facet_local_minilm_pilot_v1/manifest.json \
-  --preflight outputs/rag25_facet_local_minilm_v1/preflight_v1 \
-  --scores outputs/rag25_facet_local_minilm_v1/scoring_v1 \
+  --preflight outputs/rag25_facet_local_minilm_v1/preflight_v2 \
+  --scores outputs/rag25_facet_local_minilm_v1/full_scoring_v1 \
   --output outputs/rag25_facet_local_minilm_v1/freeze_v1
 .venv/bin/python -m trec_rag.facet_local_minilm_rank verify \
   --freeze outputs/rag25_facet_local_minilm_v1/freeze_v1
 ```
 
-Expected: every stream and seven system rankings are hash-bound; the freeze declares `qrels_opened=false` and contains no qrels path.
+Expected: every stream and all nine system rankings are hash-bound; both fusion tables and the diff audit are frozen; the freeze declares `qrels_opened=false` and contains no qrels path.
 
 - [ ] **Step 5: Test and commit**
 
@@ -347,7 +366,7 @@ git commit -m "Freeze facet-local MiniLM ranking matrix"
 
 **Interfaces:**
 - Consumes: the verified ranking freeze.
-- Produces: masked top-two C0/BF50 review pool, reviewer label files, adjudication, unmask map, and a review freeze bound to the ranking freeze.
+- Produces: masked top-two corrected-control/BF50 topic-local review pool, reviewer label files, adjudication, unmask map, and a review freeze bound to the ranking freeze.
 
 - [ ] **Step 1: Write failing masking and adjudication tests**
 
@@ -430,7 +449,7 @@ def test_gain_loss_accounting_reconciles():
     assert comparison.net_change == 0
 ```
 
-Also test raw-union deduplication; paired `O@100 + C0 facets@K` and `O@100 + BF facets@K` curves for `K=20,50,100`; equality of the two raw candidate unions at K=100; separate raw-union, BF per-facet rank/contribution, and final fused top-100 document sets; overall and graded relevance definitions; O@100/R1@100 comparisons; gains plus losses; per-facet relevant retention; exact metric formulas; oracle rankings; judged rates; blinded-review macro aggregation and shared-item attribution; all six ordered diagnostic outcomes; no Stage A output; sidecar rejection before qrels data access when the declared topic set is not exact; projection-hash and freeze-hash binding; refusal of repeat qrels access; deterministic evaluation; and self-hashed outputs.
+Also test raw-union deduplication; paired `O@100 + C0_TOPIC_LOCAL facets@K` and `O@100 + BF_TOPIC_LOCAL facets@K` curves for `K=20,50,100`; equality of the two raw candidate unions at K=100; separate raw-union, BF per-facet rank/contribution, and final fused top-100 document sets; overall and graded relevance definitions; comparisons versus both `C0_TOPIC_LOCAL@100` and `R1_LEGACY@100`; gains plus losses; per-facet relevant retention; exact metric formulas; oracle rankings; judged rates; blinded-review macro aggregation and shared-item attribution; all six ordered diagnostic outcomes with the amended promotion guards; no Stage A output; sidecar rejection before qrels data access when the declared topic set is not exact; projection-hash and freeze-hash binding; refusal of repeat qrels access; deterministic evaluation; and self-hashed outputs.
 
 - [ ] **Step 2: Verify failure**
 
@@ -440,7 +459,7 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement the evaluator and outcome rules**
 
-Make `BF100` the primary MiniLM arm. BF50/BF20 diagnose retention; BO100/BB100 isolate family effects; BF100_MAXP diagnoses aggregation. Implement the exact ordered decision table in the design, including positive macro Recall@100, non-worse macro graded Recall@100, and the `-0.02` per-topic recall guards for `B_promotes_coverage`. Persist three auditable stages: raw candidate union, BF100 per-facet ranks and RRF contributions before fusion, and final fused top 100. A fusion-block outcome requires at least one relevant document absent from R1 to move from C0 facet rank greater than 20 to BF facet rank at most 20 and then remain absent from final BF100@100. Produce `raw_union.json`, `prefusion.json`, `facet_retention.json`, `systems.json`, `gains_losses.json`, `review_metrics.json`, `representatives.json`, and `decision.json`, each self-hashed and bound to both freezes. The all-topic qrels path is not a supported CLI input.
+Make `BF100_TOPIC_LOCAL` the primary MiniLM arm and `C0_TOPIC_LOCAL` its causal control. The other corrected arms diagnose retention, family effects, and aggregation; `R1_LEGACY` preserves continuity and `BF100_LEGACY_FUSION` completes the offline 2x2 diagnostic. Implement the amended ordered decision table in the design, including the corrected-control promotion conditions and the separately predeclared operational guards versus legacy R1. Persist three auditable stages: raw candidate union, BF100 topic-local per-facet ranks and RRF contributions before fusion, and final fused top 100. A fusion-block outcome requires at least one relevant document absent from `C0_TOPIC_LOCAL` to move from control facet rank greater than 20 to BF facet rank at most 20 and then remain absent from final `BF100_TOPIC_LOCAL@100`. Produce `raw_union.json`, `prefusion.json`, `facet_retention.json`, `systems.json`, `gains_losses.json`, `review_metrics.json`, `representatives.json`, and `decision.json`, each self-hashed and bound to both freezes. The all-topic qrels path is not a supported CLI input.
 
 - [ ] **Step 4: Open qrels once after all freeze hashes verify**
 
@@ -557,7 +576,9 @@ git commit -m "Report facet-local MiniLM pilot"
 - Model identity: actual cross-encoder, exact revision, safe-file allowlist.
 - Cost control: bounded windows/pairs, tokenizer-only preflight, benchmark and full-run approvals.
 - Scientific separation: raw union, local reranking, fusion, and final ranking measured separately.
-- Baseline identity: C0 bytes and canonical ranking hash match prior frozen R1.
+- Baseline identity: `R1_LEGACY` bytes and canonical ranking hash match prior
+  frozen R1; corrected `C0_TOPIC_LOCAL` is independently reconstructed and
+  all primary B comparisons use the identical corrected fusion.
 - Relevance honesty: qrels for topic relevance; blinded review for facet relevance.
 - No score-calibration leak: raw logits remain within query streams; RRF consumes ranks.
 - No qrels leak: rankings and review labels freeze first; only the exact

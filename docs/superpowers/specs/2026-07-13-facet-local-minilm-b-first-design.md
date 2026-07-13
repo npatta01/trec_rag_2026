@@ -142,28 +142,57 @@ then document ID.
 
 ## Experiment matrix
 
+### Frozen fusion-correction amendment
+
+Pre-ranking reconstruction found that the historical R1 implementation built
+topic-specific facet weights in a global mapping keyed only by
+`(variant_name, retriever_name)`. Repeated facet names therefore inherited
+weights from later topics. Preserve that exact artifact for continuity, but do
+not treat it as the intended topic-local 0.5/0.5 family-balanced control.
+
+The primary matrix uses `family_rrf_topic_local_v2`, whose stream identity is
+`(topic_id, variant_name, retriever_name)`. For every topic, the original
+stream has weight `0.5`, the facet family totals `0.5`, and every active facet
+has weight `0.5 / topic_facet_count`. The weights must sum to exactly `1.0`
+per topic and be invariant to input ordering.
+
+Historical R1 metrics remain valid descriptions of `R1_LEGACY`, but they are
+not evidence about the intended topic-local family-balanced RRF. Any corrected
+qrels-backed result is reported as a retrospective fusion correction rather
+than silently replacing the historical artifact. Audit the historical uniform
+RRF sensitivity separately because it used the same topic-free key pattern;
+it is not a promotion arm in this experiment.
+
 The primary family reranks facet streams while leaving the original stream in
 its prior BM25 order. This isolates facet-local value despite the original
 family's 0.5 fusion weight.
 
 | Arm | Original stream | Facet streams | Role |
 |---|---|---|---|
-| `C0` | BM25 | BM25 | Current R1 control |
-| `BF100` | BM25 | MiniLM top-four aggregation, retain 100 | Primary B test |
-| `BF50` | BM25 | MiniLM top-four aggregation, retain 50 | Retention sensitivity |
-| `BF20` | BM25 | MiniLM top-four aggregation, retain 20 | Retention sensitivity |
-| `BO100` | MiniLM | BM25 | Original-only diagnostic |
-| `BB100` | MiniLM | MiniLM | Both-families diagnostic |
-| `BF100_MAXP` | BM25 | MiniLM MaxP, retain 100 | Aggregation sensitivity |
+| `R1_LEGACY` | BM25 | BM25 | Byte-identical historical R1; legacy global-key fusion |
+| `C0_TOPIC_LOCAL` | BM25 | BM25 | Primary corrected control |
+| `BF100_TOPIC_LOCAL` | BM25 | MiniLM top-four aggregation, retain 100 | Primary B test |
+| `BF50_TOPIC_LOCAL` | BM25 | MiniLM top-four aggregation, retain 50 | Retention sensitivity |
+| `BF20_TOPIC_LOCAL` | BM25 | MiniLM top-four aggregation, retain 20 | Retention sensitivity |
+| `BO100_TOPIC_LOCAL` | MiniLM | BM25 | Original-only diagnostic |
+| `BB100_TOPIC_LOCAL` | MiniLM | MiniLM | Both-families diagnostic |
+| `BF100_MAXP_TOPIC_LOCAL` | BM25 | MiniLM MaxP, retain 100 | Aggregation sensitivity |
+| `BF100_LEGACY_FUSION` | BM25 | MiniLM top-four aggregation, retain 100 | Secondary 2x2 decomposition diagnostic |
 
-All B arms reuse one content-addressed score cache. BF50 and BF20 are derived
-offline from the same scores as BF100. Do not run inference separately for an
-arm.
+All B arms reuse one content-addressed score cache. The depth and aggregation
+sensitivities are derived offline from the same scores. Do not run inference
+separately for an arm.
 
-`C0` is the exact prior frozen `R1__family_rrf.jsonl`, copied byte for byte.
-Independently reconstruct its canonical `(topic_id, rank, document_id)` rows
-from the authenticated 31 streams and require that hash to match the prior R1
-canonical hash. If either identity check fails, no B comparison may proceed.
+`R1_LEGACY` is the exact prior frozen `R1__family_rrf.jsonl`, copied byte for
+byte. Independently reconstruct its canonical `(topic_id, rank, document_id)`
+rows with the frozen `family_rrf_global_key_v1` weight table and require the
+hash to match the prior R1 canonical hash. Independently reconstruct
+`C0_TOPIC_LOCAL` from the same 31 BM25 streams with the corrected v2 weights.
+Save a qrels-free per-topic rank/set diff between these controls. The primary
+causal comparison is `BF100_TOPIC_LOCAL - C0_TOPIC_LOCAL`. Report
+`C0_TOPIC_LOCAL - R1_LEGACY` as the fusion-correction effect and
+`BF100_TOPIC_LOCAL - R1_LEGACY` as the total operational change, not as a pure
+MiniLM effect. `BF100_LEGACY_FUSION - R1_LEGACY` is a secondary diagnostic.
 
 Fuse every arm with the existing family-balanced weighted RRF:
 
@@ -181,10 +210,13 @@ reported rather than normalized away.
 
 ## Blinded facet-local review
 
-Before qrels access, pool the top two documents per facet from `C0` and
-`BF50`, deduplicated within facet. This yields at most 108 facet/document items.
+Before qrels access, pool the top two documents per facet from the BM25 facet
+order used by `C0_TOPIC_LOCAL` and the MiniLM facet order used by
+`BF50_TOPIC_LOCAL`, deduplicated within facet. This yields at most 108
+facet/document items.
 For every pooled facet/document pair, present the same frozen highest-scoring
-MiniLM window regardless of whether C0, BF50, or both contributed the item.
+MiniLM window regardless of whether the corrected control, BF50, or both
+contributed the item.
 Reviewers judge whether that displayed passage answers the facet; they are not
 asked to infer relevance from unseen document text. Mask arm, rank, score, and
 document ID. Deterministically shuffle using the experiment-manifest hash. The
@@ -214,7 +246,9 @@ Before qrels access, save and hash:
 - tokenizer/window preflight and approval receipts;
 - every raw MiniLM score and cache identity;
 - every aggregated stream ranking;
-- all seven fused system rankings;
+- all nine fused system rankings;
+- the legacy global-key weight table, corrected topic-qualified weight table,
+  per-topic sum checks, and qrels-free legacy-versus-corrected diff audit;
 - fusion definitions and tie-breaks;
 - blinded review packet, labels, adjudication, and unmasking map;
 - exact evaluated topic IDs.
@@ -238,8 +272,8 @@ the freezes complete, stop and request explicit direction.
 
 For facet depths `K = 20, 50, 100`, report paired pre-fusion curves:
 
-- `O@100 + C0 facets@K`;
-- `O@100 + BF facets@K`.
+- `O@100 + C0_TOPIC_LOCAL facets@K`;
+- `O@100 + BF_TOPIC_LOCAL facets@K`.
 
 At `K=100` both contain the same raw candidates, so union recall must be
 identical. MiniLM can improve retention at `K=20/50` and within-stream ranks
@@ -249,7 +283,8 @@ used by final fusion, but it cannot create candidates. For every curve, report:
 - relevant and graded-relevant documents;
 - Recall and graded Recall;
 - relevant documents absent from original `O@100`;
-- relevant documents absent from current `R1@100`;
+- relevant documents absent from corrected `C0_TOPIC_LOCAL@100`;
+- relevant documents absent from historical `R1_LEGACY@100`;
 - relevant documents gained and lost relative to those baselines;
 - net relevant-document change;
 - per-topic union-at-K curves.
@@ -261,7 +296,8 @@ Report by arm, topic, and facet:
 - blinded direct-answer, partial, irrelevant, wrong-domain, and low-quality
   counts;
 - topic-relevant documents retained at 100, 50, and 20;
-- unique topic-relevant documents contributed beyond `O@100` and `R1@100`;
+- unique topic-relevant documents contributed beyond `O@100`,
+  `C0_TOPIC_LOCAL@100`, and `R1_LEGACY@100`;
 - representative promoted, demoted, gained, and lost passages.
 
 ### Final systems
@@ -286,31 +322,39 @@ rule explicitly says non-worse.
 
 Define:
 
-- `headroom`: count of qrels-relevant documents in the raw `O@100 + C0
-  facets@100` union but absent from R1@100;
-- `pre_fusion_promoted_novel`: count of relevant documents absent from R1@100
-  whose best BF facet rank is at most 20 and whose best C0 facet rank is greater
-  than 20;
-- `final_novel`: relevant documents in BF100@100 but absent from R1@100.
+- `headroom`: count of qrels-relevant documents in the raw `O@100 +
+  C0_TOPIC_LOCAL facets@100` union but absent from `C0_TOPIC_LOCAL@100`;
+- `pre_fusion_promoted_novel`: count of relevant documents absent from
+  `C0_TOPIC_LOCAL@100` whose best BF facet rank is at most 20 and whose best
+  control facet rank is greater than 20;
+- `final_novel`: relevant documents in `BF100_TOPIC_LOCAL@100` but absent from
+  `C0_TOPIC_LOCAL@100`;
+- `final_novel_vs_legacy_R1`: relevant documents in
+  `BF100_TOPIC_LOCAL@100` but absent from `R1_LEGACY@100`.
 
 Apply this ordered, mutually exclusive decision table:
 
 1. `candidate_generation_gap` when `headroom == 0`. Reranking cannot create
    missing candidates; return to retrieval controls or one bounded feedback
    pass.
-2. `B_promotes_coverage` when `final_novel >= 1`, BF100 has positive net
-   relevant-document change, positive macro Recall@100 delta versus R1,
-   non-negative macro graded Recall@100 delta, no per-topic Recall@100 or
-   graded Recall@100 delta below `-0.02`, positive macro direct-answer-rate
-   delta, non-positive wrong-domain-rate delta, macro nDCG@10 delta at least
-   `-0.02`, and no topic nDCG@10 delta below `-0.10`. Only this outcome permits
-   a separately designed Stage A efficiency experiment.
+2. `B_promotes_coverage` when `final_novel >= 1`, `BF100_TOPIC_LOCAL` has
+   positive net relevant-document change, positive macro Recall@100 delta
+   versus `C0_TOPIC_LOCAL`, non-negative macro graded Recall@100 delta, no
+   per-topic Recall@100 or graded Recall@100 delta below `-0.02`, positive
+   macro direct-answer-rate delta, non-positive wrong-domain-rate delta, macro
+   nDCG@10 delta at least `-0.02`, and no topic nDCG@10 delta below `-0.10`.
+   The operational comparison versus `R1_LEGACY` must also have non-negative
+   macro Recall@100 and graded Recall@100 deltas, no per-topic Recall@100 or
+   graded Recall@100 delta below `-0.02`, macro nDCG@10 delta at least `-0.02`,
+   and no topic nDCG@10 delta below `-0.10`. Only this outcome permits a
+   separately designed Stage A efficiency experiment.
 3. `B_coverage_gain_with_regression` when `final_novel >= 1` or macro
    Recall@100 improves, but any promotion guard above fails. Preserve the gain,
    diagnose the exact loss, and do not begin Stage A.
 4. `B_filters_but_fusion_blocks` when `headroom > 0`, macro direct-answer rate
    improves without a wrong-domain-rate increase,
-   `pre_fusion_promoted_novel >= 1`, and macro final Recall@100 does not improve.
+   `pre_fusion_promoted_novel >= 1`, and macro final Recall@100 versus
+   `C0_TOPIC_LOCAL` does not improve.
    The three saved sets prove that candidates existed, MiniLM gave at least one
    novel relevant document a fusion-eligible local rank, and final RRF omitted
    the coverage gain. Diagnose fusion weights, truncation, and quotas offline.
@@ -346,7 +390,8 @@ retrieval is part of this experiment.
 - Tokenizer/window preflight with exact cost and cache coverage.
 - Benchmark and full-inference approval receipts.
 - Content-addressed MiniLM score cache and immutable run ledger.
-- Frozen C0, BF100, BF50, BF20, BO100, BB100, and BF100_MAXP rankings.
+- Frozen `R1_LEGACY`, `C0_TOPIC_LOCAL`, all six corrected topic-local B
+  rankings, and `BF100_LEGACY_FUSION`.
 - Blinded facet-local review packet and adjudicated labels.
 - Qrels-backed candidate-headroom, gain/loss, recall, and guardrail report.
 - Rendered local HTML that distinguishes retrieval absence, facet-filtering
