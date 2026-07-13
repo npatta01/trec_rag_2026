@@ -1,0 +1,1554 @@
+"""Evaluate facet-local MiniLM-B reranker candidates under the experiment firewall."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import math
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from statistics import fmean
+from typing import Any, Iterable, Mapping, Sequence
+
+
+PILOT_TOPIC_IDS = ("200", "225", "707", "897")
+EVALUATION_ARTIFACT_NAMES = (
+    "raw_union.json",
+    "prefusion.json",
+    "facet_retention.json",
+    "systems.json",
+    "gains_losses.json",
+    "review_metrics.json",
+    "representatives.json",
+    "decision.json",
+)
+
+
+@dataclass(frozen=True)
+class DocidSetComparison:
+    """Reconciled set-level gains and losses between two rankings."""
+
+    baseline_count: int
+    candidate_count: int
+    gained: set[str]
+    lost: set[str]
+
+    @property
+    def net_change(self) -> int:
+        return self.candidate_count - self.baseline_count
+
+
+def compare_docid_sets(
+    baseline: Iterable[str], candidate: Iterable[str]
+) -> DocidSetComparison:
+    """Compare unique document identifiers and retain reconcilable counts."""
+
+    baseline_set = {str(docid) for docid in baseline}
+    candidate_set = {str(docid) for docid in candidate}
+    return DocidSetComparison(
+        baseline_count=len(baseline_set),
+        candidate_count=len(candidate_set),
+        gained=candidate_set - baseline_set,
+        lost=baseline_set - candidate_set,
+    )
+
+
+def _deduplicate(docids: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(str(docid) for docid in docids))
+
+
+def _topic_sort_key(topic_id: str) -> tuple[int, str]:
+    try:
+        return (PILOT_TOPIC_IDS.index(topic_id), topic_id)
+    except ValueError:
+        return (len(PILOT_TOPIC_IDS), topic_id)
+
+
+def _dcg(grades: Sequence[int | float]) -> float:
+    return sum(
+        (2 ** float(grade) - 1.0) / math.log2(rank + 1)
+        for rank, grade in enumerate(grades, start=1)
+        if float(grade) > 0.0
+    )
+
+
+def evaluate_ranking(
+    ranking: Sequence[str], qrels: Mapping[str, int | float]
+) -> dict[str, int | float]:
+    """Calculate the preregistered ranking, coverage, and judging metrics."""
+
+    docids = _deduplicate(ranking)
+    normalized_qrels = {str(docid): float(grade) for docid, grade in qrels.items()}
+
+    top10 = docids[:10]
+    top50 = docids[:50]
+    top100 = docids[:100]
+    binary_relevant = {
+        docid for docid, grade in normalized_qrels.items() if grade >= 2.0
+    }
+    positive_grades = [grade for grade in normalized_qrels.values() if grade > 0.0]
+
+    relevant_at_10 = sum(docid in binary_relevant for docid in top10)
+    relevant_at_100 = sum(docid in binary_relevant for docid in top100)
+    graded_gain_at_100 = sum(
+        max(0.0, normalized_qrels.get(docid, 0.0)) for docid in top100
+    )
+
+    ranked_grades = [max(0.0, normalized_qrels.get(docid, 0.0)) for docid in top10]
+    ideal_ranked_grades = sorted(
+        (grade for grade in ranked_grades if grade > 0.0), reverse=True
+    )[:10]
+    ideal_ranked_dcg = _dcg(ideal_ranked_grades)
+
+    full_ideal_dcg = _dcg(sorted(positive_grades, reverse=True)[:10])
+
+    def oracle_ndcg(pool: Sequence[str]) -> float:
+        attainable = sorted(
+            (
+                max(0.0, normalized_qrels.get(docid, 0.0))
+                for docid in pool
+                if normalized_qrels.get(docid, 0.0) > 0.0
+            ),
+            reverse=True,
+        )[:10]
+        return _dcg(attainable) / full_ideal_dcg if full_ideal_dcg else 0.0
+
+    return {
+        "relevant_count@10": relevant_at_10,
+        "relevant_count@100": relevant_at_100,
+        "precision@10": relevant_at_10 / 10.0,
+        "recall@100": (
+            relevant_at_100 / len(binary_relevant) if binary_relevant else 0.0
+        ),
+        "graded_recall@100": (
+            graded_gain_at_100 / sum(positive_grades) if positive_grades else 0.0
+        ),
+        "ndcg@10": _dcg(ranked_grades) / ideal_ranked_dcg if ideal_ranked_dcg else 0.0,
+        "judged_rate@10": sum(docid in normalized_qrels for docid in top10) / 10.0,
+        "judged_rate@100": (
+            sum(docid in normalized_qrels for docid in top100) / 100.0
+        ),
+        "oracle_ndcg@10_from_top50": oracle_ndcg(top50),
+        "oracle_ndcg@10_from_top100": oracle_ndcg(top100),
+    }
+
+
+def build_union_curves(
+    original: Mapping[str, Sequence[str]],
+    control_facets: Mapping[tuple[str, str], Sequence[str]],
+    bf_facets: Mapping[tuple[str, str], Sequence[str]],
+    qrels: Mapping[str, Mapping[str, int | float]],
+    *,
+    depths: Sequence[int] = (20, 50, 100),
+) -> dict[str, dict[int, dict[str, Any]]]:
+    """Build paired, deduplicated pre-fusion candidate-union curves."""
+
+    if set(control_facets) != set(bf_facets):
+        raise ValueError("control and BF must contain the same facet streams")
+    if 100 in depths:
+        mismatches = [
+            key
+            for key in control_facets
+            if set(_deduplicate(control_facets[key])[:100])
+            != set(_deduplicate(bf_facets[key])[:100])
+        ]
+        if mismatches:
+            raise ValueError("control and BF depth-100 streams must have the same raw candidates")
+
+    topic_ids = {
+        *(str(topic_id) for topic_id in original),
+        *(str(topic_id) for topic_id, _ in control_facets),
+        *(str(topic_id) for topic_id, _ in bf_facets),
+    }
+    ordered_topics = sorted(topic_ids, key=_topic_sort_key)
+    systems = {
+        "C0_TOPIC_LOCAL": control_facets,
+        "BF100_TOPIC_LOCAL": bf_facets,
+    }
+    result: dict[str, dict[int, dict[str, Any]]] = {}
+
+    for arm, facet_rankings in systems.items():
+        arm_curves: dict[int, dict[str, Any]] = {}
+        for depth in depths:
+            per_topic: dict[str, dict[str, Any]] = {}
+            for topic_id in ordered_topics:
+                union = set(_deduplicate(original.get(topic_id, ())))
+                for (facet_topic, _), ranking in facet_rankings.items():
+                    if str(facet_topic) == topic_id:
+                        union.update(_deduplicate(ranking)[:depth])
+                docids = sorted(union)
+                topic_qrels = qrels.get(topic_id, {})
+                relevant_docids = sorted(
+                    docid for docid in union if float(topic_qrels.get(docid, 0)) >= 2
+                )
+                positive_denominator = sum(
+                    max(0.0, float(grade)) for grade in topic_qrels.values()
+                )
+                graded_gain = sum(
+                    max(0.0, float(topic_qrels.get(docid, 0))) for docid in union
+                )
+                relevant_denominator = sum(
+                    float(grade) >= 2 for grade in topic_qrels.values()
+                )
+                per_topic[topic_id] = {
+                    "docids": docids,
+                    "unique_candidate_documents": len(docids),
+                    "relevant_docids": relevant_docids,
+                    "relevant_documents": len(relevant_docids),
+                    "graded_relevant_gain": graded_gain,
+                    "recall": (
+                        len(relevant_docids) / relevant_denominator
+                        if relevant_denominator
+                        else 0.0
+                    ),
+                    "graded_recall": (
+                        graded_gain / positive_denominator
+                        if positive_denominator
+                        else 0.0
+                    ),
+                }
+            arm_curves[int(depth)] = {
+                "per_topic": per_topic,
+                "macro": {
+                    "recall": fmean(row["recall"] for row in per_topic.values())
+                    if per_topic
+                    else 0.0,
+                    "graded_recall": fmean(
+                        row["graded_recall"] for row in per_topic.values()
+                    )
+                    if per_topic
+                    else 0.0,
+                },
+            }
+        result[arm] = arm_curves
+    return result
+
+
+def build_facet_retention(
+    facets_by_arm: Mapping[
+        str, Mapping[tuple[str, str], Sequence[str]]
+    ],
+    qrels: Mapping[str, Mapping[str, int | float]],
+    *,
+    baselines: Mapping[str, Mapping[str, Iterable[str]]],
+    depths: Sequence[int] = (20, 50, 100),
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Report relevant retention and unique contribution for every facet."""
+
+    result: dict[str, dict[str, dict[str, Any]]] = {}
+    for arm, facets in facets_by_arm.items():
+        arm_rows: dict[str, dict[str, Any]] = {}
+        for (raw_topic_id, variant_name), ranking in facets.items():
+            topic_id = str(raw_topic_id)
+            docids = _deduplicate(ranking)
+            topic_qrels = qrels.get(topic_id, {})
+            relevant = {
+                docid for docid in docids if float(topic_qrels.get(docid, 0)) >= 2
+            }
+            arm_rows[f"{topic_id}/{variant_name}"] = {
+                "relevant_retained": {
+                    str(depth): len(
+                        {
+                            docid
+                            for docid in docids[:depth]
+                            if float(topic_qrels.get(docid, 0)) >= 2
+                        }
+                    )
+                    for depth in depths
+                },
+                "unique_relevant_beyond": {
+                    baseline_name: sorted(
+                        relevant
+                        - {
+                            str(docid)
+                            for docid in baseline_topics.get(topic_id, ())
+                        }
+                    )
+                    for baseline_name, baseline_topics in baselines.items()
+                },
+            }
+        result[arm] = arm_rows
+    return result
+
+
+def compute_prefusion_evidence(
+    *,
+    control_facets: Mapping[tuple[str, str], Sequence[str]],
+    bf_facets: Mapping[tuple[str, str], Sequence[str]],
+    stream_weights: Mapping[tuple[str, str], int | float],
+    control_final: Mapping[str, Sequence[str]],
+    bf_final: Mapping[str, Sequence[str]],
+    qrels: Mapping[str, Mapping[str, int | float]],
+    promotion_depth: int = 20,
+    rrf_k: int = 60,
+) -> dict[str, Any]:
+    """Keep raw candidates, local-rank evidence, and final fusion sets distinct."""
+
+    facet_keys = sorted(
+        set(control_facets) | set(bf_facets),
+        key=lambda key: (_topic_sort_key(str(key[0])), str(key[1])),
+    )
+    topic_ids = {
+        *(str(topic_id) for topic_id, _ in facet_keys),
+        *(str(topic_id) for topic_id in control_final),
+        *(str(topic_id) for topic_id in bf_final),
+    }
+    ordered_topics = sorted(topic_ids, key=_topic_sort_key)
+
+    raw_unions: dict[str, set[str]] = {topic_id: set() for topic_id in ordered_topics}
+    best_control: dict[tuple[str, str], int] = {}
+    best_bf: dict[tuple[str, str], int] = {}
+    facet_rows: list[dict[str, Any]] = []
+
+    for raw_key in facet_keys:
+        raw_topic_id, variant_name = raw_key
+        topic_id = str(raw_topic_id)
+        control = _deduplicate(control_facets.get(raw_key, ()))
+        bf = _deduplicate(bf_facets.get(raw_key, ()))
+        raw_unions[topic_id].update(control)
+        raw_unions[topic_id].update(bf)
+        control_ranks = {docid: rank for rank, docid in enumerate(control, start=1)}
+        bf_ranks = {docid: rank for rank, docid in enumerate(bf, start=1)}
+        candidate_docids = sorted(
+            set(control) | set(bf),
+            key=lambda docid: (
+                bf_ranks.get(docid, math.inf),
+                control_ranks.get(docid, math.inf),
+                docid,
+            ),
+        )
+
+        for docid in candidate_docids:
+            control_rank = control_ranks.get(docid)
+            bf_rank = bf_ranks.get(docid)
+            if control_rank is not None:
+                best_control[(topic_id, docid)] = min(
+                    best_control.get((topic_id, docid), control_rank), control_rank
+                )
+            if bf_rank is not None:
+                best_bf[(topic_id, docid)] = min(
+                    best_bf.get((topic_id, docid), bf_rank), bf_rank
+                )
+            weight = float(stream_weights.get(raw_key, 0.0))
+            qrel_grade = int(qrels.get(topic_id, {}).get(docid, 0))
+            facet_rows.append(
+                {
+                    "topic_id": topic_id,
+                    "variant_name": str(variant_name),
+                    "docid": docid,
+                    "control_rank": control_rank,
+                    "bf_rank": bf_rank,
+                    "qrel_grade": qrel_grade,
+                    "is_relevant": qrel_grade >= 2,
+                    "stream_weight": weight,
+                    "rrf_contribution": (
+                        weight / (rrf_k + bf_rank) if bf_rank is not None else 0.0
+                    ),
+                }
+            )
+
+    control_final_sets = {
+        topic_id: set(_deduplicate(control_final.get(topic_id, ())))
+        for topic_id in ordered_topics
+    }
+    bf_final_sets = {
+        topic_id: set(_deduplicate(bf_final.get(topic_id, ())))
+        for topic_id in ordered_topics
+    }
+    promoted: list[str] = []
+    for (topic_id, docid), bf_rank in sorted(best_bf.items()):
+        if (
+            float(qrels.get(topic_id, {}).get(docid, 0)) >= 2
+            and docid not in control_final_sets[topic_id]
+            and bf_rank <= promotion_depth
+            and best_control.get((topic_id, docid), math.inf) > promotion_depth
+        ):
+            promoted.append(f"{topic_id}/{docid}")
+
+    blocked = [
+        qualified
+        for qualified in promoted
+        if qualified.split("/", 1)[1]
+        not in bf_final_sets[qualified.split("/", 1)[0]]
+    ]
+    final_novel = sorted(
+        f"{topic_id}/{docid}"
+        for topic_id in ordered_topics
+        for docid in bf_final_sets[topic_id] - control_final_sets[topic_id]
+        if float(qrels.get(topic_id, {}).get(docid, 0)) >= 2
+    )
+
+    return {
+        "raw_union_docids": {
+            topic_id: sorted(raw_unions[topic_id]) for topic_id in ordered_topics
+        },
+        "facet_rows": facet_rows,
+        "control_final_docids": {
+            topic_id: sorted(control_final_sets[topic_id]) for topic_id in ordered_topics
+        },
+        "final_docids": {
+            topic_id: sorted(bf_final_sets[topic_id]) for topic_id in ordered_topics
+        },
+        "pre_fusion_promoted_novel_docids": promoted,
+        "fusion_blocked_novel_docids": blocked,
+        "final_novel_docids": final_novel,
+    }
+
+
+def aggregate_review_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate blinded labels within facets, then macro-average by arm."""
+
+    metric_names = (
+        "direct_answer",
+        "partial_or_related",
+        "not_facet_relevant",
+        "wrong_domain",
+        "low_quality",
+    )
+    by_arm: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"denominator": 0, **{name: 0 for name in metric_names}}
+    )
+    by_facet: dict[tuple[str, str, str], dict[str, int]] = defaultdict(
+        lambda: {"denominator": 0, **{name: 0 for name in metric_names}}
+    )
+
+    for row in rows:
+        label = row["label"]
+        relevance = str(label.get("relevance", ""))
+        for membership in row.get("memberships", ()):
+            arm = str(membership["arm"])
+            facet = membership["facet"]
+            facet_key = (
+                arm,
+                str(facet["topic_id"]),
+                str(facet["variant_name"]),
+            )
+            for counts in (by_arm[arm], by_facet[facet_key]):
+                counts["denominator"] += 1
+                if relevance in counts:
+                    counts[relevance] += 1
+                counts["wrong_domain"] += int(bool(label.get("wrong_domain")))
+                counts["low_quality"] += int(bool(label.get("low_quality")))
+
+    per_facet_by_arm: dict[str, dict[str, dict[str, int | float]]] = defaultdict(dict)
+    for (arm, topic_id, variant_name), counts in by_facet.items():
+        denominator = counts["denominator"]
+        per_facet_by_arm[arm][f"{topic_id}/{variant_name}"] = {
+            **counts,
+            **{
+                f"{name}_rate": counts[name] / denominator
+                for name in metric_names
+            },
+        }
+
+    macro_by_arm: dict[str, dict[str, float]] = {}
+    for arm, facets in per_facet_by_arm.items():
+        macro_by_arm[arm] = {
+            f"{name}_rate": fmean(
+                float(facet[f"{name}_rate"]) for facet in facets.values()
+            )
+            for name in metric_names
+        }
+
+    return {
+        "counts_by_arm": {arm: dict(counts) for arm, counts in by_arm.items()},
+        "per_facet_by_arm": {arm: dict(facets) for arm, facets in per_facet_by_arm.items()},
+        "macro_by_arm": macro_by_arm,
+    }
+
+
+def select_diagnostic_outcome(
+    *,
+    headroom: int,
+    pre_fusion_promoted_novel: int,
+    fusion_blocked_novel: int,
+    final_novel: int,
+    final_novel_vs_legacy_r1: int,
+    net_relevant_change_vs_control: int,
+    macro_deltas_vs_control: Mapping[str, float],
+    per_topic_deltas_vs_control: Mapping[str, Mapping[str, float]],
+    review_deltas: Mapping[str, float],
+    macro_deltas_vs_legacy_r1: Mapping[str, float],
+    per_topic_deltas_vs_legacy_r1: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    """Apply the preregistered diagnostic table in its exact order."""
+
+    def every_topic_at_least(
+        deltas: Mapping[str, Mapping[str, float]], metric: str, floor: float
+    ) -> bool:
+        return all(float(topic[metric]) >= floor for topic in deltas.values())
+
+    guards = (
+        ("final_novel", final_novel >= 1),
+        (
+            "positive_net_relevant_change_vs_control",
+            net_relevant_change_vs_control > 0,
+        ),
+        (
+            "positive_macro_recall_vs_control",
+            float(macro_deltas_vs_control["recall@100"]) > 0.0,
+        ),
+        (
+            "nonnegative_macro_graded_recall_vs_control",
+            float(macro_deltas_vs_control["graded_recall@100"]) >= 0.0,
+        ),
+        (
+            "per_topic_recall_floor_vs_control",
+            every_topic_at_least(
+                per_topic_deltas_vs_control, "recall@100", -0.02
+            ),
+        ),
+        (
+            "per_topic_graded_recall_floor_vs_control",
+            every_topic_at_least(
+                per_topic_deltas_vs_control, "graded_recall@100", -0.02
+            ),
+        ),
+        (
+            "positive_direct_answer_rate_delta",
+            float(review_deltas["direct_answer_rate"]) > 0.0,
+        ),
+        (
+            "nonpositive_wrong_domain_rate_delta",
+            float(review_deltas["wrong_domain_rate"]) <= 0.0,
+        ),
+        (
+            "macro_ndcg_floor_vs_control",
+            float(macro_deltas_vs_control["ndcg@10"]) >= -0.02,
+        ),
+        (
+            "per_topic_ndcg_floor_vs_control",
+            every_topic_at_least(per_topic_deltas_vs_control, "ndcg@10", -0.10),
+        ),
+        (
+            "nonnegative_macro_recall_vs_legacy_r1",
+            float(macro_deltas_vs_legacy_r1["recall@100"]) >= 0.0,
+        ),
+        (
+            "nonnegative_macro_graded_recall_vs_legacy_r1",
+            float(macro_deltas_vs_legacy_r1["graded_recall@100"]) >= 0.0,
+        ),
+        (
+            "per_topic_recall_floor_vs_legacy_r1",
+            every_topic_at_least(
+                per_topic_deltas_vs_legacy_r1, "recall@100", -0.02
+            ),
+        ),
+        (
+            "per_topic_graded_recall_floor_vs_legacy_r1",
+            every_topic_at_least(
+                per_topic_deltas_vs_legacy_r1, "graded_recall@100", -0.02
+            ),
+        ),
+        (
+            "macro_ndcg_floor_vs_legacy_r1",
+            float(macro_deltas_vs_legacy_r1["ndcg@10"]) >= -0.02,
+        ),
+        (
+            "per_topic_ndcg_floor_vs_legacy_r1",
+            every_topic_at_least(
+                per_topic_deltas_vs_legacy_r1, "ndcg@10", -0.10
+            ),
+        ),
+    )
+    failed_guards = [name for name, passed in guards if not passed]
+    macro_recall = float(macro_deltas_vs_control["recall@100"])
+    macro_ndcg = float(macro_deltas_vs_control["ndcg@10"])
+
+    if headroom == 0:
+        outcome = "candidate_generation_gap"
+    elif not failed_guards:
+        outcome = "B_promotes_coverage"
+    elif final_novel >= 1 or macro_recall > 0.0:
+        outcome = "B_coverage_gain_with_regression"
+    elif (
+        headroom > 0
+        and float(review_deltas["direct_answer_rate"]) > 0.0
+        and float(review_deltas["wrong_domain_rate"]) <= 0.0
+        and pre_fusion_promoted_novel >= 1
+        and fusion_blocked_novel >= 1
+        and macro_recall <= 0.0
+    ):
+        outcome = "B_filters_but_fusion_blocks"
+    elif final_novel == 0 and macro_recall <= 0.0 and macro_ndcg > 0.0:
+        outcome = "ranking_only_gain"
+    else:
+        outcome = "B_query_window_or_model_gap"
+
+    return {
+        "outcome": outcome,
+        "stage_a_permitted": outcome == "B_promotes_coverage",
+        "stage_a_executed": False,
+        "failed_promotion_guards": failed_guards,
+        "final_novel_vs_legacy_r1": final_novel_vs_legacy_r1,
+    }
+
+
+def _canonical_json_bytes(payload: Mapping[str, Any], *, newline: bool = False) -> bytes:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return encoded + (b"\n" if newline else b"")
+
+
+def add_self_hash(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a canonical-content-bound copy of an evaluation artifact."""
+
+    result = dict(payload)
+    result.pop("artifact_sha256", None)
+    result["artifact_sha256"] = hashlib.sha256(
+        _canonical_json_bytes(result)
+    ).hexdigest()
+    return result
+
+
+def validate_self_hash(payload: Mapping[str, Any]) -> bool:
+    """Reject an artifact whose claimed content hash no longer matches."""
+
+    claimed = payload.get("artifact_sha256")
+    if not isinstance(claimed, str) or len(claimed) != 64:
+        raise ValueError("artifact self-hash is missing or invalid")
+    without_hash = dict(payload)
+    without_hash.pop("artifact_sha256", None)
+    actual = hashlib.sha256(_canonical_json_bytes(without_hash)).hexdigest()
+    if not hmac.compare_digest(claimed, actual):
+        raise ValueError("artifact self-hash differs from its content")
+    return True
+
+
+def _read_json_object(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is missing or invalid") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def _validated_sha256(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{label} is not a lowercase SHA-256 digest")
+    return value
+
+
+def verify_ranking_freeze(freeze: Path) -> dict[str, Any]:
+    """Verify the complete pre-qrels ranking freeze through its owner module."""
+
+    freeze = Path(freeze)
+    if not (freeze / "freeze.json").is_file():
+        raise ValueError("ranking freeze is incomplete")
+    from .facet_local_minilm_rank import verify_freeze
+
+    try:
+        return dict(verify_freeze(freeze))
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ValueError("ranking freeze is incomplete") from exc
+
+
+def verify_blinded_review_freeze(
+    review_freeze: Path, ranking_freeze: Path
+) -> dict[str, Any]:
+    """Verify the qrels-blind review and its binding to the ranking freeze."""
+
+    review_freeze = Path(review_freeze)
+    if not (review_freeze / "review_freeze.json").is_file():
+        raise ValueError("blinded-review freeze is incomplete")
+    from .facet_local_minilm_review import verify_review_freeze
+
+    try:
+        return dict(
+            verify_review_freeze(
+                review_freeze,
+                ranking_freeze_dir=Path(ranking_freeze),
+            )
+        )
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ValueError("blinded-review freeze is incomplete") from exc
+
+
+def load_frozen_inputs(
+    ranking_freeze: Path, review_freeze: Path, prior_evaluation: Path
+) -> dict[str, Any]:
+    """Load only already-frozen, qrels-free evaluator inputs."""
+
+    ranking_root = Path(ranking_freeze)
+    freeze = _read_json_object(ranking_root / "freeze.json", "ranking freeze")
+
+    def bound_path(raw_path: Any, label: str) -> Path:
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError(f"{label} path is missing")
+        relative = Path(raw_path)
+        if relative.is_absolute() or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
+            raise ValueError(f"{label} path escapes the verified ranking freeze")
+        path = ranking_root / relative
+        try:
+            path.resolve().relative_to(ranking_root.resolve())
+        except ValueError as exc:
+            raise ValueError(
+                f"{label} path escapes the verified ranking freeze"
+            ) from exc
+        return path
+
+    def read_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
+        try:
+            values = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (
+            FileNotFoundError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ValueError(f"{label} is missing or invalid") from exc
+        if any(not isinstance(value, dict) for value in values):
+            raise ValueError(f"{label} rows must be JSON objects")
+        return values
+
+    def docid(row: Mapping[str, Any]) -> str:
+        value = row.get("docid", row.get("document_id"))
+        if not isinstance(value, str) or not value:
+            raise ValueError("frozen ranking row lacks a document ID")
+        return value
+
+    rankings: dict[str, dict[str, list[str]]] = {}
+    ranking_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    raw_ranking_records = freeze.get("rankings")
+    if not isinstance(raw_ranking_records, Mapping):
+        raise ValueError("ranking freeze lacks final ranking records")
+    document_details: dict[tuple[str, str], dict[str, Any]] = {}
+    for arm, raw_record in raw_ranking_records.items():
+        if not isinstance(raw_record, Mapping):
+            raise ValueError("ranking freeze has an invalid final ranking record")
+        rows = read_jsonl(
+            bound_path(raw_record.get("path"), f"{arm} ranking"),
+            f"{arm} ranking",
+        )
+        by_topic: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            topic_id = str(row.get("topic_id"))
+            if topic_id not in PILOT_TOPIC_IDS:
+                raise ValueError("final ranking contains a topic outside the pilot")
+            by_topic[topic_id].append(row)
+            document_details.setdefault((topic_id, docid(row)), row)
+        ordered = {
+            topic_id: sorted(
+                by_topic.get(topic_id, ()),
+                key=lambda row: (int(row["rank"]), docid(row)),
+            )
+            for topic_id in PILOT_TOPIC_IDS
+        }
+        rankings[str(arm)] = {
+            topic_id: [docid(row) for row in ordered[topic_id]]
+            for topic_id in PILOT_TOPIC_IDS
+        }
+        ranking_rows[str(arm)] = ordered
+
+    original: dict[str, list[str]] = {}
+    control_facets: dict[tuple[str, str], list[str]] = {}
+    bf_facets: dict[tuple[str, str], list[str]] = {}
+    stream_records = freeze.get("streams")
+    if not isinstance(stream_records, Sequence):
+        raise ValueError("ranking freeze lacks stream records")
+    for raw_record in stream_records:
+        if not isinstance(raw_record, Mapping):
+            raise ValueError("ranking freeze has an invalid stream record")
+        aggregation = str(raw_record.get("aggregation"))
+        family = str(raw_record.get("family"))
+        if aggregation not in {"bm25", "top4"}:
+            continue
+        topic_id = str(raw_record.get("topic_id"))
+        variant = str(raw_record.get("variant_name"))
+        rows = read_jsonl(
+            bound_path(raw_record.get("path"), "stream ranking"),
+            "stream ranking",
+        )
+        ordered_rows = sorted(
+            rows, key=lambda row: (int(row["rank"]), docid(row))
+        )
+        document_ids = [docid(row) for row in ordered_rows]
+        for row in ordered_rows:
+            document_details.setdefault((topic_id, docid(row)), row)
+        if family == "original" and aggregation == "bm25":
+            if topic_id in original:
+                raise ValueError("ranking freeze contains duplicate original streams")
+            original[topic_id] = document_ids
+        elif family == "facet":
+            key = (topic_id, variant)
+            destination = control_facets if aggregation == "bm25" else bf_facets
+            if key in destination:
+                raise ValueError("ranking freeze contains duplicate facet streams")
+            destination[key] = document_ids
+    if set(original) != set(PILOT_TOPIC_IDS) or set(control_facets) != set(bf_facets):
+        raise ValueError("ranking freeze stream population is incomplete")
+
+    fusion_tables = freeze.get("fusion_tables")
+    if not isinstance(fusion_tables, Mapping):
+        raise ValueError("ranking freeze lacks fusion weight tables")
+    weight_payload = _read_json_object(
+        bound_path(
+            fusion_tables.get("family_rrf_topic_local_v2"),
+            "topic-local fusion weights",
+        ),
+        "topic-local fusion weights",
+    )
+    raw_weights = weight_payload.get("weights")
+    if not isinstance(raw_weights, Sequence):
+        raise ValueError("topic-local fusion weights are invalid")
+    stream_weights = {
+        (str(row["topic_id"]), str(row["variant_name"])): float(row["weight"])
+        for row in raw_weights
+        if isinstance(row, Mapping)
+        and (str(row.get("topic_id")), str(row.get("variant_name")))
+        in control_facets
+    }
+    if set(stream_weights) != set(control_facets):
+        raise ValueError("facet streams lack exact topic-local fusion weights")
+
+    prior_path = Path(prior_evaluation)
+    try:
+        prior_bytes = prior_path.read_bytes()
+        prior_value = json.loads(prior_bytes)
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("prior evaluation is missing or invalid") from exc
+    if not isinstance(prior_value, dict):
+        raise ValueError("prior evaluation must be a JSON object")
+    prior = prior_value
+    if "artifact_sha256" in prior:
+        validate_self_hash(prior)
+    review_path = Path(review_freeze) / "unmasked_items.jsonl"
+    try:
+        review_rows = [
+            json.loads(line)
+            for line in review_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("blinded-review freeze is incomplete") from exc
+    return {
+        "bf_facets": bf_facets,
+        "control_facets": control_facets,
+        "document_details": document_details,
+        "original": original,
+        "prior_evaluation": prior,
+        "prior_evaluation_sha256": hashlib.sha256(prior_bytes).hexdigest(),
+        "ranking_rows": ranking_rows,
+        "rankings": rankings,
+        "review_rows": review_rows,
+        "stream_weights": stream_weights,
+    }
+
+
+def validate_qrels_authorization(
+    qrels_manifest: Path,
+    qrels_approval: Path,
+    *,
+    ranking_freeze_sha256: str,
+    review_freeze_sha256: str,
+) -> dict[str, Any]:
+    """Validate the exact projected-qrels authorization without opening qrels."""
+
+    ranking_freeze_sha256 = _validated_sha256(
+        ranking_freeze_sha256, "ranking freeze hash"
+    )
+    review_freeze_sha256 = _validated_sha256(
+        review_freeze_sha256, "review freeze hash"
+    )
+    manifest_path = Path(qrels_manifest)
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest_value = json.loads(manifest_bytes)
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("qrels projection manifest is missing or invalid") from exc
+    if not isinstance(manifest_value, dict):
+        raise ValueError("qrels projection manifest must be a JSON object")
+    manifest = manifest_value
+    if (
+        manifest.get("schema_version") != "pilot-qrels-projection-v1"
+        or manifest.get("status") != "authorized_projection"
+    ):
+        raise ValueError("qrels projection manifest contract differs")
+    if manifest.get("topic_ids") != list(PILOT_TOPIC_IDS):
+        raise ValueError(
+            "qrels projection manifest must declare exactly topics "
+            + ", ".join(PILOT_TOPIC_IDS)
+        )
+
+    projection_sha256 = _validated_sha256(
+        manifest.get("projection_sha256"), "qrels projection hash"
+    )
+    projection_name = manifest.get("projection_path")
+    if not isinstance(projection_name, str) or not projection_name:
+        raise ValueError("qrels projection path is missing")
+    declared_projection = Path(projection_name)
+    if declared_projection.is_absolute() or ".." in declared_projection.parts:
+        raise ValueError("qrels projection path must remain inside its authorized directory")
+    projection_path = manifest_path.parent / declared_projection
+    try:
+        projection_path.resolve().relative_to(manifest_path.parent.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            "qrels projection path must remain inside its authorized directory"
+        ) from exc
+
+    approval = _read_json_object(Path(qrels_approval), "qrels access approval")
+    if (
+        approval.get("schema_version") != "pilot-qrels-access-approval-v1"
+        or approval.get("status") != "approved"
+    ):
+        raise ValueError("qrels access approval contract differs")
+    if approval.get("topic_ids") != list(PILOT_TOPIC_IDS):
+        raise ValueError("qrels access approval must bind exactly topics")
+
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if approval.get("qrels_manifest_sha256") != manifest_sha256:
+        raise ValueError("qrels manifest hash binding differs")
+    if approval.get("qrels_projection_sha256") != projection_sha256:
+        raise ValueError("qrels projection hash binding differs")
+    if approval.get("ranking_freeze_sha256") != ranking_freeze_sha256:
+        raise ValueError("ranking freeze hash binding differs")
+    if approval.get("review_freeze_sha256") != review_freeze_sha256:
+        raise ValueError("review freeze hash binding differs")
+
+    return {
+        "manifest_path": manifest_path,
+        "manifest_sha256": manifest_sha256,
+        "projection_path": projection_path,
+        "projection_sha256": projection_sha256,
+        "topic_ids": list(PILOT_TOPIC_IDS),
+    }
+
+
+def read_qrels(
+    path: Path, *, expected_sha256: str | None = None
+) -> dict[str, dict[str, int]]:
+    """Read the already-authorized four-topic projection in TREC qrels format."""
+
+    result: dict[str, dict[str, int]] = defaultdict(dict)
+    try:
+        source = Path(path).read_bytes()
+    except (FileNotFoundError, OSError, UnicodeDecodeError) as exc:
+        raise ValueError("authorized qrels projection is missing or invalid") from exc
+    if expected_sha256 is not None:
+        expected = _validated_sha256(expected_sha256, "authorized projection hash")
+        if hashlib.sha256(source).hexdigest() != expected:
+            raise ValueError("authorized qrels projection hash differs")
+    try:
+        lines = source.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("authorized qrels projection is missing or invalid") from exc
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) != 4:
+            raise ValueError(f"invalid qrels row at line {line_number}")
+        topic_id, _, docid, raw_grade = fields
+        if topic_id not in PILOT_TOPIC_IDS:
+            raise ValueError("qrels projection contains a topic outside the authorization")
+        try:
+            grade = int(raw_grade)
+        except ValueError as exc:
+            raise ValueError(f"invalid qrels grade at line {line_number}") from exc
+        if docid in result[topic_id] and result[topic_id][docid] != grade:
+            raise ValueError(f"conflicting duplicate qrels row at line {line_number}")
+        result[topic_id][docid] = grade
+    if list(topic_id for topic_id in PILOT_TOPIC_IDS if topic_id in result) != list(
+        PILOT_TOPIC_IDS
+    ):
+        raise ValueError("qrels projection does not contain exactly the authorized topics")
+    return {topic_id: result[topic_id] for topic_id in PILOT_TOPIC_IDS}
+
+
+def _create_qrels_access_receipt(
+    receipt_path: Path,
+    *,
+    authorization: Mapping[str, Any],
+    ranking_freeze_sha256: str,
+    review_freeze_sha256: str,
+) -> dict[str, Any]:
+    receipt = add_self_hash(
+        {
+            "schema_version": "facet-local-minilm-qrels-access-receipt-v1",
+            "status": "qrels_access_consumed",
+            "topic_ids": list(PILOT_TOPIC_IDS),
+            "qrels_manifest_sha256": authorization["manifest_sha256"],
+            "qrels_projection_sha256": authorization["projection_sha256"],
+            "ranking_freeze_sha256": ranking_freeze_sha256,
+            "review_freeze_sha256": review_freeze_sha256,
+        }
+    )
+    try:
+        with receipt_path.open("x", encoding="utf-8") as stream:
+            stream.write(_canonical_json_bytes(receipt, newline=True).decode("utf-8"))
+    except FileExistsError as exc:
+        raise FileExistsError("repeat qrels access is refused") from exc
+    return receipt
+
+
+def _relevant_docids(
+    ranking: Iterable[str], topic_qrels: Mapping[str, int | float]
+) -> set[str]:
+    return {
+        str(docid)
+        for docid in ranking
+        if float(topic_qrels.get(str(docid), 0)) >= 2.0
+    }
+
+
+def _serialized_comparison(
+    baseline: Iterable[str], candidate: Iterable[str]
+) -> dict[str, Any]:
+    comparison = compare_docid_sets(baseline, candidate)
+    return {
+        "baseline_count": comparison.baseline_count,
+        "candidate_count": comparison.candidate_count,
+        "gained": sorted(comparison.gained),
+        "lost": sorted(comparison.lost),
+        "net_change": comparison.net_change,
+    }
+
+
+def _bound_artifact(
+    schema_version: str,
+    bindings: Mapping[str, Any],
+    content: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = json.loads(
+        _canonical_json_bytes(
+            {
+                "schema_version": schema_version,
+                "bindings": dict(bindings),
+                **content,
+            }
+        )
+    )
+    return add_self_hash(normalized)
+
+
+def build_evaluation_artifacts(
+    frozen_inputs: Mapping[str, Any],
+    qrels: Mapping[str, Mapping[str, int | float]],
+    *,
+    bindings: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Build the eight deterministic, self-hashed Task 6 artifacts."""
+
+    if tuple(qrels) != PILOT_TOPIC_IDS:
+        raise ValueError("evaluation qrels must contain exactly the pilot topics")
+    original = frozen_inputs.get("original")
+    control_facets = frozen_inputs.get("control_facets")
+    bf_facets = frozen_inputs.get("bf_facets")
+    rankings = frozen_inputs.get("rankings")
+    stream_weights = frozen_inputs.get("stream_weights")
+    review_rows = frozen_inputs.get("review_rows")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (original, control_facets, bf_facets, rankings, stream_weights)
+    ) or not isinstance(review_rows, Sequence):
+        raise ValueError("frozen evaluator inputs are incomplete")
+    required_rankings = {"R1_LEGACY", "C0_TOPIC_LOCAL", "BF100_TOPIC_LOCAL"}
+    if not required_rankings.issubset(rankings):
+        raise ValueError("frozen evaluator inputs lack required final systems")
+
+    system_rankings: dict[str, dict[str, list[str]]] = {
+        "O": {
+            topic_id: _deduplicate(original.get(topic_id, ()))
+            for topic_id in PILOT_TOPIC_IDS
+        }
+    }
+    for arm, per_topic in rankings.items():
+        if not isinstance(per_topic, Mapping):
+            raise ValueError(f"final ranking {arm} is invalid")
+        system_rankings[str(arm)] = {
+            topic_id: _deduplicate(per_topic.get(topic_id, ()))
+            for topic_id in PILOT_TOPIC_IDS
+        }
+
+    system_results: dict[str, dict[str, Any]] = {}
+    for arm, per_topic_rankings in system_rankings.items():
+        per_topic = {
+            topic_id: evaluate_ranking(
+                per_topic_rankings[topic_id], qrels[topic_id]
+            )
+            for topic_id in PILOT_TOPIC_IDS
+        }
+        metric_names = tuple(next(iter(per_topic.values())))
+        system_results[arm] = {
+            "docids": per_topic_rankings,
+            "metrics": {
+                metric: fmean(
+                    float(per_topic[topic_id][metric])
+                    for topic_id in PILOT_TOPIC_IDS
+                )
+                for metric in metric_names
+            },
+            "per_topic": per_topic,
+        }
+
+    baselines = {
+        name: {
+            topic_id: set(system_rankings[name][topic_id])
+            for topic_id in PILOT_TOPIC_IDS
+        }
+        for name in ("O", "C0_TOPIC_LOCAL", "R1_LEGACY")
+    }
+    curves = build_union_curves(
+        original,
+        control_facets,
+        bf_facets,
+        qrels,
+        depths=(20, 50, 100),
+    )
+    for arm_curves in curves.values():
+        for curve in arm_curves.values():
+            aggregate_candidates: set[str] = set()
+            aggregate_baselines: dict[str, set[str]] = {
+                name: set() for name in baselines
+            }
+            for topic_id in PILOT_TOPIC_IDS:
+                topic_curve = curve["per_topic"][topic_id]
+                candidate_relevant = _relevant_docids(
+                    topic_curve["docids"], qrels[topic_id]
+                )
+                comparisons: dict[str, Any] = {}
+                for baseline_name, baseline_topics in baselines.items():
+                    baseline_relevant = _relevant_docids(
+                        baseline_topics[topic_id], qrels[topic_id]
+                    )
+                    comparisons[baseline_name] = _serialized_comparison(
+                        baseline_relevant, candidate_relevant
+                    )
+                    aggregate_baselines[baseline_name].update(
+                        f"{topic_id}/{docid}" for docid in baseline_relevant
+                    )
+                topic_curve["comparisons"] = comparisons
+                aggregate_candidates.update(
+                    f"{topic_id}/{docid}" for docid in candidate_relevant
+                )
+            curve["comparisons"] = {
+                baseline_name: _serialized_comparison(
+                    baseline_relevant, aggregate_candidates
+                )
+                for baseline_name, baseline_relevant in aggregate_baselines.items()
+            }
+            curve["aggregate"] = {
+                "unique_candidate_documents": sum(
+                    int(curve["per_topic"][topic_id]["unique_candidate_documents"])
+                    for topic_id in PILOT_TOPIC_IDS
+                ),
+                "relevant_documents": len(aggregate_candidates),
+                "graded_relevant_gain": sum(
+                    float(curve["per_topic"][topic_id]["graded_relevant_gain"])
+                    for topic_id in PILOT_TOPIC_IDS
+                ),
+                "macro_recall": float(curve["macro"]["recall"]),
+                "macro_graded_recall": float(curve["macro"]["graded_recall"]),
+            }
+    headroom_by_topic: dict[str, list[str]] = {}
+    for topic_id in PILOT_TOPIC_IDS:
+        raw_control = curves["C0_TOPIC_LOCAL"][100]["per_topic"][topic_id][
+            "docids"
+        ]
+        raw_relevant = _relevant_docids(raw_control, qrels[topic_id])
+        final_control = _relevant_docids(
+            system_rankings["C0_TOPIC_LOCAL"][topic_id], qrels[topic_id]
+        )
+        headroom_by_topic[topic_id] = sorted(raw_relevant - final_control)
+    headroom_docids = sorted(
+        f"{topic_id}/{docid}"
+        for topic_id in PILOT_TOPIC_IDS
+        for docid in headroom_by_topic[topic_id]
+    )
+
+    prefusion = compute_prefusion_evidence(
+        control_facets=control_facets,
+        bf_facets=bf_facets,
+        stream_weights=stream_weights,
+        control_final=system_rankings["C0_TOPIC_LOCAL"],
+        bf_final=system_rankings["BF100_TOPIC_LOCAL"],
+        qrels=qrels,
+        promotion_depth=20,
+    )
+    retention = build_facet_retention(
+        {
+            "C0_TOPIC_LOCAL": control_facets,
+            "BF100_TOPIC_LOCAL": bf_facets,
+        },
+        qrels,
+        baselines=baselines,
+        depths=(20, 50, 100),
+    )
+    review_metrics = aggregate_review_metrics(review_rows)
+
+    gains_losses: dict[str, dict[str, Any]] = {}
+    for arm, per_topic_rankings in system_rankings.items():
+        against: dict[str, Any] = {}
+        for baseline_name in ("O", "C0_TOPIC_LOCAL", "R1_LEGACY"):
+            per_topic_comparisons: dict[str, Any] = {}
+            baseline_all: set[str] = set()
+            candidate_all: set[str] = set()
+            for topic_id in PILOT_TOPIC_IDS:
+                baseline_relevant = _relevant_docids(
+                    system_rankings[baseline_name][topic_id], qrels[topic_id]
+                )
+                candidate_relevant = _relevant_docids(
+                    per_topic_rankings[topic_id], qrels[topic_id]
+                )
+                per_topic_comparisons[topic_id] = _serialized_comparison(
+                    baseline_relevant, candidate_relevant
+                )
+                baseline_all.update(
+                    f"{topic_id}/{docid}" for docid in baseline_relevant
+                )
+                candidate_all.update(
+                    f"{topic_id}/{docid}" for docid in candidate_relevant
+                )
+            against[baseline_name] = {
+                "aggregate": _serialized_comparison(baseline_all, candidate_all),
+                "per_topic": per_topic_comparisons,
+            }
+        gains_losses[arm] = against
+
+    def metric_deltas(
+        candidate: str, baseline: str
+    ) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+        metrics = ("recall@100", "graded_recall@100", "ndcg@10")
+        macro = {
+            metric: float(system_results[candidate]["metrics"][metric])
+            - float(system_results[baseline]["metrics"][metric])
+            for metric in metrics
+        }
+        per_topic = {
+            topic_id: {
+                metric: float(
+                    system_results[candidate]["per_topic"][topic_id][metric]
+                )
+                - float(system_results[baseline]["per_topic"][topic_id][metric])
+                for metric in metrics
+            }
+            for topic_id in PILOT_TOPIC_IDS
+        }
+        return macro, per_topic
+
+    macro_vs_control, per_topic_vs_control = metric_deltas(
+        "BF100_TOPIC_LOCAL", "C0_TOPIC_LOCAL"
+    )
+    macro_vs_legacy, per_topic_vs_legacy = metric_deltas(
+        "BF100_TOPIC_LOCAL", "R1_LEGACY"
+    )
+    review_macro = review_metrics.get("macro_by_arm", {})
+    if not isinstance(review_macro, Mapping) or not {
+        "C0_TOPIC_LOCAL",
+        "BF50_TOPIC_LOCAL",
+    }.issubset(review_macro):
+        raise ValueError("blinded review lacks both preregistered arms")
+    review_deltas = {
+        metric: float(review_macro["BF50_TOPIC_LOCAL"][metric])
+        - float(review_macro["C0_TOPIC_LOCAL"][metric])
+        for metric in ("direct_answer_rate", "wrong_domain_rate")
+    }
+
+    control_relevant_all = {
+        f"{topic_id}/{docid}"
+        for topic_id in PILOT_TOPIC_IDS
+        for docid in _relevant_docids(
+            system_rankings["C0_TOPIC_LOCAL"][topic_id], qrels[topic_id]
+        )
+    }
+    legacy_relevant_all = {
+        f"{topic_id}/{docid}"
+        for topic_id in PILOT_TOPIC_IDS
+        for docid in _relevant_docids(
+            system_rankings["R1_LEGACY"][topic_id], qrels[topic_id]
+        )
+    }
+    bf_relevant_all = {
+        f"{topic_id}/{docid}"
+        for topic_id in PILOT_TOPIC_IDS
+        for docid in _relevant_docids(
+            system_rankings["BF100_TOPIC_LOCAL"][topic_id], qrels[topic_id]
+        )
+    }
+    final_novel_docids = sorted(bf_relevant_all - control_relevant_all)
+    final_novel_vs_legacy_docids = sorted(bf_relevant_all - legacy_relevant_all)
+    evidence = {
+        "headroom": len(headroom_docids),
+        "headroom_docids": headroom_docids,
+        "pre_fusion_promoted_novel": len(
+            prefusion["pre_fusion_promoted_novel_docids"]
+        ),
+        "fusion_blocked_novel": len(prefusion["fusion_blocked_novel_docids"]),
+        "final_novel": len(final_novel_docids),
+        "final_novel_docids": final_novel_docids,
+        "final_novel_vs_legacy_r1": len(final_novel_vs_legacy_docids),
+        "final_novel_vs_legacy_r1_docids": final_novel_vs_legacy_docids,
+        "net_relevant_change_vs_control": len(bf_relevant_all)
+        - len(control_relevant_all),
+        "macro_deltas_vs_control": macro_vs_control,
+        "per_topic_deltas_vs_control": per_topic_vs_control,
+        "review_deltas": review_deltas,
+        "macro_deltas_vs_legacy_r1": macro_vs_legacy,
+        "per_topic_deltas_vs_legacy_r1": per_topic_vs_legacy,
+    }
+    decision = select_diagnostic_outcome(
+        headroom=evidence["headroom"],
+        pre_fusion_promoted_novel=evidence["pre_fusion_promoted_novel"],
+        fusion_blocked_novel=evidence["fusion_blocked_novel"],
+        final_novel=evidence["final_novel"],
+        final_novel_vs_legacy_r1=evidence["final_novel_vs_legacy_r1"],
+        net_relevant_change_vs_control=evidence[
+            "net_relevant_change_vs_control"
+        ],
+        macro_deltas_vs_control=macro_vs_control,
+        per_topic_deltas_vs_control=per_topic_vs_control,
+        review_deltas=review_deltas,
+        macro_deltas_vs_legacy_r1=macro_vs_legacy,
+        per_topic_deltas_vs_legacy_r1=per_topic_vs_legacy,
+    )
+
+    details = frozen_inputs.get("document_details", {})
+    def representative(qualified_docid: str) -> dict[str, Any]:
+        topic_id, document_id = qualified_docid.split("/", 1)
+        raw_detail = (
+            details.get((topic_id, document_id), {})
+            if isinstance(details, Mapping)
+            else {}
+        )
+        detail = raw_detail if isinstance(raw_detail, Mapping) else {}
+        return {
+            "topic_id": topic_id,
+            "document_id": document_id,
+            "passage": str(detail.get("text", detail.get("passage", ""))),
+            "provenance": detail.get(
+                "provenance", detail.get("selected_windows", [])
+            ),
+        }
+
+    control_ranks = {
+        (topic_id, docid): rank
+        for topic_id in PILOT_TOPIC_IDS
+        for rank, docid in enumerate(
+            system_rankings["C0_TOPIC_LOCAL"][topic_id], start=1
+        )
+    }
+    bf_ranks = {
+        (topic_id, docid): rank
+        for topic_id in PILOT_TOPIC_IDS
+        for rank, docid in enumerate(
+            system_rankings["BF100_TOPIC_LOCAL"][topic_id], start=1
+        )
+    }
+    demoted_docids = sorted(
+        f"{topic_id}/{docid}"
+        for (topic_id, docid), control_rank in control_ranks.items()
+        if (topic_id, docid) in bf_ranks
+        and bf_ranks[(topic_id, docid)] > control_rank
+        and float(qrels[topic_id].get(docid, 0)) >= 2
+    )
+    representatives = {
+        "promoted": [
+            representative(docid)
+            for docid in prefusion["pre_fusion_promoted_novel_docids"][:3]
+        ],
+        "demoted": [representative(docid) for docid in demoted_docids[:3]],
+        "gained": [representative(docid) for docid in final_novel_docids[:3]],
+        "lost": [
+            representative(docid)
+            for docid in sorted(control_relevant_all - bf_relevant_all)[:3]
+        ],
+    }
+
+    artifacts = {
+        "raw_union.json": _bound_artifact(
+            "facet-local-minilm-raw-union-v1",
+            bindings,
+            {
+                "curves": curves,
+                "headroom_by_topic": headroom_by_topic,
+                "headroom_docids": headroom_docids,
+            },
+        ),
+        "prefusion.json": _bound_artifact(
+            "facet-local-minilm-prefusion-v1", bindings, prefusion
+        ),
+        "facet_retention.json": _bound_artifact(
+            "facet-local-minilm-facet-retention-v1",
+            bindings,
+            {"arms": retention},
+        ),
+        "systems.json": _bound_artifact(
+            "facet-local-minilm-systems-v1",
+            bindings,
+            {"systems": system_results, "topic_ids": list(PILOT_TOPIC_IDS)},
+        ),
+        "gains_losses.json": _bound_artifact(
+            "facet-local-minilm-gains-losses-v1",
+            bindings,
+            {"systems": gains_losses},
+        ),
+        "review_metrics.json": _bound_artifact(
+            "facet-local-minilm-review-metrics-v1", bindings, review_metrics
+        ),
+        "representatives.json": _bound_artifact(
+            "facet-local-minilm-representatives-v1", bindings, representatives
+        ),
+        "decision.json": _bound_artifact(
+            "facet-local-minilm-decision-v1",
+            bindings,
+            {"decision": decision, "evidence": evidence},
+        ),
+    }
+    if tuple(artifacts) != EVALUATION_ARTIFACT_NAMES:
+        raise AssertionError("Task 6 artifact set differs from its fixed contract")
+    return artifacts
+
+
+def _publish_evaluation_artifacts(
+    output: Path, artifacts: Mapping[str, Mapping[str, Any]]
+) -> None:
+    if set(artifacts) != set(EVALUATION_ARTIFACT_NAMES):
+        raise ValueError("evaluation artifact set differs from the fixed contract")
+    for name in EVALUATION_ARTIFACT_NAMES:
+        try:
+            with (output / name).open("x", encoding="utf-8") as stream:
+                stream.write(
+                    _canonical_json_bytes(artifacts[name], newline=True).decode(
+                        "utf-8"
+                    )
+                )
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"create-only evaluation output already exists: {name}"
+            ) from exc
+
+
+def evaluate(
+    freeze: Path,
+    *,
+    review_freeze: Path | None = None,
+    prior_evaluation: Path | None = None,
+    qrels_manifest: Path,
+    qrels_approval: Path,
+    output: Path | None = None,
+) -> dict[str, Any]:
+    """Cross the qrels firewall once, only after every frozen input verifies."""
+
+    output_path = Path(output) if output is not None else None
+    receipt_path = output_path / "qrels_access_receipt.json" if output_path else None
+    if receipt_path is not None and (
+        receipt_path.exists() or receipt_path.is_symlink()
+    ):
+        raise FileExistsError("repeat qrels access is refused")
+    if output_path is not None:
+        collision = next(
+            (
+                name
+                for name in EVALUATION_ARTIFACT_NAMES
+                if (output_path / name).exists() or (output_path / name).is_symlink()
+            ),
+            None,
+        )
+        if collision is not None:
+            raise FileExistsError(
+                f"create-only evaluation output already exists: {collision}"
+            )
+    if review_freeze is None or prior_evaluation is None or output_path is None:
+        raise ValueError("ranking and blinded-review freeze is incomplete")
+
+    ranking = verify_ranking_freeze(Path(freeze))
+    review = verify_blinded_review_freeze(Path(review_freeze), Path(freeze))
+    frozen_inputs = load_frozen_inputs(
+        Path(freeze), Path(review_freeze), Path(prior_evaluation)
+    )
+    ranking_hash = _validated_sha256(
+        ranking.get("freeze_sha256"), "ranking freeze hash"
+    )
+    review_hash = _validated_sha256(
+        review.get("review_freeze_sha256"), "review freeze hash"
+    )
+    authorization = validate_qrels_authorization(
+        Path(qrels_manifest),
+        Path(qrels_approval),
+        ranking_freeze_sha256=ranking_hash,
+        review_freeze_sha256=review_hash,
+    )
+
+    projection_path = Path(authorization["projection_path"])
+    output_path.mkdir(parents=True, exist_ok=True)
+    receipt = _create_qrels_access_receipt(
+        receipt_path,
+        authorization=authorization,
+        ranking_freeze_sha256=ranking_hash,
+        review_freeze_sha256=review_hash,
+    )
+    qrels = read_qrels(
+        projection_path,
+        expected_sha256=authorization["projection_sha256"],
+    )
+    bindings = {
+        "ranking_freeze_sha256": ranking_hash,
+        "review_freeze_sha256": review_hash,
+        "prior_evaluation_sha256": _validated_sha256(
+            frozen_inputs.get("prior_evaluation_sha256"),
+            "prior evaluation hash",
+        ),
+        "qrels_manifest_sha256": authorization["manifest_sha256"],
+        "qrels_projection_sha256": authorization["projection_sha256"],
+    }
+    artifacts = build_evaluation_artifacts(
+        frozen_inputs,
+        qrels,
+        bindings=bindings,
+    )
+    _publish_evaluation_artifacts(output_path, artifacts)
+    return {
+        "qrels": qrels,
+        "qrels_access_receipt": receipt,
+        "artifacts": artifacts,
+    }
+
+
+def build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Evaluate the frozen facet-local MiniLM pilot"
+    )
+    parser.add_argument("--freeze", type=Path, required=True)
+    parser.add_argument("--review-freeze", type=Path, required=True)
+    parser.add_argument("--prior-evaluation", type=Path, required=True)
+    parser.add_argument("--qrels-manifest", type=Path, required=True)
+    parser.add_argument("--qrels-approval", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_argument_parser().parse_args(argv)
+    evaluate(
+        args.freeze,
+        review_freeze=args.review_freeze,
+        prior_evaluation=args.prior_evaluation,
+        qrels_manifest=args.qrels_manifest,
+        qrels_approval=args.qrels_approval,
+        output=args.output,
+    )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through the CLI
+    raise SystemExit(main())
