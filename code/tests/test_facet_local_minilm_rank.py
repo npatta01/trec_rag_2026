@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sys
+import tempfile
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -10,6 +14,7 @@ import pytest
 
 from trec_rag.facet_local_minilm_rank import (
     ARM_NAMES,
+    AuthenticatedInputs,
     aggregate_maxp,
     aggregate_top4,
     build_arm_streams,
@@ -27,6 +32,91 @@ from trec_rag.facet_local_minilm_rank import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+DURABLE_FREEZE = ROOT / "outputs/rag25_facet_local_minilm_v1/freeze_v1"
+
+
+class _ProtectedIdentityOnly(dict):
+    def __getitem__(self, key):
+        if key != "topic_id":
+            raise AssertionError(f"protected row accessed before firewall: {key}")
+        return super().__getitem__(key)
+
+
+def _canonical_json_bytes(value, *, pretty=True):
+    options = {"ensure_ascii": False, "sort_keys": True}
+    if pretty:
+        options["indent"] = 2
+    else:
+        options["separators"] = (",", ":")
+    return (json.dumps(value, **options) + "\n").encode("utf-8")
+
+
+def _replace_bytes(path, content):
+    replacement = path.with_name(f".{path.name}.replacement")
+    replacement.write_bytes(content)
+    os.replace(replacement, path)
+
+
+def _rewrite_root(freeze, payload):
+    payload.pop("freeze_sha256", None)
+    payload["freeze_sha256"] = hashlib.sha256(
+        _canonical_json_bytes(payload, pretty=False)
+    ).hexdigest()
+    _replace_bytes(freeze / "freeze.json", _canonical_json_bytes(payload))
+
+
+def _replace_bound_artifact(freeze, relative, content, *, update_stream=False):
+    payload = json.loads((freeze / "freeze.json").read_text(encoding="utf-8"))
+    _replace_bytes(freeze / relative, content)
+    digest = hashlib.sha256(content).hexdigest()
+    payload["artifacts"][relative]["bytes"] = len(content)
+    payload["artifacts"][relative]["sha256"] = digest
+    if "rows" in payload["artifacts"][relative]:
+        payload["artifacts"][relative]["rows"] = len(content.splitlines())
+    if update_stream:
+        record = next(row for row in payload["streams"] if row["path"] == relative)
+        record["file_sha256"] = digest
+        stream_manifest_path = freeze / "stream_manifest.json"
+        stream_manifest = json.loads(stream_manifest_path.read_text(encoding="utf-8"))
+        manifest_record = next(
+            row for row in stream_manifest["streams"] if row["path"] == relative
+        )
+        manifest_record["file_sha256"] = digest
+        stream_manifest_content = _canonical_json_bytes(stream_manifest)
+        _replace_bytes(stream_manifest_path, stream_manifest_content)
+        payload["artifacts"]["stream_manifest.json"].update(
+            {
+                "bytes": len(stream_manifest_content),
+                "sha256": hashlib.sha256(stream_manifest_content).hexdigest(),
+            }
+        )
+    _rewrite_root(freeze, payload)
+
+
+@pytest.fixture
+def mutable_freeze():
+    parent = Path(
+        tempfile.mkdtemp(
+            prefix=".rank-verifier-test-",
+            dir=DURABLE_FREEZE.parent,
+        )
+    )
+    freeze = parent / "freeze_v1"
+    shutil.copytree(DURABLE_FREEZE, freeze, copy_function=os.link)
+    try:
+        yield freeze
+    finally:
+        shutil.rmtree(parent)
+
+
+@pytest.fixture(scope="module")
+def authenticated_inputs():
+    return load_authenticated_inputs(
+        manifest_path=ROOT
+        / "reports/experiments/facet_local_minilm_pilot_v1/manifest.json",
+        preflight_dir=ROOT / "outputs/rag25_facet_local_minilm_v1/preflight_v2",
+        scores_dir=ROOT / "outputs/rag25_facet_local_minilm_v1/full_scoring_v1",
+    )
 
 
 def test_top4_span_distinct_aggregation_uses_frozen_weights():
@@ -94,6 +184,7 @@ def test_stream_reranking_ties_by_prior_rank_then_docid_and_is_order_stable():
             "document_id": docid,
             "rank": prior_rank,
             "query": "facet query",
+            "query_sha256": "shared-query-hash",
             "source_score": 100.0 - prior_rank,
             "text": f"text for {docid}",
         }
@@ -104,6 +195,9 @@ def test_stream_reranking_ties_by_prior_rank_then_docid_and_is_order_stable():
             "topic_id": "200",
             "variant": "facet:f01",
             "document_id": row["document_id"],
+            "family": "facet",
+            "query_sha256": "shared-query-hash",
+            "rank": row["rank"],
             "score": 5.0,
             "document_start_token": 0,
             "document_end_token": 256,
@@ -122,6 +216,66 @@ def test_stream_reranking_ties_by_prior_rank_then_docid_and_is_order_stable():
     assert [row["document_id"] for row in first] == expected
     assert [row["rank"] for row in first] == [1, 2, 3]
     assert first == second
+
+
+def test_stream_reranking_rejects_protected_topics_before_join_access():
+    protected = _ProtectedIdentityOnly(topic_id="144")
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        rerank_stream([protected], [protected], aggregation="top4")
+
+
+@pytest.mark.parametrize(
+    ("candidate_change", "window_change"),
+    [
+        ({"variant": "facet:f02"}, {}),
+        ({"query_sha256": "other-query"}, {}),
+        ({}, {"variant": "facet:f02"}),
+        ({}, {"query_sha256": "other-query"}),
+        ({"family": "original"}, {"family": "original"}),
+    ],
+)
+def test_stream_reranking_rejects_cross_stream_query_lineage(
+    candidate_change, window_change
+):
+    candidates = [
+        {
+            "document_id": "doc-a",
+            "family": "facet",
+            "query_sha256": "shared-query",
+            "rank": 1,
+            "topic_id": "200",
+            "variant": "facet:f01",
+        },
+        {
+            "document_id": "doc-b",
+            "family": "facet",
+            "query_sha256": "shared-query",
+            "rank": 2,
+            "topic_id": "200",
+            "variant": "facet:f01",
+            **candidate_change,
+        },
+    ]
+    windows = [
+        {
+            "document_end_token": 256,
+            "document_id": candidate["document_id"],
+            "document_start_token": 0,
+            "family": "facet",
+            "query_sha256": "shared-query",
+            "rank": index,
+            "score": 1.0,
+            "topic_id": "200",
+            "variant": "facet:f01",
+            "window_id": f"window-{index}",
+            **(window_change if index == 2 else {}),
+        }
+        for index, candidate in enumerate(candidates, start=1)
+    ]
+
+    with pytest.raises(ValueError, match="single topic/variant/query identity"):
+        rerank_stream(candidates, windows, aggregation="top4")
 
 
 def test_topic_local_weights_are_qualified_exact_and_order_invariant():
@@ -380,6 +534,82 @@ def test_real_inputs_are_fully_authenticated_without_qrels_or_new_work():
     assert inputs.bindings["inference_call_count"] == 0
 
 
+def test_loader_rejects_protected_windows_before_identity_join(monkeypatch):
+    import trec_rag.facet_local_minilm_rank as module
+
+    original = module._read_jsonl
+    protected = _ProtectedIdentityOnly(topic_id="144")
+
+    def injected(path, label):
+        if label == "source candidates":
+            return original(path, label)
+        return (protected,) * 14720
+
+    monkeypatch.setattr(module, "_read_jsonl", injected)
+    with pytest.raises(ValueError, match="protected topic 144"):
+        load_authenticated_inputs(
+            manifest_path=ROOT
+            / "reports/experiments/facet_local_minilm_pilot_v1/manifest.json",
+            preflight_dir=ROOT / "outputs/rag25_facet_local_minilm_v1/preflight_v2",
+            scores_dir=ROOT / "outputs/rag25_facet_local_minilm_v1/full_scoring_v1",
+        )
+
+
+def test_build_stream_rankings_rejects_protected_rows_before_join_access():
+    protected = _ProtectedIdentityOnly(topic_id="144")
+    inputs = AuthenticatedInputs(
+        manifest={"streams": [protected]},
+        candidates=(protected,),
+        windows=(protected,),
+        scores=(protected,),
+        bindings={},
+    )
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        build_stream_rankings(inputs)
+
+
+def test_build_stream_rankings_requires_exact_authenticated_stream_identities(
+    authenticated_inputs,
+):
+    manifest = dict(authenticated_inputs.manifest)
+    streams = [dict(row) for row in manifest["streams"]]
+    streams[0]["variant"] = "renamed-but-otherwise-valid"
+    manifest["streams"] = streams
+    inputs = replace(authenticated_inputs, manifest=manifest)
+
+    with pytest.raises(ValueError, match="exact authenticated stream identities"):
+        build_stream_rankings(inputs)
+
+
+def test_build_stream_rankings_rejects_score_window_identity_mismatch(
+    authenticated_inputs,
+):
+    first = dict(authenticated_inputs.scores[0])
+    first["cache_key"] = "0" * 64
+    inputs = replace(
+        authenticated_inputs,
+        scores=(first, *authenticated_inputs.scores[1:]),
+    )
+
+    with pytest.raises(ValueError, match="score row lineage"):
+        build_stream_rankings(inputs)
+
+
+def test_build_stream_rankings_rejects_score_value_from_another_identity(
+    authenticated_inputs,
+):
+    first = dict(authenticated_inputs.scores[0])
+    first["score"] = authenticated_inputs.scores[1]["score"]
+    inputs = replace(
+        authenticated_inputs,
+        scores=(first, *authenticated_inputs.scores[1:]),
+    )
+
+    with pytest.raises(ValueError, match="raw score identity"):
+        build_stream_rankings(inputs)
+
+
 def test_real_stream_rankings_are_complete_and_feed_the_frozen_arm_matrix():
     inputs = load_authenticated_inputs(
         manifest_path=ROOT
@@ -456,6 +686,177 @@ def test_real_freeze_is_create_only_self_contained_and_independently_replayable(
             scores_dir=ROOT / "outputs/rag25_facet_local_minilm_v1/full_scoring_v1",
             output_dir=output,
         )
+
+
+def test_verify_freeze_authenticates_root_and_file_input_bindings(mutable_freeze):
+    bindings = json.loads(
+        (mutable_freeze / "input_bindings.json").read_text(encoding="utf-8")
+    )
+    bindings["candidates_sha256"] = "0" * 64
+    _replace_bound_artifact(
+        mutable_freeze,
+        "input_bindings.json",
+        _canonical_json_bytes(bindings),
+    )
+    payload = json.loads(
+        (mutable_freeze / "freeze.json").read_text(encoding="utf-8")
+    )
+    payload["bindings"] = bindings
+    _rewrite_root(mutable_freeze, payload)
+
+    with pytest.raises(ValueError, match="authenticated Task 4 inputs"):
+        verify_freeze(mutable_freeze)
+
+
+def test_verify_freeze_enforces_qrels_firewall_in_bound_artifacts(mutable_freeze):
+    bindings = json.loads(
+        (mutable_freeze / "input_bindings.json").read_text(encoding="utf-8")
+    )
+    bindings["qrels_path"] = "/forbidden/qrels.txt"
+    _replace_bound_artifact(
+        mutable_freeze,
+        "input_bindings.json",
+        _canonical_json_bytes(bindings),
+    )
+
+    with pytest.raises(ValueError, match="qrels firewall"):
+        verify_freeze(mutable_freeze)
+
+
+def test_verify_freeze_rejects_qrels_reference_hidden_in_artifact_value(
+    mutable_freeze,
+):
+    payload = json.loads(
+        (mutable_freeze / "freeze.json").read_text(encoding="utf-8")
+    )
+    relative = next(
+        row["path"] for row in payload["streams"] if row["aggregation"] == "top4"
+    )
+    rows = [
+        json.loads(line)
+        for line in (mutable_freeze / relative).read_text(encoding="utf-8").splitlines()
+    ]
+    rows[0]["audit_note"] = "/forbidden/qrels.txt"
+    content = b"".join(_canonical_json_bytes(row, pretty=False) for row in rows)
+    _replace_bound_artifact(
+        mutable_freeze,
+        relative,
+        content,
+        update_stream=True,
+    )
+
+    with pytest.raises(ValueError, match="qrels firewall"):
+        verify_freeze(mutable_freeze)
+
+
+def test_verify_freeze_semantically_validates_fusion_definitions(mutable_freeze):
+    definitions = json.loads(
+        (mutable_freeze / "fusion_definitions.json").read_text(encoding="utf-8")
+    )
+    definitions["k"] = 61
+    _replace_bound_artifact(
+        mutable_freeze,
+        "fusion_definitions.json",
+        _canonical_json_bytes(definitions),
+    )
+
+    with pytest.raises(ValueError, match="fusion definitions"):
+        verify_freeze(mutable_freeze)
+
+
+def test_verify_freeze_parses_stream_manifest_and_exact_topic_distribution(
+    mutable_freeze,
+):
+    stream_manifest = json.loads(
+        (mutable_freeze / "stream_manifest.json").read_text(encoding="utf-8")
+    )
+    stream_manifest["streams"][0]["topic_id"] = "225"
+    _replace_bound_artifact(
+        mutable_freeze,
+        "stream_manifest.json",
+        _canonical_json_bytes(stream_manifest),
+    )
+
+    with pytest.raises(ValueError, match="stream manifest"):
+        verify_freeze(mutable_freeze)
+
+
+@pytest.mark.parametrize("extra_kind", ["file", "directory"])
+def test_verify_freeze_rejects_every_undeclared_path(mutable_freeze, extra_kind):
+    extra = mutable_freeze / "undeclared"
+    if extra_kind == "file":
+        extra.write_text("not bound\n", encoding="utf-8")
+    else:
+        extra.mkdir()
+
+    with pytest.raises(ValueError, match="undeclared freeze path"):
+        verify_freeze(mutable_freeze)
+
+
+@pytest.mark.parametrize("mutation", ["swap", "string-rank"])
+def test_verify_freeze_requires_stream_rank_sequence_in_file_order(
+    mutable_freeze, mutation
+):
+    payload = json.loads(
+        (mutable_freeze / "freeze.json").read_text(encoding="utf-8")
+    )
+    relative = next(
+        row["path"] for row in payload["streams"] if row["aggregation"] == "top4"
+    )
+    rows = [
+        json.loads(line)
+        for line in (mutable_freeze / relative).read_text(encoding="utf-8").splitlines()
+    ]
+    if mutation == "swap":
+        rows[0], rows[1] = rows[1], rows[0]
+    else:
+        rows[0]["rank"] = "1"
+    content = b"".join(
+        _canonical_json_bytes(row, pretty=False) for row in rows
+    )
+    _replace_bound_artifact(
+        mutable_freeze,
+        relative,
+        content,
+        update_stream=True,
+    )
+
+    with pytest.raises(ValueError, match="rank sequence"):
+        verify_freeze(mutable_freeze)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("family", "original"), ("retriever_name", "wrong-retriever")],
+)
+def test_verify_freeze_requires_exact_stream_row_identity(
+    mutable_freeze, field, value
+):
+    payload = json.loads(
+        (mutable_freeze / "freeze.json").read_text(encoding="utf-8")
+    )
+    relative = next(
+        row["path"]
+        for row in payload["streams"]
+        if row["aggregation"] == "top4" and row["family"] == "facet"
+    )
+    rows = [
+        json.loads(line)
+        for line in (mutable_freeze / relative).read_text(encoding="utf-8").splitlines()
+    ]
+    rows[0][field] = value
+    content = b"".join(
+        _canonical_json_bytes(row, pretty=False) for row in rows
+    )
+    _replace_bound_artifact(
+        mutable_freeze,
+        relative,
+        content,
+        update_stream=True,
+    )
+
+    with pytest.raises(ValueError, match="stream row identity"):
+        verify_freeze(mutable_freeze)
 
 
 def test_verify_cli_dispatches_from_process_arguments(monkeypatch, tmp_path, capsys):

@@ -8,6 +8,7 @@ import json
 import math
 import os
 import shutil
+import struct
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -39,6 +40,87 @@ RETRIEVER_NAME = "pyserini_remote_raw_first_v1"
 AUTHENTICATED_SCORING_RECEIPT_SHA256 = (
     "d8d3f86d16bd25d0f92c682f3707273b08279489636481b18f694e9dd673df00"
 )
+_AUTHENTICATED_INPUT_BINDINGS = {
+    "candidates_sha256": (
+        "d530906c02c675907a9b1c60780ffb2b31c865b69b6428c07fbae31a1d5e1b2e"
+    ),
+    "inference_call_count": 0,
+    "ledger_sha256": (
+        "9e2bb0245d95d50cfca2a5c498ec25508e925966baa7df6e2627961864c5ae1d"
+    ),
+    "manifest_sha256": (
+        "c34f3a380d5d2742cca462e607fb4fca75b78e6d2841096bdfa4c972ec4ccfb8"
+    ),
+    "preflight_sha256": (
+        "91e6b040a5ef4dac1e352cf39b644209320d0f06bea93e4b6887c7a16a02f764"
+    ),
+    "qrels_opened": False,
+    "retrieval_call_count": 0,
+    "scoring_receipt_sha256": AUTHENTICATED_SCORING_RECEIPT_SHA256,
+    "source_receipt_sha256": (
+        "fa40cc6ffe923dc0c2ba1d74ee30f2478a03d90af95c7f13b577494a1800f374"
+    ),
+    "windows_sha256": (
+        "8491b6270148f381803eb9675a061d25b2f2f1a54e83d63fe255ccae722a202a"
+    ),
+}
+_EXPECTED_STREAM_COUNTS = {"200": 10, "225": 8, "707": 4, "897": 9}
+_AUTHENTICATED_STREAMS = frozenset(
+    {
+        ("200", "prompt_lab_v1:original", "original"),
+        ("200", "sparse_relevance_v1:R1:f01", "facet"),
+        ("200", "sparse_relevance_v1:R1:f02", "facet"),
+        ("200", "sparse_relevance_v1:R1:f03", "facet"),
+        ("200", "sparse_relevance_v1:R1:f04", "facet"),
+        ("200", "sparse_relevance_v1:R1:f05a", "facet"),
+        ("200", "sparse_relevance_v1:R1:f05b", "facet"),
+        ("200", "sparse_relevance_v1:R1:f06", "facet"),
+        ("200", "sparse_relevance_v1:R1:f07a", "facet"),
+        ("200", "sparse_relevance_v1:R1:f07b", "facet"),
+        ("225", "prompt_lab_v1:facet:f06", "facet"),
+        ("225", "prompt_lab_v1:facet:f07", "facet"),
+        ("225", "prompt_lab_v1:original", "original"),
+        ("225", "sparse_relevance_v1:R1:f01", "facet"),
+        ("225", "sparse_relevance_v1:R1:f02", "facet"),
+        ("225", "sparse_relevance_v1:R1:f03", "facet"),
+        ("225", "sparse_relevance_v1:R1:f04", "facet"),
+        ("225", "sparse_relevance_v1:R1:f05", "facet"),
+        ("707", "prompt_lab_v1:facet:f01", "facet"),
+        ("707", "prompt_lab_v1:facet:f03", "facet"),
+        ("707", "prompt_lab_v1:original", "original"),
+        ("707", "sparse_relevance_v1:R1:f02", "facet"),
+        ("897", "prompt_lab_v1:facet:f01", "facet"),
+        ("897", "prompt_lab_v1:original", "original"),
+        ("897", "sparse_relevance_v1:R1:f02a", "facet"),
+        ("897", "sparse_relevance_v1:R1:f02b", "facet"),
+        ("897", "sparse_relevance_v1:R1:f03", "facet"),
+        ("897", "sparse_relevance_v1:R1:f04a", "facet"),
+        ("897", "sparse_relevance_v1:R1:f04b", "facet"),
+        ("897", "sparse_relevance_v1:R1:f05", "facet"),
+        ("897", "sparse_relevance_v1:R1:f06", "facet"),
+    }
+)
+_SCORING_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+_SCORING_MODEL_REVISION = "c5ee24cb16019beea0893ab7796b1df96625c6b8"
+_FUSION_DEFINITIONS = {
+    "deduplication": "document_id within topic after one best rank per stream",
+    "facet_family_weight": 0.5,
+    "k": 60,
+    "output_depth": 100,
+    "primary_implementation": "family_rrf_topic_local_v2",
+    "raw_score_cross_stream_comparison": False,
+    "secondary_implementation": "family_rrf_global_key_v1",
+    "stream_rank_tie_break": [
+        "descending_aggregate_score",
+        "prior_stream_rank",
+        "document_id",
+    ],
+    "system_rank_tie_break": [
+        "descending_rrf_score",
+        "best_stream_rank",
+        "document_id",
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -119,6 +201,72 @@ def aggregate_maxp(windows: Sequence[Mapping[str, object]]) -> float:
     return max(scores)
 
 
+def _reject_protected_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    label: str,
+) -> None:
+    """Apply the topic firewall before reading any other row field."""
+
+    for row in rows:
+        topic_id = str(row.get("topic_id"))
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden in {label}")
+
+
+def _one_stream_lineage(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    label: str,
+) -> tuple[str, str, str, str]:
+    lineages = {
+        (
+            str(row.get("topic_id", "")),
+            str(row.get("variant", "")),
+            str(row.get("query_sha256", "")),
+            str(row.get("family", "")),
+        )
+        for row in rows
+    }
+    if len(lineages) != 1 or any(not value for value in next(iter(lineages), ())):
+        raise ValueError(
+            f"{label} must have a single topic/variant/query identity and family"
+        )
+    return next(iter(lineages))
+
+
+def _validate_stream_cohorts(
+    streams: Mapping[tuple[str, str, str], str],
+) -> None:
+    counts: dict[str, int] = defaultdict(int)
+    families: dict[str, list[str]] = defaultdict(list)
+    for (topic_id, variant, retriever), family in streams.items():
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+        if (
+            topic_id not in _EXPECTED_STREAM_COUNTS
+            or not variant
+            or retriever != RETRIEVER_NAME
+            or family not in {"original", "facet"}
+        ):
+            raise ValueError("stream identity differs from the exact Task 4 contract")
+        counts[topic_id] += 1
+        families[topic_id].append(family)
+    if {
+        (topic_id, variant, family)
+        for (topic_id, variant, _retriever), family in streams.items()
+    } != _AUTHENTICATED_STREAMS:
+        raise ValueError("streams differ from the exact authenticated stream identities")
+    if dict(counts) != _EXPECTED_STREAM_COUNTS:
+        raise ValueError("stream cohorts do not have exact per-topic 10/8/4/9 counts")
+    if any(
+        topic_families.count("original") != 1
+        or topic_families.count("facet") != _EXPECTED_STREAM_COUNTS[topic_id] - 1
+        for topic_id, topic_families in families.items()
+    ):
+        raise ValueError("stream cohorts do not have exact original/facet families")
+
+
 def rerank_stream(
     candidates: Sequence[Mapping[str, object]],
     windows: Sequence[Mapping[str, object]],
@@ -127,16 +275,37 @@ def rerank_stream(
 ) -> list[dict[str, object]]:
     """Rerank one stream using only its own query-specific MiniLM scores."""
 
+    _reject_protected_rows(candidates, label="stream candidates")
+    _reject_protected_rows(windows, label="scored windows")
     if aggregation not in {"top4", "maxp"}:
         raise ValueError("aggregation must be 'top4' or 'maxp'")
     if not candidates:
         raise ValueError("stream reranking requires candidates")
+    candidate_lineage = _one_stream_lineage(candidates, label="stream candidates")
+    window_lineage = _one_stream_lineage(windows, label="scored windows")
+    if candidate_lineage != window_lineage:
+        raise ValueError(
+            "candidates and windows must have a single topic/variant/query identity"
+        )
     candidate_docids = [str(row["document_id"]) for row in candidates]
     if len(set(candidate_docids)) != len(candidate_docids):
         raise ValueError("stream candidates must have distinct document IDs")
+    candidates_by_docid = {
+        str(row["document_id"]): row
+        for row in candidates
+    }
     window_rows: dict[str, list[Mapping[str, object]]] = defaultdict(list)
     for window in windows:
-        window_rows[str(window["document_id"])].append(window)
+        docid = str(window["document_id"])
+        candidate = candidates_by_docid.get(docid)
+        if candidate is None:
+            raise ValueError("scored windows must cover exactly the stream candidates")
+        if (
+            str(window.get("family")) != str(candidate.get("family"))
+            or int(window.get("rank", 0)) != int(candidate.get("rank", -1))
+        ):
+            raise ValueError("candidate/window stream lineage differs")
+        window_rows[docid].append(window)
     if set(window_rows) != set(candidate_docids):
         raise ValueError("scored windows must cover exactly the stream candidates")
 
@@ -578,6 +747,55 @@ def _window_identity(row: Mapping[str, object]) -> tuple[str, str, str, str, str
     )
 
 
+def _compact_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _authenticated_score_value(row: Mapping[str, object]) -> float:
+    raw_score = row.get("score")
+    if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+        raise ValueError("raw score identity is invalid")
+    score = float(raw_score)
+    if (
+        not math.isfinite(score)
+        or struct.unpack(">f", struct.pack(">f", score))[0] != score
+    ):
+        raise ValueError("raw score identity is not a finite float32")
+    cache_key = row.get("cache_key")
+    if not isinstance(cache_key, str):
+        raise ValueError("raw score identity lacks a cache key")
+    raw_float_sha = hashlib.sha256(struct.pack(">f", score)).hexdigest()
+    raw_output_sha = hashlib.sha256(
+        _compact_json_bytes(
+            {
+                "cache_key": cache_key,
+                "inference_dtype": "float32",
+                "raw_float32_be_sha256": raw_float_sha,
+                "score_representation": "raw_logits",
+            }
+        )
+    ).hexdigest()
+    if row.get("raw_output_sha256") != raw_output_sha:
+        raise ValueError("raw score identity differs from its authenticated output")
+    output_sha = hashlib.sha256(
+        _compact_json_bytes(
+            {
+                "disposition": row.get("disposition"),
+                "raw_output_sha256": raw_output_sha,
+                "reservation_sha256": row.get("reservation_sha256"),
+            }
+        )
+    ).hexdigest()
+    if row.get("output_sha256") != output_sha:
+        raise ValueError("raw score identity differs from its reservation")
+    return score
+
+
 def load_authenticated_inputs(
     *,
     manifest_path: Path,
@@ -605,6 +823,27 @@ def load_authenticated_inputs(
     ledger_sha = _sha256_file(ledger_path)
     if scoring_receipt_sha != AUTHENTICATED_SCORING_RECEIPT_SHA256:
         raise ValueError("scoring receipt differs from the authenticated Task 4 receipt")
+    if {
+        "candidates_sha256": manifest.get("candidates_sha256"),
+        "ledger_sha256": ledger_sha,
+        "manifest_sha256": manifest_sha,
+        "preflight_sha256": preflight_sha,
+        "scoring_receipt_sha256": scoring_receipt_sha,
+        "source_receipt_sha256": manifest.get("source_receipt_sha256"),
+        "windows_sha256": windows_sha,
+    } != {
+        key: _AUTHENTICATED_INPUT_BINDINGS[key]
+        for key in (
+            "candidates_sha256",
+            "ledger_sha256",
+            "manifest_sha256",
+            "preflight_sha256",
+            "scoring_receipt_sha256",
+            "source_receipt_sha256",
+            "windows_sha256",
+        )
+    }:
+        raise ValueError("input hashes differ from the authenticated Task 4 identities")
     if (
         manifest.get("schema_version") != "facet-local-minilm-manifest-v1"
         or manifest.get("status") != "frozen_source_snapshot"
@@ -624,8 +863,25 @@ def load_authenticated_inputs(
         or preflight.get("windows_sha256") != windows_sha
         or preflight.get("qrels_path_supported") is not False
         or preflight.get("retrieval_path_supported") is not False
+        or preflight.get("inference_authorized") is not False
+        or preflight.get("model_constructed") is not False
     ):
         raise ValueError("preflight bindings differ from the authenticated source")
+    preflight_summary = preflight.get("summary")
+    if not isinstance(preflight_summary, Mapping) or any(
+        preflight_summary.get(key) != expected
+        for key, expected in {
+            "document_count": 3100,
+            "hosted_inference_call_count": 0,
+            "inference_count": 0,
+            "qrels_access_count": 0,
+            "retrieval_call_count": 0,
+            "stream_count": 31,
+            "topic_count": 4,
+            "window_count": 14720,
+        }.items()
+    ):
+        raise ValueError("preflight safety counters differ from the authenticated run")
     if (
         scoring_receipt.get("schema_version")
         != "facet-local-minilm-scoring-receipt-v2"
@@ -639,6 +895,8 @@ def load_authenticated_inputs(
         or scoring_receipt.get("pending_window_count") != 0
         or scoring_receipt.get("inference_dtype") != "float32"
         or scoring_receipt.get("score_representation") != "raw_logits"
+        or scoring_receipt.get("model") != _SCORING_MODEL
+        or scoring_receipt.get("model_revision") != _SCORING_MODEL_REVISION
     ):
         raise ValueError("scoring artifacts differ from the complete authenticated run")
     if (
@@ -663,6 +921,9 @@ def load_authenticated_inputs(
         or source_receipt.get("candidate_rows") != 3100
         or source_receipt.get("stream_count") != 31
         or source_receipt.get("status") != "frozen_source_snapshot"
+        or source_receipt.get("schema_version")
+        != "facet-local-minilm-source-receipt-v1"
+        or source_receipt.get("candidate_file") != manifest.get("candidate_file")
     ):
         raise ValueError("source snapshot or receipt differs from the manifest")
 
@@ -678,6 +939,8 @@ def load_authenticated_inputs(
 
     windows = _read_jsonl(windows_path, "preflight windows")
     scores = _read_jsonl(ledger_path, "scoring ledger")
+    _reject_protected_rows(windows, label="preflight windows")
+    _reject_protected_rows(scores, label="scoring ledger")
     if len(windows) != 14720 or len(scores) != 14720:
         raise ValueError("preflight/scoring rows differ from the exact window count")
     window_index = {_window_identity(row) for row in windows}
@@ -688,9 +951,6 @@ def load_authenticated_inputs(
         or window_index != score_index
     ):
         raise ValueError("scoring ledger does not exactly cover the preflight windows")
-    if any(str(row.get("topic_id")) in PROTECTED_TOPIC_IDS for row in (*windows, *scores)):
-        raise ValueError("protected topic is forbidden in preflight or scoring artifacts")
-
     bindings: dict[str, object] = {
         "candidates_sha256": str(manifest["candidates_sha256"]),
         "inference_call_count": 0,
@@ -703,6 +963,8 @@ def load_authenticated_inputs(
         "source_receipt_sha256": str(manifest["source_receipt_sha256"]),
         "windows_sha256": windows_sha,
     }
+    if bindings != _AUTHENTICATED_INPUT_BINDINGS:
+        raise ValueError("loaded bindings differ from the authenticated Task 4 inputs")
     return AuthenticatedInputs(
         manifest=manifest,
         candidates=candidates,
@@ -717,12 +979,20 @@ def build_stream_rankings(
 ) -> dict[tuple[str, str, str], dict[str, object]]:
     """Materialize BM25, top-four, and MaxP orders from authenticated scores."""
 
+    raw_manifest_streams = inputs.manifest.get("streams")
+    if not isinstance(raw_manifest_streams, Sequence):
+        raise ValueError("manifest streams must be a sequence")
+    _reject_protected_rows(raw_manifest_streams, label="manifest streams")
+    _reject_protected_rows(inputs.candidates, label="source candidates")
+    _reject_protected_rows(inputs.windows, label="preflight windows")
+    _reject_protected_rows(inputs.scores, label="scoring ledger")
     manifest_streams = {
         (str(row["topic_id"]), str(row["variant"]), RETRIEVER_NAME): str(row["family"])
-        for row in inputs.manifest["streams"]  # type: ignore[index]
+        for row in raw_manifest_streams
     }
     if len(manifest_streams) != 31:
         raise ValueError("manifest stream identities are not exactly 31 unique streams")
+    _validate_stream_cohorts(manifest_streams)
     candidates_by_stream: dict[
         tuple[str, str, str], list[Mapping[str, object]]
     ] = defaultdict(list)
@@ -740,30 +1010,60 @@ def build_stream_rankings(
     if set(candidates_by_stream) != set(manifest_streams):
         raise ValueError("candidate snapshot does not cover every manifest stream")
 
+    for identity, candidates in candidates_by_stream.items():
+        lineage = _one_stream_lineage(candidates, label=f"candidate stream {identity!r}")
+        if lineage[:2] != identity[:2]:
+            raise ValueError("candidate stream lineage differs from the manifest")
+
+    window_identities = [_window_identity(row) for row in inputs.windows]
+    if len(set(window_identities)) != len(window_identities):
+        raise ValueError("preflight has duplicate window identities")
     score_by_window = {_window_identity(row): row for row in inputs.scores}
+    if len(score_by_window) != len(inputs.scores):
+        raise ValueError("scoring ledger has duplicate window identities")
+    if set(window_identities) != set(score_by_window):
+        raise ValueError("scoring ledger does not exactly cover preflight windows")
     windows_by_stream_doc: dict[
         tuple[str, str, str, str], list[dict[str, object]]
     ] = defaultdict(list)
     for window in inputs.windows:
-        score_row = score_by_window[_window_identity(window)]
-        score = float(score_row["score"])
-        if not math.isfinite(score):
-            raise ValueError("MiniLM scores must be finite raw logits")
-        if (
-            str(window["family"]) != str(score_row["family"])
-            or int(window["rank"]) != int(score_row["rank"])
-        ):
+        score_row = score_by_window.get(_window_identity(window))
+        if score_row is None:
+            raise ValueError("scoring ledger does not cover a preflight window")
+        lineage_fields = (
+            "topic_id",
+            "variant",
+            "document_id",
+            "window_id",
+            "query_sha256",
+            "window_sha256",
+            "family",
+            "rank",
+            "cache_key",
+        )
+        if any(window.get(field) != score_row.get(field) for field in lineage_fields):
             raise ValueError("score row lineage differs from its preflight window")
+        if (
+            score_row.get("schema_version") != "facet-local-minilm-score-row-v2"
+            or score_row.get("model") != _SCORING_MODEL
+            or score_row.get("model_revision") != _SCORING_MODEL_REVISION
+            or score_row.get("inference_dtype") != "float32"
+            or score_row.get("score_representation") != "raw_logits"
+        ):
+            raise ValueError("score row lineage differs from authenticated scoring")
+        score = _authenticated_score_value(score_row)
         merged = dict(window)
         merged["score"] = score
-        windows_by_stream_doc[
-            (
-                str(window["topic_id"]),
-                str(window["variant"]),
-                RETRIEVER_NAME,
-                str(window["document_id"]),
-            )
-        ].append(merged)
+        stream_identity = (
+            str(window["topic_id"]),
+            str(window["variant"]),
+            RETRIEVER_NAME,
+        )
+        if stream_identity not in manifest_streams:
+            raise ValueError("preflight window is outside manifest stream identities")
+        windows_by_stream_doc[(*stream_identity, str(window["document_id"]))].append(
+            merged
+        )
 
     result: dict[tuple[str, str, str], dict[str, object]] = {}
     for identity in sorted(manifest_streams):
@@ -777,6 +1077,10 @@ def build_stream_rankings(
             or len({str(row["document_id"]) for row in candidates}) != 100
         ):
             raise ValueError(f"stream {identity!r} is not exact depth 100")
+        query_hashes = {str(candidate["query_sha256"]) for candidate in candidates}
+        queries = {str(candidate["query"]) for candidate in candidates}
+        if len(query_hashes) != 1 or len(queries) != 1:
+            raise ValueError("candidate stream must have one common query identity")
         stream_windows: list[Mapping[str, object]] = []
         for candidate in candidates:
             key = (*identity, str(candidate["document_id"]))
@@ -785,6 +1089,9 @@ def build_stream_rankings(
                 raise ValueError("candidate lacks scored preflight windows")
             if any(
                 str(window["query_sha256"]) != str(candidate["query_sha256"])
+                or str(window["query"]) != str(candidate["query"])
+                or str(window["family"]) != str(candidate["family"])
+                or str(window["document_sha256"]) != str(candidate["text_sha256"])
                 or int(window["rank"]) != int(candidate["rank"])
                 for window in document_windows
             ):
@@ -1007,12 +1314,108 @@ def _project_stream_row(row: Mapping[str, object]) -> dict[str, object]:
 def _safe_artifact_path(root: Path, relative: object) -> Path:
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
         raise ValueError("freeze artifact path must be a non-empty relative path")
+    if Path(relative).as_posix() != relative or any(
+        part in {"", ".", ".."} for part in Path(relative).parts
+    ):
+        raise ValueError("freeze artifact path must be canonical")
     candidate = root / relative
     try:
         candidate.resolve().relative_to(root.resolve())
     except ValueError as exc:
         raise ValueError("freeze artifact path escapes the freeze directory") from exc
     return candidate
+
+
+def _enforce_qrels_firewall(value: object, *, label: str) -> None:
+    if isinstance(value, Mapping):
+        for raw_key, child in value.items():
+            key = str(raw_key)
+            if "qrels" in key.casefold():
+                if key == "qrels_opened" and child is False:
+                    continue
+                raise ValueError(f"qrels firewall rejected {key!r} in {label}")
+            _enforce_qrels_firewall(child, label=label)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for child in value:
+            _enforce_qrels_firewall(child, label=label)
+    elif (
+        isinstance(value, str)
+        and "qrels" in value.casefold()
+        and value != "frozen_before_qrels"
+    ):
+        raise ValueError(f"qrels firewall rejected a reference in {label}")
+
+
+def _parse_bound_artifact(content: bytes, *, relative: str) -> object:
+    try:
+        if relative.endswith(".json"):
+            value = json.loads(content)
+            _enforce_qrels_firewall(value, label=relative)
+            return value
+        if relative.endswith(".jsonl"):
+            rows = tuple(json.loads(line) for line in content.splitlines())
+            _enforce_qrels_firewall(rows, label=relative)
+            return rows
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"bound artifact {relative} is invalid JSON") from exc
+    raise ValueError(f"bound artifact {relative} has an unsupported format")
+
+
+def _validate_declared_freeze_tree(
+    freeze_dir: Path,
+    *,
+    artifact_paths: set[str],
+) -> None:
+    if freeze_dir.is_symlink() or not freeze_dir.is_dir():
+        raise ValueError("freeze root must be a real directory")
+    declared_files = {"freeze.json", *artifact_paths}
+    declared_dirs: set[str] = set()
+    for relative in declared_files:
+        parent = Path(relative).parent
+        while parent != Path("."):
+            declared_dirs.add(parent.as_posix())
+            parent = parent.parent
+
+    actual_files: set[str] = set()
+    actual_dirs: set[str] = set()
+    for path in freeze_dir.rglob("*"):
+        relative = path.relative_to(freeze_dir).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"undeclared freeze path or symlink: {relative}")
+        if path.is_file():
+            actual_files.add(relative)
+        elif path.is_dir():
+            actual_dirs.add(relative)
+        else:
+            raise ValueError(f"undeclared freeze path: {relative}")
+    if actual_files != declared_files or actual_dirs != declared_dirs:
+        extras = sorted(
+            (actual_files - declared_files) | (actual_dirs - declared_dirs)
+        )
+        missing = sorted(
+            (declared_files - actual_files) | (declared_dirs - actual_dirs)
+        )
+        detail = extras[0] if extras else f"missing {missing[0]}"
+        raise ValueError(f"undeclared freeze path or incomplete tree: {detail}")
+
+
+def _validate_authenticated_bindings(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError("input bindings must be an object")
+    bindings = dict(value)
+    if set(bindings) != set(_AUTHENTICATED_INPUT_BINDINGS):
+        raise ValueError("input bindings differ from authenticated Task 4 inputs")
+    for key, expected in _AUTHENTICATED_INPUT_BINDINGS.items():
+        observed = bindings.get(key)
+        if key.endswith("_call_count"):
+            if type(observed) is not int or observed != expected:
+                raise ValueError("input bindings differ from authenticated Task 4 inputs")
+        elif key == "qrels_opened":
+            if observed is not False:
+                raise ValueError("input bindings differ from authenticated Task 4 inputs")
+        elif observed != expected:
+            raise ValueError("input bindings differ from authenticated Task 4 inputs")
+    return bindings
 
 
 def _legacy_paths() -> tuple[Path, Path]:
@@ -1116,25 +1519,7 @@ def generate_freeze(
         control_diff = build_control_diff(
             rankings["R1_LEGACY"], rankings["C0_TOPIC_LOCAL"]
         )
-        fusion_definitions = {
-            "deduplication": "document_id within topic after one best rank per stream",
-            "facet_family_weight": 0.5,
-            "k": 60,
-            "output_depth": 100,
-            "primary_implementation": "family_rrf_topic_local_v2",
-            "raw_score_cross_stream_comparison": False,
-            "secondary_implementation": "family_rrf_global_key_v1",
-            "stream_rank_tie_break": [
-                "descending_aggregate_score",
-                "prior_stream_rank",
-                "document_id",
-            ],
-            "system_rank_tie_break": [
-                "descending_rrf_score",
-                "best_stream_rank",
-                "document_id",
-            ],
-        }
+        fusion_definitions = dict(_FUSION_DEFINITIONS)
 
         artifacts: dict[str, dict[str, object]] = {}
         _write_artifact(
@@ -1279,16 +1664,82 @@ def verify_freeze(freeze_dir: Path) -> dict[str, object]:
         or len(payload.get("streams", ())) != 93
     ):
         raise ValueError("ranking freeze root differs from the exact Task 4 contract")
-    serialized_root = json.dumps(payload, sort_keys=True)
-    if "qrels_path" in serialized_root:
-        raise ValueError("ranking freeze must not contain a qrels path")
+    if set(payload) != {
+        "artifacts",
+        "bindings",
+        "control_diff_audit",
+        "freeze_sha256",
+        "fusion_definitions",
+        "fusion_tables",
+        "qrels_opened",
+        "rankings",
+        "schema_version",
+        "status",
+        "streams",
+        "topic_ids",
+    }:
+        raise ValueError("ranking freeze root fields differ from the exact contract")
+    _enforce_qrels_firewall(payload, label="freeze.json")
 
     artifact_records = payload.get("artifacts")
     if not isinstance(artifact_records, Mapping):
         raise ValueError("ranking freeze lacks artifact hash bindings")
+    stream_records = payload.get("streams")
+    ranking_records = payload.get("rankings")
+    if not isinstance(stream_records, Sequence) or not isinstance(
+        ranking_records, Mapping
+    ):
+        raise ValueError("ranking freeze stream/ranking records are invalid")
+    referenced_paths = {
+        "input_bindings.json",
+        "stream_manifest.json",
+        str(payload.get("control_diff_audit")),
+        str(payload.get("fusion_definitions")),
+    }
+    fusion_tables_raw = payload.get("fusion_tables")
+    if isinstance(fusion_tables_raw, Mapping):
+        referenced_paths.update(str(path) for path in fusion_tables_raw.values())
+    for raw in stream_records:
+        if not isinstance(raw, Mapping):
+            raise ValueError("stream manifest record must be an object")
+        referenced_paths.add(str(raw.get("path")))
+    for raw in ranking_records.values():
+        if not isinstance(raw, Mapping):
+            raise ValueError("ranking record must be an object")
+        referenced_paths.add(str(raw.get("path")))
+    row_artifact_paths = {
+        str(raw["path"])
+        for raw in (*stream_records, *ranking_records.values())
+        if isinstance(raw, Mapping) and "path" in raw
+    }
+    if set(artifact_records) != referenced_paths:
+        raise ValueError("artifact bindings do not exactly cover referenced files")
+    for relative in referenced_paths:
+        _safe_artifact_path(freeze_dir, relative)
+    _validate_declared_freeze_tree(
+        freeze_dir,
+        artifact_paths=referenced_paths,
+    )
+
+    parsed_artifacts: dict[str, object] = {}
     for relative, raw_record in artifact_records.items():
         if not isinstance(raw_record, Mapping):
             raise ValueError("artifact record must be an object")
+        expected_record_fields = {"bytes", "sha256"}
+        if relative in row_artifact_paths:
+            expected_record_fields.add("rows")
+        if (
+            set(raw_record) != expected_record_fields
+            or type(raw_record.get("bytes")) is not int
+            or int(raw_record["bytes"]) < 0
+            or not isinstance(raw_record.get("sha256"), str)
+            or len(str(raw_record["sha256"])) != 64
+            or (
+                "rows" in raw_record
+                and type(raw_record.get("rows")) is not int
+            )
+        ):
+            raise ValueError(f"artifact record fields differ for {relative}")
         path = _safe_artifact_path(freeze_dir, relative)
         content = path.read_bytes()
         if (
@@ -1296,35 +1747,130 @@ def verify_freeze(freeze_dir: Path) -> dict[str, object]:
             or hashlib.sha256(content).hexdigest() != raw_record.get("sha256")
         ):
             raise ValueError(f"artifact hash differs for {relative}")
+        parsed_artifacts[str(relative)] = _parse_bound_artifact(
+            content,
+            relative=str(relative),
+        )
 
-    stream_records = payload["streams"]
+    input_bindings = parsed_artifacts["input_bindings.json"]
+    if payload.get("bindings") != input_bindings:
+        raise ValueError("root and file input bindings differ")
+    _validate_authenticated_bindings(input_bindings)
+
+    if payload.get("fusion_definitions") != "fusion_definitions.json":
+        raise ValueError("fusion definitions path differs")
+    if parsed_artifacts["fusion_definitions.json"] != _FUSION_DEFINITIONS:
+        raise ValueError("fusion definitions differ from the frozen semantics")
+
+    stream_manifest = parsed_artifacts["stream_manifest.json"]
+    expected_stream_manifest = {
+        "schema_version": "facet-local-minilm-stream-manifest-v1",
+        "streams": list(stream_records),
+    }
+    if stream_manifest != expected_stream_manifest:
+        raise ValueError("stream manifest differs from the ranking freeze root")
+
     grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+    stream_families: dict[tuple[str, str, str], str] = {}
+    seen_stream_paths: set[str] = set()
     for raw in stream_records:  # type: ignore[union-attr]
         if not isinstance(raw, Mapping):
             raise ValueError("stream manifest record must be an object")
+        if set(raw) != {
+            "aggregation",
+            "family",
+            "file_sha256",
+            "path",
+            "retriever_name",
+            "rows",
+            "topic_id",
+            "variant_name",
+        }:
+            raise ValueError("stream manifest record fields differ")
         identity = (
             str(raw["topic_id"]),
             str(raw["variant_name"]),
             str(raw["retriever_name"]),
         )
         aggregation = str(raw["aggregation"])
-        if aggregation not in {"bm25", "top4", "maxp"} or raw.get("rows") != 100:
+        family = str(raw["family"])
+        relative = str(raw["path"])
+        if (
+            aggregation not in {"bm25", "top4", "maxp"}
+            or type(raw.get("rows")) is not int
+            or raw.get("rows") != 100
+            or family not in {"original", "facet"}
+            or identity[2] != RETRIEVER_NAME
+            or identity[0] not in _EXPECTED_STREAM_COUNTS
+        ):
             raise ValueError("stream artifact differs from exact depth 100")
-        content = _safe_artifact_path(freeze_dir, raw["path"]).read_bytes()
+        if relative in seen_stream_paths:
+            raise ValueError("stream artifact path is referenced more than once")
+        seen_stream_paths.add(relative)
+        content = _safe_artifact_path(freeze_dir, relative).read_bytes()
         if hashlib.sha256(content).hexdigest() != raw.get("file_sha256"):
             raise ValueError("stream manifest hash differs from artifact")
-        rows = tuple(json.loads(line) for line in content.splitlines() if line)
-        if len(rows) != 100:
+        artifact_record = artifact_records[relative]
+        if (
+            artifact_record.get("sha256") != raw.get("file_sha256")
+            or artifact_record.get("rows") != raw.get("rows")
+        ):
+            raise ValueError("stream record differs from artifact binding")
+        rows_raw = parsed_artifacts[relative]
+        if not isinstance(rows_raw, Sequence):
+            raise ValueError("stream artifact must contain JSONL rows")
+        rows = tuple(rows_raw)
+        if len(rows) != 100 or any(not isinstance(row, Mapping) for row in rows):
             raise ValueError("stream artifact row count differs")
-        record = grouped.setdefault(identity, {"family": str(raw["family"])})
+        if any(type(row.get("rank")) is not int for row in rows) or [
+            int(row["rank"]) for row in rows
+        ] != list(range(1, 101)):
+            raise ValueError("stream rank sequence must be 1..100 in file order")
+        if len({str(row["document_id"]) for row in rows}) != 100:
+            raise ValueError("stream artifact document IDs must be unique")
+        for row in rows:
+            if (
+                str(row.get("topic_id")) != identity[0]
+                or str(row.get("variant")) != identity[1]
+                or str(row.get("family")) != family
+                or str(row.get("aggregation")) != aggregation
+                or (
+                    "retriever_name" in row
+                    and str(row.get("retriever_name")) != identity[2]
+                )
+            ):
+                raise ValueError("stream row identity differs from its manifest record")
+        query_lineage = {
+            (str(row.get("query_sha256", "")), str(row.get("query", "")))
+            for row in rows
+        }
+        if len(query_lineage) != 1 or any(
+            not value for value in next(iter(query_lineage), ())
+        ):
+            raise ValueError("stream rows do not share one query identity")
+        record = grouped.setdefault(identity, {"family": family})
+        if record["family"] != family:
+            raise ValueError("stream family differs across aggregation artifacts")
         if aggregation in record:
             raise ValueError("duplicate stream aggregation artifact")
         record[aggregation] = rows
+        stream_families[identity] = family
     if len(grouped) != 31 or any(
         set(record) != {"family", "bm25", "top4", "maxp"}
         for record in grouped.values()
     ):
         raise ValueError("stream artifacts do not form exactly 31 complete streams")
+    _validate_stream_cohorts(stream_families)
+    for identity, record in grouped.items():
+        document_sets = {
+            aggregation: {
+                str(row["document_id"])
+                for row in record[aggregation]  # type: ignore[index]
+            }
+            for aggregation in ("bm25", "top4", "maxp")
+        }
+        if len({frozenset(docids) for docids in document_sets.values()}) != 1:
+            raise ValueError(f"stream {identity!r} aggregations cover different documents")
 
     fusion_tables = payload.get("fusion_tables")
     if fusion_tables != {
@@ -1332,20 +1878,16 @@ def verify_freeze(freeze_dir: Path) -> dict[str, object]:
         "family_rrf_topic_local_v2": "fusion_weights_v2.json",
     }:
         raise ValueError("fusion table identities differ")
-    legacy_payload = _read_json(
-        _safe_artifact_path(
-            freeze_dir,
-            fusion_tables["family_rrf_global_key_v1"],  # type: ignore[index]
-        ),
-        "legacy weights",
-    )
-    corrected_payload = _read_json(
-        _safe_artifact_path(
-            freeze_dir,
-            fusion_tables["family_rrf_topic_local_v2"],  # type: ignore[index]
-        ),
-        "topic-local weights",
-    )
+    legacy_payload = parsed_artifacts[
+        fusion_tables["family_rrf_global_key_v1"]  # type: ignore[index]
+    ]
+    corrected_payload = parsed_artifacts[
+        fusion_tables["family_rrf_topic_local_v2"]  # type: ignore[index]
+    ]
+    if not isinstance(legacy_payload, Mapping) or not isinstance(
+        corrected_payload, Mapping
+    ):
+        raise ValueError("fusion tables must be JSON objects")
     if (
         legacy_payload.get("schema_version") != "family-rrf-global-key-v1"
         or corrected_payload.get("schema_version") != "family-rrf-topic-local-v2"
@@ -1353,6 +1895,40 @@ def verify_freeze(freeze_dir: Path) -> dict[str, object]:
         raise ValueError("fusion table schema differs")
     legacy_weights = _weight_map(legacy_payload)
     corrected_weights = _weight_map(corrected_payload)
+    expected_legacy, expected_corrected = build_weight_tables(
+        [
+            {
+                "family": family,
+                "topic_id": topic_id,
+                "variant": variant,
+            }
+            for (topic_id, variant, _retriever), family in sorted(
+                stream_families.items()
+            )
+        ],
+        retriever_name=RETRIEVER_NAME,
+    )
+    expected_legacy_payload, expected_corrected_payload = _weight_payloads(
+        expected_legacy,
+        expected_corrected,
+        [
+            {
+                "family": family,
+                "topic_id": topic_id,
+                "variant": variant,
+            }
+            for (topic_id, variant, _retriever), family in sorted(
+                stream_families.items()
+            )
+        ],
+    )
+    if (
+        legacy_weights != expected_legacy
+        or corrected_weights != expected_corrected
+        or legacy_payload != expected_legacy_payload
+        or corrected_payload != expected_corrected_payload
+    ):
+        raise ValueError("fusion tables differ from authenticated stream identities")
     for topic_id in PILOT_TOPIC_IDS:
         topic_sum = sum(
             (
@@ -1378,15 +1954,39 @@ def verify_freeze(freeze_dir: Path) -> dict[str, object]:
     decoded_rankings: dict[str, tuple[Mapping[str, object], ...]] = {}
     for arm in ARM_NAMES:
         raw_record = ranking_records[arm]  # type: ignore[index]
+        if not isinstance(raw_record, Mapping) or set(raw_record) != {
+            "canonical_sha256",
+            "file_sha256",
+            "path",
+            "rows",
+        }:
+            raise ValueError(f"ranking record fields differ for {arm}")
         path = _safe_artifact_path(freeze_dir, raw_record["path"])
         content = path.read_bytes()
+        artifact_record = artifact_records[str(raw_record["path"])]
         if (
             len(content.splitlines()) != 400
             or hashlib.sha256(content).hexdigest() != raw_record["file_sha256"]
             or raw_record["rows"] != 400
+            or artifact_record.get("sha256") != raw_record["file_sha256"]
+            or artifact_record.get("rows") != 400
         ):
             raise ValueError(f"ranking artifact differs for {arm}")
-        rows = tuple(json.loads(line) for line in content.splitlines() if line)
+        rows_raw = parsed_artifacts[str(raw_record["path"])]
+        if not isinstance(rows_raw, Sequence) or any(
+            not isinstance(row, Mapping) for row in rows_raw
+        ):
+            raise ValueError(f"ranking artifact rows are invalid for {arm}")
+        rows = tuple(rows_raw)
+        expected_topic_ranks = [
+            (topic_id, rank)
+            for topic_id in PILOT_TOPIC_IDS
+            for rank in range(1, 101)
+        ]
+        if any(type(row.get("rank")) is not int for row in rows) or [
+            (str(row.get("topic_id")), int(row["rank"])) for row in rows
+        ] != expected_topic_ranks:
+            raise ValueError(f"ranking {arm} topic/rank sequence differs")
         if canonical_ranking_sha256(rows) != raw_record["canonical_sha256"]:
             raise ValueError(f"ranking canonical hash differs for {arm}")
         decoded_rankings[arm] = rows
