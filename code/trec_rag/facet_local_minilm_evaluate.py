@@ -808,6 +808,146 @@ def _read_authenticated_bytes(
     return source
 
 
+def _validate_prior_embedded_topics(value: Any) -> None:
+    """Validate every explicit topic declaration in an authenticated prior."""
+
+    def visit(child: Any) -> None:
+        if isinstance(child, Mapping):
+            if "topic_id" in child:
+                _validate_topic_boundary(
+                    (child["topic_id"],), "prior evaluation row"
+                )
+            if "topic_ids" in child:
+                declared = child["topic_ids"]
+                if not isinstance(declared, Sequence) or isinstance(
+                    declared, (str, bytes, bytearray)
+                ):
+                    raise ValueError(
+                        "prior evaluation topic boundary declaration is invalid"
+                    )
+                _validate_topic_boundary(
+                    declared, "prior evaluation declaration", exact=True
+                )
+                if [str(topic_id) for topic_id in declared] != list(PILOT_TOPIC_IDS):
+                    raise ValueError(
+                        "prior evaluation topic boundary must declare the exact pilot order"
+                    )
+            for key in ("topics", "per_topic"):
+                declared_rows = child.get(key)
+                if isinstance(declared_rows, Mapping):
+                    _validate_topic_boundary(
+                        declared_rows,
+                        f"prior evaluation {key}",
+                        exact=True,
+                    )
+            for nested in child.values():
+                visit(nested)
+        elif isinstance(child, Sequence) and not isinstance(
+            child, (str, bytes, bytearray)
+        ):
+            for nested in child:
+                visit(nested)
+
+    visit(value)
+
+
+def load_authenticated_prior_evaluation(
+    prior_evaluation_manifest: Path,
+    prior_evaluation: Path,
+) -> dict[str, Any]:
+    """Authenticate a pilot-only prior evaluation before returning parsed bytes."""
+
+    manifest_path = Path(prior_evaluation_manifest)
+    try:
+        manifest_source = manifest_path.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("prior evaluation manifest is missing or invalid") from exc
+    manifest = _parse_json_object_bytes(
+        manifest_source, "prior evaluation manifest"
+    )
+    if set(manifest) != {
+        "manifest_sha256",
+        "prior_evaluation",
+        "schema_version",
+        "status",
+        "topic_ids",
+    } or (
+        manifest.get("schema_version")
+        != "facet-local-minilm-prior-evaluation-manifest-v1"
+        or manifest.get("status") != "authenticated_prior_evaluation"
+    ):
+        raise ValueError("prior evaluation manifest contract differs")
+
+    declared_topics = manifest.get("topic_ids")
+    if not isinstance(declared_topics, Sequence) or isinstance(
+        declared_topics, (str, bytes, bytearray)
+    ):
+        raise ValueError("prior evaluation manifest topic boundary is invalid")
+    _validate_topic_boundary(
+        declared_topics, "prior evaluation manifest", exact=True
+    )
+    if [str(topic_id) for topic_id in declared_topics] != list(PILOT_TOPIC_IDS):
+        raise ValueError(
+            "prior evaluation manifest topic boundary must declare exact pilot order"
+        )
+
+    claimed_manifest_hash = _validated_sha256(
+        manifest.get("manifest_sha256"), "prior evaluation manifest self hash"
+    )
+    without_manifest_hash = dict(manifest)
+    without_manifest_hash.pop("manifest_sha256", None)
+    actual_manifest_hash = hashlib.sha256(
+        _canonical_json_bytes(without_manifest_hash, newline=True)
+    ).hexdigest()
+    if not hmac.compare_digest(claimed_manifest_hash, actual_manifest_hash):
+        raise ValueError("prior evaluation manifest self hash differs")
+
+    record = manifest.get("prior_evaluation")
+    if not isinstance(record, Mapping) or set(record) != {
+        "path",
+        "schema_version",
+        "sha256",
+    }:
+        raise ValueError("prior evaluation manifest artifact binding differs")
+    raw_relative = record.get("path")
+    if not isinstance(raw_relative, str) or not raw_relative:
+        raise ValueError("prior evaluation path binding is missing")
+    relative = Path(raw_relative)
+    if (
+        relative.is_absolute()
+        or relative.as_posix() != raw_relative
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise ValueError("prior evaluation path binding is invalid")
+    declared_path = manifest_path.parent / relative
+    provided_path = Path(prior_evaluation)
+    if declared_path.resolve() != provided_path.resolve():
+        raise ValueError("prior evaluation path binding differs")
+
+    expected_schema = record.get("schema_version")
+    if not isinstance(expected_schema, str) or not expected_schema:
+        raise ValueError("prior evaluation schema binding is invalid")
+    expected_hash = _validated_sha256(
+        record.get("sha256"), "prior evaluation artifact hash"
+    )
+    source = _read_authenticated_bytes(
+        provided_path, expected_hash, "prior evaluation"
+    )
+    prior = _parse_json_object_bytes(source, "prior evaluation")
+    if prior.get("schema_version") != expected_schema:
+        raise ValueError("prior evaluation schema binding differs")
+    if "artifact_sha256" in prior:
+        validate_self_hash(prior)
+    _validate_prior_embedded_topics(prior)
+    return {
+        "prior_evaluation": prior,
+        "prior_evaluation_manifest_sha256": hashlib.sha256(
+            manifest_source
+        ).hexdigest(),
+        "prior_evaluation_sha256": expected_hash,
+    }
+
+
 def verify_ranking_freeze(freeze: Path) -> dict[str, Any]:
     """Verify the complete pre-qrels ranking freeze through its owner module."""
 
@@ -848,6 +988,7 @@ def load_frozen_inputs(
     review_freeze: Path,
     prior_evaluation: Path,
     *,
+    prior_evaluation_manifest: Path,
     ranking_freeze_sha256: str,
     review_freeze_sha256: str,
 ) -> dict[str, Any]:
@@ -1065,17 +1206,9 @@ def load_frozen_inputs(
     if set(stream_weights) != set(control_facets):
         raise ValueError("facet streams lack exact topic-local fusion weights")
 
-    prior_path = Path(prior_evaluation)
-    try:
-        prior_bytes = prior_path.read_bytes()
-        prior_value = json.loads(prior_bytes)
-    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("prior evaluation is missing or invalid") from exc
-    if not isinstance(prior_value, dict):
-        raise ValueError("prior evaluation must be a JSON object")
-    prior = prior_value
-    if "artifact_sha256" in prior:
-        validate_self_hash(prior)
+    prior_binding = load_authenticated_prior_evaluation(
+        Path(prior_evaluation_manifest), Path(prior_evaluation)
+    )
     review_root = Path(review_freeze)
     try:
         review_root_source = (review_root / "review_freeze.json").read_bytes()
@@ -1125,8 +1258,7 @@ def load_frozen_inputs(
         "control_facets": control_facets,
         "document_details": document_details,
         "original": original,
-        "prior_evaluation": prior,
-        "prior_evaluation_sha256": hashlib.sha256(prior_bytes).hexdigest(),
+        **prior_binding,
         "ranking_rows": ranking_rows,
         "rankings": rankings,
         "review_rows": review_rows,
@@ -1726,6 +1858,7 @@ def evaluate(
     *,
     review_freeze: Path | None = None,
     prior_evaluation: Path | None = None,
+    prior_evaluation_manifest: Path | None = None,
     qrels_manifest: Path,
     qrels_approval: Path,
     output: Path | None = None,
@@ -1751,7 +1884,12 @@ def evaluate(
             raise FileExistsError(
                 f"create-only evaluation output already exists: {collision}"
             )
-    if review_freeze is None or prior_evaluation is None or output_path is None:
+    if (
+        review_freeze is None
+        or prior_evaluation is None
+        or prior_evaluation_manifest is None
+        or output_path is None
+    ):
         raise ValueError("ranking and blinded-review freeze is incomplete")
 
     ranking = verify_ranking_freeze(Path(freeze))
@@ -1766,6 +1904,7 @@ def evaluate(
         Path(freeze),
         Path(review_freeze),
         Path(prior_evaluation),
+        prior_evaluation_manifest=Path(prior_evaluation_manifest),
         ranking_freeze_sha256=ranking_hash,
         review_freeze_sha256=review_hash,
     )
@@ -1792,6 +1931,10 @@ def evaluate(
     bindings = {
         "ranking_freeze_sha256": ranking_hash,
         "review_freeze_sha256": review_hash,
+        "prior_evaluation_manifest_sha256": _validated_sha256(
+            frozen_inputs.get("prior_evaluation_manifest_sha256"),
+            "prior evaluation manifest hash",
+        ),
         "prior_evaluation_sha256": _validated_sha256(
             frozen_inputs.get("prior_evaluation_sha256"),
             "prior evaluation hash",
@@ -1819,6 +1962,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--freeze", type=Path, required=True)
     parser.add_argument("--review-freeze", type=Path, required=True)
     parser.add_argument("--prior-evaluation", type=Path, required=True)
+    parser.add_argument("--prior-evaluation-manifest", type=Path, required=True)
     parser.add_argument("--qrels-manifest", type=Path, required=True)
     parser.add_argument("--qrels-approval", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -1831,6 +1975,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.freeze,
         review_freeze=args.review_freeze,
         prior_evaluation=args.prior_evaluation,
+        prior_evaluation_manifest=args.prior_evaluation_manifest,
         qrels_manifest=args.qrels_manifest,
         qrels_approval=args.qrels_approval,
         output=args.output,

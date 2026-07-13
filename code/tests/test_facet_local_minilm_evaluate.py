@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 import trec_rag.facet_local_minilm_evaluate as module
+import trec_rag.facet_local_minilm_rank as rank_owner
+import trec_rag.facet_local_minilm_review as review_owner
 from trec_rag.facet_local_minilm_evaluate import (
     PILOT_TOPIC_IDS,
     add_self_hash,
@@ -130,6 +132,7 @@ def test_qrels_cannot_open_before_each_freeze_verifies(
             tmp_path / "freeze",
             review_freeze=tmp_path / "review",
             prior_evaluation=tmp_path / "prior.json",
+            prior_evaluation_manifest=tmp_path / "prior-manifest.json",
             qrels_manifest=tmp_path / "safe_projection/manifest.json",
             qrels_approval=tmp_path / "approvals/qrels_access_v1.json",
             output=tmp_path / "evaluation",
@@ -506,6 +509,7 @@ def test_sidecar_topic_rejection_occurs_before_qrels_data_access(monkeypatch, tm
             tmp_path / "freeze",
             review_freeze=tmp_path / "review",
             prior_evaluation=tmp_path / "prior.json",
+            prior_evaluation_manifest=tmp_path / "prior-manifest.json",
             qrels_manifest=manifest,
             qrels_approval=tmp_path / "approval.json",
             output=tmp_path / "evaluation",
@@ -576,6 +580,7 @@ def test_repeat_access_is_refused_before_qrels_reopens(monkeypatch, tmp_path):
             tmp_path / "freeze",
             review_freeze=tmp_path / "review",
             prior_evaluation=tmp_path / "prior.json",
+            prior_evaluation_manifest=tmp_path / "prior-manifest.json",
             qrels_manifest=tmp_path / "manifest.json",
             qrels_approval=tmp_path / "approval.json",
             output=output,
@@ -590,11 +595,77 @@ def test_cli_has_no_all_topic_qrels_argument():
         "--freeze",
         "--review-freeze",
         "--prior-evaluation",
+        "--prior-evaluation-manifest",
         "--qrels-manifest",
         "--qrels-approval",
         "--output",
     }
     assert "--qrels" not in options
+
+
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+def test_prior_manifest_topics_fail_before_prior_json_reader(
+    monkeypatch, tmp_path, bad_topic
+):
+    prior, manifest = _write_prior_fixture(
+        tmp_path,
+        manifest_topic_ids=[*PILOT_TOPIC_IDS, bad_topic],
+    )
+    original_read_bytes = Path.read_bytes
+
+    def guard_prior_reader(path):
+        if path == prior:
+            pytest.fail("prior evaluation opened before manifest topic firewall")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guard_prior_reader)
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        module.load_authenticated_prior_evaluation(manifest, prior)
+
+
+@pytest.mark.parametrize(
+    ("record_override", "message"),
+    [
+        ({"path": "other.json"}, "path binding"),
+        ({"sha256": "a" * 64}, "authenticated artifact hash"),
+        ({"schema_version": "other-schema-v1"}, "schema binding"),
+    ],
+)
+def test_prior_manifest_binds_path_hash_and_schema(
+    tmp_path, record_override, message
+):
+    prior, manifest = _write_prior_fixture(
+        tmp_path,
+        record_override=record_override,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        module.load_authenticated_prior_evaluation(manifest, prior)
+
+
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+@pytest.mark.parametrize("embedded_boundary", ["declaration", "row"])
+def test_prior_payload_revalidates_embedded_topic_declarations_and_rows(
+    tmp_path, bad_topic, embedded_boundary
+):
+    payload = {
+        "schema_version": "prior-fixture-v1",
+        "topic_ids": (
+            [*PILOT_TOPIC_IDS, bad_topic]
+            if embedded_boundary == "declaration"
+            else list(PILOT_TOPIC_IDS)
+        ),
+        "rows": (
+            [{"topic_id": bad_topic}]
+            if embedded_boundary == "row"
+            else []
+        ),
+    }
+    prior, manifest = _write_prior_fixture(tmp_path, prior_payload=payload)
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        module.load_authenticated_prior_evaluation(manifest, prior)
 
 
 def _synthetic_frozen_evaluation_inputs():
@@ -690,7 +761,11 @@ def _synthetic_frozen_evaluation_inputs():
         "control_facets": control_facets,
         "document_details": details,
         "original": original,
-        "prior_evaluation": {"schema_version": "prior-fixture-v1"},
+        "prior_evaluation": {
+            "schema_version": "prior-fixture-v1",
+            "topic_ids": list(PILOT_TOPIC_IDS),
+        },
+        "prior_evaluation_manifest_sha256": "a" * 64,
         "prior_evaluation_sha256": "d" * 64,
         "ranking_rows": ranking_rows,
         "rankings": rankings,
@@ -712,6 +787,7 @@ def _artifact_bindings():
     return {
         "ranking_freeze_sha256": "b" * 64,
         "review_freeze_sha256": "c" * 64,
+        "prior_evaluation_manifest_sha256": "a" * 64,
         "prior_evaluation_sha256": "d" * 64,
         "qrels_manifest_sha256": "e" * 64,
         "qrels_projection_sha256": "f" * 64,
@@ -733,12 +809,44 @@ def _jsonl_bytes(rows):
     return b"".join(_compact_json_bytes(row) for row in rows)
 
 
-def _write_synthetic_verified_freezes(tmp_path):
-    frozen_inputs = _synthetic_frozen_evaluation_inputs()
+def _write_prior_fixture(
+    tmp_path,
+    *,
+    prior_payload=None,
+    manifest_topic_ids=None,
+    record_override=None,
+):
+    prior_payload = prior_payload or {
+        "schema_version": "prior-fixture-v1",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+    }
+    prior = tmp_path / "prior.json"
+    prior_bytes = _pretty_json_bytes(prior_payload)
+    prior.write_bytes(prior_bytes)
+    record = {
+        "path": prior.name,
+        "schema_version": str(prior_payload["schema_version"]),
+        "sha256": hashlib.sha256(prior_bytes).hexdigest(),
+    }
+    record.update(record_override or {})
+    manifest_payload = {
+        "prior_evaluation": record,
+        "schema_version": "facet-local-minilm-prior-evaluation-manifest-v1",
+        "status": "authenticated_prior_evaluation",
+        "topic_ids": list(manifest_topic_ids or PILOT_TOPIC_IDS),
+    }
+    manifest_payload["manifest_sha256"] = hashlib.sha256(
+        _compact_json_bytes(manifest_payload)
+    ).hexdigest()
+    manifest = tmp_path / "prior-manifest.json"
+    manifest.write_bytes(_pretty_json_bytes(manifest_payload))
+    return prior, manifest
+
+
+def _write_synthetic_verified_freezes(tmp_path, monkeypatch):
     freeze = tmp_path / "freeze"
     review = tmp_path / "review"
     freeze.mkdir()
-    review.mkdir()
     artifacts = {}
 
     def write_artifact(relative, content, *, rows=None):
@@ -754,104 +862,148 @@ def _write_synthetic_verified_freezes(tmp_path):
         artifacts[relative] = record
         return record
 
-    ranking_records = {}
-    for arm in EXACT_RANKING_ARMS:
-        rows = [
-            row
-            for topic_id in PILOT_TOPIC_IDS
-            for row in frozen_inputs["ranking_rows"][arm][topic_id]
-        ]
-        relative = f"rankings/{arm}.jsonl"
-        record = write_artifact(relative, _jsonl_bytes(rows), rows=len(rows))
-        ranking_records[arm] = {
-            "file_sha256": record["sha256"],
-            "path": relative,
-            "rows": len(rows),
-        }
-
     stream_records = []
-    retriever = "synthetic-retriever"
-    for topic_id in PILOT_TOPIC_IDS:
-        original_variant = f"original:{topic_id}"
-        original_rows = [
-            {
-                "aggregation": "bm25",
-                "document_id": docid,
-                "family": "original",
-                "passage": f"passage for {docid}",
-                "rank": rank,
-                "topic_id": topic_id,
-                "variant": original_variant,
-            }
-            for rank, docid in enumerate(frozen_inputs["original"][topic_id], start=1)
-        ]
-        original_path = f"streams/bm25/{topic_id}-original.jsonl"
-        original_record = write_artifact(
-            original_path, _jsonl_bytes(original_rows), rows=len(original_rows)
-        )
-        stream_records.append(
-            {
-                "aggregation": "bm25",
-                "family": "original",
-                "file_sha256": original_record["sha256"],
-                "path": original_path,
-                "retriever_name": retriever,
-                "rows": len(original_rows),
-                "topic_id": topic_id,
-                "variant_name": original_variant,
-            }
-        )
-
-    for (topic_id, variant), control_docids in frozen_inputs[
-        "control_facets"
-    ].items():
-        for aggregation, docids in (
-            ("bm25", control_docids),
-            ("top4", frozen_inputs["bf_facets"][(topic_id, variant)]),
-        ):
+    grouped = {}
+    retriever = rank_owner.RETRIEVER_NAME
+    authenticated_streams = sorted(rank_owner._AUTHENTICATED_STREAMS)
+    for ordinal, (topic_id, variant, family) in enumerate(
+        authenticated_streams, start=1
+    ):
+        identity = (topic_id, variant, retriever)
+        query = f"synthetic query {ordinal}"
+        query_sha256 = hashlib.sha256(query.encode()).hexdigest()
+        stream = {"family": family}
+        for aggregation in ("bm25", "top4", "maxp"):
             rows = [
                 {
                     "aggregation": aggregation,
-                    "document_id": docid,
-                    "family": "facet",
-                    "passage": f"passage for {docid}",
+                    "document_id": f"{topic_id}-document-{rank:03d}",
+                    "family": family,
+                    "passage": (
+                        f"synthetic passage {topic_id} {variant} {rank:03d}"
+                    ),
+                    "prior_rank": rank,
+                    "query": query,
+                    "query_sha256": query_sha256,
                     "rank": rank,
+                    "retriever_name": retriever,
+                    "score": float(101 - rank),
+                    "selected_windows": (
+                        []
+                        if aggregation == "bm25"
+                        else [
+                            {
+                                "document_end_token": 256,
+                                "document_start_token": 0,
+                                "score": float(101 - rank),
+                                "window_id": hashlib.sha256(
+                                    f"{identity}:{rank}".encode()
+                                ).hexdigest(),
+                                "window_text": (
+                                    f"synthetic passage {topic_id} "
+                                    f"{variant} {rank:03d}"
+                                ),
+                            }
+                        ]
+                    ),
+                    "source_score": float(101 - rank),
                     "topic_id": topic_id,
                     "variant": variant,
                 }
-                for rank, docid in enumerate(docids, start=1)
+                for rank in range(1, 101)
             ]
-            relative = f"streams/{aggregation}/{topic_id}-{aggregation}.jsonl"
-            record = write_artifact(relative, _jsonl_bytes(rows), rows=len(rows))
+            relative = f"streams/{aggregation}/{ordinal:02d}.jsonl"
+            record = write_artifact(relative, _jsonl_bytes(rows), rows=100)
             stream_records.append(
                 {
                     "aggregation": aggregation,
-                    "family": "facet",
+                    "family": family,
                     "file_sha256": record["sha256"],
                     "path": relative,
                     "retriever_name": retriever,
-                    "rows": len(rows),
+                    "rows": 100,
                     "topic_id": topic_id,
                     "variant_name": variant,
                 }
             )
+            stream[aggregation] = tuple(rows)
+        grouped[identity] = stream
 
-    weights = {
-        "schema_version": "family-rrf-topic-local-v2",
-        "weights": [
+    input_bindings = dict(rank_owner._AUTHENTICATED_INPUT_BINDINGS)
+    write_artifact("input_bindings.json", _pretty_json_bytes(input_bindings))
+    write_artifact(
+        "stream_manifest.json",
+        _pretty_json_bytes(
             {
-                "topic_id": topic_id,
-                "variant_name": variant,
-                "weight": weight,
+                "schema_version": "facet-local-minilm-stream-manifest-v1",
+                "streams": stream_records,
             }
-            for (topic_id, variant), weight in frozen_inputs["stream_weights"].items()
-        ],
-    }
-    weight_path = "fusion_weights_v2.json"
-    write_artifact(weight_path, _pretty_json_bytes(weights))
+        ),
+    )
+    write_artifact(
+        "fusion_definitions.json",
+        _pretty_json_bytes(rank_owner._FUSION_DEFINITIONS),
+    )
+    manifest_streams = [
+        {"family": family, "topic_id": topic_id, "variant": variant}
+        for topic_id, variant, family in authenticated_streams
+    ]
+    legacy_weights, corrected_weights = rank_owner.build_weight_tables(
+        manifest_streams,
+        retriever_name=retriever,
+    )
+    legacy_payload, corrected_payload = rank_owner._weight_payloads(
+        legacy_weights,
+        corrected_weights,
+        manifest_streams,
+    )
+    write_artifact("fusion_weights_v1.json", _pretty_json_bytes(legacy_payload))
+    write_artifact("fusion_weights_v2.json", _pretty_json_bytes(corrected_payload))
+
+    matrix = rank_owner.build_arm_streams(grouped)
+    ranking_rows = {}
+    ranking_records = {}
+    for arm in rank_owner.ARM_NAMES:
+        if arm == "R1_LEGACY":
+            rows = rank_owner.fuse_streams(
+                matrix["C0_TOPIC_LOCAL"], legacy_weights
+            )
+        else:
+            weights = (
+                legacy_weights
+                if arm == "BF100_LEGACY_FUSION"
+                else corrected_weights
+            )
+            rows = rank_owner.fuse_streams(matrix[arm], weights)
+        ranking_rows[arm] = rows
+        relative = f"rankings/{arm}.jsonl"
+        content = _jsonl_bytes(rows)
+        record = write_artifact(relative, content, rows=400)
+        ranking_records[arm] = {
+            "canonical_sha256": rank_owner.canonical_ranking_sha256(rows),
+            "file_sha256": record["sha256"],
+            "path": relative,
+            "rows": 400,
+        }
+    monkeypatch.setattr(
+        rank_owner,
+        "_LEGACY_RANKING_FILE_SHA256",
+        ranking_records["R1_LEGACY"]["file_sha256"],
+    )
+
+    control_diff = rank_owner.build_control_diff(
+        ranking_rows["R1_LEGACY"], ranking_rows["C0_TOPIC_LOCAL"]
+    )
+    write_artifact("legacy_corrected_diff.json", _pretty_json_bytes(control_diff))
     freeze_root = {
         "artifacts": artifacts,
-        "fusion_tables": {"family_rrf_topic_local_v2": weight_path},
+        "bindings": input_bindings,
+        "control_diff_audit": "legacy_corrected_diff.json",
+        "fusion_definitions": "fusion_definitions.json",
+        "fusion_tables": {
+            "family_rrf_global_key_v1": "fusion_weights_v1.json",
+            "family_rrf_topic_local_v2": "fusion_weights_v2.json",
+        },
         "qrels_opened": False,
         "rankings": ranking_records,
         "schema_version": "facet-local-minilm-ranking-freeze-v1",
@@ -864,32 +1016,52 @@ def _write_synthetic_verified_freezes(tmp_path):
     ).hexdigest()
     (freeze / "freeze.json").write_bytes(_pretty_json_bytes(freeze_root))
 
-    review_rows = frozen_inputs["review_rows"]
-    unmasked = _jsonl_bytes(review_rows)
-    (review / "unmasked_items.jsonl").write_bytes(unmasked)
-    review_root = {
-        "bindings": {
-            "ranking_freeze_sha256": freeze_root["freeze_sha256"],
-            "unmasked_items_sha256": hashlib.sha256(unmasked).hexdigest(),
-        },
-        "qrels_opened": False,
-        "schema_version": "facet-local-minilm-review-freeze-v2",
-        "status": "review_frozen_before_qrels",
-    }
-    review_root["review_freeze_sha256"] = hashlib.sha256(
-        _pretty_json_bytes(review_root)
-    ).hexdigest()
-    (review / "review_freeze.json").write_bytes(_pretty_json_bytes(review_root))
+    review_owner.create_review(freeze, review)
+    packet = [
+        json.loads(line)
+        for line in (review / "packet.jsonl").read_text().splitlines()
+        if line
+    ]
 
-    prior = tmp_path / "prior.json"
-    prior.write_bytes(_pretty_json_bytes({"schema_version": "prior-fixture-v1"}))
+    def labels(reviewer_id):
+        return [
+            {
+                "item_id": row["item_id"],
+                "low_quality": False,
+                "relevance": "direct_answer",
+                "reviewer_id": reviewer_id,
+                "wrong_domain": False,
+            }
+            for row in packet
+        ]
+
+    labels_a = tmp_path / "synthetic-labels-a.jsonl"
+    labels_b = tmp_path / "synthetic-labels-b.jsonl"
+    adjudication = tmp_path / "synthetic-adjudication.jsonl"
+    labels_a.write_bytes(_jsonl_bytes(labels("synthetic-reviewer-a")))
+    labels_b.write_bytes(_jsonl_bytes(labels("synthetic-reviewer-b")))
+    adjudication.write_bytes(b"")
+    review_root = review_owner.freeze_review_directory(
+        review,
+        labels_a_path=labels_a,
+        labels_b_path=labels_b,
+        adjudication_path=adjudication,
+    )
+
+    prior, prior_manifest = _write_prior_fixture(tmp_path)
     return {
         "freeze": freeze,
         "freeze_sha256": freeze_root["freeze_sha256"],
         "prior": prior,
+        "prior_manifest": prior_manifest,
         "review": review,
         "review_freeze_sha256": review_root["review_freeze_sha256"],
-        "stream_to_mutate": freeze / stream_records[-1]["path"],
+        "stream_to_mutate": freeze
+        / next(
+            record["path"]
+            for record in stream_records
+            if record["family"] == "facet" and record["aggregation"] == "top4"
+        ),
     }
 
 
@@ -1038,6 +1210,7 @@ def test_evaluate_rejects_frozen_input_topics_before_qrels_reader(
             tmp_path / "freeze",
             review_freeze=tmp_path / "review",
             prior_evaluation=tmp_path / "prior.json",
+            prior_evaluation_manifest=tmp_path / "prior-manifest.json",
             qrels_manifest=tmp_path / "manifest.json",
             qrels_approval=tmp_path / "approval.json",
             output=output,
@@ -1048,23 +1221,11 @@ def test_evaluate_rejects_frozen_input_topics_before_qrels_reader(
 def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
     monkeypatch, tmp_path
 ):
-    frozen = _write_synthetic_verified_freezes(tmp_path)
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
     manifest, approval = _write_synthetic_qrels_authorization(
         tmp_path,
         ranking_freeze_sha256=frozen["freeze_sha256"],
         review_freeze_sha256=frozen["review_freeze_sha256"],
-    )
-    monkeypatch.setattr(
-        module,
-        "verify_ranking_freeze",
-        lambda path: {"freeze_sha256": frozen["freeze_sha256"]},
-    )
-    monkeypatch.setattr(
-        module,
-        "verify_blinded_review_freeze",
-        lambda review, freeze: {
-            "review_freeze_sha256": frozen["review_freeze_sha256"]
-        },
     )
     output = tmp_path / "evaluation"
     projection = tmp_path / "projection.txt"
@@ -1083,6 +1244,7 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
         frozen["freeze"],
         review_freeze=frozen["review"],
         prior_evaluation=frozen["prior"],
+        prior_evaluation_manifest=frozen["prior_manifest"],
         qrels_manifest=manifest,
         qrels_approval=approval,
         output=output,
@@ -1113,8 +1275,19 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
         assert payload["bindings"]["review_freeze_sha256"] == frozen[
             "review_freeze_sha256"
         ]
+        assert payload["bindings"]["prior_evaluation_manifest_sha256"] == (
+            hashlib.sha256(frozen["prior_manifest"].read_bytes()).hexdigest()
+        )
+        assert set(payload["bindings"]) == {
+            "prior_evaluation_manifest_sha256",
+            "prior_evaluation_sha256",
+            "qrels_manifest_sha256",
+            "qrels_projection_sha256",
+            "ranking_freeze_sha256",
+            "review_freeze_sha256",
+        }
     assert result["artifacts"]["decision.json"]["decision"]["outcome"] == (
-        "B_promotes_coverage"
+        "candidate_generation_gap"
     )
     assert set(result["artifacts"]["systems.json"]["systems"]) == {
         "O",
@@ -1125,26 +1298,23 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
     ] is False
     assert result["artifacts"]["prefusion.json"][
         "pre_fusion_promoted_novel_docids"
-    ] == ["200/novel-200"]
+    ] == []
+    assert len(result["artifacts"]["prefusion.json"]["facet_rows"]) == 2700
     topic_curve = result["artifacts"]["raw_union.json"]["curves"][
         "C0_TOPIC_LOCAL"
     ]["100"]["per_topic"]["200"]
-    assert topic_curve["comparisons"]["O"]["gained"] == [
-        "c-200",
-        "novel-200",
-    ]
-    assert topic_curve["comparisons"]["C0_TOPIC_LOCAL"]["gained"] == [
-        "novel-200"
-    ]
+    assert topic_curve["comparisons"]["O"]["gained"] == []
+    assert topic_curve["comparisons"]["C0_TOPIC_LOCAL"]["gained"] == []
     aggregate_curve = result["artifacts"]["raw_union.json"]["curves"][
         "C0_TOPIC_LOCAL"
     ]["100"]["aggregate"]
-    assert aggregate_curve["unique_candidate_documents"] == 28
-    assert aggregate_curve["relevant_documents"] == 9
+    assert aggregate_curve["unique_candidate_documents"] == 400
+    assert aggregate_curve["relevant_documents"] == 0
     loaded_again = module.load_frozen_inputs(
         frozen["freeze"],
         frozen["review"],
         frozen["prior"],
+        prior_evaluation_manifest=frozen["prior_manifest"],
         ranking_freeze_sha256=frozen["freeze_sha256"],
         review_freeze_sha256=frozen["review_freeze_sha256"],
     )
@@ -1158,7 +1328,7 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
 def test_mutation_after_freeze_verification_is_rejected_before_qrels(
     monkeypatch, tmp_path
 ):
-    frozen = _write_synthetic_verified_freezes(tmp_path)
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
 
     def verify_then_mutate(path):
         frozen["stream_to_mutate"].write_bytes(b'{"tampered":true}\n')
@@ -1182,6 +1352,7 @@ def test_mutation_after_freeze_verification_is_rejected_before_qrels(
             frozen["freeze"],
             review_freeze=frozen["review"],
             prior_evaluation=frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
             qrels_manifest=tmp_path / "manifest.json",
             qrels_approval=tmp_path / "approval.json",
             output=output,
@@ -1193,7 +1364,7 @@ def test_mutation_after_freeze_verification_is_rejected_before_qrels(
 def test_declared_stream_topics_fail_before_any_bound_source_read(
     monkeypatch, tmp_path, bad_topic
 ):
-    frozen = _write_synthetic_verified_freezes(tmp_path)
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
     root_path = frozen["freeze"] / "freeze.json"
     root = json.loads(root_path.read_text())
     root["streams"][0]["topic_id"] = bad_topic
@@ -1212,6 +1383,7 @@ def test_declared_stream_topics_fail_before_any_bound_source_read(
             frozen["freeze"],
             frozen["review"],
             frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
             ranking_freeze_sha256=root["freeze_sha256"],
             review_freeze_sha256=frozen["review_freeze_sha256"],
         )
@@ -1228,6 +1400,7 @@ def test_existing_evaluation_leaf_blocks_before_qrels_access(monkeypatch, tmp_pa
             tmp_path / "freeze",
             review_freeze=tmp_path / "review",
             prior_evaluation=tmp_path / "prior.json",
+            prior_evaluation_manifest=tmp_path / "prior-manifest.json",
             qrels_manifest=tmp_path / "manifest.json",
             qrels_approval=tmp_path / "approval.json",
             output=output,
