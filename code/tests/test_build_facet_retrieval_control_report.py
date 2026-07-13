@@ -13,7 +13,10 @@ from trec_rag.facet_retrieval_control_experiment import (
     select_stream_arm,
     selected_ranking_references,
 )
-from trec_rag.facet_retrieval_control_freeze import _BASE_ARM_QUERIES
+from trec_rag.facet_retrieval_control_freeze import (
+    _BASE_ARM_QUERIES,
+    _canonical_json as _producer_canonical_json,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,10 +44,7 @@ METRICS = (
 
 
 def _canonical_json(value):
-    return (
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
-    ).encode()
+    return _producer_canonical_json(value)
 
 
 def _seal(payload):
@@ -519,11 +519,17 @@ def test_artifact_has_canonical_shape_and_executive_reading_path(report_inputs):
 
 def test_narratives_are_bound_to_verified_original_snapshot_hashes(report_inputs):
     artifact = build_artifact(**report_inputs)
-    rows = artifact["snapshot"]["datasets"]["query_rows"]
+    narratives = artifact["snapshot"]["datasets"]["narrative_rows"]
+    query_arms = artifact["snapshot"]["datasets"]["query_rows"]
 
-    assert {row["topic_id"] for row in rows} == set(TOPIC_IDS)
-    assert any(row["topic_id"] == "897" and row["stream_id"] == "original" for row in rows)
-    assert all(row["full_narrative"] != row["existing_query"] for row in rows if row["stream_id"] != "original")
+    assert {row["topic_id"] for row in narratives} == set(TOPIC_IDS)
+    assert len(narratives) == 4
+    assert any(
+        row["topic_id"] == "897" and row["stream_scope"] == "unchanged"
+        for row in narratives
+    )
+    assert len(query_arms) == 17
+    assert all("full_narrative" not in row for row in query_arms)
 
     tampered = copy.deepcopy(report_inputs)
     original = next(
@@ -535,6 +541,54 @@ def test_narratives_are_bound_to_verified_original_snapshot_hashes(report_inputs
     _refresh_integrity(tampered)
     with pytest.raises(ValueError, match="narrative.*snapshot"):
         build_artifact(**tampered)
+
+
+def test_query_evidence_uses_narrow_accessible_tables(report_inputs):
+    artifact = build_artifact(**report_inputs)
+    tables = {table["id"]: table for table in artifact["manifest"]["tables"]}
+
+    assert [column["field"] for column in tables["narrative_details"]["columns"]] == [
+        "topic_id",
+        "stream_scope",
+        "full_narrative",
+    ]
+    assert [column["field"] for column in tables["query_details"]["columns"]] == [
+        "topic_id",
+        "stream_id",
+        "arm_settings",
+        "query_text",
+    ]
+    query_rows = artifact["snapshot"]["datasets"]["query_rows"]
+    assert sum("SELECTED" in row["arm_settings"] for row in query_rows) == 5
+    blocks = [block["id"] for block in artifact["manifest"]["blocks"]]
+    assert blocks.index("narratives_table_block") < blocks.index("query_arms_note")
+    assert blocks.index("query_arms_note") < blocks.index("queries_table_block")
+
+
+def test_audit_tables_bound_width_and_avoid_unbroken_document_ids(report_inputs):
+    artifact = build_artifact(**report_inputs)
+    tables = {table["id"]: table for table in artifact["manifest"]["tables"]}
+
+    assert max(len(table["columns"]) for table in tables.values()) <= 6
+    assert "document_id" not in {
+        column["field"] for column in tables["representative_results"]["columns"]
+    }
+    assert {
+        "system_primary",
+        "system_supporting",
+        "r2_ranking_references",
+    } <= set(tables)
+    blocks = [block["id"] for block in artifact["manifest"]["blocks"]]
+    assert blocks.index("system_table_block") < blocks.index("system_supporting_note")
+    assert blocks.index("system_supporting_note") < blocks.index(
+        "system_supporting_table_block"
+    )
+    assert blocks.index("system_supporting_table_block") < blocks.index(
+        "ranking_references_note"
+    )
+    assert blocks.index("ranking_references_note") < blocks.index(
+        "ranking_references_table_block"
+    )
 
 
 def test_visual_contracts_and_adjacency_are_canonical(report_inputs):
@@ -572,7 +626,7 @@ def test_visual_contracts_and_adjacency_are_canonical(report_inputs):
         "selection_rationale",
     } <= set(gain_rows[0])
     assert all("unique graded gain" in row["selection_rationale"] for row in gain_rows)
-    system = tables["system_comparison"]
+    system = tables["system_primary"]
     assert system["density"] == "spacious"
     assert {row["system"] for row in datasets[system["dataset"]]} == set(SYSTEM_IDS)
     assert {row["row_scope"] for row in datasets[system["dataset"]]} == {
@@ -597,6 +651,9 @@ def test_quantitative_blocks_and_native_evidence_have_provenance(report_inputs):
     for source in artifact["sources"]:
         assert not Path(source["path"]).is_absolute()
         assert ".." not in Path(source["path"]).parts
+        serialized_source = json.dumps(source, sort_keys=True)
+        assert "freeze_v1" not in serialized_source
+        assert "evaluation_v1" not in serialized_source
         assert source["query"]["sql"].lstrip().upper().startswith(("SELECT", "WITH"))
         assert re.fullmatch(r"sha256:[0-9a-f]{64}", source["query"]["id"])
         assert any("validate_artifact" in note for note in source["query"]["filters"])

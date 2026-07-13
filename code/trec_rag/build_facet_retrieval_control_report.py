@@ -21,7 +21,7 @@ from .facet_retrieval_control_experiment import (
     select_stream_arm,
     selected_ranking_references,
 )
-from .facet_retrieval_control_freeze import _BASE_ARM_QUERIES
+from .facet_retrieval_control_freeze import _BASE_ARM_QUERIES, _canonical_json
 from .facet_retrieval_control_manifest import (
     PROTECTED_TOPIC_IDS,
     _ARM_SPEC,
@@ -66,18 +66,6 @@ _CANDIDATE_STREAM_FIELDS = {
     "row_count",
     "stream_rows_sha256",
 }
-
-
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
 
 
 def _object(value: object, label: str) -> Mapping[str, object]:
@@ -665,13 +653,13 @@ def _sources(
     decision: Mapping[str, object],
 ) -> list[dict[str, object]]:
     manifest_path = "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json"
-    freeze_path = "outputs/rag25_facet_retrieval_control_v1/freeze_v1/freeze.json"
-    candidate_path = "outputs/rag25_facet_retrieval_control_v1/freeze_v1/candidate_streams.json"
-    inspection_path = "outputs/rag25_facet_retrieval_control_v1/freeze_v1/inspection.json"
-    stream_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v1/stream_evaluation.json"
-    selection_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v1/selection.json"
-    evaluation_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v1/evaluation.json"
-    decision_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v1/decision.json"
+    freeze_path = "outputs/rag25_facet_retrieval_control_v1/freeze_v2/freeze.json"
+    candidate_path = "outputs/rag25_facet_retrieval_control_v1/freeze_v2/candidate_streams.json"
+    inspection_path = "outputs/rag25_facet_retrieval_control_v1/freeze_v2/inspection.json"
+    stream_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json"
+    selection_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json"
+    evaluation_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/evaluation.json"
+    decision_path = "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json"
     return [
         _source(
             "decision_evidence",
@@ -760,37 +748,66 @@ def _artifact_rows(
     system_evaluation: Mapping[str, object],
 ) -> dict[str, list[dict[str, object]]]:
     narratives = _narratives()
+    stream_scope_by_topic: dict[str, list[str]] = {topic_id: [] for topic_id in TOPIC_IDS}
+    for stream in manifest_streams:
+        stream_scope_by_topic[str(stream["topic_id"])].append(str(stream["stream_id"]))
+    narrative_rows = [
+        {
+            "topic_id": topic_id,
+            "stream_scope": (
+                ", ".join(sorted(stream_scope_by_topic[topic_id]))
+                if stream_scope_by_topic[topic_id]
+                else "unchanged"
+            ),
+            "full_narrative": narratives[topic_id],
+        }
+        for topic_id in TOPIC_IDS
+    ]
     query_rows: list[dict[str, object]] = []
     for stream in manifest_streams:
         topic_id = str(stream["topic_id"])
         stream_id = str(stream["stream_id"])
         key = f"{topic_id}/{stream_id}"
         chosen = str(selected[key])
-        arm = next(value for value in stream["arms"] if value["arm_id"] == chosen)
-        query_rows.append(
-            {
-                "topic_id": topic_id,
-                "stream_id": stream_id,
-                "stream_label": key,
-                "full_narrative": narratives[topic_id],
-                "existing_query": stream["baseline_query"],
-                "reweighted_query": stream["reweighted_query"],
-                "selected_arm": chosen,
-                "k1": arm["k1"],
-                "b": arm["b"],
-            }
-        )
+        for arm in stream["arms"]:
+            arm_id = str(arm["arm_id"])
+            k1 = _number(arm["k1"], f"{key}/{arm_id} k1")
+            b = _number(arm["b"], f"{key}/{arm_id} b")
+            query_rows.append(
+                {
+                    "topic_id": topic_id,
+                    "stream_id": stream_id,
+                    "stream_label": key,
+                    "arm_id": arm_id,
+                    "arm_settings": (
+                        f"{arm_id} · "
+                        f"{'Existing query' if arm_id == 'B0' else 'Reweighted query'}"
+                        f" · k1 {k1:g} · b {b:g}"
+                        f"{' · SELECTED' if arm_id == chosen else ''}"
+                    ),
+                    "query_text": (
+                        stream["baseline_query"]
+                        if arm_id == "B0"
+                        else stream["reweighted_query"]
+                    ),
+                    "k1": k1,
+                    "b": b,
+                    "selected": arm_id == chosen,
+                    "selection_status": "Selected arm" if arm_id == chosen else "Not selected",
+                }
+            )
     query_rows.append(
         {
             "topic_id": "897",
             "stream_id": "original",
             "stream_label": "897/original (unchanged)",
-            "full_narrative": narratives["897"],
-            "existing_query": "Not applicable — no tested facet stream",
-            "reweighted_query": "Not applicable — unchanged R1 topic",
-            "selected_arm": "Unchanged R1",
+            "arm_id": "Unchanged R1",
+            "arm_settings": "Unchanged R1 · SELECTED",
+            "query_text": "No tested facet-control query",
             "k1": None,
             "b": None,
+            "selected": True,
+            "selection_status": "Unchanged system topic",
         }
     )
 
@@ -877,6 +894,7 @@ def _artifact_rows(
         metrics = _object(system.get("metrics"), f"{system_id} metrics")
         system_comparison.append(
             {
+                "comparison_label": f"{system_id} · Aggregate",
                 "row_scope": "Aggregate",
                 "topic_id": "All four",
                 "system": system_id,
@@ -901,6 +919,7 @@ def _artifact_rows(
             row = _object(per_topic[topic_id], f"{system_id}/{topic_id}")
             system_comparison.append(
                 {
+                    "comparison_label": f"{system_id} · Topic {topic_id}",
                     "row_scope": "Topic",
                     "topic_id": topic_id,
                     "system": system_id,
@@ -920,12 +939,25 @@ def _artifact_rows(
                     ),
                 }
             )
+    ranking_references = [
+        {
+            "topic_id": topic_id,
+            "ranking_reference": references[topic_id],
+            "ranking_sha256": _object(
+                system_evaluation.get("r2_selected_ranking_sha256"),
+                "R2 selected ranking hashes",
+            )[topic_id],
+        }
+        for topic_id in TOPIC_IDS
+    ]
     return {
+        "narrative_rows": narrative_rows,
         "query_rows": query_rows,
         "noise_comparison": noise_rows,
         "representative_results": representative_results,
         "facet_evidence": facet_evidence,
         "system_comparison": system_comparison,
+        "ranking_references": ranking_references,
     }
 
 
@@ -1056,8 +1088,16 @@ def build_artifact(
             "sourceId": "query_evidence",
             "body": (
                 "## The queries stayed tied to the narrative\n\n"
-                "**The repeated terms add emphasis, not new concepts.** The table keeps the full user narrative separate from the existing facet query and reweighted query, then shows the selected arm's k1 and b settings. Topic 897 is included as the unchanged fourth system topic and had no tested facet-control stream."
+                "**The repeated terms add emphasis, not new concepts.** The first table shows each full user narrative. The arm table then lists the existing and reweighted query strings with every tested k1 and b setting, marking the selected arm. Topic 897 is included as the unchanged fourth system topic and had no tested facet-control stream."
             ),
+        },
+        {"id": "narratives_table_block", "type": "table", "tableId": "narrative_details", "layout": "full"},
+        {
+            "id": "query_arms_note",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "query_evidence",
+            "body": "**Each arm stays auditable without widening the page.** B0 uses the existing query; W0, W1, and W2 share the reweighted query but use different BM25 settings. The selected row is labeled explicitly.",
         },
         {"id": "queries_table_block", "type": "table", "tableId": "query_details", "layout": "full"},
         {
@@ -1102,7 +1142,23 @@ def build_artifact(
                 f"**{outcome}** The exact O, F0, R1, and R2 aggregate and per-topic values appear below. The rule requires higher R2 graded Recall@100, nDCG@10 no more than 0.02 below R1, no topic nDCG@10 loss greater than 0.10, and selected top-10 noise no higher than B0."
             ),
         },
-        {"id": "system_table_block", "type": "table", "tableId": "system_comparison", "layout": "full"},
+        {"id": "system_table_block", "type": "table", "tableId": "system_primary", "layout": "full"},
+        {
+            "id": "system_supporting_note",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "system_evidence",
+            "body": "**Supporting top-10 and judgment metrics remain separate for readability.** These values use the same aggregate and per-topic rows as the primary comparison.",
+        },
+        {"id": "system_supporting_table_block", "type": "table", "tableId": "system_supporting", "layout": "full"},
+        {
+            "id": "ranking_references_note",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "system_evidence",
+            "body": "**R2 points only to rankings frozen before qrels.** The four topic references below are the exact alternatives selected by the mechanical arm rule.",
+        },
+        {"id": "ranking_references_table_block", "type": "table", "tableId": "r2_ranking_references", "layout": "full"},
         {
             "id": "next_steps",
             "type": "markdown",
@@ -1191,20 +1247,29 @@ def build_artifact(
     ]
     tables = [
         _table(
+            "narrative_details",
+            "Full narrative by topic",
+            "Four evaluated topics; topic 225 has two tested facet streams.",
+            "narrative_rows",
+            "query_evidence",
+            (
+                ("topic_id", "Topic", "text"),
+                ("stream_scope", "Tested stream scope", "text"),
+                ("full_narrative", "Full narrative", "text"),
+            ),
+            "topic_id",
+        ),
+        _table(
             "query_details",
-            "Narratives and facet-control queries",
-            "Full narratives are separate from the tested query strings; topic 897 remained unchanged.",
+            "Facet query arms and settings",
+            "Seventeen rows: four arms for each tested facet plus unchanged topic 897.",
             "query_rows",
             "query_evidence",
             (
                 ("topic_id", "Topic", "text"),
                 ("stream_id", "Stream", "text"),
-                ("full_narrative", "Full narrative", "text"),
-                ("existing_query", "Existing query", "text"),
-                ("reweighted_query", "Reweighted query", "text"),
-                ("selected_arm", "Selected arm", "text"),
-                ("k1", "k1", "number"),
-                ("b", "b", "number"),
+                ("arm_settings", "Arm, BM25 settings, and selection", "text"),
+                ("query_text", "Query text", "text"),
             ),
             "topic_id",
         ),
@@ -1218,32 +1283,51 @@ def build_artifact(
                 ("stream_label", "Facet stream", "text"),
                 ("selected_arm", "Selected arm", "text"),
                 ("rank", "Rank", "number"),
-                ("document_id", "Document", "text"),
                 ("result_excerpt", "Saved excerpt", "text"),
             ),
             "stream_label",
         ),
         _table(
-            "system_comparison",
-            "Exact sparse-system comparison",
-            "Aggregate and per-topic O/F0/R1/R2 metrics with frozen ranking references and nDCG deltas versus R1.",
+            "system_primary",
+            "Primary sparse-system metrics",
+            "Aggregate and per-topic O/F0/R1/R2 effectiveness with nDCG deltas versus R1.",
             "system_comparison",
             "system_evidence",
             (
-                ("row_scope", "Scope", "text"),
-                ("topic_id", "Topic", "text"),
-                ("system", "System", "text"),
-                ("ranking_reference", "Frozen reference", "text"),
+                ("comparison_label", "Comparison", "text"),
                 ("ndcg_at_10", "nDCG@10", "number"),
                 ("graded_recall_at_100", "Graded Recall@100", "number"),
+                ("ndcg_delta_vs_r1", "nDCG delta vs R1", "number"),
+            ),
+            "comparison_label",
+        ),
+        _table(
+            "system_supporting",
+            "Supporting retrieval and judgment metrics",
+            "Exact aggregate and per-topic recall, precision, relevant-count, and judgment coverage.",
+            "system_comparison",
+            "system_evidence",
+            (
+                ("comparison_label", "Comparison", "text"),
                 ("recall_at_100", "Recall@100", "number"),
                 ("precision_at_10", "P@10", "number"),
                 ("relevant_at_10", "Relevant@10", "number"),
                 ("judged_rate_at_10", "Judged rate@10", "number"),
                 ("judged_rate_at_100", "Judged rate@100", "number"),
-                ("ndcg_delta_vs_r1", "nDCG delta vs R1", "number"),
             ),
-            "row_scope",
+            "comparison_label",
+        ),
+        _table(
+            "r2_ranking_references",
+            "Frozen R2 ranking references",
+            "One pre-qrels frozen alternative per evaluated topic.",
+            "ranking_references",
+            "system_evidence",
+            (
+                ("topic_id", "Topic", "text"),
+                ("ranking_reference", "Frozen R2 reference", "text"),
+            ),
+            "topic_id",
         ),
     ]
     return {

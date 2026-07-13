@@ -74,8 +74,8 @@ Task 7 creates `artifact.json` with:
 ```bash
 .venv/bin/python -m trec_rag.build_facet_retrieval_control_report \
   --manifest reports/experiments/facet_retrieval_control_pilot_v1/manifest.json \
-  --freeze-dir outputs/rag25_facet_retrieval_control_v1/freeze_v1 \
-  --evaluation-dir outputs/rag25_facet_retrieval_control_v1/evaluation_v1 \
+  --freeze-dir outputs/rag25_facet_retrieval_control_v1/freeze_v2 \
+  --evaluation-dir outputs/rag25_facet_retrieval_control_v1/evaluation_v2 \
   --output reports/experiments/facet_retrieval_control_pilot_v1/artifact.json
 ```
 
@@ -94,3 +94,39 @@ node <DATA_ANALYTICS_PLUGIN_ROOT>/skills/build-report/scripts/deliver_portable_a
 
 Task 6 deliberately does not create either final file. Task 7 owns generation,
 portable packaging, and rendered desktop/mobile verification.
+
+## Executed pilot and findings
+
+The first immutable attempt, `run_v1`, stopped after its first request returned
+HTTP 401 because the process had not loaded the token from the local `.env`.
+No retry or later request was sent. The authorized recovery, `run_v2`, loaded
+the token into process memory and completed all 12 planned requests through the
+persistent limiter. Across both immutable runs there were 13 request attempts:
+12 successful retrievals and one operational authentication failure.
+
+The successful responses were frozen in
+`outputs/rag25_facet_retrieval_control_v1/freeze_v2` before projected qrels were
+opened. The freeze contains 25 rankings, 20 candidate streams, 2,000 candidate
+rows, and 16 top-rank inspections. Evaluation is saved in
+`outputs/rag25_facet_retrieval_control_v1/evaluation_v2`.
+
+The selected retrieval-control arms were:
+
+- `200/f07a`: `B0` (retain the existing query)
+- `225/f02`: `W2`
+- `225/f04`: `W0`
+- `707/f02`: `W0`
+
+The resulting `R2` system did not pass the promotion gate. Aggregate nDCG@10
+fell from `0.3011` for `R1` to `0.2870` for `R2`, while graded Recall@100 rose
+only from `0.0950` to `0.0958`. Selected-stream top-10 noise increased from 19
+for the four `B0` streams to 23. All three affected evaluation topics regressed
+in nDCG@10 (`200`: -0.0092, `225`: -0.0285, `707`: -0.0185), while topic `897`
+was unchanged because it had no controlled stream. The mechanical decision is
+`retrieval_repair_failed`, so the reranker gate remained closed and no
+cross-encoder was run.
+
+`report.html` is the rendered, self-contained explanation of the experiment.
+The packaged verifier passed validation, packaging, source interaction, and
+desktop (1440 px) and mobile (390 px) rendering. The report remains local and
+was not published or shared.

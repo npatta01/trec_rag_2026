@@ -1,0 +1,1694 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Facet Retrieval Controls: Four-Topic Pilot",
+    "description": "Decision-ready four-topic facet retrieval-control pilot report.",
+    "charts": [
+      {
+        "id": "noise_comparison",
+        "title": "Top-10 noise counts by stream and arm",
+        "subtitle": "Wrong-domain and content-quality result counts across four registered streams; lower is better.",
+        "type": "bar",
+        "dataset": "noise_comparison",
+        "sourceId": "noise_evidence",
+        "valueFormat": "number",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "stream_arm",
+            "type": "nominal",
+            "label": "Stream and arm"
+          },
+          "y": {
+            "field": "top10_count",
+            "type": "quantitative",
+            "label": "Top-10 results",
+            "format": "number"
+          },
+          "color": {
+            "field": "noise_type",
+            "type": "nominal",
+            "label": "Diagnostic"
+          },
+          "label": {
+            "field": "top10_count",
+            "type": "quantitative",
+            "label": "Count"
+          },
+          "tooltip": [
+            {
+              "field": "top5_count",
+              "type": "quantitative",
+              "label": "Top-5 count"
+            },
+            {
+              "field": "selected",
+              "type": "nominal",
+              "label": "Selected arm"
+            }
+          ]
+        }
+      },
+      {
+        "id": "unique_facet_evidence",
+        "title": "Unique graded gain beyond original retrieval",
+        "subtitle": "Selected facet arm for each of four streams; gain is outside the original top 100.",
+        "type": "bar",
+        "dataset": "facet_evidence",
+        "sourceId": "facet_evidence",
+        "valueFormat": "number",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "stream_label",
+            "type": "nominal",
+            "label": "Facet stream"
+          },
+          "y": {
+            "field": "unique_graded_gain",
+            "type": "quantitative",
+            "label": "Unique graded gain",
+            "format": "number"
+          },
+          "label": {
+            "field": "unique_graded_gain",
+            "type": "quantitative",
+            "label": "Gain"
+          },
+          "tooltip": [
+            {
+              "field": "selected_arm",
+              "type": "nominal",
+              "label": "Selected arm"
+            },
+            {
+              "field": "unique_relevant_beyond_original",
+              "type": "quantitative",
+              "label": "Unique relevant beyond original"
+            },
+            {
+              "field": "graded_recall_at_100",
+              "type": "quantitative",
+              "label": "Graded Recall@100",
+              "format": "number"
+            },
+            {
+              "field": "relevant_denominator",
+              "type": "quantitative",
+              "label": "Relevant denominator"
+            },
+            {
+              "field": "selection_rationale",
+              "type": "nominal",
+              "label": "Selected-arm rationale"
+            }
+          ]
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "narrative_details",
+        "title": "Full narrative by topic",
+        "subtitle": "Four evaluated topics; topic 225 has two tested facet streams.",
+        "dataset": "narrative_rows",
+        "sourceId": "query_evidence",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "stream_scope",
+            "label": "Tested stream scope",
+            "type": "text"
+          },
+          {
+            "field": "full_narrative",
+            "label": "Full narrative",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "query_details",
+        "title": "Facet query arms and settings",
+        "subtitle": "Seventeen rows: four arms for each tested facet plus unchanged topic 897.",
+        "dataset": "query_rows",
+        "sourceId": "query_evidence",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "stream_id",
+            "label": "Stream",
+            "type": "text"
+          },
+          {
+            "field": "arm_settings",
+            "label": "Arm, BM25 settings, and selection",
+            "type": "text"
+          },
+          {
+            "field": "query_text",
+            "label": "Query text",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "representative_results",
+        "title": "Representative selected-arm results",
+        "subtitle": "First three saved results per selected facet stream; twelve bounded rows.",
+        "dataset": "representative_results",
+        "sourceId": "noise_evidence",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "stream_label",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "stream_label",
+            "label": "Facet stream",
+            "type": "text"
+          },
+          {
+            "field": "selected_arm",
+            "label": "Selected arm",
+            "type": "text"
+          },
+          {
+            "field": "rank",
+            "label": "Rank",
+            "type": "number"
+          },
+          {
+            "field": "result_excerpt",
+            "label": "Saved excerpt",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "system_primary",
+        "title": "Primary sparse-system metrics",
+        "subtitle": "Aggregate and per-topic O/F0/R1/R2 effectiveness with nDCG deltas versus R1.",
+        "dataset": "system_comparison",
+        "sourceId": "system_evidence",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "comparison_label",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "comparison_label",
+            "label": "Comparison",
+            "type": "text"
+          },
+          {
+            "field": "ndcg_at_10",
+            "label": "nDCG@10",
+            "type": "number"
+          },
+          {
+            "field": "graded_recall_at_100",
+            "label": "Graded Recall@100",
+            "type": "number"
+          },
+          {
+            "field": "ndcg_delta_vs_r1",
+            "label": "nDCG delta vs R1",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "system_supporting",
+        "title": "Supporting retrieval and judgment metrics",
+        "subtitle": "Exact aggregate and per-topic recall, precision, relevant-count, and judgment coverage.",
+        "dataset": "system_comparison",
+        "sourceId": "system_evidence",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "comparison_label",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "comparison_label",
+            "label": "Comparison",
+            "type": "text"
+          },
+          {
+            "field": "recall_at_100",
+            "label": "Recall@100",
+            "type": "number"
+          },
+          {
+            "field": "precision_at_10",
+            "label": "P@10",
+            "type": "number"
+          },
+          {
+            "field": "relevant_at_10",
+            "label": "Relevant@10",
+            "type": "number"
+          },
+          {
+            "field": "judged_rate_at_10",
+            "label": "Judged rate@10",
+            "type": "number"
+          },
+          {
+            "field": "judged_rate_at_100",
+            "label": "Judged rate@100",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "r2_ranking_references",
+        "title": "Frozen R2 ranking references",
+        "subtitle": "One pre-qrels frozen alternative per evaluated topic.",
+        "dataset": "ranking_references",
+        "sourceId": "system_evidence",
+        "density": "spacious",
+        "layout": "full",
+        "defaultSort": {
+          "field": "topic_id",
+          "direction": "asc"
+        },
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "ranking_reference",
+            "label": "Frozen R2 reference",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "decision_evidence",
+        "label": "Frozen retrieval-repair decision",
+        "path": "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json"
+      },
+      {
+        "id": "query_evidence",
+        "label": "Frozen narratives, queries, and selected arms",
+        "path": "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json"
+      },
+      {
+        "id": "noise_evidence",
+        "label": "Frozen qrels-free noise inspection",
+        "path": "outputs/rag25_facet_retrieval_control_v1/freeze_v2/inspection.json"
+      },
+      {
+        "id": "facet_evidence",
+        "label": "Selected facet contribution evaluation",
+        "path": "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json"
+      },
+      {
+        "id": "system_evidence",
+        "label": "Frozen O/F0/R1/R2 system evaluation",
+        "path": "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/evaluation.json"
+      },
+      {
+        "id": "pilot_contract",
+        "label": "Facet-control pilot contract and limitations",
+        "path": "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# Facet Retrieval Controls: Four-Topic Pilot"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision_evidence",
+        "body": "## Executive Summary\n\n- **The saved rule classifies the retrieval repair as unsuccessful.** R2 was judged only by the preregistered comparison with R1.\n- **The four stream outcomes remain visible.** Each selected arm is tied to a pre-qrels frozen ranking; no ranking was created after evaluation.\n- **The next gate stays separate.** Cross-encoder not run. A cross-encoder comparison requires separate approval even when retrieval repair succeeds."
+      },
+      {
+        "id": "queries_section",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "query_evidence",
+        "body": "## The queries stayed tied to the narrative\n\n**The repeated terms add emphasis, not new concepts.** The first table shows each full user narrative. The arm table then lists the existing and reweighted query strings with every tested k1 and b setting, marking the selected arm. Topic 897 is included as the unchanged fourth system topic and had no tested facet-control stream."
+      },
+      {
+        "id": "narratives_table_block",
+        "type": "table",
+        "tableId": "narrative_details",
+        "layout": "full"
+      },
+      {
+        "id": "query_arms_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "query_evidence",
+        "body": "**Each arm stays auditable without widening the page.** B0 uses the existing query; W0, W1, and W2 share the reweighted query but use different BM25 settings. The selected row is labeled explicitly."
+      },
+      {
+        "id": "queries_table_block",
+        "type": "table",
+        "tableId": "query_details",
+        "layout": "full"
+      },
+      {
+        "id": "noise_section",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "noise_evidence",
+        "body": "## Did the controls remove noise?\n\n**The mechanical comparison uses the same two warning families for every arm.** Across the selected arms, the combined top-10 wrong-domain and content-quality count is **23**, versus **19** for B0. The chart separates both warning families by stream and arm; these are qrels-free diagnostics, not relevance labels."
+      },
+      {
+        "id": "noise_chart_block",
+        "type": "chart",
+        "chartId": "noise_comparison",
+        "layout": "full"
+      },
+      {
+        "id": "representative_results_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "noise_evidence",
+        "body": "**Representative results make the diagnostic concrete.** The table shows only the first three saved results from each selected facet arm. It is deliberately bounded and does not expose candidate lists or relevance judgments."
+      },
+      {
+        "id": "representative_results_block",
+        "type": "table",
+        "tableId": "representative_results",
+        "layout": "full"
+      },
+      {
+        "id": "facet_evidence_section",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "facet_evidence",
+        "body": "## Did the facets add relevant evidence?\n\n**Selection protects marginal evidence first.** Each bar shows the selected arm's unique graded gain beyond the original top 100. The backing data also retains unique relevant documents, graded Recall@100, selected arm, topic, and stream so the gain can be audited in context."
+      },
+      {
+        "id": "facet_evidence_chart_block",
+        "type": "chart",
+        "chartId": "unique_facet_evidence",
+        "layout": "full"
+      },
+      {
+        "id": "system_section",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "system_evidence",
+        "body": "## Did the final sparse system improve?\n\n**The saved rule classifies the retrieval repair as unsuccessful.** The exact O, F0, R1, and R2 aggregate and per-topic values appear below. The rule requires higher R2 graded Recall@100, nDCG@10 no more than 0.02 below R1, no topic nDCG@10 loss greater than 0.10, and selected top-10 noise no higher than B0."
+      },
+      {
+        "id": "system_table_block",
+        "type": "table",
+        "tableId": "system_primary",
+        "layout": "full"
+      },
+      {
+        "id": "system_supporting_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "system_evidence",
+        "body": "**Supporting top-10 and judgment metrics remain separate for readability.** These values use the same aggregate and per-topic rows as the primary comparison."
+      },
+      {
+        "id": "system_supporting_table_block",
+        "type": "table",
+        "tableId": "system_supporting",
+        "layout": "full"
+      },
+      {
+        "id": "ranking_references_note",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "system_evidence",
+        "body": "**R2 points only to rankings frozen before qrels.** The four topic references below are the exact alternatives selected by the mechanical arm rule."
+      },
+      {
+        "id": "ranking_references_table_block",
+        "type": "table",
+        "tableId": "r2_ranking_references",
+        "layout": "full"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "decision_evidence",
+        "body": "## What happens next\n\n- Stop this REST/BM25 repair path and explain that the available controls did not resolve the observed limitation.\n- Preserve the frozen R2 decision and all four topic outcomes.\n- **Cross-encoder not run.** No reranker inference or automatic reranker gate was opened."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Would the selected arms retain their marginal evidence on untouched topics?\n- Are the remaining drift and content-quality warnings genuine relevance failures or harmless lexical noise?\n- If separately approved, does a cross-encoder benefit facet-augmented candidates more than original-only candidates?"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "pilot_contract",
+        "body": "## Caveats and assumptions\n\n- This is a four-topic pilot and does not support production generalization.\n- Projected relevance judgments are development evidence, not a hidden test set.\n- Wrong-domain and content-quality counts are heuristic diagnostics, not relevance labels.\n- The hosted REST interface limited controls to query text, hit depth, k1, and b.\n- No production claim, recursive search, or cross-encoder result is included."
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "status": "ready",
+    "datasets": {
+      "narrative_rows": [
+        {
+          "topic_id": "200",
+          "stream_scope": "f07a",
+          "full_narrative": "I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah."
+        },
+        {
+          "topic_id": "225",
+          "stream_scope": "f02, f04",
+          "full_narrative": "I'm exploring how exposure to violent video games and gory content affects human aggression, desensitization, and addiction. I'm also interested in the broader causes of aggression in both children and adults, the positive sides of gaming, and the historical background of these media trends."
+        },
+        {
+          "topic_id": "707",
+          "stream_scope": "f02",
+          "full_narrative": "I'm trying to understand the health risks and potential dangers of various chemicals and substances, such as those found in antiperspirants, sorbitol, and organophosphate poisoning. I'd also like to know how integrating different actions at the operational level might impact health outcomes."
+        },
+        {
+          "topic_id": "897",
+          "stream_scope": "unchanged",
+          "full_narrative": "I'm trying to understand how alcohol use affects neighborhood quality of life, including genetic and gender factors in dependency. I also need to grasp the main causes, risks, and fatal consequences of alcohol and drug use, and their connection to broader community health issues."
+        }
+      ],
+      "query_rows": [
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "B0",
+          "arm_settings": "B0 · Existing query · k1 0.9 · b 0.4 · SELECTED",
+          "query_text": "Holocaust enduring effects European Jews",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": true,
+          "selection_status": "Selected arm"
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W0",
+          "arm_settings": "W0 · Reweighted query · k1 0.9 · b 0.4",
+          "query_text": "Holocaust Holocaust enduring effects European European Jews Jews",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W1",
+          "arm_settings": "W1 · Reweighted query · k1 0.4 · b 0.4",
+          "query_text": "Holocaust Holocaust enduring effects European European Jews Jews",
+          "k1": 0.4,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W2",
+          "arm_settings": "W2 · Reweighted query · k1 0.4 · b 0",
+          "query_text": "Holocaust Holocaust enduring effects European European Jews Jews",
+          "k1": 0.4,
+          "b": 0.0,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "B0",
+          "arm_settings": "B0 · Existing query · k1 0.9 · b 0.4",
+          "query_text": "violent video games exposure desensitization violence research",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W0",
+          "arm_settings": "W0 · Reweighted query · k1 0.9 · b 0.4",
+          "query_text": "violent video games violent video games exposure desensitization violence research",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W1",
+          "arm_settings": "W1 · Reweighted query · k1 0.4 · b 0.4",
+          "query_text": "violent video games violent video games exposure desensitization violence research",
+          "k1": 0.4,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W2",
+          "arm_settings": "W2 · Reweighted query · k1 0.4 · b 0 · SELECTED",
+          "query_text": "violent video games violent video games exposure desensitization violence research",
+          "k1": 0.4,
+          "b": 0.0,
+          "selected": true,
+          "selection_status": "Selected arm"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "B0",
+          "arm_settings": "B0 · Existing query · k1 0.9 · b 0.4",
+          "query_text": "aggressive behavior children risk factors psychology",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W0",
+          "arm_settings": "W0 · Reweighted query · k1 0.9 · b 0.4 · SELECTED",
+          "query_text": "aggressive aggressive behavior children children risk factors psychology",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": true,
+          "selection_status": "Selected arm"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W1",
+          "arm_settings": "W1 · Reweighted query · k1 0.4 · b 0.4",
+          "query_text": "aggressive aggressive behavior children children risk factors psychology",
+          "k1": 0.4,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W2",
+          "arm_settings": "W2 · Reweighted query · k1 0.4 · b 0",
+          "query_text": "aggressive aggressive behavior children children risk factors psychology",
+          "k1": 0.4,
+          "b": 0.0,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "B0",
+          "arm_settings": "B0 · Existing query · k1 0.9 · b 0.4",
+          "query_text": "sorbitol human health adverse effects safety",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W0",
+          "arm_settings": "W0 · Reweighted query · k1 0.9 · b 0.4 · SELECTED",
+          "query_text": "sorbitol sorbitol human human health adverse effects safety",
+          "k1": 0.9,
+          "b": 0.4,
+          "selected": true,
+          "selection_status": "Selected arm"
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W1",
+          "arm_settings": "W1 · Reweighted query · k1 0.4 · b 0.4",
+          "query_text": "sorbitol sorbitol human human health adverse effects safety",
+          "k1": 0.4,
+          "b": 0.4,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W2",
+          "arm_settings": "W2 · Reweighted query · k1 0.4 · b 0",
+          "query_text": "sorbitol sorbitol human human health adverse effects safety",
+          "k1": 0.4,
+          "b": 0.0,
+          "selected": false,
+          "selection_status": "Not selected"
+        },
+        {
+          "topic_id": "897",
+          "stream_id": "original",
+          "stream_label": "897/original (unchanged)",
+          "arm_id": "Unchanged R1",
+          "arm_settings": "Unchanged R1 · SELECTED",
+          "query_text": "No tested facet-control query",
+          "k1": null,
+          "b": null,
+          "selected": true,
+          "selection_status": "Unchanged system topic"
+        }
+      ],
+      "noise_comparison": [
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "B0",
+          "stream_arm": "200/f07a · B0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 1,
+          "top10_count": 1,
+          "selected": true
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "B0",
+          "stream_arm": "200/f07a · B0",
+          "noise_type": "Content-quality",
+          "top5_count": 2,
+          "top10_count": 2,
+          "selected": true
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W0",
+          "stream_arm": "200/f07a · W0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 2,
+          "top10_count": 2,
+          "selected": false
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W0",
+          "stream_arm": "200/f07a · W0",
+          "noise_type": "Content-quality",
+          "top5_count": 2,
+          "top10_count": 4,
+          "selected": false
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W1",
+          "stream_arm": "200/f07a · W1",
+          "noise_type": "Wrong-domain",
+          "top5_count": 1,
+          "top10_count": 1,
+          "selected": false
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W1",
+          "stream_arm": "200/f07a · W1",
+          "noise_type": "Content-quality",
+          "top5_count": 1,
+          "top10_count": 2,
+          "selected": false
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W2",
+          "stream_arm": "200/f07a · W2",
+          "noise_type": "Wrong-domain",
+          "top5_count": 5,
+          "top10_count": 10,
+          "selected": false
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "arm_id": "W2",
+          "stream_arm": "200/f07a · W2",
+          "noise_type": "Content-quality",
+          "top5_count": 5,
+          "top10_count": 10,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "B0",
+          "stream_arm": "225/f02 · B0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 0,
+          "top10_count": 0,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "B0",
+          "stream_arm": "225/f02 · B0",
+          "noise_type": "Content-quality",
+          "top5_count": 4,
+          "top10_count": 6,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W0",
+          "stream_arm": "225/f02 · W0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 0,
+          "top10_count": 0,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W0",
+          "stream_arm": "225/f02 · W0",
+          "noise_type": "Content-quality",
+          "top5_count": 4,
+          "top10_count": 7,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W1",
+          "stream_arm": "225/f02 · W1",
+          "noise_type": "Wrong-domain",
+          "top5_count": 0,
+          "top10_count": 0,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W1",
+          "stream_arm": "225/f02 · W1",
+          "noise_type": "Content-quality",
+          "top5_count": 4,
+          "top10_count": 7,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W2",
+          "stream_arm": "225/f02 · W2",
+          "noise_type": "Wrong-domain",
+          "top5_count": 1,
+          "top10_count": 5,
+          "selected": true
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "arm_id": "W2",
+          "stream_arm": "225/f02 · W2",
+          "noise_type": "Content-quality",
+          "top5_count": 3,
+          "top10_count": 5,
+          "selected": true
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "B0",
+          "stream_arm": "225/f04 · B0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 2,
+          "top10_count": 3,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "B0",
+          "stream_arm": "225/f04 · B0",
+          "noise_type": "Content-quality",
+          "top5_count": 1,
+          "top10_count": 1,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W0",
+          "stream_arm": "225/f04 · W0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 2,
+          "top10_count": 2,
+          "selected": true
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W0",
+          "stream_arm": "225/f04 · W0",
+          "noise_type": "Content-quality",
+          "top5_count": 1,
+          "top10_count": 1,
+          "selected": true
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W1",
+          "stream_arm": "225/f04 · W1",
+          "noise_type": "Wrong-domain",
+          "top5_count": 2,
+          "top10_count": 2,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W1",
+          "stream_arm": "225/f04 · W1",
+          "noise_type": "Content-quality",
+          "top5_count": 1,
+          "top10_count": 1,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W2",
+          "stream_arm": "225/f04 · W2",
+          "noise_type": "Wrong-domain",
+          "top5_count": 5,
+          "top10_count": 10,
+          "selected": false
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "arm_id": "W2",
+          "stream_arm": "225/f04 · W2",
+          "noise_type": "Content-quality",
+          "top5_count": 3,
+          "top10_count": 5,
+          "selected": false
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "B0",
+          "stream_arm": "707/f02 · B0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 4,
+          "top10_count": 6,
+          "selected": false
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "B0",
+          "stream_arm": "707/f02 · B0",
+          "noise_type": "Content-quality",
+          "top5_count": 0,
+          "top10_count": 0,
+          "selected": false
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W0",
+          "stream_arm": "707/f02 · W0",
+          "noise_type": "Wrong-domain",
+          "top5_count": 5,
+          "top10_count": 7,
+          "selected": true
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W0",
+          "stream_arm": "707/f02 · W0",
+          "noise_type": "Content-quality",
+          "top5_count": 0,
+          "top10_count": 0,
+          "selected": true
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W1",
+          "stream_arm": "707/f02 · W1",
+          "noise_type": "Wrong-domain",
+          "top5_count": 5,
+          "top10_count": 8,
+          "selected": false
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W1",
+          "stream_arm": "707/f02 · W1",
+          "noise_type": "Content-quality",
+          "top5_count": 0,
+          "top10_count": 0,
+          "selected": false
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W2",
+          "stream_arm": "707/f02 · W2",
+          "noise_type": "Wrong-domain",
+          "top5_count": 4,
+          "top10_count": 9,
+          "selected": false
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "arm_id": "W2",
+          "stream_arm": "707/f02 · W2",
+          "noise_type": "Content-quality",
+          "top5_count": 1,
+          "top10_count": 2,
+          "selected": false
+        }
+      ],
+      "representative_results": [
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "selected_arm": "B0",
+          "rank": 1,
+          "document_id": "shard_06288_39327",
+          "result_excerpt": "The destruction of the jews during the holocaust The myth of bulgarian rescue of jews and reality of bulgarian complicity in the destruction of vardar macedonian jewry during the holocaust by stephen schwartz. The destruction of the european jews is a in her 1968 the holocaust: the destruction of more critical of jewish actions during the holocaust. How did the holocaust end he began implementing "
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "selected_arm": "B0",
+          "rank": 2,
+          "document_id": "shard_06149_27113",
+          "result_excerpt": "The Influence Of The Holocaust On The Jewish People In Germany The Holocaust was a cataclysmic event that took place during 1933 to 1945. The word holocaust derived from Hebrew, \"olah\", meaning burnt offering. Now the word is popularly known for the mass genocide that was a part of World War II, that took the lives of millions of Jews over the period of 12 years. It all started in 1933 when Adolf "
+        },
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "selected_arm": "B0",
+          "rank": 3,
+          "document_id": "shard_05259_49177",
+          "result_excerpt": "My grandfather was a very proud person. He uttered not a word about the Holocaust he endured in Libya; only once did I hear him talk about the renta, the reparations from Germany, which, by a cruel irony, began arriving a month after his mother died. I heard that his mother’s back had been broken in the camp and that from then on she was completely hunched over. So I also understood that there had"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "selected_arm": "W2",
+          "rank": 1,
+          "document_id": "shard_03492_25639",
+          "result_excerpt": "All rights reserved. No part of this book may be reproduced or utilized in any form or by any means, electronic or mechanical, including photocopying, recording, or by any information storage and retrieval system, without permission in writing from the publisher. Printed in the United States of America Library of Congress Cataloging-in-Publication Data Strasburger, Victor C., 1949- Children, adole"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "selected_arm": "W2",
+          "rank": 2,
+          "document_id": "shard_00602_51417",
+          "result_excerpt": "videogames videogames. Participants played a videogameVideogames have long been part of the entertainment industry. Nonetheless, it is not well known how videogames can affect us with the advancement of 3D technology. The purpose of this study is to investigate the EEG signals regularity when playing videogames in 2D and 3D modes. A total of 29 healthy subjects (24 male, 5 female) with mean age of"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "selected_arm": "W2",
+          "rank": 3,
+          "document_id": "shard_02637_15770",
+          "result_excerpt": "Playing Video Games is Productive: A Scholarly Assessment (Being in a university setting, with a major in the sciences definitely affects your outlook on life. In this article I take that unique outlook on life and analyze gaming and productivity.) Time and time again we ask ourselves if we're wasting our time by playing games. There are literally millions of websites, tweets, blogs, and personal "
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "selected_arm": "W0",
+          "rank": 1,
+          "document_id": "shard_00148_70924",
+          "result_excerpt": "Aggression in Young Children Services Proven to be Effective in Reducing Aggression Carolyn Webster-Stratton, PhD University of Washington, USA Childhood aggression is escalating — and at younger ages.1 The developmental progression of aggression in children suggests that the propensity for physical aggression and oppositional behaviour is at its highest at age two.2 Typically, as children develop"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "selected_arm": "W0",
+          "rank": 2,
+          "document_id": "shard_01291_76951",
+          "result_excerpt": "Essay on Youth Violence and Media There has been a lot of research conducted on the notions that violence portrayed in media - such as television, video, film, music, newspapers and books - can have adverse effects on the children viewing it. Many people have suggested that media has allowed violence to become so prevalent in our societies. It has also been suggested that media has been responsibl"
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "selected_arm": "W0",
+          "rank": 3,
+          "document_id": "shard_06342_71442",
+          "result_excerpt": "The Quandary of Aggression Among Children: Prevalence, Predictors and Consequences Childhood is a part of life where one learns all the moral aspects of life, which is why research has shown that the values learned in early childhood, i.e. the period from infancy to childhood, plays an important role in building up a child's morality and behavior; the child carries all these values and behaviors t"
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "selected_arm": "W0",
+          "rank": 1,
+          "document_id": "shard_04218_50851",
+          "result_excerpt": "Can Dogs Have Sorbitol? Products are linked after in-depth research. From qualifying purchases, I receive commissions as an Affiliate Associate but with no extra cost to the buyers. Sorbitol is usually used as a sugar substitute, as it is a sugar alcohol in different types of products, including foods and toothpaste. Although it is safe for humans, it can have a harmful impact on your furry buddy."
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "selected_arm": "W0",
+          "rank": 2,
+          "document_id": "shard_04204_8265",
+          "result_excerpt": "As a responsible dog owner, you should not give your furry buddy sorbitol and mannitol. As both of them are sugar alcohols, it is better to avoid them. Usually, Sorbitol and mannitol are used as sugar substitutes in different types of products like sugar-free gums, candies, etc. Although these are suitable for human consumption, they can cause digestive problems inside your furry buddy, as they do"
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "selected_arm": "W0",
+          "rank": 3,
+          "document_id": "shard_03653_83724",
+          "result_excerpt": "Sorbitol is a sugar alcohol that is commonly used as a sweetener in various dog products, including treats, toothpaste, and some medications. While it may seem harmless, it is important for dog owners to understand the potential dangers associated with sorbitol and how to safely manage its effects on their furry friends. When dogs consume sorbitol, it is rapidly absorbed into their bloodstream and"
+        }
+      ],
+      "facet_evidence": [
+        {
+          "topic_id": "200",
+          "stream_id": "f07a",
+          "stream_label": "200/f07a",
+          "selected_arm": "B0",
+          "unique_graded_gain": 53,
+          "unique_relevant_beyond_original": 17,
+          "graded_recall_at_100": 0.03561643835616438,
+          "relevant_at_100": 21,
+          "relevant_denominator": 494,
+          "selection_rationale": "Selected B0 from eligible arms B0, W1 by highest unique graded gain, then graded Recall@100, nDCG@10, lower combined noise, and the least-changed arm."
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f02",
+          "stream_label": "225/f02",
+          "selected_arm": "W2",
+          "unique_graded_gain": 53,
+          "unique_relevant_beyond_original": 19,
+          "graded_recall_at_100": 0.06143943826799298,
+          "relevant_at_100": 37,
+          "relevant_denominator": 555,
+          "selection_rationale": "Selected W2 from eligible arms B0, W0, W1, W2 by highest unique graded gain, then graded Recall@100, nDCG@10, lower combined noise, and the least-changed arm."
+        },
+        {
+          "topic_id": "225",
+          "stream_id": "f04",
+          "stream_label": "225/f04",
+          "selected_arm": "W0",
+          "unique_graded_gain": 26,
+          "unique_relevant_beyond_original": 12,
+          "graded_recall_at_100": 0.018139262726740785,
+          "relevant_at_100": 13,
+          "relevant_denominator": 555,
+          "selection_rationale": "Selected W0 from eligible arms B0, W0, W1 by highest unique graded gain, then graded Recall@100, nDCG@10, lower combined noise, and the least-changed arm."
+        },
+        {
+          "topic_id": "707",
+          "stream_id": "f02",
+          "stream_label": "707/f02",
+          "selected_arm": "W0",
+          "unique_graded_gain": 6,
+          "unique_relevant_beyond_original": 3,
+          "graded_recall_at_100": 0.0087527352297593,
+          "relevant_at_100": 3,
+          "relevant_denominator": 586,
+          "selection_rationale": "Selected W0 from eligible arms B0, W0, W1 by highest unique graded gain, then graded Recall@100, nDCG@10, lower combined noise, and the least-changed arm."
+        }
+      ],
+      "system_comparison": [
+        {
+          "comparison_label": "O · Aggregate",
+          "row_scope": "Aggregate",
+          "topic_id": "All four",
+          "system": "O",
+          "ranking_reference": "O",
+          "ndcg_at_10": 0.22622208133460384,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.65,
+          "relevant_at_10": 6.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.07489429964975339
+        },
+        {
+          "comparison_label": "O · Topic 200",
+          "row_scope": "Topic",
+          "topic_id": "200",
+          "system": "O",
+          "ranking_reference": "O",
+          "ndcg_at_10": 0.1400835882196266,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.2,
+          "relevant_at_10": 2,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.1518572307712938
+        },
+        {
+          "comparison_label": "O · Topic 225",
+          "row_scope": "Topic",
+          "topic_id": "225",
+          "system": "O",
+          "ranking_reference": "O",
+          "ndcg_at_10": 0.2572640430261628,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 0.9,
+          "relevant_at_10": 9,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.041799718945594644
+        },
+        {
+          "comparison_label": "O · Topic 707",
+          "row_scope": "Topic",
+          "topic_id": "707",
+          "system": "O",
+          "ranking_reference": "O",
+          "ndcg_at_10": 0.2026664541869443,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.5,
+          "relevant_at_10": 5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.10592024888212515
+        },
+        {
+          "comparison_label": "O · Topic 897",
+          "row_scope": "Topic",
+          "topic_id": "897",
+          "system": "O",
+          "ranking_reference": "O",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_at_10": 10,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": 0.0
+        },
+        {
+          "comparison_label": "F0 · Aggregate",
+          "row_scope": "Aggregate",
+          "topic_id": "All four",
+          "system": "F0",
+          "ranking_reference": "F0",
+          "ndcg_at_10": 0.27983873604182075,
+          "graded_recall_at_100": 0.09511723296156456,
+          "recall_at_100": 0.10151007820291735,
+          "precision_at_10": 0.725,
+          "relevant_at_10": 7.25,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.9975,
+          "ndcg_delta_vs_r1": -0.021277644942536478
+        },
+        {
+          "comparison_label": "F0 · Topic 200",
+          "row_scope": "Topic",
+          "topic_id": "200",
+          "system": "F0",
+          "ranking_reference": "F0",
+          "ndcg_at_10": 0.3129403423142977,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.5,
+          "relevant_at_10": 5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": 0.02099952332337729
+        },
+        {
+          "comparison_label": "F0 · Topic 225",
+          "row_scope": "Topic",
+          "topic_id": "225",
+          "system": "F0",
+          "ranking_reference": "F0",
+          "ndcg_at_10": 0.21238898492309757,
+          "graded_recall_at_100": 0.12287887653598596,
+          "recall_at_100": 0.13693693693693693,
+          "precision_at_10": 0.8,
+          "relevant_at_10": 8,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.99,
+          "ndcg_delta_vs_r1": -0.08667477704865986
+        },
+        {
+          "comparison_label": "F0 · Topic 707",
+          "row_scope": "Topic",
+          "topic_id": "707",
+          "system": "F0",
+          "ranking_reference": "F0",
+          "ndcg_at_10": 0.29306593531947145,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.6,
+          "relevant_at_10": 6,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.015520767749597986
+        },
+        {
+          "comparison_label": "F0 · Topic 897",
+          "row_scope": "Topic",
+          "topic_id": "897",
+          "system": "F0",
+          "ranking_reference": "F0",
+          "ndcg_at_10": 0.30095968161041636,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_at_10": 10,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.003914558295265325
+        },
+        {
+          "comparison_label": "R1 · Aggregate",
+          "row_scope": "Aggregate",
+          "topic_id": "All four",
+          "system": "R1",
+          "ranking_reference": "R1",
+          "ndcg_at_10": 0.3011163809843572,
+          "graded_recall_at_100": 0.09500814088657077,
+          "recall_at_100": 0.10190490622932434,
+          "precision_at_10": 0.85,
+          "relevant_at_10": 8.5,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.9875,
+          "ndcg_delta_vs_r1": 0.0
+        },
+        {
+          "comparison_label": "R1 · Topic 200",
+          "row_scope": "Topic",
+          "topic_id": "200",
+          "system": "R1",
+          "ranking_reference": "R1",
+          "ndcg_at_10": 0.2919408189909204,
+          "graded_recall_at_100": 0.05589041095890411,
+          "recall_at_100": 0.05668016194331984,
+          "precision_at_10": 0.6,
+          "relevant_at_10": 6,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.96,
+          "ndcg_delta_vs_r1": 0.0
+        },
+        {
+          "comparison_label": "R1 · Topic 225",
+          "row_scope": "Topic",
+          "topic_id": "225",
+          "system": "R1",
+          "ranking_reference": "R1",
+          "ndcg_at_10": 0.29906376197175744,
+          "graded_recall_at_100": 0.12463428905792862,
+          "recall_at_100": 0.14054054054054055,
+          "precision_at_10": 1.0,
+          "relevant_at_10": 10,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.99,
+          "ndcg_delta_vs_r1": 0.0
+        },
+        {
+          "comparison_label": "R1 · Topic 707",
+          "row_scope": "Topic",
+          "topic_id": "707",
+          "system": "R1",
+          "ranking_reference": "R1",
+          "ndcg_at_10": 0.30858670306906943,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.8,
+          "relevant_at_10": 8,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": 0.0
+        },
+        {
+          "comparison_label": "R1 · Topic 897",
+          "row_scope": "Topic",
+          "topic_id": "897",
+          "system": "R1",
+          "ranking_reference": "R1",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_at_10": 10,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": 0.0
+        },
+        {
+          "comparison_label": "R2 · Aggregate",
+          "row_scope": "Aggregate",
+          "topic_id": "All four",
+          "system": "R2",
+          "ranking_reference": "Selected frozen topic rankings",
+          "ndcg_at_10": 0.2870470127095123,
+          "graded_recall_at_100": 0.09584865484570733,
+          "recall_at_100": 0.10286142955426872,
+          "precision_at_10": 0.8,
+          "relevant_at_10": 8.0,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.014069368274844951
+        },
+        {
+          "comparison_label": "R2 · Topic 200",
+          "row_scope": "Topic",
+          "topic_id": "200",
+          "system": "R2",
+          "ranking_reference": "R2:200:B0",
+          "ndcg_at_10": 0.28275832582265964,
+          "graded_recall_at_100": 0.05808219178082192,
+          "recall_at_100": 0.058704453441295545,
+          "precision_at_10": 0.6,
+          "relevant_at_10": 6,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.009182493168260752
+        },
+        {
+          "comparison_label": "R2 · Topic 225",
+          "row_scope": "Topic",
+          "topic_id": "225",
+          "system": "R2",
+          "ranking_reference": "R2:225:W2-W0",
+          "ndcg_at_10": 0.2705181790724413,
+          "graded_recall_at_100": 0.12580456407255705,
+          "recall_at_100": 0.14234234234234233,
+          "precision_at_10": 0.9,
+          "relevant_at_10": 9,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.028545582899316135
+        },
+        {
+          "comparison_label": "R2 · Topic 707",
+          "row_scope": "Topic",
+          "topic_id": "707",
+          "system": "R2",
+          "ranking_reference": "R2:707:W0",
+          "ndcg_at_10": 0.29003730603726635,
+          "graded_recall_at_100": 0.09463894967177243,
+          "recall_at_100": 0.08873720136518772,
+          "precision_at_10": 0.7,
+          "relevant_at_10": 7,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": -0.018549397031803083
+        },
+        {
+          "comparison_label": "R2 · Topic 897",
+          "row_scope": "Topic",
+          "topic_id": "897",
+          "system": "R2",
+          "ranking_reference": "R2:897:B0",
+          "ndcg_at_10": 0.3048742399056817,
+          "graded_recall_at_100": 0.10486891385767791,
+          "recall_at_100": 0.12166172106824925,
+          "precision_at_10": 1.0,
+          "relevant_at_10": 10,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_delta_vs_r1": 0.0
+        }
+      ],
+      "ranking_references": [
+        {
+          "topic_id": "200",
+          "ranking_reference": "R2:200:B0",
+          "ranking_sha256": "98dbcf873853a3b4761b8867ecae0e956fcf1978cd63a2fa1df528ee4744fb49"
+        },
+        {
+          "topic_id": "225",
+          "ranking_reference": "R2:225:W2-W0",
+          "ranking_sha256": "875eb198e9aaecb4778002289a57cec719de9692c2cfaa2a9441ab3715f264b6"
+        },
+        {
+          "topic_id": "707",
+          "ranking_reference": "R2:707:W0",
+          "ranking_sha256": "c340e5037dc9f5ec9dfddb5210967f340c15a165e812d22525a660c85d8ebe81"
+        },
+        {
+          "topic_id": "897",
+          "ranking_reference": "R2:897:B0",
+          "ranking_sha256": "d99ea1162696f9e3c45879bba0602cbcfc94bb81a51bbd4bdcc829f7e9c96038"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "decision_evidence",
+      "label": "Frozen retrieval-repair decision",
+      "path": "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:5858efc2b2056755e55d2ed6b35f9d6feb131b759a98e8b817d0e80970cde270",
+        "language": "sql",
+        "description": "Loads the saved mechanical retrieval-repair decision and gate state.",
+        "sql": "SELECT * FROM read_json_auto(['outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json'], union_by_name = true);",
+        "tables_used": [
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json"
+        ],
+        "filters": [
+          "Only the four registered facet streams and four evaluated pilot topics",
+          "Protected topics and raw relevance-judgment rows excluded from report data",
+          "Canonical source shape checked before validate_artifact and portable packaging"
+        ]
+      }
+    },
+    {
+      "id": "query_evidence",
+      "label": "Frozen narratives, queries, and selected arms",
+      "path": "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:9103895b1eed90727b98acb0cb0aa014eae767afbe42c43d911d3849a01bd958",
+        "language": "sql",
+        "description": "Loads registered control queries, snapshot-bound narrative identities, and selected arms.",
+        "sql": "SELECT * FROM read_json_auto(['reports/experiments/facet_retrieval_control_pilot_v1/manifest.json', 'outputs/rag25_facet_retrieval_control_v1/freeze_v2/freeze.json', 'outputs/rag25_facet_retrieval_control_v1/freeze_v2/candidate_streams.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json'], union_by_name = true);",
+        "tables_used": [
+          "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json",
+          "outputs/rag25_facet_retrieval_control_v1/freeze_v2/freeze.json",
+          "outputs/rag25_facet_retrieval_control_v1/freeze_v2/candidate_streams.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json"
+        ],
+        "filters": [
+          "Only the four registered facet streams and four evaluated pilot topics",
+          "Protected topics and raw relevance-judgment rows excluded from report data",
+          "Canonical source shape checked before validate_artifact and portable packaging"
+        ]
+      }
+    },
+    {
+      "id": "noise_evidence",
+      "label": "Frozen qrels-free noise inspection",
+      "path": "outputs/rag25_facet_retrieval_control_v1/freeze_v2/inspection.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:af2a4adfaee1bad28200bf860575c14661ded6f31a26861142b0c78beeb2129b",
+        "language": "sql",
+        "description": "Loads bounded top-five/top-ten drift and content-quality diagnostics plus selected arms. Chart map: grouped categorical bar with stream-arm categories and two same-unit warning series.",
+        "sql": "SELECT * FROM read_json_auto(['outputs/rag25_facet_retrieval_control_v1/freeze_v2/inspection.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json'], union_by_name = true);",
+        "tables_used": [
+          "outputs/rag25_facet_retrieval_control_v1/freeze_v2/inspection.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json"
+        ],
+        "filters": [
+          "Only the four registered facet streams and four evaluated pilot topics",
+          "Protected topics and raw relevance-judgment rows excluded from report data",
+          "Canonical source shape checked before validate_artifact and portable packaging"
+        ]
+      }
+    },
+    {
+      "id": "facet_evidence",
+      "label": "Selected facet contribution evaluation",
+      "path": "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:5db4e177c1bd4ada746c9de94175ae74558c9914bdfaa7f39ec242ea31a5c6ca",
+        "language": "sql",
+        "description": "Loads saved selected-arm marginal relevant and graded contribution metrics. Chart map: single-series categorical bar across the four selected facet streams.",
+        "sql": "SELECT * FROM read_json_auto(['outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json'], union_by_name = true);",
+        "tables_used": [
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/stream_evaluation.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json"
+        ],
+        "filters": [
+          "Only the four registered facet streams and four evaluated pilot topics",
+          "Protected topics and raw relevance-judgment rows excluded from report data",
+          "Canonical source shape checked before validate_artifact and portable packaging"
+        ]
+      }
+    },
+    {
+      "id": "system_evidence",
+      "label": "Frozen O/F0/R1/R2 system evaluation",
+      "path": "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/evaluation.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:200fc59ccb85b1d8874c3afc8e0372e05f2917f0037222d6280f19f97f5d3600",
+        "language": "sql",
+        "description": "Loads exact aggregate and per-topic system metrics, ranking references, and decision evidence. Visual map: spacious exact lookup table because audit precision is the purpose.",
+        "sql": "SELECT * FROM read_json_auto(['outputs/rag25_facet_retrieval_control_v1/evaluation_v2/evaluation.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json'], union_by_name = true);",
+        "tables_used": [
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/evaluation.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/selection.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json"
+        ],
+        "filters": [
+          "Only the four registered facet streams and four evaluated pilot topics",
+          "Protected topics and raw relevance-judgment rows excluded from report data",
+          "Canonical source shape checked before validate_artifact and portable packaging"
+        ]
+      }
+    },
+    {
+      "id": "pilot_contract",
+      "label": "Facet-control pilot contract and limitations",
+      "path": "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:39b256127c831176e09333c1e7c3feb620fd8116528dee811a7eef68412c6cfc",
+        "language": "sql",
+        "description": "Loads the frozen pilot boundary, available controls, and gate outcome used for caveats.",
+        "sql": "SELECT * FROM read_json_auto(['reports/experiments/facet_retrieval_control_pilot_v1/manifest.json', 'outputs/rag25_facet_retrieval_control_v1/freeze_v2/freeze.json', 'outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json'], union_by_name = true);",
+        "tables_used": [
+          "reports/experiments/facet_retrieval_control_pilot_v1/manifest.json",
+          "outputs/rag25_facet_retrieval_control_v1/freeze_v2/freeze.json",
+          "outputs/rag25_facet_retrieval_control_v1/evaluation_v2/decision.json"
+        ],
+        "filters": [
+          "Only the four registered facet streams and four evaluated pilot topics",
+          "Protected topics and raw relevance-judgment rows excluded from report data",
+          "Canonical source shape checked before validate_artifact and portable packaging"
+        ]
+      }
+    }
+  ]
+}
