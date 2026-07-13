@@ -786,6 +786,39 @@ def test_selected_reference_tamper_is_rejected_after_freeze_reseal(report_inputs
         build_artifact(**broken)
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        pytest.param("missing", id="missing"),
+        pytest.param(None, id="null"),
+        pytest.param({"200": "4" * 64}, id="partial"),
+        pytest.param(
+            {
+                "200": "4" * 64,
+                "225": "4" * 64,
+                "707": "4" * 64,
+                "897": "4" * 64,
+                "extra": "4" * 64,
+            },
+            id="extra",
+        ),
+        pytest.param(["4" * 64] * 4, id="wrong-type"),
+    ],
+)
+def test_system_selected_ranking_hash_map_is_required_and_exact(
+    report_inputs, replacement
+):
+    broken = copy.deepcopy(report_inputs)
+    if replacement == "missing":
+        broken["system_evaluation"].pop("r2_selected_ranking_sha256")
+    else:
+        broken["system_evaluation"]["r2_selected_ranking_sha256"] = replacement
+    _reseal(broken, "system_evaluation")
+
+    with pytest.raises(ValueError, match="system evaluation ranking hash"):
+        build_artifact(**broken)
+
+
 def test_candidate_file_hash_is_bound_in_manifest_and_freeze(report_inputs):
     expected = hashlib.sha256(report_inputs["candidate_file_bytes"]).hexdigest()
     assert report_inputs["candidate_streams"]["candidate_file_sha256"] == expected
@@ -910,5 +943,6 @@ def test_readme_documents_report_inputs_validation_and_task7_packaging():
         "qrels SHA-256",
         "loaded `candidates.jsonl` bytes",
         "authenticated freeze ranking",
+        "required exact four-topic map",
     ):
         assert required in text

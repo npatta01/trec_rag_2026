@@ -523,13 +523,11 @@ def _validate_selected_ranking_hashes(
     selection_hashes = _object(
         selection.get("selected_ranking_sha256"), "selection ranking hashes"
     )
-    system_hashes_value = system_evaluation.get("r2_selected_ranking_sha256")
-    system_hashes = (
-        None
-        if system_hashes_value is None
-        else _object(system_hashes_value, "system evaluation ranking hashes")
+    system_hashes = _object(
+        system_evaluation.get("r2_selected_ranking_sha256"),
+        "system evaluation ranking hashes",
     )
-    if system_hashes is not None and set(system_hashes) != set(TOPIC_IDS):
+    if set(system_hashes) != set(TOPIC_IDS):
         raise ValueError("system evaluation ranking hash boundary differs")
     for topic_id in TOPIC_IDS:
         reference = str(references[topic_id])
@@ -543,7 +541,7 @@ def _validate_selected_ranking_hashes(
             raise ValueError(
                 f"selection ranking hash differs from authenticated freeze for {topic_id}"
             )
-        if system_hashes is not None and system_hashes[topic_id] != expected:
+        if system_hashes[topic_id] != expected:
             raise ValueError(
                 f"system ranking hash differs from authenticated freeze for {topic_id}"
             )

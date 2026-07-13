@@ -53,6 +53,9 @@ across the loaded artifacts.
 
 For each topic, the saved selection hash and the system-evaluation hash must
 equal the exact semantic SHA-256 on its authenticated freeze ranking record.
+The `r2_selected_ranking_sha256` field in `evaluation.json` is a required exact four-topic map
+for `200`, `225`, `707`, and `897`; missing, null, partial, extra-keyed, or
+non-object forms fail closed.
 The candidate snapshot is also closed in both directions: the hash of the
 loaded `candidates.jsonl` bytes must equal both `candidate_file_sha256` in
 `candidate_streams.json` and `candidates_sha256` in `freeze.json`. Candidate
