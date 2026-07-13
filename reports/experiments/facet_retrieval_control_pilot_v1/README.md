@@ -51,6 +51,13 @@ checked using their canonical self-hash or bound hash contract. Manifest,
 freeze, prior-freeze, selected-ranking, and qrels SHA-256 bindings must agree
 across the loaded artifacts.
 
+For each topic, the saved selection hash and the system-evaluation hash must
+equal the exact semantic SHA-256 on its authenticated freeze ranking record.
+The candidate snapshot is also closed in both directions: the hash of the
+loaded `candidates.jsonl` bytes must equal both `candidate_file_sha256` in
+`candidate_streams.json` and `candidates_sha256` in `freeze.json`. Candidate
+bytes are used only for validation and never enter the portable report source.
+
 Task 5 does not save an independent qrels attestation outside those four
 self-hashed evaluation files. Because Task 6 must not reopen qrels, it can
 prove that the saved qrels SHA-256 and name agree across intact evaluation

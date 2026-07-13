@@ -201,6 +201,7 @@ def _narratives() -> dict[str, str]:
 def _validate_candidate_snapshot(
     control_freeze: Mapping[str, object],
     candidate_streams: Mapping[str, object],
+    candidate_file_bytes: object,
     manifest_streams: Sequence[Mapping[str, object]],
 ) -> None:
     if (
@@ -243,6 +244,21 @@ def _validate_candidate_snapshot(
     if set(indexed) != expected or len(indexed) != 20:
         raise ValueError("candidate snapshot stream namespace differs")
     bindings = _object(control_freeze.get("bindings"), "control freeze bindings")
+    if not isinstance(candidate_file_bytes, bytes):
+        raise ValueError("candidate file bytes are required")
+    candidate_file_sha256 = hashlib.sha256(candidate_file_bytes).hexdigest()
+    manifest_candidate_sha256 = _sha256(
+        candidate_streams.get("candidate_file_sha256"),
+        "candidate file hash in candidate manifest",
+    )
+    freeze_candidate_sha256 = _sha256(
+        bindings.get("candidates_sha256"),
+        "candidates binding in control freeze",
+    )
+    if manifest_candidate_sha256 != candidate_file_sha256:
+        raise ValueError("candidate file hash differs from candidate manifest")
+    if freeze_candidate_sha256 != candidate_file_sha256:
+        raise ValueError("candidates binding differs from loaded candidate file hash")
     expected_manifest_hash = hashlib.sha256(_canonical_json(candidate_streams)).hexdigest()
     if bindings.get("candidate_streams_sha256") != expected_manifest_hash:
         raise ValueError("candidate snapshot manifest hash differs from freeze")
@@ -495,6 +511,42 @@ def _validate_system_evaluation(system_evaluation: Mapping[str, object]) -> Mapp
         if _number(deltas[topic_id], f"system delta {topic_id}") != expected:
             raise ValueError(f"system evaluation per-topic delta is inconsistent for {topic_id}")
     return systems
+
+
+def _validate_selected_ranking_hashes(
+    control_freeze: Mapping[str, object],
+    selection: Mapping[str, object],
+    system_evaluation: Mapping[str, object],
+    references: Mapping[str, object],
+) -> None:
+    rankings = _object(control_freeze.get("rankings"), "control freeze rankings")
+    selection_hashes = _object(
+        selection.get("selected_ranking_sha256"), "selection ranking hashes"
+    )
+    system_hashes_value = system_evaluation.get("r2_selected_ranking_sha256")
+    system_hashes = (
+        None
+        if system_hashes_value is None
+        else _object(system_hashes_value, "system evaluation ranking hashes")
+    )
+    if system_hashes is not None and set(system_hashes) != set(TOPIC_IDS):
+        raise ValueError("system evaluation ranking hash boundary differs")
+    for topic_id in TOPIC_IDS:
+        reference = str(references[topic_id])
+        record = _object(
+            rankings.get(reference), f"authenticated ranking {reference}"
+        )
+        expected = _sha256(
+            record.get("sha256"), f"authenticated ranking hash {reference}"
+        )
+        if selection_hashes[topic_id] != expected:
+            raise ValueError(
+                f"selection ranking hash differs from authenticated freeze for {topic_id}"
+            )
+        if system_hashes is not None and system_hashes[topic_id] != expected:
+            raise ValueError(
+                f"system ranking hash differs from authenticated freeze for {topic_id}"
+            )
 
 
 def _validate_decision(
@@ -886,6 +938,7 @@ def build_artifact(
     control_freeze: Mapping[str, object],
     control_freeze_bytes: bytes,
     candidate_streams: Mapping[str, object],
+    candidate_file_bytes: bytes,
     inspection: Mapping[str, object],
     stream_evaluation: Mapping[str, object],
     selection: Mapping[str, object],
@@ -917,7 +970,12 @@ def build_artifact(
     bindings = _object(control_freeze.get("bindings"), "control freeze bindings")
     if bindings.get("manifest_sha256") != manifest_file_sha256:
         raise ValueError("control freeze manifest file binding differs")
-    _validate_candidate_snapshot(control_freeze, candidate_streams, manifest_streams)
+    _validate_candidate_snapshot(
+        control_freeze,
+        candidate_streams,
+        candidate_file_bytes,
+        manifest_streams,
+    )
     _validate_inspection(inspection)
     if control_freeze.get("inspection_sha256") != hashlib.sha256(
         _canonical_json(inspection)
@@ -949,10 +1007,9 @@ def build_artifact(
     systems = _validate_system_evaluation(system_evaluation)
     if system_evaluation.get("r2_selected_rankings") != references:
         raise ValueError("system evaluation and selection ranking references differ")
-    if system_evaluation.get("r2_selected_ranking_sha256") != selection.get(
-        "selected_ranking_sha256"
-    ):
-        raise ValueError("system evaluation and selection ranking hashes differ")
+    _validate_selected_ranking_hashes(
+        control_freeze, selection, system_evaluation, references
+    )
     _validate_decision(decision, systems, stream_rows, selected)
 
     rows = _artifact_rows(
@@ -1245,6 +1302,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     control_freeze, control_freeze_bytes = _load_json_with_bytes(
         args.freeze_dir / "freeze.json", "control freeze"
     )
+    try:
+        candidate_file_bytes = (args.freeze_dir / "candidates.jsonl").read_bytes()
+    except OSError as exc:
+        raise ValueError("candidate file is unreadable") from exc
     artifact = build_artifact(
         manifest=manifest,
         manifest_bytes=manifest_bytes,
@@ -1253,6 +1314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidate_streams=_load_json(
             args.freeze_dir / "candidate_streams.json", "candidate streams"
         ),
+        candidate_file_bytes=candidate_file_bytes,
         inspection=_load_json(args.freeze_dir / "inspection.json", "inspection"),
         stream_evaluation=_load_json(
             args.evaluation_dir / "stream_evaluation.json", "stream evaluation"

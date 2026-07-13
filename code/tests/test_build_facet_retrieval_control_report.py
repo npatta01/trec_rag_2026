@@ -232,6 +232,10 @@ def report_inputs():
     manifest = json.loads(manifest_bytes)
     manifest_file_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     candidate_streams = _candidate_streams()
+    candidate_file_bytes = b"synthetic frozen candidate rows\n"
+    candidate_streams["candidate_file_sha256"] = hashlib.sha256(
+        candidate_file_bytes
+    ).hexdigest()
     inspections = {}
     stream_eval = {}
     for ordinal, stream_id in enumerate(STREAM_IDS):
@@ -264,7 +268,7 @@ def report_inputs():
             "candidate_streams_sha256": hashlib.sha256(
                 _canonical_json(candidate_streams)
             ).hexdigest(),
-            "candidates_sha256": "1" * 64,
+            "candidates_sha256": candidate_streams["candidate_file_sha256"],
             "candidate_stream_rows_sha256": stream_hashes,
         },
         "inspection_sha256": hashlib.sha256(_canonical_json(inspections)).hexdigest(),
@@ -341,7 +345,10 @@ def report_inputs():
         "selected": selected,
         "eligibility": eligibility,
         "selected_rankings": references,
-        "selected_ranking_sha256": {topic_id: "9" * 64 for topic_id in TOPIC_IDS},
+        "selected_ranking_sha256": {
+            topic_id: freeze["rankings"][references[topic_id]]["sha256"]
+            for topic_id in TOPIC_IDS
+        },
         "frozen_alternative_count": 25,
     })
     systems = {system_id: _system_metrics(system_id) for system_id in SYSTEM_IDS}
@@ -397,6 +404,7 @@ def report_inputs():
         "control_freeze": freeze,
         "control_freeze_bytes": control_freeze_bytes,
         "candidate_streams": candidate_streams,
+        "candidate_file_bytes": candidate_file_bytes,
         "inspection": inspections,
         "stream_evaluation": stream_evaluation,
         "selection": selection,
@@ -746,6 +754,66 @@ def test_tampered_payload_with_stale_hash_fails_before_selection(report_inputs):
         build_artifact(**broken)
 
 
+def test_selected_ranking_hashes_match_authenticated_freeze_records(report_inputs):
+    selection = report_inputs["selection"]
+    system = report_inputs["system_evaluation"]
+    freeze = report_inputs["control_freeze"]
+
+    for topic_id, reference in selection["selected_rankings"].items():
+        expected = freeze["rankings"][reference]["sha256"]
+        assert selection["selected_ranking_sha256"][topic_id] == expected
+        assert system["r2_selected_ranking_sha256"][topic_id] == expected
+
+
+def test_coordinated_selected_ranking_hash_substitution_is_rejected(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    wrong = "a" * 64
+    broken["selection"]["selected_ranking_sha256"]["200"] = wrong
+    broken["system_evaluation"]["r2_selected_ranking_sha256"]["200"] = wrong
+    _reseal(broken, "selection", "system_evaluation")
+
+    with pytest.raises(ValueError, match="ranking hash.*freeze|authenticated ranking"):
+        build_artifact(**broken)
+
+
+def test_selected_reference_tamper_is_rejected_after_freeze_reseal(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    reference = broken["selection"]["selected_rankings"]["225"]
+    broken["control_freeze"]["rankings"][reference]["sha256"] = "a" * 64
+    _refresh_integrity(broken)
+
+    with pytest.raises(ValueError, match="ranking hash.*freeze|authenticated ranking"):
+        build_artifact(**broken)
+
+
+def test_candidate_file_hash_is_bound_in_manifest_and_freeze(report_inputs):
+    expected = hashlib.sha256(report_inputs["candidate_file_bytes"]).hexdigest()
+    assert report_inputs["candidate_streams"]["candidate_file_sha256"] == expected
+    assert (
+        report_inputs["control_freeze"]["bindings"]["candidates_sha256"]
+        == expected
+    )
+
+
+def test_coordinated_candidate_metadata_rehash_cannot_replace_loaded_file(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    wrong = "a" * 64
+    broken["candidate_streams"]["candidate_file_sha256"] = wrong
+    broken["control_freeze"]["bindings"]["candidates_sha256"] = wrong
+    _refresh_integrity(broken)
+
+    with pytest.raises(ValueError, match="candidate file.*hash|candidates.*binding"):
+        build_artifact(**broken)
+
+
+def test_tampered_candidate_file_bytes_fail_bound_hashes(report_inputs):
+    broken = copy.deepcopy(report_inputs)
+    broken["candidate_file_bytes"] += b"tampered\n"
+
+    with pytest.raises(ValueError, match="candidate file.*hash|candidates.*binding"):
+        build_artifact(**broken)
+
+
 def test_all_evaluation_files_cannot_agree_on_wrong_manifest_hash(report_inputs):
     broken = copy.deepcopy(report_inputs)
     wrong = "a" * 64
@@ -840,5 +908,7 @@ def test_readme_documents_report_inputs_validation_and_task7_packaging():
         "arithmetic mean",
         "self-hash",
         "qrels SHA-256",
+        "loaded `candidates.jsonl` bytes",
+        "authenticated freeze ranking",
     ):
         assert required in text
