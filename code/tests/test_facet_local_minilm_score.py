@@ -170,15 +170,23 @@ def _benchmark_approval(
     device: str = "cuda",
     run_id: str = "benchmark-test-run",
 ):
-    return {
-        "schema_version": BENCHMARK_APPROVAL_SCHEMA_VERSION,
-        "approval_scope": BENCHMARK_APPROVAL_SCOPE,
+    payload = {
+        "schema_version": (
+            scorer_module.BENCHMARK_CPU_APPROVAL_SCHEMA_VERSION
+            if device == "cpu"
+            else BENCHMARK_APPROVAL_SCHEMA_VERSION
+        ),
+        "approval_scope": (
+            scorer_module.BENCHMARK_CPU_APPROVAL_SCOPE
+            if device == "cpu"
+            else BENCHMARK_APPROVAL_SCOPE
+        ),
         "action": "benchmark",
         "run_id": run_id,
         "output_path": str(output_dir.resolve()),
         "approved_by": "unit-test-user",
         "device": device,
-        "execution_backend": "rocm",
+        "execution_backend": "cpu" if device == "cpu" else "rocm",
         "pair_limit": 256,
         "preflight_sha256": inputs.preflight_sha256,
         "windows_sha256": inputs.windows_sha256,
@@ -188,9 +196,14 @@ def _benchmark_approval(
         "benchmark_sample_sha256": inputs.benchmark["sample_sha256"],
         "acknowledged_maximum_256_pairs": True,
         "acknowledged_local_files_only": True,
-        "acknowledged_no_cpu_fallback": True,
         "acknowledged_no_qrels_retrieval_network_or_hosted_inference": True,
     }
+    payload[
+        "acknowledged_cpu_fallback"
+        if device == "cpu"
+        else "acknowledged_no_cpu_fallback"
+    ] = True
+    return payload
 
 
 def _write_approval(
@@ -273,7 +286,7 @@ def _write_full_request(
         "run_id": f"persisted-benchmark-{device}",
         "output_path": str(output.resolve()),
         "benchmark_sample_sha256": inputs.benchmark["sample_sha256"],
-        "benchmark_approval_sha256": "4" * 64,
+        "benchmark_approval_sha256": "pending",
         "mode": plan["mode"],
         "median_pairs_per_second": median,
         "projection_multiplier": multiplier,
@@ -304,16 +317,129 @@ def _write_full_request(
         "peak_device_memory_bytes": 1234 if device == "cuda" and forward_count else 0,
         "peak_host_memory_bytes": 4567 if forward_count else 0,
     }
+    approval_path, approval_sha256 = _write_approval(
+        tmp_path / "approvals",
+        f"persisted-benchmark-{device}.json",
+        _benchmark_approval(
+            inputs,
+            output,
+            device=device,
+            run_id=f"persisted-benchmark-{device}",
+        ),
+    )
+    telemetry["benchmark_approval_sha256"] = approval_sha256
     telemetry_path = output / "benchmark_telemetry.json"
     telemetry_source = _pretty(telemetry)
     telemetry_path.write_bytes(telemetry_source)
-    request = build_full_inference_request(
+    telemetry_sha256 = _sha256(telemetry_source)
+    request = {
+        "schema_version": scorer_module.FULL_REQUEST_SCHEMA_VERSION,
+        "status": "awaiting_explicit_full_inference_approval",
+        "preflight_sha256": inputs.preflight_sha256,
+        "windows_sha256": inputs.windows_sha256,
+        "model_materialization_receipt_sha256": (
+            inputs.materialization_receipt_sha256
+        ),
+        "benchmark_telemetry_file": str(telemetry_path.resolve()),
+        "benchmark_telemetry_sha256": telemetry_sha256,
+        "benchmark_sample_sha256": inputs.benchmark["sample_sha256"],
+        "device": device,
+        "execution_backend": backend,
+        "batch_size": BATCH_SIZE,
+        "uncached_pair_count": inputs.benchmark["uncached_pair_count"],
+        "score_cache_path": str(inputs.score_cache_path),
+        "projected_full_run_wall_seconds": projected_wall,
+        "peak_device_memory_bytes": telemetry["peak_device_memory_bytes"],
+        "peak_host_memory_bytes": telemetry["peak_host_memory_bytes"],
+        "cpu_fallback_authorized": device == "cpu",
+        "qrels_path_supported": False,
+        "retrieval_path_supported": False,
+        "network_access_supported": False,
+        "hosted_inference_supported": False,
+    }
+    path = output / "full_inference_request.json"
+    request_source = _pretty(request)
+    path.write_bytes(request_source)
+    by_key = {}
+    for window in inputs.windows:
+        by_key.setdefault(window.cache_key, window)
+    planned = tuple(
+        [by_key[key] for key in inputs.benchmark["warmup_cache_keys"]]
+        + [
+            by_key[key]
+            for _repetition in range(int(inputs.benchmark["timed_repetitions"]))
+            for key in inputs.benchmark["timed_cache_keys"]
+        ]
+    )
+    records, sequence_root = scorer_module._planned_reservation_records(planned)
+    records_source = b"".join(
+        scorer_module.canonical_compact_json_bytes(record) + b"\n"
+        for record in records
+    )
+    (output / "planned_reservations.jsonl").write_bytes(records_source)
+    (output / "approval_consumption.json").write_bytes(
+        _pretty(
+            {
+                "schema_version": "facet-local-minilm-approval-consumption-v1",
+                "status": "consumed",
+                "action": "benchmark",
+                "run_id": telemetry["run_id"],
+                "approval_file": str(approval_path.resolve()),
+                "approval_sha256": approval_sha256,
+                "output_path": str(output.resolve()),
+            }
+        )
+    )
+    (output / "run_reservation.json").write_bytes(
+        _pretty(
+            {
+                "schema_version": scorer_module.RUN_RESERVATION_SCHEMA_VERSION,
+                "status": "reserved",
+                "action": "benchmark",
+                "run_id": telemetry["run_id"],
+                "output_path": str(output.resolve()),
+                "approval_sha256": approval_sha256,
+                "preflight_sha256": inputs.preflight_sha256,
+                "windows_sha256": inputs.windows_sha256,
+                "model_materialization_receipt_sha256": (
+                    inputs.materialization_receipt_sha256
+                ),
+                "benchmark_sample_sha256": inputs.benchmark["sample_sha256"],
+                "planned_row_count": len(records),
+                "planned_reservations_bytes": len(records_source),
+                "planned_reservations_sha256": _sha256(records_source),
+                "reservation_sequence_root_sha256": sequence_root,
+            }
+        )
+    )
+    (output / "run_terminal.json").write_bytes(
+        _pretty(
+            {
+                "schema_version": scorer_module.RUN_TERMINAL_SCHEMA_VERSION,
+                "status": "complete",
+                "action": "benchmark",
+                "run_id": telemetry["run_id"],
+                "approval_sha256": approval_sha256,
+                "output_path": str(output.resolve()),
+                "preflight_sha256": inputs.preflight_sha256,
+                "windows_sha256": inputs.windows_sha256,
+                "model_materialization_receipt_sha256": (
+                    inputs.materialization_receipt_sha256
+                ),
+                "benchmark_sample_sha256": inputs.benchmark["sample_sha256"],
+                "device": device,
+                "execution_backend": backend,
+                "forward_pair_count": inputs.benchmark["forward_pair_count"],
+                "benchmark_telemetry_sha256": telemetry_sha256,
+                "full_inference_request_sha256": _sha256(request_source),
+            }
+        )
+    )
+    assert build_full_inference_request(
         inputs,
         telemetry_path,
-        expected_telemetry_sha256=_sha256(telemetry_source),
-    )
-    path = tmp_path / "full_inference_request.json"
-    path.write_bytes(_pretty(request))
+        expected_telemetry_sha256=telemetry_sha256,
+    ) == request
     return path, request
 
 
@@ -1362,3 +1488,196 @@ def test_review_persisted_telemetry_projection_and_memory_are_recomputed(tmp_pat
             telemetry_path,
             expected_telemetry_sha256=_sha256(source),
         )
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "absent_consumption",
+        "mismatched_reservation",
+        "failed_terminal",
+        "telemetry_hash",
+        "request_hash",
+        "request_bytes",
+    ),
+)
+def test_rereview_benchmark_provenance_rejects_incomplete_or_tampered_companions(
+    tmp_path,
+    corruption,
+):
+    inputs = _inputs(
+        windows=(_window(1),), score_cache_root=tmp_path / "cache"
+    )
+    _request_path, request = _write_full_request(tmp_path, inputs)
+    telemetry_path = Path(request["benchmark_telemetry_file"])
+    benchmark_output = telemetry_path.parent
+
+    if corruption == "absent_consumption":
+        (benchmark_output / "approval_consumption.json").unlink()
+    elif corruption == "mismatched_reservation":
+        path = benchmark_output / "run_reservation.json"
+        payload = json.loads(path.read_text())
+        payload["run_id"] = "different-run"
+        path.write_bytes(_pretty(payload))
+    elif corruption == "failed_terminal":
+        path = benchmark_output / "run_terminal.json"
+        payload = json.loads(path.read_text())
+        payload["status"] = "failed"
+        path.write_bytes(_pretty(payload))
+    elif corruption == "telemetry_hash":
+        path = benchmark_output / "run_terminal.json"
+        payload = json.loads(path.read_text())
+        payload["benchmark_telemetry_sha256"] = "9" * 64
+        path.write_bytes(_pretty(payload))
+    elif corruption == "request_hash":
+        path = benchmark_output / "run_terminal.json"
+        payload = json.loads(path.read_text())
+        payload["full_inference_request_sha256"] = "9" * 64
+        path.write_bytes(_pretty(payload))
+    else:
+        path = benchmark_output / "full_inference_request.json"
+        payload = json.loads(path.read_text())
+        payload["projected_full_run_wall_seconds"] += 1.0
+        path.write_bytes(_pretty(payload))
+
+    with pytest.raises(ValueError, match="benchmark provenance"):
+        build_full_inference_request(
+            inputs,
+            telemetry_path,
+            expected_telemetry_sha256=_sha256(telemetry_path.read_bytes()),
+        )
+
+
+def test_rereview_authentic_complete_benchmark_provenance_builds_request(tmp_path):
+    inputs = _inputs(
+        windows=(_window(1),), score_cache_root=tmp_path / "cache"
+    )
+    _request_path, expected = _write_full_request(tmp_path, inputs)
+    telemetry_path = Path(expected["benchmark_telemetry_file"])
+
+    assert build_full_inference_request(
+        inputs,
+        telemetry_path,
+        expected_telemetry_sha256=_sha256(telemetry_path.read_bytes()),
+    ) == expected
+
+
+def test_rereview_cleanup_failure_after_complete_terminal_does_not_fail_run(
+    tmp_path,
+    monkeypatch,
+):
+    cache_root = tmp_path / "cache"
+    window = _window(1)
+    inputs = _inputs(windows=(window,), score_cache_root=cache_root)
+    request_path, _request = _write_full_request(tmp_path, inputs)
+    output = tmp_path / "scoring"
+    approval, approval_sha256 = _write_full_approval(
+        tmp_path, inputs, request_path, output
+    )
+    bundle = _runtime()
+    transaction_path = scorer_module._cache_transaction_path(inputs.score_cache_path)
+    real_unlink = Path.unlink
+
+    def fail_transaction_cleanup(path, *args, **kwargs):
+        if path == transaction_path:
+            raise OSError("simulated committed-journal cleanup failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_transaction_cleanup)
+
+    rows = run_full_scoring(
+        inputs,
+        approval,
+        expected_approval_sha256=approval_sha256,
+        score_cache_root=cache_root,
+        output_dir=output,
+        runtime_factory=lambda: bundle.runtime,
+    )
+
+    assert len(rows) == 1
+    assert json.loads((output / "run_terminal.json").read_text())["status"] == "complete"
+    assert transaction_path.is_file()
+
+
+def _completed_scoring_with_leftover_transaction(tmp_path):
+    cache_root = tmp_path / "cache"
+    window = _window(1)
+    inputs = _inputs(windows=(window,), score_cache_root=cache_root)
+    request_path, _request = _write_full_request(tmp_path, inputs)
+    output = tmp_path / "scoring"
+    approval, approval_sha256 = _write_full_approval(
+        tmp_path, inputs, request_path, output
+    )
+    run_full_scoring(
+        inputs,
+        approval,
+        expected_approval_sha256=approval_sha256,
+        score_cache_root=cache_root,
+        output_dir=output,
+        runtime_factory=lambda: _runtime().runtime,
+    )
+    scoring_receipt = json.loads((output / "scoring_receipt.json").read_text())
+    before = {
+        "state": "absent",
+        "path": str(inputs.score_cache_path),
+        "bytes": scoring_receipt["cache_before_bytes"],
+        "sha256": scoring_receipt["cache_before_sha256"],
+    }
+    after = _file_binding(inputs.score_cache_path)
+    transaction = {
+        "schema_version": scorer_module.CACHE_TRANSACTION_SCHEMA_VERSION,
+        "status": "prepared",
+        "action": "full_scoring",
+        "run_id": "full-scoring-test-run",
+        "approval_sha256": approval_sha256,
+        "output_path": str(output.resolve()),
+        "cache_before": before,
+        "cache_after": after,
+        "cache_before_count": scoring_receipt["cache_before_count"],
+        "cache_after_count": scoring_receipt["cache_after_count"],
+    }
+    transaction_path = scorer_module._cache_transaction_path(inputs.score_cache_path)
+    transaction_path.write_bytes(_pretty(transaction))
+    rebound = _inputs(
+        windows=(replace(window, cache_hit=True),),
+        score_cache_root=cache_root,
+    )
+    return rebound, transaction_path, output
+
+
+def test_rereview_restart_recovers_valid_committed_transaction(tmp_path):
+    rebound, transaction_path, _output = _completed_scoring_with_leftover_transaction(
+        tmp_path
+    )
+
+    snapshot = scorer_module._load_bound_cache(rebound)
+
+    assert len(snapshot.scores) == 1
+    assert not transaction_path.exists()
+
+
+@pytest.mark.parametrize("corruption", ("journal", "cache", "terminal"))
+def test_rereview_recovery_rejects_mismatched_transaction_cache_or_terminal(
+    tmp_path,
+    corruption,
+):
+    rebound, transaction_path, output = _completed_scoring_with_leftover_transaction(
+        tmp_path
+    )
+    if corruption == "journal":
+        transaction = json.loads(transaction_path.read_text())
+        transaction["run_id"] = "different-run"
+        transaction_path.write_bytes(_pretty(transaction))
+    elif corruption == "cache":
+        rebound.score_cache_path.write_bytes(
+            rebound.score_cache_path.read_bytes() + b"\n"
+        )
+        rebound = _with_cache_binding(rebound)
+    else:
+        terminal_path = output / "run_terminal.json"
+        terminal = json.loads(terminal_path.read_text())
+        terminal["cache_after_sha256"] = "9" * 64
+        terminal_path.write_bytes(_pretty(terminal))
+
+    with pytest.raises(ValueError, match="score-cache transaction"):
+        scorer_module._load_bound_cache(rebound)

@@ -206,6 +206,116 @@ _CACHE_ROW_FIELDS = frozenset(
     }
 )
 
+_APPROVAL_CONSUMPTION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "action",
+        "run_id",
+        "approval_file",
+        "approval_sha256",
+        "output_path",
+    }
+)
+_RUN_RESERVATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "action",
+        "run_id",
+        "output_path",
+        "approval_sha256",
+        "preflight_sha256",
+        "windows_sha256",
+        "model_materialization_receipt_sha256",
+        "benchmark_sample_sha256",
+        "planned_row_count",
+        "planned_reservations_bytes",
+        "planned_reservations_sha256",
+        "reservation_sequence_root_sha256",
+    }
+)
+_BENCHMARK_TERMINAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "action",
+        "run_id",
+        "approval_sha256",
+        "output_path",
+        "preflight_sha256",
+        "windows_sha256",
+        "model_materialization_receipt_sha256",
+        "benchmark_sample_sha256",
+        "device",
+        "execution_backend",
+        "forward_pair_count",
+        "benchmark_telemetry_sha256",
+        "full_inference_request_sha256",
+    }
+)
+_CACHE_TRANSACTION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "action",
+        "run_id",
+        "approval_sha256",
+        "output_path",
+        "cache_before",
+        "cache_after",
+        "cache_before_count",
+        "cache_after_count",
+    }
+)
+_SCORING_TERMINAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "action",
+        "run_id",
+        "approval_sha256",
+        "output_path",
+        "scoring_receipt_sha256",
+        "cache_after_sha256",
+    }
+)
+_SCORING_RECEIPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "preflight_sha256",
+        "windows_sha256",
+        "model_materialization_receipt_sha256",
+        "full_inference_approval_sha256",
+        "full_inference_request_sha256",
+        "score_cache_path",
+        "cache_before_sha256",
+        "cache_after_sha256",
+        "cache_before_bytes",
+        "cache_after_bytes",
+        "cache_before_count",
+        "cache_after_count",
+        "planned_window_count",
+        "completed_window_count",
+        "cache_hit_count",
+        "forward_pass_count",
+        "same_run_reuse_count",
+        "unique_score_count",
+        "failed_window_count",
+        "pending_window_count",
+        "reservation_sequence_root_sha256",
+        "ledger_bytes",
+        "ledger_sha256",
+        "ledger_sequence_root_sha256",
+        "unique_score_root_sha256",
+        "score_representation",
+        "inference_dtype",
+        "model",
+        "model_revision",
+    }
+)
+
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
@@ -274,6 +384,20 @@ def _exclusive_write(path: Path, content: bytes) -> None:
             os.fsync(sink.fileno())
     finally:
         os.close(descriptor)
+
+
+def _load_canonical_artifact(
+    path: Path,
+    label: str,
+) -> tuple[dict[str, object], bytes]:
+    try:
+        source = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is required") from exc
+    payload = _loads_object_no_duplicates(source, label)
+    if source != _pretty_json_bytes(payload):
+        raise ValueError(f"{label} must be canonical JSON bytes")
+    return payload, source
 
 
 def _fsync_directory(path: Path) -> None:
@@ -845,11 +969,14 @@ def _consume_approval(
         "approval_sha256": reservation.approval_sha256,
         "output_path": str(reservation.destination),
     }
+    source = _pretty_json_bytes(payload)
     try:
-        _exclusive_write(marker, _pretty_json_bytes(payload))
+        _exclusive_write(marker, source)
     except FileExistsError as exc:
         raise ValueError("approval receipt replay rejected") from exc
     _fsync_directory(registry)
+    _exclusive_write(reservation.destination / "approval_consumption.json", source)
+    _fsync_directory(reservation.destination)
     return marker
 
 
@@ -997,10 +1124,7 @@ def _derived_cache_key_from_row(
     return _sha256_bytes(canonical_compact_json_bytes(payload))
 
 
-def _load_bound_cache(inputs: ScoringInputs) -> _CacheSnapshot:
-    transaction_path = _cache_transaction_path(inputs.score_cache_path)
-    if transaction_path.exists() or os.path.lexists(transaction_path):
-        raise ValueError("unsealed score-cache transaction is forbidden")
+def _load_bound_cache_without_transaction(inputs: ScoringInputs) -> _CacheSnapshot:
     current = _score_cache_file_binding(inputs.score_cache_path)
     if current != inputs.score_cache_binding:
         raise ValueError("score cache changed after preflight")
@@ -1107,13 +1231,127 @@ class _CacheWriterLock:
             self.descriptor = None
 
 
+def _recover_committed_cache_transaction_locked(
+    inputs: ScoringInputs,
+    transaction_path: Path,
+) -> None:
+    try:
+        transaction, _transaction_source = _load_canonical_artifact(
+            transaction_path,
+            "score-cache transaction journal",
+        )
+        if set(transaction) != _CACHE_TRANSACTION_FIELDS:
+            raise ValueError("journal fields mismatch")
+        if (
+            transaction.get("schema_version") != CACHE_TRANSACTION_SCHEMA_VERSION
+            or transaction.get("status") != "prepared"
+            or transaction.get("action") != FULL_SCORING_ACTION
+        ):
+            raise ValueError("journal schema/status/action mismatch")
+        run_id = transaction.get("run_id")
+        approval_sha256 = transaction.get("approval_sha256")
+        output_value = transaction.get("output_path")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError("journal run_id mismatch")
+        if not _is_sha256(approval_sha256):
+            raise ValueError("journal approval hash mismatch")
+        if (
+            not isinstance(output_value, str)
+            or output_value != str(Path(output_value).resolve())
+        ):
+            raise ValueError("journal output path mismatch")
+        output = Path(output_value)
+        before = _validate_score_cache_binding(
+            transaction.get("cache_before"),
+            expected_path=inputs.score_cache_path,
+        )
+        after = _validate_score_cache_binding(
+            transaction.get("cache_after"),
+            expected_path=inputs.score_cache_path,
+        )
+        before_count = _nonnegative_int(
+            transaction.get("cache_before_count"),
+            "score-cache transaction before count",
+        )
+        after_count = _nonnegative_int(
+            transaction.get("cache_after_count"),
+            "score-cache transaction after count",
+        )
+        current = _score_cache_file_binding(inputs.score_cache_path)
+        if current != after:
+            raise ValueError("current cache differs from committed after-binding")
+
+        receipt, receipt_source = _load_canonical_artifact(
+            output / "scoring_receipt.json",
+            "committed scoring receipt",
+        )
+        if set(receipt) != _SCORING_RECEIPT_FIELDS:
+            raise ValueError("scoring receipt fields mismatch")
+        receipt_expected = {
+            "schema_version": SCORING_RECEIPT_SCHEMA_VERSION,
+            "status": "complete",
+            "full_inference_approval_sha256": approval_sha256,
+            "score_cache_path": str(inputs.score_cache_path),
+            "cache_before_sha256": before["sha256"],
+            "cache_after_sha256": after["sha256"],
+            "cache_before_bytes": before["bytes"],
+            "cache_after_bytes": after["bytes"],
+            "cache_before_count": before_count,
+            "cache_after_count": after_count,
+        }
+        for field, expected in receipt_expected.items():
+            if receipt.get(field) != expected:
+                raise ValueError(f"scoring receipt {field} mismatch")
+
+        terminal, _terminal_source = _load_canonical_artifact(
+            output / "run_terminal.json",
+            "committed scoring terminal",
+        )
+        if set(terminal) != _SCORING_TERMINAL_FIELDS:
+            raise ValueError("scoring terminal fields mismatch")
+        terminal_expected = {
+            "schema_version": RUN_TERMINAL_SCHEMA_VERSION,
+            "status": "complete",
+            "action": FULL_SCORING_ACTION,
+            "run_id": run_id,
+            "approval_sha256": approval_sha256,
+            "output_path": str(output),
+            "scoring_receipt_sha256": _sha256_bytes(receipt_source),
+            "cache_after_sha256": after["sha256"],
+        }
+        if terminal != terminal_expected:
+            raise ValueError("scoring terminal binding mismatch")
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"unsealed score-cache transaction is forbidden: {exc}"
+        ) from exc
+
+    try:
+        transaction_path.unlink()
+        _fsync_directory(transaction_path.parent)
+    except OSError:
+        # run_terminal complete is the commit point. A validated leftover
+        # journal is safe to accept and can be cleared on a later restart.
+        return
+
+
+def _load_bound_cache(inputs: ScoringInputs) -> _CacheSnapshot:
+    transaction_path = _cache_transaction_path(inputs.score_cache_path)
+    if transaction_path.exists() or os.path.lexists(transaction_path):
+        with _CacheWriterLock(inputs.score_cache_path):
+            if transaction_path.exists() or os.path.lexists(transaction_path):
+                _recover_committed_cache_transaction_locked(inputs, transaction_path)
+            return _load_bound_cache_without_transaction(inputs)
+    return _load_bound_cache_without_transaction(inputs)
+
+
 def _write_cache_replacement(
     inputs: ScoringInputs,
     reservation: _RunReservation,
     additions: Sequence[tuple[str, str, float]],
 ) -> tuple[_CacheSnapshot, _CacheSnapshot, Path | None]:
     with _CacheWriterLock(inputs.score_cache_path):
-        before = _load_bound_cache(inputs)
+        before = _load_bound_cache_without_transaction(inputs)
         if not additions:
             return before, before, None
         rows_by_key = dict(before.rows_by_key)
@@ -1276,6 +1514,23 @@ def _rows_by_cache_key(rows: Sequence[object]) -> dict[str, object]:
     for row in rows:
         by_key.setdefault(str(getattr(row, "cache_key")), row)
     return by_key
+
+
+def _benchmark_planned_rows(
+    inputs: ScoringInputs,
+    plan: Mapping[str, object],
+) -> tuple[object, ...]:
+    by_key = _rows_by_cache_key(inputs.windows)
+    try:
+        warmup = [by_key[str(key)] for key in plan["warmup_cache_keys"]]  # type: ignore[index]
+        timed = [by_key[str(key)] for key in plan["timed_cache_keys"]]  # type: ignore[index]
+    except KeyError as exc:
+        raise ValueError("frozen benchmark key is absent from windows") from exc
+    return tuple(warmup) + tuple(
+        row
+        for _repetition in range(int(plan["timed_repetitions"]))
+        for row in timed
+    )
 
 
 def _validate_frozen_benchmark(inputs: ScoringInputs) -> dict[str, object]:
@@ -1474,19 +1729,12 @@ def _load_benchmark_telemetry(
     return telemetry, source, path
 
 
-def build_full_inference_request(
+def _build_full_inference_request_payload(
     inputs: ScoringInputs,
-    benchmark_telemetry: Path | str,
-    *,
-    expected_telemetry_sha256: str | None = None,
+    telemetry: Mapping[str, object],
+    telemetry_source: bytes,
+    telemetry_path: Path,
 ) -> dict[str, object]:
-    """Build the second-gate request from authenticated persisted telemetry."""
-
-    telemetry, telemetry_source, telemetry_path = _load_benchmark_telemetry(
-        inputs,
-        benchmark_telemetry,
-        expected_sha256=expected_telemetry_sha256,
-    )
     device = str(telemetry["device"])
     execution_backend = str(telemetry["execution_backend"])
     return {
@@ -1522,6 +1770,167 @@ def build_full_inference_request(
     }
 
 
+def _authenticate_benchmark_provenance(
+    inputs: ScoringInputs,
+    telemetry: Mapping[str, object],
+    telemetry_source: bytes,
+    telemetry_path: Path,
+    expected_request: Mapping[str, object],
+) -> None:
+    try:
+        output = telemetry_path.parent.resolve()
+        run_id = str(telemetry["run_id"])
+        approval_sha256 = str(telemetry["benchmark_approval_sha256"])
+        device = str(telemetry["device"])
+        backend = str(telemetry["execution_backend"])
+        forward_count = int(telemetry["forward_pair_count"])
+
+        consumption, _consumption_source = _load_canonical_artifact(
+            output / "approval_consumption.json",
+            "benchmark approval consumption",
+        )
+        if set(consumption) != _APPROVAL_CONSUMPTION_FIELDS:
+            raise ValueError("approval consumption fields mismatch")
+        consumption_expected = {
+            "schema_version": "facet-local-minilm-approval-consumption-v1",
+            "status": "consumed",
+            "action": BENCHMARK_ACTION,
+            "run_id": run_id,
+            "approval_sha256": approval_sha256,
+            "output_path": str(output),
+        }
+        for field, expected in consumption_expected.items():
+            if consumption.get(field) != expected:
+                raise ValueError(f"approval consumption {field} mismatch")
+        approval_file = consumption.get("approval_file")
+        if (
+            not isinstance(approval_file, str)
+            or approval_file != str(Path(approval_file).resolve())
+        ):
+            raise ValueError("approval consumption file path mismatch")
+        approval_payload, approval_source, _approval_path = _load_receipt(
+            approval_file,
+            expected_sha256=approval_sha256,
+            label="benchmark approval receipt",
+            required_message="benchmark approval receipt is required",
+        )
+        approved_limit = approval_payload.get("pair_limit")
+        if not isinstance(approved_limit, int) or isinstance(approved_limit, bool):
+            raise ValueError("benchmark approval pair limit is invalid")
+        _validate_benchmark_approval(
+            inputs,
+            approval_file,
+            expected_approval_sha256=approval_sha256,
+            pair_limit=approved_limit,
+            device=device,
+            output_dir=output,
+        )
+        if _sha256_bytes(approval_source) != approval_sha256:
+            raise ValueError("benchmark approval content hash mismatch")
+
+        reservation, _reservation_source = _load_canonical_artifact(
+            output / "run_reservation.json",
+            "benchmark run reservation",
+        )
+        if set(reservation) != _RUN_RESERVATION_FIELDS:
+            raise ValueError("run reservation fields mismatch")
+        planned = _benchmark_planned_rows(inputs, inputs.benchmark)
+        planned_records, sequence_root = _planned_reservation_records(planned)
+        planned_source = b"".join(
+            canonical_compact_json_bytes(record) + b"\n"
+            for record in planned_records
+        )
+        persisted_planned = (output / "planned_reservations.jsonl").read_bytes()
+        if persisted_planned != planned_source:
+            raise ValueError("planned benchmark reservations mismatch")
+        reservation_expected = {
+            "schema_version": RUN_RESERVATION_SCHEMA_VERSION,
+            "status": "reserved",
+            "action": BENCHMARK_ACTION,
+            "run_id": run_id,
+            "output_path": str(output),
+            "approval_sha256": approval_sha256,
+            "preflight_sha256": inputs.preflight_sha256,
+            "windows_sha256": inputs.windows_sha256,
+            "model_materialization_receipt_sha256": (
+                inputs.materialization_receipt_sha256
+            ),
+            "benchmark_sample_sha256": inputs.benchmark.get("sample_sha256"),
+            "planned_row_count": forward_count,
+            "planned_reservations_bytes": len(planned_source),
+            "planned_reservations_sha256": _sha256_bytes(planned_source),
+            "reservation_sequence_root_sha256": sequence_root,
+        }
+        if reservation != reservation_expected:
+            raise ValueError("run reservation binding mismatch")
+
+        terminal, _terminal_source = _load_canonical_artifact(
+            output / "run_terminal.json",
+            "benchmark run terminal",
+        )
+        if set(terminal) != _BENCHMARK_TERMINAL_FIELDS:
+            raise ValueError("run terminal fields mismatch")
+        request_path = output / "full_inference_request.json"
+        request, request_source = _load_canonical_artifact(
+            request_path,
+            "benchmark full inference request",
+        )
+        if set(request) != _FULL_REQUEST_FIELDS or request != dict(expected_request):
+            raise ValueError("full inference request binding mismatch")
+        terminal_expected = {
+            "schema_version": RUN_TERMINAL_SCHEMA_VERSION,
+            "status": "complete",
+            "action": BENCHMARK_ACTION,
+            "run_id": run_id,
+            "approval_sha256": approval_sha256,
+            "output_path": str(output),
+            "preflight_sha256": inputs.preflight_sha256,
+            "windows_sha256": inputs.windows_sha256,
+            "model_materialization_receipt_sha256": (
+                inputs.materialization_receipt_sha256
+            ),
+            "benchmark_sample_sha256": inputs.benchmark.get("sample_sha256"),
+            "device": device,
+            "execution_backend": backend,
+            "forward_pair_count": forward_count,
+            "benchmark_telemetry_sha256": _sha256_bytes(telemetry_source),
+            "full_inference_request_sha256": _sha256_bytes(request_source),
+        }
+        if terminal != terminal_expected:
+            raise ValueError("run terminal binding mismatch")
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError(f"benchmark provenance authentication failed: {exc}") from exc
+
+
+def build_full_inference_request(
+    inputs: ScoringInputs,
+    benchmark_telemetry: Path | str,
+    *,
+    expected_telemetry_sha256: str | None = None,
+) -> dict[str, object]:
+    """Return a second-gate request only for a sealed benchmark run."""
+
+    telemetry, telemetry_source, telemetry_path = _load_benchmark_telemetry(
+        inputs,
+        benchmark_telemetry,
+        expected_sha256=expected_telemetry_sha256,
+    )
+    request = _build_full_inference_request_payload(
+        inputs,
+        telemetry,
+        telemetry_source,
+        telemetry_path,
+    )
+    _authenticate_benchmark_provenance(
+        inputs,
+        telemetry,
+        telemetry_source,
+        telemetry_path,
+        request,
+    )
+    return request
+
+
 def _persist_benchmark_output(
     inputs: ScoringInputs,
     output_dir: Path,
@@ -1532,10 +1941,11 @@ def _persist_benchmark_output(
     telemetry_source = _pretty_json_bytes(telemetry)
     _exclusive_write(telemetry_path, telemetry_source)
     telemetry_sha256 = _sha256_bytes(telemetry_source)
-    request = build_full_inference_request(
+    request = _build_full_inference_request_payload(
         inputs,
+        telemetry,
+        telemetry_source,
         telemetry_path,
-        expected_telemetry_sha256=telemetry_sha256,
     )
     _exclusive_write(destination / "full_inference_request.json", _pretty_json_bytes(request))
     _fsync_directory(destination)
@@ -1577,16 +1987,9 @@ def run_benchmark(
         output_dir=output_dir,
     )
     by_key = _rows_by_cache_key(inputs.windows)
-    try:
-        warmup = [by_key[str(key)] for key in plan["warmup_cache_keys"]]  # type: ignore[index]
-        timed = [by_key[str(key)] for key in plan["timed_cache_keys"]]  # type: ignore[index]
-    except KeyError as exc:
-        raise ValueError("frozen benchmark key is absent from windows") from exc
-    planned = tuple(warmup) + tuple(
-        row
-        for _repetition in range(int(plan["timed_repetitions"]))
-        for row in timed
-    )
+    planned = _benchmark_planned_rows(inputs, plan)
+    warmup = [by_key[str(key)] for key in plan["warmup_cache_keys"]]  # type: ignore[index]
+    timed = [by_key[str(key)] for key in plan["timed_cache_keys"]]  # type: ignore[index]
     reservation = _reserve_run(
         output_dir=output_dir,
         action=BENCHMARK_ACTION,
@@ -1747,6 +2150,15 @@ def run_benchmark(
             reservation,
             status="complete",
             details={
+                "preflight_sha256": inputs.preflight_sha256,
+                "windows_sha256": inputs.windows_sha256,
+                "model_materialization_receipt_sha256": (
+                    inputs.materialization_receipt_sha256
+                ),
+                "benchmark_sample_sha256": plan["sample_sha256"],
+                "device": device,
+                "execution_backend": execution_backend,
+                "forward_pair_count": forward_pairs,
                 "benchmark_telemetry_sha256": telemetry_sha256,
                 "full_inference_request_sha256": _sha256_bytes(
                     _pretty_json_bytes(request)
@@ -2196,8 +2608,17 @@ def run_full_scoring(
             },
         )
         if transaction_path is not None:
-            transaction_path.unlink()
-            _fsync_directory(transaction_path.parent)
+            try:
+                with _CacheWriterLock(inputs.score_cache_path):
+                    if transaction_path.exists() or os.path.lexists(transaction_path):
+                        _recover_committed_cache_transaction_locked(
+                            inputs,
+                            transaction_path,
+                        )
+            except BaseException:
+                # The complete terminal above is the explicit commit point.
+                # Cleanup/recovery errors must not contradict committed success.
+                pass
         return tuple(rows)
     except BaseException as exc:
         _seal_failure(reservation, exc)
