@@ -7,6 +7,8 @@ import hashlib
 import hmac
 import json
 import math
+import os
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +18,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 PILOT_TOPIC_IDS = ("200", "225", "707", "897")
 PILOT_TOPIC_ID_SET = frozenset(PILOT_TOPIC_IDS)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+QRELS_CONSUMPTION_EXPERIMENT_ID = "rag25_facet_local_minilm_v1"
 PREREGISTERED_RANKING_ARMS = (
     "R1_LEGACY",
     "C0_TOPIC_LOCAL",
@@ -1378,15 +1382,78 @@ def validate_qrels_authorization(
     }
 
 
-def qrels_consumption_registry_path(qrels_approval: Path) -> Path:
-    """Return the stable, approval-scoped one-time-consumption record path."""
+def trusted_qrels_consumption_dir() -> Path:
+    """Return a registry namespace shared by every linked repository worktree."""
 
-    approval_path = Path(qrels_approval)
-    return approval_path.with_name(f"{approval_path.name}.consumed.json")
+    completed = subprocess.run(
+        ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    common = Path(completed.stdout.strip()).resolve()
+    if not common.is_dir():
+        raise ValueError("git common directory is unavailable for qrels guard state")
+    return (
+        common
+        / "trec-rag-qrels-consumptions"
+        / QRELS_CONSUMPTION_EXPERIMENT_ID
+    )
+
+
+def qrels_consumption_identity(qrels_approval: Path) -> dict[str, str]:
+    """Derive an immutable, caller-path-independent approval identity."""
+
+    try:
+        approval_bytes = Path(qrels_approval).read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("qrels access approval is missing or invalid") from exc
+    approval = _parse_json_object_bytes(approval_bytes, "qrels access approval")
+    if (
+        approval.get("schema_version") != "pilot-qrels-access-approval-v1"
+        or approval.get("status") != "approved"
+        or approval.get("topic_ids") != list(PILOT_TOPIC_IDS)
+    ):
+        raise ValueError("qrels access approval contract differs")
+    identity = {
+        "experiment_id": QRELS_CONSUMPTION_EXPERIMENT_ID,
+        "qrels_approval_sha256": hashlib.sha256(approval_bytes).hexdigest(),
+        "qrels_manifest_sha256": _validated_sha256(
+            approval.get("qrels_manifest_sha256"), "approval qrels manifest hash"
+        ),
+        "qrels_projection_sha256": _validated_sha256(
+            approval.get("qrels_projection_sha256"), "approval qrels projection hash"
+        ),
+        "ranking_freeze_sha256": _validated_sha256(
+            approval.get("ranking_freeze_sha256"), "approval ranking freeze hash"
+        ),
+        "review_freeze_sha256": _validated_sha256(
+            approval.get("review_freeze_sha256"), "approval review freeze hash"
+        ),
+    }
+    return {
+        **identity,
+        "identity_sha256": hashlib.sha256(_canonical_json_bytes(identity)).hexdigest(),
+    }
+
+
+def _registry_path_for_identity(identity: Mapping[str, Any]) -> Path:
+    identity_sha256 = _validated_sha256(
+        identity.get("identity_sha256"), "qrels consumption identity hash"
+    )
+    return trusted_qrels_consumption_dir() / f"{identity_sha256}.json"
+
+
+def qrels_consumption_registry_path(qrels_approval: Path) -> Path:
+    """Return the trusted path for an approval's immutable identity."""
+
+    return _registry_path_for_identity(qrels_consumption_identity(qrels_approval))
 
 
 def _qrels_consumption_payload(
     *,
+    identity: Mapping[str, Any],
     approval_sha256: str,
     qrels_manifest_sha256: str,
     qrels_projection_sha256: str,
@@ -1395,10 +1462,27 @@ def _qrels_consumption_payload(
     output: Path,
     output_receipt: Path,
 ) -> dict[str, Any]:
+    expected_identity_fields = {
+        "qrels_approval_sha256": approval_sha256,
+        "qrels_manifest_sha256": qrels_manifest_sha256,
+        "qrels_projection_sha256": qrels_projection_sha256,
+        "ranking_freeze_sha256": ranking_freeze_sha256,
+        "review_freeze_sha256": review_freeze_sha256,
+    }
+    if any(
+        identity.get(field) != _validated_sha256(value, field)
+        for field, value in expected_identity_fields.items()
+    ) or identity.get("experiment_id") != QRELS_CONSUMPTION_EXPERIMENT_ID:
+        raise ValueError("qrels consumption identity binding differs")
     return add_self_hash(
         {
-            "schema_version": "facet-local-minilm-qrels-consumption-v1",
+            "schema_version": "facet-local-minilm-qrels-consumption-v2",
             "status": "qrels_access_consumed",
+            "registry_namespace": "git_common_dir_path_independent_identity",
+            "experiment_id": QRELS_CONSUMPTION_EXPERIMENT_ID,
+            "identity_sha256": _validated_sha256(
+                identity.get("identity_sha256"), "qrels consumption identity hash"
+            ),
             "topic_ids": list(PILOT_TOPIC_IDS),
             "qrels_approval_sha256": _validated_sha256(
                 approval_sha256, "qrels approval hash"
@@ -1428,11 +1512,23 @@ def _create_qrels_consumption_registry(
 
     registry = dict(payload)
     validate_self_hash(registry)
+    registry_path = Path(registry_path)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with Path(registry_path).open("x", encoding="utf-8") as stream:
-            stream.write(_canonical_json_bytes(registry, newline=True).decode("utf-8"))
+        descriptor = os.open(
+            registry_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
     except FileExistsError as exc:
         raise FileExistsError("qrels approval was already consumed") from exc
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(_canonical_json_bytes(registry, newline=True))
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(descriptor)
     return registry
 
 
@@ -1445,7 +1541,8 @@ def adopt_qrels_consumption_registry(
     """Adopt a verified completed evaluation without opening qrels again."""
 
     approval_path = Path(qrels_approval)
-    registry_path = qrels_consumption_registry_path(approval_path)
+    identity = qrels_consumption_identity(approval_path)
+    registry_path = _registry_path_for_identity(identity)
     if registry_path.exists() or registry_path.is_symlink():
         raise FileExistsError("qrels approval was already consumed")
     try:
@@ -1499,6 +1596,7 @@ def adopt_qrels_consumption_registry(
             raise ValueError("evaluation artifact qrels binding differs")
 
     payload = _qrels_consumption_payload(
+        identity=identity,
         approval_sha256=hashlib.sha256(approval_bytes).hexdigest(),
         qrels_manifest_sha256=str(receipt["qrels_manifest_sha256"]),
         qrels_projection_sha256=str(receipt["qrels_projection_sha256"]),
@@ -1508,6 +1606,49 @@ def adopt_qrels_consumption_registry(
         output_receipt=receipt_path,
     )
     return _create_qrels_consumption_registry(registry_path, payload)
+
+
+def export_qrels_consumption_registry_mirror(
+    qrels_approval: Path, *, output: Path
+) -> dict[str, Any]:
+    """Publish a create-only local mirror of the trusted global registry."""
+
+    identity = qrels_consumption_identity(Path(qrels_approval))
+    registry_path = _registry_path_for_identity(identity)
+    try:
+        registry_bytes = registry_path.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("trusted qrels consumption registry is missing") from exc
+    registry = _parse_json_object_bytes(
+        registry_bytes, "trusted qrels consumption registry"
+    )
+    validate_self_hash(registry)
+    if (
+        registry.get("schema_version")
+        != "facet-local-minilm-qrels-consumption-v2"
+        or registry.get("identity_sha256") != identity["identity_sha256"]
+        or registry.get("qrels_approval_sha256")
+        != identity["qrels_approval_sha256"]
+    ):
+        raise ValueError("trusted qrels consumption registry identity differs")
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(
+            output_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise FileExistsError("qrels consumption registry mirror already exists") from exc
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(registry_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(descriptor)
+    return registry
 
 
 def read_qrels(
@@ -1748,6 +1889,60 @@ def _representative_provenance_row(
     }
 
 
+def validate_representative_provenance(
+    representatives: Mapping[str, Any],
+) -> bool:
+    """Fail closed unless every saved representative proves its evidence class."""
+
+    for evidence_class in ("promoted", "demoted", "gained", "lost"):
+        raw_rows = representatives.get(evidence_class)
+        if not isinstance(raw_rows, Sequence) or isinstance(
+            raw_rows, (str, bytes, bytearray)
+        ):
+            raise ValueError("representative provenance class rows are invalid")
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, Mapping):
+                raise ValueError("representative provenance row is invalid")
+            topic_id = str(raw_row.get("topic_id", ""))
+            _validate_topic_boundary((topic_id,), "representative provenance")
+            if raw_row.get("evidence_class") != evidence_class:
+                raise ValueError("representative evidence class binding differs")
+            window = raw_row.get("selected_minilm_window")
+            if not isinstance(window, Mapping):
+                raise ValueError("representative selected MiniLM window is missing")
+            window_text = window.get("window_text")
+            if not isinstance(window_text, str) or not window_text:
+                raise ValueError("representative selected window text is missing")
+            if raw_row.get("passage") != window_text:
+                raise ValueError("representative passage differs from selected window text")
+            stream_provenance = raw_row.get("stream_provenance")
+            if not isinstance(stream_provenance, Mapping) or not stream_provenance:
+                raise ValueError("representative stream provenance is empty")
+            if evidence_class == "promoted":
+                control_rank = raw_row.get("facet_control_rank")
+                bf_rank = raw_row.get("facet_bf_rank")
+                if (
+                    isinstance(control_rank, bool)
+                    or not isinstance(control_rank, int)
+                    or isinstance(bf_rank, bool)
+                    or not isinstance(bf_rank, int)
+                    or not (bf_rank <= 20 < control_rank)
+                ):
+                    raise ValueError("representative promoted predicate differs")
+            if evidence_class == "demoted":
+                control_final_rank = raw_row.get("c0_final_rank")
+                bf_final_rank = raw_row.get("bf_final_rank")
+                if (
+                    isinstance(control_final_rank, bool)
+                    or not isinstance(control_final_rank, int)
+                    or isinstance(bf_final_rank, bool)
+                    or not isinstance(bf_final_rank, int)
+                    or not (control_final_rank < bf_final_rank)
+                ):
+                    raise ValueError("representative demoted predicate differs")
+    return True
+
+
 def derive_representative_provenance_v2(
     freeze: Path,
     *,
@@ -1843,6 +2038,7 @@ def derive_representative_provenance_v2(
             **derived_rows,
         }
     )
+    validate_representative_provenance(payload)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with output_path.open("x", encoding="utf-8") as stream:
@@ -2193,6 +2389,7 @@ def build_evaluation_artifacts(
             for docid in sorted(control_relevant_all - bf_relevant_all)[:3]
         ],
     }
+    validate_representative_provenance(representatives)
 
     artifacts = {
         "raw_union.json": _bound_artifact(
@@ -2270,9 +2467,6 @@ def evaluate(
 ) -> dict[str, Any]:
     """Cross the qrels firewall once, only after every frozen input verifies."""
 
-    consumption_path = qrels_consumption_registry_path(Path(qrels_approval))
-    if consumption_path.exists() or consumption_path.is_symlink():
-        raise FileExistsError("qrels approval was already consumed")
     output_path = Path(output) if output is not None else None
     receipt_path = output_path / "qrels_access_receipt.json" if output_path else None
     if receipt_path is not None and (
@@ -2323,11 +2517,28 @@ def evaluate(
         ranking_freeze_sha256=ranking_hash,
         review_freeze_sha256=review_hash,
     )
+    consumption_identity = qrels_consumption_identity(Path(qrels_approval))
+    consumption_path = _registry_path_for_identity(consumption_identity)
+    if consumption_path.exists() or consumption_path.is_symlink():
+        raise FileExistsError("qrels approval was already consumed")
+    if any(
+        consumption_identity.get(field) != authorization.get(auth_field)
+        for field, auth_field in (
+            ("qrels_approval_sha256", "approval_sha256"),
+            ("qrels_manifest_sha256", "manifest_sha256"),
+            ("qrels_projection_sha256", "projection_sha256"),
+        )
+    ) or (
+        consumption_identity.get("ranking_freeze_sha256") != ranking_hash
+        or consumption_identity.get("review_freeze_sha256") != review_hash
+    ):
+        raise ValueError("qrels consumption identity changed during authorization")
 
     projection_path = Path(authorization["projection_path"])
     consumption = _create_qrels_consumption_registry(
         consumption_path,
         _qrels_consumption_payload(
+            identity=consumption_identity,
             approval_sha256=str(authorization["approval_sha256"]),
             qrels_manifest_sha256=str(authorization["manifest_sha256"]),
             qrels_projection_sha256=str(authorization["projection_sha256"]),

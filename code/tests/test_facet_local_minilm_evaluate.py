@@ -23,9 +23,13 @@ from trec_rag.facet_local_minilm_evaluate import (
     derive_representative_provenance_v2,
     evaluate,
     evaluate_ranking,
+    export_qrels_consumption_registry_mirror,
+    qrels_consumption_identity,
     qrels_consumption_registry_path,
     select_diagnostic_outcome,
+    trusted_qrels_consumption_dir,
     validate_self_hash,
+    validate_representative_provenance,
 )
 
 
@@ -40,6 +44,42 @@ EXACT_RANKING_ARMS = (
     "BF100_MAXP_TOPIC_LOCAL",
     "BF100_LEGACY_FUSION",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_trusted_qrels_consumption_namespace(monkeypatch, tmp_path):
+    trusted_root = tmp_path / "git-common/trec-rag-qrels-consumptions"
+    monkeypatch.setattr(
+        module,
+        "trusted_qrels_consumption_dir",
+        lambda: trusted_root / "rag25_facet_local_minilm_v1",
+    )
+
+
+def test_trusted_registry_namespace_uses_git_common_dir_from_source_repo(
+    monkeypatch, tmp_path
+):
+    common = tmp_path / "shared.git"
+    common.mkdir()
+
+    def fake_run(command, *, cwd, check, capture_output, text):
+        assert command == (
+            "git",
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        )
+        assert cwd == module.REPO_ROOT
+        assert check is capture_output is text is True
+        return type("Completed", (), {"stdout": f"{common}\n"})()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert trusted_qrels_consumption_dir() == (
+        common
+        / "trec-rag-qrels-consumptions"
+        / "rag25_facet_local_minilm_v1"
+    )
 
 
 class _UnreadableMapping(dict):
@@ -769,6 +809,31 @@ def _synthetic_frozen_evaluation_inputs():
                 original_docid,
                 control_docid,
             ]
+        control_passage = f"facet-specific MiniLM passage for {control_docid}"
+        facet_stream_details[(topic_id, variant, "top4", control_docid)] = {
+            "aggregation": "top4",
+            "document_id": control_docid,
+            "family": "facet",
+            "passage": control_passage,
+            "prior_rank": 1,
+            "query": "facet-specific query",
+            "query_sha256": "7" * 64,
+            "rank": 2 if topic_id == "200" else 1,
+            "retriever_name": "pyserini_bm25",
+            "score": 3.25,
+            "selected_windows": [
+                {
+                    "document_end_token": 200,
+                    "document_start_token": 0,
+                    "score": 3.25,
+                    "window_id": "6" * 64,
+                    "window_text": control_passage,
+                }
+            ],
+            "source_score": 6.5,
+            "topic_id": topic_id,
+            "variant": variant,
+        }
         rankings["C0_TOPIC_LOCAL"][topic_id] = [original_docid, control_docid]
         rankings["R1_LEGACY"][topic_id] = [original_docid, control_docid]
         for arm in EXACT_RANKING_ARMS:
@@ -1440,16 +1505,97 @@ def test_same_approval_cannot_be_replayed_to_a_different_output_before_qrels(
         )
 
 
+@pytest.mark.parametrize("alias_kind", ["symlink", "copy"])
+def test_approval_alias_or_copy_maps_to_same_identity_and_blocks_replay(
+    monkeypatch, tmp_path, alias_kind
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path, monkeypatch)
+    manifest, approval = _write_synthetic_qrels_authorization(
+        tmp_path,
+        ranking_freeze_sha256=frozen["freeze_sha256"],
+        review_freeze_sha256=frozen["review_freeze_sha256"],
+    )
+    evaluate(
+        frozen["freeze"],
+        review_freeze=frozen["review"],
+        prior_evaluation=frozen["prior"],
+        prior_evaluation_manifest=frozen["prior_manifest"],
+        qrels_manifest=manifest,
+        qrels_approval=approval,
+        output=tmp_path / "evaluation-one",
+    )
+    alias = tmp_path / f"approval-{alias_kind}.json"
+    if alias_kind == "symlink":
+        alias.symlink_to(approval)
+    else:
+        alias.write_bytes(approval.read_bytes())
+
+    identity = qrels_consumption_identity(approval)
+    alias_identity = qrels_consumption_identity(alias)
+    registry = qrels_consumption_registry_path(approval)
+    assert alias_identity == identity
+    assert qrels_consumption_registry_path(alias) == registry
+    assert registry.name == f"{identity['identity_sha256']}.json"
+    assert "git-common" in registry.parts
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels reopened")
+    )
+
+    with pytest.raises(FileExistsError, match="approval was already consumed"):
+        evaluate(
+            frozen["freeze"],
+            review_freeze=frozen["review"],
+            prior_evaluation=frozen["prior"],
+            prior_evaluation_manifest=frozen["prior_manifest"],
+            qrels_manifest=manifest,
+            qrels_approval=alias,
+            output=tmp_path / "evaluation-two",
+        )
+
+
 def test_preexisting_consumption_registry_blocks_before_any_output_or_qrels_work(
     monkeypatch, tmp_path
 ):
     approval = tmp_path / "approval.json"
+    approval.write_text(
+        json.dumps(
+            {
+                "schema_version": "pilot-qrels-access-approval-v1",
+                "status": "approved",
+                "topic_ids": list(PILOT_TOPIC_IDS),
+                "qrels_manifest_sha256": "a" * 64,
+                "qrels_projection_sha256": "b" * 64,
+                "ranking_freeze_sha256": "c" * 64,
+                "review_freeze_sha256": "d" * 64,
+            }
+        )
+    )
     registry = qrels_consumption_registry_path(approval)
+    registry.parent.mkdir(parents=True)
     registry.write_text("{}")
     monkeypatch.setattr(
         module,
         "verify_ranking_freeze",
-        lambda *args, **kwargs: pytest.fail("freeze verified after replay"),
+        lambda *args, **kwargs: {"freeze_sha256": "c" * 64},
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_blinded_review_freeze",
+        lambda *args, **kwargs: {"review_freeze_sha256": "d" * 64},
+    )
+    monkeypatch.setattr(
+        module,
+        "load_frozen_inputs",
+        lambda *args, **kwargs: _synthetic_frozen_evaluation_inputs(),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_qrels_authorization",
+        lambda *args, **kwargs: {
+            "approval_sha256": hashlib.sha256(approval.read_bytes()).hexdigest(),
+            "manifest_sha256": "a" * 64,
+            "projection_sha256": "b" * 64,
+        },
     )
     monkeypatch.setattr(
         module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels reopened")
@@ -1542,6 +1688,12 @@ def test_offline_registry_adoption_is_create_only_and_does_not_open_qrels(
     first_bytes = registry_path.read_bytes()
     assert adopted["status"] == "qrels_access_consumed"
     assert validate_self_hash(adopted) is True
+    mirror = tmp_path / "mirror/qrels_consumption_registry_v2.json"
+    mirrored = export_qrels_consumption_registry_mirror(approval, output=mirror)
+    assert mirrored == adopted
+    assert mirror.read_bytes() == registry_path.read_bytes()
+    with pytest.raises(FileExistsError, match="registry mirror"):
+        export_qrels_consumption_registry_mirror(approval, output=mirror)
 
     with pytest.raises(FileExistsError, match="approval was already consumed"):
         adopt_qrels_consumption_registry(
@@ -1613,6 +1765,56 @@ def test_promoted_representative_uses_qualifying_facet_event_and_minilm_window()
     assert promoted["passage"] == "facet-specific MiniLM passage for novel-200"
     assert promoted["stream_provenance"]["aggregation"] == "top4"
     assert promoted["stream_provenance"]["query"] == "facet-specific query"
+
+
+def _valid_representative_row(evidence_class="promoted"):
+    return {
+        "topic_id": "200",
+        "document_id": "document",
+        "evidence_class": evidence_class,
+        "facet_variant": "facet:200:01",
+        "facet_control_rank": 49,
+        "facet_bf_rank": 11,
+        "c0_final_rank": 5 if evidence_class == "demoted" else None,
+        "bf_final_rank": 9 if evidence_class == "demoted" else None,
+        "passage": "selected MiniLM passage",
+        "selected_minilm_window": {
+            "window_id": "8" * 64,
+            "window_text": "selected MiniLM passage",
+            "score": 4.0,
+        },
+        "stream_provenance": {"aggregation": "top4", "query_sha256": "9" * 64},
+        "provenance": [{"aggregation": "top4", "query_sha256": "9" * 64}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("evidence_class", "mutation", "message"),
+    [
+        ("promoted", {"facet_bf_rank": 21}, "promoted predicate"),
+        ("promoted", {"facet_control_rank": 20}, "promoted predicate"),
+        (
+            "demoted",
+            {"c0_final_rank": 10, "bf_final_rank": 9},
+            "demoted predicate",
+        ),
+        ("promoted", {"passage": "different passage"}, "selected window text"),
+        ("promoted", {"stream_provenance": {}}, "stream provenance"),
+    ],
+)
+def test_representative_provenance_fails_closed_on_invalid_evidence(
+    evidence_class, mutation, message
+):
+    row = {**_valid_representative_row(evidence_class), **mutation}
+    payload = {
+        "promoted": [row] if evidence_class == "promoted" else [],
+        "demoted": [row] if evidence_class == "demoted" else [],
+        "gained": [],
+        "lost": [],
+    }
+
+    with pytest.raises(ValueError, match=message):
+        validate_representative_provenance(payload)
 
 
 def test_offline_representative_v2_derivation_authenticates_inputs_without_qrels(

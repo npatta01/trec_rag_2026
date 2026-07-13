@@ -691,7 +691,7 @@
       {
         "id": "evaluation_firewall",
         "title": "Evaluation firewall and blinded-review audit",
-        "subtitle": "Approval-scoped one-time qrels consumption and pre-qrels ranking/review freeze evidence.",
+        "subtitle": "Path-independent git-common-dir qrels consumption and pre-qrels ranking/review freeze evidence; the legacy adjacent marker is retained but not trusted.",
         "dataset": "firewall_rows",
         "sourceId": "qrels_access_receipt",
         "density": "spacious",
@@ -714,6 +714,16 @@
           {
             "field": "approval_scoped_consumption_registry",
             "label": "Approval consumed globally",
+            "type": "boolean"
+          },
+          {
+            "field": "registry_namespace",
+            "label": "Trusted guard namespace",
+            "type": "text"
+          },
+          {
+            "field": "legacy_marker_trusted",
+            "label": "Legacy marker trusted",
             "type": "boolean"
           },
           {
@@ -852,7 +862,12 @@
       },
       {
         "id": "qrels_consumption_registry",
-        "label": "Approval-scoped qrels-consumption registry",
+        "label": "Trusted path-independent qrels-consumption registry mirror",
+        "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json"
+      },
+      {
+        "id": "qrels_consumption_legacy_marker",
+        "label": "Legacy approval-adjacent consumption marker",
         "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json"
       },
       {
@@ -3804,6 +3819,8 @@
           "qrels_access_status": "qrels_access_consumed",
           "qrels_access_count": 1,
           "approval_scoped_consumption_registry": true,
+          "registry_namespace": "git_common_dir_path_independent_identity",
+          "legacy_marker_trusted": false,
           "ranking_frozen_before_qrels": true,
           "review_frozen_before_qrels": true,
           "review_unique_items": 101,
@@ -4385,13 +4402,39 @@
     },
     {
       "id": "qrels_consumption_registry",
-      "label": "Approval-scoped qrels-consumption registry",
+      "label": "Trusted path-independent qrels-consumption registry mirror",
+      "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json",
+      "query": {
+        "engine": "duckdb",
+        "id": "sha256:afb51fd0018743ab4b58bc238163506677532bd6d79ae40bccca566925018c3b",
+        "language": "sql",
+        "description": "Extracts the report rows from the authenticated trusted path-independent qrels-consumption registry mirror input boundary.",
+        "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json');",
+        "tables_used": [
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json"
+        ],
+        "input_sha256": {
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json": "afb51fd0018743ab4b58bc238163506677532bd6d79ae40bccca566925018c3b"
+        },
+        "filters": [
+          "Only topics 200, 225, 707, and 897",
+          "Protected topics, raw qrels rows, and private review mappings excluded",
+          "Saved artifact bytes authenticated before report construction"
+        ],
+        "metric_definitions": [
+          "Saved artifact fields are loaded without analytical recomputation."
+        ]
+      }
+    },
+    {
+      "id": "qrels_consumption_legacy_marker",
+      "label": "Legacy approval-adjacent consumption marker",
       "path": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
       "query": {
         "engine": "duckdb",
         "id": "sha256:9b9b6f8df7e34b9e71a6dad670c1a1523cf8e2419ebe6ef8267a6013ec52eaf9",
         "language": "sql",
-        "description": "Extracts the report rows from the authenticated approval-scoped qrels-consumption registry input boundary.",
+        "description": "Extracts the report rows from the authenticated legacy approval-adjacent consumption marker input boundary.",
         "sql": "SELECT * FROM read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json');",
         "tables_used": [
           "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json"
@@ -4405,7 +4448,7 @@
           "Saved artifact bytes authenticated before report construction"
         ],
         "metric_definitions": [
-          "Saved artifact fields are loaded without analytical recomputation."
+          "This approval-adjacent v1 marker is retained for history only and is not trusted as the replay guard."
         ]
       }
     },
@@ -4415,14 +4458,14 @@
       "path": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
       "query": {
         "engine": "duckdb",
-        "id": "sha256:3bd3a64a9c0f8222adf760e95b99b1ae85dd3a766063b0663c7a1fd91672c0ec",
+        "id": "sha256:6bc8e9d580afa9a846490b7a1dbb4835910e29b5b182ebb5b48cd614fa31b4d6",
         "language": "sql",
         "description": "Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.",
-        "sql": "SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,\n       g.status = 'qrels_access_consumed'\n         AND g.qrels_approval_sha256 = sha256(read_blob('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json'))\n         AS approval_scoped_consumption_registry,\n       r.qrels_opened = false AS ranking_frozen_before_qrels,\n       v.qrels_opened = false AS review_frozen_before_qrels,\n       c.item_count AS review_unique_items, c.membership_count AS review_memberships,\n       c.membership_count - c.item_count AS shared_items_attributed_to_both_arms\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json') q\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json') g\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json') r\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json') v\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json') c\nWHERE q.status = 'qrels_access_consumed'\n  AND q.ranking_freeze_sha256 = r.freeze_sha256\n  AND q.review_freeze_sha256 = v.review_freeze_sha256;",
+        "sql": "SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,\n       g.status = 'qrels_access_consumed'\n         AND g.qrels_approval_sha256 = sha256(read_blob('outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json'))\n         AS approval_scoped_consumption_registry,\n       g.registry_namespace AS registry_namespace,\n       false AS legacy_marker_trusted,\n       r.qrels_opened = false AS ranking_frozen_before_qrels,\n       v.qrels_opened = false AS review_frozen_before_qrels,\n       c.item_count AS review_unique_items, c.membership_count AS review_memberships,\n       c.membership_count - c.item_count AS shared_items_attributed_to_both_arms\nFROM read_json_auto('outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json') q\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json') g\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json') r\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json') v\nCROSS JOIN read_json_auto('outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json') c\nWHERE q.status = 'qrels_access_consumed'\n  AND q.ranking_freeze_sha256 = r.freeze_sha256\n  AND q.review_freeze_sha256 = v.review_freeze_sha256;",
         "tables_used": [
           "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
           "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json",
-          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json",
           "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json",
           "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json",
           "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json"
@@ -4430,7 +4473,7 @@
         "input_sha256": {
           "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json": "f3f7dbdef013bf843a4daef17c9b6a6ef8102613656de6bb5dc23702356b422f",
           "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json": "2233e36c27ed5eff95abbfa959fbdede96b354dcd17f73317d91a869eb48e218",
-          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json": "9b9b6f8df7e34b9e71a6dad670c1a1523cf8e2419ebe6ef8267a6013ec52eaf9",
+          "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json": "afb51fd0018743ab4b58bc238163506677532bd6d79ae40bccca566925018c3b",
           "outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json": "185a8e917f1d0c90efaa2625ec749c3eb6b470a32e7e131d05a55ff27a30bb71",
           "outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json": "0b51d3c55dc3cc020272aeeab7d725ac412a6f43d964956dcbf5a538878289c3",
           "outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json": "4bfce5ce8ee0758b44dc05ddf29e011153166eec3601beff3004fef447f829ac"

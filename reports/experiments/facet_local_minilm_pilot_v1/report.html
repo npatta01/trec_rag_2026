@@ -1771,16 +1771,18 @@ SELECT
   json_extract(control_diff, &#39;$.topics&#39;) AS corrected_legacy_audit,
   json_extract(review, &#39;$.macro_by_arm&#39;) AS blinded_review_rates
 FROM joined;</code></pre></div></div></div>
-<div class="portable-block portable-layout-full" data-artifact-block-id="definition_relevance_review" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><p><strong>Relevance and review.</strong> Topic relevance comes from the one-time authorized Umbrela projection; raw qrels rows are not included. Facet relevance comes from a qrels-blind, system-masked review: <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-480"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-480" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> unique passages map to <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-481"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-481" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> arm/facet memberships. Seven shared passages are attributed to both arm memberships, preserving the preregistered denominators.</p></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Relevance and review. Topic relevance comes from the one-time authorized Umbrela projection; raw qrels rows are not included. Facet relevance comes from a qrels-blind, system-masked review: 101 unique passages map to 108 arm/facet memberships. Seven shared passages are attributed to both arm memberships, preserving the preregistered denominators.</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+<div class="portable-block portable-layout-full" data-artifact-block-id="definition_relevance_review" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><p><strong>Relevance and review.</strong> Topic relevance comes from the one-time authorized Umbrela projection; raw qrels rows are not included. Facet relevance comes from a qrels-blind, system-masked review: <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-480"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-480" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> unique passages map to <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-481"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-481" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> arm/facet memberships. Seven shared passages are attributed to both arm memberships, preserving the preregistered denominators.</p></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Relevance and review. Topic relevance comes from the one-time authorized Umbrela projection; raw qrels rows are not included. Facet relevance comes from a qrels-blind, system-masked review: 101 unique passages map to 108 arm/facet memberships. Seven shared passages are attributed to both arm memberships, preserving the preregistered denominators.</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
        g.status = &#39;qrels_access_consumed&#39;
          AND g.qrels_approval_sha256 = sha256(read_blob(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json&#39;) q
-CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;) g
+CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;) g
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;) r
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json&#39;) v
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json&#39;) c
@@ -1812,38 +1814,42 @@ SELECT
 FROM joined;</code></pre></div></div></div>
 <div class="portable-block portable-layout-full" data-artifact-block-id="definition_isolation" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><p><strong>Isolation.</strong> BF changes facet-local ordering only. Raw MiniLM logits stay within query streams; RRF consumes ranks. Candidate generation, local reranking, fusion, and final ranking are measured separately.</p></section><div class="portable-inline-source portable-source-summary" data-source-id="ranking_freeze"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Isolation. BF changes facet-local ordering only. Raw MiniLM logits stay within query streams; RRF consumes ranks. Candidate generation, local reranking, fusion, and final ranking are measured separately.</span><strong>Source: Pre-qrels ranking freeze</strong><span class="portable-source-meta">Table: outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated pre-qrels ranking freeze input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT * FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;);</code></pre></div></div></div>
 <div class="portable-block portable-layout-full" data-artifact-block-id="firewall_note" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><h2>Evaluation firewall stayed closed until both freezes</h2>
-<p><strong>The exact four-topic projection was opened once, only after rankings and the blinded review were frozen.</strong> The one-time qrels access receipt binds the same ranking and review freeze hashes as every evaluation artifact. The table also preserves the <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-489"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-489" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span>-item/<span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-490"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-490" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span>-membership review audit and the seven shared memberships attributed to both arms.</p></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Evaluation firewall stayed closed until both freezes</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+<p><strong>The exact four-topic projection was opened once, only after rankings and the blinded review were frozen.</strong> The one-time qrels access receipt binds the same ranking and review freeze hashes as every evaluation artifact. The table also preserves the <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-489"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-489" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span>-item/<span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-490"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-490" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span>-membership review audit and the seven shared memberships attributed to both arms.</p></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Evaluation firewall stayed closed until both freezes</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
        g.status = &#39;qrels_access_consumed&#39;
          AND g.qrels_approval_sha256 = sha256(read_blob(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json&#39;) q
-CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;) g
+CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;) g
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;) r
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json&#39;) v
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json&#39;) c
 WHERE q.status = &#39;qrels_access_consumed&#39;
   AND q.ranking_freeze_sha256 = r.freeze_sha256
   AND q.review_freeze_sha256 = v.review_freeze_sha256;</code></pre></div></div></div>
-<div class="portable-block portable-layout-full" data-artifact-block-id="firewall_block" data-artifact-block-type="table" data-layout="full"><section class="portable-content-card portable-table-card" data-artifact-id="evaluation_firewall" data-artifact-kind="table" data-table-id="evaluation_firewall" data-portable-visual-title="Evaluation firewall and blinded-review audit"><header class="portable-visual-header"><h2>Evaluation firewall and blinded-review audit</h2></header><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Evaluation firewall and blinded-review audit</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+<div class="portable-block portable-layout-full" data-artifact-block-id="firewall_block" data-artifact-block-type="table" data-layout="full"><section class="portable-content-card portable-table-card" data-artifact-id="evaluation_firewall" data-artifact-kind="table" data-table-id="evaluation_firewall" data-portable-visual-title="Evaluation firewall and blinded-review audit"><header class="portable-visual-header"><h2>Evaluation firewall and blinded-review audit</h2></header><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Evaluation firewall and blinded-review audit</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
        g.status = &#39;qrels_access_consumed&#39;
          AND g.qrels_approval_sha256 = sha256(read_blob(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json&#39;) q
-CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;) g
+CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;) g
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;) r
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json&#39;) v
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json&#39;) c
 WHERE q.status = &#39;qrels_access_consumed&#39;
   AND q.ranking_freeze_sha256 = r.freeze_sha256
-  AND q.review_freeze_sha256 = v.review_freeze_sha256;</code></pre></div></div><div class="portable-table-source-region"><div class="portable-table-scroll"><table><caption>Evaluation firewall and blinded-review audit</caption><thead><tr><th scope="col">Qrels access status</th><th scope="col" class="portable-table-number">Access count</th><th scope="col">Approval consumed globally</th><th scope="col">Ranking frozen first</th><th scope="col">Review frozen first</th><th scope="col" class="portable-table-number">Unique review items</th><th scope="col" class="portable-table-number">Arm/facet memberships</th><th scope="col" class="portable-table-number">Shared memberships</th></tr></thead><tbody><tr><td>qrels_access_consumed</td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-491"><span class="portable-source-value-text">1</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-491" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 1</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td><td>true</td><td>true</td><td>true</td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-492"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-492" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-493"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-493" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-494"><span class="portable-source-value-text">7</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-494" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 7</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td></tr></tbody></table></div></div></section></div>
+  AND q.review_freeze_sha256 = v.review_freeze_sha256;</code></pre></div></div><div class="portable-table-source-region"><div class="portable-table-scroll"><table><caption>Evaluation firewall and blinded-review audit</caption><thead><tr><th scope="col">Qrels access status</th><th scope="col" class="portable-table-number">Access count</th><th scope="col">Approval consumed globally</th><th scope="col">Trusted guard namespace</th><th scope="col">Legacy marker trusted</th><th scope="col">Ranking frozen first</th><th scope="col">Review frozen first</th><th scope="col" class="portable-table-number">Unique review items</th><th scope="col" class="portable-table-number">Arm/facet memberships</th><th scope="col" class="portable-table-number">Shared memberships</th></tr></thead><tbody><tr><td>qrels_access_consumed</td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-491"><span class="portable-source-value-text">1</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-491" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 1</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td><td>true</td><td>git_common_dir_path_independent_identity</td><td>false</td><td>true</td><td>true</td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-492"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-492" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-493"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-493" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td><td class="portable-table-source-cell portable-table-number"><span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-494"><span class="portable-source-value-text">7</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-494" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 7</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span></td></tr></tbody></table></div></div></section></div>
 <div class="portable-block portable-layout-full" data-artifact-block-id="model_heading" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><h2>Model and bounded-window execution stayed within the preregistered envelope</h2>
 <p><strong>The actual cross-encoder is `cross-encoder/ms-marco-MiniLM-L6-v2` at the pinned revision shown below, materialized through a six-file safe-file allowlist.</strong> A tokenizer-only preflight created bounded windows before approved local ROCm scoring. Thirty long documents hit the <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-495"><span class="portable-source-value-text">32</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-495" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 32</span><strong>Source: Authenticated tokenizer-only preflight</strong><span class="portable-source-meta">Table: outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json</span></span></span>-window cap; minimum token coverage was <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-496"><span class="portable-source-value-text">29.52%</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-496" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 29.52%</span><strong>Source: Authenticated tokenizer-only preflight</strong><span class="portable-source-meta">Table: outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json</span></span></span>, while median and p95 coverage were <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-497"><span class="portable-source-value-text">100%</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-497" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 100%</span><strong>Source: Authenticated tokenizer-only preflight</strong><span class="portable-source-meta">Table: outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json</span></span></span>.</p></section><div class="portable-inline-source portable-source-summary" data-source-id="preflight"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for Model and bounded-window execution stayed within the preregistered envelope</span><strong>Source: Authenticated tokenizer-only preflight</strong><span class="portable-source-meta">Table: outputs/rag25_facet_local_minilm_v1/preflight_v2/preflight.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated authenticated tokenizer-only preflight input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT model_materialization.model_id AS model,
        model_materialization.revision AS revision,
@@ -1894,32 +1900,36 @@ SELECT
   CAST(json_extract(stream.value, &#39;$.expected_rows&#39;) AS INTEGER) AS candidate_rows,
   json_extract_string(stream.value, &#39;$.query_sha256&#39;) AS query_sha256
 FROM source, json_each(source.doc, &#39;$.streams&#39;) AS stream;</code></pre></div></div></div>
-<div class="portable-block portable-layout-full" data-artifact-block-id="limitation_judgments" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><ul><li><strong>Pooled judgments are incomplete.</strong> Umbrela judgments are pooled and non-exhaustive; unjudged documents are not proof of irrelevance.</li></ul></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for - Pooled judgments are incomplete. Umbrela judgments are pooled and non-exhaustive; unjudged documents are not proof of irrelevance.</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+<div class="portable-block portable-layout-full" data-artifact-block-id="limitation_judgments" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><ul><li><strong>Pooled judgments are incomplete.</strong> Umbrela judgments are pooled and non-exhaustive; unjudged documents are not proof of irrelevance.</li></ul></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for - Pooled judgments are incomplete. Umbrela judgments are pooled and non-exhaustive; unjudged documents are not proof of irrelevance.</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
        g.status = &#39;qrels_access_consumed&#39;
          AND g.qrels_approval_sha256 = sha256(read_blob(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json&#39;) q
-CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;) g
+CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;) g
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;) r
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json&#39;) v
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json&#39;) c
 WHERE q.status = &#39;qrels_access_consumed&#39;
   AND q.ranking_freeze_sha256 = r.freeze_sha256
   AND q.review_freeze_sha256 = v.review_freeze_sha256;</code></pre></div></div></div>
-<div class="portable-block portable-layout-full" data-artifact-block-id="limitation_review" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><ul><li><strong>Review estimates are small and dependent.</strong> The <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-511"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-511" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> unique passages produce <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-512"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-512" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> arm/facet memberships, with seven shared passages attributed to both arms. No confidence interval or significance test is claimed.</li></ul></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for - Review estimates are small and dependent. The 101 unique passages produce 108 arm/facet memberships, with seven shared passages attributed to both arms. No confidence interval or significance test is claimed.</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+<div class="portable-block portable-layout-full" data-artifact-block-id="limitation_review" data-artifact-block-type="markdown" data-layout="full"><section class="portable-markdown"><ul><li><strong>Review estimates are small and dependent.</strong> The <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-511"><span class="portable-source-value-text">101</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-511" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 101</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> unique passages produce <span class="portable-source-tooltip portable-source-value" data-portable-source-host="true" tabindex="0" aria-describedby="portable-source-tooltip-512"><span class="portable-source-value-text">108</span><span class="portable-source-tooltip-content" id="portable-source-tooltip-512" role="tooltip"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for 108</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span></span></span> arm/facet memberships, with seven shared passages attributed to both arms. No confidence interval or significance test is claimed.</li></ul></section><div class="portable-inline-source portable-source-summary" data-source-id="qrels_access_receipt"><div class="portable-inline-source-content portable-source-summary-content"><span class="portable-source-tooltip-heading" aria-hidden="true">Source for - Review estimates are small and dependent. The 101 unique passages produce 108 arm/facet memberships, with seven shared passages attributed to both arms. No confidence interval or significance test is claimed.</span><strong>Source: One-time qrels-access receipt</strong><span class="portable-source-meta">Tables: outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json, outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json, outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json, outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json</span><p class="portable-source-description-data">Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><pre class="portable-source-query-data" aria-hidden="true"><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
        g.status = &#39;qrels_access_consumed&#39;
          AND g.qrels_approval_sha256 = sha256(read_blob(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json&#39;) q
-CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;) g
+CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;) g
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;) r
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json&#39;) v
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json&#39;) c
@@ -2076,16 +2086,18 @@ SELECT
   json_extract(decision, &#39;$.evidence.final_novel_vs_legacy_r1_docids&#39;) AS novel_vs_legacy,
   json_extract(control_diff, &#39;$.topics&#39;) AS corrected_legacy_audit,
   json_extract(review, &#39;$.macro_by_arm&#39;) AS blinded_review_rates
-FROM joined;</code></pre></details></li><li><strong>One-time qrels-access approval</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json · duckdb</span><p>Extracts the report rows from the authenticated one-time qrels-access approval input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT * FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;);</code></pre></details></li><li><strong>Approval-scoped qrels-consumption registry</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json · duckdb</span><p>Extracts the report rows from the authenticated approval-scoped qrels-consumption registry input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT * FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;);</code></pre></details></li><li><strong>One-time qrels-access receipt</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json · duckdb</span><p>Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
+FROM joined;</code></pre></details></li><li><strong>One-time qrels-access approval</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json · duckdb</span><p>Extracts the report rows from the authenticated one-time qrels-access approval input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT * FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;);</code></pre></details></li><li><strong>Trusted path-independent qrels-consumption registry mirror</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json · duckdb</span><p>Extracts the report rows from the authenticated trusted path-independent qrels-consumption registry mirror input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT * FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;);</code></pre></details></li><li><strong>Legacy approval-adjacent consumption marker</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json · duckdb</span><p>Extracts the report rows from the authenticated legacy approval-adjacent consumption marker input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT * FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;);</code></pre></details></li><li><strong>One-time qrels-access receipt</strong><span class="portable-source-meta">outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json · duckdb</span><p>Extracts the report rows from the authenticated one-time qrels-access receipt input boundary.</p><details class="portable-source-query" open><summary>SQL query</summary><pre><code>SELECT q.status AS qrels_access_status, 1 AS qrels_access_count,
        g.status = &#39;qrels_access_consumed&#39;
          AND g.qrels_approval_sha256 = sha256(read_blob(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json&#39;))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
        c.membership_count - c.item_count AS shared_items_attributed_to_both_arms
 FROM read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json&#39;) q
-CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json&#39;) g
+CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json&#39;) g
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/freeze_v1/freeze.json&#39;) r
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/review_freeze.json&#39;) v
 CROSS JOIN read_json_auto(&#39;outputs/rag25_facet_local_minilm_v1/review_v3/create_receipt.json&#39;) c
@@ -2432,408 +2444,415 @@ WHERE q.status = &#39;qrels_access_consumed&#39;
 })();</script>
 <div id="data-analytics-portable-reader" aria-hidden="true" inert></div>
 <template id="data-analytics-portable-artifact-payload-source" data-compression="gzip-base64">
-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
+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
 </template>
 <template id="data-analytics-portable-reader-runtime-source" data-compression="gzip-base64">
 H4sIAAAAAAACA+y9a3fjNrYg+v38CilTV0MeQ4pk15MyyqfiR6e665VyVdLVjseESUhCTIEKCNnl

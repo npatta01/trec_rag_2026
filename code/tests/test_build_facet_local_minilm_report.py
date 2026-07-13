@@ -44,6 +44,8 @@ SOURCE_FILES = {
     "decision": OUTPUT_ROOT / "evaluation_v1/decision.json",
     "qrels_access_approval": OUTPUT_ROOT / "approvals/qrels_access_v1.json",
     "qrels_consumption_registry": OUTPUT_ROOT
+    / "approvals/qrels_consumption_registry_v2.json",
+    "qrels_consumption_legacy_marker": OUTPUT_ROOT
     / "approvals/qrels_access_v1.json.consumed.json",
     "qrels_access_receipt": OUTPUT_ROOT
     / "evaluation_v1/qrels_access_receipt.json",
@@ -317,6 +319,51 @@ def test_firewall_exposes_approval_scoped_consumption_registry(artifact):
     row = artifact["snapshot"]["datasets"]["firewall_rows"][0]
     assert row["approval_scoped_consumption_registry"] is True
     assert row["qrels_access_status"] == "qrels_access_consumed"
+    assert row["registry_namespace"] == (
+        "git_common_dir_path_independent_identity"
+    )
+    assert row["legacy_marker_trusted"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("promoted_bf_depth", "promoted predicate"),
+        ("promoted_control_depth", "promoted predicate"),
+        ("demoted_final_order", "demoted predicate"),
+        ("passage_window_mismatch", "selected window text"),
+        ("empty_stream_provenance", "stream provenance"),
+    ],
+)
+def test_report_rejects_invalid_representative_provenance(inputs, mutation, message):
+    tampered = copy.deepcopy(inputs)
+    provenance = tampered["artifacts"]["representative_provenance"]
+    if mutation == "promoted_bf_depth":
+        provenance["promoted"][0]["facet_bf_rank"] = 21
+    elif mutation == "promoted_control_depth":
+        provenance["promoted"][0]["facet_control_rank"] = 20
+    elif mutation == "demoted_final_order":
+        provenance["demoted"][0]["c0_final_rank"] = 20
+        provenance["demoted"][0]["bf_final_rank"] = 10
+    elif mutation == "passage_window_mismatch":
+        provenance["promoted"][0]["passage"] = "different passage"
+    else:
+        provenance["promoted"][0]["stream_provenance"] = {}
+    provenance.pop("artifact_sha256")
+    provenance["artifact_sha256"] = hashlib.sha256(
+        json.dumps(
+            provenance,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    tampered["artifact_bytes"]["representative_provenance"] = json.dumps(
+        provenance, ensure_ascii=False, indent=2, sort_keys=True
+    ).encode()
+
+    with pytest.raises(ValueError, match=message):
+        build_artifact(**tampered)
 
 
 def test_native_chart_contracts_match_the_four_required_visuals(artifact):

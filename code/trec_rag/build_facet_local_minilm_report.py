@@ -55,7 +55,8 @@ SOURCE_PATHS = {
     "representative_provenance": "outputs/rag25_facet_local_minilm_v1/derived_v2/representative_provenance_v2.json",
     "decision": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/decision.json",
     "qrels_access_approval": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json",
-    "qrels_consumption_registry": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
+    "qrels_consumption_registry": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_consumption_registry_v2.json",
+    "qrels_consumption_legacy_marker": "outputs/rag25_facet_local_minilm_v1/approvals/qrels_access_v1.json.consumed.json",
     "qrels_access_receipt": "outputs/rag25_facet_local_minilm_v1/evaluation_v1/qrels_access_receipt.json",
 }
 SOURCE_LABELS = {
@@ -80,7 +81,8 @@ SOURCE_LABELS = {
     "representative_provenance": "Facet-event representative provenance",
     "decision": "Mechanical experiment decision",
     "qrels_access_approval": "One-time qrels-access approval",
-    "qrels_consumption_registry": "Approval-scoped qrels-consumption registry",
+    "qrels_consumption_registry": "Trusted path-independent qrels-consumption registry mirror",
+    "qrels_consumption_legacy_marker": "Legacy approval-adjacent consumption marker",
     "qrels_access_receipt": "One-time qrels-access receipt",
 }
 MATERIAL_SOURCE_IDS = {
@@ -156,6 +158,9 @@ SOURCE_METRIC_DEFINITIONS = {
         "Approval-scoped consumption is true only when the stable registry binds the approval, receipt, freezes, projection hashes, and canonical evaluation output.",
         "Ranking/review frozen flags require qrels_opened=false in their authenticated freezes; shared memberships = membership_count - item_count.",
     ],
+    "qrels_consumption_legacy_marker": [
+        "This approval-adjacent v1 marker is retained for history only and is not trusted as the replay guard.",
+    ],
 }
 
 
@@ -194,6 +199,59 @@ def _sha256(value: object, label: str) -> str:
     ):
         raise ValueError(f"{label} must be a lowercase SHA-256")
     return value
+
+
+def _validate_representative_provenance(
+    representatives: Mapping[str, object],
+) -> None:
+    for evidence_class in ("promoted", "demoted", "gained", "lost"):
+        rows = _list(
+            representatives.get(evidence_class),
+            f"representative provenance {evidence_class}",
+        )
+        for raw_row in rows:
+            row = _object(raw_row, "representative provenance row")
+            topic_id = str(row.get("topic_id", ""))
+            if topic_id not in PILOT_TOPIC_SET:
+                raise ValueError("representative provenance topic boundary differs")
+            if row.get("evidence_class") != evidence_class:
+                raise ValueError("representative evidence class binding differs")
+            window = _object(
+                row.get("selected_minilm_window"),
+                "representative selected MiniLM window",
+            )
+            window_text = window.get("window_text")
+            if not isinstance(window_text, str) or not window_text:
+                raise ValueError("representative selected window text is missing")
+            if row.get("passage") != window_text:
+                raise ValueError(
+                    "representative passage differs from selected window text"
+                )
+            stream = _object(
+                row.get("stream_provenance"),
+                "representative stream provenance",
+            )
+            if not stream:
+                raise ValueError("representative stream provenance is empty")
+            if evidence_class == "promoted":
+                bf_rank = _integer(
+                    row.get("facet_bf_rank"), "representative BF facet rank"
+                )
+                control_rank = _integer(
+                    row.get("facet_control_rank"),
+                    "representative C0 facet rank",
+                )
+                if not (bf_rank <= 20 < control_rank):
+                    raise ValueError("representative promoted predicate differs")
+            if evidence_class == "demoted":
+                control_rank = _integer(
+                    row.get("c0_final_rank"), "representative C0 final rank"
+                )
+                bf_rank = _integer(
+                    row.get("bf_final_rank"), "representative BF final rank"
+                )
+                if not control_rank < bf_rank:
+                    raise ValueError("representative demoted predicate differs")
 
 
 def _compact_bytes(value: object, *, newline: bool = False) -> bytes:
@@ -401,9 +459,28 @@ def _validate_contract(
     _verify_self_hash(receipt, "artifact_sha256", "qrels access receipt")
     approval = loaded["qrels_access_approval"]
     registry = loaded["qrels_consumption_registry"]
+    legacy_marker = loaded["qrels_consumption_legacy_marker"]
     _verify_self_hash(
         registry, "artifact_sha256", "qrels consumption registry"
     )
+    _verify_self_hash(
+        legacy_marker, "artifact_sha256", "legacy qrels consumption marker"
+    )
+    registry_identity = {
+        "experiment_id": "rag25_facet_local_minilm_v1",
+        "qrels_approval_sha256": hashlib.sha256(
+            raw["qrels_access_approval"]
+        ).hexdigest(),
+        **{
+            field: registry.get(field)
+            for field in (
+                "qrels_manifest_sha256",
+                "qrels_projection_sha256",
+                "ranking_freeze_sha256",
+                "review_freeze_sha256",
+            )
+        },
+    }
     canonical_evaluation = (
         REPO_ROOT / "outputs/rag25_facet_local_minilm_v1/evaluation_v1"
     ).resolve()
@@ -418,14 +495,22 @@ def _validate_contract(
         or approval.get("status") != "approved"
         or tuple(approval.get("topic_ids", ())) != PILOT_TOPICS
         or registry.get("schema_version")
-        != "facet-local-minilm-qrels-consumption-v1"
+        != "facet-local-minilm-qrels-consumption-v2"
         or registry.get("status") != "qrels_access_consumed"
+        or registry.get("registry_namespace")
+        != "git_common_dir_path_independent_identity"
+        or registry.get("experiment_id") != "rag25_facet_local_minilm_v1"
+        or registry.get("identity_sha256")
+        != hashlib.sha256(_compact_bytes(registry_identity)).hexdigest()
         or tuple(registry.get("topic_ids", ())) != PILOT_TOPICS
         or registry.get("qrels_approval_sha256")
         != hashlib.sha256(raw["qrels_access_approval"]).hexdigest()
         or registry.get("canonical_output_path") != str(canonical_evaluation)
         or registry.get("output_receipt_path")
         != str((canonical_evaluation / "qrels_access_receipt.json").resolve())
+        or legacy_marker.get("schema_version")
+        != "facet-local-minilm-qrels-consumption-v1"
+        or legacy_marker.get("status") != "qrels_access_consumed"
         or any(
             receipt.get(field) != bindings.get(field)
             for field in (
@@ -469,6 +554,7 @@ def _validate_contract(
         != loaded["representatives"].get("artifact_sha256")
     ):
         raise ValueError("representative provenance authentication differs")
+    _validate_representative_provenance(provenance)
     for evidence_class in ("promoted", "demoted", "gained", "lost"):
         source_rows = _list(
             loaded["representatives"].get(evidence_class),
@@ -637,6 +723,8 @@ FROM read_json_auto('{path}');"""
        g.status = 'qrels_access_consumed'
          AND g.qrels_approval_sha256 = sha256(read_blob('{approval_path}'))
          AS approval_scoped_consumption_registry,
+       g.registry_namespace AS registry_namespace,
+       false AS legacy_marker_trusted,
        r.qrels_opened = false AS ranking_frozen_before_qrels,
        v.qrels_opened = false AS review_frozen_before_qrels,
        c.item_count AS review_unique_items, c.membership_count AS review_memberships,
@@ -1133,6 +1221,8 @@ def _artifact_rows(loaded: Mapping[str, Mapping[str, object]]) -> dict[str, list
             "approval_scoped_consumption_registry": (
                 registry["status"] == "qrels_access_consumed"
             ),
+            "registry_namespace": registry["registry_namespace"],
+            "legacy_marker_trusted": False,
             "ranking_frozen_before_qrels": loaded["ranking_freeze"]["qrels_opened"] is False,
             "review_frozen_before_qrels": loaded["review_freeze"]["qrels_opened"] is False,
             "review_unique_items": create["item_count"],
@@ -1609,7 +1699,7 @@ def build_artifact(
         _table("model_preflight", "Pinned model and capped-window coverage", "Tokenizer-only preflight evidence for the actual model identity, safe files, and bounded coverage.", "model_rows", "preflight", (("model", "Model", "text"), ("revision", "Revision", "text"), ("safe_files", "Safe-file allowlist", "text"), ("window_cap", "Window cap per document", "number"), ("capped_documents", "Capped documents", "number"), ("coverage_min_percent", "Minimum coverage (%)", "number"), ("coverage_p95_percent", "p95 coverage (%)", "number")), "model"),
         _table("scoring_runtime", "Completed local scoring", "Authenticated raw-logit scoring receipt; all planned windows completed.", "scoring_rows", "scoring_receipt", (("model", "Model", "text"), ("revision", "Revision", "text"), ("dtype", "Inference dtype", "text"), ("planned_windows", "Planned windows", "number"), ("completed_windows", "Completed windows", "number"), ("unique_scores", "Unique scores", "number"), ("failed_windows", "Failed windows", "number")), "model"),
         _table("benchmark_runtime", "ROCm benchmark evidence", "Bounded benchmark used for full-run approval and runtime projection.", "benchmark_rows", "benchmark", (("backend", "Backend", "text"), ("device", "Device", "text"), ("pairs_per_second", "Median pairs/s", "number"), ("peak_device_memory_mb", "Peak device memory (MB)", "number"), ("projected_wall_seconds", "Projected full wall time (s)", "number")), "backend"),
-        _table("evaluation_firewall", "Evaluation firewall and blinded-review audit", "Approval-scoped one-time qrels consumption and pre-qrels ranking/review freeze evidence.", "firewall_rows", "qrels_access_receipt", (("qrels_access_status", "Qrels access status", "text"), ("qrels_access_count", "Access count", "number"), ("approval_scoped_consumption_registry", "Approval consumed globally", "boolean"), ("ranking_frozen_before_qrels", "Ranking frozen first", "boolean"), ("review_frozen_before_qrels", "Review frozen first", "boolean"), ("review_unique_items", "Unique review items", "number"), ("review_memberships", "Arm/facet memberships", "number"), ("shared_items_attributed_to_both_arms", "Shared memberships", "number")), "qrels_access_status"),
+        _table("evaluation_firewall", "Evaluation firewall and blinded-review audit", "Path-independent git-common-dir qrels consumption and pre-qrels ranking/review freeze evidence; the legacy adjacent marker is retained but not trusted.", "firewall_rows", "qrels_access_receipt", (("qrels_access_status", "Qrels access status", "text"), ("qrels_access_count", "Access count", "number"), ("approval_scoped_consumption_registry", "Approval consumed globally", "boolean"), ("registry_namespace", "Trusted guard namespace", "text"), ("legacy_marker_trusted", "Legacy marker trusted", "boolean"), ("ranking_frozen_before_qrels", "Ranking frozen first", "boolean"), ("review_frozen_before_qrels", "Review frozen first", "boolean"), ("review_unique_items", "Unique review items", "number"), ("review_memberships", "Arm/facet memberships", "number"), ("shared_items_attributed_to_both_arms", "Shared memberships", "number")), "qrels_access_status"),
     ]
 
     sources = [_source(key, artifact_bytes) for key in SOURCE_PATHS]
@@ -1740,6 +1830,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "decision": args.evaluation / "decision.json",
         "qrels_access_approval": root / "approvals/qrels_access_v1.json",
         "qrels_consumption_registry": root
+        / "approvals/qrels_consumption_registry_v2.json",
+        "qrels_consumption_legacy_marker": root
         / "approvals/qrels_access_v1.json.consumed.json",
         "qrels_access_receipt": args.evaluation / "qrels_access_receipt.json",
     }
@@ -1749,6 +1841,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 f"noncanonical {key} path: expected {expected}, received {path}"
             )
+    from trec_rag.facet_local_minilm_evaluate import (
+        qrels_consumption_registry_path,
+    )
+
+    trusted_registry_path = qrels_consumption_registry_path(
+        paths["qrels_access_approval"]
+    )
+    try:
+        trusted_registry_bytes = trusted_registry_path.read_bytes()
+        mirror_registry_bytes = paths["qrels_consumption_registry"].read_bytes()
+    except OSError as exc:
+        raise ValueError("trusted qrels consumption registry is unavailable") from exc
+    if trusted_registry_bytes != mirror_registry_bytes:
+        raise ValueError("qrels consumption registry mirror differs from trusted state")
     payloads: dict[str, object] = {}
     raw: dict[str, bytes] = {}
     for key, path in paths.items():
