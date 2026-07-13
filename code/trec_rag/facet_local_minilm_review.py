@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import random
+import shutil
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -35,6 +39,11 @@ infer relevance from an unseen document or from outside knowledge.
 - `not_facet_relevant`: it does not answer the facet.
 - `wrong_domain`: flag an answer about the wrong population or subject domain.
 - `low_quality`: flag dictionaries, essay templates, spam, or similarly weak material.
+
+Write one JSON object per line with exactly:
+`item_id`, `relevance`, `wrong_domain` (boolean), `low_quality` (boolean), and
+`reviewer_id`. Example:
+`{"item_id":"…","low_quality":false,"relevance":"direct_answer","reviewer_id":"reviewer-a","wrong_domain":false}`
 """
 
 
@@ -79,6 +88,54 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
             raise ValueError(f"{path.name} row {number} must be an object")
         rows.append(value)
     return rows
+
+
+def _exclusive_write(path: Path, source: bytes, mode: int = 0o644) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(source)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _publish_directory_noreplace(stage: Path, destination: Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as exc:
+        raise OSError(errno.ENOSYS, "atomic no-replace publication unavailable") from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(stage), -100, os.fsencode(destination), 1)
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(error_number, "create-only destination exists", destination)
+    raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _retry_safe_leaf(path: Path, source: bytes, mode: int = 0o600) -> None:
+    if path.exists():
+        if path.read_bytes() == source:
+            return
+        raise FileExistsError(f"immutable review artifact differs: {path}")
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{_sha256_bytes(source)[:12]}")
+    try:
+        _exclusive_write(temporary, source, mode)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != source:
+                raise
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _reject_protected(topic_ids: Iterable[object]) -> None:
@@ -249,11 +306,125 @@ def build_review_packet(
     secret = {
         "experiment_manifest_sha256": seed,
         "items": secret_items,
+        "packet_sha256": _sha256_bytes(_jsonl_bytes(packet)),
         "ranking_freeze_sha256": str(ranking_freeze.get("ranking_freeze_sha256", "")),
         "schema_version": "facet-local-minilm-review-secret-v1",
         "topic_ids": list(PILOT_TOPIC_IDS),
     }
     return packet, secret
+
+
+def _validate_packet_secret(
+    packet: Sequence[Mapping[str, object]], secret: Mapping[str, object]
+) -> tuple[int, int]:
+    _reject_protected(row.get("topic_id") for row in packet)
+    if any(set(row) != {"item_id", "topic_id", "facet_query", "passage"} for row in packet):
+        raise ValueError("public packet schema mismatch")
+    if secret.get("schema_version") != "facet-local-minilm-review-secret-v1":
+        raise ValueError("secret map schema mismatch")
+    if secret.get("packet_sha256") != _sha256_bytes(_jsonl_bytes(packet)):
+        raise ValueError("secret map packet binding mismatch")
+    items = secret.get("items")
+    if not isinstance(items, list):
+        raise ValueError("secret map items are invalid")
+    _reject_protected(item.get("topic_id") for item in items if isinstance(item, Mapping))
+    packet_by_id = {str(row["item_id"]): dict(row) for row in packet}
+    secret_by_id = {
+        str(item.get("item_id", "")): item for item in items if isinstance(item, Mapping)
+    }
+    if len(packet_by_id) != len(packet) or len(secret_by_id) != len(items):
+        raise ValueError("review item IDs must be unique")
+    if set(packet_by_id) != set(secret_by_id):
+        raise ValueError("packet and secret item IDs differ")
+    facets: set[tuple[str, str]] = set()
+    membership_count = 0
+    for item_id, item in secret_by_id.items():
+        public = packet_by_id[item_id]
+        if (
+            public["topic_id"] != item.get("topic_id")
+            or public["facet_query"] != item.get("facet_query")
+            or public["passage"] != item.get("passage")
+        ):
+            raise ValueError("packet differs from secret public projection")
+        if item.get("document_id") in {None, ""}:
+            raise ValueError("secret document ID is invalid")
+        memberships = item.get("memberships")
+        if not isinstance(memberships, list) or not memberships:
+            raise ValueError("secret memberships are invalid")
+        seen: set[tuple[str, str, str]] = set()
+        for membership in memberships:
+            if not isinstance(membership, Mapping):
+                raise ValueError("secret membership must be an object")
+            facet = membership.get("facet")
+            provenance = membership.get("passage_selection_provenance")
+            if not isinstance(facet, Mapping) or not isinstance(provenance, Mapping):
+                raise ValueError("secret membership lineage is invalid")
+            topic_id = str(facet.get("topic_id", ""))
+            variant = str(facet.get("variant_name", ""))
+            _reject_protected((topic_id,))
+            if topic_id != item.get("topic_id") or membership.get("document_id") != item.get("document_id"):
+                raise ValueError("secret membership item lineage mismatch")
+            arm = str(membership.get("arm", ""))
+            if arm not in {CONTROL_ARM, MINILM_ARM} or membership.get("source_rank") not in {1, 2}:
+                raise ValueError("secret membership arm/rank is invalid")
+            if provenance.get("selection") != "highest_raw_logit_window":
+                raise ValueError("secret passage selection is invalid")
+            if provenance.get("passage_sha256") != _sha256_text(str(item.get("passage", ""))):
+                raise ValueError("secret passage hash mismatch")
+            identity = (arm, topic_id, variant)
+            if identity in seen:
+                raise ValueError("duplicate within-facet membership")
+            seen.add(identity)
+            facets.add((topic_id, variant))
+            membership_count += 1
+    counts = defaultdict(int)
+    for topic_id, _variant in facets:
+        counts[topic_id] += 1
+    if dict(counts) != EXPECTED_FACET_COUNTS or membership_count != 108:
+        raise ValueError("secret facet/membership accounting mismatch")
+    return len(facets), membership_count
+
+
+def _validate_label_freeze(label_freeze: Mapping[str, object]) -> None:
+    if label_freeze.get("status") != "labels_and_adjudication_frozen":
+        raise ValueError("labels must be frozen before unmasking")
+    required = {
+        "adjudicated_disagreement_count",
+        "items",
+        "label_freeze_sha256",
+        "packet_sha256",
+        "reviewer_count",
+        "schema_version",
+        "source_hashes",
+        "status",
+    }
+    if set(label_freeze) != required:
+        raise ValueError("label freeze fields mismatch")
+    if (
+        label_freeze.get("schema_version") != "facet-local-minilm-label-freeze-v1"
+        or label_freeze.get("status") != "labels_and_adjudication_frozen"
+    ):
+        raise ValueError("labels must be frozen before unmasking")
+    without_hash = {key: value for key, value in label_freeze.items() if key != "label_freeze_sha256"}
+    if label_freeze.get("label_freeze_sha256") != _sha256_bytes(_pretty_bytes(without_hash)):
+        raise ValueError("label freeze self-hash mismatch")
+    sources = label_freeze.get("source_hashes")
+    if not isinstance(sources, Mapping) or set(sources) != {
+        "labels_a_sha256",
+        "labels_b_sha256",
+        "adjudication_sha256",
+    } or not all(isinstance(value, str) and len(value) == 64 for value in sources.values()):
+        raise ValueError("label freeze source hashes are invalid")
+    items = label_freeze.get("items")
+    if not isinstance(items, list) or any(
+        not isinstance(row, Mapping)
+        or set(row) != {"item_id", "low_quality", "relevance", "wrong_domain"}
+        or row.get("relevance") not in LABEL_VOCABULARY
+        or not isinstance(row.get("low_quality"), bool)
+        or not isinstance(row.get("wrong_domain"), bool)
+        for row in items
+    ):
+        raise ValueError("label freeze items are invalid")
 
 
 def _index_labels(
@@ -294,9 +465,12 @@ def freeze_labels(
     labels_a: Sequence[Mapping[str, object]],
     labels_b: Sequence[Mapping[str, object]],
     adjudication: Sequence[Mapping[str, object]] | Mapping[str, object],
+    *,
+    _source_hashes: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Freeze labels without exposing system or document identity."""
 
+    _reject_protected(row.get("topic_id") for row in packet)
     a, reviewer_a = _index_labels(packet, labels_a, name="reviewer A")
     b, reviewer_b = _index_labels(packet, labels_b, name="reviewer B")
     if reviewer_a == reviewer_b:
@@ -340,12 +514,27 @@ def freeze_labels(
                 "wrong_domain": bool(a[item_id]["wrong_domain"] or b[item_id]["wrong_domain"]),
             }
         )
+    source_hashes = dict(
+        _source_hashes
+        or {
+            "labels_a_sha256": _sha256_bytes(_jsonl_bytes(labels_a)),
+            "labels_b_sha256": _sha256_bytes(_jsonl_bytes(labels_b)),
+            "adjudication_sha256": _sha256_bytes(_jsonl_bytes(adjudication_rows)),
+        }
+    )
+    if set(source_hashes) != {
+        "labels_a_sha256",
+        "labels_b_sha256",
+        "adjudication_sha256",
+    }:
+        raise ValueError("label source hash fields mismatch")
     payload: dict[str, object] = {
         "adjudicated_disagreement_count": len(disagreements),
         "items": sorted(frozen_items, key=lambda row: str(row["item_id"])),
         "packet_sha256": _sha256_bytes(_jsonl_bytes(packet)),
         "reviewer_count": 2 + bool(disagreements),
         "schema_version": "facet-local-minilm-label-freeze-v1",
+        "source_hashes": source_hashes,
         "status": "labels_and_adjudication_frozen",
     }
     payload["label_freeze_sha256"] = _sha256_bytes(_pretty_bytes(payload))
@@ -355,12 +544,16 @@ def freeze_labels(
 def unmask_review(
     label_freeze: Mapping[str, object], secret: Mapping[str, object]
 ) -> dict[str, object]:
-    if label_freeze.get("status") != "labels_and_adjudication_frozen":
-        raise ValueError("labels must be frozen before unmasking")
+    _validate_label_freeze(label_freeze)
     labels_raw = label_freeze.get("items")
     secret_raw = secret.get("items")
     if not isinstance(labels_raw, list) or not isinstance(secret_raw, list):
         raise ValueError("label/secret items are invalid")
+    _reject_protected(
+        item.get("topic_id") for item in secret_raw if isinstance(item, Mapping)
+    )
+    if secret.get("packet_sha256") != label_freeze.get("packet_sha256"):
+        raise ValueError("label freeze packet binding differs from secret map")
     labels = {str(row["item_id"]): dict(row) for row in labels_raw}
     secret_items = {str(row["item_id"]): dict(row) for row in secret_raw}
     if set(labels) != set(secret_items):
@@ -429,27 +622,17 @@ def write_review_create(
     secret: Mapping[str, object],
 ) -> dict[str, object]:
     destination = Path(output_dir)
-    try:
-        destination.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise FileExistsError(f"create-only review destination exists: {destination}") from exc
+    _reject_protected(row.get("topic_id") for row in packet)
+    facet_count, memberships = _validate_packet_secret(packet, secret)
+    if destination.exists() or os.path.lexists(destination):
+        raise FileExistsError(f"create-only review destination exists: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.stage-", dir=destination.parent))
     packet_bytes = _jsonl_bytes(packet)
     secret_bytes = _pretty_bytes(secret)
     rubric_bytes = RUBRIC_TEXT.encode("utf-8")
-    (destination / "packet.jsonl").write_bytes(packet_bytes)
-    secret_path = destination / "secret_map.json"
-    fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(secret_bytes)
-    (destination / "rubric.md").write_bytes(rubric_bytes)
-    facets = {
-        (membership["facet"]["topic_id"], membership["facet"]["variant_name"])
-        for item in secret["items"]  # type: ignore[index]
-        for membership in item["memberships"]
-    }
-    memberships = sum(len(item["memberships"]) for item in secret["items"])  # type: ignore[index]
     receipt: dict[str, object] = {
-        "facet_count": len(facets),
+        "facet_count": facet_count,
         "inference_call_count": 0,
         "item_count": len(packet),
         "membership_count": memberships,
@@ -464,7 +647,16 @@ def write_review_create(
         "secret_map_sha256": _sha256_bytes(secret_bytes),
         "status": "awaiting_two_independent_reviews",
     }
-    (destination / "create_receipt.json").write_bytes(_pretty_bytes(receipt))
+    try:
+        _exclusive_write(stage / "packet.jsonl", packet_bytes)
+        _exclusive_write(stage / "secret_map.json", secret_bytes, 0o600)
+        _exclusive_write(stage / "rubric.md", rubric_bytes)
+        _exclusive_write(stage / "create_receipt.json", _pretty_bytes(receipt))
+        _publish_directory_noreplace(stage, destination)
+    except BaseException:
+        if stage.exists():
+            shutil.rmtree(stage)
+        raise
     return receipt
 
 
@@ -483,12 +675,33 @@ def verify_review_create(
     if _sha256_bytes(rubric_source) != receipt.get("rubric_sha256"):
         raise ValueError("rubric hash mismatch")
     packet = _read_jsonl(root / "packet.jsonl")
+    secret = _read_json(root / "secret_map.json")
+    facet_count, membership_count = _validate_packet_secret(packet, secret)
+    if (root / "secret_map.json").stat().st_mode & 0o777 != 0o600:
+        raise ValueError("secret map permissions must be 0600")
     if len(packet) != receipt.get("item_count"):
         raise ValueError("packet row count mismatch")
+    if (
+        receipt.get("facet_count") != facet_count
+        or receipt.get("membership_count") != membership_count
+        or receipt.get("qrels_opened") is not False
+        or any(
+            receipt.get(name) != 0
+            for name in ("retrieval_call_count", "network_call_count", "inference_call_count")
+        )
+    ):
+        raise ValueError("create receipt semantic accounting mismatch")
     if ranking_freeze_dir is not None:
         freeze = verify_freeze(Path(ranking_freeze_dir))
         if freeze.get("freeze_sha256") != receipt.get("ranking_freeze_sha256"):
             raise ValueError("ranking freeze hash mismatch")
+        expected_packet, expected_secret = build_review_packet(
+            _real_review_input(Path(ranking_freeze_dir))
+        )
+        if packet_source != _jsonl_bytes(expected_packet) or secret_source != _pretty_bytes(
+            expected_secret
+        ):
+            raise ValueError("create stage differs from authenticated ranking freeze")
     return {
         "item_count": len(packet),
         "packet_sha256": receipt["packet_sha256"],
@@ -553,45 +766,128 @@ def freeze_review_directory(
     adjudication_path: Path,
 ) -> dict[str, object]:
     root = Path(review_dir)
-    verify_review_create(root)
+    # Validate public inputs and freeze the independent label sources before
+    # opening the private unmask map.
+    receipt_source = (root / "create_receipt.json").read_bytes()
+    receipt = _read_json(root / "create_receipt.json")
     packet = _read_jsonl(root / "packet.jsonl")
-    secret = _read_json(root / "secret_map.json")
+    _reject_protected(row.get("topic_id") for row in packet)
+    packet_source = (root / "packet.jsonl").read_bytes()
+    if _sha256_bytes(packet_source) != receipt.get("packet_sha256"):
+        raise ValueError("packet hash mismatch before label freeze")
+    labels_a_source = Path(labels_a_path).read_bytes()
+    labels_b_source = Path(labels_b_path).read_bytes()
+    adjudication_source = Path(adjudication_path).read_bytes()
     labels_a = _read_jsonl(Path(labels_a_path))
     labels_b = _read_jsonl(Path(labels_b_path))
     adjudication = _read_jsonl(Path(adjudication_path))
-    frozen = freeze_review(packet, labels_a, labels_b, adjudication, secret=secret)
-    label_freeze = frozen["label_freeze"]
-    unmasked = frozen["unmasked_items"]
-    review_payload = {key: value for key, value in frozen.items() if key != "unmasked_items"}
+    source_hashes = {
+        "labels_a_sha256": _sha256_bytes(labels_a_source),
+        "labels_b_sha256": _sha256_bytes(labels_b_source),
+        "adjudication_sha256": _sha256_bytes(adjudication_source),
+    }
+    label_freeze = freeze_labels(
+        packet,
+        labels_a,
+        labels_b,
+        adjudication,
+        _source_hashes=source_hashes,
+    )
+    _validate_label_freeze(label_freeze)
+    _retry_safe_leaf(root / "labels_a.jsonl", labels_a_source)
+    _retry_safe_leaf(root / "labels_b.jsonl", labels_b_source)
+    _retry_safe_leaf(root / "adjudication.jsonl", adjudication_source)
+    verify_review_create(root)
+    secret_source = (root / "secret_map.json").read_bytes()
+    secret = _read_json(root / "secret_map.json")
+    unmasked_result = unmask_review(label_freeze, secret)
+    unmasked = unmasked_result["unmasked_items"]
     unmasked_bytes = _jsonl_bytes(unmasked)  # type: ignore[arg-type]
-    review_payload["unmasked_items_sha256"] = _sha256_bytes(unmasked_bytes)
-    for name, source in (
-        ("label_freeze.json", _pretty_bytes(label_freeze)),
-        ("unmasked_items.jsonl", unmasked_bytes),
-        ("review_freeze.json", _pretty_bytes(review_payload)),
-    ):
-        path = root / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(source)
+    bindings = {
+        "adjudication_sha256": source_hashes["adjudication_sha256"],
+        "create_receipt_sha256": _sha256_bytes(receipt_source),
+        "label_freeze_sha256": label_freeze["label_freeze_sha256"],
+        "labels_a_sha256": source_hashes["labels_a_sha256"],
+        "labels_b_sha256": source_hashes["labels_b_sha256"],
+        "packet_sha256": receipt["packet_sha256"],
+        "ranking_freeze_sha256": receipt["ranking_freeze_sha256"],
+        "rubric_sha256": receipt["rubric_sha256"],
+        "secret_map_sha256": _sha256_bytes(secret_source),
+        "unmasked_items_sha256": _sha256_bytes(unmasked_bytes),
+    }
+    review_payload: dict[str, object] = {
+        "aggregate_counts": unmasked_result["aggregate_counts"],
+        "bindings": bindings,
+        "qrels_opened": False,
+        "schema_version": "facet-local-minilm-review-freeze-v2",
+        "status": "review_frozen_before_qrels",
+    }
+    review_payload["review_freeze_sha256"] = _sha256_bytes(_pretty_bytes(review_payload))
+    _retry_safe_leaf(root / "label_freeze.json", _pretty_bytes(label_freeze))
+    _retry_safe_leaf(root / "unmasked_items.jsonl", unmasked_bytes)
+    # Root commit marker is always published last.
+    _retry_safe_leaf(root / "review_freeze.json", _pretty_bytes(review_payload))
     return review_payload
 
 
 def verify_review_freeze(review_dir: Path) -> dict[str, object]:
     root = Path(review_dir)
-    verify_review_create(root)
+    create_verified = verify_review_create(root)
+    receipt_source = (root / "create_receipt.json").read_bytes()
+    receipt = _read_json(root / "create_receipt.json")
     label_freeze = _read_json(root / "label_freeze.json")
     review_freeze = _read_json(root / "review_freeze.json")
     unmasked_source = (root / "unmasked_items.jsonl").read_bytes()
-    if label_freeze.get("status") != "labels_and_adjudication_frozen":
-        raise ValueError("label freeze status mismatch")
-    if review_freeze.get("status") != "review_frozen_before_qrels":
+    _validate_label_freeze(label_freeze)
+    if (
+        review_freeze.get("schema_version") != "facet-local-minilm-review-freeze-v2"
+        or review_freeze.get("status") != "review_frozen_before_qrels"
+    ):
         raise ValueError("review freeze status mismatch")
     if review_freeze.get("qrels_opened") is not False:
         raise ValueError("review freeze qrels firewall mismatch")
-    if _sha256_bytes(unmasked_source) != review_freeze.get("unmasked_items_sha256"):
+    without_hash = {
+        key: value for key, value in review_freeze.items() if key != "review_freeze_sha256"
+    }
+    if review_freeze.get("review_freeze_sha256") != _sha256_bytes(
+        _pretty_bytes(without_hash)
+    ):
+        raise ValueError("review freeze self-hash mismatch")
+    bindings = review_freeze.get("bindings")
+    if not isinstance(bindings, Mapping):
+        raise ValueError("review freeze bindings are invalid")
+    label_sources = label_freeze["source_hashes"]
+    expected_bindings = {
+        "adjudication_sha256": label_sources["adjudication_sha256"],
+        "create_receipt_sha256": _sha256_bytes(receipt_source),
+        "label_freeze_sha256": label_freeze["label_freeze_sha256"],
+        "labels_a_sha256": label_sources["labels_a_sha256"],
+        "labels_b_sha256": label_sources["labels_b_sha256"],
+        "packet_sha256": create_verified["packet_sha256"],
+        "ranking_freeze_sha256": receipt["ranking_freeze_sha256"],
+        "rubric_sha256": receipt["rubric_sha256"],
+        "secret_map_sha256": receipt["secret_map_sha256"],
+        "unmasked_items_sha256": _sha256_bytes(unmasked_source),
+    }
+    if dict(bindings) != expected_bindings:
+        raise ValueError("review freeze binding mismatch")
+    for name, binding_name in (
+        ("labels_a.jsonl", "labels_a_sha256"),
+        ("labels_b.jsonl", "labels_b_sha256"),
+        ("adjudication.jsonl", "adjudication_sha256"),
+    ):
+        if _sha256_bytes((root / name).read_bytes()) != bindings[binding_name]:
+            raise ValueError(f"{name} source hash mismatch")
+    secret = _read_json(root / "secret_map.json")
+    recomputed = unmask_review(label_freeze, secret)
+    if _jsonl_bytes(recomputed["unmasked_items"]) != unmasked_source:
         raise ValueError("unmasked items hash mismatch")
-    return {"status": "verified_review_freeze"}
+    if recomputed["aggregate_counts"] != review_freeze.get("aggregate_counts"):
+        raise ValueError("review aggregate counts mismatch")
+    return {
+        "review_freeze_sha256": review_freeze["review_freeze_sha256"],
+        "status": "verified_review_freeze",
+    }
 
 
 def build_argument_parser() -> argparse.ArgumentParser:

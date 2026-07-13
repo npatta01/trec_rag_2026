@@ -408,6 +408,47 @@ def test_unmask_refuses_anything_except_a_verified_label_freeze(packet_and_secre
         unmask_review({"status": "awaiting_labels"}, secret)
 
 
+def test_unmask_rejects_forged_status_and_items(packet_and_secret):
+    packet, secret = packet_and_secret
+    forged = {
+        "status": "labels_and_adjudication_frozen",
+        "schema_version": "facet-local-minilm-label-freeze-v1",
+        "items": [
+            {
+                "item_id": row["item_id"],
+                "low_quality": False,
+                "relevance": "direct_answer",
+                "wrong_domain": False,
+            }
+            for row in packet
+        ],
+        "label_freeze_sha256": "0" * 64,
+    }
+    with pytest.raises(ValueError, match="label freeze"):
+        unmask_review(forged, secret)
+
+
+def test_label_freeze_binds_both_review_sources_and_adjudication(packet_and_secret):
+    packet, _secret = packet_and_secret
+    labels_a = _labels(packet, "reviewer-a")
+    labels_b = _labels(packet, "reviewer-b")
+    frozen = freeze_labels(packet, labels_a, labels_b, [])
+
+    assert set(frozen["source_hashes"]) == {
+        "adjudication_sha256",
+        "labels_a_sha256",
+        "labels_b_sha256",
+    }
+    assert all(len(value) == 64 for value in frozen["source_hashes"].values())
+
+
+def test_label_freeze_rejects_protected_packet_before_label_index(packet_and_secret):
+    packet, _secret = packet_and_secret
+    malicious = [{**packet[0], "topic_id": "144"}, *packet[1:]]
+    with pytest.raises(ValueError, match="protected topic 144"):
+        freeze_labels(malicious, [], [], [])
+
+
 def test_frozen_labels_unmask_shared_items_into_both_arm_denominators(
     packet_and_secret,
 ):
@@ -492,6 +533,26 @@ def test_create_stage_verifier_detects_packet_tampering(tmp_path, packet_and_sec
         verify_review_create(review)
 
 
+def test_create_verifier_rejects_semantic_secret_tampering_with_rehashed_receipt(
+    tmp_path, packet_and_secret
+):
+    packet, secret = packet_and_secret
+    review = tmp_path / "review_v1"
+    write_review_create(review, packet, secret)
+    secret_path = review / "secret_map.json"
+    receipt_path = review / "create_receipt.json"
+    tampered = json.loads(secret_path.read_text())
+    tampered["items"][0]["topic_id"] = "144"
+    secret_source = (json.dumps(tampered, indent=2, sort_keys=True) + "\n").encode()
+    secret_path.write_bytes(secret_source)
+    receipt = json.loads(receipt_path.read_text())
+    receipt["secret_map_sha256"] = hashlib.sha256(secret_source).hexdigest()
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        verify_review_create(review)
+
+
 def test_fixture_freeze_directory_persists_bound_label_and_unmask_artifacts(
     tmp_path,
     packet_and_secret,
@@ -532,6 +593,11 @@ def test_fixture_freeze_directory_persists_bound_label_and_unmask_artifacts(
     assert (review / "review_freeze.json").exists()
     assert (review / "unmasked_items.jsonl").exists()
     assert verify_review_freeze(review)["status"] == "verified_review_freeze"
+    stored = json.loads((review / "review_freeze.json").read_text())
+    assert len(stored["review_freeze_sha256"]) == 64
+    assert stored["bindings"]["ranking_freeze_sha256"] == secret[
+        "ranking_freeze_sha256"
+    ]
 
 
 def test_real_ranking_freeze_builds_exact_create_stage_without_external_work(tmp_path):
