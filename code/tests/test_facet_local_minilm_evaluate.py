@@ -23,6 +23,33 @@ from trec_rag.facet_local_minilm_evaluate import (
 )
 
 
+EXACT_RANKING_ARMS = (
+    "R1_LEGACY",
+    "C0_TOPIC_LOCAL",
+    "BF100_TOPIC_LOCAL",
+    "BF50_TOPIC_LOCAL",
+    "BF20_TOPIC_LOCAL",
+    "BO100_TOPIC_LOCAL",
+    "BB100_TOPIC_LOCAL",
+    "BF100_MAXP_TOPIC_LOCAL",
+    "BF100_LEGACY_FUSION",
+)
+
+
+class _UnreadableMapping(dict):
+    def __getitem__(self, key):
+        raise AssertionError(f"mapping read before topic firewall: {key}")
+
+    def get(self, key, default=None):
+        raise AssertionError(f"mapping read before topic firewall: {key}")
+
+    def items(self):
+        raise AssertionError("mapping read before topic firewall")
+
+    def values(self):
+        raise AssertionError("mapping read before topic firewall")
+
+
 def _qrels():
     return {
         "200": {"a": 3, "b": 2, "c": 1, "z": 0},
@@ -67,14 +94,45 @@ def _decision_kwargs():
     }
 
 
-def test_qrels_cannot_open_before_both_freezes_verify(monkeypatch, tmp_path):
-    monkeypatch.setattr(module, "read_qrels", lambda path: pytest.fail("qrels opened"))
+@pytest.mark.parametrize("failing_verifier", ["ranking", "review"])
+def test_qrels_cannot_open_before_each_freeze_verifies(
+    monkeypatch, tmp_path, failing_verifier
+):
+    def fail_ranking(path):
+        raise ValueError("ranking freeze is incomplete")
 
-    with pytest.raises(ValueError, match="freeze is incomplete"):
+    def fail_review(review, freeze):
+        raise ValueError("review freeze is incomplete")
+
+    monkeypatch.setattr(
+        module,
+        "verify_ranking_freeze",
+        fail_ranking
+        if failing_verifier == "ranking"
+        else lambda path: {"freeze_sha256": "b" * 64},
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_blinded_review_freeze",
+        fail_review
+        if failing_verifier == "review"
+        else lambda review, freeze: {"review_freeze_sha256": "c" * 64},
+    )
+    monkeypatch.setattr(
+        module, "load_frozen_inputs", lambda *args, **kwargs: pytest.fail("inputs loaded")
+    )
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels opened")
+    )
+
+    with pytest.raises(ValueError, match=f"{failing_verifier} freeze is incomplete"):
         evaluate(
-            tmp_path / "incomplete-freeze",
+            tmp_path / "freeze",
+            review_freeze=tmp_path / "review",
+            prior_evaluation=tmp_path / "prior.json",
             qrels_manifest=tmp_path / "safe_projection/manifest.json",
             qrels_approval=tmp_path / "approvals/qrels_access_v1.json",
+            output=tmp_path / "evaluation",
         )
 
 
@@ -138,6 +196,38 @@ def test_union_curves_reject_different_raw_candidate_sets_at_depth_100():
         )
 
 
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+@pytest.mark.parametrize("boundary", ["union", "retention", "prefusion"])
+def test_facet_boundaries_reject_out_of_scope_topics_before_qrels_access(
+    bad_topic, boundary
+):
+    qrels = {bad_topic: _UnreadableMapping()}
+    with pytest.raises(ValueError, match="topic boundary"):
+        if boundary == "union":
+            build_union_curves(
+                {bad_topic: ["o"]},
+                {(bad_topic, "f1"): ["a"]},
+                {(bad_topic, "f1"): ["a"]},
+                qrels,
+                depths=(20, 50, 100),
+            )
+        elif boundary == "retention":
+            build_facet_retention(
+                {"C0_TOPIC_LOCAL": {(bad_topic, "f1"): ["a"]}},
+                qrels,
+                baselines={"O": {bad_topic: set()}},
+            )
+        else:
+            compute_prefusion_evidence(
+                control_facets={(bad_topic, "f1"): ["a"]},
+                bf_facets={(bad_topic, "f1"): ["a"]},
+                stream_weights={(bad_topic, "f1"): 0.5},
+                control_final={bad_topic: ["a"]},
+                bf_final={bad_topic: ["a"]},
+                qrels=qrels,
+            )
+
+
 def test_overall_and_graded_relevance_formulas_are_distinct():
     metrics = evaluate_ranking(["a", "c", "z", "missing"], _qrels()["200"])
 
@@ -151,19 +241,21 @@ def test_overall_and_graded_relevance_formulas_are_distinct():
     assert metrics["judged_rate@100"] == pytest.approx(0.03)
 
 
-def test_ndcg_and_oracles_use_exact_dcg_formulas():
-    metrics = evaluate_ranking(["b", "x", "a"], _qrels()["200"])
-    actual_dcg = (2**2 - 1) / math.log2(2) + (2**3 - 1) / math.log2(4)
-    ideal_dcg = (2**3 - 1) / math.log2(2) + (2**2 - 1) / math.log2(3)
+def test_ndcg_idcg_uses_all_qrels_when_high_grade_document_is_omitted():
+    metrics = evaluate_ranking(["b", "x"], _qrels()["200"])
+    actual_dcg = (2**2 - 1) / math.log2(2)
+    ideal_dcg = (
+        (2**3 - 1) / math.log2(2)
+        + (2**2 - 1) / math.log2(3)
+        + (2**1 - 1) / math.log2(4)
+    )
 
     assert metrics["ndcg@10"] == pytest.approx(actual_dcg / ideal_dcg)
-    oracle_dcg = (2**3 - 1) / math.log2(2) + (2**2 - 1) / math.log2(3)
-    full_ideal_dcg = oracle_dcg + (2**1 - 1) / math.log2(4)
     assert metrics["oracle_ndcg@10_from_top50"] == pytest.approx(
-        oracle_dcg / full_ideal_dcg
+        actual_dcg / ideal_dcg
     )
     assert metrics["oracle_ndcg@10_from_top100"] == pytest.approx(
-        oracle_dcg / full_ideal_dcg
+        actual_dcg / ideal_dcg
     )
 
 
@@ -259,6 +351,24 @@ def test_review_macro_is_over_facets_and_shared_items_count_in_both_arms():
     assert review["macro_by_arm"]["BF50_TOPIC_LOCAL"]["direct_answer_rate"] == 0.5
     assert review["macro_by_arm"]["C0_TOPIC_LOCAL"]["wrong_domain_rate"] == 0.5
     assert review["macro_by_arm"]["BF50_TOPIC_LOCAL"]["wrong_domain_rate"] == 0.0
+
+
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+def test_review_memberships_reject_out_of_scope_topics_before_label_access(bad_topic):
+    rows = [
+        {
+            "label": _UnreadableMapping(),
+            "memberships": [
+                {
+                    "arm": "C0_TOPIC_LOCAL",
+                    "facet": {"topic_id": bad_topic, "variant_name": "f1"},
+                }
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        aggregate_review_metrics(rows)
 
 
 def test_candidate_generation_gap_is_first_and_never_opens_stage_a():
@@ -384,7 +494,11 @@ def test_sidecar_topic_rejection_occurs_before_qrels_data_access(monkeypatch, tm
     )
     monkeypatch.setattr(module, "verify_ranking_freeze", lambda path: {"freeze_sha256": "b" * 64})
     monkeypatch.setattr(module, "verify_blinded_review_freeze", lambda review, freeze: {"review_freeze_sha256": "c" * 64})
-    monkeypatch.setattr(module, "load_frozen_inputs", lambda *args: {})
+    monkeypatch.setattr(
+        module,
+        "load_frozen_inputs",
+        lambda *args, **kwargs: _synthetic_frozen_evaluation_inputs(),
+    )
     monkeypatch.setattr(module, "read_qrels", lambda path: pytest.fail("qrels opened"))
 
     with pytest.raises(ValueError, match="exactly topics"):
@@ -487,11 +601,7 @@ def _synthetic_frozen_evaluation_inputs():
     original = {}
     control_facets = {}
     bf_facets = {}
-    rankings = {
-        "R1_LEGACY": {},
-        "C0_TOPIC_LOCAL": {},
-        "BF100_TOPIC_LOCAL": {},
-    }
+    rankings = {arm: {} for arm in EXACT_RANKING_ARMS}
     ranking_rows = {arm: {} for arm in rankings}
     details = {}
     review_rows = []
@@ -520,6 +630,11 @@ def _synthetic_frozen_evaluation_inputs():
             ]
         rankings["C0_TOPIC_LOCAL"][topic_id] = [original_docid, control_docid]
         rankings["R1_LEGACY"][topic_id] = [original_docid, control_docid]
+        for arm in EXACT_RANKING_ARMS:
+            if topic_id not in rankings[arm]:
+                rankings[arm][topic_id] = list(
+                    rankings["C0_TOPIC_LOCAL"][topic_id]
+                )
         for arm in rankings:
             ranking_rows[arm][topic_id] = [
                 {
@@ -584,7 +699,270 @@ def _synthetic_frozen_evaluation_inputs():
     }
 
 
-def _write_synthetic_qrels_authorization(tmp_path):
+def _synthetic_qrels():
+    return {
+        "200": {"o-200": 3, "c-200": 2, "novel-200": 2},
+        "225": {"o-225": 3, "c-225": 2},
+        "707": {"o-707": 3, "c-707": 2},
+        "897": {"o-897": 3, "c-897": 2},
+    }
+
+
+def _artifact_bindings():
+    return {
+        "ranking_freeze_sha256": "b" * 64,
+        "review_freeze_sha256": "c" * 64,
+        "prior_evaluation_sha256": "d" * 64,
+        "qrels_manifest_sha256": "e" * 64,
+        "qrels_projection_sha256": "f" * 64,
+    }
+
+
+def _compact_json_bytes(value):
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode()
+
+
+def _pretty_json_bytes(value):
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _jsonl_bytes(rows):
+    return b"".join(_compact_json_bytes(row) for row in rows)
+
+
+def _write_synthetic_verified_freezes(tmp_path):
+    frozen_inputs = _synthetic_frozen_evaluation_inputs()
+    freeze = tmp_path / "freeze"
+    review = tmp_path / "review"
+    freeze.mkdir()
+    review.mkdir()
+    artifacts = {}
+
+    def write_artifact(relative, content, *, rows=None):
+        path = freeze / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        record = {
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+        if rows is not None:
+            record["rows"] = rows
+        artifacts[relative] = record
+        return record
+
+    ranking_records = {}
+    for arm in EXACT_RANKING_ARMS:
+        rows = [
+            row
+            for topic_id in PILOT_TOPIC_IDS
+            for row in frozen_inputs["ranking_rows"][arm][topic_id]
+        ]
+        relative = f"rankings/{arm}.jsonl"
+        record = write_artifact(relative, _jsonl_bytes(rows), rows=len(rows))
+        ranking_records[arm] = {
+            "file_sha256": record["sha256"],
+            "path": relative,
+            "rows": len(rows),
+        }
+
+    stream_records = []
+    retriever = "synthetic-retriever"
+    for topic_id in PILOT_TOPIC_IDS:
+        original_variant = f"original:{topic_id}"
+        original_rows = [
+            {
+                "aggregation": "bm25",
+                "document_id": docid,
+                "family": "original",
+                "passage": f"passage for {docid}",
+                "rank": rank,
+                "topic_id": topic_id,
+                "variant": original_variant,
+            }
+            for rank, docid in enumerate(frozen_inputs["original"][topic_id], start=1)
+        ]
+        original_path = f"streams/bm25/{topic_id}-original.jsonl"
+        original_record = write_artifact(
+            original_path, _jsonl_bytes(original_rows), rows=len(original_rows)
+        )
+        stream_records.append(
+            {
+                "aggregation": "bm25",
+                "family": "original",
+                "file_sha256": original_record["sha256"],
+                "path": original_path,
+                "retriever_name": retriever,
+                "rows": len(original_rows),
+                "topic_id": topic_id,
+                "variant_name": original_variant,
+            }
+        )
+
+    for (topic_id, variant), control_docids in frozen_inputs[
+        "control_facets"
+    ].items():
+        for aggregation, docids in (
+            ("bm25", control_docids),
+            ("top4", frozen_inputs["bf_facets"][(topic_id, variant)]),
+        ):
+            rows = [
+                {
+                    "aggregation": aggregation,
+                    "document_id": docid,
+                    "family": "facet",
+                    "passage": f"passage for {docid}",
+                    "rank": rank,
+                    "topic_id": topic_id,
+                    "variant": variant,
+                }
+                for rank, docid in enumerate(docids, start=1)
+            ]
+            relative = f"streams/{aggregation}/{topic_id}-{aggregation}.jsonl"
+            record = write_artifact(relative, _jsonl_bytes(rows), rows=len(rows))
+            stream_records.append(
+                {
+                    "aggregation": aggregation,
+                    "family": "facet",
+                    "file_sha256": record["sha256"],
+                    "path": relative,
+                    "retriever_name": retriever,
+                    "rows": len(rows),
+                    "topic_id": topic_id,
+                    "variant_name": variant,
+                }
+            )
+
+    weights = {
+        "schema_version": "family-rrf-topic-local-v2",
+        "weights": [
+            {
+                "topic_id": topic_id,
+                "variant_name": variant,
+                "weight": weight,
+            }
+            for (topic_id, variant), weight in frozen_inputs["stream_weights"].items()
+        ],
+    }
+    weight_path = "fusion_weights_v2.json"
+    write_artifact(weight_path, _pretty_json_bytes(weights))
+    freeze_root = {
+        "artifacts": artifacts,
+        "fusion_tables": {"family_rrf_topic_local_v2": weight_path},
+        "qrels_opened": False,
+        "rankings": ranking_records,
+        "schema_version": "facet-local-minilm-ranking-freeze-v1",
+        "status": "frozen_before_qrels",
+        "streams": stream_records,
+        "topic_ids": list(PILOT_TOPIC_IDS),
+    }
+    freeze_root["freeze_sha256"] = hashlib.sha256(
+        _compact_json_bytes(freeze_root)
+    ).hexdigest()
+    (freeze / "freeze.json").write_bytes(_pretty_json_bytes(freeze_root))
+
+    review_rows = frozen_inputs["review_rows"]
+    unmasked = _jsonl_bytes(review_rows)
+    (review / "unmasked_items.jsonl").write_bytes(unmasked)
+    review_root = {
+        "bindings": {
+            "ranking_freeze_sha256": freeze_root["freeze_sha256"],
+            "unmasked_items_sha256": hashlib.sha256(unmasked).hexdigest(),
+        },
+        "qrels_opened": False,
+        "schema_version": "facet-local-minilm-review-freeze-v2",
+        "status": "review_frozen_before_qrels",
+    }
+    review_root["review_freeze_sha256"] = hashlib.sha256(
+        _pretty_json_bytes(review_root)
+    ).hexdigest()
+    (review / "review_freeze.json").write_bytes(_pretty_json_bytes(review_root))
+
+    prior = tmp_path / "prior.json"
+    prior.write_bytes(_pretty_json_bytes({"schema_version": "prior-fixture-v1"}))
+    return {
+        "freeze": freeze,
+        "freeze_sha256": freeze_root["freeze_sha256"],
+        "prior": prior,
+        "review": review,
+        "review_freeze_sha256": review_root["review_freeze_sha256"],
+        "stream_to_mutate": freeze / stream_records[-1]["path"],
+    }
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_artifact_builder_requires_exact_preregistered_ranking_arms(mutation):
+    frozen_inputs = _synthetic_frozen_evaluation_inputs()
+    rankings = dict(frozen_inputs["rankings"])
+    if mutation == "missing":
+        rankings.pop("BF20_TOPIC_LOCAL")
+    else:
+        rankings["UNREGISTERED_ARM"] = rankings["C0_TOPIC_LOCAL"]
+    frozen_inputs = {**frozen_inputs, "rankings": rankings}
+
+    with pytest.raises(ValueError, match="exact preregistered system set"):
+        module.build_evaluation_artifacts(
+            frozen_inputs,
+            _synthetic_qrels(),
+            bindings=_artifact_bindings(),
+        )
+
+
+@pytest.mark.parametrize("boundary", ["original", "ranking", "review"])
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+def test_artifact_builder_rejects_out_of_scope_topics_before_qrels_values(
+    boundary, bad_topic
+):
+    frozen_inputs = _synthetic_frozen_evaluation_inputs()
+    if boundary == "original":
+        frozen_inputs["original"] = {
+            **frozen_inputs["original"],
+            bad_topic: ["forbidden"],
+        }
+    elif boundary == "ranking":
+        rankings = dict(frozen_inputs["rankings"])
+        rankings["C0_TOPIC_LOCAL"] = {
+            **rankings["C0_TOPIC_LOCAL"],
+            bad_topic: ["forbidden"],
+        }
+        frozen_inputs["rankings"] = rankings
+    else:
+        frozen_inputs["review_rows"] = [
+            *frozen_inputs["review_rows"],
+            {
+                "label": _UnreadableMapping(),
+                "memberships": [
+                    {
+                        "arm": "C0_TOPIC_LOCAL",
+                        "facet": {
+                            "topic_id": bad_topic,
+                            "variant_name": "forbidden",
+                        },
+                    }
+                ],
+            },
+        ]
+    unreadable_qrels = {
+        topic_id: _UnreadableMapping() for topic_id in PILOT_TOPIC_IDS
+    }
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        module.build_evaluation_artifacts(
+            frozen_inputs,
+            unreadable_qrels,
+            bindings=_artifact_bindings(),
+        )
+
+
+def _write_synthetic_qrels_authorization(
+    tmp_path,
+    *,
+    ranking_freeze_sha256="b" * 64,
+    review_freeze_sha256="c" * 64,
+):
     projection = tmp_path / "projection.txt"
     projection.write_text(
         "\n".join(
@@ -622,19 +1000,23 @@ def _write_synthetic_qrels_authorization(tmp_path):
                 "topic_ids": list(PILOT_TOPIC_IDS),
                 "qrels_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
                 "qrels_projection_sha256": projection_sha256,
-                "ranking_freeze_sha256": "b" * 64,
-                "review_freeze_sha256": "c" * 64,
+                "ranking_freeze_sha256": ranking_freeze_sha256,
+                "review_freeze_sha256": review_freeze_sha256,
             }
         )
     )
     return manifest_path, approval_path
 
 
-def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+def test_evaluate_rejects_frozen_input_topics_before_qrels_reader(
+    monkeypatch, tmp_path, bad_topic
 ):
     frozen_inputs = _synthetic_frozen_evaluation_inputs()
-    manifest, approval = _write_synthetic_qrels_authorization(tmp_path)
+    frozen_inputs["original"] = {
+        **frozen_inputs["original"],
+        bad_topic: ["forbidden"],
+    }
     monkeypatch.setattr(
         module, "verify_ranking_freeze", lambda path: {"freeze_sha256": "b" * 64}
     )
@@ -643,7 +1025,47 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
         "verify_blinded_review_freeze",
         lambda review, freeze: {"review_freeze_sha256": "c" * 64},
     )
-    monkeypatch.setattr(module, "load_frozen_inputs", lambda *args: frozen_inputs)
+    monkeypatch.setattr(
+        module, "load_frozen_inputs", lambda *args, **kwargs: frozen_inputs
+    )
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels opened")
+    )
+    output = tmp_path / "evaluation"
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        evaluate(
+            tmp_path / "freeze",
+            review_freeze=tmp_path / "review",
+            prior_evaluation=tmp_path / "prior.json",
+            qrels_manifest=tmp_path / "manifest.json",
+            qrels_approval=tmp_path / "approval.json",
+            output=output,
+        )
+    assert not (output / "qrels_access_receipt.json").exists()
+
+
+def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
+    monkeypatch, tmp_path
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path)
+    manifest, approval = _write_synthetic_qrels_authorization(
+        tmp_path,
+        ranking_freeze_sha256=frozen["freeze_sha256"],
+        review_freeze_sha256=frozen["review_freeze_sha256"],
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_ranking_freeze",
+        lambda path: {"freeze_sha256": frozen["freeze_sha256"]},
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_blinded_review_freeze",
+        lambda review, freeze: {
+            "review_freeze_sha256": frozen["review_freeze_sha256"]
+        },
+    )
     output = tmp_path / "evaluation"
     projection = tmp_path / "projection.txt"
     original_read_bytes = Path.read_bytes
@@ -658,9 +1080,9 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
     monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
 
     result = evaluate(
-        tmp_path / "freeze",
-        review_freeze=tmp_path / "review",
-        prior_evaluation=tmp_path / "prior.json",
+        frozen["freeze"],
+        review_freeze=frozen["review"],
+        prior_evaluation=frozen["prior"],
         qrels_manifest=manifest,
         qrels_approval=approval,
         output=output,
@@ -685,11 +1107,19 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
     for name in artifact_names:
         payload = json.loads((output / name).read_text())
         assert validate_self_hash(payload) is True
-        assert payload["bindings"]["ranking_freeze_sha256"] == "b" * 64
-        assert payload["bindings"]["review_freeze_sha256"] == "c" * 64
+        assert payload["bindings"]["ranking_freeze_sha256"] == frozen[
+            "freeze_sha256"
+        ]
+        assert payload["bindings"]["review_freeze_sha256"] == frozen[
+            "review_freeze_sha256"
+        ]
     assert result["artifacts"]["decision.json"]["decision"]["outcome"] == (
         "B_promotes_coverage"
     )
+    assert set(result["artifacts"]["systems.json"]["systems"]) == {
+        "O",
+        *EXACT_RANKING_ARMS,
+    }
     assert result["artifacts"]["decision.json"]["decision"][
         "stage_a_executed"
     ] is False
@@ -711,11 +1141,80 @@ def test_evaluate_publishes_eight_self_hashed_bound_artifacts(
     ]["100"]["aggregate"]
     assert aggregate_curve["unique_candidate_documents"] == 28
     assert aggregate_curve["relevant_documents"] == 9
+    loaded_again = module.load_frozen_inputs(
+        frozen["freeze"],
+        frozen["review"],
+        frozen["prior"],
+        ranking_freeze_sha256=frozen["freeze_sha256"],
+        review_freeze_sha256=frozen["review_freeze_sha256"],
+    )
     assert result["artifacts"] == module.build_evaluation_artifacts(
-        frozen_inputs,
+        loaded_again,
         result["qrels"],
         bindings=result["artifacts"]["decision.json"]["bindings"],
     )
+
+
+def test_mutation_after_freeze_verification_is_rejected_before_qrels(
+    monkeypatch, tmp_path
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path)
+
+    def verify_then_mutate(path):
+        frozen["stream_to_mutate"].write_bytes(b'{"tampered":true}\n')
+        return {"freeze_sha256": frozen["freeze_sha256"]}
+
+    monkeypatch.setattr(module, "verify_ranking_freeze", verify_then_mutate)
+    monkeypatch.setattr(
+        module,
+        "verify_blinded_review_freeze",
+        lambda review, freeze: {
+            "review_freeze_sha256": frozen["review_freeze_sha256"]
+        },
+    )
+    monkeypatch.setattr(
+        module, "read_qrels", lambda *args, **kwargs: pytest.fail("qrels opened")
+    )
+    output = tmp_path / "evaluation"
+
+    with pytest.raises(ValueError, match="authenticated artifact hash"):
+        evaluate(
+            frozen["freeze"],
+            review_freeze=frozen["review"],
+            prior_evaluation=frozen["prior"],
+            qrels_manifest=tmp_path / "manifest.json",
+            qrels_approval=tmp_path / "approval.json",
+            output=output,
+        )
+    assert not (output / "qrels_access_receipt.json").exists()
+
+
+@pytest.mark.parametrize("bad_topic", ["144", "999"])
+def test_declared_stream_topics_fail_before_any_bound_source_read(
+    monkeypatch, tmp_path, bad_topic
+):
+    frozen = _write_synthetic_verified_freezes(tmp_path)
+    root_path = frozen["freeze"] / "freeze.json"
+    root = json.loads(root_path.read_text())
+    root["streams"][0]["topic_id"] = bad_topic
+    root.pop("freeze_sha256")
+    root["freeze_sha256"] = hashlib.sha256(_compact_json_bytes(root)).hexdigest()
+    root_path.write_bytes(_pretty_json_bytes(root))
+    monkeypatch.setattr(
+        module,
+        "_read_authenticated_bytes",
+        lambda *args, **kwargs: pytest.fail("declared source read"),
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="topic boundary"):
+        module.load_frozen_inputs(
+            frozen["freeze"],
+            frozen["review"],
+            frozen["prior"],
+            ranking_freeze_sha256=root["freeze_sha256"],
+            review_freeze_sha256=frozen["review_freeze_sha256"],
+        )
 
 
 def test_existing_evaluation_leaf_blocks_before_qrels_access(monkeypatch, tmp_path):

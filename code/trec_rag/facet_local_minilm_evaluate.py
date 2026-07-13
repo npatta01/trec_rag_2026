@@ -15,6 +15,18 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 PILOT_TOPIC_IDS = ("200", "225", "707", "897")
+PILOT_TOPIC_ID_SET = frozenset(PILOT_TOPIC_IDS)
+PREREGISTERED_RANKING_ARMS = (
+    "R1_LEGACY",
+    "C0_TOPIC_LOCAL",
+    "BF100_TOPIC_LOCAL",
+    "BF50_TOPIC_LOCAL",
+    "BF20_TOPIC_LOCAL",
+    "BO100_TOPIC_LOCAL",
+    "BB100_TOPIC_LOCAL",
+    "BF100_MAXP_TOPIC_LOCAL",
+    "BF100_LEGACY_FUSION",
+)
 EVALUATION_ARTIFACT_NAMES = (
     "raw_union.json",
     "prefusion.json",
@@ -25,6 +37,92 @@ EVALUATION_ARTIFACT_NAMES = (
     "representatives.json",
     "decision.json",
 )
+
+
+def _validate_topic_boundary(
+    topic_ids: Iterable[Any], label: str, *, exact: bool = False
+) -> set[str]:
+    observed = {str(topic_id) for topic_id in topic_ids}
+    outside = observed - PILOT_TOPIC_ID_SET
+    if outside:
+        raise ValueError(
+            f"{label} topic boundary contains forbidden or out-of-scope topics: "
+            + ", ".join(sorted(outside))
+        )
+    if exact and observed != PILOT_TOPIC_ID_SET:
+        raise ValueError(
+            f"{label} topic boundary must be exactly " + ", ".join(PILOT_TOPIC_IDS)
+        )
+    return observed
+
+
+def _facet_topic_ids(
+    facets: Mapping[tuple[str, str], Any], label: str
+) -> set[str]:
+    topics: list[str] = []
+    for key in facets:
+        if not isinstance(key, tuple) or len(key) != 2:
+            raise ValueError(f"{label} facet key is invalid")
+        topics.append(str(key[0]))
+    return _validate_topic_boundary(topics, label)
+
+
+def _review_topic_ids(
+    rows: Sequence[Mapping[str, Any]], label: str, *, exact: bool = False
+) -> set[str]:
+    topics: list[str] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError(f"{label} row is invalid")
+        if "topic_id" in row:
+            topics.append(str(row["topic_id"]))
+        memberships = row.get("memberships")
+        if not isinstance(memberships, Sequence):
+            raise ValueError(f"{label} memberships are invalid")
+        for membership in memberships:
+            if not isinstance(membership, Mapping):
+                raise ValueError(f"{label} membership is invalid")
+            facet = membership.get("facet")
+            if not isinstance(facet, Mapping) or "topic_id" not in facet:
+                raise ValueError(f"{label} facet membership is invalid")
+            topics.append(str(facet["topic_id"]))
+    return _validate_topic_boundary(topics, label, exact=exact)
+
+
+def validate_frozen_input_topics(frozen_inputs: Mapping[str, Any]) -> None:
+    """Reject incomplete or out-of-scope frozen inputs before qrels access."""
+
+    original = frozen_inputs.get("original")
+    rankings = frozen_inputs.get("rankings")
+    control_facets = frozen_inputs.get("control_facets")
+    bf_facets = frozen_inputs.get("bf_facets")
+    stream_weights = frozen_inputs.get("stream_weights")
+    review_rows = frozen_inputs.get("review_rows")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (original, rankings, control_facets, bf_facets, stream_weights)
+    ) or not isinstance(review_rows, Sequence):
+        raise ValueError("frozen evaluator inputs are incomplete")
+    _validate_topic_boundary(original, "original ranking", exact=True)
+    if set(rankings) != set(PREREGISTERED_RANKING_ARMS):
+        raise ValueError("frozen evaluator inputs lack the exact preregistered system set")
+    for arm in PREREGISTERED_RANKING_ARMS:
+        per_topic = rankings[arm]
+        if not isinstance(per_topic, Mapping):
+            raise ValueError(f"final ranking {arm} is invalid")
+        _validate_topic_boundary(per_topic, f"{arm} ranking", exact=True)
+    control_topics = _facet_topic_ids(control_facets, "control facet streams")
+    bf_topics = _facet_topic_ids(bf_facets, "BF facet streams")
+    weight_topics = _facet_topic_ids(stream_weights, "facet stream weights")
+    if (
+        control_topics != PILOT_TOPIC_ID_SET
+        or bf_topics != PILOT_TOPIC_ID_SET
+        or weight_topics != PILOT_TOPIC_ID_SET
+        or set(control_facets) != set(bf_facets)
+        or set(control_facets) != set(stream_weights)
+    ):
+        raise ValueError("facet stream topic boundary or identity set is incomplete")
+    _review_topic_ids(review_rows, "blinded review", exact=True)
 
 
 @dataclass(frozen=True)
@@ -98,11 +196,6 @@ def evaluate_ranking(
     )
 
     ranked_grades = [max(0.0, normalized_qrels.get(docid, 0.0)) for docid in top10]
-    ideal_ranked_grades = sorted(
-        (grade for grade in ranked_grades if grade > 0.0), reverse=True
-    )[:10]
-    ideal_ranked_dcg = _dcg(ideal_ranked_grades)
-
     full_ideal_dcg = _dcg(sorted(positive_grades, reverse=True)[:10])
 
     def oracle_ndcg(pool: Sequence[str]) -> float:
@@ -126,7 +219,7 @@ def evaluate_ranking(
         "graded_recall@100": (
             graded_gain_at_100 / sum(positive_grades) if positive_grades else 0.0
         ),
-        "ndcg@10": _dcg(ranked_grades) / ideal_ranked_dcg if ideal_ranked_dcg else 0.0,
+        "ndcg@10": _dcg(ranked_grades) / full_ideal_dcg if full_ideal_dcg else 0.0,
         "judged_rate@10": sum(docid in normalized_qrels for docid in top10) / 10.0,
         "judged_rate@100": (
             sum(docid in normalized_qrels for docid in top100) / 100.0
@@ -146,6 +239,12 @@ def build_union_curves(
 ) -> dict[str, dict[int, dict[str, Any]]]:
     """Build paired, deduplicated pre-fusion candidate-union curves."""
 
+    original_topics = _validate_topic_boundary(original, "original union input")
+    control_topics = _facet_topic_ids(control_facets, "control union facets")
+    bf_topics = _facet_topic_ids(bf_facets, "BF union facets")
+    _validate_topic_boundary(qrels, "union qrels")
+    if original_topics != control_topics or original_topics != bf_topics:
+        raise ValueError("union input topic boundary differs between sources")
     if set(control_facets) != set(bf_facets):
         raise ValueError("control and BF must contain the same facet streams")
     if 100 in depths:
@@ -238,6 +337,14 @@ def build_facet_retention(
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Report relevant retention and unique contribution for every facet."""
 
+    facet_topics: set[str] = set()
+    for arm, facets in facets_by_arm.items():
+        facet_topics.update(_facet_topic_ids(facets, f"{arm} retention facets"))
+    _validate_topic_boundary(qrels, "retention qrels")
+    for baseline_name, per_topic in baselines.items():
+        _validate_topic_boundary(per_topic, f"{baseline_name} retention baseline")
+    if not facet_topics:
+        raise ValueError("facet retention topic boundary is empty")
     result: dict[str, dict[str, dict[str, Any]]] = {}
     for arm, facets in facets_by_arm.items():
         arm_rows: dict[str, dict[str, Any]] = {}
@@ -287,6 +394,24 @@ def compute_prefusion_evidence(
 ) -> dict[str, Any]:
     """Keep raw candidates, local-rank evidence, and final fusion sets distinct."""
 
+    control_topics = _facet_topic_ids(control_facets, "control prefusion facets")
+    bf_topics = _facet_topic_ids(bf_facets, "BF prefusion facets")
+    weight_topics = _facet_topic_ids(stream_weights, "prefusion stream weights")
+    control_final_topics = _validate_topic_boundary(
+        control_final, "control final ranking"
+    )
+    bf_final_topics = _validate_topic_boundary(bf_final, "BF final ranking")
+    _validate_topic_boundary(qrels, "prefusion qrels")
+    if not (
+        control_topics
+        == bf_topics
+        == weight_topics
+        == control_final_topics
+        == bf_final_topics
+    ) or set(control_facets) != set(bf_facets) or set(control_facets) != set(
+        stream_weights
+    ):
+        raise ValueError("prefusion topic boundary or facet identity set differs")
     facet_keys = sorted(
         set(control_facets) | set(bf_facets),
         key=lambda key: (_topic_sort_key(str(key[0])), str(key[1])),
@@ -401,6 +526,7 @@ def compute_prefusion_evidence(
 def aggregate_review_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate blinded labels within facets, then macro-average by arm."""
 
+    _review_topic_ids(rows, "blinded review")
     metric_names = (
         "direct_answer",
         "partial_or_related",
@@ -632,6 +758,32 @@ def _read_json_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+def _parse_json_object_bytes(source: bytes, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(source)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is missing or invalid") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def _parse_jsonl_bytes(source: bytes, label: str) -> list[dict[str, Any]]:
+    try:
+        values = [json.loads(line) for line in source.splitlines() if line.strip()]
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is missing or invalid") from exc
+    if any(not isinstance(value, dict) for value in values):
+        raise ValueError(f"{label} rows must be JSON objects")
+    return values
+
+
+def _pretty_json_bytes(payload: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
 def _validated_sha256(value: Any, label: str) -> str:
     if (
         not isinstance(value, str)
@@ -640,6 +792,20 @@ def _validated_sha256(value: Any, label: str) -> str:
     ):
         raise ValueError(f"{label} is not a lowercase SHA-256 digest")
     return value
+
+
+def _read_authenticated_bytes(
+    path: Path, expected_sha256: Any, label: str
+) -> bytes:
+    expected = _validated_sha256(expected_sha256, f"{label} hash")
+    try:
+        source = Path(path).read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError(f"{label} is missing or invalid") from exc
+    actual = hashlib.sha256(source).hexdigest()
+    if not hmac.compare_digest(expected, actual):
+        raise ValueError(f"{label} authenticated artifact hash differs")
+    return source
 
 
 def verify_ranking_freeze(freeze: Path) -> dict[str, Any]:
@@ -678,12 +844,71 @@ def verify_blinded_review_freeze(
 
 
 def load_frozen_inputs(
-    ranking_freeze: Path, review_freeze: Path, prior_evaluation: Path
+    ranking_freeze: Path,
+    review_freeze: Path,
+    prior_evaluation: Path,
+    *,
+    ranking_freeze_sha256: str,
+    review_freeze_sha256: str,
 ) -> dict[str, Any]:
-    """Load only already-frozen, qrels-free evaluator inputs."""
+    """Load frozen inputs from the exact bytes authenticated by both verifiers."""
 
+    ranking_hash = _validated_sha256(
+        ranking_freeze_sha256, "ranking freeze hash"
+    )
+    review_hash = _validated_sha256(review_freeze_sha256, "review freeze hash")
     ranking_root = Path(ranking_freeze)
-    freeze = _read_json_object(ranking_root / "freeze.json", "ranking freeze")
+    try:
+        ranking_root_source = (ranking_root / "freeze.json").read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("ranking freeze is missing or invalid") from exc
+    freeze = _parse_json_object_bytes(ranking_root_source, "ranking freeze")
+    if (
+        freeze.get("schema_version") != "facet-local-minilm-ranking-freeze-v1"
+        or freeze.get("status") != "frozen_before_qrels"
+        or freeze.get("qrels_opened") is not False
+    ):
+        raise ValueError("ranking freeze contract differs")
+    if freeze.get("topic_ids") != list(PILOT_TOPIC_IDS):
+        raise ValueError("ranking freeze topic boundary must be exactly the pilot topics")
+    claimed_ranking_hash = _validated_sha256(
+        freeze.get("freeze_sha256"), "ranking freeze self hash"
+    )
+    without_ranking_hash = dict(freeze)
+    without_ranking_hash.pop("freeze_sha256", None)
+    recomputed_ranking_hash = hashlib.sha256(
+        _canonical_json_bytes(without_ranking_hash, newline=True)
+    ).hexdigest()
+    if not hmac.compare_digest(claimed_ranking_hash, recomputed_ranking_hash):
+        raise ValueError("ranking freeze self hash differs")
+    if not hmac.compare_digest(claimed_ranking_hash, ranking_hash):
+        raise ValueError("ranking freeze changed after verification")
+
+    raw_ranking_records = freeze.get("rankings")
+    if not isinstance(raw_ranking_records, Mapping):
+        raise ValueError("ranking freeze lacks final ranking records")
+    if set(raw_ranking_records) != set(PREREGISTERED_RANKING_ARMS):
+        raise ValueError("ranking freeze lacks the exact preregistered system set")
+    stream_records = freeze.get("streams")
+    if not isinstance(stream_records, Sequence):
+        raise ValueError("ranking freeze lacks stream records")
+
+    # The root declarations are the only data inspected before this complete
+    # boundary check. No ranking or stream artifact may be opened first.
+    declared_stream_topics: list[str] = []
+    for raw_record in stream_records:
+        if not isinstance(raw_record, Mapping):
+            raise ValueError("ranking freeze has an invalid stream record")
+        if "topic_id" not in raw_record:
+            raise ValueError("stream topic boundary is missing")
+        declared_stream_topics.append(str(raw_record["topic_id"]))
+    _validate_topic_boundary(
+        declared_stream_topics, "declared stream", exact=True
+    )
+
+    artifact_records = freeze.get("artifacts")
+    if not isinstance(artifact_records, Mapping):
+        raise ValueError("ranking freeze lacks artifact hash bindings")
 
     def bound_path(raw_path: Any, label: str) -> Path:
         if not isinstance(raw_path, str) or not raw_path:
@@ -702,23 +927,24 @@ def load_frozen_inputs(
             ) from exc
         return path
 
-    def read_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
-        try:
-            values = [
-                json.loads(line)
-                for line in path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-        except (
-            FileNotFoundError,
-            OSError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-        ) as exc:
-            raise ValueError(f"{label} is missing or invalid") from exc
-        if any(not isinstance(value, dict) for value in values):
-            raise ValueError(f"{label} rows must be JSON objects")
-        return values
+    def read_bound_bytes(
+        raw_path: Any, label: str, *, record_sha256: Any | None = None
+    ) -> bytes:
+        path = bound_path(raw_path, label)
+        relative = path.relative_to(ranking_root).as_posix()
+        raw_artifact = artifact_records.get(relative)
+        if not isinstance(raw_artifact, Mapping):
+            raise ValueError(f"{label} lacks an authenticated artifact binding")
+        artifact_hash = _validated_sha256(
+            raw_artifact.get("sha256"), f"{label} artifact hash"
+        )
+        if record_sha256 is not None:
+            record_hash = _validated_sha256(
+                record_sha256, f"{label} declared hash"
+            )
+            if not hmac.compare_digest(record_hash, artifact_hash):
+                raise ValueError(f"{label} hash binding differs")
+        return _read_authenticated_bytes(path, artifact_hash, label)
 
     def docid(row: Mapping[str, Any]) -> str:
         value = row.get("docid", row.get("document_id"))
@@ -728,22 +954,27 @@ def load_frozen_inputs(
 
     rankings: dict[str, dict[str, list[str]]] = {}
     ranking_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    raw_ranking_records = freeze.get("rankings")
-    if not isinstance(raw_ranking_records, Mapping):
-        raise ValueError("ranking freeze lacks final ranking records")
     document_details: dict[tuple[str, str], dict[str, Any]] = {}
-    for arm, raw_record in raw_ranking_records.items():
+    for arm in PREREGISTERED_RANKING_ARMS:
+        raw_record = raw_ranking_records[arm]
         if not isinstance(raw_record, Mapping):
             raise ValueError("ranking freeze has an invalid final ranking record")
-        rows = read_jsonl(
-            bound_path(raw_record.get("path"), f"{arm} ranking"),
+        rows = _parse_jsonl_bytes(
+            read_bound_bytes(
+                raw_record.get("path"),
+                f"{arm} ranking",
+                record_sha256=raw_record.get("file_sha256"),
+            ),
             f"{arm} ranking",
+        )
+        _validate_topic_boundary(
+            (row.get("topic_id") for row in rows),
+            f"{arm} ranking",
+            exact=True,
         )
         by_topic: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             topic_id = str(row.get("topic_id"))
-            if topic_id not in PILOT_TOPIC_IDS:
-                raise ValueError("final ranking contains a topic outside the pilot")
             by_topic[topic_id].append(row)
             document_details.setdefault((topic_id, docid(row)), row)
         ordered = {
@@ -762,22 +993,27 @@ def load_frozen_inputs(
     original: dict[str, list[str]] = {}
     control_facets: dict[tuple[str, str], list[str]] = {}
     bf_facets: dict[tuple[str, str], list[str]] = {}
-    stream_records = freeze.get("streams")
-    if not isinstance(stream_records, Sequence):
-        raise ValueError("ranking freeze lacks stream records")
     for raw_record in stream_records:
-        if not isinstance(raw_record, Mapping):
-            raise ValueError("ranking freeze has an invalid stream record")
         aggregation = str(raw_record.get("aggregation"))
         family = str(raw_record.get("family"))
         if aggregation not in {"bm25", "top4"}:
             continue
         topic_id = str(raw_record.get("topic_id"))
         variant = str(raw_record.get("variant_name"))
-        rows = read_jsonl(
-            bound_path(raw_record.get("path"), "stream ranking"),
+        rows = _parse_jsonl_bytes(
+            read_bound_bytes(
+                raw_record.get("path"),
+                "stream ranking",
+                record_sha256=raw_record.get("file_sha256"),
+            ),
             "stream ranking",
         )
+        row_topics = _validate_topic_boundary(
+            (row.get("topic_id") for row in rows),
+            "stream ranking",
+        )
+        if row_topics != {topic_id}:
+            raise ValueError("stream ranking topic boundary differs from its declaration")
         ordered_rows = sorted(
             rows, key=lambda row: (int(row["rank"]), docid(row))
         )
@@ -800,8 +1036,8 @@ def load_frozen_inputs(
     fusion_tables = freeze.get("fusion_tables")
     if not isinstance(fusion_tables, Mapping):
         raise ValueError("ranking freeze lacks fusion weight tables")
-    weight_payload = _read_json_object(
-        bound_path(
+    weight_payload = _parse_json_object_bytes(
+        read_bound_bytes(
             fusion_tables.get("family_rrf_topic_local_v2"),
             "topic-local fusion weights",
         ),
@@ -810,6 +1046,15 @@ def load_frozen_inputs(
     raw_weights = weight_payload.get("weights")
     if not isinstance(raw_weights, Sequence):
         raise ValueError("topic-local fusion weights are invalid")
+    _validate_topic_boundary(
+        (
+            row.get("topic_id")
+            for row in raw_weights
+            if isinstance(row, Mapping)
+        ),
+        "topic-local fusion weights",
+        exact=True,
+    )
     stream_weights = {
         (str(row["topic_id"]), str(row["variant_name"])): float(row["weight"])
         for row in raw_weights
@@ -831,16 +1076,51 @@ def load_frozen_inputs(
     prior = prior_value
     if "artifact_sha256" in prior:
         validate_self_hash(prior)
-    review_path = Path(review_freeze) / "unmasked_items.jsonl"
+    review_root = Path(review_freeze)
     try:
-        review_rows = [
-            json.loads(line)
-            for line in review_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        review_root_source = (review_root / "review_freeze.json").read_bytes()
+    except (FileNotFoundError, OSError) as exc:
         raise ValueError("blinded-review freeze is incomplete") from exc
-    return {
+    review = _parse_json_object_bytes(
+        review_root_source, "blinded-review freeze"
+    )
+    if (
+        review.get("schema_version") != "facet-local-minilm-review-freeze-v2"
+        or review.get("status") != "review_frozen_before_qrels"
+        or review.get("qrels_opened") is not False
+    ):
+        raise ValueError("blinded-review freeze contract differs")
+    claimed_review_hash = _validated_sha256(
+        review.get("review_freeze_sha256"), "review freeze self hash"
+    )
+    without_review_hash = dict(review)
+    without_review_hash.pop("review_freeze_sha256", None)
+    recomputed_review_hash = hashlib.sha256(
+        _pretty_json_bytes(without_review_hash)
+    ).hexdigest()
+    if not hmac.compare_digest(claimed_review_hash, recomputed_review_hash):
+        raise ValueError("review freeze self hash differs")
+    if not hmac.compare_digest(claimed_review_hash, review_hash):
+        raise ValueError("review freeze changed after verification")
+    review_bindings = review.get("bindings")
+    if not isinstance(review_bindings, Mapping):
+        raise ValueError("blinded-review freeze bindings are invalid")
+    bound_ranking_hash = _validated_sha256(
+        review_bindings.get("ranking_freeze_sha256"),
+        "review ranking freeze binding",
+    )
+    if not hmac.compare_digest(bound_ranking_hash, ranking_hash):
+        raise ValueError("review freeze ranking binding differs")
+    review_rows = _parse_jsonl_bytes(
+        _read_authenticated_bytes(
+            review_root / "unmasked_items.jsonl",
+            review_bindings.get("unmasked_items_sha256"),
+            "blinded-review unmasked items",
+        ),
+        "blinded-review unmasked items",
+    )
+    _review_topic_ids(review_rows, "blinded review", exact=True)
+    result = {
         "bf_facets": bf_facets,
         "control_facets": control_facets,
         "document_details": document_details,
@@ -852,6 +1132,8 @@ def load_frozen_inputs(
         "review_rows": review_rows,
         "stream_weights": stream_weights,
     }
+    validate_frozen_input_topics(result)
+    return result
 
 
 def validate_qrels_authorization(
@@ -1049,6 +1331,8 @@ def build_evaluation_artifacts(
 ) -> dict[str, dict[str, Any]]:
     """Build the eight deterministic, self-hashed Task 6 artifacts."""
 
+    validate_frozen_input_topics(frozen_inputs)
+    _validate_topic_boundary(qrels, "evaluation qrels", exact=True)
     if tuple(qrels) != PILOT_TOPIC_IDS:
         raise ValueError("evaluation qrels must contain exactly the pilot topics")
     original = frozen_inputs.get("original")
@@ -1062,9 +1346,8 @@ def build_evaluation_artifacts(
         for value in (original, control_facets, bf_facets, rankings, stream_weights)
     ) or not isinstance(review_rows, Sequence):
         raise ValueError("frozen evaluator inputs are incomplete")
-    required_rankings = {"R1_LEGACY", "C0_TOPIC_LOCAL", "BF100_TOPIC_LOCAL"}
-    if not required_rankings.issubset(rankings):
-        raise ValueError("frozen evaluator inputs lack required final systems")
+    if set(rankings) != set(PREREGISTERED_RANKING_ARMS):
+        raise ValueError("frozen evaluator inputs lack the exact preregistered system set")
 
     system_rankings: dict[str, dict[str, list[str]]] = {
         "O": {
@@ -1473,15 +1756,20 @@ def evaluate(
 
     ranking = verify_ranking_freeze(Path(freeze))
     review = verify_blinded_review_freeze(Path(review_freeze), Path(freeze))
-    frozen_inputs = load_frozen_inputs(
-        Path(freeze), Path(review_freeze), Path(prior_evaluation)
-    )
     ranking_hash = _validated_sha256(
         ranking.get("freeze_sha256"), "ranking freeze hash"
     )
     review_hash = _validated_sha256(
         review.get("review_freeze_sha256"), "review freeze hash"
     )
+    frozen_inputs = load_frozen_inputs(
+        Path(freeze),
+        Path(review_freeze),
+        Path(prior_evaluation),
+        ranking_freeze_sha256=ranking_hash,
+        review_freeze_sha256=review_hash,
+    )
+    validate_frozen_input_topics(frozen_inputs)
     authorization = validate_qrels_authorization(
         Path(qrels_manifest),
         Path(qrels_approval),
