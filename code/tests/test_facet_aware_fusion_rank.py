@@ -382,8 +382,57 @@ def test_task2_candidates_are_adapted_to_existing_window_preflight_schema() -> N
             "variant": "233-positive",
             "document_id": "doc-1",
             "query": "teenager social media positive mental health impacts",
+            "text_sha256": hashlib.sha256(b"candidate text").hexdigest(),
         },
     )
+
+
+def test_task2_adapter_authenticates_text_in_real_window_preflight(
+    tmp_path: Path,
+) -> None:
+    query = "teenager social media positive mental health impacts"
+    text = "candidate café 🚀 text for authenticated window planning"
+    manifest = {
+        "qrels_opened": False,
+        "topic_ids": ["233"],
+        "facets": [
+            {
+                "topic_id": "233",
+                "facet_id": "233-positive",
+                "query": query,
+                "manifest_order": 0,
+            }
+        ],
+    }
+    retrieval_row = {
+        "schema_version": "facet-aware-fusion-candidate-v1",
+        "topic_id": "233",
+        "facet_id": "233-positive",
+        "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+        "rank": 1,
+        "docid": "doc-1",
+        "score": 123.0,
+        "text": text,
+        "request_key": "request-1",
+    }
+    adapted = prepare_scoring_candidates(manifest, [retrieval_row])
+    cache = module.GlobalScoreCache(
+        tmp_path / "score-cache", module.score_cache_context()
+    )
+
+    plan = module.build_scoring_preflight(adapted, _WordTokenizer(), cache)
+    assert len(plan.windows) == 1
+    assert adapted[0]["text_sha256"] == hashlib.sha256(
+        text.encode("utf-8")
+    ).hexdigest()
+
+    changed_text = {**adapted[0], "text": text + " changed"}
+    with pytest.raises(ValueError, match="candidate document hash mismatch"):
+        module.build_scoring_preflight([changed_text], _WordTokenizer(), cache)
+
+    changed_hash = {**adapted[0], "text_sha256": "0" * 64}
+    with pytest.raises(ValueError, match="candidate document hash mismatch"):
+        module.build_scoring_preflight([changed_hash], _WordTokenizer(), cache)
 
 
 def test_task2_summary_binds_validated_manifest_by_canonical_content(

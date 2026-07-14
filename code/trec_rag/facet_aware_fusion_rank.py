@@ -419,6 +419,7 @@ def prepare_scoring_candidates(
             "variant": facet_id,
             "document_id": docid,
             "query": query,
+            "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         }
         adapted.append(
             (int(facet["manifest_order"]), rank, docid, materialized)
