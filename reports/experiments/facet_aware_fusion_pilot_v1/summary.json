@@ -1,0 +1,93 @@
+{
+  "advisor": {
+    "recommended_next_experiment": "Test a **protected RRF backbone with globally scored residual facet slots** on fresh held-out topics.",
+    "verdict": "Keep `RRF` as the promoted arm. The mechanical decision is correct."
+  },
+  "bindings": {
+    "decision_self_sha256": "3e245a1630813d766f10204325c3f688695d0dff6edd5dcb455a86279fe54145",
+    "metrics_self_sha256": "3432f9ada144b37469903888163fb44a07c818c7153cc81d7a91e41a07dba4b4",
+    "ranking_freeze_sha256": "2e39eedeed0eebef3329493531ef56809ee4a346ed6aa372698705c2ce4a085f"
+  },
+  "cost": {
+    "candidate_rows": 2400,
+    "external_calls": 24,
+    "monetary_usd": 0,
+    "projected_local_seconds": 35.27063504454463,
+    "scored_windows": 9698,
+    "unique_local_pairs": 9610
+  },
+  "decision": {
+    "failed_checks": [
+      "graded_recall_improves",
+      "aggregate_ndcg_guardrail",
+      "per_topic_ndcg_guardrail"
+    ],
+    "no_new_arm_promoted": true,
+    "selected_arm": "RRF"
+  },
+  "facets": {
+    "accepted": 20,
+    "planned": 24,
+    "rejected": 4
+  },
+  "fusion": {
+    "cxq_forced_selection_count": 0,
+    "xq_cxq_byte_identical": true
+  },
+  "novel_relevant": {
+    "denominator": 73,
+    "denominator_definition": "Unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are absent from RRF@100.",
+    "retained_by_xq": 66
+  },
+  "schema_version": "facet-aware-fusion-report-summary-v1",
+  "systems": {
+    "BI": {
+      "graded_recall@100": 0.07919985876423521,
+      "judged_rate@10": 0.725,
+      "judged_rate@100": 0.71,
+      "ndcg@10": 0.4263822761669623,
+      "relevant@10": 6.5
+    },
+    "CXQ": {
+      "graded_recall@100": 0.057577340101966315,
+      "judged_rate@10": 0.5,
+      "judged_rate@100": 0.515,
+      "ndcg@10": 0.2835604646367565,
+      "relevant@10": 4.75
+    },
+    "O": {
+      "graded_recall@100": 0.11086482458282149,
+      "judged_rate@10": 1.0,
+      "judged_rate@100": 1.0,
+      "ndcg@10": 0.4719555340629681,
+      "relevant@10": 7.25
+    },
+    "RRF": {
+      "graded_recall@100": 0.11098237307135614,
+      "judged_rate@10": 1.0,
+      "judged_rate@100": 0.9824999999999999,
+      "ndcg@10": 0.5894638651596213,
+      "relevant@10": 8.0
+    },
+    "TUS-C": {
+      "graded_recall@100": 0.1074964255119414,
+      "judged_rate@10": 0.975,
+      "judged_rate@100": 0.95,
+      "ndcg@10": 0.48481606991480286,
+      "relevant@10": 7.75
+    },
+    "XQ": {
+      "graded_recall@100": 0.057577340101966315,
+      "judged_rate@10": 0.5,
+      "judged_rate@100": 0.515,
+      "ndcg@10": 0.2835604646367565,
+      "relevant@10": 4.75
+    }
+  },
+  "topic_ids": [
+    "233",
+    "273",
+    "161",
+    "14"
+  ]
+}

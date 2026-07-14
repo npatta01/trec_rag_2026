@@ -1,0 +1,1273 @@
+{
+  "manifest": {
+    "blocks": [
+      {
+        "body": "# Facet-aware fusion found useful evidence, but xQuAD spent too much ranking budget",
+        "id": "title",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Technical summary\n\n**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued 24 rate-limited BM25 facet requests, locally scored 9,698 windows with MiniLM, and incurred **$0** in paid cost. RRF improved nDCG@10 from 0.472 to 0.589 with essentially flat graded Recall@100.\n\n**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **66 of 73** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list: it allocated 311 of 400 positions to facet-only documents and did not demonstrate safe improvement.\n\n**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget.",
+        "id": "technical_summary",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Facets found relevant evidence that the main list missed\n\nThe residual set contains 73 unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are **absent from RRF@100**. RRF's zero is true by construction, not an independent failure. The advisor additionally verified 83 relevant facet documents absent from the original top 100; RRF recovered some and left 73 outside both lists.\n\nThe chart shows why the facet signal should be kept: XQ/CXQ retained 90.4% of that residual evidence. The unresolved problem is controlled insertion, not candidate discovery.",
+        "id": "facet_recall_finding",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "chartId": "novel_retention",
+        "id": "novel_retention_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "body": "## RRF improved the head; xQuAD consumed too much of the list\n\nRRF achieved the best nDCG@10 (0.589) and improved all four topics over the original query. XQ and CXQ fell to 0.284 because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. They replaced 290 RRF documents while only 51.5% of their top 100 was judged.\n\nThe preregistered guardrails correctly block promotion. Because 187 of 290 XQ additions were unjudged, the exact size of the apparent loss is uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’",
+        "id": "fusion_quality_finding",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "chartId": "system_ndcg",
+        "id": "ndcg_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "body": "## Every held-out topic improved at the top under RRF\n\nThe per-topic table preserves the exact metrics, judged coverage, and negative-result arms so aggregate gains cannot hide a topic regression.",
+        "id": "per_topic_intro",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "id": "per_topic_table",
+        "layout": "full",
+        "tableId": "per_topic_metrics",
+        "type": "table"
+      },
+      {
+        "body": "## The coherence gate removed four noisy streams before fusion\n\nTwenty of 24 facet streams passed. Four failed the frozen subject-anchor or anchor-plus-relation threshold. Content-quality warnings could prompt inspection but could not reject a stream by themselves.",
+        "id": "facet_gate_intro",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "id": "facet_gate_table",
+        "layout": "full",
+        "tableId": "facet_gates",
+        "type": "table"
+      },
+      {
+        "body": "## Rejected passages show why facet-local filtering is necessary\n\nThese bounded excerpts are retrieval diagnostics, not relevance judgments. They show partial topic overlap without enough evidence for the requested relation.",
+        "id": "rejected_example_intro",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "id": "rejected_example_table",
+        "layout": "full",
+        "tableId": "rejected_examples",
+        "type": "table"
+      },
+      {
+        "body": "## Scope and metric definitions\n\n**Scope.** Four deterministically selected, previously untouched development topics: 233, 273, 161, and 14. Protected topics 144, 213, 224, 407, and 515 and prior-pilot topics 200, 225, 707, and 897 were excluded.\n\n**nDCG@10** rewards placing higher-grade documents near the top. **Graded Recall@100** is the recovered relevance gain divided by all graded relevance gain in the projected qrels. **Judged@100** is the fraction of output documents present in the projection. **Novel retention** uses a deliberately RRF-relative denominator, so it compares alternative fusion arms only.",
+        "id": "scope_definitions",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## What ran and what stayed frozen\n\nThe endpoint returned top-100 BM25 results for 24 narrative-tethered facet queries under a persistent one-start-per-three-seconds limiter. Local `cross-encoder/ms-marco-MiniLM-L6-v2` scored each document against its own facet; 20 coherent streams survived the deterministic gate.\n\nSix depth-100 arms were frozen before qrels access: original (O), family-balanced RRF, balanced interleaving (BI), xQuAD (XQ), constrained xQuAD (CXQ), and a TUS-style consensus diagnostic (TUS-C). XQ and CXQ are byte-identical and the CXQ deadline never fired, so this pilot contains no independent deadline-forcing result.",
+        "id": "method",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Limitations and robustness\n\nThis is a four-topic pilot, not production generalization. Judging coverage is differential: O is 100% judged at depth 100, RRF 98.25%, and XQ/CXQ 51.5%. Unjudged documents are scored as zero, so the measured xQuAD loss combines real displacement with non-random missing judgments.\n\nThe ranking and evaluation files pass their native hash checks. No ranking was constructed after qrels access, no protected topic entered the pipeline, and no paid model or retrieval call was used.",
+        "id": "limitations",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "# Independent advisor memo\n\n## Verdict\n\nKeep `RRF` as the promoted arm. The mechanical decision is correct.\n\nHowever, the experiment does **not** show that facets or facet-local MiniLM failed. It shows that the tested xQuAD relevance term and its unbounded list allocation were unsafe:\n\n- Facet retrieval found substantial new judged-relevant evidence.\n- RRF used facet agreement effectively to improve top-rank ordering.\n- XQ/CXQ admitted far too many facet-only documents.\n- Incomplete judging materially exaggerates the apparent XQ/CXQ collapse.\n\nThe right conclusion is: **retain facets, replace the fusion design.**\n\n## Verified results\n\n| Arm | nDCG@10 | Graded Recall@100 | Relevant@10 | Judged@100 |\n|---|---:|---:|---:|---:|\n| Original | 0.4720 | 0.11086 | 7.25 | 100.0% |\n| RRF | **0.5895** | **0.11098** | **8.00** | 98.25% |\n| BI | 0.4264 | 0.07920 | 6.50 | 71.0% |\n| XQ/CXQ | 0.2836 | 0.05758 | 4.75 | 51.5% |\n| TUS-C | 0.4848 | 0.10750 | 7.75 | 95.0% |\n\nRRF improved nDCG@10 over the original on all four topics, while aggregate Recall@100 was essentially unchanged.\n\n## Why RRF improved nDCG\n\nAll 40 RRF top-10 documents were already in the original top-100. RRF therefore improved nDCG primarily by **reranking original candidates**, not by flooding the head with new facet-only documents.\n\nIt promoted original documents that also appeared strongly in one or more facet lists. Examples include original ranks 87, 25, 23, and 19 being promoted because facet-local MiniLM supplied corroborating evidence.\n\nThis is a useful facet signal: cross-stream agreement identified better full-topic documents.\n\n## Why XQ/CXQ retained 66 novel documents but lost effectiveness\n\nThe xQuAD relevance term was:\n\n`Rel(d) = max(original-rank score, best facet-rank score)`\n\nThat makes every stream’s rank-1 document globally equivalent:\n\n- original rank 1 → `Rel = 1`\n- every facet rank 1 → `Rel = 1`\n\nThus a document that is merely best for one narrow facet receives the same base relevance as the best original-query document. The “Rel” term was therefore not global topic relevance; it was the best local rank from any stream.\n\nThe consequence was severe:\n\n| Arm | Facet-only documents in top 100 across four topics |\n|---|---:|\n| RRF | 21 / 400 |\n| TUS-C | 38 / 400 |\n| BI | 195 / 400 |\n| XQ/CXQ | **311 / 400** |\n\nXQ replaced 290 RRF documents. Under available judgments, it gained 75 relevant documents but lost 207 relevant RRF documents.\n\nIts high novel retention—66/73—is real, but it was achieved by spending most of the ranking budget on facet streams. Novel retention alone can therefore be maximized while overall recall falls.\n\nThe main defect is a **fusion-budget and relevance-calibration problem**, not evidence that facet-local MiniLM cannot identify useful documents.\n\n## Novelty-definition audit\n\nThe 73-document denominator is:\n\n> Unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are absent from RRF@100.\n\nTherefore RRF retaining zero of these 73 is true **by construction**. It is not an independent criticism of RRF.\n\nNevertheless, the underlying recall finding is strong:\n\n- Accepted facet top-20 lists contained **83 judged-relevant documents absent from the original top 100**.\n- RRF recovered some of them, leaving **73 judged-relevant documents absent from both O and RRF**.\n- Counts for those 73 were:\n  - topic 233: 16\n  - topic 273: 7\n  - topic 161: 28\n  - topic 14: 22\n- XQ/CXQ retained 66: all novel documents for three topics and 15/22 for topic 14.\n\nThus the experiment does prove that facet decomposition plus local MiniLM adds useful recall candidates. The failure is getting those candidates safely into a depth-100 result.\n\n## Judging artifact\n\nThe evaluation treats unjudged documents as grade zero, but coverage differs sharply:\n\n- Original: 100% judged at 100\n- RRF: 98.25%\n- XQ/CXQ: 51.5%\n\nOf the 290 documents XQ added relative to RRF:\n\n- only 103 were judged;\n- 187 were unjudged.\n\nAll 290 RRF documents it displaced were judged.\n\nAmong judged XQ top-100 documents, 159/206 were grade ≥2, versus 291/393 for RRF. This judged-only comparison is not unbiased because missingness is highly non-random, but it shows that the evidence does not support calling all facet additions irrelevant.\n\nTherefore:\n\n- The preregistered metrics correctly block promotion.\n- The magnitude of the apparent XQ collapse is partly a judging-coverage artifact.\n- We should say “XQ did not demonstrate safe improvement,” not “XQ documents were proven irrelevant.”\n\n## Why XQ and CXQ were identical\n\nThe files are byte-identical, and every one of the 400 CXQ selections was recorded as an ordinary `xquad` selection. No deadline insertion fired.\n\nOrdinary XQ had already covered all accepted facets extremely early:\n\n- topic 233: by rank 2\n- topic 273: by rank 5\n- topic 161: by rank 4\n- topic 14: by rank 5\n\nThis is not evidence of a bug. It means the CXQ deadlines were inactive and the pilot provides no independent evidence about deadline forcing. It also confirms that base XQ was already over-aggressive about facet coverage.\n\n## Single best next bounded experiment\n\nTest a **protected RRF backbone with globally scored residual facet slots** on fresh held-out topics.\n\n1. Reuse the same BM25 and accepted facet candidates.\n2. Score the complete topic-level candidate union once with MiniLM using the **full original narrative**. Because every document receives the same query, these scores are comparable within the topic.\n3. Keep existing facet-local MiniLM ranks as the coverage signal.\n4. Freeze RRF ranks 1–80 unchanged.\n5. For the remaining 20 positions, select from:\n   - RRF ranks 81–100; and\n   - accepted-facet top-20 candidates absent from the protected head.\n6. Rank that residual pool by full-narrative MiniLM score, with at most two new documents per facet and no forced insertion.\n7. Keep an RRF tail document whenever its global narrative score exceeds the proposed facet replacement.\n8. Evaluate only after ranking freezes, and ensure every added output document is judged—or blind-adjudicate the at-most-80 additions across four topics.\n\nThis directly tests the missing capability:\n\n> Can globally relevant facet evidence replace only weak RRF-tail documents?\n\nIt preserves nDCG@10 exactly by construction, limits maximum disruption to 20%, adds no retrieval calls, uses the already-cached cheap MiniLM, and avoids comparing facet-local scores across queries.",
+        "id": "advisor_review",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Next experiment: protect RRF ranks 1–80\n\nOn fresh held-out topics, score the complete candidate union once against the **full original narrative**, keep RRF ranks 1–80 unchanged, and let RRF ranks 81–100 compete with residual facet candidates for only 20 positions. Cap new documents at two per facet and never force insertion.\n\nThis tests whether globally relevant facet evidence can replace only weak RRF-tail documents. It preserves nDCG@10 by construction, needs no new retrieval calls, and uses the already-cached cheap MiniLM model.",
+        "id": "next_step",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Further questions\n\n- Does full-narrative MiniLM separate the 73 residual candidates from weak RRF-tail documents?\n- How many of the at-most-80 inserted documents require blind adjudication to remove differential-judging bias?\n- Is the two-per-facet cap sufficient across topics with three versus seven accepted facets?",
+        "id": "further_questions",
+        "layout": "full",
+        "type": "markdown"
+      }
+    ],
+    "cards": [],
+    "charts": [
+      {
+        "comparisonContext": {
+          "baseline": "Original query",
+          "grain": "fusion arm",
+          "unit": "nDCG@10"
+        },
+        "dataset": "system_metric_rows",
+        "encodings": {
+          "tooltip": [
+            {
+              "field": "graded_recall_at_100",
+              "format": "number",
+              "label": "Graded Recall@100"
+            },
+            {
+              "field": "judged_rate_at_100",
+              "format": "percent",
+              "label": "Judged@100"
+            }
+          ],
+          "x": {
+            "field": "arm",
+            "label": "Arm",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "ndcg_at_10",
+            "format": "number",
+            "label": "nDCG@10",
+            "type": "quantitative"
+          }
+        },
+        "id": "system_ndcg",
+        "intent": "comparison",
+        "labels": {
+          "values": "all"
+        },
+        "layout": "full",
+        "palette": {
+          "kind": "sequential",
+          "name": "blue"
+        },
+        "question": "Which frozen arm best ranks highly relevant documents in the top 10?",
+        "rationale": "A categorical bar chart makes the six frozen-arm values directly comparable.",
+        "settings": {
+          "sort": "none"
+        },
+        "sourceId": "system_metrics_query",
+        "subtitle": "Four held-out topics; higher values indicate better top-10 ranking quality.",
+        "surface": {
+          "viewMode": "visualization"
+        },
+        "title": "nDCG@10 by retrieval and fusion arm",
+        "type": "bar",
+        "valueFormat": "number"
+      },
+      {
+        "comparisonContext": {
+          "denominator": "73 residual relevant facet documents",
+          "grain": "fusion arm",
+          "unit": "fraction"
+        },
+        "dataset": "novel_retention_rows",
+        "encodings": {
+          "tooltip": [
+            {
+              "field": "retained_relevant",
+              "format": "number",
+              "label": "Retained"
+            },
+            {
+              "field": "eligible_relevant",
+              "format": "number",
+              "label": "Eligible"
+            }
+          ],
+          "x": {
+            "field": "arm",
+            "label": "Arm",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "retention_fraction",
+            "format": "percent",
+            "label": "Retention",
+            "type": "quantitative"
+          }
+        },
+        "id": "novel_retention",
+        "intent": "comparison",
+        "labels": {
+          "values": "all"
+        },
+        "layout": "full",
+        "palette": {
+          "kind": "sequential",
+          "name": "blue"
+        },
+        "question": "How much of the verified residual facet evidence does each alternative retain?",
+        "rationale": "A bar chart exposes the coverage gain and its sharp tradeoff with ranking quality.",
+        "settings": {
+          "sort": "none"
+        },
+        "sourceId": "novel_retention_query",
+        "subtitle": "Share of 73 grade-≥2 accepted-facet candidates absent from the RRF top 100.",
+        "surface": {
+          "viewMode": "visualization"
+        },
+        "title": "Novel relevant facet documents retained at depth 100",
+        "type": "bar",
+        "valueFormat": "percent"
+      }
+    ],
+    "description": "Held-out sparse retrieval and facet-aware fusion pilot.",
+    "generatedAt": "2026-07-13T21:30:00Z",
+    "sources": [
+      {
+        "id": "pilot_manifest",
+        "label": "Pilot Manifest",
+        "path": "reports/experiments/facet_aware_fusion_pilot_v1/manifest.json",
+        "source_sha256": "a966bbdfb42e5fc3ff5b5e59b1a7365f408507ccc993eadadf3279c5331a0c66"
+      },
+      {
+        "id": "retrieval_summary",
+        "label": "Retrieval Summary",
+        "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/retrieval_summary.json",
+        "source_sha256": "3973995d0b651d27a0dbf495faf30d83933264cdb21b2c9a6b83b50dd5a607d0"
+      },
+      {
+        "id": "scoring_preflight",
+        "label": "Scoring Preflight",
+        "path": "outputs/rag25_facet_aware_fusion_v1/preflight_v1/preflight.json",
+        "source_sha256": "346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122"
+      },
+      {
+        "id": "benchmark",
+        "label": "Benchmark",
+        "path": "outputs/rag25_facet_aware_fusion_v1/benchmark_recovery_v1/benchmark_telemetry.json",
+        "source_sha256": "e7d341c2b3dc9216f51c8f62842ef836a3595f220bf891ee5a270070e753d757"
+      },
+      {
+        "id": "scoring_receipt",
+        "label": "Scoring Receipt",
+        "path": "outputs/rag25_facet_aware_fusion_v1/scoring_v1/scoring_receipt.json",
+        "source_sha256": "1c986664b04d624629b4640dbef6ac98387df26855f85fd1416df4bd8eda3c3e"
+      },
+      {
+        "id": "ranking_freeze",
+        "label": "Ranking Freeze",
+        "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/freeze.json",
+        "source_sha256": "2e39eedeed0eebef3329493531ef56809ee4a346ed6aa372698705c2ce4a085f"
+      },
+      {
+        "id": "facet_gates",
+        "label": "Facet Gates",
+        "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json",
+        "source_sha256": "baaafd25173f6524cc9b8b423de9deb14e4101a08448da27a0182b0676d24c29"
+      },
+      {
+        "id": "cxq_provenance",
+        "label": "Cxq Provenance",
+        "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/cxq_provenance.jsonl",
+        "source_sha256": "a2a336b6c386ecf98d95dfff4342c3848d1824834703bb3d9bd3e28544b2ba11"
+      },
+      {
+        "id": "retrieval_candidates",
+        "label": "Retrieval Candidates",
+        "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl",
+        "source_sha256": "5fd4cf2f22930950704291d9930eb737c1787f9d199bd8ae571a1ae6eb3066b6"
+      },
+      {
+        "id": "metrics",
+        "label": "Metrics",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+        "source_sha256": "67d264c5aeabfe63c81401247db03a1dbd799c737db6be8c3b3897fcae5c8c9d"
+      },
+      {
+        "id": "gains_losses",
+        "label": "Gains Losses",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+        "source_sha256": "e03e9869f90154968e7651ee799330865ed36af9f7cb1a2a364f5942e45a3875"
+      },
+      {
+        "id": "decision",
+        "label": "Decision",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/decision.json",
+        "source_sha256": "d166f157a53e73b386247562a604442b2e8855e5adcec5ba6263c6ca6834f4d1"
+      },
+      {
+        "id": "advisor_review",
+        "label": "Advisor Review",
+        "path": "reports/experiments/facet_aware_fusion_pilot_v1/advisor_review.md",
+        "source_sha256": "9ed3858975fe6d561aa1c253fce882218b8907a9ab5f306fc1e5c1d5861f3d19"
+      },
+      {
+        "id": "system_metrics_query",
+        "label": "System metrics materialization",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+        "query": {
+          "description": "Exact aggregate metric rows materialized from the hash-verified metrics artifact.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT 'O' AS \"arm\", 0.4719555340629681 AS \"ndcg_at_10\", 0.11086482458282149 AS \"graded_recall_at_100\", 7.25 AS \"relevant_at_10\", 1.0 AS \"judged_rate_at_10\", 1.0 AS \"judged_rate_at_100\"\nUNION ALL\nSELECT 'RRF', 0.5894638651596213, 0.11098237307135614, 8.0, 1.0, 0.9824999999999999\nUNION ALL\nSELECT 'TUS-C', 0.48481606991480286, 0.1074964255119414, 7.75, 0.975, 0.95\nUNION ALL\nSELECT 'BI', 0.4263822761669623, 0.07919985876423521, 6.5, 0.725, 0.71\nUNION ALL\nSELECT 'XQ', 0.2835604646367565, 0.057577340101966315, 4.75, 0.5, 0.515\nUNION ALL\nSELECT 'CXQ', 0.2835604646367565, 0.057577340101966315, 4.75, 0.5, 0.515"
+        },
+        "source_sha256": "939d907508c718d458440c7875e00e464bb9c3ab357680b44204b971610c1f83"
+      },
+      {
+        "id": "novel_retention_query",
+        "label": "Novel retention materialization",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+        "query": {
+          "description": "Exact novel-retention rows materialized from the hash-verified gains/losses artifact.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT 'TUS-C' AS \"arm\", 7 AS \"retained_relevant\", 73 AS \"eligible_relevant\", 0.0958904109589041 AS \"retention_fraction\", 3 AS \"topics_with_positive_retention\"\nUNION ALL\nSELECT 'BI', 52, 73, 0.7123287671232876, 4\nUNION ALL\nSELECT 'XQ', 66, 73, 0.9041095890410958, 4\nUNION ALL\nSELECT 'CXQ', 66, 73, 0.9041095890410958, 4"
+        },
+        "source_sha256": "950b7d6a9b63c092f39b2f8ec059dafa877f7f70bc4820b4bdd988f2de53042c"
+      },
+      {
+        "id": "per_topic_metrics_query",
+        "label": "Per-topic metrics materialization",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+        "query": {
+          "description": "Exact per-topic metric rows materialized from the hash-verified metrics artifact.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT '233' AS \"topic_id\", 'O' AS \"arm\", 0.5438357471436231 AS \"ndcg_at_10\", 0.08202975963372758 AS \"graded_recall_at_100\", 9 AS \"relevant_at_10\", 1.0 AS \"judged_rate_at_100\"\nUNION ALL\nSELECT '273', 'O', 0.32232755593747364, 0.11835577604535791, 5, 1.0\nUNION ALL\nSELECT '161', 'O', 0.6663255610722455, 0.11892642295233688, 8, 1.0\nUNION ALL\nSELECT '14', 'O', 0.3553332720985301, 0.12414733969986358, 7, 1.0\nUNION ALL\nSELECT '233', 'RRF', 0.6892968798970169, 0.0843189622281572, 10, 0.94\nUNION ALL\nSELECT '273', 'RRF', 0.40929587546934315, 0.11835577604535791, 6, 1.0\nUNION ALL\nSELECT '161', 'RRF', 0.8284009462408221, 0.11892642295233688, 9, 1.0\nUNION ALL\nSELECT '14', 'RRF', 0.430861759031303, 0.12232833105957254, 7, 0.99\nUNION ALL\nSELECT '233', 'TUS-C', 0.5263601439674077, 0.0866081648225868, 10, 0.96\nUNION ALL\nSELECT '273', 'TUS-C', 0.32336602905302214, 0.11268603827072998, 5, 0.94\nUNION ALL\nSELECT '161', 'TUS-C', 0.7342048345402515, 0.11291068949560389, 9, 0.95\nUNION ALL\nSELECT '14', 'TUS-C', 0.3553332720985301, 0.11778080945884493, 7, 0.95\nUNION ALL\nSELECT '233', 'BI', 0.5441868087588073, 0.08126669210225104, 10, 0.84\nUNION ALL\nSELECT '273', 'BI', 0.28104264089305553, 0.06803685329553508, 5, 0.59\nUNION ALL\nSELECT '161', 'BI', 0.59134027165232, 0.08745950948634891, 7, 0.76\nUNION ALL\nSELECT '14', 'BI', 0.2889593833636663, 0.08003638017280582, 4, 0.65\nUNION ALL\nSELECT '233', 'XQ', 0.5345486262295351, 0.08202975963372758, 10, 0.8\nUNION ALL\nSELECT '273', 'XQ', 0.10020664705566687, 0.03614457831325301, 2, 0.3\nUNION ALL\nSELECT '161', 'XQ', 0.3703797716036438, 0.06802406293382693, 5, 0.6\nUNION ALL\nSELECT '14', 'XQ', 0.12910681365818008, 0.04411095952705776, 2, 0.36\nUNION ALL\nSELECT '233', 'CXQ', 0.5345486262295351, 0.08202975963372758, 10, 0.8\nUNION ALL\nSELECT '273', 'CXQ', 0.10020664705566687, 0.03614457831325301, 2, 0.3\nUNION ALL\nSELECT '161', 'CXQ', 0.3703797716036438, 0.06802406293382693, 5, 0.6\nUNION ALL\nSELECT '14', 'CXQ', 0.12910681365818008, 0.04411095952705776, 2, 0.36"
+        },
+        "source_sha256": "b5aeeb0fb4d25e3e969b6f07ada41a766817e8ee1519f8b35166e70ea961625c"
+      },
+      {
+        "id": "facet_gate_query",
+        "label": "Facet gate materialization",
+        "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json",
+        "query": {
+          "description": "Exact deterministic gate rows materialized from the frozen gate artifact.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT 13 AS \"manifest_order\", '161' AS \"topic_id\", '161-political-ideologies' AS \"facet_id\", 0 AS \"accepted\", 0 AS \"anchor_top5_count\", 0 AS \"anchor_relation_top5_count\", 0 AS \"wrong_domain_top5_count\", 0 AS \"content_warning_top5_count\", 'anchor, anchor_relation' AS \"failed_checks\"\nUNION ALL\nSELECT 14, '161', '161-historical-changes', 0, 1, 0, 0, 1, 'anchor, anchor_relation'\nUNION ALL\nSELECT 6, '273', '273-economic-changes', 0, 5, 1, 0, 0, 'anchor_relation'\nUNION ALL\nSELECT 11, '161', '161-laws-and-rights', 0, 2, 2, 0, 0, 'anchor'\nUNION ALL\nSELECT 12, '161', '161-rapture-beliefs', 1, 3, 3, 0, 0, 'none'\nUNION ALL\nSELECT 19, '14', '14-cultural-influence', 1, 5, 4, 0, 0, 'none'\nUNION ALL\nSELECT 20, '14', '14-business', 1, 5, 4, 0, 0, 'none'\nUNION ALL\nSELECT 18, '14', '14-inclusion', 1, 5, 4, 0, 0, 'none'\nUNION ALL\nSELECT 17, '14', '14-athlete-compensation', 1, 5, 4, 0, 2, 'none'\nUNION ALL\nSELECT 22, '14', '14-training', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 8, '273', '273-cameroon-resource', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 15, '161', '161-current-options', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 21, '14', '14-equipment', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 16, '161', '161-rights-group-priorities', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 23, '14', '14-mindset', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 4, '273', '273-resource-distribution', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 5, '273', '273-historical-events', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 7, '273', '273-morocco-location', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 2, '233', '233-depression-contribution', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 9, '273', '273-continent-capacity', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 0, '233', '233-positive-impact', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 1, '233', '233-negative-impact', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 3, '273', '273-poverty-perception', 1, 5, 5, 0, 2, 'none'\nUNION ALL\nSELECT 10, '161', '161-arguments-and-views', 1, 5, 5, 0, 2, 'none'"
+        },
+        "source_sha256": "85c06bbf57239558ac401a50c0f804ed24c606f4e2ce3b5d13eae175d399c60f"
+      },
+      {
+        "id": "rejected_examples_query",
+        "label": "Rejected passage materialization",
+        "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl",
+        "query": {
+          "description": "Four bounded rank-one diagnostic excerpts materialized from frozen retrieval candidates.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT '161' AS \"topic_id\", '161-political-ideologies' AS \"facet_id\", 'shard_03277_46451' AS \"document_id\", 'anchor, anchor_relation' AS \"failed_checks\", 'In social science, access to contraception and abortion services is a critical aspect of reproductive health and rights. This section will delve into the disparities in access to contraception worldwide and explore the role of politics and ideology in shaping these disparities. We will use the example of Planned Parenthood in the United States and its defunding as a lens through which to examine broader global issues surrounding reproductive healthcare. First, let us define some key terms. Repr…' AS \"passage_excerpt\", 1 AS \"diagnostic_only\"\nUNION ALL\nSELECT '161', '161-historical-changes', 'shard_04451_75204', 'anchor, anchor_relation', 'Cart Uncategorized History of Abortion Legalization: How it Became Legal How Did Abortion Become Legal Abortion has been a highly controversial and polarizing topic for decades. The legality of abortion has been the subject of intense debate and activism, ultimately leading to landmark legal decisions that have shaped the laws surrounding the issue. In this blog post, we will explore the historical and legal journey that led to the legalization of abortion in the United States. Historical Backg…', 1\nUNION ALL\nSELECT '273', '273-economic-changes', 'shard_04477_70241', 'anchor_relation', 'The climate crisis is hitting hardest in countries that contribute to it the least — how can the UK move to be part of the solution rather than part of the problem? The UK-Africa Summit, held in January in London, has highlighted a policy conundrum. On the one hand, Boris Johnson''s opening speech stated that the country would refrain from investing in coal projects in Africa, a decision which actually goes back to 2002. On the other hand, Green Party MP Caroline Lucas and The Guardian revealed…', 1\nUNION ALL\nSELECT '161', '161-laws-and-rights', 'shard_05564_4782', 'anchor', 'The rationale behind the first abortion law was largely based on moral and religious beliefs, with many viewing abortion as a sin or immoral act. Additionally, concerns about population growth and the desire to protect fetal life played a role in shaping these early laws. 4. How have abortion laws evolved since the first one was passed? Abortion laws have evolved significantly since the first one was passed, with a gradual shift towards greater reproductive rights and autonomy for women. Howeve…', 1"
+        },
+        "source_sha256": "93dc193c46594fb5c74f8651644e92c7bbfe6c7fdafdd53a7da118b7467e310b"
+      }
+    ],
+    "surface": "report",
+    "tables": [
+      {
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "arm",
+            "label": "Arm",
+            "type": "text"
+          },
+          {
+            "field": "ndcg_at_10",
+            "format": "number",
+            "label": "nDCG@10"
+          },
+          {
+            "field": "graded_recall_at_100",
+            "format": "number",
+            "label": "Graded Recall@100"
+          },
+          {
+            "field": "relevant_at_10",
+            "format": "number",
+            "label": "Relevant@10"
+          },
+          {
+            "field": "judged_rate_at_100",
+            "format": "percent",
+            "label": "Judged@100"
+          }
+        ],
+        "dataset": "per_topic_metric_rows",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "topic_id"
+        },
+        "density": "dense",
+        "id": "per_topic_metrics",
+        "layout": "full",
+        "sourceId": "per_topic_metrics_query",
+        "subtitle": "All four held-out topics and all six frozen arms.",
+        "title": "Per-topic metric audit"
+      },
+      {
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "facet_id",
+            "label": "Facet",
+            "type": "text"
+          },
+          {
+            "field": "accepted",
+            "label": "Accepted",
+            "type": "text"
+          },
+          {
+            "field": "anchor_top5_count",
+            "format": "number",
+            "label": "Anchor in top 5"
+          },
+          {
+            "field": "anchor_relation_top5_count",
+            "format": "number",
+            "label": "Anchor + relation"
+          },
+          {
+            "field": "failed_checks",
+            "label": "Failed checks",
+            "type": "text"
+          }
+        ],
+        "dataset": "facet_gate_rows",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "topic_id"
+        },
+        "density": "dense",
+        "id": "facet_gates",
+        "layout": "full",
+        "sourceId": "facet_gate_query",
+        "subtitle": "Twenty streams passed; four failed frozen anchor or relation checks.",
+        "title": "Facet stream coherence gates"
+      },
+      {
+        "columns": [
+          {
+            "field": "topic_id",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "facet_id",
+            "label": "Rejected facet",
+            "type": "text"
+          },
+          {
+            "field": "failed_checks",
+            "label": "Why rejected",
+            "type": "text"
+          },
+          {
+            "field": "passage_excerpt",
+            "label": "Top passage excerpt",
+            "type": "text"
+          }
+        ],
+        "dataset": "rejected_facet_example_rows",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "topic_id"
+        },
+        "density": "spacious",
+        "id": "rejected_examples",
+        "layout": "full",
+        "sourceId": "rejected_examples_query",
+        "subtitle": "Top BM25 passage from each rejected stream; diagnostic excerpts only.",
+        "title": "Representative rejected-stream evidence"
+      }
+    ],
+    "title": "Facet-aware fusion found useful evidence, but xQuAD spent too much ranking budget",
+    "version": 1
+  },
+  "snapshot": {
+    "datasets": {
+      "facet_gate_rows": [
+        {
+          "accepted": 0,
+          "anchor_relation_top5_count": 0,
+          "anchor_top5_count": 0,
+          "content_warning_top5_count": 0,
+          "facet_id": "161-political-ideologies",
+          "failed_checks": "anchor, anchor_relation",
+          "manifest_order": 13,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 0,
+          "anchor_relation_top5_count": 0,
+          "anchor_top5_count": 1,
+          "content_warning_top5_count": 1,
+          "facet_id": "161-historical-changes",
+          "failed_checks": "anchor, anchor_relation",
+          "manifest_order": 14,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 0,
+          "anchor_relation_top5_count": 1,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "273-economic-changes",
+          "failed_checks": "anchor_relation",
+          "manifest_order": 6,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 0,
+          "anchor_relation_top5_count": 2,
+          "anchor_top5_count": 2,
+          "content_warning_top5_count": 0,
+          "facet_id": "161-laws-and-rights",
+          "failed_checks": "anchor",
+          "manifest_order": 11,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 3,
+          "anchor_top5_count": 3,
+          "content_warning_top5_count": 0,
+          "facet_id": "161-rapture-beliefs",
+          "failed_checks": "none",
+          "manifest_order": 12,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 4,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "14-cultural-influence",
+          "failed_checks": "none",
+          "manifest_order": 19,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 4,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "14-business",
+          "failed_checks": "none",
+          "manifest_order": 20,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 4,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "14-inclusion",
+          "failed_checks": "none",
+          "manifest_order": 18,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 4,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 2,
+          "facet_id": "14-athlete-compensation",
+          "failed_checks": "none",
+          "manifest_order": 17,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "14-training",
+          "failed_checks": "none",
+          "manifest_order": 22,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "273-cameroon-resource",
+          "failed_checks": "none",
+          "manifest_order": 8,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "161-current-options",
+          "failed_checks": "none",
+          "manifest_order": 15,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "14-equipment",
+          "failed_checks": "none",
+          "manifest_order": 21,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "161-rights-group-priorities",
+          "failed_checks": "none",
+          "manifest_order": 16,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "14-mindset",
+          "failed_checks": "none",
+          "manifest_order": 23,
+          "topic_id": "14",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "273-resource-distribution",
+          "failed_checks": "none",
+          "manifest_order": 4,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "273-historical-events",
+          "failed_checks": "none",
+          "manifest_order": 5,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 0,
+          "facet_id": "273-morocco-location",
+          "failed_checks": "none",
+          "manifest_order": 7,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 1,
+          "facet_id": "233-depression-contribution",
+          "failed_checks": "none",
+          "manifest_order": 2,
+          "topic_id": "233",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 1,
+          "facet_id": "273-continent-capacity",
+          "failed_checks": "none",
+          "manifest_order": 9,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 1,
+          "facet_id": "233-positive-impact",
+          "failed_checks": "none",
+          "manifest_order": 0,
+          "topic_id": "233",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 1,
+          "facet_id": "233-negative-impact",
+          "failed_checks": "none",
+          "manifest_order": 1,
+          "topic_id": "233",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 2,
+          "facet_id": "273-poverty-perception",
+          "failed_checks": "none",
+          "manifest_order": 3,
+          "topic_id": "273",
+          "wrong_domain_top5_count": 0
+        },
+        {
+          "accepted": 1,
+          "anchor_relation_top5_count": 5,
+          "anchor_top5_count": 5,
+          "content_warning_top5_count": 2,
+          "facet_id": "161-arguments-and-views",
+          "failed_checks": "none",
+          "manifest_order": 10,
+          "topic_id": "161",
+          "wrong_domain_top5_count": 0
+        }
+      ],
+      "headline_metrics": [
+        {
+          "accepted_facets": 20,
+          "external_calls": 24,
+          "local_cost_usd": 0,
+          "novel_relevant_candidates": 73,
+          "rrf_graded_recall_at_100": 0.11098237307135614,
+          "rrf_ndcg_at_10": 0.5894638651596213
+        }
+      ],
+      "novel_retention_rows": [
+        {
+          "arm": "TUS-C",
+          "eligible_relevant": 73,
+          "retained_relevant": 7,
+          "retention_fraction": 0.0958904109589041,
+          "topics_with_positive_retention": 3
+        },
+        {
+          "arm": "BI",
+          "eligible_relevant": 73,
+          "retained_relevant": 52,
+          "retention_fraction": 0.7123287671232876,
+          "topics_with_positive_retention": 4
+        },
+        {
+          "arm": "XQ",
+          "eligible_relevant": 73,
+          "retained_relevant": 66,
+          "retention_fraction": 0.9041095890410958,
+          "topics_with_positive_retention": 4
+        },
+        {
+          "arm": "CXQ",
+          "eligible_relevant": 73,
+          "retained_relevant": 66,
+          "retention_fraction": 0.9041095890410958,
+          "topics_with_positive_retention": 4
+        }
+      ],
+      "per_topic_metric_rows": [
+        {
+          "arm": "O",
+          "graded_recall_at_100": 0.08202975963372758,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.5438357471436231,
+          "relevant_at_10": 9,
+          "topic_id": "233"
+        },
+        {
+          "arm": "O",
+          "graded_recall_at_100": 0.11835577604535791,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.32232755593747364,
+          "relevant_at_10": 5,
+          "topic_id": "273"
+        },
+        {
+          "arm": "O",
+          "graded_recall_at_100": 0.11892642295233688,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.6663255610722455,
+          "relevant_at_10": 8,
+          "topic_id": "161"
+        },
+        {
+          "arm": "O",
+          "graded_recall_at_100": 0.12414733969986358,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.3553332720985301,
+          "relevant_at_10": 7,
+          "topic_id": "14"
+        },
+        {
+          "arm": "RRF",
+          "graded_recall_at_100": 0.0843189622281572,
+          "judged_rate_at_100": 0.94,
+          "ndcg_at_10": 0.6892968798970169,
+          "relevant_at_10": 10,
+          "topic_id": "233"
+        },
+        {
+          "arm": "RRF",
+          "graded_recall_at_100": 0.11835577604535791,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.40929587546934315,
+          "relevant_at_10": 6,
+          "topic_id": "273"
+        },
+        {
+          "arm": "RRF",
+          "graded_recall_at_100": 0.11892642295233688,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.8284009462408221,
+          "relevant_at_10": 9,
+          "topic_id": "161"
+        },
+        {
+          "arm": "RRF",
+          "graded_recall_at_100": 0.12232833105957254,
+          "judged_rate_at_100": 0.99,
+          "ndcg_at_10": 0.430861759031303,
+          "relevant_at_10": 7,
+          "topic_id": "14"
+        },
+        {
+          "arm": "TUS-C",
+          "graded_recall_at_100": 0.0866081648225868,
+          "judged_rate_at_100": 0.96,
+          "ndcg_at_10": 0.5263601439674077,
+          "relevant_at_10": 10,
+          "topic_id": "233"
+        },
+        {
+          "arm": "TUS-C",
+          "graded_recall_at_100": 0.11268603827072998,
+          "judged_rate_at_100": 0.94,
+          "ndcg_at_10": 0.32336602905302214,
+          "relevant_at_10": 5,
+          "topic_id": "273"
+        },
+        {
+          "arm": "TUS-C",
+          "graded_recall_at_100": 0.11291068949560389,
+          "judged_rate_at_100": 0.95,
+          "ndcg_at_10": 0.7342048345402515,
+          "relevant_at_10": 9,
+          "topic_id": "161"
+        },
+        {
+          "arm": "TUS-C",
+          "graded_recall_at_100": 0.11778080945884493,
+          "judged_rate_at_100": 0.95,
+          "ndcg_at_10": 0.3553332720985301,
+          "relevant_at_10": 7,
+          "topic_id": "14"
+        },
+        {
+          "arm": "BI",
+          "graded_recall_at_100": 0.08126669210225104,
+          "judged_rate_at_100": 0.84,
+          "ndcg_at_10": 0.5441868087588073,
+          "relevant_at_10": 10,
+          "topic_id": "233"
+        },
+        {
+          "arm": "BI",
+          "graded_recall_at_100": 0.06803685329553508,
+          "judged_rate_at_100": 0.59,
+          "ndcg_at_10": 0.28104264089305553,
+          "relevant_at_10": 5,
+          "topic_id": "273"
+        },
+        {
+          "arm": "BI",
+          "graded_recall_at_100": 0.08745950948634891,
+          "judged_rate_at_100": 0.76,
+          "ndcg_at_10": 0.59134027165232,
+          "relevant_at_10": 7,
+          "topic_id": "161"
+        },
+        {
+          "arm": "BI",
+          "graded_recall_at_100": 0.08003638017280582,
+          "judged_rate_at_100": 0.65,
+          "ndcg_at_10": 0.2889593833636663,
+          "relevant_at_10": 4,
+          "topic_id": "14"
+        },
+        {
+          "arm": "XQ",
+          "graded_recall_at_100": 0.08202975963372758,
+          "judged_rate_at_100": 0.8,
+          "ndcg_at_10": 0.5345486262295351,
+          "relevant_at_10": 10,
+          "topic_id": "233"
+        },
+        {
+          "arm": "XQ",
+          "graded_recall_at_100": 0.03614457831325301,
+          "judged_rate_at_100": 0.3,
+          "ndcg_at_10": 0.10020664705566687,
+          "relevant_at_10": 2,
+          "topic_id": "273"
+        },
+        {
+          "arm": "XQ",
+          "graded_recall_at_100": 0.06802406293382693,
+          "judged_rate_at_100": 0.6,
+          "ndcg_at_10": 0.3703797716036438,
+          "relevant_at_10": 5,
+          "topic_id": "161"
+        },
+        {
+          "arm": "XQ",
+          "graded_recall_at_100": 0.04411095952705776,
+          "judged_rate_at_100": 0.36,
+          "ndcg_at_10": 0.12910681365818008,
+          "relevant_at_10": 2,
+          "topic_id": "14"
+        },
+        {
+          "arm": "CXQ",
+          "graded_recall_at_100": 0.08202975963372758,
+          "judged_rate_at_100": 0.8,
+          "ndcg_at_10": 0.5345486262295351,
+          "relevant_at_10": 10,
+          "topic_id": "233"
+        },
+        {
+          "arm": "CXQ",
+          "graded_recall_at_100": 0.03614457831325301,
+          "judged_rate_at_100": 0.3,
+          "ndcg_at_10": 0.10020664705566687,
+          "relevant_at_10": 2,
+          "topic_id": "273"
+        },
+        {
+          "arm": "CXQ",
+          "graded_recall_at_100": 0.06802406293382693,
+          "judged_rate_at_100": 0.6,
+          "ndcg_at_10": 0.3703797716036438,
+          "relevant_at_10": 5,
+          "topic_id": "161"
+        },
+        {
+          "arm": "CXQ",
+          "graded_recall_at_100": 0.04411095952705776,
+          "judged_rate_at_100": 0.36,
+          "ndcg_at_10": 0.12910681365818008,
+          "relevant_at_10": 2,
+          "topic_id": "14"
+        }
+      ],
+      "rejected_facet_example_rows": [
+        {
+          "diagnostic_only": 1,
+          "document_id": "shard_03277_46451",
+          "facet_id": "161-political-ideologies",
+          "failed_checks": "anchor, anchor_relation",
+          "passage_excerpt": "In social science, access to contraception and abortion services is a critical aspect of reproductive health and rights. This section will delve into the disparities in access to contraception worldwide and explore the role of politics and ideology in shaping these disparities. We will use the example of Planned Parenthood in the United States and its defunding as a lens through which to examine broader global issues surrounding reproductive healthcare. First, let us define some key terms. Repr…",
+          "topic_id": "161"
+        },
+        {
+          "diagnostic_only": 1,
+          "document_id": "shard_04451_75204",
+          "facet_id": "161-historical-changes",
+          "failed_checks": "anchor, anchor_relation",
+          "passage_excerpt": "Cart Uncategorized History of Abortion Legalization: How it Became Legal How Did Abortion Become Legal Abortion has been a highly controversial and polarizing topic for decades. The legality of abortion has been the subject of intense debate and activism, ultimately leading to landmark legal decisions that have shaped the laws surrounding the issue. In this blog post, we will explore the historical and legal journey that led to the legalization of abortion in the United States. Historical Backg…",
+          "topic_id": "161"
+        },
+        {
+          "diagnostic_only": 1,
+          "document_id": "shard_04477_70241",
+          "facet_id": "273-economic-changes",
+          "failed_checks": "anchor_relation",
+          "passage_excerpt": "The climate crisis is hitting hardest in countries that contribute to it the least — how can the UK move to be part of the solution rather than part of the problem? The UK-Africa Summit, held in January in London, has highlighted a policy conundrum. On the one hand, Boris Johnson's opening speech stated that the country would refrain from investing in coal projects in Africa, a decision which actually goes back to 2002. On the other hand, Green Party MP Caroline Lucas and The Guardian revealed…",
+          "topic_id": "273"
+        },
+        {
+          "diagnostic_only": 1,
+          "document_id": "shard_05564_4782",
+          "facet_id": "161-laws-and-rights",
+          "failed_checks": "anchor",
+          "passage_excerpt": "The rationale behind the first abortion law was largely based on moral and religious beliefs, with many viewing abortion as a sin or immoral act. Additionally, concerns about population growth and the desire to protect fetal life played a role in shaping these early laws. 4. How have abortion laws evolved since the first one was passed? Abortion laws have evolved significantly since the first one was passed, with a gradual shift towards greater reproductive rights and autonomy for women. Howeve…",
+          "topic_id": "161"
+        }
+      ],
+      "system_metric_rows": [
+        {
+          "arm": "O",
+          "graded_recall_at_100": 0.11086482458282149,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 1.0,
+          "ndcg_at_10": 0.4719555340629681,
+          "relevant_at_10": 7.25
+        },
+        {
+          "arm": "RRF",
+          "graded_recall_at_100": 0.11098237307135614,
+          "judged_rate_at_10": 1.0,
+          "judged_rate_at_100": 0.9824999999999999,
+          "ndcg_at_10": 0.5894638651596213,
+          "relevant_at_10": 8.0
+        },
+        {
+          "arm": "TUS-C",
+          "graded_recall_at_100": 0.1074964255119414,
+          "judged_rate_at_10": 0.975,
+          "judged_rate_at_100": 0.95,
+          "ndcg_at_10": 0.48481606991480286,
+          "relevant_at_10": 7.75
+        },
+        {
+          "arm": "BI",
+          "graded_recall_at_100": 0.07919985876423521,
+          "judged_rate_at_10": 0.725,
+          "judged_rate_at_100": 0.71,
+          "ndcg_at_10": 0.4263822761669623,
+          "relevant_at_10": 6.5
+        },
+        {
+          "arm": "XQ",
+          "graded_recall_at_100": 0.057577340101966315,
+          "judged_rate_at_10": 0.5,
+          "judged_rate_at_100": 0.515,
+          "ndcg_at_10": 0.2835604646367565,
+          "relevant_at_10": 4.75
+        },
+        {
+          "arm": "CXQ",
+          "graded_recall_at_100": 0.057577340101966315,
+          "judged_rate_at_10": 0.5,
+          "judged_rate_at_100": 0.515,
+          "ndcg_at_10": 0.2835604646367565,
+          "relevant_at_10": 4.75
+        }
+      ]
+    },
+    "generatedAt": "2026-07-13T21:30:00Z",
+    "status": "ready",
+    "version": 1
+  },
+  "sources": [
+    {
+      "id": "pilot_manifest",
+      "label": "Pilot Manifest",
+      "path": "reports/experiments/facet_aware_fusion_pilot_v1/manifest.json",
+      "source_sha256": "a966bbdfb42e5fc3ff5b5e59b1a7365f408507ccc993eadadf3279c5331a0c66"
+    },
+    {
+      "id": "retrieval_summary",
+      "label": "Retrieval Summary",
+      "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/retrieval_summary.json",
+      "source_sha256": "3973995d0b651d27a0dbf495faf30d83933264cdb21b2c9a6b83b50dd5a607d0"
+    },
+    {
+      "id": "scoring_preflight",
+      "label": "Scoring Preflight",
+      "path": "outputs/rag25_facet_aware_fusion_v1/preflight_v1/preflight.json",
+      "source_sha256": "346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122"
+    },
+    {
+      "id": "benchmark",
+      "label": "Benchmark",
+      "path": "outputs/rag25_facet_aware_fusion_v1/benchmark_recovery_v1/benchmark_telemetry.json",
+      "source_sha256": "e7d341c2b3dc9216f51c8f62842ef836a3595f220bf891ee5a270070e753d757"
+    },
+    {
+      "id": "scoring_receipt",
+      "label": "Scoring Receipt",
+      "path": "outputs/rag25_facet_aware_fusion_v1/scoring_v1/scoring_receipt.json",
+      "source_sha256": "1c986664b04d624629b4640dbef6ac98387df26855f85fd1416df4bd8eda3c3e"
+    },
+    {
+      "id": "ranking_freeze",
+      "label": "Ranking Freeze",
+      "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/freeze.json",
+      "source_sha256": "2e39eedeed0eebef3329493531ef56809ee4a346ed6aa372698705c2ce4a085f"
+    },
+    {
+      "id": "facet_gates",
+      "label": "Facet Gates",
+      "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json",
+      "source_sha256": "baaafd25173f6524cc9b8b423de9deb14e4101a08448da27a0182b0676d24c29"
+    },
+    {
+      "id": "cxq_provenance",
+      "label": "Cxq Provenance",
+      "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/cxq_provenance.jsonl",
+      "source_sha256": "a2a336b6c386ecf98d95dfff4342c3848d1824834703bb3d9bd3e28544b2ba11"
+    },
+    {
+      "id": "retrieval_candidates",
+      "label": "Retrieval Candidates",
+      "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl",
+      "source_sha256": "5fd4cf2f22930950704291d9930eb737c1787f9d199bd8ae571a1ae6eb3066b6"
+    },
+    {
+      "id": "metrics",
+      "label": "Metrics",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+      "source_sha256": "67d264c5aeabfe63c81401247db03a1dbd799c737db6be8c3b3897fcae5c8c9d"
+    },
+    {
+      "id": "gains_losses",
+      "label": "Gains Losses",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+      "source_sha256": "e03e9869f90154968e7651ee799330865ed36af9f7cb1a2a364f5942e45a3875"
+    },
+    {
+      "id": "decision",
+      "label": "Decision",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/decision.json",
+      "source_sha256": "d166f157a53e73b386247562a604442b2e8855e5adcec5ba6263c6ca6834f4d1"
+    },
+    {
+      "id": "advisor_review",
+      "label": "Advisor Review",
+      "path": "reports/experiments/facet_aware_fusion_pilot_v1/advisor_review.md",
+      "source_sha256": "9ed3858975fe6d561aa1c253fce882218b8907a9ab5f306fc1e5c1d5861f3d19"
+    },
+    {
+      "id": "system_metrics_query",
+      "label": "System metrics materialization",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+      "query": {
+        "description": "Exact aggregate metric rows materialized from the hash-verified metrics artifact.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT 'O' AS \"arm\", 0.4719555340629681 AS \"ndcg_at_10\", 0.11086482458282149 AS \"graded_recall_at_100\", 7.25 AS \"relevant_at_10\", 1.0 AS \"judged_rate_at_10\", 1.0 AS \"judged_rate_at_100\"\nUNION ALL\nSELECT 'RRF', 0.5894638651596213, 0.11098237307135614, 8.0, 1.0, 0.9824999999999999\nUNION ALL\nSELECT 'TUS-C', 0.48481606991480286, 0.1074964255119414, 7.75, 0.975, 0.95\nUNION ALL\nSELECT 'BI', 0.4263822761669623, 0.07919985876423521, 6.5, 0.725, 0.71\nUNION ALL\nSELECT 'XQ', 0.2835604646367565, 0.057577340101966315, 4.75, 0.5, 0.515\nUNION ALL\nSELECT 'CXQ', 0.2835604646367565, 0.057577340101966315, 4.75, 0.5, 0.515"
+      },
+      "source_sha256": "939d907508c718d458440c7875e00e464bb9c3ab357680b44204b971610c1f83"
+    },
+    {
+      "id": "novel_retention_query",
+      "label": "Novel retention materialization",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+      "query": {
+        "description": "Exact novel-retention rows materialized from the hash-verified gains/losses artifact.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT 'TUS-C' AS \"arm\", 7 AS \"retained_relevant\", 73 AS \"eligible_relevant\", 0.0958904109589041 AS \"retention_fraction\", 3 AS \"topics_with_positive_retention\"\nUNION ALL\nSELECT 'BI', 52, 73, 0.7123287671232876, 4\nUNION ALL\nSELECT 'XQ', 66, 73, 0.9041095890410958, 4\nUNION ALL\nSELECT 'CXQ', 66, 73, 0.9041095890410958, 4"
+      },
+      "source_sha256": "950b7d6a9b63c092f39b2f8ec059dafa877f7f70bc4820b4bdd988f2de53042c"
+    },
+    {
+      "id": "per_topic_metrics_query",
+      "label": "Per-topic metrics materialization",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+      "query": {
+        "description": "Exact per-topic metric rows materialized from the hash-verified metrics artifact.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT '233' AS \"topic_id\", 'O' AS \"arm\", 0.5438357471436231 AS \"ndcg_at_10\", 0.08202975963372758 AS \"graded_recall_at_100\", 9 AS \"relevant_at_10\", 1.0 AS \"judged_rate_at_100\"\nUNION ALL\nSELECT '273', 'O', 0.32232755593747364, 0.11835577604535791, 5, 1.0\nUNION ALL\nSELECT '161', 'O', 0.6663255610722455, 0.11892642295233688, 8, 1.0\nUNION ALL\nSELECT '14', 'O', 0.3553332720985301, 0.12414733969986358, 7, 1.0\nUNION ALL\nSELECT '233', 'RRF', 0.6892968798970169, 0.0843189622281572, 10, 0.94\nUNION ALL\nSELECT '273', 'RRF', 0.40929587546934315, 0.11835577604535791, 6, 1.0\nUNION ALL\nSELECT '161', 'RRF', 0.8284009462408221, 0.11892642295233688, 9, 1.0\nUNION ALL\nSELECT '14', 'RRF', 0.430861759031303, 0.12232833105957254, 7, 0.99\nUNION ALL\nSELECT '233', 'TUS-C', 0.5263601439674077, 0.0866081648225868, 10, 0.96\nUNION ALL\nSELECT '273', 'TUS-C', 0.32336602905302214, 0.11268603827072998, 5, 0.94\nUNION ALL\nSELECT '161', 'TUS-C', 0.7342048345402515, 0.11291068949560389, 9, 0.95\nUNION ALL\nSELECT '14', 'TUS-C', 0.3553332720985301, 0.11778080945884493, 7, 0.95\nUNION ALL\nSELECT '233', 'BI', 0.5441868087588073, 0.08126669210225104, 10, 0.84\nUNION ALL\nSELECT '273', 'BI', 0.28104264089305553, 0.06803685329553508, 5, 0.59\nUNION ALL\nSELECT '161', 'BI', 0.59134027165232, 0.08745950948634891, 7, 0.76\nUNION ALL\nSELECT '14', 'BI', 0.2889593833636663, 0.08003638017280582, 4, 0.65\nUNION ALL\nSELECT '233', 'XQ', 0.5345486262295351, 0.08202975963372758, 10, 0.8\nUNION ALL\nSELECT '273', 'XQ', 0.10020664705566687, 0.03614457831325301, 2, 0.3\nUNION ALL\nSELECT '161', 'XQ', 0.3703797716036438, 0.06802406293382693, 5, 0.6\nUNION ALL\nSELECT '14', 'XQ', 0.12910681365818008, 0.04411095952705776, 2, 0.36\nUNION ALL\nSELECT '233', 'CXQ', 0.5345486262295351, 0.08202975963372758, 10, 0.8\nUNION ALL\nSELECT '273', 'CXQ', 0.10020664705566687, 0.03614457831325301, 2, 0.3\nUNION ALL\nSELECT '161', 'CXQ', 0.3703797716036438, 0.06802406293382693, 5, 0.6\nUNION ALL\nSELECT '14', 'CXQ', 0.12910681365818008, 0.04411095952705776, 2, 0.36"
+      },
+      "source_sha256": "b5aeeb0fb4d25e3e969b6f07ada41a766817e8ee1519f8b35166e70ea961625c"
+    },
+    {
+      "id": "facet_gate_query",
+      "label": "Facet gate materialization",
+      "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json",
+      "query": {
+        "description": "Exact deterministic gate rows materialized from the frozen gate artifact.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT 13 AS \"manifest_order\", '161' AS \"topic_id\", '161-political-ideologies' AS \"facet_id\", 0 AS \"accepted\", 0 AS \"anchor_top5_count\", 0 AS \"anchor_relation_top5_count\", 0 AS \"wrong_domain_top5_count\", 0 AS \"content_warning_top5_count\", 'anchor, anchor_relation' AS \"failed_checks\"\nUNION ALL\nSELECT 14, '161', '161-historical-changes', 0, 1, 0, 0, 1, 'anchor, anchor_relation'\nUNION ALL\nSELECT 6, '273', '273-economic-changes', 0, 5, 1, 0, 0, 'anchor_relation'\nUNION ALL\nSELECT 11, '161', '161-laws-and-rights', 0, 2, 2, 0, 0, 'anchor'\nUNION ALL\nSELECT 12, '161', '161-rapture-beliefs', 1, 3, 3, 0, 0, 'none'\nUNION ALL\nSELECT 19, '14', '14-cultural-influence', 1, 5, 4, 0, 0, 'none'\nUNION ALL\nSELECT 20, '14', '14-business', 1, 5, 4, 0, 0, 'none'\nUNION ALL\nSELECT 18, '14', '14-inclusion', 1, 5, 4, 0, 0, 'none'\nUNION ALL\nSELECT 17, '14', '14-athlete-compensation', 1, 5, 4, 0, 2, 'none'\nUNION ALL\nSELECT 22, '14', '14-training', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 8, '273', '273-cameroon-resource', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 15, '161', '161-current-options', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 21, '14', '14-equipment', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 16, '161', '161-rights-group-priorities', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 23, '14', '14-mindset', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 4, '273', '273-resource-distribution', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 5, '273', '273-historical-events', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 7, '273', '273-morocco-location', 1, 5, 5, 0, 0, 'none'\nUNION ALL\nSELECT 2, '233', '233-depression-contribution', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 9, '273', '273-continent-capacity', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 0, '233', '233-positive-impact', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 1, '233', '233-negative-impact', 1, 5, 5, 0, 1, 'none'\nUNION ALL\nSELECT 3, '273', '273-poverty-perception', 1, 5, 5, 0, 2, 'none'\nUNION ALL\nSELECT 10, '161', '161-arguments-and-views', 1, 5, 5, 0, 2, 'none'"
+      },
+      "source_sha256": "85c06bbf57239558ac401a50c0f804ed24c606f4e2ce3b5d13eae175d399c60f"
+    },
+    {
+      "id": "rejected_examples_query",
+      "label": "Rejected passage materialization",
+      "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl",
+      "query": {
+        "description": "Four bounded rank-one diagnostic excerpts materialized from frozen retrieval candidates.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT '161' AS \"topic_id\", '161-political-ideologies' AS \"facet_id\", 'shard_03277_46451' AS \"document_id\", 'anchor, anchor_relation' AS \"failed_checks\", 'In social science, access to contraception and abortion services is a critical aspect of reproductive health and rights. This section will delve into the disparities in access to contraception worldwide and explore the role of politics and ideology in shaping these disparities. We will use the example of Planned Parenthood in the United States and its defunding as a lens through which to examine broader global issues surrounding reproductive healthcare. First, let us define some key terms. Repr…' AS \"passage_excerpt\", 1 AS \"diagnostic_only\"\nUNION ALL\nSELECT '161', '161-historical-changes', 'shard_04451_75204', 'anchor, anchor_relation', 'Cart Uncategorized History of Abortion Legalization: How it Became Legal How Did Abortion Become Legal Abortion has been a highly controversial and polarizing topic for decades. The legality of abortion has been the subject of intense debate and activism, ultimately leading to landmark legal decisions that have shaped the laws surrounding the issue. In this blog post, we will explore the historical and legal journey that led to the legalization of abortion in the United States. Historical Backg…', 1\nUNION ALL\nSELECT '273', '273-economic-changes', 'shard_04477_70241', 'anchor_relation', 'The climate crisis is hitting hardest in countries that contribute to it the least — how can the UK move to be part of the solution rather than part of the problem? The UK-Africa Summit, held in January in London, has highlighted a policy conundrum. On the one hand, Boris Johnson''s opening speech stated that the country would refrain from investing in coal projects in Africa, a decision which actually goes back to 2002. On the other hand, Green Party MP Caroline Lucas and The Guardian revealed…', 1\nUNION ALL\nSELECT '161', '161-laws-and-rights', 'shard_05564_4782', 'anchor', 'The rationale behind the first abortion law was largely based on moral and religious beliefs, with many viewing abortion as a sin or immoral act. Additionally, concerns about population growth and the desire to protect fetal life played a role in shaping these early laws. 4. How have abortion laws evolved since the first one was passed? Abortion laws have evolved significantly since the first one was passed, with a gradual shift towards greater reproductive rights and autonomy for women. Howeve…', 1"
+      },
+      "source_sha256": "93dc193c46594fb5c74f8651644e92c7bbfe6c7fdafdd53a7da118b7467e310b"
+    }
+  ],
+  "surface": "report"
+}
