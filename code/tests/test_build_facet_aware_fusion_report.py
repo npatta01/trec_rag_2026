@@ -228,6 +228,40 @@ def test_advisor_only_counts_are_not_duplicated_as_first_party_findings(built):
     )
     for advisor_only_count in ("83 judged-relevant", "311 / 400", "replaced 290", "187 were unjudged"):
         assert advisor_only_count not in first_party
+    assert "original and RRF pools" not in first_party
+    assert "because their relevance term" not in first_party
+
+
+def test_retrieval_receipt_must_confirm_qrels_were_closed(report_inputs):
+    tampered = _replace_json_source(
+        report_inputs,
+        "retrieval_summary",
+        lambda payload: payload.__setitem__("qrels_opened", True),
+    )
+    with pytest.raises(ValueError, match="pre-freeze qrels state"):
+        build_report(tampered)
+
+
+def test_evaluation_schema_binding_fails_closed(report_inputs):
+    def change_schema(payload):
+        payload["schema_version"] = "unexpected-schema"
+        repaired = add_self_hash(payload)
+        payload.clear()
+        payload.update(repaired)
+
+    tampered = _replace_json_source(report_inputs, "metrics", change_schema)
+    with pytest.raises(ValueError, match="metrics schema binding"):
+        build_report(tampered)
+
+
+def test_preflight_lineage_binding_fails_closed(report_inputs):
+    tampered = _replace_json_source(
+        report_inputs,
+        "scoring_preflight",
+        lambda payload: payload.__setitem__("windows_sha256", "0" * 64),
+    )
+    with pytest.raises(ValueError, match="pipeline lineage hash binding"):
+        build_report(tampered)
 
 
 def test_document_flow_and_visible_provenance_are_present(built):

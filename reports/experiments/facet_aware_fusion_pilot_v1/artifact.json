@@ -8,7 +8,7 @@
         "type": "markdown"
       },
       {
-        "body": "## Technical summary\n\n**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued 24 rate-limited BM25 facet requests, locally scored 9,698 windows with MiniLM, and incurred **$0** in paid cost because it used the existing endpoint and local ROCm inference. RRF improved nDCG@10 from 0.472 to 0.589 with essentially flat graded Recall@100.\n\n**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **66 of 73** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list and did not demonstrate safe improvement.\n\n**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget.",
+        "body": "## Technical summary\n\n**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued 24 rate-limited BM25 facet requests, locally scored 9,698 windows with MiniLM, and incurred **$0** in paid cost because it used the existing endpoint and local ROCm inference. RRF improved nDCG@10 from 0.472 to 0.589 with essentially flat graded Recall@100.\n\n**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from RRF@100, and XQ/CXQ retained **66 of 73** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list and did not demonstrate safe improvement.\n\n**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget.",
         "id": "technical_summary",
         "layout": "full",
         "type": "markdown"
@@ -40,7 +40,7 @@
         "type": "chart"
       },
       {
-        "body": "## RRF improved the head; xQuAD consumed too much of the list\n\nRRF achieved the best nDCG@10 (0.589) and improved all four topics over the original query. XQ and CXQ fell to 0.284 because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. Only 51.5% of their top 100 was judged.\n\nThe preregistered guardrails correctly block promotion. Differential judging makes the exact size of the apparent loss uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’",
+        "body": "## RRF improved the head; xQuAD did not demonstrate safe fusion\n\nRRF achieved the best nDCG@10 (0.589) and improved all four topics over the original query. XQ and CXQ fell to 0.284, and only 51.5% of their top 100 was judged.\n\nThe preregistered guardrails correctly block promotion. Differential judging makes the exact size of the apparent loss uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’",
         "id": "fusion_quality_finding",
         "layout": "full",
         "sourceId": "metrics",

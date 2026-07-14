@@ -115,6 +115,9 @@ def _validate_run_bindings(
         "benchmark": "facet-local-minilm-benchmark-telemetry-v2",
         "scoring_receipt": "facet-local-minilm-scoring-receipt-v2",
         "ranking_freeze": "facet-aware-fusion-freeze-v1",
+        "metrics": "facet-aware-fusion-metrics-v1",
+        "gains_losses": "facet-aware-fusion-gains-losses-v1",
+        "decision": "facet-aware-fusion-decision-v1",
     }
     payloads = {
         "pilot_manifest": manifest,
@@ -123,12 +126,16 @@ def _validate_run_bindings(
         "benchmark": benchmark,
         "scoring_receipt": scoring,
         "ranking_freeze": freeze,
+        "metrics": metrics,
+        "gains_losses": gains,
+        "decision": decision,
     }
     for source_id, expected_schema in expected_schemas.items():
         if payloads[source_id].get("schema_version") != expected_schema:
             raise ValueError(f"{source_id} schema binding differs")
     if not (
         manifest.get("qrels_opened") is False
+        and retrieval.get("qrels_opened") is False
         and preflight.get("qrels_opened") is False
         and freeze.get("qrels_opened") is False
     ):
@@ -785,7 +792,7 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "body": (
                 "## Technical summary\n\n"
                 f"**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued {retrieval['external_calls']} rate-limited BM25 facet requests, locally scored {scoring['completed_window_count']:,} windows with MiniLM, and incurred **$0** in paid cost because it used the existing endpoint and local ROCm inference. RRF improved nDCG@10 from {metrics['systems']['O']['aggregate']['ndcg@10']:.3f} to {metrics['systems']['RRF']['aggregate']['ndcg@10']:.3f} with essentially flat graded Recall@100.\n\n"
-                f"**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **{xq_retained} of {novel_denominator}** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list and did not demonstrate safe improvement.\n\n"
+                f"**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from RRF@100, and XQ/CXQ retained **{xq_retained} of {novel_denominator}** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list and did not demonstrate safe improvement.\n\n"
                 "**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget."
             ),
         },
@@ -817,8 +824,8 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "type": "markdown",
             "layout": "full",
             "body": (
-                "## RRF improved the head; xQuAD consumed too much of the list\n\n"
-                f"RRF achieved the best nDCG@10 ({metrics['systems']['RRF']['aggregate']['ndcg@10']:.3f}) and improved all four topics over the original query. XQ and CXQ fell to {metrics['systems']['XQ']['aggregate']['ndcg@10']:.3f} because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. Only {metrics['systems']['XQ']['aggregate']['judged_rate@100']:.1%} of their top 100 was judged.\n\n"
+                "## RRF improved the head; xQuAD did not demonstrate safe fusion\n\n"
+                f"RRF achieved the best nDCG@10 ({metrics['systems']['RRF']['aggregate']['ndcg@10']:.3f}) and improved all four topics over the original query. XQ and CXQ fell to {metrics['systems']['XQ']['aggregate']['ndcg@10']:.3f}, and only {metrics['systems']['XQ']['aggregate']['judged_rate@100']:.1%} of their top 100 was judged.\n\n"
                 "The preregistered guardrails correctly block promotion. Differential judging makes the exact size of the apparent loss uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’"
             ),
             "sourceId": "metrics",
