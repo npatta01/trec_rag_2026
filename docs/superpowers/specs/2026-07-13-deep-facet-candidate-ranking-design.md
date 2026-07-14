@@ -10,11 +10,11 @@ candidates without repeating the prior xQuAD failure. This experiment ends at a
 ranked candidate list. It does not select generation evidence, allocate an answer
 token budget, generate prose, or evaluate citations.
 
-The pilot compares four deterministic rankings over the same frozen candidate
-union: current family-balanced RRF, common-query scoring, facet-coverage scoring,
-and a dual-score coverage-aware selector. Every arm emits 1,000 unique document
-IDs. The complete deduplicated union is also preserved so candidate discovery can
-be separated from ranking loss.
+The pilot compares four deterministic rankings and one no-redundancy diagnostic
+over the same frozen accepted candidate union: current family-balanced RRF,
+common-query scoring, facet-local scoring, and a dual-score coverage-aware
+selector. Every arm freezes a complete permutation of that union; prefixes at
+100, 500, and 1,000 are evaluation views rather than output limits.
 
 ## Advisor correction
 
@@ -26,15 +26,19 @@ or BM25 scores never cross query boundaries.
 The selection pipeline is:
 
 ```text
-original BM25 top 1,000 + accepted facet BM25 top 200
+original BM25 top 1,000 + all successful facet BM25 top 200
                          |
                 facet-local MiniLM
                          |
-             deduplicated candidate union
-                         |
- common topic coherence + narrative + facet coverage + RRF prior
-                         |
-              ranked candidates to depth 1,000
+            qrels-blind stream quality gate
+                  /                    \
+              U_raw                U_accepted
+        discovery audit       ranking candidate union
+                                      |
+        common topic coherence + narrative + persistent facet
+                 relevance + coverage + RRF prior
+                                      |
+                 complete deterministic permutations
 ```
 
 ## Fresh topic boundary
@@ -54,7 +58,7 @@ quality gates, parameters, rankings, and hashes are frozen.
 ## Frozen query manifest
 
 The original stream is the exact cached narrative query at depth 1,000. Each
-facet request uses depth 200. The 25 facet queries below partition explicit
+facet request uses depth 200. The 24 facet queries below partition explicit
 narrative obligations and introduce no candidate answer.
 
 ### Topic 219: technology's societal impact
@@ -96,11 +100,10 @@ Common topic-coherence query:
 
 Facets:
 
-1. `specific actions to prevent and reduce global warming and climate change`
+1. `effective specific strategies to prevent and reduce global warming and climate change`
 2. `climate change actions for Antarctica`
-3. `global measures to prevent and reduce climate change`
+3. `international and government measures to prevent and reduce climate change`
 4. `economic cost of addressing global warming compared with its impacts`
-5. `effective strategies to reduce global warming`
 
 ### Topic 84: vaccines
 
@@ -124,12 +127,13 @@ hash before retrieval.
 ## Retrieval and cost boundary
 
 - Reuse the four exact cached original-query top-1,000 responses.
-- Issue at most 25 new facet requests, each with `hits=200`.
+- Issue exactly 24 new facet requests, each with `hits=200`.
 - Use the existing raw-first immutable ledger, exact-identity cache, and persistent
   limiter of one request start per three seconds.
-- Minimum uncached request-start time is 75 seconds.
-- Do not retry a failed immutable attempt. Record it and continue only if the
-  remaining manifest is still valid.
+- Minimum uncached request-start time is 72 seconds.
+- Do not retry a failed immutable attempt. Any transport, HTTP, schema, identity,
+  or short-response failure aborts the pilot before qrels access. A successful
+  response must contain exactly 200 unique, text-bearing ClimbMix document IDs.
 - Expected paid cost is $0. Do not download a model or use hosted inference.
 - The already materialized `cross-encoder/ms-marco-MiniLM-L6-v2` revision
   `c5ee24cb16019beea0893ab7796b1df96625c6b8` is the only scorer.
@@ -145,27 +149,65 @@ any missing model file.
 
 ## Candidate construction and score features
 
-Deduplicate repeated occurrences of the same ClimbMix document ID while retaining
-every stream, BM25 rank, facet-local MiniLM rank, text hash, and window-score
-provenance. Distinct document IDs are never collapsed merely because their text is
-identical: exact-text and near duplicates are recorded and softly penalized during
-ranking, but remain in the full union.
+Freeze two document-ID-deduplicated unions while retaining every stream, BM25
+rank, facet-local MiniLM rank, text hash, and window-score provenance:
+
+- `U_raw = original@1000 union every successful facet@200 response`;
+- `U_accepted = original@1000 union every accepted facet@200 response`.
+
+All ranking arms use `U_accepted`. Evaluation separately measures discovery in
+`U_raw`, discovery surviving in `U_accepted`, and qrel-relevant documents lost by
+the stream gate. This stage is called **stream gating plus local scoring**: it does
+not perform a document-level MiniLM filter. Distinct document IDs are never
+collapsed because their text is identical.
+
+MiniLM uses the previously frozen tokenizer and document-window policy: pair
+maximum 512 tokens, query maximum 192 tokens, minimum passage budget 256 tokens,
+64-token passage overlap, at most 32 deterministically sampled windows per
+document, and final non-empty short windows retained. Use the existing top-four
+span-distinct aggregation: sort windows by raw logit, accept the first window and
+then only spans contributing at least 128 previously uncovered document tokens,
+select at most four, apply weights `0.55, 0.25, 0.13, 0.07`, and renormalize the
+retained weights when fewer than four windows qualify. Phase-1 preflight must
+reproduce these values from the authenticated prior receipt rather than silently
+choosing new window settings or aggregation.
+
+For scores sorted from best to worst in a stated population of size `n`, define:
+
+`P(d) = (n - average_rank(d) + 1) / n`
+
+Average rank is deterministic for ties. Thus the best value is `1`, the worst
+present value is `1/n`, and an absent facet value is exactly `0`.
 
 Score each document with:
 
-- `F_i(d)`: top-four-window MiniLM relevance to facet `i`, converted to a
-  within-facet rank percentile. A document absent from facet `i` has zero.
-- `G(d)`: top-four-window MiniLM relevance to the frozen common topic-coherence
-  query, converted to a topic-wide rank percentile.
-- `N(d)`: top-four-window MiniLM relevance to the exact full narrative, converted
-  to a topic-wide rank percentile. This is never a gate.
-- `R(d)`: family-balanced RRF prior, converted to a topic-wide rank percentile.
-- `D(d,S)`: maximum analyzer-token Jaccard similarity to a previously selected
-  document, used only as a soft redundancy penalty.
+- `F_i(d)`: facet-`i` document score converted with `P` over that facet's 200
+  candidates when facet `i` is accepted; rejected facets contribute no feature,
+  and a document absent from an accepted facet has zero.
+- `G(d)`: common topic-coherence score converted with `P` over `U_accepted`.
+- `N(d)`: exact full-narrative score converted with `P` over `U_accepted`; never a
+  gate.
+- `R(d)`: family-balanced RRF score converted with `P` over `U_accepted`; a
+  missing stream rank contributes zero to the underlying RRF sum.
+- `L(d) = max_i F_i(d)`: persistent strongest facet-local relevance, or zero when
+  no facet is accepted.
+- `C_i(S) = max_{s in S} F_i(s)`, with `C_i(empty)=0`.
+- `B(d|S) = max_i [F_i(d) * (1 - C_i(S))]`: diminishing strongest uncovered-facet
+  bonus, or zero when no facet is accepted; tied facets resolve by manifest order.
 
-All percentiles use deterministic average ranks for tied scores and are scaled to
-`[0,1]`. Raw scores remain in the audit artifact but never enter a cross-query
-comparison.
+Redundancy uses the frozen analyzer's lowercased, stemmed, non-stopword token sets.
+Let `J(d,s)` be token-set Jaccard, with `J=0` if either set is empty. Define:
+
+```text
+penalty(J) = 0                     when J < 0.80
+penalty(J) = (J - 0.80) / 0.20     when J >= 0.80
+D(d,S) = 0                         when S is empty
+D(d,S) = max_s penalty(J(d,s))     otherwise
+```
+
+The same `0.80` threshold defines the reported near-duplicate metric. Exact-text
+and near-duplicate documents remain in both unions. Raw scores remain in the audit
+artifact but never enter a cross-query comparison.
 
 ## Frozen quality gate
 
@@ -179,77 +221,109 @@ A facet is accepted only when its top five contain:
 Content-quality warnings cannot reject a stream by themselves. A rejected facet
 contributes no facet feature, but its raw response remains in the audit ledger.
 No individual document is removed merely for a low common-query or narrative
-score.
+score. Anchor, relation, wrong-domain, stopword, and stemming rules freeze in the
+manifest before retrieval.
+
+Status values are distinct:
+
+- `failed`: the request or scoring contract failed; abort the pilot;
+- `rejected`: a complete scored stream failed the qrels-blind quality gate;
+- `accepted`: a complete scored stream passed the gate;
+- `unavailable`: reserved for a pre-run missing dependency and never used to
+  reinterpret an attempted request.
+
+If a facet has fewer than five scored documents, phase 1 fails. If a topic has zero
+accepted facets, that topic's rankings fall back to the exact original permutation
+for auditability and the whole pilot is automatically ineligible to advance.
 
 ## Ranking arms
 
-Every arm receives the same full deduplicated union and emits 1,000 unique
-document IDs. If an arm's scoring rule exhausts preferred documents, append all
-remaining union documents by `R(d)`, then original rank, best facet rank, and
-document ID. Nothing is discarded merely because it falls below rank 1,000.
+Every arm receives exactly `U_accepted` and freezes a complete permutation of all
+its document IDs. Prefixes at 100, 500, and 1,000 are evaluated; documents below
+1,000 remain ranked and auditable. Because the validated original stream contains
+1,000 unique documents, `U_accepted` must contain at least 1,000 IDs.
 
 ### RRF: current control
 
 Family-balanced rank-only RRF with `k=60`: original family weight `0.5`, total
-accepted-facet weight `0.5`, divided equally across accepted facets.
+accepted-facet weight `0.5`, divided equally across accepted facets. A missing
+rank contributes zero. When a topic has no accepted facets, the original family
+receives weight `1.0` and the pilot is non-advancing as specified above.
 
 ### GLOBAL: common-topic control
 
 Sort by `0.70*G(d) + 0.30*N(d)`, with `R(d)` and document ID as tie-breakers.
 This arm measures whether one common semantic query is sufficient.
 
-### FACET: coverage-only control
+### FACET: facet-local control
 
-Greedily maximize equal-weight residual facet coverage:
-
-`FacetGain(d|S) = sum_i (1/m) * F_i(d) * (1 - C_i(S))`
-
-where `C_i(S) = max_{s in S} F_i(s)` and `m` is the number of accepted facets.
-Use `R(d)` and document ID as tie-breakers. This deliberately omits common-query
-scores to expose the noise cost of facet coverage alone.
+Greedily maximize `0.70*L(d) + 0.30*B(d|S)`. Use `R(d)`, best contributing facet
+in manifest order, original rank, best facet rank, and document ID as tie-breakers.
+This isolates persistent facet-local relevance plus diminishing coverage without
+using common-query scores.
 
 ### DUAL: primary arm
 
 Greedily maximize:
 
-`U(d|S) = 0.35*G(d) + 0.15*N(d) + 0.15*R(d) + 0.35*FacetGain(d|S) - 0.15*D(d,S)`
+`U(d|S) = 0.35*G(d) + 0.15*N(d) + 0.15*R(d) + 0.25*L(d) + 0.10*B(d|S) - 0.15*D(d,S)`
 
 No facet has a minimum or maximum quota. Coverage gains diminish after strong
 evidence is selected, but every remaining candidate is still eligible and is
 eventually appended. Tie-break by `R(d)`, best facet-local percentile, original
 rank, best facet rank, then document ID.
 
+### DUAL-NR: no-redundancy diagnostic
+
+Use the DUAL objective with the `D(d,S)` term fixed to zero. This offline arm is
+not eligible to advance; it isolates whether the `0.80` lexical redundancy
+threshold suppresses useful same-facet evidence.
+
+For FACET, DUAL, and DUAL-NR, update `C_i(S)` and the maximum redundancy penalty
+incrementally after each selection. Precompute token sets and pairwise Jaccard
+values. This produces a deterministic `O(|U_accepted|^2 * m)` upper bound rather
+than rescanning the selected set inside every candidate comparison.
+
 ## Freeze and one-time evaluation
 
 Before qrels access, create and hash:
 
 - topic-selection and protected-topic rejection receipts;
-- narrative, common-query, and 25-facet manifest;
+- narrative, common-query, and 24-facet manifest;
 - all raw requests, responses, cache identities, and candidate rows;
 - model, tokenizer, window, score-cache, inference, and runtime receipts;
 - facet gates and representative qrels-blind diagnostics;
-- the complete deduplicated union;
-- definitions and complete top-1,000 rankings for RRF, GLOBAL, FACET, and DUAL;
+- `U_raw`, `U_accepted`, accepted/rejected stream records, and two frozen accepted
+  facet-prefix union families at depths 50, 100, and 200: one using each stream's
+  BM25 order and one using its facet-local MiniLM order;
+- definitions and complete permutations for RRF, GLOBAL, FACET, DUAL, and DUAL-NR;
 - every normalization, coefficient, tie-break, and evaluated topic ID.
 
-Then project qrels once for exactly `219,72,300,84`. Evaluation code must reject
-protected, previously exposed, extra, missing, or reordered topics and must not
-permit ranking regeneration after qrels access.
+Write a create-only `SEALED.json` containing every artifact path, byte length, and
+SHA-256 value. Evaluation must validate the seal, atomically create a
+`QRELS_ACCESSED` sentinel, and only then project qrels once for exactly
+`219,72,300,84`. Retrieval, scoring, gating, and ranking commands must refuse to
+run whenever that sentinel exists. Evaluation code must reject protected,
+previously exposed, extra, missing, or reordered topics.
 
 ## Metrics and diagnosis
 
 Candidate-discovery metrics:
 
-- complete-union Recall and graded Recall;
-- unique grade-2-or-higher documents beyond original BM25 top 1,000;
-- per-facet contribution to those novel documents;
-- accepted/rejected stream counts and overlap.
+- Recall and graded Recall for `U_raw`, `U_accepted`, and both the BM25-ordered and
+  MiniLM-ordered accepted facet-prefix unions at depths 50, 100, and 200;
+- `NovelRel = {d | qrel(d) >= 2, d not in original@1000, d in U_accepted}`;
+- qrel-relevant documents discovered in `U_raw` but lost from `U_accepted` by the
+  stream gate;
+- per-stream inclusive provenance counts and exclusive-to-stream counts for
+  `NovelRel`; inclusive counts are never summed across overlapping streams;
+- accepted, rejected, failed, and unavailable stream counts kept separate.
 
 Ranking metrics at depths 100, 500, and 1,000:
 
 - Recall and graded Recall;
-- novel facet documents retained;
-- fraction of union-novel relevant documents retained;
+- `NovelRel` documents retained;
+- fraction of `NovelRel` retained;
 - judged rate;
 - nDCG at 10 and 100;
 - exact and near-duplicate rates;
@@ -257,30 +331,45 @@ Ranking metrics at depths 100, 500, and 1,000:
 
 Diagnosis is mechanical:
 
-- relevant evidence absent from the complete union means retrieval or facet
-  planning failed;
-- evidence present in the union but missing from an arm means ranking/fusion
+- qrel-relevant evidence absent from `U_raw` means retrieval or facet planning
   failed;
+- evidence present in `U_raw` but absent from `U_accepted` means stream gating
+  failed;
+- evidence present in `U_accepted` but missing from an arm prefix means ranking or
+  fusion failed;
 - high retention with poor nDCG means coverage was over-weighted.
 
-## Promotion and stop rule
+Metric definitions freeze before qrels access. Binary relevance is grade `>=2`.
+Binary Recall@k divides retrieved relevant IDs by all grade-`>=2` IDs for the
+topic. Graded Recall@k uses gain `2^grade - 1` and divides retrieved gain by total
+topic gain. nDCG uses the same gain and discount `1/log2(rank+1)`. Unjudged IDs
+receive gain zero but are reported separately through judged rate. A metric with
+a zero denominator is `null`, never zero, and is excluded from macro means with
+the excluded topic count reported.
 
-Promote DUAL only if all are true:
+## Advance and stop rule
 
-- the complete union adds at least five grade-2-or-higher documents beyond the
+This four-topic pilot cannot promote a production method. Advance DUAL to a
+larger preregistered validation only if all are true:
+
+- `U_accepted` adds at least five grade-2-or-higher documents beyond the
   original top 1,000 across at least two topics;
 - DUAL graded Recall@500 is greater than both RRF and GLOBAL;
 - DUAL graded Recall@1,000 is not below RRF;
-- DUAL retains at least 50% of union-novel relevant facet documents at 1,000;
+- DUAL retains at least 50% of `NovelRel` at 1,000;
 - aggregate nDCG@10 is within `0.02` of RRF;
 - no topic loses more than `0.10` nDCG@10 versus RRF; and
 - judged-rate differences are reported and no unjudged document is described as
-  irrelevant.
+  irrelevant; and
+- in every leave-one-topic-out subset, DUAL macro graded Recall@500 remains above
+  both RRF and GLOBAL and its macro nDCG@10 remains within `0.02` of RRF; otherwise
+  report the unstable topic and do not advance.
 
-If the union fails the first condition, stop and diagnose retrieval/facet queries.
-If the union succeeds but DUAL fails, retain the union and diagnose fusion; do not
-reject facet decomposition. GLOBAL and FACET are diagnostic controls and cannot
-be promoted from this four-topic pilot.
+If `U_raw` fails to add qrel-relevant evidence, stop and diagnose retrieval/facet
+queries. If `U_raw` succeeds but `U_accepted` loses the evidence, diagnose stream
+gating. If `U_accepted` succeeds but DUAL fails, retain the union and diagnose
+fusion; do not reject facet decomposition. GLOBAL, FACET, and DUAL-NR are
+diagnostic controls and cannot advance from this four-topic pilot.
 
 ## Deliverables
 
@@ -288,7 +377,8 @@ be promoted from this four-topic pilot.
 - raw-first retrieval ledger and exact cache report;
 - local MiniLM preflight, benchmark, score cache, and receipt;
 - facet gate report with bounded excerpts;
-- frozen union and RRF/GLOBAL/FACET/DUAL top-1,000 rankings;
+- frozen `U_raw`, `U_accepted`, prefix unions, and complete
+  RRF/GLOBAL/FACET/DUAL/DUAL-NR permutations;
 - one-time qrels-backed candidate and ranking evaluation;
 - independent post-results advisor review;
 - rendered private HTML explaining discovery, filtering, retention, ranking, and
@@ -298,13 +388,20 @@ be promoted from this four-topic pilot.
 
 - protected and previously exposed topics fail at planning, retrieval, scoring,
   cache joins, fusion, evaluation, and reporting;
-- qrels cannot load until every ranking hash exists;
+- qrels cannot load until `SEALED.json` validates every artifact hash;
+- retrieval, scoring, gating, and ranking refuse to run after the create-only
+  `QRELS_ACCESSED` sentinel exists;
 - all external requests pass through the persistent limiter and respect the
-  separate 25-request ceiling;
+  exact 24-request ceiling;
 - raw BM25 or MiniLM scores never cross query boundaries;
 - full-narrative scoring cannot reject a document;
 - input reordering cannot change percentiles, rankings, or tie-breaks;
-- all arms use identical candidate unions;
+- `U_raw` and `U_accepted` are independently reproducible and gate losses are
+  attributable;
+- all ranking arms use identical `U_accepted` inputs and freeze full permutations;
+- percentile direction, comparison population, tied ranks, absent values, empty
+  token sets, zero accepted facets, missing ranks, and tie-breaking facets are
+  covered by deterministic tests;
 - every metric and decision in the HTML reproduces from frozen artifacts;
 - no generation, evidence-token budgeting, answer writing, or citation evaluation
   enters this pilot.
