@@ -152,6 +152,46 @@ def test_contract_preflights_protected_metadata_before_gate_union_or_join_access
     assert accesses == ["manifest:get:topic_ids"]
 
 
+def test_contract_preflights_protected_gate_before_obligation_or_union_access() -> None:
+    accesses: list[str] = []
+
+    class RecordingTopic(dict[str, object]):
+        def __getitem__(self, key: str) -> object:
+            if key == "query":
+                accesses.append("obligation:query")
+            return super().__getitem__(key)
+
+    class RecordingRows(list[dict[str, object]]):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            accesses.append("union:iter")
+            return super().__iter__()
+
+    manifest = _manifest()
+    manifest["topics"][0] = RecordingTopic(  # type: ignore[index]
+        {"topic_id": "219", "query": "full narrative"}
+    )
+    gates = {
+        "gates": [
+            {
+                "topic_id": "144",
+                "facet_id": "219-positive",
+                "accepted": True,
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        build_contract(
+            manifest,
+            gates,
+            RecordingRows(),
+            expected_population=0,
+            expected_o0=1,
+        )
+
+    assert accesses == []
+
+
 def test_contract_rejects_accepted_gate_id_missing_from_manifest() -> None:
     gates = {"gates": [{"facet_id": "219-missing", "accepted": True}]}
     with pytest.raises(ValueError, match="accepted facet set.*manifest"):

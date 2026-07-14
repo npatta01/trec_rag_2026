@@ -75,10 +75,19 @@ def build_contract(
     expected_o0: int = 24,
 ) -> dict[str, object]:
     _preflight_manifest_topic_ids(manifest)
+    gate_rows = gates["gates"]  # type: ignore[index]
+    reject_protected_before_access(
+        (
+            str(row["topic_id"])
+            for row in gate_rows
+            if "topic_id" in row
+        ),
+        lambda: None,
+    )
     topics = {str(row["topic_id"]): row for row in manifest["topics"]}  # type: ignore[index]
     accepted = {
         str(row["facet_id"])
-        for row in gates["gates"]  # type: ignore[index]
+        for row in gate_rows
         if row.get("accepted") is True
     }
     if len(accepted) != expected_o0:
