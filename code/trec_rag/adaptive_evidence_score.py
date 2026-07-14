@@ -355,6 +355,42 @@ def build_score_candidates(
     )
 
 
+def build_o1_score_candidates(
+    contract: Mapping[str, object],
+    derived: Sequence[Mapping[str, object]],
+    *,
+    opposite_fold_only: bool,
+) -> list[dict[str, object]]:
+    """Build only derived O1 rows, optionally confined to the opposite fold."""
+
+    materialized = [dict(row) for row in derived]
+    if any(row.get("kind") != "o1" for row in materialized):
+        raise ValueError("derived score records must all be kind o1")
+    source_folds: dict[str, int] = {}
+    for row in materialized:
+        obligation_id = str(row.get("obligation_id", ""))
+        if not obligation_id:
+            raise ValueError("derived O1 obligation_id must be nonempty")
+        if opposite_fold_only:
+            source_fold = row.get("source_fold")
+            if isinstance(source_fold, bool) or source_fold not in (0, 1):
+                raise ValueError("provisional O1 source_fold must be 0 or 1")
+            source_folds[obligation_id] = int(source_fold)
+    derived_ids = {str(row["obligation_id"]) for row in materialized}
+    rows = [
+        row
+        for row in build_score_candidates(contract, derived=materialized)
+        if row["obligation_id"] in derived_ids
+    ]
+    if opposite_fold_only:
+        rows = [
+            row
+            for row in rows
+            if int(row["fold"]) != source_folds[str(row["obligation_id"])]
+        ]
+    return rows
+
+
 def _coverage_row(
     *,
     document_count: int,
@@ -1852,6 +1888,25 @@ def run_score_preflight(
         raise FileExistsError(f"create-only preflight output exists: {destination}")
     contract = load_score_contract(Path(contract_dir))
     candidates = build_score_candidates(contract)
+    return _run_candidate_score_preflight(
+        contract_dir=Path(contract_dir),
+        output_dir=destination,
+        candidates=candidates,
+        model_receipt_path=model_receipt_path,
+        score_cache_root=score_cache_root,
+    )
+
+
+def _run_candidate_score_preflight(
+    *,
+    contract_dir: Path,
+    output_dir: Path,
+    candidates: Sequence[Mapping[str, object]],
+    model_receipt_path: Path | None = None,
+    score_cache_root: Path | None = None,
+    extra_bindings: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Materialize an authenticated preflight for an already frozen population."""
 
     repo_root = find_repo_root()
     materialization_path = Path(
@@ -1925,12 +1980,246 @@ def run_score_preflight(
             name: _sha256_file(path) for name, path in source_files.items()
         },
     }
+    if extra_bindings:
+        overlap = set(bindings) & set(extra_bindings)
+        if overlap:
+            raise ValueError(f"extra preflight binding collides: {sorted(overlap)[0]}")
+        bindings.update(dict(extra_bindings))
     return persist_score_preflight(
-        destination,
+        Path(output_dir),
         candidates=candidates,
         preflight=plan,
         bindings=bindings,
     )
+
+
+O1_STAGE_SCHEMA_VERSION = "adaptive-evidence-o1-score-stage-v1"
+
+
+def _normalize_o1_score_records(
+    records: Sequence[Mapping[str, object]],
+    *,
+    opposite_fold_only: bool,
+) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for raw in records:
+        row = dict(raw)
+        topic_id = row.get("topic_id")
+        _reject_protected([topic_id])
+        _require_pilot_topic_ids([topic_id])
+        obligation_id = row.get("obligation_id")
+        parent_id = row.get("parent_id")
+        query = row.get("query")
+        if (
+            not isinstance(obligation_id, str)
+            or not obligation_id
+            or obligation_id in seen
+            or not isinstance(parent_id, str)
+            or not parent_id
+            or row.get("kind") != "o1"
+            or not isinstance(query, str)
+            or "\n\nCorpus-derived sub-obligation:\n" not in query
+        ):
+            raise ValueError("derived O1 score record schema or identity is invalid")
+        if opposite_fold_only:
+            source_fold = row.get("source_fold")
+            if isinstance(source_fold, bool) or source_fold not in (0, 1):
+                raise ValueError("provisional O1 source_fold must be 0 or 1")
+        seen.add(obligation_id)
+        normalized.append(row)
+    return sorted(
+        normalized,
+        key=lambda row: (str(row["topic_id"]), str(row["obligation_id"])),
+    )
+
+
+def _o1_population_proof(
+    contract: Mapping[str, object],
+    records: Sequence[Mapping[str, object]],
+    candidates: Sequence[Mapping[str, object]],
+    *,
+    opposite_fold_only: bool,
+) -> tuple[list[dict[str, object]], int]:
+    obligations = {
+        str(row["obligation_id"]): row
+        for row in contract["obligations"]  # type: ignore[index]
+    }
+    documents = list(contract["documents"])  # type: ignore[index]
+    actual: dict[str, list[Mapping[str, object]]] = defaultdict(list)
+    for row in candidates:
+        actual[str(row["obligation_id"])].append(row)
+    proof: list[dict[str, object]] = []
+    violations = 0
+    for record in records:
+        obligation_id = str(record["obligation_id"])
+        parent_id = str(record["parent_id"])
+        parent = obligations.get(parent_id)
+        if parent is None or parent.get("kind") != "o0":
+            raise ValueError(f"O1 parent {parent_id} is not a contract O0")
+        source_facet_id = str(parent.get("source_facet_id", ""))
+        parent_documents = [
+            row
+            for row in documents
+            if str(row.get("topic_id")) == str(record["topic_id"])
+            and _generated_by(row, source_facet_id)
+        ]
+        if opposite_fold_only:
+            source_fold = int(record["source_fold"])
+            expected = [
+                row for row in parent_documents if int(row["fold"]) != source_fold
+            ]
+            fold_violations = sum(
+                int(row["fold"]) == source_fold for row in actual[obligation_id]
+            )
+        else:
+            source_fold = int(record.get("source_fold", -1))
+            expected = parent_documents
+            fold_violations = 0
+        expected_ids = {str(row["document_id"]) for row in expected}
+        actual_ids = {str(row["document_id"]) for row in actual[obligation_id]}
+        population_match = expected_ids == actual_ids
+        if not population_match or fold_violations:
+            violations += 1
+        proof.append(
+            {
+                "topic_id": str(record["topic_id"]),
+                "obligation_id": obligation_id,
+                "parent_id": parent_id,
+                "source_fold": source_fold,
+                "allowed_folds": [1 - source_fold]
+                if opposite_fold_only
+                else [0, 1],
+                "expected_document_count": len(expected_ids),
+                "actual_document_count": len(actual_ids),
+                "fold_violation_count": fold_violations,
+                "population_match": population_match,
+            }
+        )
+    return proof, violations
+
+
+def run_o1_score_stage(
+    *,
+    contract_dir: Path,
+    records_path: Path,
+    output_dir: Path,
+    opposite_fold_only: bool,
+    model_receipt_path: Path | None = None,
+    score_cache_root: Path | None = None,
+) -> dict[str, object]:
+    """Score provisional opposite-fold or accepted full-parent O1 populations."""
+
+    destination = Path(output_dir)
+    if destination.exists():
+        raise FileExistsError(f"create-only O1 score output exists: {destination}")
+    source_path = Path(records_path)
+    records = _normalize_o1_score_records(
+        _read_jsonl(source_path, "derived O1 records"),
+        opposite_fold_only=opposite_fold_only,
+    )
+    source_binding = _file_binding(source_path)
+    stage = "provisional_o1" if opposite_fold_only else "accepted_o1"
+    if not records:
+        receipt: dict[str, object] = {
+            "schema_version": O1_STAGE_SCHEMA_VERSION,
+            "status": "complete",
+            "stage": stage,
+            "opposite_fold_only": opposite_fold_only,
+            "record_count": 0,
+            "candidate_count": 0,
+            "window_count": 0,
+            "population_violation_count": 0,
+            "population_proof": [],
+            "source": source_binding,
+            "qrels_opened": False,
+            "network_call_count": 0,
+            "retrieval_call_count": 0,
+            "hosted_inference_call_count": 0,
+            "paid_call_count": 0,
+            "external_cost_usd": 0.0,
+            "model_constructed": False,
+        }
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.mkdir()
+        _exclusive_json(destination / "receipt.json", receipt)
+        return receipt
+
+    contract = load_score_contract(Path(contract_dir))
+    candidates = build_o1_score_candidates(
+        contract,
+        records,
+        opposite_fold_only=opposite_fold_only,
+    )
+    proof, violations = _o1_population_proof(
+        contract,
+        records,
+        candidates,
+        opposite_fold_only=opposite_fold_only,
+    )
+    if violations:
+        raise ValueError("derived O1 candidate population differs from its fold proof")
+    preflight_dir = destination / "preflight"
+    _run_candidate_score_preflight(
+        contract_dir=Path(contract_dir),
+        output_dir=preflight_dir,
+        candidates=candidates,
+        model_receipt_path=model_receipt_path,
+        score_cache_root=score_cache_root,
+        extra_bindings={"derived_o1_source": source_binding},
+    )
+    repo_root = find_repo_root()
+    cache_root = Path(
+        score_cache_root or repo_cache_root(repo_root) / "reranker"
+    ).resolve()
+    scores_dir = destination / "scores"
+    score_receipt = run_local_scoring(preflight_dir, scores_dir, cache_root)
+    if _file_binding(source_path) != source_binding:
+        raise ValueError("derived O1 source changed during scoring")
+    receipt = {
+        "schema_version": O1_STAGE_SCHEMA_VERSION,
+        "status": "complete",
+        "stage": stage,
+        "opposite_fold_only": opposite_fold_only,
+        "record_count": len(records),
+        "candidate_count": len(candidates),
+        "window_count": int(score_receipt["completed_window_count"]),
+        "unique_pair_count": int(score_receipt["unique_pair_count"]),
+        "forward_pair_count": int(score_receipt["unique_forward_pair_count"]),
+        "population_violation_count": 0,
+        "population_proof": proof,
+        "source": source_binding,
+        "artifacts": {
+            "preflight": {
+                "path": "preflight/preflight.json",
+                "sha256": _sha256_file(preflight_dir / "preflight.json"),
+            },
+            "scores": {
+                "path": "scores/receipt.json",
+                "sha256": _sha256_file(scores_dir / "receipt.json"),
+            },
+        },
+        "model": score_receipt["model"],
+        "model_revision": score_receipt["model_revision"],
+        "execution_backend": score_receipt["execution_backend"],
+        "device": score_receipt["device"],
+        "device_name": score_receipt["device_name"],
+        "elapsed_seconds": score_receipt["elapsed_seconds"],
+        "orchestration_elapsed_seconds": score_receipt[
+            "orchestration_elapsed_seconds"
+        ],
+        "peak_device_memory_bytes": score_receipt["peak_device_memory_bytes"],
+        "peak_host_memory_bytes": score_receipt["peak_host_memory_bytes"],
+        "qrels_opened": False,
+        "network_call_count": 0,
+        "retrieval_call_count": 0,
+        "hosted_inference_call_count": 0,
+        "paid_call_count": 0,
+        "external_cost_usd": 0.0,
+        "model_constructed": True,
+    }
+    _exclusive_json(destination / "receipt.json", receipt)
+    return receipt
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1951,6 +2240,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         "verify", help="authenticate every completed base-score shard"
     )
     verify.add_argument("--output", type=Path, required=True)
+    provisional_o1 = subparsers.add_parser(
+        "provisional-o1",
+        help="score each proposed O1 only over its opposite parent fold",
+    )
+    provisional_o1.add_argument("--contract", type=Path, required=True)
+    provisional_o1.add_argument("--proposals", type=Path, required=True)
+    provisional_o1.add_argument(
+        "--opposite-fold-only",
+        action="store_true",
+        required=True,
+    )
+    provisional_o1.add_argument("--output", type=Path, required=True)
+    accepted_o1 = subparsers.add_parser(
+        "accepted-o1",
+        help="score each accepted O1 over its complete parent population",
+    )
+    accepted_o1.add_argument("--contract", type=Path, required=True)
+    accepted_o1.add_argument("--accepted", type=Path, required=True)
+    accepted_o1.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "preflight":
         receipt = run_score_preflight(
@@ -1985,13 +2293,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"elapsed_seconds={receipt['elapsed_seconds']:.3f} "
             "network=false qrels_opened=false external_cost=$0"
         )
-    else:
+    elif args.command == "verify":
         receipt = verify_local_scoring(args.output)
         print(
             "status=verified "
             f"windows={receipt['completed_window_count']} "
             f"pairs={receipt['unique_pair_count']} "
             f"shards={receipt['shard_count']} "
+            "network=false qrels_opened=false external_cost=$0"
+        )
+    else:
+        opposite_fold_only = args.command == "provisional-o1"
+        records_path = args.proposals if opposite_fold_only else args.accepted
+        receipt = run_o1_score_stage(
+            contract_dir=args.contract,
+            records_path=records_path,
+            output_dir=args.output,
+            opposite_fold_only=opposite_fold_only,
+        )
+        print(
+            "status=complete "
+            f"records={receipt['record_count']} "
+            f"candidates={receipt['candidate_count']} "
+            f"windows={receipt['window_count']} "
+            f"forwards={receipt.get('forward_pair_count', 0)} "
+            f"opposite_fold_only={str(opposite_fold_only).lower()} "
             "network=false qrels_opened=false external_cost=$0"
         )
     return 0

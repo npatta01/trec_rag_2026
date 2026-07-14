@@ -10,10 +10,12 @@ import pytest
 
 from trec_rag import adaptive_evidence_score as score_module
 from trec_rag.adaptive_evidence_score import (
+    build_o1_score_candidates,
     build_score_candidates,
     build_score_preflight,
     load_score_contract,
     persist_score_preflight,
+    run_o1_score_stage,
     run_score_preflight,
     score_window_rows,
 )
@@ -124,6 +126,166 @@ def test_o1_scores_only_its_parent_population() -> None:
     rows = build_score_candidates(_contract(), derived=derived)
     o1 = [row for row in rows if row["obligation_id"].endswith(":access")]
     assert {row["document_id"] for row in o1} == {"facet-doc"}
+
+
+def _cross_fold_contract() -> dict[str, object]:
+    contract = _contract()
+    documents = list(contract["documents"])  # type: ignore[arg-type]
+    text = "second facet passage"
+    documents.append(
+        {
+            "topic_id": "219",
+            "document_id": "facet-doc-zero",
+            "union_order": 3,
+            "text": text,
+            "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "fold": 0,
+            "provenance": [
+                {"family": "facet", "facet_id": "219-positive", "rank": 2}
+            ],
+        }
+    )
+    return {**contract, "documents": documents}
+
+
+def _derived_o1(*, source_fold: int = 0) -> dict[str, object]:
+    return {
+        "proposal_id": "219-positive:f0:o1:0",
+        "topic_id": "219",
+        "obligation_id": "219-positive:f0:o1:0",
+        "kind": "o1",
+        "parent_id": "219-positive",
+        "source_fold": source_fold,
+        "label": "accessibility effects",
+        "query": (
+            "full narrative\n\nExplicit obligation:\n"
+            "Positive effects on society.\n\n"
+            "Corpus-derived sub-obligation:\naccessibility effects"
+        ),
+    }
+
+
+def test_provisional_o1_scores_only_opposite_parent_fold() -> None:
+    rows = build_o1_score_candidates(
+        _cross_fold_contract(),
+        [_derived_o1(source_fold=0)],
+        opposite_fold_only=True,
+    )
+    assert {row["document_id"] for row in rows} == {"facet-doc"}
+    assert {row["fold"] for row in rows} == {1}
+
+
+def test_accepted_o1_scores_complete_parent_population() -> None:
+    rows = build_o1_score_candidates(
+        _cross_fold_contract(),
+        [_derived_o1(source_fold=0)],
+        opposite_fold_only=False,
+    )
+    assert {row["document_id"] for row in rows} == {
+        "facet-doc",
+        "facet-doc-zero",
+    }
+    assert {row["fold"] for row in rows} == {0, 1}
+
+
+def test_opposite_fold_stage_requires_a_frozen_source_fold() -> None:
+    derived = _derived_o1()
+    derived.pop("source_fold")
+    with pytest.raises(ValueError, match="source_fold"):
+        build_o1_score_candidates(
+            _cross_fold_contract(),
+            [derived],
+            opposite_fold_only=True,
+        )
+
+
+def test_o1_stage_rejects_existing_output_before_input_or_model_access(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "stage"
+    output.mkdir()
+    with pytest.raises(FileExistsError, match="create-only"):
+        run_o1_score_stage(
+            contract_dir=tmp_path / "missing-contract",
+            records_path=tmp_path / "missing-records",
+            output_dir=output,
+            opposite_fold_only=True,
+        )
+
+
+def test_o1_stage_rejects_protected_record_before_contract_cache_or_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = tmp_path / "proposals.jsonl"
+    records.write_bytes(
+        _compact_bytes(
+            {
+                **_derived_o1(),
+                "topic_id": "144",
+            }
+        )
+    )
+    touched: list[str] = []
+    monkeypatch.setattr(
+        score_module,
+        "load_score_contract",
+        lambda path: touched.append("contract"),
+    )
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        run_o1_score_stage(
+            contract_dir=tmp_path / "contract",
+            records_path=records,
+            output_dir=tmp_path / "stage",
+            opposite_fold_only=True,
+        )
+
+    assert touched == []
+
+
+@pytest.mark.parametrize(
+    ("command", "source_flag", "opposite"),
+    [
+        ("provisional-o1", "--proposals", True),
+        ("accepted-o1", "--accepted", False),
+    ],
+)
+def test_o1_cli_routes_exact_fold_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    source_flag: str,
+    opposite: bool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        captured.append(dict(kwargs))
+        return {
+            "record_count": 1,
+            "candidate_count": 2,
+            "window_count": 3,
+            "forward_pair_count": 4,
+        }
+
+    monkeypatch.setattr(score_module, "run_o1_score_stage", fake_run)
+    args = [
+        command,
+        "--contract",
+        str(tmp_path / "contract"),
+        source_flag,
+        str(tmp_path / "records.jsonl"),
+        "--output",
+        str(tmp_path / "output"),
+    ]
+    if opposite:
+        args.append("--opposite-fold-only")
+
+    assert score_module.main(args) == 0
+    assert captured[0]["opposite_fold_only"] is opposite
+    assert "records=1 candidates=2 windows=3 forwards=4" in capsys.readouterr().out
 
 
 def test_preflight_records_exact_hits_misses_and_never_reads_qrels() -> None:
