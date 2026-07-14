@@ -455,6 +455,7 @@ def freeze_gate(
                         "facet_id": stream["facet_id"],
                         "manifest_order": stream["manifest_order"],
                         "accepted": stream["accepted"],
+                        "stream_family": family,
                         "family": family,
                         **dict(row),
                     }
