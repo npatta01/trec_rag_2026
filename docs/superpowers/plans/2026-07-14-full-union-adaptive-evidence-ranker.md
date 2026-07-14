@@ -274,6 +274,8 @@ git commit -m "Add adaptive evidence contract"
 - Consumes: Task 1 contract records, existing MiniLM receipts/cache, and later accepted O1 records.
 - Produces: `build_score_candidates(contract, derived=()) -> list[dict]`, `build_score_preflight(candidates, tokenizer, cache_lookup) -> dict`, `score_window_rows(rows, predict, cache_get, cache_add) -> list[dict]`, and create-only candidates/windows/preflight artifacts.
 
+**Approved boundary resolution:** Task 2 defines and tests `score_window_rows` as a pure injected cache/predict orchestration function, but its CLI never calls it and performs zero inference. Task 3 supplies the authenticated ROCm predictor plus resumable shard orchestration around this interface.
+
 - [ ] **Step 1: Write failing population and cache-identity tests**
 
 ```python
@@ -313,6 +315,20 @@ def test_preflight_records_exact_hits_misses_and_never_reads_qrels() -> None:
         preflight["summary"]["cache_hit_count"]
         + preflight["summary"]["cache_miss_count"]
     )
+
+
+def test_score_window_rows_deduplicates_pairs_and_restores_all_windows() -> None:
+    rows = [_window("w1", "q", "same"), _window("w2", "q", "same")]
+    calls: list[tuple[str, str]] = []
+    scores = score_window_rows(
+        rows,
+        cache_get=lambda q, t: None,
+        cache_add=lambda pairs: calls.extend((q, t) for q, t, _ in pairs),
+        predict=lambda pairs: [0.75 for _ in pairs],
+    )
+    assert calls == [("q", "same")]
+    assert [row["window_id"] for row in scores] == ["w1", "w2"]
+    assert {row["score"] for row in scores} == {0.75}
 ```
 
 - [ ] **Step 2: Verify the tests fail before implementation**
@@ -405,26 +421,12 @@ git commit -m "Add adaptive evidence score preflight"
 - Create at run time: `outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/scoring/base/`
 
 **Interfaces:**
-- Consumes: Task 2 preflight plus the existing global MiniLM score cache.
-- Produces: `run_local_scoring(preflight_dir, output_dir, cache_root) -> dict`, topic-obligation score shards, and `receipt.json`.
+- Consumes: Task 2 preflight, Task 2 `score_window_rows`, and the existing global MiniLM score cache.
+- Produces: `verify_completed_shard(path, receipt) -> int`, `run_local_scoring(preflight_dir, output_dir, cache_root) -> dict`, the authenticated ROCm predictor adapter, topic-obligation score shards, and `receipt.json`.
 
 - [ ] **Step 1: Add failing resumability and completeness tests**
 
 ```python
-def test_score_window_rows_deduplicates_pairs_and_restores_all_windows() -> None:
-    rows = [_window("w1", "q", "same"), _window("w2", "q", "same")]
-    calls: list[tuple[str, str]] = []
-    scores = score_window_rows(
-        rows,
-        cache_get=lambda q, t: None,
-        cache_add=lambda pairs: calls.extend((q, t) for q, t, _ in pairs),
-        predict=lambda pairs: [0.75 for _ in pairs],
-    )
-    assert calls == [("q", "same")]
-    assert [row["window_id"] for row in scores] == ["w1", "w2"]
-    assert {row["score"] for row in scores} == {0.75}
-
-
 def test_resume_accepts_only_hash_matching_complete_shards(tmp_path: Path) -> None:
     shard = tmp_path / "219__broad.jsonl"
     shard.write_text('{"window_id":"w1","score":0.5}\n', encoding="utf-8")
@@ -435,35 +437,26 @@ def test_resume_accepts_only_hash_matching_complete_shards(tmp_path: Path) -> No
         verify_completed_shard(shard, receipt)
 ```
 
-- [ ] **Step 2: Run tests and verify the new functions fail**
+- [ ] **Step 2: Run tests and verify the new orchestration functions fail**
 
 Run: `.venv/bin/python -m pytest code/tests/test_adaptive_evidence_score.py -q`
 
-Expected: failures name `score_window_rows` and `verify_completed_shard`.
+Expected: failures name `verify_completed_shard` and `run_local_scoring`; the already-tested Task 2 `score_window_rows` remains green.
 
-- [ ] **Step 3: Implement the injected scoring core and ROCm adapter**
+- [ ] **Step 3: Implement shard verification, resumable orchestration, and the ROCm adapter**
 
 ```python
-def score_window_rows(rows, *, cache_get, cache_add, predict):
-    unique: dict[tuple[str, str], Mapping[str, object]] = {}
-    for row in rows:
-        unique.setdefault((str(row["query"]), str(row["window_text"])), row)
-    missing = [pair for pair in sorted(unique) if cache_get(*pair) is None]
-    if missing:
-        values = predict(missing)
-        if len(values) != len(missing):
-            raise ValueError("predictor score count differs from missing pairs")
-        cache_add((query, text, float(score)) for (query, text), score in zip(missing, values, strict=True))
-    output = []
-    for row in rows:
-        score = cache_get(str(row["query"]), str(row["window_text"]))
-        if score is None or not math.isfinite(float(score)):
-            raise ValueError("score cache does not cover a frozen window")
-        output.append({**dict(row), "score": float(score), "model": MODEL_ID, "model_revision": MODEL_REVISION})
-    return output
+def verify_completed_shard(path: Path, receipt: Mapping[str, object]) -> int:
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != receipt["sha256"]:
+        raise ValueError("completed shard hash differs from its receipt")
+    rows = sum(1 for line in payload.splitlines() if line)
+    if rows != receipt["rows"]:
+        raise ValueError("completed shard row count differs from its receipt")
+    return rows
 ```
 
-The production `predict` adapter must load the authenticated MiniLM snapshot with `local_files_only=True`, `trust_remote_code=False`, `use_safetensors=True`, float32, `eval()`, and ROCm `cuda`. Write one create-only shard per topic-obligation; on restart, verify and skip only complete hash-matching shards. Poll long-running scoring sessions rather than blocking silently.
+Use the Task 2 `score_window_rows` function unchanged. The production `predict` adapter must load the authenticated MiniLM snapshot with `local_files_only=True`, `trust_remote_code=False`, `use_safetensors=True`, float32, `eval()`, and ROCm `cuda`. Write one create-only shard per topic-obligation; on restart, verify and skip only complete hash-matching shards. Poll long-running scoring sessions rather than blocking silently.
 
 - [ ] **Step 4: Run tests, execute base scoring, and verify the receipt**
 
