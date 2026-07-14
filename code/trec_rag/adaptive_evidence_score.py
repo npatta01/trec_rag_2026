@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -54,6 +55,76 @@ def _reject_protected(topic_ids: Sequence[object]) -> None:
     for topic_id in map(str, topic_ids):
         if topic_id in PROTECTED_TOPIC_IDS:
             raise ValueError(f"protected topic {topic_id} is forbidden")
+
+
+def _validate_contract_population(
+    obligations: Sequence[Mapping[str, object]],
+    documents: Sequence[Mapping[str, object]],
+    *,
+    expected_document_count: int | None = None,
+    expected_topic_ids: Sequence[str] | None = None,
+) -> None:
+    identities = {
+        (str(row.get("topic_id")), str(row.get("document_id")))
+        for row in documents
+    }
+    required_count = expected_document_count or len(documents)
+    if len(identities) != required_count or len(documents) != required_count:
+        raise ValueError(
+            f"contract requires exactly {required_count} unique topic-document identities"
+        )
+    required_topics = set(
+        expected_topic_ids
+        if expected_topic_ids is not None
+        else (str(row.get("topic_id")) for row in documents)
+    )
+    broad_counts = {
+        topic_id: sum(
+            row.get("kind") == "broad" and str(row.get("topic_id")) == topic_id
+            for row in obligations
+        )
+        for topic_id in required_topics
+    }
+    broad_topics = {
+        str(row.get("topic_id")) for row in obligations if row.get("kind") == "broad"
+    }
+    if broad_topics != required_topics or any(count != 1 for count in broad_counts.values()):
+        raise ValueError("contract requires exactly one broad obligation per pilot topic")
+
+
+def _validated_obligations(
+    obligations: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, Mapping[str, object]], dict[str, Mapping[str, object]]]:
+    by_id: dict[str, Mapping[str, object]] = {}
+    for row in obligations:
+        obligation_id = str(row.get("obligation_id"))
+        if obligation_id in by_id:
+            raise ValueError(f"duplicate obligation ID {obligation_id}")
+        by_id[obligation_id] = row
+    o1_parents: dict[str, Mapping[str, object]] = {}
+    for row in obligations:
+        if row.get("kind") != "o1":
+            continue
+        obligation_id = str(row.get("obligation_id"))
+        parent_id = str(row.get("parent_id"))
+        parent = by_id.get(parent_id)
+        if parent is None:
+            raise ValueError(f"O1 parent {parent_id} does not exist")
+        if parent.get("kind") != "o0":
+            raise ValueError(f"O1 parent {parent_id} must be kind o0")
+        topic_id = str(row.get("topic_id"))
+        if str(parent.get("topic_id")) != topic_id:
+            raise ValueError(f"O1 parent {parent_id} must share topic {topic_id}")
+        source_facet_id = parent.get("source_facet_id")
+        if (
+            not isinstance(source_facet_id, str)
+            or not source_facet_id
+            or source_facet_id != parent_id
+            or str(parent.get("obligation_id")) != parent_id
+        ):
+            raise ValueError(f"O1 parent {parent_id} source facet is invalid")
+        o1_parents[obligation_id] = parent
+    return by_id, o1_parents
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -188,6 +259,12 @@ def load_score_contract(
         or sum(row.get("kind") == "o0" for row in obligations) != expected_o0_count
     ):
         raise ValueError("contract row counts differ from its receipt")
+    _validate_contract_population(
+        obligations,
+        documents,
+        expected_document_count=expected_document_count,
+        expected_topic_ids=PILOT_TOPIC_IDS,
+    )
     if {str(row.get("topic_id")) for row in obligations} != set(PILOT_TOPIC_IDS):
         raise ValueError("contract obligation topics differ from the pilot set")
     if {str(row.get("topic_id")) for row in documents} != set(PILOT_TOPIC_IDS):
@@ -212,13 +289,16 @@ def build_score_candidates(
 ) -> list[dict[str, object]]:
     """Build broad-universal, O0 facet-local, and O1 parent-local rows."""
 
-    obligations = [*contract["obligations"], *derived]  # type: ignore[index]
+    contract_obligations = list(contract["obligations"])  # type: ignore[index]
     documents = list(contract["documents"])  # type: ignore[index]
     _reject_protected(
-        [row["topic_id"] for row in obligations]
+        [row["topic_id"] for row in contract_obligations]
+        + [row["topic_id"] for row in derived]
         + [row["topic_id"] for row in documents]
     )
-    by_id = {str(row["obligation_id"]): row for row in obligations}
+    _validate_contract_population(contract_obligations, documents)
+    obligations = [*contract_obligations, *derived]
+    _by_id, o1_parents = _validated_obligations(obligations)
     output: list[dict[str, object]] = []
     for document in documents:
         topic_id = str(document["topic_id"])
@@ -231,7 +311,7 @@ def build_score_candidates(
             ):
                 continue
             if kind == "o1":
-                parent = by_id[str(obligation["parent_id"])]
+                parent = o1_parents[str(obligation["obligation_id"])]
                 if not _generated_by(document, str(parent["source_facet_id"])):
                     continue
             query = str(obligation["query"])
@@ -370,6 +450,65 @@ def build_score_preflight(
         ],
         "windows": [row.to_dict() for row in windows],
     }
+
+
+def score_window_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    predict: Callable[[list[tuple[str, str]]], Sequence[float]],
+    cache_get: Callable[[str, str], float | None],
+    cache_add: Callable[[Sequence[tuple[str, str, float]]], object],
+) -> list[dict[str, object]]:
+    """Score unique injected misses and restore every frozen window row."""
+
+    for row in rows:
+        topic_id = row.get("topic_id")
+        if not isinstance(topic_id, str) or not topic_id:
+            raise ValueError("window topic_id must be nonempty text")
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+    unique: dict[tuple[str, str], None] = {}
+    initial_scores: dict[tuple[str, str], float | None] = {}
+    for row in rows:
+        pair = (str(row["query"]), str(row["window_text"]))
+        unique.setdefault(pair, None)
+    for pair in unique:
+        value = cache_get(*pair)
+        if value is not None and not math.isfinite(float(value)):
+            raise ValueError("score cache contains a nonfinite score")
+        initial_scores[pair] = value
+
+    missing = sorted(pair for pair, value in initial_scores.items() if value is None)
+    if missing:
+        values = list(predict(missing))
+        if len(values) != len(missing):
+            raise ValueError("predictor score count differs from missing pairs")
+        additions: list[tuple[str, str, float]] = []
+        for (query, text), score in zip(missing, values, strict=True):
+            value = float(score)
+            if not math.isfinite(value):
+                raise ValueError("predictor returned a nonfinite score")
+            additions.append((query, text, value))
+        cache_add(additions)
+
+    output: list[dict[str, object]] = []
+    for row in rows:
+        query, text = str(row["query"]), str(row["window_text"])
+        score = cache_get(query, text)
+        if score is None:
+            raise ValueError("score cache does not cover a frozen window")
+        value = float(score)
+        if not math.isfinite(value):
+            raise ValueError("score cache contains a nonfinite score")
+        output.append(
+            {
+                **dict(row),
+                "score": value,
+                "model": MODEL_ID,
+                "model_revision": MODEL_REVISION,
+            }
+        )
+    return output
 
 
 def _file_binding(path: Path) -> dict[str, object]:

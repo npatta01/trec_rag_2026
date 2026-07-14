@@ -12,6 +12,7 @@ from trec_rag.adaptive_evidence_score import (
     load_score_contract,
     persist_score_preflight,
     run_score_preflight,
+    score_window_rows,
 )
 
 
@@ -300,6 +301,145 @@ def test_contract_loader_rejects_protected_manifest_before_row_files(
         )
 
 
+def _replace_contract_jsonl(
+    contract_dir: Path,
+    name: str,
+    rows: list[dict[str, object]],
+) -> None:
+    content = _jsonl_bytes(rows)
+    (contract_dir / name).write_bytes(content)
+    summary_path = contract_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["artifact_sha256"][name] = hashlib.sha256(content).hexdigest()
+    summary_path.write_bytes(_compact_bytes(summary))
+
+
+def test_contract_loader_requires_exact_unique_document_population(
+    tmp_path: Path,
+) -> None:
+    contract_dir = tmp_path / "contract"
+    _write_contract(contract_dir)
+    rows = [
+        json.loads(line)
+        for line in (contract_dir / "documents.jsonl").read_text().splitlines()
+    ]
+    rows[-1] = {**rows[0], "union_order": 2}
+    _replace_contract_jsonl(contract_dir, "documents.jsonl", rows)
+
+    with pytest.raises(ValueError, match="exactly 4 unique topic-document"):
+        load_score_contract(
+            contract_dir,
+            expected_document_count=4,
+            expected_o0_count=0,
+        )
+
+
+def test_contract_loader_requires_one_broad_obligation_per_pilot_topic(
+    tmp_path: Path,
+) -> None:
+    contract_dir = tmp_path / "contract"
+    _write_contract(contract_dir)
+    rows = [
+        json.loads(line)
+        for line in (contract_dir / "obligations.jsonl").read_text().splitlines()
+    ]
+    rows[-1] = {
+        **rows[0],
+        "obligation_id": "219:duplicate-broad",
+    }
+    _replace_contract_jsonl(contract_dir, "obligations.jsonl", rows)
+
+    with pytest.raises(ValueError, match="exactly one broad obligation per pilot topic"):
+        load_score_contract(
+            contract_dir,
+            expected_document_count=4,
+            expected_o0_count=0,
+        )
+
+
+def test_candidate_builder_rejects_duplicate_document_identity() -> None:
+    contract = _contract()
+    duplicate = {**contract["documents"][0], "union_order": 3}  # type: ignore[index]
+    contract["documents"].append(duplicate)  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match="unique topic-document"):
+        build_score_candidates(contract)
+
+
+def test_o1_rejects_missing_parent_explicitly() -> None:
+    with pytest.raises(ValueError, match="O1 parent 219-missing does not exist"):
+        build_score_candidates(
+            _contract(),
+            derived=[
+                {
+                    "topic_id": "219",
+                    "obligation_id": "219-missing:o1:x",
+                    "kind": "o1",
+                    "parent_id": "219-missing",
+                    "query": "full narrative\n\nderived",
+                }
+            ],
+        )
+
+
+def test_o1_rejects_non_o0_parent() -> None:
+    with pytest.raises(ValueError, match="O1 parent 219:broad must be kind o0"):
+        build_score_candidates(
+            _contract(),
+            derived=[
+                {
+                    "topic_id": "219",
+                    "obligation_id": "219:broad:o1:x",
+                    "kind": "o1",
+                    "parent_id": "219:broad",
+                    "query": "full narrative\n\nderived",
+                }
+            ],
+        )
+
+
+def test_o1_rejects_cross_topic_parent() -> None:
+    with pytest.raises(ValueError, match="O1 parent 219-positive must share topic 72"):
+        build_score_candidates(
+            _contract(),
+            derived=[
+                {
+                    "topic_id": "72",
+                    "obligation_id": "72:o1:x",
+                    "kind": "o1",
+                    "parent_id": "219-positive",
+                    "query": "narrative 72\n\nderived",
+                }
+            ],
+        )
+
+
+@pytest.mark.parametrize("source_facet_id", [None, "219-wrong-facet"])
+def test_o1_rejects_invalid_parent_source_facet(
+    source_facet_id: str | None,
+) -> None:
+    contract = _contract()
+    parent = contract["obligations"][1]  # type: ignore[index]
+    if source_facet_id is None:
+        parent.pop("source_facet_id")
+    else:
+        parent["source_facet_id"] = source_facet_id
+
+    with pytest.raises(ValueError, match="O1 parent 219-positive source facet is invalid"):
+        build_score_candidates(
+            contract,
+            derived=[
+                {
+                    "topic_id": "219",
+                    "obligation_id": "219-positive:o1:x",
+                    "kind": "o1",
+                    "parent_id": "219-positive",
+                    "query": "full narrative\n\nderived",
+                }
+            ],
+        )
+
+
 def test_persist_preflight_is_create_only_and_hashes_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -344,3 +484,110 @@ def test_run_preflight_rejects_existing_output_before_any_input_access(
             contract_dir=tmp_path / "missing-contract",
             output_dir=output,
         )
+
+
+def _window(window_id: str, query: str, text: str) -> dict[str, object]:
+    return {
+        "topic_id": "219",
+        "window_id": window_id,
+        "query": query,
+        "window_text": text,
+    }
+
+
+def test_score_window_rows_predicts_each_miss_once_and_restores_all_rows() -> None:
+    rows = [_window("w1", "q", "same"), _window("w2", "q", "same")]
+    cache: dict[tuple[str, str], float] = {}
+    predicted: list[list[tuple[str, str]]] = []
+    added: list[tuple[str, str, float]] = []
+
+    def predict(pairs: list[tuple[str, str]]) -> list[float]:
+        predicted.append(pairs)
+        return [0.75 for _ in pairs]
+
+    def cache_add(pairs: object) -> None:
+        for query, text, score in pairs:  # type: ignore[union-attr]
+            added.append((query, text, score))
+            cache[(query, text)] = score
+
+    scores = score_window_rows(
+        rows,
+        predict=predict,
+        cache_get=lambda query, text: cache.get((query, text)),
+        cache_add=cache_add,
+    )
+
+    assert predicted == [[("q", "same")]]
+    assert added == [("q", "same", 0.75)]
+    assert [row["window_id"] for row in scores] == ["w1", "w2"]
+    assert {row["score"] for row in scores} == {0.75}
+    assert {row["model_revision"] for row in scores} == {
+        "c5ee24cb16019beea0893ab7796b1df96625c6b8"
+    }
+
+
+def test_score_window_rows_uses_complete_cache_without_prediction() -> None:
+    def forbidden_predict(pairs: list[tuple[str, str]]) -> list[float]:
+        raise AssertionError(f"predictor must not run for cached pairs: {pairs}")
+
+    scores = score_window_rows(
+        [_window("cached", "q", "text")],
+        predict=forbidden_predict,
+        cache_get=lambda query, text: 0.5,
+        cache_add=lambda pairs: None,
+    )
+
+    assert scores[0]["score"] == 0.5
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_score_window_rows_rejects_nonfinite_scores(value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        score_window_rows(
+            [_window("bad", "q", "text")],
+            predict=lambda pairs: [value],
+            cache_get=lambda query, text: None,
+            cache_add=lambda pairs: None,
+        )
+
+
+def test_score_window_rows_rejects_predictor_count_and_missing_cache_coverage() -> None:
+    row = _window("missing", "q", "text")
+    with pytest.raises(ValueError, match="predictor score count"):
+        score_window_rows(
+            [row],
+            predict=lambda pairs: [],
+            cache_get=lambda query, text: None,
+            cache_add=lambda pairs: None,
+        )
+    with pytest.raises(ValueError, match="cache does not cover"):
+        score_window_rows(
+            [row],
+            predict=lambda pairs: [0.25],
+            cache_get=lambda query, text: None,
+            cache_add=lambda pairs: None,
+        )
+
+
+@pytest.mark.parametrize("topic_id", ["144", None])
+def test_score_window_rows_rejects_forbidden_topic_before_cache_or_prediction(
+    topic_id: str | None,
+) -> None:
+    touched: list[str] = []
+    row = _window("forbidden", "q", "text")
+    if topic_id is None:
+        row.pop("topic_id")
+        match = "window topic_id must be nonempty"
+    else:
+        row["topic_id"] = topic_id
+        match = "protected topic 144"
+
+    with pytest.raises(ValueError, match=match):
+        score_window_rows(
+            [row],
+            predict=lambda pairs: touched.append("predict"),  # type: ignore[arg-type,return-value]
+            cache_get=lambda query, text: touched.append("cache_get"),  # type: ignore[return-value]
+            cache_add=lambda pairs: touched.append("cache_add"),
+        )
+
+    assert touched == []
