@@ -8,7 +8,9 @@ import pytest
 from trec_rag.deep_facet_candidate_score import (
     MAX_PHASE_SECONDS,
     aggregate_top4,
+    build_runtime_override,
     build_phase_preflight,
+    checkpoint_projection,
     phase1_candidates,
     phase2_candidates,
     verify_source_receipt,
@@ -168,3 +170,54 @@ def test_phase2_scores_every_accepted_document_with_common_and_narrative_queries
         ("d2", "narrative"),
     }
     assert all("decision" not in row and "accepted" not in row for row in candidates)
+
+
+def test_runtime_override_uses_slower_same_run_estimate_and_25_percent_margin() -> None:
+    phase2_preflight = {
+        "phase": "phase2_common_narrative",
+        "qrels_opened": False,
+        "projected_runtime_seconds": 508.99666666666667,
+        "summary": {"unique_uncached_pair_count": 143699},
+    }
+    phase1_receipt = {
+        "phase": "phase1_facet_local",
+        "qrels_opened": False,
+        "unique_forward_pair_count": 20766,
+        "elapsed_seconds": 113.72382251900854,
+    }
+
+    override = build_runtime_override(
+        phase2_preflight,
+        phase1_receipt,
+        approved_by="user",
+        approval_note="Codex task approval on 2026-07-14",
+    )
+
+    assert override["historical_estimate_seconds"] == pytest.approx(508.9966666667)
+    assert override["same_run_estimate_seconds"] == pytest.approx(816.959432349)
+    assert override["selected_estimate_seconds"] == pytest.approx(816.959432349)
+    assert override["hard_ceiling_seconds"] == 1080
+    assert override["checkpoint_pair_count"] == 10000
+    assert override["qrels_opened"] is False
+
+
+def test_checkpoint_projection_is_conservative_and_enforces_hard_ceiling() -> None:
+    projection = checkpoint_projection(
+        elapsed_seconds=55.0,
+        completed_pairs=10000,
+        total_pairs=143699,
+        fixed_finalize_seconds=30.0,
+        hard_ceiling_seconds=1080.0,
+    )
+    assert projection["projected_total_seconds"] == pytest.approx(820.3445)
+    assert projection["continue_authorized"] is True
+
+    stopped = checkpoint_projection(
+        elapsed_seconds=80.0,
+        completed_pairs=10000,
+        total_pairs=143699,
+        fixed_finalize_seconds=30.0,
+        hard_ceiling_seconds=1080.0,
+    )
+    assert stopped["projected_total_seconds"] > 1080
+    assert stopped["continue_authorized"] is False

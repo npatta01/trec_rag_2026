@@ -51,6 +51,10 @@ BATCH_SIZE = 32
 PREFLIGHT_SCHEMA_VERSION = "deep-facet-candidate-minilm-preflight-v1"
 SCORE_SCHEMA_VERSION = "deep-facet-candidate-minilm-score-v1"
 RECEIPT_SCHEMA_VERSION = "deep-facet-candidate-minilm-receipt-v1"
+RUNTIME_OVERRIDE_SCHEMA_VERSION = "deep-facet-candidate-runtime-override-v1"
+CHECKPOINT_SCHEMA_VERSION = "deep-facet-candidate-runtime-checkpoint-v1"
+CHECKPOINT_PAIR_COUNT = 10_000
+RUNTIME_MARGIN = 1.25
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -121,6 +125,93 @@ def verify_source_receipt(path: Path, expected_sha256: str) -> str:
     if actual != expected_sha256:
         raise ValueError("authenticated source receipt SHA-256 differs")
     return actual
+
+
+def build_runtime_override(
+    phase2_preflight: Mapping[str, object],
+    phase1_receipt: Mapping[str, object],
+    *,
+    approved_by: str,
+    approval_note: str,
+) -> dict[str, object]:
+    """Build the advisor-recommended one-time phase-2 runtime amendment."""
+
+    if not approved_by.strip() or not approval_note.strip():
+        raise ValueError("runtime override requires explicit approver and note")
+    if (
+        phase2_preflight.get("phase") != "phase2_common_narrative"
+        or phase2_preflight.get("qrels_opened") is not False
+        or phase1_receipt.get("phase") != "phase1_facet_local"
+        or phase1_receipt.get("qrels_opened") is not False
+    ):
+        raise ValueError("runtime override requires qrels-blind phase-1/phase-2 evidence")
+    summary = phase2_preflight.get("summary")
+    if not isinstance(summary, Mapping):
+        raise ValueError("phase-2 preflight lacks its uncached-pair count")
+    total_pairs = int(summary.get("unique_uncached_pair_count", 0))
+    phase1_pairs = int(phase1_receipt.get("unique_forward_pair_count", 0))
+    phase1_elapsed = float(phase1_receipt.get("elapsed_seconds", 0.0))
+    historical = float(phase2_preflight.get("projected_runtime_seconds", 0.0))
+    if total_pairs <= CHECKPOINT_PAIR_COUNT or phase1_pairs <= 0 or phase1_elapsed <= 0:
+        raise ValueError("runtime override evidence counts and elapsed time are invalid")
+    same_run_rate = phase1_pairs / phase1_elapsed
+    same_run = REFERENCE_FIXED_SECONDS + total_pairs / same_run_rate
+    selected = max(historical, same_run)
+    hard_ceiling = int(math.ceil((RUNTIME_MARGIN * selected) / 60.0) * 60)
+    return {
+        "schema_version": RUNTIME_OVERRIDE_SCHEMA_VERSION,
+        "status": "approved",
+        "phase": "phase2_common_narrative",
+        "approved_by": approved_by,
+        "approval_note": approval_note,
+        "advisor_recommendation": "bounded_ceiling_override_with_10000_pair_checkpoint",
+        "historical_estimate_seconds": historical,
+        "same_run_pairs_per_second": same_run_rate,
+        "same_run_estimate_seconds": same_run,
+        "selected_estimate_seconds": selected,
+        "runtime_margin": RUNTIME_MARGIN,
+        "hard_ceiling_seconds": hard_ceiling,
+        "checkpoint_pair_count": CHECKPOINT_PAIR_COUNT,
+        "fixed_finalize_seconds": REFERENCE_FIXED_SECONDS,
+        "qrels_opened": False,
+        "one_time": True,
+        "automatic_second_override": False,
+    }
+
+
+def checkpoint_projection(
+    *,
+    elapsed_seconds: float,
+    completed_pairs: int,
+    total_pairs: int,
+    fixed_finalize_seconds: float,
+    hard_ceiling_seconds: float,
+) -> dict[str, object]:
+    """Conservatively project total wall time from the frozen first checkpoint."""
+
+    if (
+        elapsed_seconds <= 0
+        or completed_pairs <= 0
+        or total_pairs < completed_pairs
+        or fixed_finalize_seconds < 0
+        or hard_ceiling_seconds <= 0
+    ):
+        raise ValueError("runtime checkpoint inputs are invalid")
+    projected = (
+        elapsed_seconds * total_pairs / completed_pairs + fixed_finalize_seconds
+    )
+    return {
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "completed_pairs": completed_pairs,
+        "total_pairs": total_pairs,
+        "elapsed_seconds": elapsed_seconds,
+        "observed_pairs_per_second": completed_pairs / elapsed_seconds,
+        "fixed_finalize_seconds": fixed_finalize_seconds,
+        "projected_total_seconds": projected,
+        "hard_ceiling_seconds": hard_ceiling_seconds,
+        "continue_authorized": projected <= hard_ceiling_seconds,
+        "qrels_opened": False,
+    }
 
 
 def _reject_excluded(topic_id: object) -> str:
@@ -514,6 +605,47 @@ def create_phase2_preflight(
     return payload
 
 
+def create_runtime_override(
+    phase2_preflight_path: Path,
+    phase1_receipt_path: Path,
+    *,
+    approved_by: str,
+    approval_note: str,
+) -> dict[str, object]:
+    """Create one immutable user-approved runtime amendment beside phase 2."""
+
+    phase2_preflight_path = Path(phase2_preflight_path)
+    output = phase2_preflight_path.parent
+    assert_mutation_allowed(output)
+    assert_mutation_allowed(output.parent)
+    destination = output / "runtime_override.json"
+    if destination.exists():
+        raise FileExistsError(f"create-only runtime override already exists: {destination}")
+    phase2 = _read_json(phase2_preflight_path, "phase-2 preflight")
+    phase1 = _read_json(Path(phase1_receipt_path), "phase-1 scoring receipt")
+    payload = build_runtime_override(
+        phase2,
+        phase1,
+        approved_by=approved_by,
+        approval_note=approval_note,
+    )
+    if payload["hard_ceiling_seconds"] != 1080:
+        raise ValueError("approved one-time runtime override must freeze 1,080 seconds")
+    payload.update(
+        {
+            "phase2_preflight_sha256": _sha256_bytes(
+                phase2_preflight_path.read_bytes()
+            ),
+            "phase1_receipt_sha256": _sha256_bytes(
+                Path(phase1_receipt_path).read_bytes()
+            ),
+            "scorer_code_sha256": _sha256_bytes(Path(__file__).read_bytes()),
+        }
+    )
+    _exclusive_json(destination, payload)
+    return payload
+
+
 def _float32(value: object) -> float:
     converted = float(value)
     if not math.isfinite(converted):
@@ -549,16 +681,89 @@ def _load_model(model_receipt: Path):
     return torch, tokenizer, model
 
 
+def _runtime_policy(
+    preflight_path: Path,
+    preflight: Mapping[str, object],
+    runtime_override_path: Path | None,
+) -> tuple[float, int | None, float, str | None]:
+    current_code_sha = _sha256_bytes(Path(__file__).read_bytes())
+    if preflight.get("phase") != "phase2_common_narrative":
+        if runtime_override_path is not None:
+            raise ValueError("runtime override is authorized only for phase 2")
+        if (
+            preflight.get("scorer_code_sha256") != current_code_sha
+            or float(preflight.get("projected_runtime_seconds", MAX_PHASE_SECONDS + 1))
+            > MAX_PHASE_SECONDS
+        ):
+            raise ValueError("MiniLM preflight differs from the frozen scorer contract")
+        return MAX_PHASE_SECONDS, None, REFERENCE_FIXED_SECONDS, None
+    if runtime_override_path is None:
+        raise ValueError("phase 2 requires the explicit runtime override receipt")
+    path = Path(runtime_override_path)
+    override = _read_json(path, "runtime override")
+    if (
+        override.get("schema_version") != RUNTIME_OVERRIDE_SCHEMA_VERSION
+        or override.get("status") != "approved"
+        or override.get("phase") != "phase2_common_narrative"
+        or override.get("qrels_opened") is not False
+        or override.get("one_time") is not True
+        or override.get("automatic_second_override") is not False
+        or override.get("phase2_preflight_sha256")
+        != _sha256_bytes(preflight_path.read_bytes())
+        or override.get("scorer_code_sha256") != current_code_sha
+        or override.get("hard_ceiling_seconds") != 1080
+        or override.get("checkpoint_pair_count") != CHECKPOINT_PAIR_COUNT
+        or not isinstance(override.get("approved_by"), str)
+        or not str(override["approved_by"]).strip()
+    ):
+        raise ValueError("runtime override differs from the approved phase-2 amendment")
+    return (
+        float(override["hard_ceiling_seconds"]),
+        int(override["checkpoint_pair_count"]),
+        float(override["fixed_finalize_seconds"]),
+        _sha256_bytes(path.read_bytes()),
+    )
+
+
+def _runtime_stop(
+    output: Path,
+    *,
+    reason: str,
+    elapsed_seconds: float,
+    completed_pairs: int,
+    hard_ceiling_seconds: float,
+) -> None:
+    _exclusive_json(
+        output / "runtime_stop.json",
+        {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "status": "stopped",
+            "reason": reason,
+            "elapsed_seconds": elapsed_seconds,
+            "completed_pairs": completed_pairs,
+            "hard_ceiling_seconds": hard_ceiling_seconds,
+            "qrels_opened": False,
+            "automatic_retry": False,
+        },
+    )
+
+
 def run_local_scoring(
     preflight_path: Path,
     *,
     cache_root: Path = SCORE_CACHE_ROOT,
+    runtime_override_path: Path | None = None,
 ) -> dict[str, object]:
     preflight_path = Path(preflight_path)
     output = preflight_path.parent
     assert_mutation_allowed(output)
     assert_mutation_allowed(output.parent)
-    if (output / "scores.jsonl").exists() or (output / "scoring_receipt.json").exists():
+    if (
+        (output / "scores.jsonl").exists()
+        or (output / "scoring_receipt.json").exists()
+        or (output / "scoring_reservation.json").exists()
+        or (output / "runtime_stop.json").exists()
+    ):
         raise FileExistsError("create-only scoring output already exists")
     preflight = _read_json(preflight_path, "MiniLM preflight")
     if (
@@ -567,12 +772,11 @@ def run_local_scoring(
         or preflight.get("qrels_opened") is not False
         or preflight.get("model") != MODEL_ID
         or preflight.get("model_revision") != MODEL_REVISION
-        or preflight.get("scorer_code_sha256")
-        != _sha256_bytes(Path(__file__).read_bytes())
-        or float(preflight.get("projected_runtime_seconds", MAX_PHASE_SECONDS + 1))
-        > MAX_PHASE_SECONDS
     ):
         raise ValueError("MiniLM preflight differs from the frozen scorer contract")
+    hard_ceiling, checkpoint_pairs, fixed_finalize, runtime_override_sha = (
+        _runtime_policy(preflight_path, preflight, runtime_override_path)
+    )
     verify_source_receipt(SOURCE_RECEIPT_PATH, SOURCE_RECEIPT_SHA256)
     model_receipt = Path(str(preflight["model_materialization_receipt"]))
     verified = load_verified_materialization(model_receipt)
@@ -599,14 +803,34 @@ def run_local_scoring(
     planned_misses = int(preflight["summary"]["unique_uncached_pair_count"])  # type: ignore[index]
     if len(misses) != planned_misses:
         raise ValueError("score-cache misses changed after MiniLM preflight")
+    _exclusive_json(
+        output / "scoring_reservation.json",
+        {
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "status": "reserved",
+            "phase": preflight["phase"],
+            "preflight_sha256": _sha256_bytes(preflight_path.read_bytes()),
+            "runtime_override_sha256": runtime_override_sha,
+            "planned_unique_forward_pair_count": len(misses),
+            "hard_ceiling_seconds": hard_ceiling,
+            "checkpoint_pair_count": checkpoint_pairs,
+            "qrels_opened": False,
+            "automatic_retry": False,
+        },
+    )
     started = time.perf_counter()
     peak_device = 0
     peak_host = _host_memory_bytes()
+    checkpoint_sha: str | None = None
     if misses:
         torch, tokenizer, model = _load_model(model_receipt)
         torch.cuda.reset_peak_memory_stats()
-        for start in range(0, len(misses), BATCH_SIZE):
-            batch = misses[start : start + BATCH_SIZE]
+        start = 0
+        while start < len(misses):
+            end = min(start + BATCH_SIZE, len(misses))
+            if checkpoint_pairs is not None and start < checkpoint_pairs < end:
+                end = checkpoint_pairs
+            batch = misses[start:end]
             encoded = tokenizer(
                 [row.query for row in batch],
                 [row.window_text for row in batch],
@@ -630,6 +854,42 @@ def run_local_scoring(
             )
             peak_device = max(peak_device, int(torch.cuda.max_memory_allocated()))
             peak_host = max(peak_host, _host_memory_bytes())
+            start = end
+            elapsed_now = time.perf_counter() - started
+            if checkpoint_pairs is not None and start == checkpoint_pairs:
+                checkpoint = checkpoint_projection(
+                    elapsed_seconds=elapsed_now,
+                    completed_pairs=start,
+                    total_pairs=len(misses),
+                    fixed_finalize_seconds=fixed_finalize,
+                    hard_ceiling_seconds=hard_ceiling,
+                )
+                checkpoint["runtime_override_sha256"] = runtime_override_sha
+                checkpoint_bytes = _pretty_bytes(checkpoint)
+                _exclusive_bytes(output / "runtime_checkpoint.json", checkpoint_bytes)
+                checkpoint_sha = _sha256_bytes(checkpoint_bytes)
+                if checkpoint["continue_authorized"] is not True:
+                    _runtime_stop(
+                        output,
+                        reason="checkpoint_projection_exceeds_hard_ceiling",
+                        elapsed_seconds=elapsed_now,
+                        completed_pairs=start,
+                        hard_ceiling_seconds=hard_ceiling,
+                    )
+                    raise RuntimeError(
+                        "phase-2 checkpoint projection exceeds the approved 1,080-second ceiling"
+                    )
+            if elapsed_now > hard_ceiling - fixed_finalize:
+                _runtime_stop(
+                    output,
+                    reason="hard_ceiling_reserve_reached",
+                    elapsed_seconds=elapsed_now,
+                    completed_pairs=start,
+                    hard_ceiling_seconds=hard_ceiling,
+                )
+                raise RuntimeError(
+                    "phase-2 scoring reached the approved runtime reserve; no retry"
+                )
     elapsed = time.perf_counter() - started
     score_rows: list[dict[str, object]] = []
     for row in windows:
@@ -666,6 +926,9 @@ def run_local_scoring(
         "unique_forward_pair_count": len(misses),
         "cache_reuse_pair_count": len(by_key) - len(misses),
         "elapsed_seconds": elapsed,
+        "hard_ceiling_seconds": hard_ceiling,
+        "runtime_override_sha256": runtime_override_sha,
+        "runtime_checkpoint_sha256": checkpoint_sha,
         "peak_device_memory_bytes": peak_device,
         "peak_host_memory_bytes": peak_host,
         "device": "cuda",
@@ -691,6 +954,12 @@ def _parser() -> argparse.ArgumentParser:
     phase2.add_argument("--output", required=True, type=Path)
     score2 = subparsers.add_parser("score-phase2")
     score2.add_argument("--preflight", required=True, type=Path)
+    score2.add_argument("--runtime-override", required=True, type=Path)
+    authorize = subparsers.add_parser("authorize-phase2-override")
+    authorize.add_argument("--preflight", required=True, type=Path)
+    authorize.add_argument("--phase1-receipt", required=True, type=Path)
+    authorize.add_argument("--approved-by", required=True)
+    authorize.add_argument("--approval-note", required=True)
     return parser
 
 
@@ -711,6 +980,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = create_phase2_preflight(
                 manifest, args.gate, args.output
             )
+    elif args.command == "authorize-phase2-override":
+        result = create_runtime_override(
+            args.preflight,
+            args.phase1_receipt,
+            approved_by=args.approved_by,
+            approval_note=args.approval_note,
+        )
+    elif args.command == "score-phase2":
+        result = run_local_scoring(
+            args.preflight, runtime_override_path=args.runtime_override
+        )
     else:
         result = run_local_scoring(args.preflight)
     print(json.dumps(result, indent=2, sort_keys=True))
