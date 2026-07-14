@@ -52,6 +52,30 @@ def test_gate_rejects_anchor_failure_or_domain_drift() -> None:
     assert decision.failed_checks == ("wrong_domain",)
 
 
+def test_query_morphology_diagnostic_cannot_reject_coherent_stream() -> None:
+    facet = {
+        "facet_id": "219-rationing",
+        "query": "why rationing devices may be needed with technological advancements",
+        "anchor_terms": ["device", "technology"],
+        "relation_terms": ["rationing", "needed", "advancement"],
+        "wrong_domain_patterns": [],
+    }
+    docs = [
+        _doc(
+            f"d{rank}",
+            rank,
+            "technology device rationing may be needed after an advancement",
+        )
+        for rank in range(1, 6)
+    ]
+
+    decision = quality_gate(facet, docs)
+
+    assert decision.structural_checks_passed is False
+    assert decision.accepted is True
+    assert decision.failed_checks == ()
+
+
 def test_gate_loss_remains_visible_in_raw_union() -> None:
     original = {
         "219": [_doc("original", 1, "original text")],

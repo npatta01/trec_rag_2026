@@ -8,6 +8,7 @@ import json
 import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from .deep_facet_candidate_manifest import (
@@ -17,7 +18,7 @@ from .deep_facet_candidate_manifest import (
     load_manifest,
 )
 from .facet_aware_fusion_rank import (
-    quality_gate,
+    quality_gate as _legacy_quality_gate,
 )
 from .facet_local_minilm_rank import aggregate_top4
 from .remote_client import extract_text
@@ -95,6 +96,19 @@ def _docid(row: Mapping[str, object]) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("candidate document ID must be non-empty text")
     return value
+
+
+def quality_gate(facet, ranked_docs):
+    """Apply only the three top-five checks frozen in the approved design.
+
+    The older helper also reports whether singular literal gate terms occur in
+    the query text.  That remains useful diagnostic metadata, but morphology in
+    an already frozen query cannot reject an otherwise coherent result stream.
+    """
+
+    decision = _legacy_quality_gate(facet, ranked_docs)
+    failed = tuple(check for check in decision.failed_checks if check != "structural")
+    return replace(decision, accepted=not failed, failed_checks=failed)
 
 
 def _topic(row: Mapping[str, object]) -> str:
