@@ -485,7 +485,6 @@ def score_window_rows(
             raise ValueError("window topic_id must be nonempty text")
         if topic_id in PROTECTED_TOPIC_IDS:
             raise ValueError(f"protected topic {topic_id} is forbidden")
-        _require_pilot_topic_ids([topic_id])
     unique: dict[tuple[str, str], None] = {}
     initial_scores: dict[tuple[str, str], float | None] = {}
     for row in rows:
