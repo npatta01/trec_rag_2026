@@ -7,9 +7,9 @@
         "type": "markdown"
       },
       {
-        "body": "## Technical summary\n\n**Facet decomposition succeeds at candidate discovery, but the tested fusion does not safely rank the additions.** U_accepted adds **177 grade\u22652 documents** beyond original@1000 across **4/4 topics**; the stream gate loses only **2** relevant documents. However, RRF leads early precision at **0.433 nDCG@10**, while DUAL falls to **0.334** despite retaining **87.6%** of novel evidence by rank 1,000. The preregistered decision is therefore **stop; diagnose fusion**\u2014not reject facet queries or accept pure BM25 as sufficient.",
+        "body": "## Technical summary\n\n**The fixed cascade protected the first ten results, but did not fix relevance at candidate depth 500.** Its nDCG@10 exactly matches RRF at **0.433**, and it retains **87.6%** of the 177 novel relevant documents by 1,000. But graded Recall@500 is only **0.187**, below RRF (**0.210**) and GLOBAL (**0.198**). This post-qrels diagnostic fails the fixed stop rule. The candidate coverage is real; a positional splice of existing MiniLM/RRF rankings is not enough.",
         "id": "technical_summary",
-        "sourceId": "evaluation_metrics",
+        "sourceId": "cascade_metrics",
         "type": "markdown"
       },
       {
@@ -17,7 +17,8 @@
           "novel_card",
           "gate_card",
           "rrf_card",
-          "dual_card"
+          "dual_card",
+          "cascade_card"
         ],
         "id": "headline_metrics",
         "type": "metric-strip"
@@ -51,6 +52,18 @@
         "id": "retention_chart",
         "layout": "full",
         "type": "chart"
+      },
+      {
+        "body": "## The cascade answers the reranking question\n\nRanks 1\u201310 remain exact RRF, ranks 11\u2013100 use GLOBAL MiniLM order, and ranks 101 onward use DUAL. This keeps nDCG@10 unchanged and preserves **155/177** novel relevant documents by 1,000. It still reaches only **18.7% graded Recall@500**, versus **21.0%** for RRF and **19.8%** for GLOBAL. Topic 219 loses more than the allowed 0.02, so the problem is not merely protecting the head. Existing MiniLM scores plus a fixed positional budget do not separate relevant facet candidates reliably enough.",
+        "id": "cascade_finding",
+        "sourceId": "cascade_metrics",
+        "type": "markdown"
+      },
+      {
+        "id": "cascade_guard_table_block",
+        "layout": "full",
+        "tableId": "cascade_guard_table",
+        "type": "table"
       },
       {
         "body": "## The precision loss is concentrated but not isolated\n\nDUAL loses nDCG@10 on all four topics. The largest regressions are topic 300 (**\u22120.163**) and topic 84 (**\u22120.134**); topic 219 loses **\u22120.063** and topic 72 **\u22120.033**. Topic 300 also shows why the candidate union should be preserved: DUAL retains 50 novel relevant documents by 500 and slightly improves that topic's graded Recall@500, even while its first ten ranks worsen sharply.",
@@ -107,13 +120,19 @@
         "type": "markdown"
       },
       {
-        "body": "## Recommended next step\n\nPreserve the frozen U_accepted union and test **one deterministic RRF\u2013GLOBAL\u2013DUAL cascade**: exact RRF at ranks 1\u201310, GLOBAL at 11\u2013100 while skipping selected documents, and DUAL from 101 onward, again skipping duplicates and eventually appending the complete union. This uses only existing scores\u2014no retrieval, inference, new weights, filtering, or iterative tuning. Freeze the cascade before evaluation. Stop if nDCG@10 differs from RRF, graded Recall@500 does not beat both RRF and GLOBAL, graded Recall@1000 falls below RRF, novel retention@1000 is below 80%, any topic loses more than 0.02 graded Recall@500 versus RRF, or judged coverage prevents a defensible comparison.",
-        "id": "next_step",
-        "sourceId": "evaluation_decision",
+        "body": "## Advisor review after the cascade\n\n# Independent cascade advisor review\n\n## Verdict\n\nThe cascade is implemented correctly and the mechanical decision to stop is\ncorrect. It proves that positional protection can restore RRF's head while\npreserving deep facet coverage, but it does not solve selection at ranks\n11\u2013500. The next useful test is a bounded, stronger reranker over the\ndisagreement pool, not another hand-tuned fusion cutoff.\n\nThis remains post-qrels diagnostic evidence. It cannot authorize production or\nserve as confirmation on these four topics.\n\n## Implementation and decision audit\n\nThe sealed ranking exactly matches the frozen rule for every topic:\n\n- ranks 1\u201310 are the exact RRF head;\n- ranks 11\u2013100 are the first 90 unseen GLOBAL documents;\n- ranks 101 onward follow DUAL, skipping prior selections;\n- every topic is a complete, duplicate-free permutation of its original\n  `U_accepted` candidate set; and\n- the freeze records zero retrieval and inference calls and no qrels read while\n  constructing the arm.\n\nThe metric and decision relationships are internally consistent:\n\n- nDCG@10 exactly equals RRF: `0.4326`;\n- graded Recall@500 is `0.1870`, below RRF `0.2101` and GLOBAL `0.1979`;\n- graded Recall@1,000 is `0.2804`, above RRF `0.2659` but just below GLOBAL\n  `0.2821`;\n- the arm retains `155/177` novel relevant documents at 1,000, satisfying the\n  frozen `142/177` floor; and\n- the per-topic Recall@500 floor fails on topics 219 (`-0.0613` versus RRF) and\n  72 (`-0.0209`).\n\nThe cascade therefore improved DUAL's head and preserved DUAL's deep novelty,\nbut its middle still failed the preregistered comparison. The no-advance result\nis correct.\n\n## Judging-coverage caveat\n\nComparison with RRF is not defensible as a clean estimate of shallow relevance:\n\n- judged@100: cascade `47.0%`, RRF `97.25%`;\n- judged@500: cascade `28.75%`, RRF `36.75%`; and\n- judged@1,000: cascade `22.90%`, RRF `23.38%`.\n\nBecause unjudged documents receive zero gain, the large shallow gap favors RRF.\nThe exact nDCG@10 equality is nevertheless valid because the top ten documents\nand order are identical. The depth-1,000 comparison is also materially more\ncredible because coverage is nearly matched.\n\nGLOBAL is a more informative middle-depth control: judged@500 differs by only\none aggregate percentage point (`28.75%` versus `29.75%`), and the cascade still\nloses graded Recall@500 by `0.0109`. Coverage is not perfectly balanced per\ntopic\u2014especially topic 72\u2014so this is diagnostic rather than conclusive, but the\nresult does not support advancing the cascade.\n\n## Interpretation\n\nAnother fixed splice or coefficient adjustment is unlikely to resolve the main\nproblem. The cascade can choose *where* each existing ranker controls the list,\nbut it cannot decide which facet-only documents are globally useful enough to\ndisplace strong original-query evidence. Moving the 101 boundary after seeing\nthese qrels would be cutoff tuning on exposed topics.\n\nThe evidence instead supports targeted stronger relevance estimation:\n\n- RRF remains strongest at the head;\n- the facet union contains 177 known novel relevant documents;\n- DUAL retains 155 of them at 1,000;\n- GLOBAL/DUAL/CASCADE remain weak or uncertain in the middle; and\n- matched depth-1,000 coverage shows that deep recall exists, while the\n  unresolved task is promoting the right subset earlier.\n\n## One bounded next experiment\n\nRun one **protected-head targeted cross-encoder rerank**:\n\n1. Keep RRF ranks 1\u201310 unchanged.\n2. Form one qrels-blind residual pool per topic from the union of RRF@500,\n   GLOBAL@500, and DUAL@1,000, excluding the protected head.\n3. Score that pool once with the previously strongest available cross-encoder,\n   `mixedbread-ai/mxbai-rerank-base-v2`, using one identical structured query per\n   topic containing the original narrative plus the complete accepted-facet\n   obligation list. This makes scores comparable within a topic and asks about\n   relevance to any requested information need without comparing scores across\n   facet queries.\n4. Select the best 490 documents for ranks 11\u2013500, then append all remaining\n   documents in frozen DUAL order. The complete `U_accepted` permutation remains\n   intact, so no discovered candidate is discarded.\n5. Before inference, freeze the exact document/window count, cache coverage,\n   runtime, memory, and cost. Stop for approval if the model is not already\n   materialized or the bounded run exceeds the agreed local-compute budget.\n6. Run one arm only, with no weight, cutoff, prompt, or candidate-pool tuning.\n\nThese qrels-exposed topics may be used only for a mechanism diagnostic. Any\neffectiveness claim requires the same frozen arm on fresh topics, with qrels\nopened only after its ranking is sealed.\n\n### Stop rule\n\nStop without another fusion repair unless the targeted arm:\n\n- preserves RRF nDCG@10 exactly;\n- exceeds both RRF and GLOBAL graded Recall@500;\n- remains at least RRF on graded Recall@1,000;\n- retains at least 80% of novel relevant evidence at 1,000;\n- loses no more than `0.02` graded Recall@500 on any topic; and\n- has comparable judging coverage, or receives blind judgments for its\n  top-500 disagreement documents.\n\nIf judged coverage remains materially unequal, label the result inconclusive\nrather than treating unjudged candidates as irrelevant.",
+        "id": "cascade_advisor",
+        "sourceId": "cascade_advisor",
         "type": "markdown"
       },
       {
-        "body": "## Further questions\n\n- How large can the protected RRF head be while still admitting meaningful facet evidence by 500?\n- Should insertion eligibility require both strong facet-local percentile and a minimum common/narrative coherence score?\n- On a larger preregistered topic set, does the topic-300 recall gain persist without its early-precision regression?",
+        "body": "## Recommended next step\n\n**Do not tune another positional cascade on these exposed topics.** The bounded mechanism diagnostic is one protected-head Mixedbread rerank: keep RRF ranks 1\u201310, form the residual union of RRF@500, GLOBAL@500, and DUAL@1000, and score it once with `mixedbread-ai/mxbai-rerank-base-v2`. Use one identical structured query per topic containing the full narrative plus the complete accepted-facet obligation list, so scores are comparable within the topic. Fill ranks 11\u2013500 from that score and append the remaining complete union in frozen DUAL order. Audit cached scores and freeze exact documents, windows, runtime, memory, and cost before any separately approved inference.",
+        "id": "next_step",
+        "sourceId": "cascade_advisor",
+        "type": "markdown"
+      },
+      {
+        "body": "## Further questions\n\n- How much of the frozen disagreement pool is already covered by authenticated Mixedbread cache entries?\n- Would blind judgments of top-500 disagreements resolve the shallow judged-coverage imbalance?\n- On fresh preregistered topics, can the protected-head reranker promote novel facet evidence without topic-level recall regressions?",
         "id": "further_questions",
         "type": "markdown"
       }
@@ -172,6 +191,19 @@
             "field": "dual_novel1000",
             "format": "percent",
             "label": "DUAL novel retention@1000"
+          }
+        ],
+        "sourceId": "headline_sql"
+      },
+      {
+        "dataset": "headline",
+        "description": "The fixed cascade's macro graded Recall@500; it must beat both RRF and GLOBAL to pass.",
+        "id": "cascade_card",
+        "metrics": [
+          {
+            "field": "cascade_graded_recall500",
+            "format": "percent",
+            "label": "Cascade graded Recall@500"
           }
         ],
         "sourceId": "headline_sql"
@@ -343,6 +375,31 @@
         "id": "runtime_receipt",
         "label": "Local MiniLM scoring receipt",
         "path": "outputs/rag25_deep_facet_candidates_v1/phase2_v1/scoring_receipt.json"
+      },
+      {
+        "id": "cascade_guards_sql",
+        "label": "Cascade Guards report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "cascade_metrics",
+        "label": "Sealed cascade diagnostic metrics",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/metrics.json"
+      },
+      {
+        "id": "cascade_decision",
+        "label": "Cascade stop-rule decision",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/decision.json"
+      },
+      {
+        "id": "cascade_freeze",
+        "label": "Cascade diagnostic seal",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/freeze/SEALED.json"
+      },
+      {
+        "id": "cascade_advisor",
+        "label": "Independent cascade-results review",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/cascade_advisor_review.md"
       }
     ],
     "surface": "report",
@@ -431,6 +488,21 @@
             "field": "dual_ndcg10",
             "format": "number",
             "label": "DUAL nDCG@10"
+          },
+          {
+            "field": "cascade_ndcg10",
+            "format": "number",
+            "label": "Cascade nDCG@10"
+          },
+          {
+            "field": "cascade_graded_recall500",
+            "format": "percent",
+            "label": "Cascade graded Recall@500"
+          },
+          {
+            "field": "cascade_graded_recall500_delta",
+            "format": "number",
+            "label": "Cascade GR@500 \u0394 vs RRF"
           }
         ],
         "dataset": "topics",
@@ -442,6 +514,29 @@
         "sourceId": "topics_sql",
         "subtitle": "Exact grade\u22652 discovery counts and early-ranking outcomes by topic.",
         "title": "Topic-level discovery and ranking tradeoff"
+      },
+      {
+        "columns": [
+          {
+            "field": "guard",
+            "label": "Guard",
+            "type": "text"
+          },
+          {
+            "field": "outcome",
+            "label": "Outcome",
+            "type": "text"
+          }
+        ],
+        "dataset": "cascade_guards",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "outcome"
+        },
+        "id": "cascade_guard_table",
+        "sourceId": "cascade_guards_sql",
+        "subtitle": "Every preregistered mechanical condition; any FAIL stops the diagnostic arm.",
+        "title": "Fixed cascade stop guards"
       }
     ],
     "title": "Deep facets find evidence; fusion loses precision",
@@ -511,6 +606,43 @@
           "near_duplicate_rate500": 0.0815,
           "novel_retention1000": 0.864406779661017,
           "novel_retention500": 0.6610169491525424
+        },
+        {
+          "arm": "RRF-GLOBAL-DUAL",
+          "graded_recall1000": 0.2803748417177658,
+          "graded_recall500": 0.1869929262288872,
+          "judged_rate100": 0.47,
+          "ndcg10": 0.4325738541430897,
+          "ndcg100": 0.2708031476728464,
+          "near_duplicate_rate500": null,
+          "novel_retention1000": 0.8757062146892656,
+          "novel_retention500": 0.6440677966101694
+        }
+      ],
+      "cascade_guards": [
+        {
+          "guard": "graded recall 1000 not below rrf",
+          "outcome": "PASS"
+        },
+        {
+          "guard": "graded recall 500 beats global",
+          "outcome": "FAIL"
+        },
+        {
+          "guard": "graded recall 500 beats rrf",
+          "outcome": "FAIL"
+        },
+        {
+          "guard": "ndcg 10 exactly preserves rrf",
+          "outcome": "PASS"
+        },
+        {
+          "guard": "novel retention 1000 at least 142 of 177",
+          "outcome": "PASS"
+        },
+        {
+          "guard": "per topic graded recall 500 floor",
+          "outcome": "FAIL"
         }
       ],
       "discovery": [
@@ -577,6 +709,7 @@
       ],
       "headline": [
         {
+          "cascade_graded_recall500": 0.1869929262288872,
           "dual_novel1000": 0.8757062146892656,
           "gate_lost": 2,
           "novel_relevant": 177,
@@ -634,6 +767,16 @@
           "arm": "DUAL-NR",
           "depth": "@1000",
           "retention": 0.864406779661017
+        },
+        {
+          "arm": "RRF-GLOBAL-DUAL",
+          "depth": "@500",
+          "retention": 0.6440677966101694
+        },
+        {
+          "arm": "RRF-GLOBAL-DUAL",
+          "depth": "@1000",
+          "retention": 0.8757062146892656
         }
       ],
       "runtime": [
@@ -668,6 +811,9 @@
       "topics": [
         {
           "accepted_relevant": 117,
+          "cascade_graded_recall500": 0.10051880674448768,
+          "cascade_graded_recall500_delta": -0.06128404669260701,
+          "cascade_ndcg10": 0.4625613680905797,
           "dual_ndcg10": 0.3995688713838976,
           "dual_novel_1000": 14,
           "dual_novel_500": 7,
@@ -679,6 +825,9 @@
         },
         {
           "accepted_relevant": 346,
+          "cascade_graded_recall500": 0.20144451739986868,
+          "cascade_graded_recall500_delta": -0.020879842416283656,
+          "cascade_ndcg10": 0.3543514673597038,
           "dual_ndcg10": 0.3214961622634444,
           "dual_novel_1000": 68,
           "dual_novel_500": 43,
@@ -690,6 +839,9 @@
         },
         {
           "accepted_relevant": 197,
+          "cascade_graded_recall500": 0.2200734394124847,
+          "cascade_graded_recall500_delta": 0.004161566707466341,
+          "cascade_ndcg10": 0.4182569541043738,
           "dual_ndcg10": 0.2551712773660139,
           "dual_novel_1000": 57,
           "dual_novel_500": 50,
@@ -701,6 +853,9 @@
         },
         {
           "accepted_relevant": 215,
+          "cascade_graded_recall500": 0.22593494135870767,
+          "cascade_graded_recall500_delta": -0.014605001106439475,
+          "cascade_ndcg10": 0.49512562701770135,
           "dual_ndcg10": 0.3615277867877797,
           "dual_novel_1000": 16,
           "dual_novel_500": 14,
@@ -911,6 +1066,75 @@
         "language": "JSON/Markdown",
         "tables_used": [
           "outputs/rag25_deep_facet_candidates_v1/phase2_v1/scoring_receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "cascade_guards_sql",
+      "label": "Cascade Guards report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Mechanical pass/fail results for every fixed cascade stop guard.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM cascade_guards ORDER BY row_order",
+        "tables_used": [
+          "cascade_guards"
+        ]
+      }
+    },
+    {
+      "id": "cascade_metrics",
+      "label": "Sealed cascade diagnostic metrics",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/metrics.json",
+      "query": {
+        "description": "Post-qrels diagnostic ranking, recall, novel-retention, and judged-rate metrics.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/metrics.json"
+        ]
+      }
+    },
+    {
+      "id": "cascade_decision",
+      "label": "Cascade stop-rule decision",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/decision.json",
+      "query": {
+        "description": "Mechanical guards for the fixed RRF\u2013GLOBAL\u2013DUAL cascade.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/decision.json"
+        ]
+      }
+    },
+    {
+      "id": "cascade_freeze",
+      "label": "Cascade diagnostic seal",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/freeze/SEALED.json",
+      "query": {
+        "description": "Hash inventory proving the cascade ranking was frozen before diagnostic metrics were computed.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/freeze/SEALED.json"
+        ]
+      }
+    },
+    {
+      "id": "cascade_advisor",
+      "label": "Independent cascade-results review",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/cascade_advisor_review.md",
+      "query": {
+        "description": "Independent interpretation of the fixed cascade outcome and next-step recommendation.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "reports/experiments/deep_facet_candidate_pilot_v1/cascade_advisor_review.md"
         ]
       }
     }

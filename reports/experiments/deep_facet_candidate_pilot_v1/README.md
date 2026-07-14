@@ -30,6 +30,15 @@ The executable plan is in
   evidence at 1,000 (`155/177`) but reduced nDCG@10 to `0.3344`.
 - The preregistered decision is **stop; diagnose fusion**. This is not evidence
   against facet decomposition or the accepted candidate union.
+- The advisor's fixed post-qrels cascade preserved the exact RRF top 10 and
+  retained `155/177` novel relevant documents by rank 1,000, but graded
+  Recall@500 was only `0.1870`, below RRF (`0.2101`) and GLOBAL (`0.1979`).
+- The cascade therefore stops. Its ranking was sealed before diagnostic metrics,
+  and it made zero new retrieval or inference calls. These four exposed topics
+  provide mechanism evidence only, not confirmation or production promotion.
+- The independently reviewed next experiment is a separately approval-gated,
+  protected-head Mixedbread rerank over the frozen disagreement pool—not another
+  cutoff or coefficient adjustment on these topics.
 
 Open `report.html` for the rendered, source-backed technical report. Its canonical
 input is `artifact.json`; `report_data.sqlite` contains the exact bounded datasets

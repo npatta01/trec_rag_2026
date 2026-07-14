@@ -13,6 +13,7 @@ from pathlib import Path
 TITLE = "Deep facets find evidence; fusion loses precision"
 TOPIC_IDS = ("219", "72", "300", "84")
 ARM_ORDER = ("RRF", "GLOBAL", "FACET", "DUAL", "DUAL-NR")
+CASCADE_ARM = "RRF-GLOBAL-DUAL"
 
 
 def _sha256(path: Path) -> str:
@@ -45,6 +46,24 @@ def load_verified_evaluation(
         _read_object(decision_path, "evaluation decision"),
         summary,
     )
+
+
+def load_verified_cascade(
+    metrics_path: Path, decision_path: Path, summary_path: Path
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    summary = _read_object(summary_path, "cascade summary")
+    if (
+        summary.get("status") != "complete"
+        or summary.get("post_qrels_diagnostic") is not True
+        or summary.get("metrics_sha256") != _sha256(metrics_path)
+        or summary.get("decision_sha256") != _sha256(decision_path)
+    ):
+        raise ValueError("cascade source hash or completion state differs")
+    metrics = _read_object(metrics_path, "cascade metrics")
+    decision = _read_object(decision_path, "cascade decision")
+    if metrics.get("post_qrels_diagnostic") is not True:
+        raise ValueError("cascade metrics are not labeled diagnostic")
+    return metrics, decision, summary
 
 
 def _pct(value: object, digits: int = 1) -> str:
@@ -129,6 +148,9 @@ def build_artifact(
     *,
     advisor_memo: str,
     runtime_evidence: Mapping[str, object] | None = None,
+    cascade_metrics: Mapping[str, object] | None = None,
+    cascade_decision: Mapping[str, object] | None = None,
+    cascade_advisor_memo: str = "",
 ) -> tuple[dict[str, object], dict[str, object]]:
     aggregate = metrics.get("aggregate")
     discovery = metrics.get("discovery")
@@ -144,6 +166,33 @@ def build_artifact(
     rrf = aggregate["RRF"]
     dual = aggregate["DUAL"]
     assert isinstance(rrf, Mapping) and isinstance(dual, Mapping)
+    cascade: Mapping[str, object] | None = None
+    cascade_per_topic: Mapping[str, object] | None = None
+    if cascade_metrics is not None:
+        cascade_aggregate = cascade_metrics.get("aggregate")
+        cascade_per_topic = cascade_metrics.get("per_topic")  # type: ignore[assignment]
+        if (
+            cascade_metrics.get("post_qrels_diagnostic") is not True
+            or not isinstance(cascade_aggregate, Mapping)
+            or not isinstance(cascade_aggregate.get(CASCADE_ARM), Mapping)
+            or not isinstance(cascade_per_topic, Mapping)
+            or not isinstance(cascade_decision, Mapping)
+        ):
+            raise ValueError("cascade evidence is incomplete or not diagnostic")
+        cascade = cascade_aggregate[CASCADE_ARM]  # type: ignore[assignment]
+    cascade_guard_rows: list[dict[str, object]] = []
+    if cascade is not None:
+        assert isinstance(cascade_decision, Mapping)
+        raw_guards = cascade_decision.get("guards")
+        if not isinstance(raw_guards, Mapping) or not raw_guards:
+            raise ValueError("cascade decision lacks mechanical guards")
+        cascade_guard_rows = [
+            {
+                "guard": str(name).replace("_", " "),
+                "outcome": "PASS" if passed is True else "FAIL",
+            }
+            for name, passed in raw_guards.items()
+        ]
     runtime_value = runtime_evidence or {
         "external_calls": 0,
         "retry_count": 0,
@@ -188,6 +237,18 @@ def build_artifact(
                 "dual_ndcg10": float(topic_metric["DUAL"]["ndcg@10"]),  # type: ignore[index]
                 "dual_novel_500": int(topic_metric["DUAL"]["novel_retained@500"]),  # type: ignore[index]
                 "dual_novel_1000": int(topic_metric["DUAL"]["novel_retained@1000"]),  # type: ignore[index]
+                "cascade_ndcg10": (
+                    float(cascade_per_topic[topic]["ndcg@10"])  # type: ignore[index]
+                    if cascade_per_topic is not None else None
+                ),
+                "cascade_graded_recall500": (
+                    float(cascade_per_topic[topic]["graded_recall@500"])  # type: ignore[index]
+                    if cascade_per_topic is not None else None
+                ),
+                "cascade_graded_recall500_delta": (
+                    float(cascade_per_topic[topic]["graded_recall@500_delta_vs_RRF"])  # type: ignore[index]
+                    if cascade_per_topic is not None else None
+                ),
             }
         )
         delta_rows.append(
@@ -196,8 +257,9 @@ def build_artifact(
 
     arm_rows: list[dict[str, object]] = []
     retention_rows: list[dict[str, object]] = []
-    for arm in ARM_ORDER:
-        row = aggregate[arm]
+    report_arms = (*ARM_ORDER, CASCADE_ARM) if cascade is not None else ARM_ORDER
+    for arm in report_arms:
+        row = cascade if arm == CASCADE_ARM else aggregate[arm]
         assert isinstance(row, Mapping)
         arm_rows.append(
             {
@@ -209,7 +271,10 @@ def build_artifact(
                 "novel_retention500": float(row["novel_retention@500"]),
                 "novel_retention1000": float(row["novel_retention@1000"]),
                 "judged_rate100": float(row["judged_rate@100"]),
-                "near_duplicate_rate500": float(row["near_duplicate_rate@500"]),
+                "near_duplicate_rate500": (
+                    float(row["near_duplicate_rate@500"])
+                    if row.get("near_duplicate_rate@500") is not None else None
+                ),
             }
         )
         retention_rows.extend(
@@ -264,6 +329,40 @@ def build_artifact(
             "ROCm runtime, model revision, window count, memory, and output hashes.",
         ),
     ]
+    if cascade is not None:
+        sources.append(
+            _dataset_source(
+                "cascade_guards", "Mechanical pass/fail results for every fixed cascade stop guard."
+            )
+        )
+        sources.extend(
+            [
+                _source(
+                    "cascade_metrics",
+                    "Sealed cascade diagnostic metrics",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/metrics.json",
+                    "Post-qrels diagnostic ranking, recall, novel-retention, and judged-rate metrics.",
+                ),
+                _source(
+                    "cascade_decision",
+                    "Cascade stop-rule decision",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/evaluation/decision.json",
+                    "Mechanical guards for the fixed RRF–GLOBAL–DUAL cascade.",
+                ),
+                _source(
+                    "cascade_freeze",
+                    "Cascade diagnostic seal",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_cascade_v1/freeze/SEALED.json",
+                    "Hash inventory proving the cascade ranking was frozen before diagnostic metrics were computed.",
+                ),
+                _source(
+                    "cascade_advisor",
+                    "Independent cascade-results review",
+                    "reports/experiments/deep_facet_candidate_pilot_v1/cascade_advisor_review.md",
+                    "Independent interpretation of the fixed cascade outcome and next-step recommendation.",
+                ),
+            ]
+        )
 
     cards = [
         {
@@ -298,6 +397,18 @@ def build_artifact(
             "metrics": [{"label": "DUAL novel retention@1000", "field": "dual_novel1000", "format": "percent"}],
         },
     ]
+    if cascade is not None:
+        cards.append(
+            {
+                "id": "cascade_card",
+                "description": "The fixed cascade's macro graded Recall@500; it must beat both RRF and GLOBAL to pass.",
+                "dataset": "headline",
+                "sourceId": "headline_sql",
+                "metrics": [
+                    {"label": "Cascade graded Recall@500", "field": "cascade_graded_recall500", "format": "percent"}
+                ],
+            }
+        )
 
     charts = [
         {
@@ -391,9 +502,27 @@ def build_artifact(
                 {"field": "gate_lost", "label": "Gate lost", "format": "number"},
                 {"field": "rrf_ndcg10", "label": "RRF nDCG@10", "format": "number"},
                 {"field": "dual_ndcg10", "label": "DUAL nDCG@10", "format": "number"},
+                {"field": "cascade_ndcg10", "label": "Cascade nDCG@10", "format": "number"},
+                {"field": "cascade_graded_recall500", "label": "Cascade graded Recall@500", "format": "percent"},
+                {"field": "cascade_graded_recall500_delta", "label": "Cascade GR@500 Δ vs RRF", "format": "number"},
             ],
         },
     ]
+    if cascade is not None:
+        tables.append(
+            {
+                "id": "cascade_guard_table",
+                "title": "Fixed cascade stop guards",
+                "subtitle": "Every preregistered mechanical condition; any FAIL stops the diagnostic arm.",
+                "dataset": "cascade_guards",
+                "sourceId": "cascade_guards_sql",
+                "defaultSort": {"field": "outcome", "direction": "asc"},
+                "columns": [
+                    {"field": "guard", "label": "Guard", "type": "text"},
+                    {"field": "outcome", "label": "Outcome", "type": "text"},
+                ],
+            }
+        )
 
     advisor_clean = advisor_memo.strip() or "Advisor review was requested but no memo was available."
     blocks = [
@@ -401,13 +530,23 @@ def build_artifact(
         {
             "id": "technical_summary",
             "type": "markdown",
-            "sourceId": "evaluation_metrics",
+            "sourceId": "cascade_metrics" if cascade is not None else "evaluation_metrics",
             "body": (
-                "## Technical summary\n\n"
-                f"**Facet decomposition succeeds at candidate discovery, but the tested fusion does not safely rank the additions.** "
-                f"U_accepted adds **{novel_count} grade≥2 documents** beyond original@1000 across **{novel_topics}/4 topics**; the stream gate loses only **{gate_lost}** relevant documents. "
-                f"However, RRF leads early precision at **{float(rrf['ndcg@10']):.3f} nDCG@10**, while DUAL falls to **{float(dual['ndcg@10']):.3f}** despite retaining **{_pct(dual['novel_retention@1000'])}** of novel evidence by rank 1,000. "
-                "The preregistered decision is therefore **stop; diagnose fusion**—not reject facet queries or accept pure BM25 as sufficient."
+                (
+                    "## Technical summary\n\n"
+                    "**The fixed cascade protected the first ten results, but did not fix relevance at candidate depth 500.** "
+                    f"Its nDCG@10 exactly matches RRF at **{float(cascade['ndcg@10']):.3f}**, and it retains **{_pct(cascade['novel_retention@1000'])}** of the {novel_count} novel relevant documents by 1,000. "
+                    f"But graded Recall@500 is only **{float(cascade['graded_recall@500']):.3f}**, below RRF (**{float(rrf['graded_recall@500']):.3f}**) and GLOBAL (**{float(aggregate['GLOBAL']['graded_recall@500']):.3f}**). "  # type: ignore[index]
+                    "This post-qrels diagnostic fails the fixed stop rule. The candidate coverage is real; a positional splice of existing MiniLM/RRF rankings is not enough."
+                )
+                if cascade is not None
+                else (
+                    "## Technical summary\n\n"
+                    f"**Facet decomposition succeeds at candidate discovery, but the tested fusion does not safely rank the additions.** "
+                    f"U_accepted adds **{novel_count} grade≥2 documents** beyond original@1000 across **{novel_topics}/4 topics**; the stream gate loses only **{gate_lost}** relevant documents. "
+                    f"However, RRF leads early precision at **{float(rrf['ndcg@10']):.3f} nDCG@10**, while DUAL falls to **{float(dual['ndcg@10']):.3f}** despite retaining **{_pct(dual['novel_retention@1000'])}** of novel evidence by rank 1,000. "
+                    "The preregistered decision is therefore **stop; diagnose fusion**—not reject facet queries or accept pure BM25 as sufficient."
+                )
             ),
         },
         {"id": "headline_metrics", "type": "metric-strip", "cardIds": [card["id"] for card in cards]},
@@ -435,6 +574,35 @@ def build_artifact(
         },
         {"id": "precision_chart", "type": "chart", "chartId": "early_precision", "layout": "full"},
         {"id": "retention_chart", "type": "chart", "chartId": "novel_retention", "layout": "full"},
+        *(
+            [
+                {
+                    "id": "cascade_finding",
+                    "type": "markdown",
+                    "sourceId": "cascade_metrics",
+                    "body": (
+                        "## The cascade answers the reranking question\n\n"
+                        f"Ranks 1–10 remain exact RRF, ranks 11–100 use GLOBAL MiniLM order, and ranks 101 onward use DUAL. This keeps nDCG@10 unchanged and preserves **{int(cascade.get('novel_retained@1000', round(float(cascade['novel_retention@1000']) * novel_count)))}/{novel_count}** novel relevant documents by 1,000. "
+                        f"It still reaches only **{_pct(cascade['graded_recall@500'])} graded Recall@500**, versus **{_pct(rrf['graded_recall@500'])}** for RRF and **{_pct(aggregate['GLOBAL']['graded_recall@500'])}** for GLOBAL. "  # type: ignore[index]
+                        "Topic 219 loses more than the allowed 0.02, so the problem is not merely protecting the head. Existing MiniLM scores plus a fixed positional budget do not separate relevant facet candidates reliably enough."
+                    ),
+                }
+            ]
+            if cascade is not None
+            else []
+        ),
+        *(
+            [
+                {
+                    "id": "cascade_guard_table_block",
+                    "type": "table",
+                    "tableId": "cascade_guard_table",
+                    "layout": "full",
+                }
+            ]
+            if cascade is not None
+            else []
+        ),
         {
             "id": "topic_finding",
             "type": "markdown",
@@ -498,24 +666,56 @@ def build_artifact(
             "sourceId": "advisor_review",
             "body": "## Independent advisor review\n\n" + advisor_clean,
         },
+        *(
+            [
+                {
+                    "id": "cascade_advisor",
+                    "type": "markdown",
+                    "sourceId": "cascade_advisor",
+                    "body": (
+                        "## Advisor review after the cascade\n\n"
+                        + (cascade_advisor_memo.strip() or "Cascade review is pending.")
+                    ),
+                }
+            ]
+            if cascade is not None
+            else []
+        ),
         {
             "id": "next_step",
             "type": "markdown",
-            "sourceId": "evaluation_decision",
+            "sourceId": "cascade_advisor" if cascade is not None else "evaluation_decision",
             "body": (
-                "## Recommended next step\n\n"
-                "Preserve the frozen U_accepted union and test **one deterministic RRF–GLOBAL–DUAL cascade**: exact RRF at ranks 1–10, GLOBAL at 11–100 while skipping selected documents, and DUAL from 101 onward, again skipping duplicates and eventually appending the complete union. "
-                "This uses only existing scores—no retrieval, inference, new weights, filtering, or iterative tuning. Freeze the cascade before evaluation. Stop if nDCG@10 differs from RRF, graded Recall@500 does not beat both RRF and GLOBAL, graded Recall@1000 falls below RRF, novel retention@1000 is below 80%, any topic loses more than 0.02 graded Recall@500 versus RRF, or judged coverage prevents a defensible comparison."
+                (
+                    "## Recommended next step\n\n"
+                    "**Do not tune another positional cascade on these exposed topics.** The bounded mechanism diagnostic is one protected-head Mixedbread rerank: keep RRF ranks 1–10, form the residual union of RRF@500, GLOBAL@500, and DUAL@1000, and score it once with `mixedbread-ai/mxbai-rerank-base-v2`. "
+                    "Use one identical structured query per topic containing the full narrative plus the complete accepted-facet obligation list, so scores are comparable within the topic. Fill ranks 11–500 from that score and append the remaining complete union in frozen DUAL order. Audit cached scores and freeze exact documents, windows, runtime, memory, and cost before any separately approved inference."
+                )
+                if cascade is not None
+                else (
+                    "## Recommended next step\n\n"
+                    "Preserve the frozen U_accepted union and test **one deterministic RRF–GLOBAL–DUAL cascade**: exact RRF at ranks 1–10, GLOBAL at 11–100 while skipping selected documents, and DUAL from 101 onward, again skipping duplicates and eventually appending the complete union. "
+                    "This uses only existing scores—no retrieval, inference, new weights, filtering, or iterative tuning. Freeze the cascade before evaluation. Stop if nDCG@10 differs from RRF, graded Recall@500 does not beat both RRF and GLOBAL, graded Recall@1000 falls below RRF, novel retention@1000 is below 80%, any topic loses more than 0.02 graded Recall@500 versus RRF, or judged coverage prevents a defensible comparison."
+                )
             ),
         },
         {
             "id": "further_questions",
             "type": "markdown",
             "body": (
-                "## Further questions\n\n"
-                "- How large can the protected RRF head be while still admitting meaningful facet evidence by 500?\n"
-                "- Should insertion eligibility require both strong facet-local percentile and a minimum common/narrative coherence score?\n"
-                "- On a larger preregistered topic set, does the topic-300 recall gain persist without its early-precision regression?"
+                (
+                    "## Further questions\n\n"
+                    "- How much of the frozen disagreement pool is already covered by authenticated Mixedbread cache entries?\n"
+                    "- Would blind judgments of top-500 disagreements resolve the shallow judged-coverage imbalance?\n"
+                    "- On fresh preregistered topics, can the protected-head reranker promote novel facet evidence without topic-level recall regressions?"
+                )
+                if cascade is not None
+                else (
+                    "## Further questions\n\n"
+                    "- How large can the protected RRF head be while still admitting meaningful facet evidence by 500?\n"
+                    "- Should insertion eligibility require both strong facet-local percentile and a minimum common/narrative coherence score?\n"
+                    "- On a larger preregistered topic set, does the topic-300 recall gain persist without its early-precision regression?"
+                )
             ),
         },
     ]
@@ -546,6 +746,10 @@ def build_artifact(
                         "gate_lost": gate_lost,
                         "rrf_ndcg10": float(rrf["ndcg@10"]),
                         "dual_novel1000": float(dual["novel_retention@1000"]),
+                        "cascade_graded_recall500": (
+                            float(cascade["graded_recall@500"])
+                            if cascade is not None else None
+                        ),
                     }
                 ],
                 "discovery": discovery_rows,
@@ -554,6 +758,7 @@ def build_artifact(
                 "topic_deltas": delta_rows,
                 "topics": topic_rows,
                 "runtime": [runtime_row],
+                **({"cascade_guards": cascade_guard_rows} if cascade is not None else {}),
             },
         },
         "sources": sources,
@@ -573,6 +778,14 @@ def build_artifact(
         "rrf_ndcg10": float(rrf["ndcg@10"]),
         "dual_ndcg10": float(dual["ndcg@10"]),
         "dual_novel_retention1000": float(dual["novel_retention@1000"]),
+        "cascade_mechanical_guards_pass": (
+            cascade_decision.get("mechanical_guards_pass")
+            if isinstance(cascade_decision, Mapping) else None
+        ),
+        "cascade_graded_recall500": (
+            float(cascade["graded_recall@500"])
+            if cascade is not None else None
+        ),
     }
     return artifact, report_summary
 
@@ -586,6 +799,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--retrieval-summary", required=True, type=Path)
     parser.add_argument("--phase1-receipt", required=True, type=Path)
     parser.add_argument("--phase2-receipt", required=True, type=Path)
+    parser.add_argument("--cascade-metrics", type=Path)
+    parser.add_argument("--cascade-decision", type=Path)
+    parser.add_argument("--cascade-summary", type=Path)
+    parser.add_argument("--cascade-advisor", type=Path)
     parser.add_argument("--artifact", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -596,6 +813,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     retrieval = _read_object(args.retrieval_summary, "retrieval summary")
     phase1 = _read_object(args.phase1_receipt, "phase-1 receipt")
     phase2 = _read_object(args.phase2_receipt, "phase-2 receipt")
+    cascade_paths = (
+        args.cascade_metrics,
+        args.cascade_decision,
+        args.cascade_summary,
+        args.cascade_advisor,
+    )
+    if any(path is not None for path in cascade_paths) and not all(
+        path is not None for path in cascade_paths
+    ):
+        raise ValueError("all cascade report inputs must be provided together")
+    cascade_metrics = cascade_decision = None
+    cascade_advisor = ""
+    if all(path is not None for path in cascade_paths):
+        cascade_metrics, cascade_decision, _cascade_summary = load_verified_cascade(
+            args.cascade_metrics,
+            args.cascade_decision,
+            args.cascade_summary,
+        )
+        cascade_advisor = args.cascade_advisor.read_text(encoding="utf-8")
     if (
         retrieval.get("complete") is not True
         or retrieval.get("qrels_opened") is not False
@@ -620,6 +856,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 int(phase2["peak_device_memory_bytes"]),
             ),
         },
+        cascade_metrics=cascade_metrics,
+        cascade_decision=cascade_decision,
+        cascade_advisor_memo=cascade_advisor,
     )
     datasets = artifact["snapshot"]["datasets"]
     assert isinstance(datasets, Mapping)

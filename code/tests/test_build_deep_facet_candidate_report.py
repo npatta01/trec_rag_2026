@@ -7,6 +7,7 @@ import pytest
 
 from trec_rag.build_deep_facet_candidate_report import (
     build_artifact,
+    load_verified_cascade,
     load_verified_evaluation,
 )
 
@@ -126,3 +127,93 @@ def test_mutated_evaluation_source_is_rejected(tmp_path: Path) -> None:
     metrics_path.write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="hash"):
         load_verified_evaluation(metrics_path, decision_path, summary_path)
+
+
+def test_artifact_leads_with_measured_cascade_failure_when_supplied() -> None:
+    metrics, decision, summary = _evidence()
+    per_topic = {
+        topic: {
+            "ndcg@10": metrics["per_topic"][topic]["RRF"]["ndcg@10"],
+            "graded_recall@500": 0.18,
+            "graded_recall@500_delta_vs_RRF": -0.03,
+            "graded_recall@1000": 0.28,
+            "novel_retained@500": 20,
+            "novel_retained@1000": 38,
+            "judged_rate@100": 0.47,
+            "judged_rate@500": 0.29,
+            "judged_rate@1000": 0.23,
+        }
+        for topic in ("219", "72", "300", "84")
+    }
+    cascade_metrics = {
+        "post_qrels_diagnostic": True,
+        "aggregate": {
+            "RRF-GLOBAL-DUAL": {
+                "ndcg@10": 0.43,
+                "ndcg@100": 0.27,
+                "graded_recall@500": 0.187,
+                "graded_recall@1000": 0.280,
+                "novel_retention@500": 114 / 177,
+                "novel_retention@1000": 155 / 177,
+                "judged_rate@100": 0.47,
+                "judged_rate@500": 0.2875,
+            }
+        },
+        "per_topic": per_topic,
+    }
+    cascade_decision = {
+        "mechanical_guards_pass": False,
+        "advance_to_fresh_validation": False,
+        "failed_guards": ["graded_recall_500_beats_rrf"],
+        "guards": {
+            "ndcg_10_exactly_preserves_rrf": True,
+            "graded_recall_500_beats_rrf": False,
+        },
+        "coverage_review_status": "required",
+    }
+
+    artifact, report_summary = build_artifact(
+        metrics,
+        decision,
+        summary,
+        advisor_memo="Initial advisor review.",
+        cascade_metrics=cascade_metrics,
+        cascade_decision=cascade_decision,
+        cascade_advisor_memo="Cascade advisor: stronger reranking is warranted.",
+    )
+
+    encoded = json.dumps(artifact)
+    assert "RRF-GLOBAL-DUAL" in encoded
+    assert "did not fix" in encoded
+    assert "post-qrels diagnostic" in encoded
+    assert "stronger reranking is warranted" in encoded
+    assert "cascade_guards" in artifact["snapshot"]["datasets"]
+    assert len(artifact["snapshot"]["datasets"]["cascade_guards"]) == 2
+    assert any(table["id"] == "cascade_guard_table" for table in artifact["manifest"]["tables"])
+    assert any(block.get("tableId") == "cascade_guard_table" for block in artifact["manifest"]["blocks"])
+    assert report_summary["cascade_mechanical_guards_pass"] is False
+    assert report_summary["cascade_graded_recall500"] == pytest.approx(0.187)
+
+
+def test_mutated_cascade_source_is_rejected(tmp_path: Path) -> None:
+    import hashlib
+
+    metrics_path = tmp_path / "metrics.json"
+    decision_path = tmp_path / "decision.json"
+    summary_path = tmp_path / "summary.json"
+    metrics_path.write_text('{"post_qrels_diagnostic":true}\n', encoding="utf-8")
+    decision_path.write_text('{"mechanical_guards_pass":false}\n', encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "post_qrels_diagnostic": True,
+                "metrics_sha256": hashlib.sha256(metrics_path.read_bytes()).hexdigest(),
+                "decision_sha256": hashlib.sha256(decision_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    metrics_path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="cascade"):
+        load_verified_cascade(metrics_path, decision_path, summary_path)

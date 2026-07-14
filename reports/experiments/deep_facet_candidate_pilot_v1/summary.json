@@ -1,5 +1,7 @@
 {
   "advance_to_larger_validation": false,
+  "cascade_graded_recall500": 0.1869929262288872,
+  "cascade_mechanical_guards_pass": false,
   "diagnosis": "fusion",
   "dual_ndcg10": 0.3344410244502839,
   "dual_novel_retention1000": 0.8757062146892656,
