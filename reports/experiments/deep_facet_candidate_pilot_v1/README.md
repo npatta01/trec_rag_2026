@@ -21,6 +21,20 @@ The source-backed design is in
 The executable plan is in
 `docs/superpowers/plans/2026-07-13-deep-facet-candidate-ranking.md`.
 
+## Result
+
+- Facet retrieval added 177 grade-2-or-higher documents beyond the four
+  original top-1,000 pools, with additions on every topic.
+- The qrels-blind stream gate lost two relevant documents.
+- RRF had the best aggregate nDCG@10 (`0.4326`). DUAL retained much more novel
+  evidence at 1,000 (`155/177`) but reduced nDCG@10 to `0.3344`.
+- The preregistered decision is **stop; diagnose fusion**. This is not evidence
+  against facet decomposition or the accepted candidate union.
+
+Open `report.html` for the rendered, source-backed technical report. Its canonical
+input is `artifact.json`; `report_data.sqlite` contains the exact bounded datasets
+and executable SQLite queries used by its native cards, charts, and tables.
+
 ## Rebuild the manifest
 
 ```bash

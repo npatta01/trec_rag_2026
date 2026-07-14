@@ -1,0 +1,919 @@
+{
+  "manifest": {
+    "blocks": [
+      {
+        "body": "# Deep facets find evidence; fusion loses precision",
+        "id": "title",
+        "type": "markdown"
+      },
+      {
+        "body": "## Technical summary\n\n**Facet decomposition succeeds at candidate discovery, but the tested fusion does not safely rank the additions.** U_accepted adds **177 grade\u22652 documents** beyond original@1000 across **4/4 topics**; the stream gate loses only **2** relevant documents. However, RRF leads early precision at **0.433 nDCG@10**, while DUAL falls to **0.334** despite retaining **87.6%** of novel evidence by rank 1,000. The preregistered decision is therefore **stop; diagnose fusion**\u2014not reject facet queries or accept pure BM25 as sufficient.",
+        "id": "technical_summary",
+        "sourceId": "evaluation_metrics",
+        "type": "markdown"
+      },
+      {
+        "cardIds": [
+          "novel_card",
+          "gate_card",
+          "rrf_card",
+          "dual_card"
+        ],
+        "id": "headline_metrics",
+        "type": "metric-strip"
+      },
+      {
+        "body": "## Facets add relevant evidence on every topic\n\nThe important result is the gap between the original narrative pool and the accepted facet union. The additions are **+19** documents for topic 219, **+77** for 72, **+60** for 300, and **+21** for 84. U_raw and U_accepted are identical on three topics; the one rejected animal-vaccination stream costs two relevant documents on topic 84. This places the dominant failure after retrieval and mostly after gating.",
+        "id": "discovery_finding",
+        "sourceId": "evaluation_metrics",
+        "type": "markdown"
+      },
+      {
+        "chartId": "candidate_discovery",
+        "id": "discovery_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "body": "## Coverage and early precision pull in opposite directions\n\nRRF retains only **22.0%** of novel evidence by 500 but has the strongest nDCG@10. DUAL raises novel retention@500 to **64.4%**, yet loses **0.098** aggregate nDCG@10. FACET is the extreme diagnostic: it retains almost all novel evidence by 1,000, but its nDCG@10 collapses. A useful next method must keep RRF-like head precision while admitting facet evidence deeper in the ranking.",
+        "id": "fusion_finding",
+        "sourceId": "evaluation_metrics",
+        "type": "markdown"
+      },
+      {
+        "chartId": "early_precision",
+        "id": "precision_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "chartId": "novel_retention",
+        "id": "retention_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "body": "## The precision loss is concentrated but not isolated\n\nDUAL loses nDCG@10 on all four topics. The largest regressions are topic 300 (**\u22120.163**) and topic 84 (**\u22120.134**); topic 219 loses **\u22120.063** and topic 72 **\u22120.033**. Topic 300 also shows why the candidate union should be preserved: DUAL retains 50 novel relevant documents by 500 and slightly improves that topic's graded Recall@500, even while its first ten ranks worsen sharply.",
+        "id": "topic_finding",
+        "sourceId": "evaluation_metrics",
+        "type": "markdown"
+      },
+      {
+        "chartId": "topic_delta",
+        "id": "delta_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "body": "## What was measured\n\n**Cohort.** Four fresh development topics (219, 72, 300, 84); protected and previously qrels-exposed pilot topics were excluded.\n\n**Relevant.** Projected qrel grade \u22652. **NovelRel** is a relevant topic-document identity absent from original@1000 but present in U_accepted. **Graded Recall** uses gain `2^grade\u22121` over grade\u22652 documents. **nDCG** measures gain near the top of a ranking. **Judged rate** is reported separately; an unjudged document is not called irrelevant.\n\n**Candidate sets.** U_raw is original@1000 plus every successful facet@200. U_accepted removes only entire facet streams that failed the qrels-blind coherence gate. Every ranking arm permutes the same U_accepted set.",
+        "id": "definitions",
+        "sourceId": "experiment_spec",
+        "type": "markdown"
+      },
+      {
+        "id": "arm_table_block",
+        "layout": "full",
+        "tableId": "arm_table",
+        "type": "table"
+      },
+      {
+        "body": "## Rankings were frozen before qrels\n\nTwenty-five depth-200 BM25 facet requests were retrieved through the persistent rate limiter. MiniLM scored each facet locally, one incoherent stream was rejected, and the accepted union received common-topic plus full-narrative MiniLM scores. RRF, GLOBAL, FACET, DUAL, and DUAL-NR then produced complete deterministic permutations. All requests, responses, candidates, model receipts, scores, gates, parameters, and rankings were sealed before the qrels sentinel was created. This is a deterministic two-stage retrieval experiment, not a free-running agent.",
+        "id": "methodology",
+        "sourceId": "sealed_freeze",
+        "type": "markdown"
+      },
+      {
+        "body": "## Cost and runtime stayed bounded\n\nRetrieval made **25 external requests** through the persistent limiter with **0 retries**. Facet-local MiniLM took **113.7 seconds** and common/narrative scoring **456.0 seconds**, or **569.7 seconds** total local inference. Peak device memory was **467 MiB**. No model download, hosted inference, or paid call was used; measured hosted/paid cost was **$0**.",
+        "id": "runtime",
+        "sourceId": "runtime_sql",
+        "type": "markdown"
+      },
+      {
+        "id": "topic_table_block",
+        "layout": "full",
+        "tableId": "topic_table",
+        "type": "table"
+      },
+      {
+        "body": "## Limitations and robustness checks\n\nThis is a four-topic pilot and cannot promote a production method. Semantic arms have much lower judged rates near the head than RRF, so their observed nDCG may penalize unjudged discoveries as zero; the report therefore does not label those documents irrelevant. The leave-one-topic-out requirement fails, so the DUAL result is not stable enough to advance. The DUAL-NR sensitivity arm changes little, which indicates that the 0.80 lexical redundancy penalty is not the primary cause of the precision loss. The qrels are projected development judgments rather than final task judgments.",
+        "id": "limitations",
+        "sourceId": "evaluation_metrics",
+        "type": "markdown"
+      },
+      {
+        "body": "## Independent advisor review\n\n### Verdict\n\n`diagnosis = fusion` is justified as a **pipeline-stage diagnosis**: facet retrieval found useful documents, the stream gate preserved nearly all of them, and the failure occurred when ranking the accepted union.\n\nIt should not be interpreted as \u201cfacet candidates are irrelevant.\u201d The exact failure is an inadequately calibrated early-ranking objective, compounded by differential qrels coverage.\n\n### Evidence\n\n- `U_raw` found 179 grade-\u22652 documents beyond original@1000.\n- `U_accepted` preserved 177 across all four topics:\n  - 219: 19\n  - 72: 77\n  - 300: 60\n  - 84: 21\n- The single rejected stream lost only two known-relevant documents.\n- DUAL retained 155/177 novel documents at 1000, versus 95/177 for RRF.\n- DUAL slightly beat RRF on aggregate graded Recall@1000: `0.2799` versus `0.2659`.\n- But DUAL lost at 500: `0.1855` versus RRF `0.2101`, and nDCG@10 fell from `0.4326` to `0.3344`.\n- DUAL lost nDCG@10 to RRF on every topic and failed every leave-one-topic-out check.\n\nThis is a deep-ranking success but an early-allocation failure.\n\n### Important caveats and red flags\n\n1. **Judging coverage strongly favors RRF near the head.**\n\n   - Judged@100: RRF `97.25%`, DUAL `36.75%`\n   - Judged@500: RRF `36.75%`, DUAL `28.15%`\n   - Judged@1000 is much closer: RRF `23.38%`, DUAL `22.83%`\n\n   Because unjudged documents receive zero gain, shallow nDCG and recall understate facet-heavy arms. The no-advance decision is valid, but the magnitude of DUAL\u2019s apparent early-precision loss is uncertain.\n\n2. **The DUAL features are not calibrated relevance probabilities.**\n\n   `G`, `N`, and `R` are percentiles over roughly 1,700\u20132,200 documents; each `F_i` is a percentile over 200. Equal percentile values do not imply equal relevance likelihood. Static coefficients assume comparability that has not been demonstrated.\n\n3. **`L=max_i F_i` has a multiple-opportunity bias.**\n\n   Topics with seven facets give documents more chances to receive a high local score than the four-facet topic. This can over-promote narrow facet matches.\n\n4. **The quality gate is intentionally permissive.**\n\n   One accepted stream had content warnings in four of its top five documents. Thus \u201caccepted\u201d means coherent enough to retain, not high-quality enough for early ranking.\n\n5. **Redundancy is not the main problem.**\n\n   DUAL and DUAL-NR are nearly identical. Changing the Jaccard penalty is unlikely to fix relevance.\n\n### One bounded next experiment\n\nTest one deterministic **RRF\u2013GLOBAL\u2013DUAL cascade**, using the existing sealed union and scores:\n\n1. Ranks 1\u201310: exact RRF order.\n2. Ranks 11\u2013100: GLOBAL order, skipping already selected documents.\n3. Ranks 101 onward: DUAL order, skipping duplicates.\n4. Append every remaining `U_accepted` document in DUAL order, preserving the complete permutation and all 177 discovered candidates.\n5. Add no retrieval, inference, new weights, filtering, or iterative tuning.\n\nWhy this arm:\n\n- RRF protects nDCG@10 exactly.\n- GLOBAL was stronger than DUAL at early aggregate relevance.\n- DUAL supplies deep facet coverage and retained 155/177 novel documents at 1000.\n- The arm isolates positional budgeting rather than redesigning retrieval.\n\nThis evaluation is diagnostic because the current topics are qrels-exposed. Freeze the cascade before computing its metrics and do not tune its boundaries afterward.\n\n### Stop rule\n\nStop without another repair if any condition fails:\n\n- nDCG@10 differs from RRF;\n- graded Recall@500 does not exceed both RRF and GLOBAL;\n- graded Recall@1000 falls below RRF;\n- novel retention@1000 is below 80% (`142/177`);\n- any topic loses more than `0.02` graded Recall@500 versus RRF; or\n- differential judged coverage prevents a defensible comparison.\n\nIf the arm passes, it justifies one fresh preregistered validation\u2014not production promotion.",
+        "id": "advisor",
+        "sourceId": "advisor_review",
+        "type": "markdown"
+      },
+      {
+        "body": "## Recommended next step\n\nPreserve the frozen U_accepted union and test **one deterministic RRF\u2013GLOBAL\u2013DUAL cascade**: exact RRF at ranks 1\u201310, GLOBAL at 11\u2013100 while skipping selected documents, and DUAL from 101 onward, again skipping duplicates and eventually appending the complete union. This uses only existing scores\u2014no retrieval, inference, new weights, filtering, or iterative tuning. Freeze the cascade before evaluation. Stop if nDCG@10 differs from RRF, graded Recall@500 does not beat both RRF and GLOBAL, graded Recall@1000 falls below RRF, novel retention@1000 is below 80%, any topic loses more than 0.02 graded Recall@500 versus RRF, or judged coverage prevents a defensible comparison.",
+        "id": "next_step",
+        "sourceId": "evaluation_decision",
+        "type": "markdown"
+      },
+      {
+        "body": "## Further questions\n\n- How large can the protected RRF head be while still admitting meaningful facet evidence by 500?\n- Should insertion eligibility require both strong facet-local percentile and a minimum common/narrative coherence score?\n- On a larger preregistered topic set, does the topic-300 recall gain persist without its early-precision regression?",
+        "id": "further_questions",
+        "type": "markdown"
+      }
+    ],
+    "cards": [
+      {
+        "dataset": "headline",
+        "description": "Grade-2-or-higher documents in U_accepted but absent from original@1000.",
+        "id": "novel_card",
+        "metrics": [
+          {
+            "field": "novel_relevant",
+            "format": "number",
+            "label": "Novel relevant documents"
+          },
+          {
+            "field": "novel_topics",
+            "format": "number",
+            "label": "Topics with additions"
+          }
+        ],
+        "sourceId": "headline_sql"
+      },
+      {
+        "dataset": "headline",
+        "description": "Relevant documents present in U_raw but removed with a rejected facet stream.",
+        "id": "gate_card",
+        "metrics": [
+          {
+            "field": "gate_lost",
+            "format": "number",
+            "label": "Relevant documents lost by gate"
+          }
+        ],
+        "sourceId": "headline_sql"
+      },
+      {
+        "dataset": "headline",
+        "description": "Best aggregate early-ranking score among the frozen arms.",
+        "id": "rrf_card",
+        "metrics": [
+          {
+            "field": "rrf_ndcg10",
+            "format": "number",
+            "label": "RRF nDCG@10"
+          }
+        ],
+        "sourceId": "headline_sql"
+      },
+      {
+        "dataset": "headline",
+        "description": "Fraction of all 177 novel relevant topic-document identities retained by DUAL@1000.",
+        "id": "dual_card",
+        "metrics": [
+          {
+            "field": "dual_novel1000",
+            "format": "percent",
+            "label": "DUAL novel retention@1000"
+          }
+        ],
+        "sourceId": "headline_sql"
+      }
+    ],
+    "charts": [
+      {
+        "dataset": "discovery",
+        "encodings": {
+          "color": {
+            "field": "candidate_set",
+            "label": "Candidate set",
+            "type": "nominal"
+          },
+          "x": {
+            "field": "topic",
+            "label": "Topic",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "relevant_documents",
+            "label": "Relevant documents",
+            "type": "quantitative"
+          }
+        },
+        "id": "candidate_discovery",
+        "layout": "full",
+        "sourceId": "discovery_sql",
+        "subtitle": "Grade \u22652 documents in original@1000, U_raw, and U_accepted.",
+        "title": "Relevant-document discovery by topic",
+        "type": "bar"
+      },
+      {
+        "dataset": "arms",
+        "encodings": {
+          "x": {
+            "field": "arm",
+            "label": "Ranking arm",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "ndcg10",
+            "label": "nDCG@10",
+            "type": "quantitative"
+          }
+        },
+        "id": "early_precision",
+        "layout": "full",
+        "sourceId": "arms_sql",
+        "subtitle": "Macro mean across four topics; higher is better.",
+        "title": "nDCG@10 by frozen ranking arm",
+        "type": "bar",
+        "valueFormat": "number"
+      },
+      {
+        "dataset": "retention",
+        "encodings": {
+          "color": {
+            "field": "depth",
+            "label": "Depth",
+            "type": "nominal"
+          },
+          "x": {
+            "field": "arm",
+            "label": "Ranking arm",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "retention",
+            "format": "percent",
+            "label": "Novel retention",
+            "type": "quantitative"
+          }
+        },
+        "id": "novel_retention",
+        "layout": "full",
+        "sourceId": "retention_sql",
+        "subtitle": "Micro fraction of 177 novel relevant topic-document identities.",
+        "title": "Novel relevant evidence retained by depth",
+        "type": "bar",
+        "valueFormat": "percent"
+      },
+      {
+        "dataset": "topic_deltas",
+        "encodings": {
+          "x": {
+            "field": "topic",
+            "label": "Topic",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "ndcg10_delta",
+            "label": "nDCG@10 delta",
+            "type": "quantitative"
+          }
+        },
+        "id": "topic_delta",
+        "layout": "full",
+        "sourceId": "topic_deltas_sql",
+        "subtitle": "Per-topic signed difference; zero means no early-ranking change.",
+        "title": "DUAL nDCG@10 delta versus RRF",
+        "type": "bar"
+      }
+    ],
+    "description": "Qrels-backed technical report on deep facet candidate discovery and fusion.",
+    "generatedAt": "2026-07-14T00:00:00-04:00",
+    "sources": [
+      {
+        "id": "headline_sql",
+        "label": "Headline report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "discovery_sql",
+        "label": "Discovery report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "arms_sql",
+        "label": "Arms report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "retention_sql",
+        "label": "Retention report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "topic_deltas_sql",
+        "label": "Topic Deltas report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "topics_sql",
+        "label": "Topics report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "runtime_sql",
+        "label": "Runtime report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "evaluation_metrics",
+        "label": "Sealed four-topic evaluation metrics",
+        "path": "outputs/rag25_deep_facet_candidates_v1/evaluation_v1/metrics.json"
+      },
+      {
+        "id": "evaluation_decision",
+        "label": "Mechanical pilot decision",
+        "path": "outputs/rag25_deep_facet_candidates_v1/evaluation_v1/decision.json"
+      },
+      {
+        "id": "sealed_freeze",
+        "label": "Pre-qrels seal",
+        "path": "outputs/rag25_deep_facet_candidates_v1/freeze_v1/SEALED.json"
+      },
+      {
+        "id": "experiment_spec",
+        "label": "Preregistered experiment specification",
+        "path": "docs/superpowers/specs/2026-07-13-deep-facet-candidate-ranking-design.md"
+      },
+      {
+        "id": "advisor_review",
+        "label": "Independent advisor review",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/advisor_review.md"
+      },
+      {
+        "id": "runtime_receipt",
+        "label": "Local MiniLM scoring receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/phase2_v1/scoring_receipt.json"
+      }
+    ],
+    "surface": "report",
+    "tables": [
+      {
+        "columns": [
+          {
+            "field": "arm",
+            "label": "Arm",
+            "type": "text"
+          },
+          {
+            "field": "ndcg10",
+            "format": "number",
+            "label": "nDCG@10"
+          },
+          {
+            "field": "graded_recall500",
+            "format": "percent",
+            "label": "Graded Recall@500"
+          },
+          {
+            "field": "graded_recall1000",
+            "format": "percent",
+            "label": "Graded Recall@1000"
+          },
+          {
+            "field": "novel_retention500",
+            "format": "percent",
+            "label": "Novel retention@500"
+          },
+          {
+            "field": "novel_retention1000",
+            "format": "percent",
+            "label": "Novel retention@1000"
+          },
+          {
+            "field": "judged_rate100",
+            "format": "percent",
+            "label": "Judged rate@100"
+          }
+        ],
+        "dataset": "arms",
+        "defaultSort": {
+          "direction": "desc",
+          "field": "ndcg10"
+        },
+        "id": "arm_table",
+        "sourceId": "arms_sql",
+        "subtitle": "Macro ranking metrics and micro novel-evidence retention across four topics.",
+        "title": "Frozen arm metrics"
+      },
+      {
+        "columns": [
+          {
+            "field": "topic",
+            "label": "Topic",
+            "type": "text"
+          },
+          {
+            "field": "original_relevant",
+            "format": "number",
+            "label": "Original relevant"
+          },
+          {
+            "field": "accepted_relevant",
+            "format": "number",
+            "label": "Accepted relevant"
+          },
+          {
+            "field": "novel_relevant",
+            "format": "number",
+            "label": "Novel relevant"
+          },
+          {
+            "field": "gate_lost",
+            "format": "number",
+            "label": "Gate lost"
+          },
+          {
+            "field": "rrf_ndcg10",
+            "format": "number",
+            "label": "RRF nDCG@10"
+          },
+          {
+            "field": "dual_ndcg10",
+            "format": "number",
+            "label": "DUAL nDCG@10"
+          }
+        ],
+        "dataset": "topics",
+        "defaultSort": {
+          "direction": "desc",
+          "field": "novel_relevant"
+        },
+        "id": "topic_table",
+        "sourceId": "topics_sql",
+        "subtitle": "Exact grade\u22652 discovery counts and early-ranking outcomes by topic.",
+        "title": "Topic-level discovery and ranking tradeoff"
+      }
+    ],
+    "title": "Deep facets find evidence; fusion loses precision",
+    "version": 1
+  },
+  "package_info": {
+    "controls": {
+      "edit": false,
+      "refresh": false
+    },
+    "originUrl": "artifact://deep-facet-candidate-pilot-v1"
+  },
+  "snapshot": {
+    "datasets": {
+      "arms": [
+        {
+          "arm": "RRF",
+          "graded_recall1000": 0.2659157835843987,
+          "graded_recall500": 0.21014475710585312,
+          "judged_rate100": 0.9724999999999999,
+          "ndcg10": 0.4325738541430897,
+          "ndcg100": 0.40476871895580796,
+          "near_duplicate_rate500": 0.068,
+          "novel_retention1000": 0.536723163841808,
+          "novel_retention500": 0.22033898305084745
+        },
+        {
+          "arm": "GLOBAL",
+          "graded_recall1000": 0.2820563119396219,
+          "graded_recall500": 0.1978603576326585,
+          "judged_rate100": 0.42250000000000004,
+          "ndcg10": 0.35574949071608797,
+          "ndcg100": 0.2432210018799239,
+          "near_duplicate_rate500": 0.0775,
+          "novel_retention1000": 0.8022598870056498,
+          "novel_retention500": 0.5423728813559322
+        },
+        {
+          "arm": "FACET",
+          "graded_recall1000": 0.14915586477231432,
+          "graded_recall500": 0.07825980290439812,
+          "judged_rate100": 0.135,
+          "ndcg10": 0.11625305142183151,
+          "ndcg100": 0.0706000373469229,
+          "near_duplicate_rate500": 0.0905,
+          "novel_retention1000": 0.9717514124293786,
+          "novel_retention500": 0.6497175141242938
+        },
+        {
+          "arm": "DUAL",
+          "graded_recall1000": 0.27992678744217164,
+          "graded_recall500": 0.18550421806986986,
+          "judged_rate100": 0.3675,
+          "ndcg10": 0.3344410244502839,
+          "ndcg100": 0.20760214854045578,
+          "near_duplicate_rate500": 0.044,
+          "novel_retention1000": 0.8757062146892656,
+          "novel_retention500": 0.6440677966101694
+        },
+        {
+          "arm": "DUAL-NR",
+          "graded_recall1000": 0.2817556733776441,
+          "graded_recall500": 0.18535426620558315,
+          "judged_rate100": 0.365,
+          "ndcg10": 0.34100190042007095,
+          "ndcg100": 0.21232693559102064,
+          "near_duplicate_rate500": 0.0815,
+          "novel_retention1000": 0.864406779661017,
+          "novel_retention500": 0.6610169491525424
+        }
+      ],
+      "discovery": [
+        {
+          "candidate_set": "Original@1000",
+          "relevant_documents": 98,
+          "topic": "219"
+        },
+        {
+          "candidate_set": "U_raw",
+          "relevant_documents": 117,
+          "topic": "219"
+        },
+        {
+          "candidate_set": "U_accepted",
+          "relevant_documents": 117,
+          "topic": "219"
+        },
+        {
+          "candidate_set": "Original@1000",
+          "relevant_documents": 269,
+          "topic": "72"
+        },
+        {
+          "candidate_set": "U_raw",
+          "relevant_documents": 346,
+          "topic": "72"
+        },
+        {
+          "candidate_set": "U_accepted",
+          "relevant_documents": 346,
+          "topic": "72"
+        },
+        {
+          "candidate_set": "Original@1000",
+          "relevant_documents": 137,
+          "topic": "300"
+        },
+        {
+          "candidate_set": "U_raw",
+          "relevant_documents": 197,
+          "topic": "300"
+        },
+        {
+          "candidate_set": "U_accepted",
+          "relevant_documents": 197,
+          "topic": "300"
+        },
+        {
+          "candidate_set": "Original@1000",
+          "relevant_documents": 194,
+          "topic": "84"
+        },
+        {
+          "candidate_set": "U_raw",
+          "relevant_documents": 217,
+          "topic": "84"
+        },
+        {
+          "candidate_set": "U_accepted",
+          "relevant_documents": 215,
+          "topic": "84"
+        }
+      ],
+      "headline": [
+        {
+          "dual_novel1000": 0.8757062146892656,
+          "gate_lost": 2,
+          "novel_relevant": 177,
+          "novel_topics": 4,
+          "rrf_ndcg10": 0.4325738541430897
+        }
+      ],
+      "retention": [
+        {
+          "arm": "RRF",
+          "depth": "@500",
+          "retention": 0.22033898305084745
+        },
+        {
+          "arm": "RRF",
+          "depth": "@1000",
+          "retention": 0.536723163841808
+        },
+        {
+          "arm": "GLOBAL",
+          "depth": "@500",
+          "retention": 0.5423728813559322
+        },
+        {
+          "arm": "GLOBAL",
+          "depth": "@1000",
+          "retention": 0.8022598870056498
+        },
+        {
+          "arm": "FACET",
+          "depth": "@500",
+          "retention": 0.6497175141242938
+        },
+        {
+          "arm": "FACET",
+          "depth": "@1000",
+          "retention": 0.9717514124293786
+        },
+        {
+          "arm": "DUAL",
+          "depth": "@500",
+          "retention": 0.6440677966101694
+        },
+        {
+          "arm": "DUAL",
+          "depth": "@1000",
+          "retention": 0.8757062146892656
+        },
+        {
+          "arm": "DUAL-NR",
+          "depth": "@500",
+          "retention": 0.6610169491525424
+        },
+        {
+          "arm": "DUAL-NR",
+          "depth": "@1000",
+          "retention": 0.864406779661017
+        }
+      ],
+      "runtime": [
+        {
+          "external_calls": 25,
+          "local_scoring_seconds": 569.6909575020545,
+          "paid_or_hosted_cost_usd": 0.0,
+          "peak_device_memory_mib": 467.029296875,
+          "phase1_seconds": 113.72382251900854,
+          "phase2_seconds": 455.967134983046,
+          "retry_count": 0
+        }
+      ],
+      "topic_deltas": [
+        {
+          "ndcg10_delta": -0.06299249670668211,
+          "topic": "219"
+        },
+        {
+          "ndcg10_delta": -0.03285530509625939,
+          "topic": "72"
+        },
+        {
+          "ndcg10_delta": -0.16308567673835989,
+          "topic": "300"
+        },
+        {
+          "ndcg10_delta": -0.13359784022992166,
+          "topic": "84"
+        }
+      ],
+      "topics": [
+        {
+          "accepted_relevant": 117,
+          "dual_ndcg10": 0.3995688713838976,
+          "dual_novel_1000": 14,
+          "dual_novel_500": 7,
+          "gate_lost": 0,
+          "novel_relevant": 19,
+          "original_relevant": 98,
+          "rrf_ndcg10": 0.4625613680905797,
+          "topic": "219"
+        },
+        {
+          "accepted_relevant": 346,
+          "dual_ndcg10": 0.3214961622634444,
+          "dual_novel_1000": 68,
+          "dual_novel_500": 43,
+          "gate_lost": 0,
+          "novel_relevant": 77,
+          "original_relevant": 269,
+          "rrf_ndcg10": 0.3543514673597038,
+          "topic": "72"
+        },
+        {
+          "accepted_relevant": 197,
+          "dual_ndcg10": 0.2551712773660139,
+          "dual_novel_1000": 57,
+          "dual_novel_500": 50,
+          "gate_lost": 0,
+          "novel_relevant": 60,
+          "original_relevant": 137,
+          "rrf_ndcg10": 0.4182569541043738,
+          "topic": "300"
+        },
+        {
+          "accepted_relevant": 215,
+          "dual_ndcg10": 0.3615277867877797,
+          "dual_novel_1000": 16,
+          "dual_novel_500": 14,
+          "gate_lost": 2,
+          "novel_relevant": 21,
+          "original_relevant": 194,
+          "rrf_ndcg10": 0.49512562701770135,
+          "topic": "84"
+        }
+      ]
+    },
+    "generatedAt": "2026-07-14T00:00:00-04:00",
+    "status": "ready",
+    "version": 1
+  },
+  "sources": [
+    {
+      "id": "headline_sql",
+      "label": "Headline report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Headline discovery, gate-loss, RRF, and DUAL metrics.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM headline ORDER BY row_order",
+        "tables_used": [
+          "headline"
+        ]
+      }
+    },
+    {
+      "id": "discovery_sql",
+      "label": "Discovery report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Relevant-document counts by topic and candidate set.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM discovery ORDER BY row_order",
+        "tables_used": [
+          "discovery"
+        ]
+      }
+    },
+    {
+      "id": "arms_sql",
+      "label": "Arms report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Aggregate ranking and retention metrics by frozen arm.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM arms ORDER BY row_order",
+        "tables_used": [
+          "arms"
+        ]
+      }
+    },
+    {
+      "id": "retention_sql",
+      "label": "Retention report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Novel relevant evidence retention by arm and depth.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM retention ORDER BY row_order",
+        "tables_used": [
+          "retention"
+        ]
+      }
+    },
+    {
+      "id": "topic_deltas_sql",
+      "label": "Topic Deltas report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Per-topic DUAL nDCG@10 deltas versus RRF.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM topic_deltas ORDER BY row_order",
+        "tables_used": [
+          "topic_deltas"
+        ]
+      }
+    },
+    {
+      "id": "topics_sql",
+      "label": "Topics report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Topic-level discovery and ranking tradeoff metrics.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM topics ORDER BY row_order",
+        "tables_used": [
+          "topics"
+        ]
+      }
+    },
+    {
+      "id": "runtime_sql",
+      "label": "Runtime report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "External request and local MiniLM runtime/cost evidence.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM runtime ORDER BY row_order",
+        "tables_used": [
+          "runtime"
+        ]
+      }
+    },
+    {
+      "id": "evaluation_metrics",
+      "label": "Sealed four-topic evaluation metrics",
+      "path": "outputs/rag25_deep_facet_candidates_v1/evaluation_v1/metrics.json",
+      "query": {
+        "description": "Qrels-backed discovery, ranking, judged-rate, duplication, and leave-one-out metrics.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/evaluation_v1/metrics.json"
+        ]
+      }
+    },
+    {
+      "id": "evaluation_decision",
+      "label": "Mechanical pilot decision",
+      "path": "outputs/rag25_deep_facet_candidates_v1/evaluation_v1/decision.json",
+      "query": {
+        "description": "Frozen advance guards and failure-stage diagnosis.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/evaluation_v1/decision.json"
+        ]
+      }
+    },
+    {
+      "id": "sealed_freeze",
+      "label": "Pre-qrels seal",
+      "path": "outputs/rag25_deep_facet_candidates_v1/freeze_v1/SEALED.json",
+      "query": {
+        "description": "Hash inventory for all requests, candidates, scores, gates, and complete rankings frozen before qrels.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/freeze_v1/SEALED.json"
+        ]
+      }
+    },
+    {
+      "id": "experiment_spec",
+      "label": "Preregistered experiment specification",
+      "path": "docs/superpowers/specs/2026-07-13-deep-facet-candidate-ranking-design.md",
+      "query": {
+        "description": "Qrels-blind design, metrics, coefficients, tie-breaks, and stop rule.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "docs/superpowers/specs/2026-07-13-deep-facet-candidate-ranking-design.md"
+        ]
+      }
+    },
+    {
+      "id": "advisor_review",
+      "label": "Independent advisor review",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/advisor_review.md",
+      "query": {
+        "description": "Post-results review that cannot change frozen candidates, rankings, or metrics.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "reports/experiments/deep_facet_candidate_pilot_v1/advisor_review.md"
+        ]
+      }
+    },
+    {
+      "id": "runtime_receipt",
+      "label": "Local MiniLM scoring receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/phase2_v1/scoring_receipt.json",
+      "query": {
+        "description": "ROCm runtime, model revision, window count, memory, and output hashes.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/phase2_v1/scoring_receipt.json"
+        ]
+      }
+    }
+  ],
+  "surface": "report"
+}

@@ -1,0 +1,12 @@
+{
+  "advance_to_larger_validation": false,
+  "diagnosis": "fusion",
+  "dual_ndcg10": 0.3344410244502839,
+  "dual_novel_retention1000": 0.8757062146892656,
+  "gate_lost_relevant_count": 2,
+  "novel_relevant_count": 177,
+  "qrels_opened": true,
+  "rrf_ndcg10": 0.4325738541430897,
+  "status": "complete",
+  "title": "Deep facets find evidence; fusion loses precision"
+}
