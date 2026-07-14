@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import quote
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .facet_local_minilm_preflight import (
@@ -62,6 +63,16 @@ def _reject_protected(topic_ids: Sequence[object]) -> None:
     for topic_id in map(str, topic_ids):
         if topic_id in PROTECTED_TOPIC_IDS:
             raise ValueError(f"protected topic {topic_id} is forbidden")
+
+
+def _require_pilot_topic_ids(topic_ids: Sequence[object]) -> None:
+    allowed = set(PILOT_TOPIC_IDS)
+    for topic_id in topic_ids:
+        if not isinstance(topic_id, str) or topic_id not in allowed:
+            raise ValueError(
+                "scoring topic_id must be an exact frozen pilot topic "
+                f"from {','.join(PILOT_TOPIC_IDS)}"
+            )
 
 
 def _validate_contract_population(
@@ -474,6 +485,7 @@ def score_window_rows(
             raise ValueError("window topic_id must be nonempty text")
         if topic_id in PROTECTED_TOPIC_IDS:
             raise ValueError(f"protected topic {topic_id} is forbidden")
+        _require_pilot_topic_ids([topic_id])
     unique: dict[tuple[str, str], None] = {}
     initial_scores: dict[tuple[str, str], float | None] = {}
     for row in rows:
@@ -554,6 +566,15 @@ def _require_nonnegative_int(value: object, label: str) -> int:
     return value
 
 
+def _require_possible_forward_bookkeeping(
+    forward_pairs: int,
+    forward_calls: int,
+    label: str,
+) -> None:
+    if (forward_pairs == 0) != (forward_calls == 0):
+        raise ValueError(f"{label} forward execution bookkeeping is impossible")
+
+
 def _artifact_binding(
     root: Path,
     name: str,
@@ -596,6 +617,7 @@ def _preflight_topics(receipt: Mapping[str, object]) -> list[str]:
             raise ValueError("score preflight topic IDs must be nonempty text")
         topics.append(topic_id)
     _reject_protected(topics)
+    _require_pilot_topic_ids(topics)
     return topics
 
 
@@ -628,6 +650,7 @@ def _load_scoring_preflight(
     window_binding = _artifact_binding(root, "windows.jsonl", artifacts)
     windows = _read_jsonl(root / "windows.jsonl", "score preflight windows")
     _reject_protected([row.get("topic_id") for row in windows])
+    _require_pilot_topic_ids([row.get("topic_id") for row in windows])
     if len(windows) != window_binding["rows"]:
         raise ValueError("preflight windows row count differs")
     if not windows:
@@ -699,19 +722,31 @@ def _load_scoring_preflight(
 
 
 def _shard_filename(topic_id: str, obligation_id: str) -> str:
+    _require_pilot_topic_ids([topic_id])
     local_id = obligation_id
     for separator in (":", "-"):
         prefix = f"{topic_id}{separator}"
         if local_id.startswith(prefix):
             local_id = local_id[len(prefix) :]
             break
-    safe = "".join(
-        character if character.isalnum() or character in {"-", "_", "."} else "_"
-        for character in local_id
-    ).strip("._")
+    safe = quote(local_id, safe="-_.")
     if not safe:
         raise ValueError("obligation ID cannot form a score shard name")
-    return f"{topic_id}__{safe}.jsonl"
+    return f"{quote(topic_id, safe='')}__{safe}.jsonl"
+
+
+def _confined_shard_paths(output_dir: Path, filename: str) -> tuple[Path, Path]:
+    if Path(filename).name != filename:
+        raise ValueError("score shard filename is not a single confined component")
+    destination = Path(output_dir).resolve(strict=False)
+    shard_root = destination / "shards"
+    if shard_root.resolve(strict=False) != shard_root:
+        raise ValueError("score shard directory is not confined beneath output")
+    shard_path = (shard_root / filename).resolve(strict=False)
+    sidecar_path = shard_path.with_suffix(".receipt.json").resolve(strict=False)
+    if shard_path.parent != shard_root or sidecar_path.parent != shard_root:
+        raise ValueError("score shard paths are not confined beneath output/shards")
+    return shard_path, sidecar_path
 
 
 def _planned_score_rows(
@@ -1161,6 +1196,29 @@ def _verify_base_receipt(
         or receipt.get("external_cost_usd") != 0.0
     ):
         raise ValueError("base score receipt binding or safety counters differ")
+    for field in ("restored_cache_pair_count", "resumed_shard_count"):
+        if field not in receipt:
+            continue
+        legacy_value = _require_nonnegative_int(
+            receipt.get(field), f"legacy {field}"
+        )
+        if legacy_value != 0:
+            raise ValueError(
+                "base score receipt contains unauthenticated resume history"
+            )
+    receipt_forward_pairs = _require_nonnegative_int(
+        receipt.get("unique_forward_pair_count"),
+        "base receipt forward pair count",
+    )
+    receipt_forward_calls = _require_nonnegative_int(
+        receipt.get("forward_call_count"),
+        "base receipt forward call count",
+    )
+    _require_possible_forward_bookkeeping(
+        receipt_forward_pairs,
+        receipt_forward_calls,
+        "base receipt",
+    )
     raw_shards = receipt.get("shards")
     if not isinstance(raw_shards, list) or len(raw_shards) != len(queues):
         raise ValueError("base score receipt shard coverage differs")
@@ -1175,13 +1233,16 @@ def _verify_base_receipt(
     if set(by_queue) != set(queues):
         raise ValueError("base score receipt obligation coverage differs")
     expected_artifacts: set[str] = set()
-    for raw in by_queue.values():
+    expected_paths: dict[tuple[str, str], tuple[Path, Path]] = {}
+    for key, raw in by_queue.items():
         path_value = raw.get("path")
-        if not isinstance(path_value, str):
+        name = _shard_filename(*key)
+        shard_path, sidecar_path = _confined_shard_paths(output_dir, name)
+        if path_value != f"shards/{name}":
             raise ValueError("base score receipt shard path is invalid")
-        shard_name = Path(path_value).name
-        expected_artifacts.add(shard_name)
-        expected_artifacts.add(Path(shard_name).with_suffix(".receipt.json").name)
+        expected_paths[key] = (shard_path, sidecar_path)
+        expected_artifacts.add(shard_path.name)
+        expected_artifacts.add(sidecar_path.name)
     try:
         observed_artifacts = {
             path.name for path in (output_dir / "shards").iterdir()
@@ -1196,11 +1257,7 @@ def _verify_base_receipt(
     total_elapsed = 0.0
     for key, planned in queues.items():
         raw = by_queue[key]
-        path_value = raw.get("path")
-        if not isinstance(path_value, str):
-            raise ValueError("base score receipt shard path is invalid")
-        shard_path = output_dir / path_value
-        sidecar = shard_path.with_suffix(".receipt.json")
+        shard_path, sidecar = expected_paths[key]
         loaded = _load_complete_shard(
             shard_path,
             sidecar,
@@ -1229,6 +1286,11 @@ def _verify_base_receipt(
         )
         forward_calls = _require_nonnegative_int(
             loaded.get("forward_call_count"), "shard forward call count"
+        )
+        _require_possible_forward_bookkeeping(
+            forward_pairs,
+            forward_calls,
+            "shard",
         )
         shard_execution = loaded.get("execution")
         legacy_execution = receipt.get("model_constructed") is None
@@ -1303,15 +1365,6 @@ def _verify_base_receipt(
         or receipt.get("planned_candidate_count") != summary.get("candidate_count")
     ):
         raise ValueError("base score planned population differs from preflight")
-    restored_pairs = _require_nonnegative_int(
-        receipt.get("restored_cache_pair_count", 0),
-        "base receipt restored cache pair count",
-    )
-    if restored_pairs > initial_misses:
-        raise ValueError("base receipt restored cache pair count differs")
-    resumed = _require_nonnegative_int(
-        receipt.get("resumed_shard_count"), "base receipt resumed shard count"
-    )
     if (
         receipt.get("planned_window_count") != completed
         or receipt.get("completed_window_count") != completed
@@ -1323,11 +1376,10 @@ def _verify_base_receipt(
         or initial_hits + initial_misses != len(all_pairs)
         or receipt.get("final_cache_hit_pair_count") != len(all_pairs)
         or receipt.get("final_cache_miss_pair_count") != 0
-        or receipt.get("unique_forward_pair_count") != total_forward_pairs
-        or receipt.get("forward_call_count") != total_forward_calls
+        or receipt_forward_pairs != total_forward_pairs
+        or receipt_forward_calls != total_forward_calls
         or receipt.get("elapsed_seconds") != total_elapsed
         or receipt.get("shard_count") != len(queues)
-        or resumed > len(queues)
         or total_forward_pairs > len(preflight_pair_hits) - sum(preflight_pair_hits.values())
     ):
         raise ValueError("base score receipt count or telemetry differs")
@@ -1410,7 +1462,10 @@ def _verify_base_receipt(
         )
     ):
         raise ValueError("base score execution telemetry is invalid")
-    return dict(receipt)
+    verified = dict(receipt)
+    verified.pop("restored_cache_pair_count", None)
+    verified.pop("resumed_shard_count", None)
+    return verified
 
 
 def run_local_scoring(
@@ -1431,14 +1486,17 @@ def run_local_scoring(
         queues[(str(row["topic_id"]), str(row["variant"]))].append(row)
 
     planned_paths: dict[tuple[str, str], Path] = {}
+    planned_sidecars: dict[tuple[str, str], Path] = {}
     seen_names: set[str] = set()
-    destination = Path(output_dir)
+    destination = Path(output_dir).resolve(strict=False)
     for key in sorted(queues):
         name = _shard_filename(*key)
         if name in seen_names:
             raise ValueError("score shard names collide")
         seen_names.add(name)
-        planned_paths[key] = destination / "shards" / name
+        shard_path, sidecar_path = _confined_shard_paths(destination, name)
+        planned_paths[key] = shard_path
+        planned_sidecars[key] = sidecar_path
 
     if (destination / "receipt.json").exists():
         complete = _read_json(destination / "receipt.json", "base score receipt")
@@ -1464,12 +1522,11 @@ def run_local_scoring(
         raise ValueError("score output contains an unexpected shard artifact")
 
     shard_receipts: dict[tuple[str, str], dict[str, object]] = {}
-    resumed = 0
     remaining: list[tuple[str, str]] = []
     for key, shard_path in planned_paths.items():
         loaded = _load_complete_shard(
             shard_path,
-            shard_path.with_suffix(".receipt.json"),
+            planned_sidecars[key],
             queues[key],
             topic_id=key[0],
             obligation_id=key[1],
@@ -1480,7 +1537,6 @@ def run_local_scoring(
             remaining.append(key)
         else:
             shard_receipts[key] = loaded
-            resumed += 1
 
     materialization = _validate_model_binding(preflight)
     cache = _load_bound_score_cache(preflight, Path(cache_root))
@@ -1498,7 +1554,6 @@ def run_local_scoring(
         cache.get(query_text=query, text=text) is not None
         for query, text in all_pairs
     )
-    restored_cache_pairs = 0
     for key in shard_receipts:
         restored: dict[tuple[str, str], float] = {}
         for row in _read_jsonl(planned_paths[key], "resumed score shard"):
@@ -1507,10 +1562,6 @@ def run_local_scoring(
             if pair in restored and restored[pair] != score:
                 raise ValueError("resumed shard has conflicting scores for one pair")
             restored[pair] = score
-        restored_cache_pairs += sum(
-            cache.get(query_text=query, text=text) is None
-            for query, text in restored
-        )
         cache.add_many(
             (query, text, score)
             for (query, text), score in restored.items()
@@ -1575,7 +1626,7 @@ def run_local_scoring(
         }
         if shard_misses and (observed_pairs != shard_misses or observed_calls <= 0):
             raise ValueError("ROCm predictor telemetry differs from scored misses")
-        _exclusive_json(shard_path.with_suffix(".receipt.json"), shard_receipt)
+        _exclusive_json(planned_sidecars[key], shard_receipt)
         shard_receipts[key] = shard_receipt
 
     if set(shard_receipts) != set(queues):
@@ -1622,7 +1673,6 @@ def run_local_scoring(
         "preflight_cache_miss_pair_count": preflight["summary"]["cache_miss_count"],  # type: ignore[index]
         "initial_runtime_cache_hit_pair_count": initial_hits,
         "initial_runtime_cache_miss_pair_count": len(all_pairs) - initial_hits,
-        "restored_cache_pair_count": restored_cache_pairs,
         "final_cache_hit_pair_count": final_hits,
         "final_cache_miss_pair_count": len(all_pairs) - final_hits,
         "unique_forward_pair_count": total_forward_pairs,
@@ -1637,7 +1687,6 @@ def run_local_scoring(
         ),
         "score_cache_path": str(cache.path.resolve()),
         "shard_count": len(shard_receipts),
-        "resumed_shard_count": resumed,
         "shards": [shard_receipts[key] for key in sorted(shard_receipts)],
         "qrels_opened": False,
         "network_call_count": 0,
@@ -1934,7 +1983,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"pairs={receipt['unique_pair_count']} "
             f"forwards={receipt['unique_forward_pair_count']} "
             f"shards={receipt['shard_count']} "
-            f"resumed_shards={receipt['resumed_shard_count']} "
             f"elapsed_seconds={receipt['elapsed_seconds']:.3f} "
             "network=false qrels_opened=false external_cost=$0"
         )

@@ -346,6 +346,7 @@ class _InstrumentedPredictor:
 def test_local_scoring_writes_complete_shards_and_resumes_without_prediction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     preflight = tmp_path / "preflight"
     cache_root = tmp_path / "cache"
@@ -373,6 +374,8 @@ def test_local_scoring_writes_complete_shards_and_resumes_without_prediction(
     assert len(receipt["shards"]) == 2
     assert predictor.calls == [[("facet query", "same missing passage")]]
     assert receipt["device_name"] == "fake AMD"
+    assert "resumed_shard_count" not in receipt
+    assert "restored_cache_pair_count" not in receipt
 
     (output / "receipt.json").unlink()
     monkeypatch.setattr(
@@ -382,12 +385,28 @@ def test_local_scoring_writes_complete_shards_and_resumes_without_prediction(
     )
     resumed = score_module.run_local_scoring(preflight, output, cache_root)
 
-    assert resumed["resumed_shard_count"] == 2
+    assert "resumed_shard_count" not in resumed
+    assert "restored_cache_pair_count" not in resumed
     assert resumed["device_name"] == "fake AMD"
     assert resumed["torch_hip_version"] == "fake hip"
     assert resumed["peak_device_memory_bytes"] == 1234
     assert score_module.verify_local_scoring(output)["completed_window_count"] == 3
     assert score_module.main(["verify", "--output", str(output)]) == 0
+    assert (
+        score_module.main(
+            [
+                "score",
+                "--preflight",
+                str(preflight),
+                "--output",
+                str(output),
+                "--cache-root",
+                str(cache_root),
+            ]
+        )
+        == 0
+    )
+    assert "resumed_shards=" not in capsys.readouterr().out
     receipt_path = output / "receipt.json"
     receipt_source = receipt_path.read_bytes()
     unsafe_receipt = json.loads(receipt_source)
@@ -449,11 +468,19 @@ def test_local_scoring_writes_complete_shards_and_resumes_without_prediction(
     with pytest.raises(ValueError, match="planned"):
         score_module.verify_local_scoring(output)
     receipt_path.write_bytes(receipt_source)
-    wrong_restored_receipt = json.loads(receipt_source)
-    wrong_restored_receipt["restored_cache_pair_count"] = 99
-    receipt_path.write_bytes(_compact_bytes(wrong_restored_receipt))
-    with pytest.raises(ValueError, match="restored"):
-        score_module.verify_local_scoring(output)
+    legacy_receipt = json.loads(receipt_source)
+    legacy_receipt["restored_cache_pair_count"] = 0
+    legacy_receipt["resumed_shard_count"] = 0
+    receipt_path.write_bytes(_compact_bytes(legacy_receipt))
+    verified_legacy = score_module.verify_local_scoring(output)
+    assert "restored_cache_pair_count" not in verified_legacy
+    assert "resumed_shard_count" not in verified_legacy
+    for field in ("restored_cache_pair_count", "resumed_shard_count"):
+        fabricated_receipt = dict(legacy_receipt)
+        fabricated_receipt[field] = 1
+        receipt_path.write_bytes(_compact_bytes(fabricated_receipt))
+        with pytest.raises(ValueError, match="unauthenticated resume history"):
+            score_module.verify_local_scoring(output)
     receipt_path.write_bytes(receipt_source)
     shard_path = output / str(resumed["shards"][0]["path"])
     shard_source = shard_path.read_bytes()
@@ -580,7 +607,8 @@ def test_partial_resume_restores_shared_pair_from_completed_shard(
 
     assert resumed_predictor.calls == []
     assert resumed["unique_forward_pair_count"] == 1
-    assert resumed["restored_cache_pair_count"] == 1
+    assert "restored_cache_pair_count" not in resumed
+    assert "resumed_shard_count" not in resumed
 
 
 def test_local_scoring_rejects_protected_receipt_before_window_cache_or_model_access(
@@ -602,6 +630,85 @@ def test_local_scoring_rejects_protected_receipt_before_window_cache_or_model_ac
         score_module.run_local_scoring(preflight, tmp_path / "base", cache_root)
 
     assert touched == []
+
+
+@pytest.mark.parametrize("topic_kind", ["traversal", "absolute"])
+def test_local_scoring_rejects_nonpilot_topic_before_output_cache_or_model_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    topic_kind: str,
+) -> None:
+    malicious_topic = (
+        "../escape"
+        if topic_kind == "traversal"
+        else str(tmp_path / "absolute-escape")
+    )
+    preflight = tmp_path / "preflight"
+    cache_root = tmp_path / "cache"
+    output = tmp_path / "base"
+    _write_scoring_preflight(preflight, cache_root, topic_id=malicious_topic)
+    touched: list[str] = []
+
+    def forbidden(name: str) -> object:
+        touched.append(name)
+        raise AssertionError(f"{name} callback must not be reached")
+
+    monkeypatch.setattr(
+        score_module,
+        "_validate_model_binding",
+        lambda preflight: forbidden("model"),
+    )
+    monkeypatch.setattr(
+        score_module,
+        "_load_bound_score_cache",
+        lambda preflight, root: forbidden("cache"),
+    )
+    monkeypatch.setattr(
+        score_module,
+        "_load_rocm_predictor",
+        lambda materialization: forbidden("predictor"),
+    )
+
+    with pytest.raises(ValueError, match="pilot topic"):
+        score_module.run_local_scoring(preflight, output, cache_root)
+
+    assert touched == []
+    assert not output.exists()
+    assert not (tmp_path / "absolute-escape__facet.jsonl").exists()
+
+
+def test_local_scoring_rejects_shard_symlink_escape_before_external_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preflight = tmp_path / "preflight"
+    cache_root = tmp_path / "cache"
+    output = tmp_path / "base"
+    outside = tmp_path / "outside"
+    _write_scoring_preflight(preflight, cache_root)
+    output.mkdir()
+    outside.mkdir()
+    (output / "shards").symlink_to(outside, target_is_directory=True)
+    touched: list[str] = []
+    monkeypatch.setattr(
+        score_module,
+        "_validate_model_binding",
+        lambda preflight: touched.append("model"),
+    )
+
+    with pytest.raises(ValueError, match="confined"):
+        score_module.run_local_scoring(preflight, output, cache_root)
+
+    assert touched == []
+    assert list(outside.iterdir()) == []
+
+
+def test_shard_filename_preserves_canonical_names_and_encodes_unsafe_bytes() -> None:
+    assert score_module._shard_filename("219", "219:broad") == "219__broad.jsonl"
+    assert (
+        score_module._shard_filename("219", "219:facet/../unsafe")
+        == "219__facet%2F..%2Funsafe.jsonl"
+    )
 
 
 def test_local_scoring_rejects_frozen_cache_key_outside_pinned_context(
@@ -761,6 +868,78 @@ def test_verifier_requires_execution_for_every_forward_bearing_shard(
 
     with pytest.raises(ValueError, match="execution"):
         score_module.verify_local_scoring(output)
+
+
+def test_verifier_rejects_impossible_forward_pair_call_bookkeeping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preflight = tmp_path / "preflight"
+    cache_root = tmp_path / "cache"
+    verified = _write_scoring_preflight(preflight, cache_root)
+    predictor = _InstrumentedPredictor()
+    monkeypatch.setattr(
+        score_module,
+        "load_verified_materialization",
+        lambda path: verified,
+    )
+    monkeypatch.setattr(
+        score_module,
+        "_load_rocm_predictor",
+        lambda materialization: predictor,
+    )
+    output = tmp_path / "base"
+    score_module.run_local_scoring(preflight, output, cache_root)
+    receipt_path = output / "receipt.json"
+    receipt_source = receipt_path.read_bytes()
+
+    for target_kind, changed_pairs, changed_calls in (
+        ("forward", 1, 0),
+        ("cache", 0, 1),
+    ):
+        receipt = json.loads(receipt_source)
+        target = next(
+            shard
+            for shard in receipt["shards"]
+            if (shard["forward_pair_count"] > 0) == (target_kind == "forward")
+        )
+        sidecar_path = (output / str(target["path"])).with_suffix(
+            ".receipt.json"
+        )
+        sidecar_source = sidecar_path.read_bytes()
+        changed_shard = dict(target)
+        changed_shard["forward_pair_count"] = changed_pairs
+        changed_shard["forward_call_count"] = changed_calls
+        changed_shards = [
+            changed_shard if shard["path"] == target["path"] else shard
+            for shard in receipt["shards"]
+        ]
+        receipt["shards"] = changed_shards
+        receipt["unique_forward_pair_count"] = sum(
+            shard["forward_pair_count"] for shard in changed_shards
+        )
+        receipt["forward_call_count"] = sum(
+            shard["forward_call_count"] for shard in changed_shards
+        )
+        sidecar_path.write_bytes(_compact_bytes(changed_shard))
+        receipt_path.write_bytes(_compact_bytes(receipt))
+        try:
+            with pytest.raises(ValueError, match="forward execution bookkeeping"):
+                score_module.verify_local_scoring(output)
+        finally:
+            sidecar_path.write_bytes(sidecar_source)
+            receipt_path.write_bytes(receipt_source)
+
+    for changed_pairs, changed_calls in ((1, 0), (0, 1)):
+        receipt = json.loads(receipt_source)
+        receipt["unique_forward_pair_count"] = changed_pairs
+        receipt["forward_call_count"] = changed_calls
+        receipt_path.write_bytes(_compact_bytes(receipt))
+        try:
+            with pytest.raises(ValueError, match="forward execution bookkeeping"):
+                score_module.verify_local_scoring(output)
+        finally:
+            receipt_path.write_bytes(receipt_source)
 
 
 class _FakeTensor:
