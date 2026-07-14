@@ -46,12 +46,14 @@ SHARED_CACHE_DIR = Path(
     "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote"
 )
 LIMITER_STATE_PATH = SHARED_CACHE_DIR / "rate-limit.sqlite"
-PREFLIGHT_SCHEMA_VERSION = "facet-aware-fusion-retrieval-preflight-v1"
+PREFLIGHT_SCHEMA_VERSION = "facet-aware-fusion-retrieval-preflight-v2"
 SUMMARY_SCHEMA_VERSION = "facet-aware-fusion-retrieval-summary-v1"
 CANDIDATE_SCHEMA_VERSION = "facet-aware-fusion-candidate-v1"
-RECOVERY_SCHEMA_VERSION = "facet-aware-fusion-recovery-receipt-v1"
+RECOVERY_SCHEMA_VERSION = "facet-aware-fusion-recovery-receipt-v2"
+RECOVERY_CLAIM_SCHEMA_VERSION = "facet-aware-fusion-recovery-claim-v1"
 RECOVERY_ROOT_CAUSE = "repo_env_not_loaded_before_token_read_v1"
 RECOVERY_RECEIPT_NAME = "recovery_receipt.json"
+RECOVERY_CLAIM_NAME = "recovery_claim.json"
 _TIMEOUT_SECONDS = 30.0
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FACET_COUNTS = {"233": 3, "273": 7, "161": 7, "14": 7}
@@ -354,6 +356,7 @@ def preflight_retrieval(
         )
     return {
         "schema_version": PREFLIGHT_SCHEMA_VERSION,
+        "authorization_mode": "normal",
         "experiment_id": EXPERIMENT_ID,
         "endpoint": ENDPOINT,
         "index_id": INDEX_ID,
@@ -464,6 +467,21 @@ def _failed_401_evidence(
     }
 
 
+def _recovery_preflight(
+    normal_preflight: Mapping[str, object],
+    evidence: Mapping[str, object],
+) -> dict[str, object]:
+    payload = dict(normal_preflight)
+    payload["authorization_mode"] = "recovery"
+    payload["recovery_source"] = {
+        "failed_run_dir": evidence["failed_run_dir"],
+        "failed_request_key": evidence["failed_request_key"],
+        "failed_response_sha256": evidence["failed_response_sha256"],
+        "root_cause": RECOVERY_ROOT_CAUSE,
+    }
+    return payload
+
+
 def _recovery_receipt(
     manifest: Mapping[str, object],
     failed_ledger: RetrievalLedger,
@@ -497,6 +515,27 @@ def _recovery_receipt(
     }
 
 
+def _recovery_claim(
+    receipt: Mapping[str, object],
+    preflight: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "schema_version": RECOVERY_CLAIM_SCHEMA_VERSION,
+        "root_cause": RECOVERY_ROOT_CAUSE,
+        "failed_run_dir": receipt["failed_run_dir"],
+        "failed_request_key": receipt["failed_request_key"],
+        "failed_response_sha256": receipt["failed_response_sha256"],
+        "recovery_run_dir": receipt["recovery_run_dir"],
+        "recovery_preflight_sha256": hashlib.sha256(
+            _pretty_json_bytes(preflight)
+        ).hexdigest(),
+        "recovery_receipt_sha256": hashlib.sha256(
+            _pretty_json_bytes(receipt)
+        ).hexdigest(),
+        "authorized_batches": 1,
+    }
+
+
 def create_recovery_preflight(
     manifest: Mapping[str, object],
     failed_ledger: RetrievalLedger,
@@ -515,14 +554,24 @@ def create_recovery_preflight(
     for path in (receipt_path, preflight_path):
         if path.exists():
             raise FileExistsError(f"create-only output already exists: {path}")
+    claim_path = failed_ledger.run_dir / RECOVERY_CLAIM_NAME
+    if claim_path.exists():
+        raise FileExistsError(f"create-only recovery claim already exists: {claim_path}")
     if recovery_ledger.validate_run().planned_requests != 0:
         raise ValueError("recovery output must have no prior retrieval invocation")
-    preflight = preflight_retrieval(
+    normal_preflight = preflight_retrieval(
         manifest,
         recovery_ledger,
         endpoint,
         cache_root=cache_root,
     )
+    evidence = _failed_401_evidence(
+        manifest,
+        failed_ledger,
+        endpoint,
+        cache_root=cache_root,
+    )
+    preflight = _recovery_preflight(normal_preflight, evidence)
     receipt = _recovery_receipt(
         manifest,
         failed_ledger,
@@ -531,8 +580,10 @@ def create_recovery_preflight(
         preflight,
         cache_root=cache_root,
     )
-    # Receipt first: a crash can leave an inert authorization without a runnable
-    # preflight, never an unbound runnable preflight.
+    claim = _recovery_claim(receipt, preflight)
+    # Every crash prefix is inert: consume the source first, then record the
+    # destination receipt, and create the runnable recovery preflight last.
+    _create_json(claim_path, claim)
     _create_json(receipt_path, receipt)
     _create_json(preflight_path, preflight)
     return receipt
@@ -547,14 +598,39 @@ def _validate_recovery_receipt_if_present(
     cache_root: Path,
 ) -> None:
     path = recovery_ledger.run_dir / RECOVERY_RECEIPT_NAME
-    if not path.exists():
+    authorization_mode = preflight.get("authorization_mode")
+    if authorization_mode == "normal":
+        if path.exists():
+            raise ValueError("normal preflight cannot carry a recovery receipt")
         return
+    if authorization_mode != "recovery":
+        raise ValueError("preflight lacks an explicit authorization mode")
+    if not path.is_file():
+        raise ValueError("recovery receipt is required by the recovery preflight")
     stored = _read_json_object(path, "recovery receipt")
-    failed_run_dir = stored.get("failed_run_dir")
+    recovery_source = preflight.get("recovery_source")
+    if not isinstance(recovery_source, Mapping):
+        raise ValueError("recovery preflight lacks its source identity")
+    failed_run_dir = recovery_source.get("failed_run_dir")
     if not isinstance(failed_run_dir, str) or not failed_run_dir:
-        raise ValueError("recovery receipt has no failed run directory")
+        raise ValueError("recovery preflight has no failed run directory")
     failed_ledger = _ledger(Path(failed_run_dir), cache_root=cache_root)
-    expected = _recovery_receipt(
+    normal_preflight = preflight_retrieval(
+        manifest,
+        recovery_ledger,
+        endpoint,
+        cache_root=cache_root,
+    )
+    evidence = _failed_401_evidence(
+        manifest,
+        failed_ledger,
+        endpoint,
+        cache_root=cache_root,
+    )
+    expected_preflight = _recovery_preflight(normal_preflight, evidence)
+    if dict(preflight) != expected_preflight:
+        raise ValueError("recovery preflight differs from immutable source evidence")
+    expected_receipt = _recovery_receipt(
         manifest,
         failed_ledger,
         recovery_ledger,
@@ -562,8 +638,21 @@ def _validate_recovery_receipt_if_present(
         preflight,
         cache_root=cache_root,
     )
-    if stored != expected or path.read_bytes() != _pretty_json_bytes(stored):
+    if (
+        stored != expected_receipt
+        or path.read_bytes() != _pretty_json_bytes(stored)
+    ):
         raise ValueError("recovery receipt differs from immutable failed-run evidence")
+    claim_path = failed_ledger.run_dir / RECOVERY_CLAIM_NAME
+    if not claim_path.is_file():
+        raise ValueError("source recovery claim is required")
+    stored_claim = _read_json_object(claim_path, "source recovery claim")
+    expected_claim = _recovery_claim(expected_receipt, preflight)
+    if (
+        stored_claim != expected_claim
+        or claim_path.read_bytes() != _pretty_json_bytes(stored_claim)
+    ):
+        raise ValueError("source recovery claim differs from authorized destination")
 
 
 def _read_preflight(
@@ -582,12 +671,36 @@ def _read_preflight(
         raise ValueError(f"preflight receipt is unreadable: {path}") from exc
     if not isinstance(stored, dict):
         raise ValueError("preflight receipt must be a JSON object")
-    expected = preflight_retrieval(
+    authorization_mode = stored.get("authorization_mode")
+    if authorization_mode not in {"normal", "recovery"}:
+        raise ValueError("preflight lacks an explicit authorization mode")
+    receipt_path = ledger.run_dir / RECOVERY_RECEIPT_NAME
+    if authorization_mode == "recovery" and not receipt_path.is_file():
+        raise ValueError("recovery receipt is required by the recovery preflight")
+    if authorization_mode == "normal" and receipt_path.exists():
+        raise ValueError("normal preflight cannot carry a recovery receipt")
+    expected: dict[str, object] = preflight_retrieval(
         manifest,
         ledger,
         endpoint,
         cache_root=cache_root,
     )
+    if authorization_mode == "recovery":
+        recovery_source = stored.get("recovery_source")
+        if (
+            not isinstance(recovery_source, Mapping)
+            or set(recovery_source)
+            != {
+                "failed_run_dir",
+                "failed_request_key",
+                "failed_response_sha256",
+                "root_cause",
+            }
+            or recovery_source.get("root_cause") != RECOVERY_ROOT_CAUSE
+        ):
+            raise ValueError("recovery preflight has an invalid source identity")
+        expected["authorization_mode"] = "recovery"
+        expected["recovery_source"] = dict(recovery_source)
     if stored != expected:
         raise ValueError("stored preflight no longer matches the exact retrieval plan")
     return stored, path

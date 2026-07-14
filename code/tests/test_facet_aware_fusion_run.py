@@ -312,6 +312,7 @@ def test_preflight_is_qrels_blind_and_does_not_reserve_calls(tmp_path):
     payload = preflight_retrieval(_manifest(), ledger, ENDPOINT)
 
     assert payload["planned_requests"] == 24
+    assert payload["authorization_mode"] == "normal"
     assert payload["minimum_start_span_seconds"] == 69.0
     assert payload["qrels_opened"] is False
     assert payload["projected_external_attempts"] == 24
@@ -459,7 +460,10 @@ def test_run_cli_loads_repo_env_before_token_and_never_logs_it(
     monkeypatch.setattr(
         module,
         "_read_preflight",
-        lambda payload, run_ledger, endpoint, *, cache_root: ({}, output / "preflight.json"),
+        lambda payload, run_ledger, endpoint, *, cache_root: (
+            {"authorization_mode": "normal"},
+            output / "preflight.json",
+        ),
     )
     requests = build_requests(_manifest(), ENDPOINT)
     monkeypatch.setattr(
@@ -561,6 +565,16 @@ def test_recovery_preflight_binds_401_and_old_run_cannot_replay(tmp_path):
     assert receipt["failed_run_replay_allowed"] is False
     assert (recovery.run_dir / "recovery_receipt.json").is_file()
     assert (recovery.run_dir / "preflight.json").is_file()
+    recovery_preflight = json.loads(
+        (recovery.run_dir / "preflight.json").read_text(encoding="utf-8")
+    )
+    assert recovery_preflight["authorization_mode"] == "recovery"
+    assert recovery_preflight["recovery_source"] == {
+        "failed_run_dir": str(failed.run_dir.resolve()),
+        "failed_request_key": receipt["failed_request_key"],
+        "failed_response_sha256": receipt["failed_response_sha256"],
+        "root_cause": receipt["root_cause"],
+    }
 
     old_calls = []
     with pytest.raises(ValueError, match="24-call global budget|stored preflight"):
@@ -607,6 +621,106 @@ def test_recovery_receipt_tampering_stops_before_transport(tmp_path):
         )
 
     assert calls == []
+
+
+def test_deleted_recovery_receipt_fails_before_cli_session_factory(
+    tmp_path,
+    monkeypatch,
+):
+    manifest = _manifest()
+    failed = _failed_401_run(tmp_path, manifest)
+    recovery = RetrievalLedger(
+        tmp_path / "recovery",
+        max_calls=MAX_EXTERNAL_REQUESTS,
+        max_calls_per_topic=7,
+        min_results=50,
+        required_text_results=50,
+    )
+    module.create_recovery_preflight(
+        manifest,
+        failed,
+        recovery,
+        ENDPOINT,
+        cache_root=tmp_path / "cache",
+    )
+    (recovery.run_dir / "recovery_receipt.json").unlink()
+    session_builds = []
+    monkeypatch.setattr(module, "find_repo_root", lambda start: tmp_path)
+    monkeypatch.setattr(module, "load_repo_env", lambda root: None)
+    monkeypatch.setattr(
+        module,
+        "load_manifest",
+        lambda path, *, cache_root: manifest,
+    )
+    monkeypatch.setattr(
+        module,
+        "_ledger",
+        lambda output, *, cache_root: recovery,
+    )
+
+    def hostile_session_factory(config, requests):
+        session_builds.append((config, requests))
+        raise AssertionError("session factory must remain untouched")
+
+    monkeypatch.setattr(module, "RateLimitedFacetTransport", hostile_session_factory)
+
+    with pytest.raises(ValueError, match="recovery receipt.*required"):
+        main(
+            [
+                "run",
+                "--manifest",
+                str(tmp_path / "manifest.json"),
+                "--output",
+                str(recovery.run_dir),
+                "--cache-root",
+                str(tmp_path / "cache"),
+            ]
+        )
+
+    assert session_builds == []
+
+
+def test_failed_ledger_claim_binds_first_recovery_artifacts(tmp_path):
+    manifest = _manifest()
+    failed = _failed_401_run(tmp_path, manifest)
+    recovery = _ledger(tmp_path / "authorized")
+
+    module.create_recovery_preflight(manifest, failed, recovery, ENDPOINT)
+
+    claim_path = failed.run_dir / "recovery_claim.json"
+    assert claim_path.is_file()
+    claim = json.loads(claim_path.read_text(encoding="utf-8"))
+    assert claim["recovery_run_dir"] == str(recovery.run_dir.resolve())
+    assert claim["recovery_preflight_sha256"] == hashlib.sha256(
+        (recovery.run_dir / "preflight.json").read_bytes()
+    ).hexdigest()
+    assert claim["recovery_receipt_sha256"] == hashlib.sha256(
+        (recovery.run_dir / "recovery_receipt.json").read_bytes()
+    ).hexdigest()
+
+
+def test_failed_ledger_can_issue_only_one_recovery_destination(tmp_path):
+    manifest = _manifest()
+    failed = _failed_401_run(tmp_path, manifest)
+    first_recovery = _ledger(tmp_path / "first")
+    second_recovery = _ledger(tmp_path / "second")
+    module.create_recovery_preflight(
+        manifest,
+        failed,
+        first_recovery,
+        ENDPOINT,
+    )
+
+    with pytest.raises(FileExistsError, match="recovery_claim.json"):
+        module.create_recovery_preflight(
+            manifest,
+            failed,
+            second_recovery,
+            ENDPOINT,
+        )
+
+    assert not (second_recovery.run_dir / "recovery_receipt.json").exists()
+    assert not (second_recovery.run_dir / "preflight.json").exists()
 
 
 def test_recovery_preflight_cli_requires_separate_failed_output(tmp_path):
