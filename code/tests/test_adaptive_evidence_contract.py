@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from trec_rag.adaptive_evidence_contract import (
+    _load_cli_sources,
     build_contract,
     canonical_sha256,
     document_fold,
@@ -84,6 +85,71 @@ def test_contract_rejects_a_protected_accepted_facet() -> None:
     manifest["facets"][0]["topic_id"] = "144"  # type: ignore[index]
     with pytest.raises(ValueError, match="protected topic 144"):
         build_contract(manifest, _gates(), _rows(), expected_population=1, expected_o0=1)
+
+
+def test_contract_preflights_protected_facet_metadata_before_gate_access() -> None:
+    accesses: list[str] = []
+
+    class RecordingGates(dict[str, object]):
+        def __getitem__(self, key: str) -> object:
+            accesses.append(f"gates:item:{key}")
+            return super().__getitem__(key)
+
+    manifest = _manifest()
+    manifest["facets"][0]["topic_id"] = "144"  # type: ignore[index]
+    with pytest.raises(ValueError, match="protected topic 144"):
+        build_contract(
+            manifest,
+            RecordingGates(_gates()),
+            _rows(),
+            expected_population=1,
+            expected_o0=1,
+        )
+
+    assert accesses == []
+
+
+def test_contract_preflights_protected_metadata_before_gate_union_or_join_access() -> None:
+    accesses: list[str] = []
+
+    class RecordingDict(dict[str, object]):
+        def __init__(self, label: str, value: dict[str, object]) -> None:
+            super().__init__(value)
+            self.label = label
+
+        def get(self, key: str, default: object = None) -> object:
+            accesses.append(f"{self.label}:get:{key}")
+            return super().get(key, default)
+
+        def __getitem__(self, key: str) -> object:
+            accesses.append(f"{self.label}:item:{key}")
+            return super().__getitem__(key)
+
+    class RecordingRows(list[dict[str, object]]):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            accesses.append("union:iter")
+            return super().__iter__()
+
+    manifest = RecordingDict(
+        "manifest",
+        {
+            "topic_ids": ["144"],
+            "topics": [{"topic_id": "144", "query": "forbidden"}],
+            "facets": [],
+        },
+    )
+    gates = RecordingDict("gates", {"gates": []})
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        build_contract(
+            manifest,
+            gates,
+            RecordingRows(),
+            expected_population=0,
+            expected_o0=0,
+        )
+
+    assert accesses == ["manifest:get:topic_ids"]
 
 
 def test_contract_rejects_accepted_gate_id_missing_from_manifest() -> None:
@@ -226,6 +292,33 @@ def test_create_cli_rejects_protected_manifest_before_other_source_access(
                 "--output", str(tmp_path / "contract"),
             ]
         )
+
+
+def test_cli_protected_metadata_prevents_gate_union_and_join_loader_calls() -> None:
+    accesses: list[str] = []
+
+    def record(label: str, result: object):
+        def loader() -> object:
+            accesses.append(label)
+            return result
+
+        return loader
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        _load_cli_sources(
+            manifest_topic_ids_loader=record(
+                "manifest_metadata",
+                (
+                    ["144", "72", "300", "84"],
+                    ["144", "72", "300", "84"],
+                ),
+            ),
+            manifest_loader=record("manifest_join", ({}, b"")),
+            gates_loader=record("gates", ({}, b"")),
+            union_loader=record("union", ([], b"")),
+        )
+
+    assert accesses == ["manifest_metadata"]
 
 
 def test_create_cli_rejects_any_declared_nonpilot_topic_set_before_gate_access(

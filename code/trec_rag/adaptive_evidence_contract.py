@@ -45,6 +45,27 @@ def render_obligation_query(narrative: str, obligation: str) -> str:
     return f"{narrative}\n\nExplicit obligation:\n{obligation}"
 
 
+def _preflight_manifest_topic_ids(manifest: Mapping[str, object]) -> list[str]:
+    declared = manifest.get("topic_ids")
+    if declared is not None:
+        if not isinstance(declared, list):
+            raise ValueError("manifest topic_ids must be a JSON array")
+        reject_protected_before_access((str(value) for value in declared), lambda: None)
+
+    topic_rows = manifest.get("topics")
+    if not isinstance(topic_rows, list):
+        raise ValueError("manifest topics must be a JSON array")
+    topic_ids = [str(row["topic_id"]) for row in topic_rows]
+    reject_protected_before_access(topic_ids, lambda: None)
+
+    facet_rows = manifest.get("facets")
+    if not isinstance(facet_rows, list):
+        raise ValueError("manifest facets must be a JSON array")
+    facet_topic_ids = [str(row["topic_id"]) for row in facet_rows]
+    reject_protected_before_access(facet_topic_ids, lambda: None)
+    return topic_ids
+
+
 def build_contract(
     manifest: Mapping[str, object],
     gates: Mapping[str, object],
@@ -53,6 +74,7 @@ def build_contract(
     expected_population: int = 8114,
     expected_o0: int = 24,
 ) -> dict[str, object]:
+    _preflight_manifest_topic_ids(manifest)
     topics = {str(row["topic_id"]): row for row in manifest["topics"]}  # type: ignore[index]
     accepted = {
         str(row["facet_id"])
@@ -159,6 +181,23 @@ def _load_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
     return payload, raw
 
 
+def _load_manifest_topic_metadata(path: Path) -> tuple[list[str], list[str]]:
+    payload, _ = _load_json(path, "manifest topic metadata")
+    topics = payload.get("topics")
+    if not isinstance(topics, list):
+        raise ValueError("manifest topics must be a JSON array")
+    record_topic_ids = [str(row["topic_id"]) for row in topics]
+
+    declared = payload.get("topic_ids")
+    if declared is None:
+        declared_topic_ids = list(record_topic_ids)
+    elif isinstance(declared, list):
+        declared_topic_ids = [str(topic_id) for topic_id in declared]
+    else:
+        raise ValueError("manifest topic_ids must be a JSON array")
+    return declared_topic_ids, record_topic_ids
+
+
 def _manifest_topic_ids(manifest: Mapping[str, object]) -> list[str]:
     declared = manifest.get("topic_ids")
     if isinstance(declared, list):
@@ -194,6 +233,49 @@ def _manifest_topic_ids(manifest: Mapping[str, object]) -> list[str]:
     if not set(facet_topic_ids).issubset(PILOT_TOPIC_IDS):
         raise ValueError("manifest facets contain a non-pilot topic")
     return topic_ids
+
+
+def _load_cli_sources(
+    *,
+    manifest_topic_ids_loader: Callable[[], tuple[Sequence[str], Sequence[str]]],
+    manifest_loader: Callable[[], tuple[dict[str, object], bytes]],
+    gates_loader: Callable[[], tuple[dict[str, object], bytes]],
+    union_loader: Callable[[], tuple[list[dict[str, object]], bytes]],
+) -> tuple[
+    dict[str, object],
+    bytes,
+    dict[str, object],
+    bytes,
+    list[dict[str, object]],
+    bytes,
+]:
+    declared_topic_ids, record_topic_ids = manifest_topic_ids_loader()
+    for topic_ids in (declared_topic_ids, record_topic_ids):
+        reject_protected_before_access(topic_ids, lambda: None)
+        if len(topic_ids) != len(PILOT_TOPIC_IDS) or set(topic_ids) != set(
+            PILOT_TOPIC_IDS
+        ):
+            raise ValueError(
+                "manifest topic set must contain exactly the four pilot topics "
+                f"{list(PILOT_TOPIC_IDS)}"
+            )
+
+    manifest, manifest_raw = manifest_loader()
+    _manifest_topic_ids(manifest)
+
+    gates, gates_raw = gates_loader()
+    gate_rows = gates.get("gates")
+    if not isinstance(gate_rows, list):
+        raise ValueError("gate records must be a JSON array")
+    gate_topic_ids = [
+        str(row["topic_id"]) for row in gate_rows if "topic_id" in row
+    ]
+    reject_protected_before_access(gate_topic_ids, lambda: None)
+    if not set(gate_topic_ids).issubset(PILOT_TOPIC_IDS):
+        raise ValueError("gate records contain a non-pilot topic")
+
+    union_rows, union_raw = union_loader()
+    return manifest, manifest_raw, gates, gates_raw, union_rows, union_raw
 
 
 def _load_union(path: Path) -> tuple[list[dict[str, object]], bytes]:
@@ -313,23 +395,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output.exists():
         raise FileExistsError(f"contract output already exists: {args.output}")
 
-    manifest, manifest_raw = reject_protected_before_access(
-        PILOT_TOPIC_IDS, lambda: _load_json(args.manifest, "source manifest")
+    (
+        manifest,
+        manifest_raw,
+        gates,
+        gates_raw,
+        union_rows,
+        union_raw,
+    ) = _load_cli_sources(
+        manifest_topic_ids_loader=lambda: _load_manifest_topic_metadata(args.manifest),
+        manifest_loader=lambda: _load_json(args.manifest, "source manifest"),
+        gates_loader=lambda: _load_json(args.gates, "gate"),
+        union_loader=lambda: _load_union(args.union),
     )
-    _manifest_topic_ids(manifest)
-
-    gates, gates_raw = _load_json(args.gates, "gate")
-    gate_rows = gates.get("gates")
-    if not isinstance(gate_rows, list):
-        raise ValueError("gate records must be a JSON array")
-    gate_topic_ids = [
-        str(row["topic_id"]) for row in gate_rows if "topic_id" in row
-    ]
-    reject_protected_before_access(gate_topic_ids, lambda: None)
-    if not set(gate_topic_ids).issubset(PILOT_TOPIC_IDS):
-        raise ValueError("gate records contain a non-pilot topic")
-
-    union_rows, union_raw = _load_union(args.union)
     contract = build_contract(manifest, gates, union_rows)
     summary = _create_contract_files(
         contract,
