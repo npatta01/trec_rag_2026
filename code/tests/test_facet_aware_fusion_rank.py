@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 import trec_rag.facet_aware_fusion_rank as module
+import trec_rag.facet_local_minilm_preflight as preflight_module
+from trec_rag.facet_local_minilm_score import load_scoring_inputs
 from trec_rag.facet_aware_fusion_rank import (
     ARM_NAMES,
     FacetStream,
@@ -433,41 +435,535 @@ def test_cli_requires_and_forwards_explicit_original_cache_root(
         )
 
 
-def test_freeze_refuses_uncached_work_without_implicit_model_inference(
+def test_cli_exposes_approval_gated_scoring_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_scoring(**kwargs: object) -> dict[str, object]:
+        observed.update(kwargs)
+        return {"status": "complete", "qrels_opened": False}
+
+    monkeypatch.setattr(module, "run_rank_scoring", fake_scoring)
+    assert module.main(
+        [
+            "score",
+            "--preflight",
+            str(tmp_path / "preflight.json"),
+            "--approval",
+            str(tmp_path / "approval.json"),
+            "--approval-sha256",
+            "2" * 64,
+            "--score-cache",
+            str(tmp_path / "cache"),
+            "--output",
+            str(tmp_path / "scoring"),
+        ]
+    ) == 0
+
+    assert observed["preflight_path"] == tmp_path / "preflight.json"
+    assert observed["approval_path"] == tmp_path / "approval.json"
+    assert observed["approval_sha256"] == "2" * 64
+    assert observed["output_dir"] == tmp_path / "scoring"
+    assert json.loads(capsys.readouterr().out)["status"] == "complete"
+
+
+def test_freeze_consumes_authenticated_scoring_handoff_without_inference(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    class FakeCache:
-        scores: dict[str, float] = {}
-
-        def __init__(self, _root: Path, _context: object) -> None:
-            pass
-
-    class FakePlan:
-        windows = (object(),)
-        summary = {"unique_uncached_pair_count": 1}
-
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    manifest = {"topic_ids": ["233"], "topics": [], "facets": []}
+    candidate = {
+        "topic_id": "233",
+        "family": "facet",
+        "variant": "233-positive",
+        "document_id": "raw",
+        "rank": 1,
+    }
     monkeypatch.setattr(
         module,
         "_load_rank_inputs",
         lambda **_kwargs: (
-            {"topic_ids": ["233"], "topics": [], "facets": []},
-            tuple(),
+            manifest,
+            (candidate,),
             {"candidates_sha256": "1" * 64},
         ),
     )
-    monkeypatch.setattr(module, "load_verified_tokenizer", lambda _path: object())
-    monkeypatch.setattr(module, "GlobalScoreCache", FakeCache)
+    handoff = module.RankScoringHandoff(
+        scored_windows=({"cache_key": "one", "score": 0.5},),
+        score_rows=({"cache_key": "one", "score": 0.5},),
+        preflight={
+            "manifest_sha256": manifest_sha256,
+            "task3_retrieval_candidates_sha256": "1" * 64,
+            "task3_topic_ids": ["233"],
+            "qrels_opened": False,
+            "windows_sha256": "3" * 64,
+            "model_materialization_receipt_sha256": "4" * 64,
+        },
+        preflight_sha256="2" * 64,
+        scoring_receipt={},
+        scoring_receipt_sha256="5" * 64,
+        ledger_sha256="6" * 64,
+    )
+    monkeypatch.setattr(module, "load_rank_scoring_handoff", lambda *_args: handoff)
+    original = {"topic_id": "233", "family": "original", "document_id": "o", "rank": 1}
+    facet_rank = {
+        "topic_id": "233",
+        "family": "facet",
+        "facet_id": "233-positive",
+        "variant": "233-positive",
+        "document_id": "f",
+        "rank": 1,
+        "accepted": True,
+        "manifest_order": 0,
+    }
+    monkeypatch.setattr(module, "_original_rank_rows", lambda *_args: [original])
     monkeypatch.setattr(
         module,
-        "build_scoring_preflight",
-        lambda _candidates, _tokenizer, _cache: FakePlan(),
+        "_scored_facet_rank_rows",
+        lambda *_args: ([facet_rank], []),
+    )
+    observed: dict[str, object] = {}
+
+    def fake_freeze(output: Path, **kwargs: object) -> dict[str, object]:
+        observed.update({"output": output, **kwargs})
+        return {"complete": True}
+
+    monkeypatch.setattr(module, "create_ranking_freeze", fake_freeze)
+
+    result = module.run_rank_freeze(
+        manifest_path=manifest_path,
+        retrieval_dir=tmp_path / "retrieval",
+        cache_root=tmp_path / "original-cache",
+        preflight_path=tmp_path / "preflight.json",
+        scoring_dir=tmp_path / "scoring",
+        output_dir=tmp_path / "freeze",
     )
 
-    with pytest.raises(ValueError, match="cache misses.*separate approval-gated"):
-        module.run_rank_freeze(
-            manifest_path=tmp_path / "manifest.json",
-            retrieval_dir=tmp_path / "retrieval",
-            cache_root=tmp_path / "original-cache",
-            output_dir=tmp_path / "freeze",
+    assert result == {"complete": True}
+    assert observed["score_rows"] == handoff.score_rows
+    provenance = observed["candidate_provenance"]
+    assert isinstance(provenance, list)
+    assert {row["provenance_stage"] for row in provenance} == {
+        "original_rank",
+        "task2_retrieval",
+        "facet_minilm_rank",
+    }
+
+
+class _WordTokenizer:
+    def encode(self, text, *, add_special_tokens=False, truncation=False):
+        assert add_special_tokens is False
+        assert truncation is False
+        return text.split()
+
+    def decode(
+        self,
+        token_ids,
+        *,
+        skip_special_tokens=False,
+        clean_up_tokenization_spaces=False,
+    ):
+        assert skip_special_tokens is False
+        assert clean_up_tokenization_spaces is False
+        return " ".join(token_ids)
+
+    def num_special_tokens_to_add(self, *, pair):
+        assert pair is True
+        return 3
+
+
+def _synthetic_materialization_receipt(tmp_path: Path) -> Path:
+    approval = {
+        "schema_version": "facet-local-minilm-model-download-approval-v1",
+        "approval_scope": "facet_local_minilm_model_materialization_v1",
+        "approved_by": "test",
+        "model_id": preflight_module.MODEL_ID,
+        "revision": preflight_module.MODEL_REVISION,
+        "allow_patterns": list(preflight_module.ALLOW_PATTERNS),
+        "allow_patterns_sha256": preflight_module.approval_allow_patterns_sha256(),
+        "acknowledged_network_download": True,
+        "acknowledged_safe_files_only": True,
+        "acknowledged_no_model_or_tokenizer_construction": True,
+        "acknowledged_no_inference_qrels_retrieval_or_paid_calls": True,
+    }
+    approval_path = tmp_path / "model-approval.json"
+    _write_canonical_json(approval_path, approval)
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    for index, relative in enumerate(preflight_module.ALLOW_PATTERNS, start=1):
+        path = snapshot / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"safe-file-{index}\n".encode())
+    output = tmp_path / "model-v1"
+    preflight_module.materialize_model(
+        model_id=preflight_module.MODEL_ID,
+        revision=preflight_module.MODEL_REVISION,
+        approval_path=approval_path,
+        output_dir=output,
+        snapshot_download_fn=lambda **_kwargs: str(snapshot),
+    )
+    return output / "materialization.json"
+
+
+def test_cache_miss_preflight_persists_existing_scorer_compatible_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query = "teenager social media mental health"
+    text = " ".join(f"token-{index}" for index in range(600))
+    candidate = {
+        "topic_id": "233",
+        "family": "facet",
+        "variant": "233-positive",
+        "query": query,
+        "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "rank": 1,
+        "document_id": "doc-1",
+        "text": text,
+        "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+    }
+    score_cache_root = tmp_path / "score-cache"
+    context = module.score_cache_context()
+    cache = module.GlobalScoreCache(score_cache_root, context)
+    plan = module.build_scoring_preflight([candidate], _WordTokenizer(), cache)
+    assert plan.summary["unique_uncached_pair_count"] > 0
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    output = tmp_path / "preflight"
+    materialization_receipt = _synthetic_materialization_receipt(tmp_path)
+
+    payload = module.persist_rank_preflight(
+        output,
+        plan=plan,
+        manifest_path=manifest_path,
+        retrieval_candidates_sha256="1" * 64,
+        materialization_receipt_path=materialization_receipt,
+        score_cache_root=score_cache_root,
+        tokenizer_class="_WordTokenizer",
+        topic_ids=["233"],
+    )
+
+    inputs = load_scoring_inputs(output / "preflight.json")
+    assert payload["windows_sha256"] == inputs.windows_sha256
+    assert inputs.benchmark["uncached_pair_count"] > 0
+    assert len(inputs.windows) == payload["summary"]["window_count"]
+
+    observed: dict[str, object] = {}
+
+    def fake_scorer(preflight, approval, **kwargs):
+        observed.update(
+            {"preflight": preflight, "approval": approval, **kwargs}
         )
+        return tuple(object() for _ in inputs.windows)
+
+    monkeypatch.setattr(module, "run_rocm_scoring", fake_scorer)
+    scoring_output = tmp_path / "scoring"
+    result = module.run_rank_scoring(
+        preflight_path=output / "preflight.json",
+        approval_path=tmp_path / "approval.json",
+        approval_sha256="2" * 64,
+        output_dir=scoring_output,
+        score_cache_root=score_cache_root,
+    )
+    assert result["score_row_count"] == len(inputs.windows)
+    assert observed["preflight"] == output / "preflight.json"
+    assert observed["score_cache_root"] == score_cache_root
+
+    scoring_output.mkdir()
+    planned_rows = []
+    reservation_hashes = []
+    ledger_rows = []
+    output_hashes = []
+    unique_outputs = {}
+    for index, window in enumerate(inputs.windows):
+        reservation_payload = {
+            "sequence_index": index,
+            "topic_id": window.topic_id,
+            "family": window.family,
+            "variant": window.variant,
+            "rank": window.rank,
+            "document_id": window.document_id,
+            "window_id": window.window_id,
+            "cache_key": window.cache_key,
+        }
+        reservation_sha256 = hashlib.sha256(
+            module._compact_json_bytes(reservation_payload)
+        ).hexdigest()
+        planned_rows.append(
+            {**reservation_payload, "reservation_sha256": reservation_sha256}
+        )
+        reservation_hashes.append(reservation_sha256)
+        raw_output_sha256 = hashlib.sha256(
+            module._compact_json_bytes(
+                {
+                    "cache_key": window.cache_key,
+                    "inference_dtype": "float32",
+                    "score_representation": "raw_logits",
+                    "raw_float32_be_sha256": hashlib.sha256(
+                        module.struct.pack(">f", 0.5)
+                    ).hexdigest(),
+                }
+            )
+        ).hexdigest()
+        output_sha256 = hashlib.sha256(
+            module._compact_json_bytes(
+                {
+                    "reservation_sha256": reservation_sha256,
+                    "disposition": "forward_pass",
+                    "raw_output_sha256": raw_output_sha256,
+                }
+            )
+        ).hexdigest()
+        ledger_rows.append(
+            {
+            "schema_version": "facet-local-minilm-score-row-v2",
+            "topic_id": window.topic_id,
+            "family": window.family,
+            "variant": window.variant,
+            "rank": window.rank,
+            "document_id": window.document_id,
+            "window_id": window.window_id,
+            "query_sha256": window.query_sha256,
+            "window_sha256": window.window_sha256,
+            "cache_key": window.cache_key,
+            "reservation_sha256": reservation_sha256,
+            "disposition": "forward_pass",
+            "score": 0.5,
+            "elapsed_seconds": 0.01,
+            "peak_device_memory_bytes": 0,
+            "peak_host_memory_bytes": 0,
+            "model": module.MODEL_ID,
+            "model_revision": module.MODEL_REVISION,
+            "score_representation": "raw_logits",
+            "inference_dtype": "float32",
+            "raw_output_sha256": raw_output_sha256,
+            "output_sha256": output_sha256,
+            }
+        )
+        output_hashes.append(output_sha256)
+        unique_outputs[window.cache_key] = raw_output_sha256
+    planned_bytes = b"".join(
+        module._canonical_json_bytes(row, pretty=False) for row in planned_rows
+    )
+    (scoring_output / "planned_reservations.jsonl").write_bytes(planned_bytes)
+    reservation_root = hashlib.sha256(
+        b"".join((value + "\n").encode() for value in reservation_hashes)
+    ).hexdigest()
+    run_id = "synthetic-task3"
+    approval_sha256 = "2" * 64
+    _write_canonical_json(
+        scoring_output / "run_reservation.json",
+        {
+            "schema_version": "facet-local-minilm-run-reservation-v1",
+            "status": "reserved",
+            "action": "full_scoring",
+            "run_id": run_id,
+            "output_path": str(scoring_output.resolve()),
+            "approval_sha256": approval_sha256,
+            "preflight_sha256": inputs.preflight_sha256,
+            "windows_sha256": inputs.windows_sha256,
+            "model_materialization_receipt_sha256": inputs.materialization_receipt_sha256,
+            "benchmark_sample_sha256": inputs.benchmark["sample_sha256"],
+            "planned_row_count": len(planned_rows),
+            "planned_reservations_bytes": len(planned_bytes),
+            "planned_reservations_sha256": hashlib.sha256(planned_bytes).hexdigest(),
+            "reservation_sequence_root_sha256": reservation_root,
+        }
+    )
+    ledger_bytes = b"".join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+        for row in ledger_rows
+    )
+    (scoring_output / "scoring_ledger.jsonl").write_bytes(ledger_bytes)
+    receipt = {
+        "schema_version": "facet-local-minilm-scoring-receipt-v2",
+        "status": "complete",
+        "preflight_sha256": inputs.preflight_sha256,
+        "windows_sha256": inputs.windows_sha256,
+        "model_materialization_receipt_sha256": inputs.materialization_receipt_sha256,
+        "full_inference_approval_sha256": approval_sha256,
+        "full_inference_request_sha256": "3" * 64,
+        "score_cache_path": str(inputs.score_cache_path),
+        "cache_before_sha256": None,
+        "cache_after_sha256": "4" * 64,
+        "cache_before_bytes": 0,
+        "cache_after_bytes": 1,
+        "cache_before_count": 0,
+        "cache_after_count": len(unique_outputs),
+        "planned_window_count": len(inputs.windows),
+        "completed_window_count": len(inputs.windows),
+        "cache_hit_count": 0,
+        "forward_pass_count": len(inputs.windows),
+        "same_run_reuse_count": 0,
+        "unique_score_count": len(unique_outputs),
+        "failed_window_count": 0,
+        "pending_window_count": 0,
+        "reservation_sequence_root_sha256": reservation_root,
+        "ledger_bytes": len(ledger_bytes),
+        "ledger_sha256": hashlib.sha256(ledger_bytes).hexdigest(),
+        "ledger_sequence_root_sha256": hashlib.sha256(
+            b"".join((value + "\n").encode() for value in output_hashes)
+        ).hexdigest(),
+        "unique_score_root_sha256": hashlib.sha256(
+            b"".join(
+                f"{key}:{unique_outputs[key]}\n".encode()
+                for key in sorted(unique_outputs)
+            )
+        ).hexdigest(),
+        "score_representation": "raw_logits",
+        "inference_dtype": "float32",
+        "model": module.MODEL_ID,
+        "model_revision": module.MODEL_REVISION,
+    }
+    receipt_bytes = (
+        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    (scoring_output / "scoring_receipt.json").write_bytes(receipt_bytes)
+    _write_canonical_json(
+        scoring_output / "run_terminal.json",
+        {
+            "schema_version": "facet-local-minilm-run-terminal-v1",
+            "status": "complete",
+            "action": "full_scoring",
+            "run_id": run_id,
+            "approval_sha256": approval_sha256,
+            "output_path": str(scoring_output.resolve()),
+            "scoring_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+            "cache_after_sha256": "4" * 64,
+        },
+    )
+
+    handoff = module.load_rank_scoring_handoff(
+        output / "preflight.json", scoring_output
+    )
+    assert len(handoff.scored_windows) == len(inputs.windows)
+    assert handoff.scored_windows[0]["score"] == 0.5
+    assert handoff.scoring_receipt_sha256 == hashlib.sha256(receipt_bytes).hexdigest()
+
+    terminal_path = scoring_output / "run_terminal.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    terminal["scoring_receipt_sha256"] = "0" * 64
+    _write_canonical_json(terminal_path, terminal)
+    with pytest.raises(ValueError, match="terminal receipt binding"):
+        module.load_rank_scoring_handoff(output / "preflight.json", scoring_output)
+
+
+def test_ranking_freeze_atomic_publish_preserves_raced_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    frozen_rows: list[dict[str, object]],
+) -> None:
+    output = tmp_path / "freeze"
+    real_publish = module._publish_directory_noreplace
+    raced: dict[str, int] = {}
+
+    def race(stage: Path, destination: Path) -> None:
+        destination.mkdir(mode=0o711)
+        raced["inode"] = destination.stat().st_ino
+        real_publish(stage, destination)
+
+    monkeypatch.setattr(module, "_publish_directory_noreplace", race)
+    with pytest.raises(FileExistsError):
+        create_ranking_freeze(
+            output,
+            frozen_rows=frozen_rows,
+            gates=[],
+            score_rows=[],
+            candidate_provenance=frozen_rows,
+            input_hashes={"manifest_sha256": "0" * 64},
+        )
+
+    assert output.is_dir()
+    assert list(output.iterdir()) == []
+    assert output.stat().st_ino == raced["inode"]
+    assert list(tmp_path.glob(".freeze.*")) == []
+
+
+def _write_canonical_json(path: Path, value: object) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_freeze_requires_exact_artifact_set_including_hash_manifest(
+    tmp_path: Path,
+    frozen_rows: list[dict[str, object]],
+) -> None:
+    output = tmp_path / "freeze"
+    create_ranking_freeze(
+        output,
+        frozen_rows=frozen_rows,
+        gates=[],
+        score_rows=[],
+        candidate_provenance=frozen_rows,
+        input_hashes={"manifest_sha256": "0" * 64},
+    )
+    freeze_path = output / "freeze.json"
+    freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+    assert "hashes.json" in freeze["artifacts"]
+
+    freeze["artifacts"].pop("scores.jsonl")
+    _write_canonical_json(freeze_path, freeze)
+    with pytest.raises(ValueError, match="exact artifact set"):
+        verify_ranking_freeze(output)
+
+
+def test_freeze_verifier_recomputes_declared_artifact_row_counts(
+    tmp_path: Path,
+    frozen_rows: list[dict[str, object]],
+) -> None:
+    output = tmp_path / "freeze"
+    create_ranking_freeze(
+        output,
+        frozen_rows=frozen_rows,
+        gates=[],
+        score_rows=[{"cache_key": "one", "score": 0.5}],
+        candidate_provenance=frozen_rows,
+        input_hashes={"manifest_sha256": "0" * 64},
+    )
+    freeze_path = output / "freeze.json"
+    freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+    freeze["artifacts"]["scores.jsonl"]["rows"] = 2
+    _write_canonical_json(freeze_path, freeze)
+
+    with pytest.raises(ValueError, match="row count"):
+        verify_ranking_freeze(output)
+
+
+def test_freeze_verifier_authenticates_hash_manifest_contents(
+    tmp_path: Path,
+    frozen_rows: list[dict[str, object]],
+) -> None:
+    output = tmp_path / "freeze"
+    create_ranking_freeze(
+        output,
+        frozen_rows=frozen_rows,
+        gates=[],
+        score_rows=[],
+        candidate_provenance=frozen_rows,
+        input_hashes={"manifest_sha256": "0" * 64},
+    )
+    hashes_path = output / "hashes.json"
+    hashes = json.loads(hashes_path.read_text(encoding="utf-8"))
+    hashes["artifacts"].pop("scores.jsonl")
+    _write_canonical_json(hashes_path, hashes)
+    hashes_source = hashes_path.read_bytes()
+
+    freeze_path = output / "freeze.json"
+    freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+    freeze["artifacts"]["hashes.json"] = {
+        "bytes": len(hashes_source),
+        "sha256": hashlib.sha256(hashes_source).hexdigest(),
+    }
+    _write_canonical_json(freeze_path, freeze)
+
+    with pytest.raises(ValueError, match="hash manifest authentication"):
+        verify_ranking_freeze(output)

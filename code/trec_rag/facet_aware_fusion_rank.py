@@ -10,12 +10,15 @@ arms whose cross-stream inputs are ranks rather than raw scores.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import math
 import hashlib
 import json
 import os
 import re
 import shutil
+import struct
 import tempfile
 import unicodedata
 from collections import defaultdict
@@ -27,13 +30,25 @@ from .facet_local_minilm_preflight import (
     build_preflight as build_scoring_preflight,
 )
 from .facet_local_minilm_preflight import (
+    MAX_WINDOWS_PER_DOCUMENT,
+    MIN_PASSAGE_TOKENS,
     MODEL_ID,
     MODEL_REVISION,
+    PAIR_MAX_TOKENS,
+    PASSAGE_OVERLAP_TOKENS,
+    PREFLIGHT_SCHEMA_VERSION,
+    QUERY_MAX_TOKENS,
+    WINDOW_POLICY_VERSION,
+    _score_cache_file_binding as _preflight_score_cache_file_binding,
+    load_verified_materialization,
     load_verified_tokenizer,
     score_cache_context,
 )
 from .facet_local_minilm_rank import aggregate_top4
-from .facet_local_minilm_score import run_full_scoring as run_rocm_scoring
+from .facet_local_minilm_score import (
+    load_scoring_inputs,
+    run_full_scoring as run_rocm_scoring,
+)
 from .rerank_score_cache import GlobalScoreCache
 
 
@@ -101,6 +116,19 @@ class FacetStream:
     accepted: bool
     topic_id: str = ""
     gate: GateDecision | None = None
+
+
+@dataclass(frozen=True)
+class RankScoringHandoff:
+    """Authenticated Task 3 scorer output consumed by the rank freeze."""
+
+    scored_windows: tuple[dict[str, object], ...]
+    score_rows: tuple[dict[str, object], ...]
+    preflight: dict[str, object]
+    preflight_sha256: str
+    scoring_receipt: dict[str, object]
+    scoring_receipt_sha256: str
+    ledger_sha256: str
 
 
 def _value(row: Mapping[str, object] | object, field: str, default: object = None) -> object:
@@ -454,7 +482,7 @@ def run_rank_preflight(
     model_receipt: Path = _DEFAULT_MODEL_RECEIPT,
     score_cache_root: Path = _DEFAULT_SCORE_CACHE_ROOT,
 ) -> dict[str, object]:
-    """Compute exact local tokenizer/window/cache work without writing or inference."""
+    """Persist exact tokenizer/window/cache work without model inference."""
 
     destination = Path(output_dir)
     if destination.exists() or os.path.lexists(destination):
@@ -468,22 +496,495 @@ def run_rank_preflight(
     context = score_cache_context()
     cache = GlobalScoreCache(Path(score_cache_root), context)
     plan = build_scoring_preflight(candidates, tokenizer, cache)
-    return {
-        "schema_version": "facet-aware-fusion-rank-preflight-v1",
+    return persist_rank_preflight(
+        destination,
+        plan=plan,
+        manifest_path=manifest_path,
+        retrieval_candidates_sha256=str(retrieval_summary["candidates_sha256"]),
+        materialization_receipt_path=model_receipt,
+        score_cache_root=score_cache_root,
+        tokenizer_class=type(tokenizer).__name__,
+        topic_ids=[str(topic_id) for topic_id in manifest["topic_ids"]],
+        experiment_id=str(manifest.get("experiment_id", "")),
+    )
+
+
+def persist_rank_preflight(
+    output_dir: Path,
+    *,
+    plan: object,
+    manifest_path: Path,
+    retrieval_candidates_sha256: str,
+    materialization_receipt_path: Path,
+    score_cache_root: Path,
+    tokenizer_class: str,
+    topic_ids: Sequence[str],
+    experiment_id: str = "rag25_facet_aware_fusion_v1",
+) -> dict[str, object]:
+    """Persist Task 3 windows in the existing scorer's authenticated format."""
+
+    destination = Path(output_dir)
+    if destination.exists() or os.path.lexists(destination):
+        raise FileExistsError(f"create-only scoring preflight exists: {destination}")
+    if not _is_sha256(retrieval_candidates_sha256):
+        raise ValueError("retrieval candidate binding must be a SHA-256")
+    materialization = load_verified_materialization(
+        Path(materialization_receipt_path)
+    )
+    context = score_cache_context()
+    expected_cache_path = Path(score_cache_root).joinpath(*context.path_parts)
+    cache_binding = _preflight_score_cache_file_binding(expected_cache_path)
+    cache = GlobalScoreCache(Path(score_cache_root), context)
+    if Path(cache.path).resolve() != expected_cache_path.resolve():
+        raise ValueError("score cache path differs from the pinned context")
+    windows = tuple(getattr(plan, "windows"))
+    for window in windows:
+        cache_key = str(getattr(window, "cache_key"))
+        if bool(getattr(window, "cache_hit")) != (cache_key in cache.scores):
+            raise ValueError("window cache-hit plan differs from persisted cache")
+    if _preflight_score_cache_file_binding(expected_cache_path) != cache_binding:
+        raise ValueError("score cache changed while persisting preflight")
+    windows_bytes = b"".join(
+        _canonical_json_bytes(window.to_dict(), pretty=False) for window in windows
+    )
+    summary = dict(getattr(plan, "summary"))
+    payload: dict[str, object] = {
+        "schema_version": PREFLIGHT_SCHEMA_VERSION,
         "status": "tokenizer_only_preflight_complete",
-        "experiment_id": manifest.get("experiment_id"),
-        "topic_ids": list(manifest["topic_ids"]),
+        "manifest_file": str(Path(manifest_path).resolve()),
         "manifest_sha256": _sha256(Path(manifest_path).read_bytes()),
-        "retrieval_candidates_sha256": retrieval_summary["candidates_sha256"],
-        "model": MODEL_ID,
-        "model_revision": MODEL_REVISION,
-        "score_cache_context": context.artifact_metadata,
-        **plan.summary,
-        "inference_count": 0,
-        "retrieval_call_count": 0,
-        "qrels_access_count": 0,
+        "source_dir": str(Path(manifest_path).resolve().parent),
+        "source_receipt_sha256": retrieval_candidates_sha256,
+        "source_candidates_sha256": retrieval_candidates_sha256,
+        "source_candidate_rows": summary["document_count"],
+        "model_materialization_receipt": str(materialization.receipt_path),
+        "model_materialization_receipt_sha256": materialization.sha256,
+        "model_materialization": materialization.payload,
+        "tokenizer": {
+            "class": tokenizer_class,
+            "local_files_only": True,
+            "trust_remote_code": False,
+            "use_fast": True,
+        },
+        "score_cache": {
+            "root": str(Path(score_cache_root).resolve()),
+            "path": str(Path(cache.path).resolve()),
+            "context": context.artifact_metadata,
+            "binding": cache_binding,
+        },
+        "window_policy": {
+            "version": WINDOW_POLICY_VERSION,
+            "pair_max_tokens": PAIR_MAX_TOKENS,
+            "query_max_tokens": QUERY_MAX_TOKENS,
+            "minimum_passage_tokens": MIN_PASSAGE_TOKENS,
+            "passage_overlap_tokens": PASSAGE_OVERLAP_TOKENS,
+            "maximum_windows_per_document": MAX_WINDOWS_PER_DOCUMENT,
+            "capped_index_rule": "round_half_up(j * (N - 1) / 31), j=0..31",
+        },
+        "windows_file": "windows.jsonl",
+        "windows_bytes": len(windows_bytes),
+        "windows_sha256": _sha256(windows_bytes),
+        "documents": [row.to_dict() for row in getattr(plan, "documents")],
+        "streams": list(getattr(plan, "streams")),
+        "topics": list(getattr(plan, "topics")),
+        "summary": summary,
+        "benchmark": dict(getattr(plan, "benchmark")),
+        "inference_authorized": False,
+        "model_constructed": False,
+        "qrels_path_supported": False,
+        "retrieval_path_supported": False,
+        "task3_experiment_id": experiment_id,
+        "task3_topic_ids": list(topic_ids),
+        "task3_retrieval_candidates_sha256": retrieval_candidates_sha256,
         "qrels_opened": False,
     }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.mkdir()
+    try:
+        (destination / "windows.jsonl").write_bytes(windows_bytes)
+        (destination / "preflight.json").write_bytes(
+            _canonical_json_bytes(payload, pretty=True)
+        )
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+    return payload
+
+
+def run_rank_scoring(
+    *,
+    preflight_path: Path,
+    approval_path: Path,
+    approval_sha256: str,
+    output_dir: Path,
+    score_cache_root: Path,
+    device: str = "cuda",
+) -> dict[str, object]:
+    """Delegate Task 3 cache misses to the established approval-gated scorer."""
+
+    rows = run_rocm_scoring(
+        Path(preflight_path),
+        Path(approval_path),
+        expected_approval_sha256=approval_sha256,
+        output_dir=Path(output_dir),
+        score_cache_root=Path(score_cache_root),
+        device=device,
+    )
+    return {
+        "status": "complete",
+        "score_row_count": len(rows),
+        "output": str(Path(output_dir).resolve()),
+        "qrels_opened": False,
+    }
+
+
+def _read_canonical_object(path: Path, label: str) -> tuple[dict[str, object], bytes]:
+    try:
+        source = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is required") from exc
+
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate key {key}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(
+            source,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"{label} contains nonstandard JSON value {value}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is invalid JSON") from exc
+    if not isinstance(payload, dict) or source != _canonical_json_bytes(payload, pretty=True):
+        raise ValueError(f"{label} must be canonical JSON")
+    return payload, source
+
+
+def _compact_json_bytes(value: object) -> bytes:
+    return _canonical_json_bytes(value, pretty=False).rstrip(b"\n")
+
+
+def load_rank_scoring_handoff(
+    preflight_path: Path,
+    scoring_dir: Path,
+) -> RankScoringHandoff:
+    """Authenticate the scorer reservation, ledger, receipt, and terminal commit."""
+
+    inputs = load_scoring_inputs(Path(preflight_path))
+    root = Path(scoring_dir).resolve()
+    planned_rows: list[dict[str, object]] = []
+    reservation_hashes: list[str] = []
+    for sequence_index, window in enumerate(inputs.windows):
+        reservation = {
+            "sequence_index": sequence_index,
+            "topic_id": str(getattr(window, "topic_id")),
+            "family": str(getattr(window, "family")),
+            "variant": str(getattr(window, "variant")),
+            "rank": int(getattr(window, "rank")),
+            "document_id": str(getattr(window, "document_id")),
+            "window_id": str(getattr(window, "window_id")),
+            "cache_key": str(getattr(window, "cache_key")),
+        }
+        reservation_sha256 = _sha256(_compact_json_bytes(reservation))
+        planned_rows.append({**reservation, "reservation_sha256": reservation_sha256})
+        reservation_hashes.append(reservation_sha256)
+    planned_source = b"".join(
+        _canonical_json_bytes(row, pretty=False) for row in planned_rows
+    )
+    try:
+        actual_planned_source = (root / "planned_reservations.jsonl").read_bytes()
+    except OSError as exc:
+        raise ValueError("scoring planned reservations are required") from exc
+    if actual_planned_source != planned_source:
+        raise ValueError("scoring planned reservations differ from preflight windows")
+    reservation_root = _sha256(
+        b"".join((value + "\n").encode("ascii") for value in reservation_hashes)
+    )
+
+    reservation, _reservation_source = _read_canonical_object(
+        root / "run_reservation.json", "scoring run reservation"
+    )
+    reservation_fields = {
+        "schema_version",
+        "status",
+        "action",
+        "run_id",
+        "output_path",
+        "approval_sha256",
+        "preflight_sha256",
+        "windows_sha256",
+        "model_materialization_receipt_sha256",
+        "benchmark_sample_sha256",
+        "planned_row_count",
+        "planned_reservations_bytes",
+        "planned_reservations_sha256",
+        "reservation_sequence_root_sha256",
+    }
+    if set(reservation) != reservation_fields:
+        raise ValueError("scoring run reservation fields mismatch")
+    run_id = reservation.get("run_id")
+    approval_sha256 = reservation.get("approval_sha256")
+    if not isinstance(run_id, str) or not run_id or not _is_sha256(approval_sha256):
+        raise ValueError("scoring run reservation identity is invalid")
+    reservation_expected = {
+        "schema_version": "facet-local-minilm-run-reservation-v1",
+        "status": "reserved",
+        "action": "full_scoring",
+        "output_path": str(root),
+        "preflight_sha256": inputs.preflight_sha256,
+        "windows_sha256": inputs.windows_sha256,
+        "model_materialization_receipt_sha256": inputs.materialization_receipt_sha256,
+        "benchmark_sample_sha256": inputs.benchmark.get("sample_sha256"),
+        "planned_row_count": len(planned_rows),
+        "planned_reservations_bytes": len(planned_source),
+        "planned_reservations_sha256": _sha256(planned_source),
+        "reservation_sequence_root_sha256": reservation_root,
+    }
+    for field, expected in reservation_expected.items():
+        if reservation.get(field) != expected:
+            raise ValueError(f"scoring run reservation {field} mismatch")
+
+    try:
+        ledger_source = (root / "scoring_ledger.jsonl").read_bytes()
+    except OSError as exc:
+        raise ValueError("scoring ledger is required") from exc
+    ledger_rows: list[dict[str, object]] = []
+    score_row_fields = {
+        "schema_version",
+        "topic_id",
+        "family",
+        "variant",
+        "rank",
+        "document_id",
+        "window_id",
+        "query_sha256",
+        "window_sha256",
+        "cache_key",
+        "reservation_sha256",
+        "disposition",
+        "score",
+        "elapsed_seconds",
+        "peak_device_memory_bytes",
+        "peak_host_memory_bytes",
+        "model",
+        "model_revision",
+        "score_representation",
+        "inference_dtype",
+        "raw_output_sha256",
+        "output_sha256",
+    }
+    for line_number, line in enumerate(ledger_source.splitlines(), start=1):
+        try:
+            row = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"scoring ledger row {line_number} is invalid") from exc
+        if (
+            not isinstance(row, dict)
+            or set(row) != score_row_fields
+            or _compact_json_bytes(row) != line
+        ):
+            raise ValueError(f"scoring ledger row {line_number} is not canonical")
+        ledger_rows.append(row)
+    if len(ledger_rows) != len(inputs.windows):
+        raise ValueError("scoring ledger row count differs from preflight windows")
+
+    scored_windows: list[dict[str, object]] = []
+    output_hashes: list[str] = []
+    unique_outputs: dict[str, str] = {}
+    dispositions: dict[str, int] = defaultdict(int)
+    for index, (window, row) in enumerate(
+        zip(inputs.windows, ledger_rows, strict=True)
+    ):
+        identity = {
+            "topic_id": str(getattr(window, "topic_id")),
+            "family": str(getattr(window, "family")),
+            "variant": str(getattr(window, "variant")),
+            "rank": int(getattr(window, "rank")),
+            "document_id": str(getattr(window, "document_id")),
+            "window_id": str(getattr(window, "window_id")),
+            "query_sha256": str(getattr(window, "query_sha256")),
+            "window_sha256": str(getattr(window, "window_sha256")),
+            "cache_key": str(getattr(window, "cache_key")),
+        }
+        if any(row.get(field) != expected for field, expected in identity.items()):
+            raise ValueError(f"scoring ledger row {index + 1} identity mismatch")
+        score = row.get("score")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(score)
+        ):
+            raise ValueError(f"scoring ledger row {index + 1} score is invalid")
+        if (
+            row.get("schema_version") != "facet-local-minilm-score-row-v2"
+            or row.get("model") != MODEL_ID
+            or row.get("model_revision") != MODEL_REVISION
+            or row.get("score_representation") != "raw_logits"
+            or row.get("inference_dtype") != "float32"
+            or row.get("reservation_sha256") != reservation_hashes[index]
+        ):
+            raise ValueError(f"scoring ledger row {index + 1} binding mismatch")
+        disposition = row.get("disposition")
+        if disposition not in {"cache_hit", "forward_pass", "same_run_reuse"}:
+            raise ValueError(f"scoring ledger row {index + 1} disposition is invalid")
+        raw_output_sha256 = _sha256(
+            _compact_json_bytes(
+                {
+                    "cache_key": identity["cache_key"],
+                    "inference_dtype": "float32",
+                    "score_representation": "raw_logits",
+                    "raw_float32_be_sha256": _sha256(struct.pack(">f", float(score))),
+                }
+            )
+        )
+        output_sha256 = _sha256(
+            _compact_json_bytes(
+                {
+                    "reservation_sha256": reservation_hashes[index],
+                    "disposition": disposition,
+                    "raw_output_sha256": raw_output_sha256,
+                }
+            )
+        )
+        if (
+            row.get("raw_output_sha256") != raw_output_sha256
+            or row.get("output_sha256") != output_sha256
+        ):
+            raise ValueError(f"scoring ledger row {index + 1} output hash mismatch")
+        previous = unique_outputs.setdefault(identity["cache_key"], raw_output_sha256)
+        if previous != raw_output_sha256:
+            raise ValueError("one scoring cache key has conflicting outputs")
+        dispositions[str(disposition)] += 1
+        output_hashes.append(output_sha256)
+        window_to_dict = getattr(window, "to_dict")
+        scored_windows.append({**window_to_dict(), "score": float(score)})
+
+    ledger_sequence_root = _sha256(
+        b"".join((value + "\n").encode("ascii") for value in output_hashes)
+    )
+    unique_score_root = _sha256(
+        b"".join(
+            f"{cache_key}:{unique_outputs[cache_key]}\n".encode("ascii")
+            for cache_key in sorted(unique_outputs)
+        )
+    )
+    receipt, receipt_source = _read_canonical_object(
+        root / "scoring_receipt.json", "scoring receipt"
+    )
+    receipt_fields = {
+        "schema_version",
+        "status",
+        "preflight_sha256",
+        "windows_sha256",
+        "model_materialization_receipt_sha256",
+        "full_inference_approval_sha256",
+        "full_inference_request_sha256",
+        "score_cache_path",
+        "cache_before_sha256",
+        "cache_after_sha256",
+        "cache_before_bytes",
+        "cache_after_bytes",
+        "cache_before_count",
+        "cache_after_count",
+        "planned_window_count",
+        "completed_window_count",
+        "cache_hit_count",
+        "forward_pass_count",
+        "same_run_reuse_count",
+        "unique_score_count",
+        "failed_window_count",
+        "pending_window_count",
+        "reservation_sequence_root_sha256",
+        "ledger_bytes",
+        "ledger_sha256",
+        "ledger_sequence_root_sha256",
+        "unique_score_root_sha256",
+        "score_representation",
+        "inference_dtype",
+        "model",
+        "model_revision",
+    }
+    if set(receipt) != receipt_fields:
+        raise ValueError("scoring receipt fields mismatch")
+    receipt_expected = {
+        "schema_version": "facet-local-minilm-scoring-receipt-v2",
+        "status": "complete",
+        "preflight_sha256": inputs.preflight_sha256,
+        "windows_sha256": inputs.windows_sha256,
+        "model_materialization_receipt_sha256": inputs.materialization_receipt_sha256,
+        "full_inference_approval_sha256": approval_sha256,
+        "score_cache_path": str(inputs.score_cache_path),
+        "planned_window_count": len(inputs.windows),
+        "completed_window_count": len(inputs.windows),
+        "cache_hit_count": dispositions["cache_hit"],
+        "forward_pass_count": dispositions["forward_pass"],
+        "same_run_reuse_count": dispositions["same_run_reuse"],
+        "unique_score_count": len(unique_outputs),
+        "failed_window_count": 0,
+        "pending_window_count": 0,
+        "reservation_sequence_root_sha256": reservation_root,
+        "ledger_bytes": len(ledger_source),
+        "ledger_sha256": _sha256(ledger_source),
+        "ledger_sequence_root_sha256": ledger_sequence_root,
+        "unique_score_root_sha256": unique_score_root,
+        "score_representation": "raw_logits",
+        "inference_dtype": "float32",
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+    }
+    for field, expected in receipt_expected.items():
+        if receipt.get(field) != expected:
+            raise ValueError(f"scoring receipt {field} mismatch")
+    if not _is_sha256(receipt.get("full_inference_request_sha256")):
+        raise ValueError("scoring receipt full request hash is invalid")
+    if receipt.get("cache_before_sha256") is not None and not _is_sha256(
+        receipt.get("cache_before_sha256")
+    ):
+        raise ValueError("scoring receipt before-cache hash is invalid")
+    if not _is_sha256(receipt.get("cache_after_sha256")):
+        raise ValueError("scoring receipt after-cache hash is invalid")
+    for field in (
+        "cache_before_bytes",
+        "cache_after_bytes",
+        "cache_before_count",
+        "cache_after_count",
+    ):
+        value = receipt.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"scoring receipt {field} is invalid")
+
+    terminal, _terminal_source = _read_canonical_object(
+        root / "run_terminal.json", "scoring terminal receipt"
+    )
+    terminal_expected = {
+        "schema_version": "facet-local-minilm-run-terminal-v1",
+        "status": "complete",
+        "action": "full_scoring",
+        "run_id": run_id,
+        "approval_sha256": approval_sha256,
+        "output_path": str(root),
+        "scoring_receipt_sha256": _sha256(receipt_source),
+        "cache_after_sha256": receipt.get("cache_after_sha256"),
+    }
+    if terminal != terminal_expected:
+        raise ValueError("scoring terminal receipt binding mismatch")
+
+    return RankScoringHandoff(
+        scored_windows=tuple(scored_windows),
+        score_rows=tuple(ledger_rows),
+        preflight=inputs.preflight,
+        preflight_sha256=inputs.preflight_sha256,
+        scoring_receipt=receipt,
+        scoring_receipt_sha256=_sha256(receipt_source),
+        ledger_sha256=_sha256(ledger_source),
+    )
 
 
 def _original_rank_rows(
@@ -539,12 +1040,11 @@ def _original_rank_rows(
     return rows
 
 
-def _cached_facet_rank_rows(
+def _scored_facet_rank_rows(
     manifest: Mapping[str, object],
     candidates: Sequence[Mapping[str, object]],
-    windows: Sequence[object],
-    cache: object,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    scored_windows: Sequence[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     raw_facets = manifest.get("facets")
     if not isinstance(raw_facets, Sequence) or isinstance(raw_facets, (str, bytes)):
         raise ValueError("manifest facets must be a sequence")
@@ -563,20 +1063,18 @@ def _cached_facet_rank_rows(
     windows_by_facet: dict[
         tuple[str, str], list[dict[str, object]]
     ] = defaultdict(list)
-    score_rows: list[dict[str, object]] = []
-    scores = getattr(cache, "scores", None)
-    if not isinstance(scores, Mapping):
-        raise ValueError("score cache does not expose authenticated scores")
-    for window in windows:
-        to_dict = getattr(window, "to_dict", None)
-        row = to_dict() if callable(to_dict) else dict(window)  # type: ignore[arg-type]
-        cache_key = row.get("cache_key")
-        if not isinstance(cache_key, str) or cache_key not in scores:
-            raise ValueError("all planned windows must be present in the global score cache")
-        scored = {**row, "score": float(scores[cache_key])}
+    for window in scored_windows:
+        row = dict(window)
+        score = row.get("score")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(score)
+        ):
+            raise ValueError("all planned windows must have authenticated finite scores")
+        scored = {**row, "score": float(score)}
         key = (str(row["topic_id"]), str(row["variant"]))
         windows_by_facet[key].append(scored)
-        score_rows.append(scored)
 
     ranked_rows: list[dict[str, object]] = []
     gate_rows: list[dict[str, object]] = []
@@ -608,7 +1106,7 @@ def _cached_facet_rank_rows(
             )
     if set(candidates_by_facet) != set(facets) or set(windows_by_facet) != set(facets):
         raise ValueError("candidate/window facet identities differ from the manifest")
-    return ranked_rows, gate_rows, score_rows
+    return ranked_rows, gate_rows
 
 
 def run_rank_freeze(
@@ -616,11 +1114,11 @@ def run_rank_freeze(
     manifest_path: Path,
     retrieval_dir: Path,
     cache_root: Path,
+    preflight_path: Path,
+    scoring_dir: Path,
     output_dir: Path,
-    model_receipt: Path = _DEFAULT_MODEL_RECEIPT,
-    score_cache_root: Path = _DEFAULT_SCORE_CACHE_ROOT,
 ) -> dict[str, object]:
-    """Freeze rankings only after separate approval-gated scoring filled the cache."""
+    """Freeze rankings from one authenticated approval-gated scoring handoff."""
 
     destination = Path(output_dir)
     if destination.exists() or os.path.lexists(destination):
@@ -630,33 +1128,54 @@ def run_rank_freeze(
         retrieval_dir=retrieval_dir,
         cache_root=cache_root,
     )
-    tokenizer = load_verified_tokenizer(Path(model_receipt))
-    context = score_cache_context()
-    cache = GlobalScoreCache(Path(score_cache_root), context)
-    plan = build_scoring_preflight(candidates, tokenizer, cache)
-    misses = int(plan.summary.get("unique_uncached_pair_count", 0))
-    if misses:
-        raise ValueError(
-            f"rank freeze has {misses} cache misses; run the separate approval-gated "
-            "ROCm scorer before freezing"
-        )
+    handoff = load_rank_scoring_handoff(preflight_path, scoring_dir)
+    preflight = handoff.preflight
+    expected_bindings = {
+        "manifest_sha256": _sha256(Path(manifest_path).read_bytes()),
+        "task3_retrieval_candidates_sha256": str(
+            retrieval_summary["candidates_sha256"]
+        ),
+        "task3_topic_ids": [str(topic_id) for topic_id in manifest["topic_ids"]],
+        "qrels_opened": False,
+    }
+    for field, expected in expected_bindings.items():
+        if preflight.get(field) != expected:
+            raise ValueError(f"Task 3 scoring preflight {field} binding mismatch")
     original_rows = _original_rank_rows(manifest, cache_root)
-    facet_rows, gates, score_rows = _cached_facet_rank_rows(
-        manifest, candidates, plan.windows, cache
+    facet_rows, gates = _scored_facet_rank_rows(
+        manifest, candidates, handoff.scored_windows
     )
     frozen_rows = [*original_rows, *facet_rows]
-    score_bytes = _canonical_jsonl_bytes(_stable_rows(score_rows))
+    candidate_provenance = [
+        *(
+            {**row, "provenance_stage": "original_rank"}
+            for row in original_rows
+        ),
+        *(
+            {**row, "provenance_stage": "task2_retrieval"}
+            for row in candidates
+        ),
+        *(
+            {**row, "provenance_stage": "facet_minilm_rank"}
+            for row in facet_rows
+        ),
+    ]
     return create_ranking_freeze(
         destination,
         frozen_rows=frozen_rows,
         gates=gates,
-        score_rows=score_rows,
-        candidate_provenance=[*original_rows, *candidates],
+        score_rows=handoff.score_rows,
+        candidate_provenance=candidate_provenance,
         input_hashes={
-            "manifest_sha256": _sha256(Path(manifest_path).read_bytes()),
+            "manifest_sha256": expected_bindings["manifest_sha256"],
             "retrieval_sha256": str(retrieval_summary["candidates_sha256"]),
-            "scoring_sha256": _sha256(score_bytes),
-            "model_materialization_sha256": _sha256(Path(model_receipt).read_bytes()),
+            "preflight_sha256": handoff.preflight_sha256,
+            "windows_sha256": str(preflight["windows_sha256"]),
+            "scoring_receipt_sha256": handoff.scoring_receipt_sha256,
+            "scoring_ledger_sha256": handoff.ledger_sha256,
+            "model_materialization_sha256": str(
+                preflight["model_materialization_receipt_sha256"]
+            ),
         },
         topic_order=[str(topic_id) for topic_id in manifest["topic_ids"]],
     )
@@ -1187,6 +1706,9 @@ def ranking_parameters() -> dict[str, object]:
 
 
 _FREEZE_SCHEMA_VERSION = "facet-aware-fusion-freeze-v1"
+_ARTIFACT_HASH_SCHEMA_VERSION = "facet-aware-fusion-artifact-hashes-v1"
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
 
 
 def _canonical_json_bytes(value: object, *, pretty: bool) -> bytes:
@@ -1230,6 +1752,52 @@ def _reject_qrels_fields(value: object, *, path: str = "freeze") -> None:
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for index, nested in enumerate(value):
             _reject_qrels_fields(nested, path=f"{path}[{index}]")
+
+
+def _publish_directory_noreplace(staging: Path, destination: Path) -> None:
+    """Atomically publish a directory while preserving a raced destination."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is required for no-replace publish")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        _AT_FDCWD,
+        os.fsencode(staging),
+        _AT_FDCWD,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(
+            error,
+            f"create-only ranking freeze already exists: {destination}",
+            destination,
+        )
+    raise OSError(error, os.strerror(error), destination)
+
+
+def _expected_freeze_artifact_paths() -> set[str]:
+    return {
+        "scores.jsonl",
+        "gates.json",
+        "candidate_provenance.jsonl",
+        "cxq_provenance.jsonl",
+        "parameters.json",
+        "hashes.json",
+        *(f"rankings/{arm}.jsonl" for arm in ARM_NAMES),
+    }
 
 
 def _freeze_topic_inputs(
@@ -1364,6 +1932,24 @@ def create_ranking_freeze(
             len(rows),
         )
 
+    semantic_artifact_records = {
+        relative: {
+            "bytes": len(content),
+            "sha256": _sha256(content),
+            **({"rows": rows} if rows is not None else {}),
+        }
+        for relative, (content, rows) in sorted(payloads.items())
+    }
+    payloads["hashes.json"] = (
+        _canonical_json_bytes(
+            {
+                "schema_version": _ARTIFACT_HASH_SCHEMA_VERSION,
+                "artifacts": semantic_artifact_records,
+            },
+            pretty=True,
+        ),
+        None,
+    )
     artifact_records = {
         relative: {
             "bytes": len(content),
@@ -1372,6 +1958,8 @@ def create_ranking_freeze(
         }
         for relative, (content, rows) in sorted(payloads.items())
     }
+    if set(artifact_records) != _expected_freeze_artifact_paths():
+        raise RuntimeError("internal ranking freeze artifact set mismatch")
     candidate_pool_hashes = {}
     for topic_id in ordered_topics:
         original, facets = inputs[topic_id]
@@ -1406,22 +1994,51 @@ def create_ranking_freeze(
         (staging / "freeze.json").write_bytes(
             _canonical_json_bytes(freeze, pretty=True)
         )
-        try:
-            os.rename(staging, destination)
-        except FileExistsError as exc:
-            raise FileExistsError(
-                f"create-only ranking freeze already exists: {destination}"
-            ) from exc
+        _publish_directory_noreplace(staging, destination)
     finally:
         if staging.exists():
             shutil.rmtree(staging)
     return freeze
 
 
+def _artifact_row_count(relative: str, content: bytes) -> int | None:
+    if relative.endswith(".jsonl"):
+        lines = content.splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            try:
+                row = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"ranking freeze artifact row is invalid: {relative}:{line_number}"
+                ) from exc
+            if not isinstance(row, dict) or _compact_json_bytes(row) != line:
+                raise ValueError(
+                    f"ranking freeze artifact row is not canonical: {relative}:{line_number}"
+                )
+        if b"".join(line + b"\n" for line in lines) != content:
+            raise ValueError(f"ranking freeze artifact is not canonical JSONL: {relative}")
+        return len(lines)
+    try:
+        payload = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"ranking freeze artifact is invalid JSON: {relative}") from exc
+    if content != _canonical_json_bytes(payload, pretty=True):
+        raise ValueError(f"ranking freeze artifact is not canonical JSON: {relative}")
+    if relative == "gates.json":
+        if not isinstance(payload, list):
+            raise ValueError("ranking freeze gates must be a JSON list")
+        return len(payload)
+    if not isinstance(payload, dict):
+        raise ValueError(f"ranking freeze artifact must be a JSON object: {relative}")
+    return None
+
+
 def verify_ranking_freeze(output_dir: Path) -> dict[str, object]:
     """Authenticate every declared freeze artifact without opening qrels."""
 
     root = Path(output_dir)
+    if root.is_symlink():
+        raise ValueError("ranking freeze root may not be a symbolic link")
     source = (root / "freeze.json").read_bytes()
     try:
         freeze = json.loads(source)
@@ -1441,6 +2058,17 @@ def verify_ranking_freeze(output_dir: Path) -> dict[str, object]:
     artifacts = freeze.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("ranking freeze artifacts are invalid")
+    expected_artifacts = _expected_freeze_artifact_paths()
+    if set(artifacts) != expected_artifacts:
+        raise ValueError("ranking freeze must declare the exact artifact set")
+    actual_files: set[str] = set()
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("ranking freeze may not contain symbolic links")
+        if path.is_file():
+            actual_files.add(path.relative_to(root).as_posix())
+    if actual_files != expected_artifacts | {"freeze.json"}:
+        raise ValueError("ranking freeze must contain the exact artifact set")
     for relative, record in artifacts.items():
         if (
             not isinstance(relative, str)
@@ -1449,9 +2077,41 @@ def verify_ranking_freeze(output_dir: Path) -> dict[str, object]:
             or not isinstance(record, Mapping)
         ):
             raise ValueError("ranking freeze artifact path is unsafe")
+        expects_rows = relative not in {"parameters.json", "hashes.json"}
+        expected_record_fields = {"bytes", "sha256"} | (
+            {"rows"} if expects_rows else set()
+        )
+        if set(record) != expected_record_fields:
+            raise ValueError(f"ranking freeze artifact record fields mismatch: {relative}")
         content = (root / relative).read_bytes()
         if record.get("bytes") != len(content) or record.get("sha256") != _sha256(content):
             raise ValueError(f"ranking freeze artifact hash mismatch: {relative}")
+        actual_rows = _artifact_row_count(relative, content)
+        if expects_rows:
+            declared_rows = record.get("rows")
+            if (
+                isinstance(declared_rows, bool)
+                or not isinstance(declared_rows, int)
+                or declared_rows < 0
+                or declared_rows != actual_rows
+            ):
+                raise ValueError(
+                    f"ranking freeze artifact row count mismatch: {relative}"
+                )
+        elif actual_rows is not None:
+            raise ValueError(f"ranking freeze artifact row semantics mismatch: {relative}")
+    hashes_source = (root / "hashes.json").read_bytes()
+    hashes = json.loads(hashes_source)
+    semantic_records = {
+        relative: dict(record)
+        for relative, record in artifacts.items()
+        if relative != "hashes.json"
+    }
+    if hashes != {
+        "schema_version": _ARTIFACT_HASH_SCHEMA_VERSION,
+        "artifacts": semantic_records,
+    }:
+        raise ValueError("ranking freeze hash manifest authentication mismatch")
     depth = freeze.get("depth")
     topic_ids = freeze.get("topic_ids")
     if (
@@ -1460,11 +2120,21 @@ def verify_ranking_freeze(output_dir: Path) -> dict[str, object]:
         or depth < 1
         or not isinstance(topic_ids, list)
         or any(not isinstance(topic_id, str) for topic_id in topic_ids)
+        or len(topic_ids) != len(set(topic_ids))
+        or any(
+            topic_id in PROTECTED_TOPIC_IDS or topic_id in PRIOR_PILOT_TOPIC_IDS
+            for topic_id in topic_ids
+        )
     ):
         raise ValueError("ranking freeze topic/depth fields are invalid")
     for arm in ARM_NAMES:
         path = root / "rankings" / f"{arm}.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        if (
+            len(rows) != len(topic_ids) * depth
+            or any(set(row) != {"topic_id", "rank", "docid"} for row in rows)
+        ):
+            raise ValueError(f"ranking freeze row set is invalid for {arm}")
         for topic_id in topic_ids:
             topic_rows = [row for row in rows if row.get("topic_id") == topic_id]
             if [row.get("rank") for row in topic_rows] != list(range(1, depth + 1)):
@@ -1485,29 +2155,58 @@ def _argument_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--retrieval", type=Path, required=True)
         subparser.add_argument("--cache-root", type=Path, required=True)
         subparser.add_argument("--output", type=Path, required=True)
-        subparser.add_argument(
-            "--model-receipt", type=Path, default=_DEFAULT_MODEL_RECEIPT
-        )
-        subparser.add_argument(
-            "--score-cache", type=Path, default=_DEFAULT_SCORE_CACHE_ROOT
-        )
+    preflight = subparsers.choices["preflight"]
+    preflight.add_argument(
+        "--model-receipt", type=Path, default=_DEFAULT_MODEL_RECEIPT
+    )
+    preflight.add_argument(
+        "--score-cache", type=Path, default=_DEFAULT_SCORE_CACHE_ROOT
+    )
+    freeze = subparsers.choices["freeze"]
+    freeze.add_argument("--preflight", type=Path, required=True)
+    freeze.add_argument("--scoring", type=Path, required=True)
+
+    score = subparsers.add_parser("score")
+    score.add_argument("--preflight", type=Path, required=True)
+    score.add_argument("--approval", type=Path, required=True)
+    score.add_argument("--approval-sha256", required=True)
+    score.add_argument("--output", type=Path, required=True)
+    score.add_argument(
+        "--score-cache", type=Path, default=_DEFAULT_SCORE_CACHE_ROOT
+    )
+    score.add_argument("--device", default="cuda")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
-    common = {
-        "manifest_path": args.manifest,
-        "retrieval_dir": args.retrieval,
-        "cache_root": args.cache_root,
-        "output_dir": args.output,
-        "model_receipt": args.model_receipt,
-        "score_cache_root": args.score_cache,
-    }
     if args.command == "preflight":
-        result = run_rank_preflight(**common)
+        result = run_rank_preflight(
+            manifest_path=args.manifest,
+            retrieval_dir=args.retrieval,
+            cache_root=args.cache_root,
+            output_dir=args.output,
+            model_receipt=args.model_receipt,
+            score_cache_root=args.score_cache,
+        )
+    elif args.command == "score":
+        result = run_rank_scoring(
+            preflight_path=args.preflight,
+            approval_path=args.approval,
+            approval_sha256=args.approval_sha256,
+            output_dir=args.output,
+            score_cache_root=args.score_cache,
+            device=args.device,
+        )
     else:
-        result = run_rank_freeze(**common)
+        result = run_rank_freeze(
+            manifest_path=args.manifest,
+            retrieval_dir=args.retrieval,
+            cache_root=args.cache_root,
+            preflight_path=args.preflight,
+            scoring_dir=args.scoring,
+            output_dir=args.output,
+        )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
     return 0
 
