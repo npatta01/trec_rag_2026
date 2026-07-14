@@ -84,6 +84,10 @@ def build_contract(
         ),
         lambda: None,
     )
+    reject_protected_before_access(
+        (str(row["topic_id"]) for row in union_rows),
+        lambda: None,
+    )
     topics = {str(row["topic_id"]): row for row in manifest["topics"]}  # type: ignore[index]
     accepted = {
         str(row["facet_id"])
@@ -190,12 +194,19 @@ def _load_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
     return payload, raw
 
 
-def _load_manifest_topic_metadata(path: Path) -> tuple[list[str], list[str]]:
+def _load_manifest_topic_metadata(
+    path: Path,
+) -> tuple[list[str], list[str], list[str]]:
     payload, _ = _load_json(path, "manifest topic metadata")
     topics = payload.get("topics")
     if not isinstance(topics, list):
         raise ValueError("manifest topics must be a JSON array")
     record_topic_ids = [str(row["topic_id"]) for row in topics]
+
+    facets = payload.get("facets")
+    if not isinstance(facets, list):
+        raise ValueError("manifest facets must be a JSON array")
+    facet_topic_ids = [str(row["topic_id"]) for row in facets]
 
     declared = payload.get("topic_ids")
     if declared is None:
@@ -204,7 +215,15 @@ def _load_manifest_topic_metadata(path: Path) -> tuple[list[str], list[str]]:
         declared_topic_ids = [str(topic_id) for topic_id in declared]
     else:
         raise ValueError("manifest topic_ids must be a JSON array")
-    return declared_topic_ids, record_topic_ids
+    return declared_topic_ids, record_topic_ids, facet_topic_ids
+
+
+def _load_gate_topic_metadata(path: Path) -> list[str]:
+    payload, _ = _load_json(path, "gate topic metadata")
+    gate_rows = payload.get("gates")
+    if not isinstance(gate_rows, list):
+        raise ValueError("gate records must be a JSON array")
+    return [str(row["topic_id"]) for row in gate_rows if "topic_id" in row]
 
 
 def _manifest_topic_ids(manifest: Mapping[str, object]) -> list[str]:
@@ -246,7 +265,11 @@ def _manifest_topic_ids(manifest: Mapping[str, object]) -> list[str]:
 
 def _load_cli_sources(
     *,
-    manifest_topic_ids_loader: Callable[[], tuple[Sequence[str], Sequence[str]]],
+    manifest_topic_ids_loader: Callable[
+        [], tuple[Sequence[str], Sequence[str], Sequence[str]]
+    ],
+    gate_topic_ids_loader: Callable[[], Sequence[str]],
+    union_topic_ids_loader: Callable[[], Sequence[str]],
     manifest_loader: Callable[[], tuple[dict[str, object], bytes]],
     gates_loader: Callable[[], tuple[dict[str, object], bytes]],
     union_loader: Callable[[], tuple[list[dict[str, object]], bytes]],
@@ -258,7 +281,9 @@ def _load_cli_sources(
     list[dict[str, object]],
     bytes,
 ]:
-    declared_topic_ids, record_topic_ids = manifest_topic_ids_loader()
+    declared_topic_ids, record_topic_ids, facet_topic_ids = (
+        manifest_topic_ids_loader()
+    )
     for topic_ids in (declared_topic_ids, record_topic_ids):
         reject_protected_before_access(topic_ids, lambda: None)
         if len(topic_ids) != len(PILOT_TOPIC_IDS) or set(topic_ids) != set(
@@ -268,6 +293,20 @@ def _load_cli_sources(
                 "manifest topic set must contain exactly the four pilot topics "
                 f"{list(PILOT_TOPIC_IDS)}"
             )
+
+    reject_protected_before_access(facet_topic_ids, lambda: None)
+    if not set(facet_topic_ids).issubset(PILOT_TOPIC_IDS):
+        raise ValueError("manifest facets contain a non-pilot topic")
+
+    gate_topic_ids = gate_topic_ids_loader()
+    reject_protected_before_access(gate_topic_ids, lambda: None)
+    if not set(gate_topic_ids).issubset(PILOT_TOPIC_IDS):
+        raise ValueError("gate records contain a non-pilot topic")
+
+    union_topic_ids = union_topic_ids_loader()
+    reject_protected_before_access(union_topic_ids, lambda: None)
+    if not set(union_topic_ids).issubset(PILOT_TOPIC_IDS):
+        raise ValueError("accepted union contains a non-pilot topic")
 
     manifest, manifest_raw = manifest_loader()
     _manifest_topic_ids(manifest)
@@ -285,6 +324,155 @@ def _load_cli_sources(
 
     union_rows, union_raw = union_loader()
     return manifest, manifest_raw, gates, gates_raw, union_rows, union_raw
+
+
+def _build_cli_contract(
+    *,
+    manifest_topic_ids_loader: Callable[
+        [], tuple[Sequence[str], Sequence[str], Sequence[str]]
+    ],
+    gate_topic_ids_loader: Callable[[], Sequence[str]],
+    union_topic_ids_loader: Callable[[], Sequence[str]],
+    manifest_loader: Callable[[], tuple[dict[str, object], bytes]],
+    gates_loader: Callable[[], tuple[dict[str, object], bytes]],
+    union_loader: Callable[[], tuple[list[dict[str, object]], bytes]],
+    contract_builder: Callable[
+        [
+            Mapping[str, object],
+            Mapping[str, object],
+            Sequence[Mapping[str, object]],
+        ],
+        dict[str, object],
+    ],
+) -> tuple[dict[str, object], bytes, bytes, bytes]:
+    manifest, manifest_raw, gates, gates_raw, union_rows, union_raw = (
+        _load_cli_sources(
+            manifest_topic_ids_loader=manifest_topic_ids_loader,
+            gate_topic_ids_loader=gate_topic_ids_loader,
+            union_topic_ids_loader=union_topic_ids_loader,
+            manifest_loader=manifest_loader,
+            gates_loader=gates_loader,
+            union_loader=union_loader,
+        )
+    )
+    contract = contract_builder(manifest, gates, union_rows)
+    return contract, manifest_raw, gates_raw, union_raw
+
+
+def _skip_json_whitespace(raw: bytes, position: int) -> int:
+    while position < len(raw) and raw[position] in b" \t\r\n":
+        position += 1
+    return position
+
+
+def _scan_json_string_end(raw: bytes, position: int, *, line_number: int) -> int:
+    if position >= len(raw) or raw[position] != ord('"'):
+        raise ValueError(f"accepted-union line {line_number} expected a JSON string")
+    position += 1
+    while position < len(raw):
+        byte = raw[position]
+        if byte == ord('"'):
+            return position + 1
+        if byte == ord("\\"):
+            position += 2
+        else:
+            if byte < 0x20:
+                raise ValueError(
+                    f"accepted-union line {line_number} contains a control byte"
+                )
+            position += 1
+    raise ValueError(f"accepted-union line {line_number} has an unterminated string")
+
+
+def _scan_top_level_topic_id(raw: bytes, *, line_number: int) -> str:
+    position = _skip_json_whitespace(raw, 0)
+    if position >= len(raw) or raw[position] != ord("{"):
+        raise ValueError(
+            f"accepted-union line {line_number} must be a JSON object"
+        )
+    expected_closers = [ord("}")]
+    position += 1
+    topic_id: str | None = None
+    while position < len(raw) and expected_closers:
+        byte = raw[position]
+        if byte == ord('"'):
+            string_start = position
+            string_end = _scan_json_string_end(
+                raw, position, line_number=line_number
+            )
+            after_string = _skip_json_whitespace(raw, string_end)
+            is_top_level_key = (
+                len(expected_closers) == 1
+                and after_string < len(raw)
+                and raw[after_string] == ord(":")
+            )
+            if is_top_level_key and json.loads(raw[string_start:string_end]) == "topic_id":
+                if topic_id is not None:
+                    raise ValueError(
+                        f"accepted-union line {line_number} repeats topic_id"
+                    )
+                value_start = _skip_json_whitespace(raw, after_string + 1)
+                if value_start >= len(raw):
+                    raise ValueError(
+                        f"accepted-union line {line_number} has an invalid topic_id"
+                    )
+                if raw[value_start] == ord('"'):
+                    value_end = _scan_json_string_end(
+                        raw, value_start, line_number=line_number
+                    )
+                else:
+                    value_end = value_start
+                    while value_end < len(raw) and raw[value_end] not in (
+                        ord(","),
+                        ord("}"),
+                    ):
+                        value_end += 1
+                try:
+                    value = json.loads(raw[value_start:value_end])
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"accepted-union line {line_number} has an invalid topic_id"
+                    ) from exc
+                if isinstance(value, bool) or not isinstance(value, (str, int)):
+                    raise ValueError(
+                        f"accepted-union line {line_number} has an invalid topic_id"
+                    )
+                topic_id = str(value)
+            position = string_end
+            continue
+        if byte == ord("{"):
+            expected_closers.append(ord("}"))
+        elif byte == ord("["):
+            expected_closers.append(ord("]"))
+        elif byte in (ord("}"), ord("]")):
+            if byte != expected_closers[-1]:
+                raise ValueError(
+                    f"accepted-union line {line_number} has mismatched containers"
+                )
+            expected_closers.pop()
+        position += 1
+
+    if expected_closers:
+        raise ValueError(
+            f"accepted-union line {line_number} has an unterminated object"
+        )
+    if _skip_json_whitespace(raw, position) != len(raw):
+        raise ValueError(
+            f"accepted-union line {line_number} has trailing JSON content"
+        )
+    if topic_id is None:
+        raise ValueError(f"accepted-union line {line_number} is missing topic_id")
+    return topic_id
+
+
+def _scan_jsonl_topic_metadata(path: Path) -> list[str]:
+    raw = path.read_bytes()
+    topic_ids: list[str] = []
+    for line_number, line in enumerate(raw.splitlines(), start=1):
+        if not line.strip():
+            raise ValueError(f"accepted union contains a blank line at {line_number}")
+        topic_ids.append(_scan_top_level_topic_id(line, line_number=line_number))
+    return topic_ids
 
 
 def _load_union(path: Path) -> tuple[list[dict[str, object]], bytes]:
@@ -404,20 +592,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output.exists():
         raise FileExistsError(f"contract output already exists: {args.output}")
 
-    (
-        manifest,
-        manifest_raw,
-        gates,
-        gates_raw,
-        union_rows,
-        union_raw,
-    ) = _load_cli_sources(
+    contract, manifest_raw, gates_raw, union_raw = _build_cli_contract(
         manifest_topic_ids_loader=lambda: _load_manifest_topic_metadata(args.manifest),
+        gate_topic_ids_loader=lambda: _load_gate_topic_metadata(args.gates),
+        union_topic_ids_loader=lambda: _scan_jsonl_topic_metadata(args.union),
         manifest_loader=lambda: _load_json(args.manifest, "source manifest"),
         gates_loader=lambda: _load_json(args.gates, "gate"),
         union_loader=lambda: _load_union(args.union),
+        contract_builder=build_contract,
     )
-    contract = build_contract(manifest, gates, union_rows)
     summary = _create_contract_files(
         contract,
         args.output,

@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from trec_rag.adaptive_evidence_contract import (
+    _build_cli_contract,
     _load_cli_sources,
+    _scan_jsonl_topic_metadata,
     build_contract,
     canonical_sha256,
     document_fold,
@@ -192,6 +194,61 @@ def test_contract_preflights_protected_gate_before_obligation_or_union_access() 
     assert accesses == []
 
 
+def test_contract_preflights_protected_union_before_gate_join_or_obligations() -> None:
+    accesses: list[str] = []
+
+    class RecordingTopic(dict[str, object]):
+        def __getitem__(self, key: str) -> object:
+            if key == "query":
+                accesses.append("obligation:query")
+            return super().__getitem__(key)
+
+    class RecordingGate(dict[str, object]):
+        def __getitem__(self, key: str) -> object:
+            if key == "facet_id":
+                accesses.append("gate_join:facet_id")
+            return super().__getitem__(key)
+
+        def get(self, key: str, default: object = None) -> object:
+            if key == "accepted":
+                accesses.append("gate_join:accepted")
+            return super().get(key, default)
+
+    class RecordingUnionRow(dict[str, object]):
+        def __getitem__(self, key: str) -> object:
+            accesses.append(f"union:{key}")
+            return super().__getitem__(key)
+
+    manifest = _manifest()
+    manifest["topics"][0] = RecordingTopic(  # type: ignore[index]
+        {"topic_id": "219", "query": "full narrative"}
+    )
+    gates = {"gates": [RecordingGate(_gates()["gates"][0])]}  # type: ignore[index]
+    union_rows = [
+        RecordingUnionRow(
+            {
+                "topic_id": "144",
+                "document_id": "forbidden",
+                "text": "must not be processed",
+                "text_sha256": "0" * 64,
+                "union_order": 1,
+                "provenance": [],
+            }
+        )
+    ]
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        build_contract(
+            manifest,
+            gates,
+            union_rows,
+            expected_population=1,
+            expected_o0=1,
+        )
+
+    assert accesses == ["union:topic_id"]
+
+
 def test_contract_rejects_accepted_gate_id_missing_from_manifest() -> None:
     gates = {"gates": [{"facet_id": "219-missing", "accepted": True}]}
     with pytest.raises(ValueError, match="accepted facet set.*manifest"):
@@ -251,6 +308,37 @@ def _write_cli_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
             }
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     return manifest_path, gate_path, union_path
+
+
+def test_jsonl_metadata_scanner_reads_only_top_level_topic_ids(tmp_path: Path) -> None:
+    path = tmp_path / "union.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "document_id": "safe",
+                        "nested": {"topic_id": "144"},
+                        "text": "safe evidence",
+                        "topic_id": "219",
+                    },
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    {
+                        "document_id": "forbidden",
+                        "text": "must not be processed",
+                        "topic_id": "144",
+                    },
+                    sort_keys=True,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _scan_jsonl_topic_metadata(path) == ["219", "144"]
 
 
 def test_create_cli_writes_canonical_hashed_contract_and_rejects_overwrite(
@@ -351,14 +439,47 @@ def test_cli_protected_metadata_prevents_gate_union_and_join_loader_calls() -> N
                 (
                     ["144", "72", "300", "84"],
                     ["144", "72", "300", "84"],
+                    ["144"],
                 ),
             ),
+            gate_topic_ids_loader=record("gate_metadata", []),
+            union_topic_ids_loader=record("union_metadata", []),
             manifest_loader=record("manifest_join", ({}, b"")),
             gates_loader=record("gates", ({}, b"")),
             union_loader=record("union", ([], b"")),
         )
 
     assert accesses == ["manifest_metadata"]
+
+
+def test_cli_protected_union_metadata_blocks_full_loaders_and_obligation_builder() -> None:
+    accesses: list[str] = []
+    pilot_topic_ids = ["219", "72", "300", "84"]
+
+    def record(label: str, result: object):
+        def loader(*_args: object) -> object:
+            accesses.append(label)
+            return result
+
+        return loader
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        _build_cli_contract(
+            manifest_topic_ids_loader=record(
+                "manifest_metadata",
+                (pilot_topic_ids, pilot_topic_ids, pilot_topic_ids),
+            ),
+            gate_topic_ids_loader=record("gate_metadata", pilot_topic_ids),
+            union_topic_ids_loader=record(
+                "union_metadata", ["219", "144", "72"]
+            ),
+            manifest_loader=record("manifest_processing", ({}, b"")),
+            gates_loader=record("gate_processing", ({}, b"")),
+            union_loader=record("union_processing", ([], b"")),
+            contract_builder=record("obligation_builder", {}),
+        )
+
+    assert accesses == ["manifest_metadata", "gate_metadata", "union_metadata"]
 
 
 def test_create_cli_rejects_any_declared_nonpilot_topic_set_before_gate_access(
