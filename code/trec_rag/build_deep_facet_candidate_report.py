@@ -14,6 +14,7 @@ TITLE = "Deep facets find evidence; fusion loses precision"
 TOPIC_IDS = ("219", "72", "300", "84")
 ARM_ORDER = ("RRF", "GLOBAL", "FACET", "DUAL", "DUAL-NR")
 CASCADE_ARM = "RRF-GLOBAL-DUAL"
+MIXEDBREAD_ARM = "RRF-MIXEDBREAD-DUAL"
 
 
 def _sha256(path: Path) -> str:
@@ -64,6 +65,42 @@ def load_verified_cascade(
     if metrics.get("post_qrels_diagnostic") is not True:
         raise ValueError("cascade metrics are not labeled diagnostic")
     return metrics, decision, summary
+
+
+def load_verified_mixedbread(
+    metrics_path: Path, decision_path: Path, summary_path: Path, receipt_path: Path
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
+    summary = _read_object(summary_path, "Mixedbread evaluation summary")
+    receipt = _read_object(receipt_path, "Mixedbread scoring receipt")
+    if (
+        summary.get("status") != "complete"
+        or summary.get("post_qrels_diagnostic") is not True
+        or summary.get("metrics_sha256") != _sha256(metrics_path)
+        or summary.get("decision_sha256") != _sha256(decision_path)
+        or receipt.get("status") != "complete"
+        or receipt.get("qrels_read") is not False
+        or receipt.get("paid_cost_usd") != 0
+    ):
+        raise ValueError("Mixedbread source hash or completion state differs")
+    metrics = _read_object(metrics_path, "Mixedbread metrics")
+    decision = _read_object(decision_path, "Mixedbread decision")
+    aggregate = metrics.get("aggregate")
+    source = metrics.get("source")
+    if (
+        metrics.get("post_qrels_diagnostic") is not True
+        or metrics.get("confirmatory_evidence") is not False
+        or not isinstance(aggregate, Mapping)
+        or not isinstance(aggregate.get(MIXEDBREAD_ARM), Mapping)
+        or not isinstance(metrics.get("per_topic"), Mapping)
+        or not isinstance(source, Mapping)
+        or source.get("scoring_receipt")
+        != {"bytes": receipt_path.stat().st_size, "sha256": _sha256(receipt_path)}
+        or decision.get("status") != "complete"
+        or decision.get("advance_to_fresh_validation") is not False
+        or decision.get("production_promotion_authorized") is not False
+    ):
+        raise ValueError("Mixedbread evidence is incomplete or not diagnostic")
+    return metrics, decision, receipt, summary
 
 
 def _pct(value: object, digits: int = 1) -> str:
@@ -151,6 +188,10 @@ def build_artifact(
     cascade_metrics: Mapping[str, object] | None = None,
     cascade_decision: Mapping[str, object] | None = None,
     cascade_advisor_memo: str = "",
+    mixedbread_metrics: Mapping[str, object] | None = None,
+    mixedbread_decision: Mapping[str, object] | None = None,
+    mixedbread_receipt: Mapping[str, object] | None = None,
+    mixedbread_advisor_memo: str = "",
 ) -> tuple[dict[str, object], dict[str, object]]:
     aggregate = metrics.get("aggregate")
     discovery = metrics.get("discovery")
@@ -180,6 +221,24 @@ def build_artifact(
         ):
             raise ValueError("cascade evidence is incomplete or not diagnostic")
         cascade = cascade_aggregate[CASCADE_ARM]  # type: ignore[assignment]
+    mixedbread: Mapping[str, object] | None = None
+    mixedbread_per_topic: Mapping[str, object] | None = None
+    if mixedbread_metrics is not None:
+        mixedbread_aggregate = mixedbread_metrics.get("aggregate")
+        mixedbread_per_topic = mixedbread_metrics.get("per_topic")  # type: ignore[assignment]
+        if (
+            mixedbread_metrics.get("post_qrels_diagnostic") is not True
+            or mixedbread_metrics.get("confirmatory_evidence") is not False
+            or not isinstance(mixedbread_aggregate, Mapping)
+            or not isinstance(mixedbread_aggregate.get(MIXEDBREAD_ARM), Mapping)
+            or not isinstance(mixedbread_per_topic, Mapping)
+            or not isinstance(mixedbread_receipt, Mapping)
+            or not isinstance(mixedbread_decision, Mapping)
+            or mixedbread_receipt.get("status") != "complete"
+            or mixedbread_receipt.get("qrels_read") is not False
+        ):
+            raise ValueError("Mixedbread evidence is incomplete or not diagnostic")
+        mixedbread = mixedbread_aggregate[MIXEDBREAD_ARM]  # type: ignore[assignment]
     cascade_guard_rows: list[dict[str, object]] = []
     if cascade is not None:
         assert isinstance(cascade_decision, Mapping)
@@ -213,6 +272,7 @@ def build_artifact(
     discovery_rows: list[dict[str, object]] = []
     topic_rows: list[dict[str, object]] = []
     delta_rows: list[dict[str, object]] = []
+    mixedbread_delta_rows: list[dict[str, object]] = []
     for topic in TOPIC_IDS:
         row = discovery[topic]
         topic_metric = per_topic[topic]
@@ -249,17 +309,49 @@ def build_artifact(
                     float(cascade_per_topic[topic]["graded_recall@500_delta_vs_RRF"])  # type: ignore[index]
                     if cascade_per_topic is not None else None
                 ),
+                "mixedbread_candidate_count": (
+                    int(mixedbread_per_topic[topic]["candidate_count"])  # type: ignore[index]
+                    if mixedbread_per_topic is not None else None
+                ),
+                "mixedbread_ndcg10": (
+                    float(mixedbread_per_topic[topic]["ndcg@10"])  # type: ignore[index]
+                    if mixedbread_per_topic is not None else None
+                ),
+                "mixedbread_graded_recall500": (
+                    float(mixedbread_per_topic[topic]["graded_recall@500"])  # type: ignore[index]
+                    if mixedbread_per_topic is not None else None
+                ),
+                "mixedbread_novel_retention1000": (
+                    float(mixedbread_per_topic[topic]["novel_retention@1000"])  # type: ignore[index]
+                    if mixedbread_per_topic is not None else None
+                ),
             }
         )
         delta_rows.append(
             {"topic": topic, "ndcg10_delta": float(topic_metric["DUAL_ndcg@10_delta_vs_RRF"])}
         )
+        if mixedbread_per_topic is not None:
+            mixedbread_delta_rows.append(
+                {
+                    "topic": topic,
+                    "graded_recall500_delta": float(
+                        mixedbread_per_topic[topic]["graded_recall@500_delta_vs_RRF"]  # type: ignore[index]
+                    ),
+                    "candidate_count": int(mixedbread_per_topic[topic]["candidate_count"]),  # type: ignore[index]
+                }
+            )
 
     arm_rows: list[dict[str, object]] = []
     retention_rows: list[dict[str, object]] = []
-    report_arms = (*ARM_ORDER, CASCADE_ARM) if cascade is not None else ARM_ORDER
+    report_arms: tuple[str, ...] = ARM_ORDER
+    if cascade is not None:
+        report_arms += (CASCADE_ARM,)
+    if mixedbread is not None:
+        report_arms += (MIXEDBREAD_ARM,)
     for arm in report_arms:
-        row = cascade if arm == CASCADE_ARM else aggregate[arm]
+        row = mixedbread if arm == MIXEDBREAD_ARM else (
+            cascade if arm == CASCADE_ARM else aggregate[arm]
+        )
         assert isinstance(row, Mapping)
         arm_rows.append(
             {
@@ -283,7 +375,6 @@ def build_artifact(
                 {"arm": arm, "depth": "@1000", "retention": float(row["novel_retention@1000"])},
             ]
         )
-
     sources = [
         _dataset_source("headline", "Headline discovery, gate-loss, RRF, and DUAL metrics."),
         _dataset_source("discovery", "Relevant-document counts by topic and candidate set."),
@@ -292,6 +383,16 @@ def build_artifact(
         _dataset_source("topic_deltas", "Per-topic DUAL nDCG@10 deltas versus RRF."),
         _dataset_source("topics", "Topic-level discovery and ranking tradeoff metrics."),
         _dataset_source("runtime", "External request and local MiniLM runtime/cost evidence."),
+        *(
+            [
+                _dataset_source(
+                    "mixedbread_topic_deltas",
+                    "Per-topic Mixedbread graded Recall@500 deltas versus RRF with complete candidate counts.",
+                )
+            ]
+            if mixedbread_delta_rows
+            else []
+        ),
         _source(
             "evaluation_metrics",
             "Sealed four-topic evaluation metrics",
@@ -363,6 +464,41 @@ def build_artifact(
                 ),
             ]
         )
+    if mixedbread is not None:
+        sources.extend(
+            [
+                _source(
+                    "mixedbread_metrics",
+                    "Protected-head Mixedbread diagnostic metrics",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/metrics.json",
+                    "Complete-ranking recall, judged-rate, and novel-evidence curves at practical and full depths.",
+                ),
+                _source(
+                    "mixedbread_decision",
+                    "Protected-head Mixedbread diagnostic decision",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/decision.json",
+                    "Mechanical guards, explicit coverage-inconclusive state, and promotion prohibition.",
+                ),
+                _source(
+                    "mixedbread_freeze",
+                    "Complete Mixedbread ranking seal",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/freeze/SEALED.json",
+                    "Hash inventory for all 8,114 ranked topic-document rows and their scoring inputs.",
+                ),
+                _source(
+                    "mixedbread_receipt",
+                    "Local Mixedbread scoring receipt",
+                    "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/scoring/receipt.json",
+                    "ROCm runtime, model revision, passage count, memory, and zero-cost evidence.",
+                ),
+                _source(
+                    "mixedbread_advisor",
+                    "Independent Mixedbread-results review",
+                    "reports/experiments/deep_facet_candidate_pilot_v1/mixedbread_advisor_review.md",
+                    "Independent review of whether the targeted reranker repaired candidate ordering.",
+                ),
+            ]
+        )
 
     cards = [
         {
@@ -406,6 +542,22 @@ def build_artifact(
                 "sourceId": "headline_sql",
                 "metrics": [
                     {"label": "Cascade graded Recall@500", "field": "cascade_graded_recall500", "format": "percent"}
+                ],
+            }
+        )
+    if mixedbread is not None:
+        cards.append(
+            {
+                "id": "mixedbread_card",
+                "description": "Protected RRF head plus facet-aware Mixedbread selection, while retaining every accepted document.",
+                "dataset": "headline",
+                "sourceId": "headline_sql",
+                "metrics": [
+                    {
+                        "label": "Mixedbread graded Recall@500",
+                        "field": "mixedbread_graded_recall500",
+                        "format": "percent",
+                    }
                 ],
             }
         )
@@ -467,6 +619,29 @@ def build_artifact(
             },
             "layout": "full",
         },
+        *(
+            [
+                {
+                    "id": "mixedbread_topic_delta",
+                    "title": "Mixedbread graded Recall@500 delta versus RRF",
+                    "subtitle": "Per-topic signed diagnostic difference; all accepted candidates remain in the full ranking.",
+                    "type": "bar",
+                    "dataset": "mixedbread_topic_deltas",
+                    "sourceId": "mixedbread_topic_deltas_sql",
+                    "encodings": {
+                        "x": {"field": "topic", "type": "nominal", "label": "Topic"},
+                        "y": {
+                            "field": "graded_recall500_delta",
+                            "type": "quantitative",
+                            "label": "Graded Recall@500 delta",
+                        },
+                    },
+                    "layout": "full",
+                }
+            ]
+            if mixedbread_delta_rows
+            else []
+        ),
     ]
 
     tables = [
@@ -505,6 +680,10 @@ def build_artifact(
                 {"field": "cascade_ndcg10", "label": "Cascade nDCG@10", "format": "number"},
                 {"field": "cascade_graded_recall500", "label": "Cascade graded Recall@500", "format": "percent"},
                 {"field": "cascade_graded_recall500_delta", "label": "Cascade GR@500 Δ vs RRF", "format": "number"},
+                {"field": "mixedbread_candidate_count", "label": "Complete candidates", "format": "number"},
+                {"field": "mixedbread_ndcg10", "label": "Mixedbread nDCG@10", "format": "number"},
+                {"field": "mixedbread_graded_recall500", "label": "Mixedbread graded Recall@500", "format": "percent"},
+                {"field": "mixedbread_novel_retention1000", "label": "Mixedbread novel retention@1000", "format": "percent"},
             ],
         },
     ]
@@ -525,27 +704,92 @@ def build_artifact(
         )
 
     advisor_clean = advisor_memo.strip() or "Advisor review was requested but no memo was available."
+    mixedbread_guards_pass = bool(
+        isinstance(mixedbread_decision, Mapping)
+        and mixedbread_decision.get("mechanical_guards_pass") is True
+    )
+    mixedbread_next_step = (
+        "## Recommended next step\n\n"
+        "**The mechanism passes its fixed mechanical checks, but the verdict remains inconclusive on these exposed projected qrels.** Freeze the exact query, candidate pool, reranker, aggregation, and complete-tail policy, then run one untouched fresh-topic validation. Production promotion remains prohibited until that coverage check."
+        if mixedbread_guards_pass
+        else
+        "## Recommended next step\n\n"
+        "**Stop the all-facet-query configuration, but preserve the complete candidate union for RAG.** On fresh qrels-blind topics, test one preregistered two-basket arm: preserve RRF ranks 1–100; score each facet's candidates with the full narrative plus only that generating facet; normalize scores within each facet; fill ranks 101–500 by deterministic interleaving of 200 unseen RRF documents and 200 equal-budget facet documents; then append every remaining candidate in frozen DUAL order. Do not retune or promote using these exposed topics."
+    )
+    mixedbread_verdict = (
+        "Because these four topics were already qrels-exposed, the mechanical pass would still be mechanism evidence only and requires untouched fresh validation."
+        if mixedbread_guards_pass
+        else
+        "The fixed per-topic guard fails, so this exact all-facet-query configuration stops here and is not promoted to fresh validation."
+    )
     blocks = [
         {"id": "title", "type": "markdown", "body": f"# {TITLE}"},
+        *(
+            [
+                {
+                    "id": "mixedbread_summary",
+                    "type": "markdown",
+                    "sourceId": "mixedbread_metrics",
+                    "body": (
+                        "## Technical summary\n\n"
+                        f"**The protected-head Mixedbread arm ranks all {sum(int(mixedbread_per_topic[topic]['candidate_count']) for topic in TOPIC_IDS):,} accepted topic-document candidates; no document is discarded at rank 100 or 500.** "  # type: ignore[index]
+                        "RRF ranks 1–10 remain exact, Mixedbread selects ranks 11–500 using the narrative plus every accepted facet obligation, and every remaining document follows in frozen DUAL order. "
+                        f"It reaches **{_pct(mixedbread['graded_recall@500'])} graded Recall@500**, **{_pct(mixedbread['graded_recall@1000'])} at 1,000**, and retains **{int(mixedbread['novel_retained@1000'])}/{novel_count}** novel relevant documents by 1,000. "
+                        f"But nDCG@100 is **{float(mixedbread['ndcg@100']):.3f}** versus RRF's **{float(rrf['ndcg@100']):.3f}**, and raw Recall@500 is **{float(mixedbread['recall@500']):.3f}** versus **{float(rrf['recall@500']):.3f}**. "
+                        + mixedbread_verdict
+                    ),
+                }
+            ]
+            if mixedbread is not None and mixedbread_per_topic is not None
+            else []
+        ),
+        *(
+            [
+                {
+                    "id": "mixedbread_runtime",
+                    "type": "markdown",
+                    "sourceId": "mixedbread_receipt",
+                    "body": (
+                        "### Local scoring cost\n\n"
+                        f"The local pass scored **{int(mixedbread_receipt['window_count']):,} passages** in **{float(mixedbread_receipt['elapsed_seconds']):.1f} seconds** at **$0**, with no retrieval or network calls. "  # type: ignore[index]
+                        "The receipt is hash-bound through the ranking freeze into this evaluation."
+                    ),
+                }
+            ]
+            if mixedbread is not None
+            else []
+        ),
         {
             "id": "technical_summary",
             "type": "markdown",
-            "sourceId": "cascade_metrics" if cascade is not None else "evaluation_metrics",
+            "sourceId": (
+                "cascade_metrics" if cascade is not None else "evaluation_metrics"
+            ),
             "body": (
                 (
-                    "## Technical summary\n\n"
+                    "## Why the positional cascade failed\n\n"
                     "**The fixed cascade protected the first ten results, but did not fix relevance at candidate depth 500.** "
                     f"Its nDCG@10 exactly matches RRF at **{float(cascade['ndcg@10']):.3f}**, and it retains **{_pct(cascade['novel_retention@1000'])}** of the {novel_count} novel relevant documents by 1,000. "
                     f"But graded Recall@500 is only **{float(cascade['graded_recall@500']):.3f}**, below RRF (**{float(rrf['graded_recall@500']):.3f}**) and GLOBAL (**{float(aggregate['GLOBAL']['graded_recall@500']):.3f}**). "  # type: ignore[index]
                     "This post-qrels diagnostic fails the fixed stop rule. The candidate coverage is real; a positional splice of existing MiniLM/RRF rankings is not enough."
                 )
-                if cascade is not None
+                if mixedbread is not None and cascade is not None
+                else (
+                    (
+                        "## Technical summary\n\n"
+                        "**The fixed cascade protected the first ten results, but did not fix relevance at candidate depth 500.** "
+                        f"Its nDCG@10 exactly matches RRF at **{float(cascade['ndcg@10']):.3f}**, and it retains **{_pct(cascade['novel_retention@1000'])}** of the {novel_count} novel relevant documents by 1,000. "
+                        f"But graded Recall@500 is only **{float(cascade['graded_recall@500']):.3f}**, below RRF (**{float(rrf['graded_recall@500']):.3f}**) and GLOBAL (**{float(aggregate['GLOBAL']['graded_recall@500']):.3f}**). "  # type: ignore[index]
+                        "This post-qrels diagnostic fails the fixed stop rule. The candidate coverage is real; a positional splice of existing MiniLM/RRF rankings is not enough."
+                    )
+                    if cascade is not None
                 else (
                     "## Technical summary\n\n"
                     f"**Facet decomposition succeeds at candidate discovery, but the tested fusion does not safely rank the additions.** "
                     f"U_accepted adds **{novel_count} grade≥2 documents** beyond original@1000 across **{novel_topics}/4 topics**; the stream gate loses only **{gate_lost}** relevant documents. "
                     f"However, RRF leads early precision at **{float(rrf['ndcg@10']):.3f} nDCG@10**, while DUAL falls to **{float(dual['ndcg@10']):.3f}** despite retaining **{_pct(dual['novel_retention@1000'])}** of novel evidence by rank 1,000. "
                     "The preregistered decision is therefore **stop; diagnose fusion**—not reject facet queries or accept pure BM25 as sufficient."
+                )
                 )
             ),
         },
@@ -594,6 +838,50 @@ def build_artifact(
         *(
             [
                 {
+                    "id": "mixedbread_method",
+                    "type": "markdown",
+                    "sourceId": "mixedbread_freeze",
+                    "body": (
+                        "## What Mixedbread changed\n\n"
+                        "The reranker does not score a pooled document against only the broad narrative or only one facet. Every residual candidate is scored against the same structured topic query: the unchanged narrative followed by the complete accepted-facet obligation list. "
+                        "The strongest four document passages are combined with frozen weights `0.55, 0.25, 0.13, 0.07`. This makes scores comparable within a topic while allowing evidence that answers only one requested information need to rank well. "
+                        "The expensive pool is bounded to the RRF@500 ∪ GLOBAL@500 ∪ DUAL@1000 disagreement set, but the delivered RAG ranking remains a complete permutation."
+                    ),
+                }
+            ]
+            if mixedbread is not None
+            else []
+        ),
+        *(
+            [
+                {
+                    "id": "mixedbread_topic_finding",
+                    "type": "markdown",
+                    "sourceId": "mixedbread_metrics",
+                    "body": (
+                        "## Topic-level recall shows whether the repair is stable\n\n"
+                        "The chart compares Mixedbread with RRF at rank 500 for each topic; positive bars mean the stronger reranker moved more graded relevant evidence into a practical RAG candidate depth. "
+                        + "Observed deltas are "
+                        + ", ".join(
+                            f"topic {topic} **{float(mixedbread_per_topic[topic]['graded_recall@500_delta_vs_RRF']):+.3f}**"  # type: ignore[index]
+                            for topic in TOPIC_IDS
+                        )
+                        + ". The complete tail is unchanged as a population, so these differences measure ordering—not candidate loss."
+                    ),
+                },
+                {
+                    "id": "mixedbread_topic_delta_chart",
+                    "type": "chart",
+                    "chartId": "mixedbread_topic_delta",
+                    "layout": "full",
+                },
+            ]
+            if mixedbread_per_topic is not None
+            else []
+        ),
+        *(
+            [
+                {
                     "id": "cascade_guard_table_block",
                     "type": "table",
                     "tableId": "cascade_guard_table",
@@ -601,6 +889,21 @@ def build_artifact(
                 }
             ]
             if cascade is not None
+            else []
+        ),
+        *(
+            [
+                {
+                    "id": "mixedbread_advisor",
+                    "type": "markdown",
+                    "sourceId": "mixedbread_advisor",
+                    "body": (
+                        "## Advisor review after targeted reranking\n\n"
+                        + (mixedbread_advisor_memo.strip() or "Mixedbread review is pending.")
+                    ),
+                }
+            ]
+            if mixedbread is not None
             else []
         ),
         {
@@ -684,39 +987,61 @@ def build_artifact(
         {
             "id": "next_step",
             "type": "markdown",
-            "sourceId": "cascade_advisor" if cascade is not None else "evaluation_decision",
+            "sourceId": (
+                (
+                    "mixedbread_decision"
+                    if mixedbread_guards_pass else "mixedbread_advisor"
+                ) if mixedbread is not None else (
+                    "cascade_advisor" if cascade is not None else "evaluation_decision"
+                )
+            ),
             "body": (
                 (
-                    "## Recommended next step\n\n"
-                    "**Do not tune another positional cascade on these exposed topics.** The bounded mechanism diagnostic is one protected-head Mixedbread rerank: keep RRF ranks 1–10, form the residual union of RRF@500, GLOBAL@500, and DUAL@1000, and score it once with `mixedbread-ai/mxbai-rerank-base-v2`. "
-                    "Use one identical structured query per topic containing the full narrative plus the complete accepted-facet obligation list, so scores are comparable within the topic. Fill ranks 11–500 from that score and append the remaining complete union in frozen DUAL order. Audit cached scores and freeze exact documents, windows, runtime, memory, and cost before any separately approved inference."
+                    mixedbread_next_step
                 )
-                if cascade is not None
+                if mixedbread is not None
                 else (
-                    "## Recommended next step\n\n"
-                    "Preserve the frozen U_accepted union and test **one deterministic RRF–GLOBAL–DUAL cascade**: exact RRF at ranks 1–10, GLOBAL at 11–100 while skipping selected documents, and DUAL from 101 onward, again skipping duplicates and eventually appending the complete union. "
-                    "This uses only existing scores—no retrieval, inference, new weights, filtering, or iterative tuning. Freeze the cascade before evaluation. Stop if nDCG@10 differs from RRF, graded Recall@500 does not beat both RRF and GLOBAL, graded Recall@1000 falls below RRF, novel retention@1000 is below 80%, any topic loses more than 0.02 graded Recall@500 versus RRF, or judged coverage prevents a defensible comparison."
+                    (
+                        "## Recommended next step\n\n"
+                        "**Do not tune another positional cascade on these exposed topics.** The bounded mechanism diagnostic is one protected-head Mixedbread rerank: keep RRF ranks 1–10, form the residual union of RRF@500, GLOBAL@500, and DUAL@1000, and score it once with `mixedbread-ai/mxbai-rerank-base-v2`. "
+                        "Use one identical structured query per topic containing the full narrative plus the complete accepted-facet obligation list, so scores are comparable within the topic. Fill ranks 11–500 from that score and append the remaining complete union in frozen DUAL order. Audit cached scores and freeze exact documents, windows, runtime, memory, and cost before inference."
+                    )
+                    if cascade is not None
+                    else (
+                        "## Recommended next step\n\n"
+                        "Preserve the frozen U_accepted union and test **one deterministic RRF–GLOBAL–DUAL cascade**: exact RRF at ranks 1–10, GLOBAL at 11–100 while skipping selected documents, and DUAL from 101 onward, again skipping duplicates and eventually appending the complete union. "
+                        "This uses only existing scores—no retrieval, inference, new weights, filtering, or iterative tuning. Freeze the cascade before evaluation."
+                    )
                 )
             ),
         },
         {
             "id": "further_questions",
             "type": "markdown",
-            "body": (
-                (
-                    "## Further questions\n\n"
-                    "- How much of the frozen disagreement pool is already covered by authenticated Mixedbread cache entries?\n"
+                "body": (
+                    (
+                        "## Further questions\n\n"
+                        "- How many exact narrative-plus-one-facet passage scores are already cached before approving new inference?\n"
+                        "- Can blind judging of rank-500 disagreements make binary and graded recall comparisons defensible?\n"
+                        "- On fresh topics, does the protected 100/200/200 two-basket allocation recover facet evidence without topic-level recall regressions?"
+                    )
+                    if mixedbread is not None
+                    else (
+                    (
+                        "## Further questions\n\n"
+                        "- How much of the frozen disagreement pool is already covered by authenticated Mixedbread cache entries?\n"
                     "- Would blind judgments of top-500 disagreements resolve the shallow judged-coverage imbalance?\n"
                     "- On fresh preregistered topics, can the protected-head reranker promote novel facet evidence without topic-level recall regressions?"
                 )
-                if cascade is not None
-                else (
+                    if cascade is not None
+                    else (
                     "## Further questions\n\n"
                     "- How large can the protected RRF head be while still admitting meaningful facet evidence by 500?\n"
                     "- Should insertion eligibility require both strong facet-local percentile and a minimum common/narrative coherence score?\n"
-                    "- On a larger preregistered topic set, does the topic-300 recall gain persist without its early-precision regression?"
-                )
-            ),
+                        "- On a larger preregistered topic set, does the topic-300 recall gain persist without its early-precision regression?"
+                    )
+                    )
+                ),
         },
     ]
 
@@ -750,6 +1075,10 @@ def build_artifact(
                             float(cascade["graded_recall@500"])
                             if cascade is not None else None
                         ),
+                        "mixedbread_graded_recall500": (
+                            float(mixedbread["graded_recall@500"])
+                            if mixedbread is not None else None
+                        ),
                     }
                 ],
                 "discovery": discovery_rows,
@@ -759,6 +1088,10 @@ def build_artifact(
                 "topics": topic_rows,
                 "runtime": [runtime_row],
                 **({"cascade_guards": cascade_guard_rows} if cascade is not None else {}),
+                **(
+                    {"mixedbread_topic_deltas": mixedbread_delta_rows}
+                    if mixedbread_delta_rows else {}
+                ),
             },
         },
         "sources": sources,
@@ -786,6 +1119,26 @@ def build_artifact(
             float(cascade["graded_recall@500"])
             if cascade is not None else None
         ),
+        "mixedbread_graded_recall500": (
+            float(mixedbread["graded_recall@500"])
+            if mixedbread is not None else None
+        ),
+        "mixedbread_novel_retention1000": (
+            float(mixedbread["novel_retention@1000"])
+            if mixedbread is not None else None
+        ),
+        "mixedbread_complete_candidate_count": (
+            sum(int(mixedbread_per_topic[topic]["candidate_count"]) for topic in TOPIC_IDS)  # type: ignore[index]
+            if mixedbread_per_topic is not None else None
+        ),
+        "mixedbread_mechanical_guards_pass": (
+            mixedbread_decision.get("mechanical_guards_pass")
+            if isinstance(mixedbread_decision, Mapping) else None
+        ),
+        "mixedbread_advance_to_fresh_validation": (
+            mixedbread_decision.get("advance_to_fresh_validation")
+            if isinstance(mixedbread_decision, Mapping) else None
+        ),
     }
     return artifact, report_summary
 
@@ -803,6 +1156,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cascade-decision", type=Path)
     parser.add_argument("--cascade-summary", type=Path)
     parser.add_argument("--cascade-advisor", type=Path)
+    parser.add_argument("--mixedbread-metrics", type=Path)
+    parser.add_argument("--mixedbread-decision", type=Path)
+    parser.add_argument("--mixedbread-summary", type=Path)
+    parser.add_argument("--mixedbread-receipt", type=Path)
+    parser.add_argument("--mixedbread-advisor", type=Path)
     parser.add_argument("--artifact", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -832,6 +1190,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.cascade_summary,
         )
         cascade_advisor = args.cascade_advisor.read_text(encoding="utf-8")
+    mixedbread_paths = (
+        args.mixedbread_metrics,
+        args.mixedbread_decision,
+        args.mixedbread_summary,
+        args.mixedbread_receipt,
+        args.mixedbread_advisor,
+    )
+    if any(path is not None for path in mixedbread_paths) and not all(
+        path is not None for path in mixedbread_paths
+    ):
+        raise ValueError("all Mixedbread report inputs must be provided together")
+    mixedbread_metrics = mixedbread_decision = mixedbread_receipt = None
+    mixedbread_advisor = ""
+    if all(path is not None for path in mixedbread_paths):
+        mixedbread_metrics, mixedbread_decision, mixedbread_receipt, _mixedbread_summary = (
+            load_verified_mixedbread(
+                args.mixedbread_metrics,
+                args.mixedbread_decision,
+                args.mixedbread_summary,
+                args.mixedbread_receipt,
+            )
+        )
+        mixedbread_advisor = args.mixedbread_advisor.read_text(encoding="utf-8")
     if (
         retrieval.get("complete") is not True
         or retrieval.get("qrels_opened") is not False
@@ -859,6 +1240,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         cascade_metrics=cascade_metrics,
         cascade_decision=cascade_decision,
         cascade_advisor_memo=cascade_advisor,
+        mixedbread_metrics=mixedbread_metrics,
+        mixedbread_decision=mixedbread_decision,
+        mixedbread_receipt=mixedbread_receipt,
+        mixedbread_advisor_memo=mixedbread_advisor,
     )
     datasets = artifact["snapshot"]["datasets"]
     assert isinstance(datasets, Mapping)

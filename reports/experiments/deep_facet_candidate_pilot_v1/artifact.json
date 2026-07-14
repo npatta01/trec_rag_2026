@@ -7,7 +7,19 @@
         "type": "markdown"
       },
       {
-        "body": "## Technical summary\n\n**The fixed cascade protected the first ten results, but did not fix relevance at candidate depth 500.** Its nDCG@10 exactly matches RRF at **0.433**, and it retains **87.6%** of the 177 novel relevant documents by 1,000. But graded Recall@500 is only **0.187**, below RRF (**0.210**) and GLOBAL (**0.198**). This post-qrels diagnostic fails the fixed stop rule. The candidate coverage is real; a positional splice of existing MiniLM/RRF rankings is not enough.",
+        "body": "## Technical summary\n\n**The protected-head Mixedbread arm ranks all 8,114 accepted topic-document candidates; no document is discarded at rank 100 or 500.** RRF ranks 1\u201310 remain exact, Mixedbread selects ranks 11\u2013500 using the narrative plus every accepted facet obligation, and every remaining document follows in frozen DUAL order. It reaches **21.6% graded Recall@500**, **28.7% at 1,000**, and retains **153/177** novel relevant documents by 1,000. But nDCG@100 is **0.273** versus RRF's **0.405**, and raw Recall@500 is **0.179** versus **0.198**. The fixed per-topic guard fails, so this exact all-facet-query configuration stops here and is not promoted to fresh validation.",
+        "id": "mixedbread_summary",
+        "sourceId": "mixedbread_metrics",
+        "type": "markdown"
+      },
+      {
+        "body": "### Local scoring cost\n\nThe local pass scored **36,435 passages** in **4458.0 seconds** at **$0**, with no retrieval or network calls. The receipt is hash-bound through the ranking freeze into this evaluation.",
+        "id": "mixedbread_runtime",
+        "sourceId": "mixedbread_receipt",
+        "type": "markdown"
+      },
+      {
+        "body": "## Why the positional cascade failed\n\n**The fixed cascade protected the first ten results, but did not fix relevance at candidate depth 500.** Its nDCG@10 exactly matches RRF at **0.433**, and it retains **87.6%** of the 177 novel relevant documents by 1,000. But graded Recall@500 is only **0.187**, below RRF (**0.210**) and GLOBAL (**0.198**). This post-qrels diagnostic fails the fixed stop rule. The candidate coverage is real; a positional splice of existing MiniLM/RRF rankings is not enough.",
         "id": "technical_summary",
         "sourceId": "cascade_metrics",
         "type": "markdown"
@@ -18,7 +30,8 @@
           "gate_card",
           "rrf_card",
           "dual_card",
-          "cascade_card"
+          "cascade_card",
+          "mixedbread_card"
         ],
         "id": "headline_metrics",
         "type": "metric-strip"
@@ -60,10 +73,34 @@
         "type": "markdown"
       },
       {
+        "body": "## What Mixedbread changed\n\nThe reranker does not score a pooled document against only the broad narrative or only one facet. Every residual candidate is scored against the same structured topic query: the unchanged narrative followed by the complete accepted-facet obligation list. The strongest four document passages are combined with frozen weights `0.55, 0.25, 0.13, 0.07`. This makes scores comparable within a topic while allowing evidence that answers only one requested information need to rank well. The expensive pool is bounded to the RRF@500 \u222a GLOBAL@500 \u222a DUAL@1000 disagreement set, but the delivered RAG ranking remains a complete permutation.",
+        "id": "mixedbread_method",
+        "sourceId": "mixedbread_freeze",
+        "type": "markdown"
+      },
+      {
+        "body": "## Topic-level recall shows whether the repair is stable\n\nThe chart compares Mixedbread with RRF at rank 500 for each topic; positive bars mean the stronger reranker moved more graded relevant evidence into a practical RAG candidate depth. Observed deltas are topic 219 **-0.040**, topic 72 **+0.051**, topic 300 **+0.010**, topic 84 **+0.003**. The complete tail is unchanged as a population, so these differences measure ordering\u2014not candidate loss.",
+        "id": "mixedbread_topic_finding",
+        "sourceId": "mixedbread_metrics",
+        "type": "markdown"
+      },
+      {
+        "chartId": "mixedbread_topic_delta",
+        "id": "mixedbread_topic_delta_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
         "id": "cascade_guard_table_block",
         "layout": "full",
         "tableId": "cascade_guard_table",
         "type": "table"
+      },
+      {
+        "body": "## Advisor review after targeted reranking\n\n# Independent protected-head Mixedbread review\n\n## Verdict\n\nThe Mixedbread diagnostic is a meaningful mechanism success, but it is not a\nsafe overall win and the frozen no-promotion decision is correct. Stronger\nreranking improved graded gain at 500 and 1,000 while preserving the RRF top\nten and nearly all deep novel evidence. It also reduced binary Recall@500,\nsubstantially damaged nDCG@100, and failed badly on topic 219.\n\nDo not adjust this query, cutoff, or score on these qrels-exposed topics. The\nnext test should be one preregistered, facet-local Mixedbread design on fresh\ntopics, with an explicit original-query basket.\n\n## Artifact and implementation audit\n\nVerified from the sealed artifacts and a complete semantic recomputation:\n\n- the residual pool is exactly the union of RRF@500, GLOBAL@500, and DUAL@1,000,\n  excluding the protected RRF top ten;\n- ranks 1\u201310 are the exact RRF order;\n- ranks 11\u2013500 are the 490 strongest aggregated Mixedbread residual scores,\n  with frozen DUAL rank as the tie-break;\n- ranks 501 onward are the remaining complete DUAL order;\n- all 8,114 topic-document candidates form duplicate-free complete\n  permutations, so all 177 known novel relevant candidates remain present;\n- preflight, scoring, and ranking construction record no retrieval, network, or\n  paid call and no qrels read before the ranking seal; and\n- 36,435 windows for 4,469 residual documents were scored locally in 4,458\n  seconds at 8.17 windows/second. Peak device and host memory were approximately\n  2.74 GB and 3.56 GB.\n\nThe sealed ranking root `936b9a96d9b7fc2f984dca63d7e512bcfa8d382caef3e9e56999ee36c2166dc1`\nrecomputed successfully from its bound source rankings, windows, and scores.\n\n## What worked\n\nThe following are verified results:\n\n- nDCG@10 is exactly RRF: `0.4326`;\n- graded Recall@500 is `0.2161`, above RRF `0.2101`, GLOBAL `0.1979`, DUAL\n  `0.1855`, and the positional cascade `0.1870`;\n- graded Recall@1,000 is `0.2869`, above RRF `0.2659` and DUAL `0.2799`;\n- 99/177 novel relevant documents survive at 500 and 153/177 at 1,000;\n- all 177 remain in the complete ranking; and\n- per-topic graded Recall@500 improves over RRF on topics 72 (`+0.0515`), 300\n  (`+0.0095`), and 84 (`+0.0029`).\n\nThis establishes that a stronger cross-encoder can identify useful high-grade\nfacet evidence better than the prior fixed fusion rules. It also shows that the\ncandidate-generation work should be retained.\n\n## Why this is not a safe win\n\n### Binary coverage fell\n\nAggregate binary Recall@500 fell from RRF `0.1976` to `0.1791`, even though\ngraded Recall increased. Mixedbread therefore selected fewer grade-2-or-higher\ndocuments overall while favoring higher-grade documents strongly enough to win\nthe exponential-gain metric.\n\nAt 500, the relevant-document counts changed as follows:\n\n- topic 219: 85 to 53;\n- topic 72: 199 to 187;\n- topic 300: 130 to 131; and\n- topic 84: 153 to 148.\n\nThis trade is unsuitable if the downstream goal values broad evidence recall,\nnot only a smaller set of highly graded passages.\n\n### The protected top ten masks ranks 11\u2013100\n\nnDCG@10 is safe only because those ten positions were copied from RRF. At 100:\n\n- nDCG falls from RRF `0.4048` to `0.2727`;\n- graded Recall falls from `0.1155` to `0.0675`; and\n- judged coverage falls from `97.25%` to `45.25%`.\n\nThe new arm does retrieve 23 novel relevant documents at 100, versus zero for\nRRF, but it displaces too much established original-query evidence. A production\nsystem that consumes more than ten candidates would still experience this loss.\n\n### Topic 219 remains a decisive failure\n\nAt 500, topic 219 loses 40 RRF-relevant documents and gains only eight, for a\nnet graded-gain loss of 124. Thirty-seven of the 40 lost documents have original\nquery provenance. Broad grade-4 AI and societal-impact documents are displaced,\nwhile the strongest gained documents disproportionately emphasize the narrower\ntelehealth facet. At 100 the loss is larger; by 1,000 the net graded-gain gap is\nonly two, so this is primarily an ordering failure rather than candidate loss.\n\nMixedbread score separation is also weak for topic 219: median residual scores\nare `5.409` for relevant, `5.295` for judged nonrelevant, and `5.253` for\nunjudged documents. The relevant/nonrelevant separation is materially larger on\nthe other three topics.\n\n## Judging-coverage limitation\n\nThe RRF comparison remains biased toward RRF because unjudged documents receive\nzero gain:\n\n- judged@100: Mixedbread `45.25%`, RRF `97.25%`;\n- judged@500: Mixedbread `30.75%`, RRF `36.75%`; and\n- judged@1,000: Mixedbread `23.25%`, RRF `23.38%`.\n\nThe depth-1,000 improvement is the most defensible because coverage is nearly\nidentical. At 500, the six-point aggregate gap makes the exact advantage over\nRRF uncertain. Mixedbread does beat GLOBAL at 500 with nearly comparable judged\ncoverage (`30.75%` versus `29.75%`), which supports a real gain over the weaker\ncommon-query semantic control. It does not remove the topic-219 or raw-recall\nconcerns.\n\n## Did the all-facet query dilute relevance?\n\n**Inference:** probably on topic 219, but the experiment does not prove it.\n\nThe topic-219 query concatenates a broad narrative with seven heterogeneous\nobligations: daily-life effects, government, business, telehealth, technical\nsocieties, and device rationing. The observed promotion of telehealth-specific\ndocuments, loss of broad societal-impact evidence, and weak score separation\nare consistent with a cross-encoder rewarding one conspicuous facet while not\ncalibrating comprehensive topic relevance.\n\n**Unknown:** there is no matched Mixedbread facet-local arm, so query dilution\ncannot be separated from model calibration, projected-qrels coverage, long-text\nwindow aggregation, or topic-specific candidate quality.\n\nThe result supports testing narrative-tethered facet-local scoring next. It does\nnot support an unconstrained global `max-over-facet` ranking: that would repeat\nthe multiple-opportunity and facet-flooding risks already observed. A max local\nscore is reasonable only inside a bounded facet basket while an original-query\nbasket is protected separately.\n\n## One bounded next experiment\n\nPreregister one **two-basket, facet-local Mixedbread** arm on fresh qrels-blind\ntopics:\n\n1. Preserve RRF ranks 1\u2013100 exactly.\n2. For each accepted facet's existing 200 candidates, score each document with\n   one query containing the full narrative plus only that generating facet as a\n   `Focus:` obligation. Do not concatenate all facets.\n3. Convert scores to percentiles within each facet; for a document retrieved by\n   multiple facets, retain its maximum generating-facet percentile. Raw scores\n   never cross facet-query boundaries.\n4. Fill ranks 101\u2013500 from two deterministic baskets:\n   - 200 next-unseen RRF documents, preserving the broad original-query basket;\n   - 200 facet documents, selected by facet-local percentile with equal\n     per-facet slot budgets and manifest-order remainder allocation.\n   Interleave the two baskets and skip duplicates.\n5. Append every remaining candidate in frozen DUAL order, preserving the full\n   candidate union.\n6. Freeze exact candidate/window counts, cache coverage, runtime, and memory\n   before separately approved inference. Run one arm only and do not tune the\n   100/200/200 allocation after qrels access.\n\nThis directly tests whether shorter narrative-plus-one-facet queries recover\nspecific evidence without sacrificing the broad original basket. It bounds the\neffect of max-over-facet scoring rather than allowing it to dominate the list.\n\n### Stop rule\n\nDo not run another repair if the fresh evaluation fails any of these:\n\n- nDCG@100 is exactly RRF by construction;\n- binary Recall@500 is not below RRF;\n- graded Recall@500 exceeds RRF;\n- at least 50% of discovered novel relevant documents survive at 500;\n- binary and graded Recall@1,000 are not below RRF;\n- novel retention@1,000 is at least 80%;\n- no topic loses more than `0.02` binary or graded Recall@500 versus RRF; and\n- judging coverage is comparable, or the disagreement pool receives blind\n  judgments.\n\nThe current four topics may inform this frozen design but must not be used to\ntune or confirm it. Only fresh topics with rankings sealed before qrels access\ncan determine whether the method should advance.",
+        "id": "mixedbread_advisor",
+        "sourceId": "mixedbread_advisor",
+        "type": "markdown"
       },
       {
         "body": "## The precision loss is concentrated but not isolated\n\nDUAL loses nDCG@10 on all four topics. The largest regressions are topic 300 (**\u22120.163**) and topic 84 (**\u22120.134**); topic 219 loses **\u22120.063** and topic 72 **\u22120.033**. Topic 300 also shows why the candidate union should be preserved: DUAL retains 50 novel relevant documents by 500 and slightly improves that topic's graded Recall@500, even while its first ten ranks worsen sharply.",
@@ -126,13 +163,13 @@
         "type": "markdown"
       },
       {
-        "body": "## Recommended next step\n\n**Do not tune another positional cascade on these exposed topics.** The bounded mechanism diagnostic is one protected-head Mixedbread rerank: keep RRF ranks 1\u201310, form the residual union of RRF@500, GLOBAL@500, and DUAL@1000, and score it once with `mixedbread-ai/mxbai-rerank-base-v2`. Use one identical structured query per topic containing the full narrative plus the complete accepted-facet obligation list, so scores are comparable within the topic. Fill ranks 11\u2013500 from that score and append the remaining complete union in frozen DUAL order. Audit cached scores and freeze exact documents, windows, runtime, memory, and cost before any separately approved inference.",
+        "body": "## Recommended next step\n\n**Stop the all-facet-query configuration, but preserve the complete candidate union for RAG.** On fresh qrels-blind topics, test one preregistered two-basket arm: preserve RRF ranks 1\u2013100; score each facet's candidates with the full narrative plus only that generating facet; normalize scores within each facet; fill ranks 101\u2013500 by deterministic interleaving of 200 unseen RRF documents and 200 equal-budget facet documents; then append every remaining candidate in frozen DUAL order. Do not retune or promote using these exposed topics.",
         "id": "next_step",
-        "sourceId": "cascade_advisor",
+        "sourceId": "mixedbread_advisor",
         "type": "markdown"
       },
       {
-        "body": "## Further questions\n\n- How much of the frozen disagreement pool is already covered by authenticated Mixedbread cache entries?\n- Would blind judgments of top-500 disagreements resolve the shallow judged-coverage imbalance?\n- On fresh preregistered topics, can the protected-head reranker promote novel facet evidence without topic-level recall regressions?",
+        "body": "## Further questions\n\n- How many exact narrative-plus-one-facet passage scores are already cached before approving new inference?\n- Can blind judging of rank-500 disagreements make binary and graded recall comparisons defensible?\n- On fresh topics, does the protected 100/200/200 two-basket allocation recover facet evidence without topic-level recall regressions?",
         "id": "further_questions",
         "type": "markdown"
       }
@@ -204,6 +241,19 @@
             "field": "cascade_graded_recall500",
             "format": "percent",
             "label": "Cascade graded Recall@500"
+          }
+        ],
+        "sourceId": "headline_sql"
+      },
+      {
+        "dataset": "headline",
+        "description": "Protected RRF head plus facet-aware Mixedbread selection, while retaining every accepted document.",
+        "id": "mixedbread_card",
+        "metrics": [
+          {
+            "field": "mixedbread_graded_recall500",
+            "format": "percent",
+            "label": "Mixedbread graded Recall@500"
           }
         ],
         "sourceId": "headline_sql"
@@ -306,6 +356,27 @@
         "subtitle": "Per-topic signed difference; zero means no early-ranking change.",
         "title": "DUAL nDCG@10 delta versus RRF",
         "type": "bar"
+      },
+      {
+        "dataset": "mixedbread_topic_deltas",
+        "encodings": {
+          "x": {
+            "field": "topic",
+            "label": "Topic",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "graded_recall500_delta",
+            "label": "Graded Recall@500 delta",
+            "type": "quantitative"
+          }
+        },
+        "id": "mixedbread_topic_delta",
+        "layout": "full",
+        "sourceId": "mixedbread_topic_deltas_sql",
+        "subtitle": "Per-topic signed diagnostic difference; all accepted candidates remain in the full ranking.",
+        "title": "Mixedbread graded Recall@500 delta versus RRF",
+        "type": "bar"
       }
     ],
     "description": "Qrels-backed technical report on deep facet candidate discovery and fusion.",
@@ -344,6 +415,11 @@
       {
         "id": "runtime_sql",
         "label": "Runtime report dataset",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
+      },
+      {
+        "id": "mixedbread_topic_deltas_sql",
+        "label": "Mixedbread Topic Deltas report dataset",
         "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite"
       },
       {
@@ -400,6 +476,31 @@
         "id": "cascade_advisor",
         "label": "Independent cascade-results review",
         "path": "reports/experiments/deep_facet_candidate_pilot_v1/cascade_advisor_review.md"
+      },
+      {
+        "id": "mixedbread_metrics",
+        "label": "Protected-head Mixedbread diagnostic metrics",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/metrics.json"
+      },
+      {
+        "id": "mixedbread_decision",
+        "label": "Protected-head Mixedbread diagnostic decision",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/decision.json"
+      },
+      {
+        "id": "mixedbread_freeze",
+        "label": "Complete Mixedbread ranking seal",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/freeze/SEALED.json"
+      },
+      {
+        "id": "mixedbread_receipt",
+        "label": "Local Mixedbread scoring receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/scoring/receipt.json"
+      },
+      {
+        "id": "mixedbread_advisor",
+        "label": "Independent Mixedbread-results review",
+        "path": "reports/experiments/deep_facet_candidate_pilot_v1/mixedbread_advisor_review.md"
       }
     ],
     "surface": "report",
@@ -503,6 +604,26 @@
             "field": "cascade_graded_recall500_delta",
             "format": "number",
             "label": "Cascade GR@500 \u0394 vs RRF"
+          },
+          {
+            "field": "mixedbread_candidate_count",
+            "format": "number",
+            "label": "Complete candidates"
+          },
+          {
+            "field": "mixedbread_ndcg10",
+            "format": "number",
+            "label": "Mixedbread nDCG@10"
+          },
+          {
+            "field": "mixedbread_graded_recall500",
+            "format": "percent",
+            "label": "Mixedbread graded Recall@500"
+          },
+          {
+            "field": "mixedbread_novel_retention1000",
+            "format": "percent",
+            "label": "Mixedbread novel retention@1000"
           }
         ],
         "dataset": "topics",
@@ -617,6 +738,17 @@
           "near_duplicate_rate500": null,
           "novel_retention1000": 0.8757062146892656,
           "novel_retention500": 0.6440677966101694
+        },
+        {
+          "arm": "RRF-MIXEDBREAD-DUAL",
+          "graded_recall1000": 0.28694919224352244,
+          "graded_recall500": 0.2160681798328952,
+          "judged_rate100": 0.4525,
+          "ndcg10": 0.4325738541430897,
+          "ndcg100": 0.27265569783169846,
+          "near_duplicate_rate500": null,
+          "novel_retention1000": 0.864406779661017,
+          "novel_retention500": 0.559322033898305
         }
       ],
       "cascade_guards": [
@@ -712,9 +844,32 @@
           "cascade_graded_recall500": 0.1869929262288872,
           "dual_novel1000": 0.8757062146892656,
           "gate_lost": 2,
+          "mixedbread_graded_recall500": 0.2160681798328952,
           "novel_relevant": 177,
           "novel_topics": 4,
           "rrf_ndcg10": 0.4325738541430897
+        }
+      ],
+      "mixedbread_topic_deltas": [
+        {
+          "candidate_count": 2182,
+          "graded_recall500_delta": -0.04020752269779508,
+          "topic": "219"
+        },
+        {
+          "candidate_count": 2127,
+          "graded_recall500_delta": 0.051477347340774804,
+          "topic": "72"
+        },
+        {
+          "candidate_count": 1712,
+          "graded_recall500_delta": 0.009547123623011022,
+          "topic": "300"
+        },
+        {
+          "candidate_count": 2093,
+          "graded_recall500_delta": 0.0028767426421774933,
+          "topic": "84"
         }
       ],
       "retention": [
@@ -777,6 +932,16 @@
           "arm": "RRF-GLOBAL-DUAL",
           "depth": "@1000",
           "retention": 0.8757062146892656
+        },
+        {
+          "arm": "RRF-MIXEDBREAD-DUAL",
+          "depth": "@500",
+          "retention": 0.559322033898305
+        },
+        {
+          "arm": "RRF-MIXEDBREAD-DUAL",
+          "depth": "@1000",
+          "retention": 0.864406779661017
         }
       ],
       "runtime": [
@@ -818,6 +983,10 @@
           "dual_novel_1000": 14,
           "dual_novel_500": 7,
           "gate_lost": 0,
+          "mixedbread_candidate_count": 2182,
+          "mixedbread_graded_recall500": 0.12159533073929961,
+          "mixedbread_ndcg10": 0.4625613680905797,
+          "mixedbread_novel_retention1000": 0.7368421052631579,
           "novel_relevant": 19,
           "original_relevant": 98,
           "rrf_ndcg10": 0.4625613680905797,
@@ -832,6 +1001,10 @@
           "dual_novel_1000": 68,
           "dual_novel_500": 43,
           "gate_lost": 0,
+          "mixedbread_candidate_count": 2127,
+          "mixedbread_graded_recall500": 0.27380170715692714,
+          "mixedbread_ndcg10": 0.3543514673597038,
+          "mixedbread_novel_retention1000": 0.8701298701298701,
           "novel_relevant": 77,
           "original_relevant": 269,
           "rrf_ndcg10": 0.3543514673597038,
@@ -846,6 +1019,10 @@
           "dual_novel_1000": 57,
           "dual_novel_500": 50,
           "gate_lost": 0,
+          "mixedbread_candidate_count": 1712,
+          "mixedbread_graded_recall500": 0.22545899632802938,
+          "mixedbread_ndcg10": 0.4182569541043738,
+          "mixedbread_novel_retention1000": 0.9333333333333333,
           "novel_relevant": 60,
           "original_relevant": 137,
           "rrf_ndcg10": 0.4182569541043738,
@@ -860,6 +1037,10 @@
           "dual_novel_1000": 16,
           "dual_novel_500": 14,
           "gate_lost": 2,
+          "mixedbread_candidate_count": 2093,
+          "mixedbread_graded_recall500": 0.24341668510732464,
+          "mixedbread_ndcg10": 0.49512562701770135,
+          "mixedbread_novel_retention1000": 0.7619047619047619,
           "novel_relevant": 21,
           "original_relevant": 194,
           "rrf_ndcg10": 0.49512562701770135,
@@ -988,6 +1169,23 @@
         "sql": "SELECT * FROM runtime ORDER BY row_order",
         "tables_used": [
           "runtime"
+        ]
+      }
+    },
+    {
+      "id": "mixedbread_topic_deltas_sql",
+      "label": "Mixedbread Topic Deltas report dataset",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/report_data.sqlite",
+      "query": {
+        "description": "Per-topic Mixedbread graded Recall@500 deltas versus RRF with complete candidate counts.",
+        "engine": "sqlite",
+        "filters": [
+          "Four frozen topics: 219, 72, 300, 84"
+        ],
+        "language": "SQL",
+        "sql": "SELECT * FROM mixedbread_topic_deltas ORDER BY row_order",
+        "tables_used": [
+          "mixedbread_topic_deltas"
         ]
       }
     },
@@ -1135,6 +1333,71 @@
         "language": "JSON/Markdown",
         "tables_used": [
           "reports/experiments/deep_facet_candidate_pilot_v1/cascade_advisor_review.md"
+        ]
+      }
+    },
+    {
+      "id": "mixedbread_metrics",
+      "label": "Protected-head Mixedbread diagnostic metrics",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/metrics.json",
+      "query": {
+        "description": "Complete-ranking recall, judged-rate, and novel-evidence curves at practical and full depths.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/metrics.json"
+        ]
+      }
+    },
+    {
+      "id": "mixedbread_decision",
+      "label": "Protected-head Mixedbread diagnostic decision",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/decision.json",
+      "query": {
+        "description": "Mechanical guards, explicit coverage-inconclusive state, and promotion prohibition.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/evaluation/decision.json"
+        ]
+      }
+    },
+    {
+      "id": "mixedbread_freeze",
+      "label": "Complete Mixedbread ranking seal",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/freeze/SEALED.json",
+      "query": {
+        "description": "Hash inventory for all 8,114 ranked topic-document rows and their scoring inputs.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/freeze/SEALED.json"
+        ]
+      }
+    },
+    {
+      "id": "mixedbread_receipt",
+      "label": "Local Mixedbread scoring receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/scoring/receipt.json",
+      "query": {
+        "description": "ROCm runtime, model revision, passage count, memory, and zero-cost evidence.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/post_qrels_mixedbread_v1/scoring/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "mixedbread_advisor",
+      "label": "Independent Mixedbread-results review",
+      "path": "reports/experiments/deep_facet_candidate_pilot_v1/mixedbread_advisor_review.md",
+      "query": {
+        "description": "Independent review of whether the targeted reranker repaired candidate ordering.",
+        "engine": "local-artifact",
+        "language": "JSON/Markdown",
+        "tables_used": [
+          "reports/experiments/deep_facet_candidate_pilot_v1/mixedbread_advisor_review.md"
         ]
       }
     }

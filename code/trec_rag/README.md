@@ -683,3 +683,39 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.rerank_cache_promotion promote \
 
 The Modal and local paths differ, but the artifact rows, cache keys, validation
 rules, and pipeline consumer interface are the same.
+
+### Complete protected-head Mixedbread candidates for RAG
+
+`trec_rag.deep_facet_candidate_mixedbread` is the bounded post-qrels mechanism
+diagnostic for the deep-facet pilot. It does not retrieve or discard documents.
+It protects RRF ranks 1–10, reranks the frozen RRF@500/GLOBAL@500/DUAL@1000
+disagreement pool against one narrative-plus-all-facet-obligations query, fills
+ranks 11–500, and appends every remaining accepted document in DUAL order.
+
+The four create-only stages are `preflight`, `score`, `freeze`, and `evaluate`.
+Preflight writes exact candidate and passage-window plans and authenticates the
+local Mixedbread revision. Score is local-only ROCm inference over the frozen
+windows and can resume only a verified score prefix. Freeze emits a complete,
+duplicate-free ranking permutation and a hash seal before evaluation. Evaluate
+uses only the existing four-topic projected-qrels artifact and labels its output
+post-qrels diagnostic rather than confirmatory.
+
+The scoring method is the historically strongest Mixedbread
+`chunk_top4_weighted` arm: 3,500-character passages with 350-character overlap,
+raw bfloat16 logits at max length 1,024, and weights
+`0.55, 0.25, 0.13, 0.07`. The slower 32k-token whole-document branch is not part
+of this diagnostic.
+
+Result (2026-07-14): the corrected accepted-facet preflight scored 36,435
+passages for 4,469 residual documents in 4,458 seconds on local ROCm, with zero
+cache hits, retrieval calls, network calls, or paid cost. The sealed output is a
+complete 8,114-row topic-document ranking. It exactly preserves RRF nDCG@10
+(0.433), improves aggregate graded Recall@500 from 0.210 to 0.216 and graded
+Recall@1000 from 0.266 to 0.287, and retains 153/177 novel relevant documents by
+1,000 plus all 177 in the full ranking. It does not pass the fixed decision:
+topic 219 loses 0.040 graded Recall@500 versus RRF, below the allowed -0.02
+floor. Raw Recall@500 also falls from 0.198 to 0.179 and nDCG@100 from 0.405 to
+0.273. Therefore the one narrative-plus-all-facets scoring query is stopped,
+not promoted. The complete candidate union remains the useful RAG asset; the
+failure concerns ordering and points to keeping the original-query basket while
+scoring facet candidates against their own facet plus narrative.
