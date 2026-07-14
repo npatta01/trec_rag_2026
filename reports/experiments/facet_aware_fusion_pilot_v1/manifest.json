@@ -1,0 +1,636 @@
+{
+  "eligible_topic_ids": [
+    "14",
+    "31",
+    "37",
+    "58",
+    "72",
+    "84",
+    "161",
+    "219",
+    "233",
+    "273",
+    "300",
+    "477",
+    "499"
+  ],
+  "experiment_id": "rag25_facet_aware_fusion_v1",
+  "facets": [
+    {
+      "anchor_terms": [
+        "social media",
+        "teenager"
+      ],
+      "bridge_terms": [],
+      "facet_id": "233-positive-impact",
+      "manifest_order": 0,
+      "obligation": "Positive impacts of social media on teenagers' mental health.",
+      "query": "teenager social media positive mental health impacts",
+      "relation_terms": [
+        "positive",
+        "mental health"
+      ],
+      "topic_id": "233",
+      "wrong_domain_patterns": [
+        "social media marketing",
+        "brand engagement"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "social media",
+        "teenager"
+      ],
+      "bridge_terms": [],
+      "facet_id": "233-negative-impact",
+      "manifest_order": 1,
+      "obligation": "Negative impacts of social media on teenagers' mental health.",
+      "query": "teenager social media negative mental health impacts",
+      "relation_terms": [
+        "negative",
+        "mental health"
+      ],
+      "topic_id": "233",
+      "wrong_domain_patterns": [
+        "social media marketing",
+        "brand engagement"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "social media",
+        "teenager"
+      ],
+      "bridge_terms": [],
+      "facet_id": "233-depression-contribution",
+      "manifest_order": 2,
+      "obligation": "Why social media might contribute to depression among teenagers.",
+      "query": "why social media contributes to teenager depression",
+      "relation_terms": [
+        "contribute",
+        "depression"
+      ],
+      "topic_id": "233",
+      "wrong_domain_patterns": [
+        "social media marketing",
+        "brand engagement"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Africa",
+        "resources"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-poverty-perception",
+      "manifest_order": 3,
+      "obligation": "Why resource-rich Africa is often perceived as underdeveloped or poor.",
+      "query": "why resource-rich Africa is seen as underdeveloped or poor",
+      "relation_terms": [
+        "underdeveloped",
+        "poor"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "African violet",
+        "Africa song"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Africa",
+        "resource distribution"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-resource-distribution",
+      "manifest_order": 4,
+      "obligation": "How resource distribution contributes to perceptions of African underdevelopment.",
+      "query": "Africa resource distribution contribution to underdevelopment perception",
+      "relation_terms": [
+        "contribution",
+        "underdevelopment"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "African violet",
+        "Africa song"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Africa",
+        "historical events"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-historical-events",
+      "manifest_order": 5,
+      "obligation": "How historical events contribute to perceptions of African underdevelopment.",
+      "query": "Africa historical events contribution to underdevelopment perception",
+      "relation_terms": [
+        "contribution",
+        "underdevelopment"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "African violet",
+        "Africa song"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Africa",
+        "economic changes"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-economic-changes",
+      "manifest_order": 6,
+      "obligation": "How economic changes in specific African countries contribute to the perception.",
+      "query": "Africa economic changes in specific countries contribution to underdevelopment perception",
+      "relation_terms": [
+        "specific countries",
+        "perception"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "African violet",
+        "Africa song"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Morocco"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-morocco-location",
+      "manifest_order": 7,
+      "obligation": "Morocco's location.",
+      "query": "Morocco location in Africa",
+      "relation_terms": [
+        "location",
+        "Africa"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "Morocco Indiana",
+        "Morocco football"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Cameroon"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-cameroon-resource",
+      "manifest_order": 8,
+      "obligation": "Cameroon's most important resource.",
+      "query": "Cameroon most important resource",
+      "relation_terms": [
+        "most important",
+        "resource"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "Cameroon football",
+        "Cameroon sheep"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "Africa",
+        "continents"
+      ],
+      "bridge_terms": [],
+      "facet_id": "273-continent-capacity",
+      "manifest_order": 9,
+      "obligation": "How many continents could fit inside Africa.",
+      "query": "how many continents could fit inside Africa",
+      "relation_terms": [
+        "how many",
+        "fit inside"
+      ],
+      "topic_id": "273",
+      "wrong_domain_patterns": [
+        "Africa song",
+        "African violet"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-arguments-and-views",
+      "manifest_order": 10,
+      "obligation": "The main abortion arguments and why people hold different views.",
+      "query": "abortion main arguments why people hold different views",
+      "relation_terms": [
+        "arguments",
+        "different views"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "abort operation",
+        "process abortion"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion rights"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-laws-and-rights",
+      "manifest_order": 11,
+      "obligation": "How laws have shaped abortion rights.",
+      "query": "how laws shaped abortion rights",
+      "relation_terms": [
+        "laws",
+        "shaped"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "abort operation",
+        "process abortion"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion rights",
+        "Rapture"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-rapture-beliefs",
+      "manifest_order": 12,
+      "obligation": "How beliefs such as the Rapture have shaped abortion rights.",
+      "query": "how beliefs like the Rapture shaped abortion rights",
+      "relation_terms": [
+        "beliefs",
+        "shaped"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "Rapture video game",
+        "Rapture song"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion rights"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-political-ideologies",
+      "manifest_order": 13,
+      "obligation": "How political ideologies have shaped abortion rights.",
+      "query": "how political ideologies shaped abortion rights",
+      "relation_terms": [
+        "political ideologies",
+        "shaped"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "abort operation",
+        "process abortion"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion rights"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-historical-changes",
+      "manifest_order": 14,
+      "obligation": "How historical changes have shaped abortion rights.",
+      "query": "how historical changes shaped abortion rights",
+      "relation_terms": [
+        "historical changes",
+        "shaped"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "abort operation",
+        "process abortion"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-current-options",
+      "manifest_order": 15,
+      "obligation": "Current abortion options, including the abortion pill.",
+      "query": "current abortion options abortion pill",
+      "relation_terms": [
+        "current options",
+        "abortion pill"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "abort operation",
+        "process abortion"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "abortion",
+        "women's rights groups"
+      ],
+      "bridge_terms": [],
+      "facet_id": "161-rights-group-priorities",
+      "manifest_order": 16,
+      "obligation": "What women's rights groups prioritize today regarding abortion.",
+      "query": "women's rights groups priorities today abortion",
+      "relation_terms": [
+        "priorities",
+        "today"
+      ],
+      "topic_id": "161",
+      "wrong_domain_patterns": [
+        "abort operation",
+        "process abortion"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports",
+        "athlete"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-athlete-compensation",
+      "manifest_order": 17,
+      "obligation": "The societal impact of athlete compensation.",
+      "query": "sports societal impact athlete compensation",
+      "relation_terms": [
+        "compensation",
+        "societal impact"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "fantasy sports"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-inclusion",
+      "manifest_order": 18,
+      "obligation": "The societal impact of inclusion in sports.",
+      "query": "sports societal impact inclusion",
+      "relation_terms": [
+        "inclusion",
+        "societal impact"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "fantasy sports"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-cultural-influence",
+      "manifest_order": 19,
+      "obligation": "Sports' societal and cultural influence.",
+      "query": "sports societal impact cultural influence",
+      "relation_terms": [
+        "cultural influence",
+        "societal impact"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "fantasy sports"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-business",
+      "manifest_order": 20,
+      "obligation": "The societal impact of the business side of sports.",
+      "query": "sports societal impact business side",
+      "relation_terms": [
+        "business side",
+        "societal impact"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "fantasy sports"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports",
+        "equipment"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-equipment",
+      "manifest_order": 21,
+      "obligation": "How evolving equipment shapes athletes and sport popularity.",
+      "query": "evolving sports equipment shapes athletes and sport popularity",
+      "relation_terms": [
+        "shapes",
+        "athletes",
+        "popularity"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "video game equipment"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports",
+        "training"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-training",
+      "manifest_order": 22,
+      "obligation": "How evolving training shapes athletes and sport popularity.",
+      "query": "evolving sports training shapes athletes and sport popularity",
+      "relation_terms": [
+        "shapes",
+        "athletes",
+        "popularity"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "sports game tutorial"
+      ]
+    },
+    {
+      "anchor_terms": [
+        "sports",
+        "mindset"
+      ],
+      "bridge_terms": [],
+      "facet_id": "14-mindset",
+      "manifest_order": 23,
+      "obligation": "How evolving mindset shapes athletes and sport popularity.",
+      "query": "evolving sports mindset shapes athletes and sport popularity",
+      "relation_terms": [
+        "shapes",
+        "athletes",
+        "popularity"
+      ],
+      "topic_id": "14",
+      "wrong_domain_patterns": [
+        "sports betting odds",
+        "fantasy sports"
+      ]
+    }
+  ],
+  "hashes": {
+    "analyzer_fingerprint_sha256": "f9bbd4e7af26c532105f6dd7e49ce15fa11afd1f0fe7d387847ce41ff7d8def4",
+    "facets_sha256": "888e7511e9bb6f105335397c0daa547a471259a34eb36458edcb3017165ef987",
+    "freeze_sha256": "b424357bd924cf6c2c7c3adbd784da837fa59775e615719bf7f74c3bdc5f11ed",
+    "topic_selection_sha256": "0737ffd7808abf0fd041762fff38f6a4036a66b77df4ed4d0c3f12732094d27c",
+    "topics_sha256": "e9f35cd58ec18f5e42efcd7bca8fc6407eaefdcc298d03c60bf9040a66e17bca"
+  },
+  "prior_pilot_topic_ids": [
+    "200",
+    "225",
+    "707",
+    "897"
+  ],
+  "protected_topic_ids": [
+    "144",
+    "213",
+    "224",
+    "407",
+    "515"
+  ],
+  "qrels_opened": false,
+  "schema_version": "rag25_facet_aware_fusion_manifest_v1",
+  "selection_salt": "rag25_facet_aware_fusion_v1",
+  "topic_ids": [
+    "233",
+    "273",
+    "161",
+    "14"
+  ],
+  "topic_selection": [
+    {
+      "selected": true,
+      "selection_order": 0,
+      "selection_sha256": "601bae29ebaca2712a2ebb9bae70a9f05e12acf5b51ab216c3df59d540d9ddda",
+      "topic_id": "233"
+    },
+    {
+      "selected": true,
+      "selection_order": 1,
+      "selection_sha256": "76440b20ff3d71502edb73a34f535e155ba3c9f89cc30797384526aa87587ea7",
+      "topic_id": "273"
+    },
+    {
+      "selected": true,
+      "selection_order": 2,
+      "selection_sha256": "7e7826dd5130829aa4502f0e0ded951778bc0e2566fbd68ead78e92b8f5eb57c",
+      "topic_id": "161"
+    },
+    {
+      "selected": true,
+      "selection_order": 3,
+      "selection_sha256": "81838b47208bad4988b8c2d191a9c96ebeb9940cd3930486854ef711c34eb799",
+      "topic_id": "14"
+    },
+    {
+      "selected": false,
+      "selection_order": 4,
+      "selection_sha256": "8696e4cfaba1bb8b81c620055d33c9f75a17ed111d6dd73de85d6813850db907",
+      "topic_id": "31"
+    },
+    {
+      "selected": false,
+      "selection_order": 5,
+      "selection_sha256": "901bd14a4bc4f66e3e40a376ec216aab0d9053ffd9d54611ad191e2774b862ef",
+      "topic_id": "37"
+    },
+    {
+      "selected": false,
+      "selection_order": 6,
+      "selection_sha256": "95dcbd6526a722128e24d30592390f88bd559651b795a853deaf1dcf51a87994",
+      "topic_id": "219"
+    },
+    {
+      "selected": false,
+      "selection_order": 7,
+      "selection_sha256": "bc597d1e3e31ff3eab29adb0c8ba8a3cf07f64ae94c1b0aeccf88adf27e7108a",
+      "topic_id": "499"
+    },
+    {
+      "selected": false,
+      "selection_order": 8,
+      "selection_sha256": "bdc5e1efbbeff320414f6bff24f446ceabf9e7cd577320b80f7878d4803d8c29",
+      "topic_id": "58"
+    },
+    {
+      "selected": false,
+      "selection_order": 9,
+      "selection_sha256": "d8bc1009d51862b02ad7fa2607eb52f898799c2bd274fd7c9e7c7f061f06945c",
+      "topic_id": "72"
+    },
+    {
+      "selected": false,
+      "selection_order": 10,
+      "selection_sha256": "eff176f9b4c63887ab07654fa57e0f945773432e279b20055985d01861059afc",
+      "topic_id": "477"
+    },
+    {
+      "selected": false,
+      "selection_order": 11,
+      "selection_sha256": "fd9632b5daaec84e29b4a1ca2cf037acfe904426f3b19fe28a04fbc2ddb9da5b",
+      "topic_id": "84"
+    },
+    {
+      "selected": false,
+      "selection_order": 12,
+      "selection_sha256": "fe5f751dcb42cf9dd2bb2af950ff87e081d23858ceeed4bd6ad48640f63c4bd2",
+      "topic_id": "300"
+    }
+  ],
+  "topics": [
+    {
+      "manifest_order": 0,
+      "original_cache_filename": "233__original__climbmix_bm25__7cdd439263a3903a.json",
+      "original_cache_sha256": "5acb3f7038c8059f409d4ef7ee61098f39882bff1809a63915893770d602c89d",
+      "query": "I'm interested in learning how social media affects mental health, particularly among teenagers. I want to know about both its positive and negative impacts, and understand why it might contribute to depression.",
+      "selection_sha256": "601bae29ebaca2712a2ebb9bae70a9f05e12acf5b51ab216c3df59d540d9ddda",
+      "topic_id": "233"
+    },
+    {
+      "manifest_order": 1,
+      "original_cache_filename": "273__original__climbmix_bm25__6317c02800ae6128.json",
+      "original_cache_sha256": "e046893acf7d219ab90e568fea57b931a6fbb5db6340755c84ea3aa482f01cd3",
+      "query": "I want to understand why Africa, despite its rich resources, is often seen as underdeveloped or poor. I'm particularly interested in how factors like resource distribution, historical events, and economic changes in specific countries contribute to this perception. Additionally, I'd like basic facts such as Morocco's location, Cameroon's most important resource, and how many continents could fit inside Africa.",
+      "selection_sha256": "76440b20ff3d71502edb73a34f535e155ba3c9f89cc30797384526aa87587ea7",
+      "topic_id": "273"
+    },
+    {
+      "manifest_order": 2,
+      "original_cache_filename": "161__original__climbmix_bm25__4d32fee8356cc5ad.json",
+      "original_cache_sha256": "d5752b357d84e2f967719d8d85c0fbb37df9ce2bb21b7a494bd208e581ac3330",
+      "query": "I want to understand the main arguments surrounding abortion and why people hold such different views on it. I'm also curious how laws, beliefs like the Rapture or political ideologies, and historical changes have shaped abortion rights. Finally, I'd like to learn about current options, such as the abortion pill, and what women's rights groups are prioritizing today.",
+      "selection_sha256": "7e7826dd5130829aa4502f0e0ded951778bc0e2566fbd68ead78e92b8f5eb57c",
+      "topic_id": "161"
+    },
+    {
+      "manifest_order": 3,
+      "original_cache_filename": "14__original__climbmix_bm25__7f4431a51367740b.json",
+      "original_cache_sha256": "69282e20c77fb7b105a77f10798869030f8e99b75c2b1ef6cf7f3ea09e67e5cf",
+      "query": "I'm interested in sports' societal impact, particularly concerning athlete compensation, inclusion, cultural influence, and the business side. I also want to understand how evolving equipment, training, and mindset shape both athletes and the popularity of different sports.",
+      "selection_sha256": "81838b47208bad4988b8c2d191a9c96ebeb9940cd3930486854ef711c34eb799",
+      "topic_id": "14"
+    }
+  ]
+}
