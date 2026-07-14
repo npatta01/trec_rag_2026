@@ -57,9 +57,30 @@ _CONTENT_STOPWORDS = {
     "with",
 }
 _FACT_PATTERNS = (
+    re.compile(r"(?:[$€£¥]|\b(?:usd|eur|gbp|dollars?|euros?|pounds?)\b)", re.IGNORECASE),
+    re.compile(r"\b\d+(?:[.,]\d+)?\b", re.IGNORECASE),
     re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|percent|per cent)\b", re.IGNORECASE),
     re.compile(
-        r"\b(?:caused?|increased?|decreased?|reduced?|resulted?|led to)\b",
+        r"\b(?:causes?|caused|increases?|increased|decreases?|decreased|"
+        r"reduces?|reduced|results?|resulted|leads?|led to|improves?|improved|"
+        r"produces?|produced|prevents?|prevented|saves?|saved|costs?|cost)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:is|are|was|were|has|have|had|will)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:january|february|march|april|may|june|july|august|september|"
+        r"october|november|december|monday|tuesday|wednesday|thursday|friday|"
+        r"saturday|sunday)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b\d+(?:[.,]\d+)?\s*(?:people|users?|patients?|students?|"
+        r"kilograms?|metric tons?|megawatts?|gigawatts?|hours?|days?|years?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|hundred|"
+        r"thousand|million|billion|trillion)\b",
         re.IGNORECASE,
     ),
 )
@@ -283,22 +304,44 @@ def _parent_scope_preserved(
     proposal: Mapping[str, object],
     parent: Mapping[str, object],
 ) -> bool:
-    label_terms = _tokens(proposal.get("label"))
-    subject_terms = _tokens(proposal.get("subject"))
-    relation_terms = _tokens(proposal.get("relation"))
-    parent_subject = set().union(
-        *(_tokens(value) for value in parent.get("anchor_terms", []))
+    def content_terms(value: object) -> set[str]:
+        return _stemmed_content_terms(value) - _CONTENT_STOPWORDS
+
+    def listed_terms(name: str) -> set[str]:
+        raw = parent.get(name, [])
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            return set()
+        return set().union(*(content_terms(value) for value in raw))
+
+    parent_text = content_terms(parent.get("text", ""))
+    parent_subject = listed_terms("anchor_terms") or parent_text
+    parent_relation = listed_terms("relation_terms") | parent_text
+    parent_population = listed_terms("population_terms")
+    if not parent_population:
+        parent_population = listed_terms("relation_terms") | parent_text
+    parent_domain = listed_terms("domain_terms") or (
+        listed_terms("anchor_terms") | parent_text
     )
-    parent_relation = set().union(
-        *(_tokens(value) for value in parent.get("relation_terms", []))
-    )
-    subject_ok = not parent_subject or bool(
-        parent_subject & (label_terms | subject_terms)
-    )
-    relation_ok = not parent_relation or bool(
-        parent_relation & (label_terms | relation_terms)
-    )
-    return subject_ok and relation_ok
+
+    proposed = {
+        name: content_terms(proposal.get(name, ""))
+        for name in ("subject", "population", "domain", "relation")
+    }
+    allowed = {
+        "subject": parent_subject,
+        "population": parent_population,
+        "domain": parent_domain,
+        "relation": parent_relation,
+    }
+    if any(not proposed[name] or not proposed[name].issubset(allowed[name]) for name in allowed):
+        return False
+
+    proposed_domain = proposed["domain"]
+    for pattern in parent.get("wrong_domain_patterns", []):
+        pattern_terms = content_terms(pattern)
+        if pattern_terms and pattern_terms.issubset(proposed_domain):
+            return False
+    return True
 
 
 def validate_proposal(
@@ -312,7 +355,15 @@ def validate_proposal(
     reasons: list[str] = []
     if proposal.get("parent_id") != parent.get("obligation_id"):
         reasons.append("parent")
-    required = ("label", "scope_rationale", "support_span")
+    required = (
+        "label",
+        "scope_rationale",
+        "subject",
+        "population",
+        "domain",
+        "relation",
+        "support_span",
+    )
     if any(
         name not in proposal
         or not isinstance(proposal.get(name), str)
@@ -343,6 +394,48 @@ def _triple_key(row: Mapping[str, object]) -> tuple[str, str, str]:
         " ".join(sorted(_stemmed_content_terms(row.get(name, ""))))
         for name in ("subject", "relation", "object")
     )  # type: ignore[return-value]
+
+
+_SRO_COORDINATION_RE = re.compile(
+    r"(?:[,;/]|\b(?:and|or|but|while|because|although|whereas|which|who)\b)",
+    re.IGNORECASE,
+)
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+
+
+def validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]:
+    """Require one fully quoted, non-coordinated subject-relation-object fact."""
+
+    reasons: list[str] = []
+    fields: dict[str, str] = {}
+    for name in ("subject", "relation", "object"):
+        value = nugget.get(name)
+        if not isinstance(value, str) or not value.strip():
+            reasons.append(f"{name}_missing")
+            continue
+        fields[name] = value.strip()
+        if _SRO_COORDINATION_RE.search(value):
+            reasons.append(f"{name}_coordination")
+
+    support = nugget.get("support_span")
+    if not isinstance(support, str) or not support.strip():
+        reasons.append("support_missing")
+    else:
+        support = support.strip()
+        if len(_SENTENCE_BOUNDARY_RE.split(support)) != 1:
+            reasons.append("support_multiple_sentences")
+        if _SRO_COORDINATION_RE.search(support):
+            reasons.append("support_multiple_clauses")
+        if len(fields) == 3:
+            support_terms = _stemmed_content_terms(support)
+            assertion_terms = set().union(
+                *(_stemmed_content_terms(fields[name]) for name in fields)
+            )
+            if not assertion_terms or not assertion_terms.issubset(support_terms):
+                reasons.append("unsupported_sro")
+
+    unique_reasons = sorted(set(reasons))
+    return {"accepted": not unique_reasons, "reasons": unique_reasons}
 
 
 def merge_nuggets(
@@ -440,6 +533,17 @@ def validate_model_response(
                 rejected.append({**row, "kind": kind, "reason": "support_document"})
             elif not span or span not in passage:
                 rejected.append({**row, "kind": kind, "reason": "support_span"})
+            elif kind == "n1" and not (
+                atomicity := validate_nugget_atomicity(row)
+            )["accepted"]:
+                rejected.append(
+                    {
+                        **row,
+                        "kind": kind,
+                        "reason": "n1_atomicity",
+                        "atomicity_reasons": atomicity["reasons"],
+                    }
+                )
             else:
                 accepted[kind].append(row)
     return accepted, rejected
@@ -450,17 +554,18 @@ def extract_repeated_phrases(
 ) -> list[dict[str, object]]:
     """Emit 2--5 analyzed-token phrases occurring in documents in both folds."""
 
-    occurrences: dict[str, set[tuple[str, int]]] = defaultdict(set)
+    occurrences: dict[str, set[tuple[str, str, int]]] = defaultdict(set)
     for row in passages:
         document_id = str(row.get("document_id", ""))
         fold = row.get("fold")
         if not document_id or isinstance(fold, bool) or fold not in (0, 1):
             raise ValueError("phrase-control passages require document and binary fold")
+        passage = str(row.get("passage_text", row.get("window_text", "")))
+        normalized_content = " ".join(passage.split()).casefold()
+        content_sha256 = _sha256_bytes(normalized_content.encode("utf-8"))
         analyzed = [
             token.casefold()
-            for token in _TOKEN_RE.findall(
-                str(row.get("passage_text", row.get("window_text", "")))
-            )
+            for token in _TOKEN_RE.findall(passage)
             if token.casefold() not in _CONTENT_STOPWORDS
         ]
         seen: set[str] = set()
@@ -468,17 +573,32 @@ def extract_repeated_phrases(
             for start in range(0, len(analyzed) - size + 1):
                 seen.add(" ".join(analyzed[start : start + size]))
         for phrase in seen:
-            occurrences[phrase].add((document_id, int(fold)))
+            occurrences[phrase].add((document_id, content_sha256, int(fold)))
     output: list[dict[str, object]] = []
     for phrase, identities in occurrences.items():
-        documents = sorted({document_id for document_id, _fold in identities})
-        folds = sorted({fold for _document_id, fold in identities})
-        if len(documents) >= 2 and folds == [0, 1]:
+        documents = sorted({document_id for document_id, _hash, _fold in identities})
+        hashes = sorted({_hash for _document_id, _hash, _fold in identities})
+        folds = sorted({fold for _document_id, _hash, fold in identities})
+        hashes_by_fold = {
+            fold: {
+                content_hash
+                for _document_id, content_hash, identity_fold in identities
+                if identity_fold == fold
+            }
+            for fold in (0, 1)
+        }
+        distinct_across_folds = any(
+            left != right
+            for left in hashes_by_fold[0]
+            for right in hashes_by_fold[1]
+        )
+        if len(documents) >= 2 and len(hashes) >= 2 and distinct_across_folds:
             output.append(
                 {
                     "phrase": phrase,
                     "token_count": len(phrase.split()),
                     "document_ids": documents,
+                    "content_sha256s": hashes,
                     "folds": folds,
                 }
             )
@@ -505,17 +625,18 @@ def freeze_o1(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Freeze at most one accepted child per parent and four per topic."""
 
+    def lexical_key(row: Mapping[str, object]) -> tuple[str, str, str, str]:
+        normalized_label = " ".join(_TOKEN_RE.findall(str(row.get("label", "")).casefold()))
+        return (
+            str(row.get("topic_id", "")).casefold(),
+            normalized_label,
+            str(row.get("parent_id", "")).casefold(),
+            str(row.get("proposal_id", row.get("obligation_id", ""))).casefold(),
+        )
+
     ranked = sorted(
         (dict(row) for row in rows if row.get("accepted") is True),
-        key=lambda row: (
-            str(row.get("topic_id", "")),
-            -int(row.get("validating_document_count", 0)),
-            -int(row.get("independent_stream_count", 0)),
-            -int(row.get("source_diversity", 0)),
-            int(row.get("parent_local_rank", 0)),
-            " ".join(sorted(_tokens(row.get("label", "")))),
-            str(row.get("proposal_id", "")),
-        ),
+        key=lexical_key,
     )
     accepted: list[dict[str, object]] = []
     rejected: list[dict[str, object]] = []
@@ -539,7 +660,12 @@ _DISCOVERY_INSTRUCTIONS = (
     "separately from specific N1 facts. Quote support spans as exact substrings "
     "from the supplied passages; never use outside knowledge. If the passages "
     "do not support a record, return unsupported rather than inventing evidence. "
-    "O1 labels must name information categories, never candidate answers or facts."
+    "O1 labels must be short abstract information categories already inside the "
+    "frozen parent scope, never candidate answers, assertions, numbers, dates, "
+    "currencies, quantities, causes, or outcomes. "
+    "Every N1 must be exactly one atomic subject-relation-object assertion "
+    "supported by one exact span: no coordinated subjects, relations, or objects; "
+    "no lists, multiple clauses, or multiple sentences."
 )
 _SCHEMA_INSTRUCTIONS = (
     "The response_json_schema is authoritative. Return exactly one JSON object "
@@ -834,9 +960,25 @@ def finalize_discovery_records(
         *initially_rejected,
         *({**row, "status": "unsupported"} for row in freeze_rejected),
     ]
+    atomic_nuggets: list[dict[str, object]] = []
+    rejected_n1: list[dict[str, object]] = []
+    for raw in nuggets:
+        nugget = dict(raw)
+        atomicity = validate_nugget_atomicity(nugget)
+        if atomicity["accepted"]:
+            atomic_nuggets.append(nugget)
+        else:
+            rejected_n1.append(
+                {
+                    **nugget,
+                    "kind": "n1",
+                    "status": "unsupported",
+                    "reasons": atomicity["reasons"],
+                }
+            )
     accepted_n1 = [
         {**row, "kind": "n1", "status": "accepted"}
-        for row in merge_nuggets(nuggets)
+        for row in merge_nuggets(atomic_nuggets)
     ]
     return {
         "validated_o1": sorted(
@@ -852,7 +994,7 @@ def finalize_discovery_records(
             key=lambda row: str(row.get("proposal_id", row.get("obligation_id", ""))),
         ),
         "accepted_n1": accepted_n1,
-        "rejected_n1": [],
+        "rejected_n1": rejected_n1,
     }
 
 
@@ -1274,6 +1416,7 @@ def run_proposal_pass(
                         "scope_rationale": str(raw["scope_rationale"]),
                         "subject": str(raw["subject"]),
                         "population": str(raw["population"]),
+                        "domain": str(raw["domain"]),
                         "relation": str(raw["relation"]),
                         "support_span": str(raw["support_span"]),
                         "query": build_derived_query(
@@ -1396,100 +1539,218 @@ def run_proposal_pass(
     return receipt
 
 
-def record_discovery_unavailable(
-    output_dir: Path,
-    *,
-    parent_id: str,
-    source_fold: int,
-    messages_sha256: str,
-    error_type: str,
-    error_message: str,
-    cause_type: str,
-    cause_message: str,
-) -> dict[str, object]:
-    """Freeze the authorized corrected-pass failure without another model call."""
+_FAILURE_HISTORY_NAMES = (
+    "preflight.json",
+    "integration_preflight_failure.json",
+    "corrected_pass_started.json",
+    "corrected_pass_failure.json",
+)
+_TERMINAL_ALLOWED_NAMES = {
+    *_FAILURE_HISTORY_NAMES,
+    "receipt.json",
+    "verification.json",
+    "broad.jsonl",
+    "parents.jsonl",
+    "reservoirs.jsonl",
+    "repeated_phrases.jsonl",
+}
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _authenticate_failure_history(root: Path) -> dict[str, object]:
+    """Authenticate the four immutable records and derive terminal call counts."""
+
+    preflight_path = root / "preflight.json"
+    integration_path = root / "integration_preflight_failure.json"
+    marker_path = root / "corrected_pass_started.json"
+    failure_path = root / "corrected_pass_failure.json"
+    preflight = _read_json(preflight_path, "discovery preflight")
+    integration = _read_json(integration_path, "integration preflight failure")
+    marker = _read_json(marker_path, "corrected pass start marker")
+    failure = _read_json(failure_path, "corrected pass failure")
+
+    preflight_schema = preflight.get("schema")
+    preflight_model = preflight.get("model_preflight")
+    if (
+        preflight.get("schema_version") != DISCOVERY_PREFLIGHT_SCHEMA_VERSION
+        or preflight.get("status") != "complete"
+        or preflight.get("model") != MODEL_ID
+        or preflight.get("model_revision") != MODEL_REVISION
+        or not isinstance(preflight_model, Mapping)
+        or preflight_model.get("generation_count") != 1
+        or not isinstance(preflight_schema, Mapping)
+        or preflight.get("schema_sha256")
+        != _sha256_bytes(_compact_bytes(preflight_schema))
+        or not _is_sha256(preflight.get("prompt_sha256"))
+        or preflight.get("qrels_opened") is not False
+        or preflight.get("network_call_count") != 0
+        or preflight.get("retrieval_call_count") != 0
+        or preflight.get("hosted_inference_call_count") != 0
+        or preflight.get("paid_call_count") != 0
+        or preflight.get("external_cost_usd") != 0.0
+    ):
+        raise ValueError("discovery failure history has an invalid successful preflight")
+
+    integration_messages = integration.get("messages")
+    if (
+        integration.get("schema_version")
+        != "adaptive-evidence-integration-preflight-failure-v1"
+        or integration.get("status") != "failed"
+        or integration.get("phase")
+        != "model_facing_schema_integration_preflight"
+        or integration.get("completed_proposal_pass_count") != 0
+        or integration.get("qwen_reservoir_generation_call_count") != 1
+        or integration.get("proposal_artifact_count") != 0
+        or integration.get("model") != MODEL_ID
+        or integration.get("model_revision") != MODEL_REVISION
+        or integration.get("error_type") != "ValueError"
+        or integration.get("error_message") != "JSON schema $ is missing status"
+        or integration.get("model_output_retained") is not False
+        or integration.get("preflight_sha256") != _sha256_file(preflight_path)
+        or integration.get("schema_sha256") != preflight.get("schema_sha256")
+        or not isinstance(integration.get("schema"), Mapping)
+        or integration.get("schema_sha256")
+        != _sha256_bytes(_compact_bytes(integration["schema"]))
+        or not isinstance(integration_messages, list)
+        or integration.get("messages_sha256")
+        != _sha256_bytes(_compact_bytes(integration_messages))
+    ):
+        raise ValueError("discovery failure history has an invalid integration failure")
+
+    prompt_contract_sha256 = marker.get("prompt_contract_sha256")
+    schema_sha256 = marker.get("schema_sha256")
+    if (
+        marker.get("schema_version")
+        != "adaptive-evidence-corrected-pass-start-v1"
+        or marker.get("status") != "started"
+        or marker.get("corrected_completed_pass_ordinal") != 1
+        or marker.get("expected_generation_count") != 48
+        or marker.get("no_further_retry_authorized") is not True
+        or marker.get("model") != MODEL_ID
+        or marker.get("model_revision") != MODEL_REVISION
+        or not _is_sha256(prompt_contract_sha256)
+        or schema_sha256 != integration.get("schema_sha256")
+        or marker.get("integration_preflight_failure_sha256")
+        != _sha256_file(integration_path)
+    ):
+        raise ValueError("discovery failure history has an invalid corrected-pass marker")
+
+    if (
+        failure.get("schema_version")
+        != "adaptive-evidence-corrected-pass-failure-v1"
+        or failure.get("status") != "failed"
+        or failure.get("phase") != "corrected_complete_proposal_pass"
+        or failure.get("failed_generation_ordinal") != 1
+        or failure.get("completed_generation_count") != 0
+        or failure.get("expected_generation_count") != 48
+        or failure.get("completed_proposal_pass_count") != 0
+        or failure.get("model") != MODEL_ID
+        or failure.get("model_revision") != MODEL_REVISION
+        or failure.get("max_new_tokens") != DISCOVERY_MAX_NEW_TOKENS
+        or failure.get("prompt_contract_sha256") != prompt_contract_sha256
+        or failure.get("schema_sha256") != schema_sha256
+        or not isinstance(failure.get("schema"), Mapping)
+        or failure.get("schema_sha256")
+        != _sha256_bytes(_compact_bytes(failure["schema"]))
+        or failure.get("error_type") != "ValueError"
+        or failure.get("error_message")
+        != "local model completion is not one exact JSON value"
+        or failure.get("cause_type") != "JSONDecodeError"
+        or failure.get("failure_classification")
+        != "schema_json_truncated_at_generation_ceiling"
+        or failure.get("model_output_retained") is not False
+        or failure.get("proposal_artifact_count") != 0
+        or failure.get("no_further_retry_authorized") is not True
+        or failure.get("corrected_pass_started_sha256") != _sha256_file(marker_path)
+        or failure.get("integration_preflight_failure_sha256")
+        != _sha256_file(integration_path)
+        or not _is_sha256(failure.get("messages_sha256"))
+    ):
+        raise ValueError("discovery failure history is not the exact terminal history")
+
+    integration_calls = int(integration["qwen_reservoir_generation_call_count"])
+    corrected_calls = int(failure["failed_generation_ordinal"])
+    total_calls = integration_calls + corrected_calls
+    if total_calls != 2:
+        raise ValueError("discovery failure history does not contain exactly two calls")
+    return {
+        "preflight": preflight,
+        "prompt_contract_sha256": prompt_contract_sha256,
+        "schema_sha256": schema_sha256,
+        "preflight_schema_probe_generation_call_count": int(
+            preflight_model["generation_count"]
+        ),
+        "prior_integration_preflight_failure_count": 1,
+        "corrected_pass_failure_count": 1,
+        "completed_proposal_pass_count": int(
+            failure["completed_proposal_pass_count"]
+        ),
+        "total_qwen_proposal_generation_call_count": total_calls,
+        "hashes": {
+            name: _sha256_file(root / name) for name in _FAILURE_HISTORY_NAMES
+        },
+    }
+
+
+def _reject_terminal_extras(root: Path) -> None:
+    unexpected = sorted(
+        path.name for path in root.iterdir() if path.name not in _TERMINAL_ALLOWED_NAMES
+    )
+    downstream = [
+        root.parent / "scoring" / name
+        for name in (
+            "provisional-o1",
+            "provisional_o1",
+            "o1",
+            "accepted-o1",
+            "accepted_o1",
+        )
+    ]
+    if unexpected or any(path.exists() for path in downstream):
+        raise ValueError(
+            "terminal discovery unexpectedly contains partial or downstream artifacts"
+        )
+
+
+def record_discovery_unavailable(output_dir: Path) -> dict[str, object]:
+    """Freeze a receipt derived only from the complete immutable failure history."""
 
     root = Path(output_dir)
-    terminal_paths = (root / "corrected_pass_failure.json", root / "receipt.json")
-    if any(path.exists() for path in terminal_paths):
+    if (root / "receipt.json").exists():
         raise FileExistsError("create-only terminal discovery receipt already exists")
-    marker_path = root / "corrected_pass_started.json"
-    marker = _read_json(marker_path, "corrected pass start marker")
-    if (
-        marker.get("expected_generation_count") != 48
-        or marker.get("no_further_retry_authorized") is not True
-    ):
-        raise ValueError("corrected pass start marker differs from authorization")
-    proposal_artifacts = (
-        root / "proposed_o1.jsonl",
-        root / "proposed_n1.jsonl",
-        root / "proposal_receipt.json",
-    )
-    if any(path.exists() for path in proposal_artifacts):
-        raise ValueError("corrected failure cannot coexist with proposal artifacts")
-    preflight = (
-        _read_json(root / "preflight.json", "discovery preflight")
-        if (root / "preflight.json").exists()
-        else {}
-    )
-    integration_path = root / "integration_preflight_failure.json"
-    integration_sha256 = (
-        _sha256_file(integration_path) if integration_path.exists() else None
-    )
-    failure = {
-        "schema_version": "adaptive-evidence-corrected-pass-failure-v1",
-        "status": "failed",
-        "phase": "corrected_complete_proposal_pass",
-        "failed_generation_ordinal": 1,
-        "completed_generation_count": 0,
-        "expected_generation_count": 48,
-        "completed_proposal_pass_count": 0,
-        "parent_id": parent_id,
-        "source_fold": source_fold,
-        "messages_sha256": messages_sha256,
-        "prompt_contract_sha256": _proposal_prompt_contract_sha256(),
-        "schema": DISCOVERY_SCHEMA,
-        "schema_sha256": _sha256_bytes(_compact_bytes(DISCOVERY_SCHEMA)),
-        "model": MODEL_ID,
-        "model_revision": MODEL_REVISION,
-        "max_new_tokens": DISCOVERY_MAX_NEW_TOKENS,
-        "model_loading": {
-            "local_files_only": True,
-            "trust_remote_code": False,
-            "use_safetensors": True,
-            "torch_dtype": "bfloat16",
-            "eval_mode": True,
-            "device": "cuda",
-            "execution_backend": "rocm",
-            "seed": 0,
-            "do_sample": False,
-        },
-        "error_type": error_type,
-        "error_message": error_message,
-        "cause_type": cause_type,
-        "cause_message": cause_message,
-        "failure_classification": "schema_json_truncated_at_generation_ceiling",
-        "model_output_retained": False,
-        "proposal_artifact_count": 0,
-        "no_further_retry_authorized": True,
-        "corrected_pass_started_sha256": _sha256_file(marker_path),
-        "integration_preflight_failure_sha256": integration_sha256,
-    }
-    _exclusive_bytes(root / "corrected_pass_failure.json", _pretty_bytes(failure))
+    history = _authenticate_failure_history(root)
+    _reject_terminal_extras(root)
+    preflight = history["preflight"]
+    assert isinstance(preflight, Mapping)
+    hashes = history["hashes"]
+    assert isinstance(hashes, Mapping)
     receipt: dict[str, object] = {
         "schema_version": DISCOVERY_RECEIPT_SCHEMA_VERSION,
         "status": "discovery_unavailable",
         "reason": "corrected_pass_schema_json_truncation",
-        "completed_proposal_pass_count": 0,
-        "prior_integration_preflight_failure_count": 1,
-        "corrected_pass_failure_count": 1,
-        "total_qwen_proposal_generation_call_count": 2,
-        "preflight_schema_probe_generation_call_count": 1,
+        "completed_proposal_pass_count": history["completed_proposal_pass_count"],
+        "prior_integration_preflight_failure_count": history[
+            "prior_integration_preflight_failure_count"
+        ],
+        "corrected_pass_failure_count": history["corrected_pass_failure_count"],
+        "total_qwen_proposal_generation_call_count": history[
+            "total_qwen_proposal_generation_call_count"
+        ],
+        "preflight_schema_probe_generation_call_count": history[
+            "preflight_schema_probe_generation_call_count"
+        ],
         "no_further_retry_authorized": True,
         "model": MODEL_ID,
         "model_revision": MODEL_REVISION,
-        "prompt_contract_sha256": _proposal_prompt_contract_sha256(),
-        "schema_sha256": _sha256_bytes(_compact_bytes(DISCOVERY_SCHEMA)),
+        "prompt_contract_sha256": history["prompt_contract_sha256"],
+        "schema_sha256": history["schema_sha256"],
         "repeated_phrase_count": preflight.get("repeated_phrase_count", 0),
         "accepted_control_phrase_count": preflight.get(
             "accepted_control_phrase_count", 0
@@ -1511,20 +1772,13 @@ def record_discovery_unavailable(
         "accepted_o1_candidate_count": 0,
         "accepted_o1_window_count": 0,
         "artifacts": {
-            "corrected_pass_started.json": {
-                "sha256": _sha256_file(marker_path),
-            },
-            "corrected_pass_failure.json": {
-                "sha256": _sha256_file(root / "corrected_pass_failure.json"),
-            },
+            name: {"sha256": hashes[name]} for name in _FAILURE_HISTORY_NAMES
         },
         "bindings": {
-            "integration_preflight_failure_sha256": integration_sha256,
-            "preflight_sha256": (
-                _sha256_file(root / "preflight.json")
-                if (root / "preflight.json").exists()
-                else None
-            ),
+            "integration_preflight_failure_sha256": hashes[
+                "integration_preflight_failure.json"
+            ],
+            "preflight_sha256": hashes["preflight.json"],
             "model_preflight": preflight.get("model_preflight"),
             "code_sha256": {
                 "adaptive_evidence_discovery.py": _sha256_file(Path(__file__)),
@@ -1552,22 +1806,27 @@ def verify_discovery_terminal(output_dir: Path) -> dict[str, object]:
 
     root = Path(output_dir)
     receipt = _read_json(root / "receipt.json", "terminal discovery receipt")
+    history = _authenticate_failure_history(root)
     if (
         receipt.get("schema_version") != DISCOVERY_RECEIPT_SCHEMA_VERSION
         or receipt.get("status") != "discovery_unavailable"
         or receipt.get("reason") != "corrected_pass_schema_json_truncation"
-        or receipt.get("completed_proposal_pass_count") != 0
-        or receipt.get("prior_integration_preflight_failure_count") != 1
-        or receipt.get("corrected_pass_failure_count") != 1
-        or receipt.get("total_qwen_proposal_generation_call_count") != 2
-        or receipt.get("preflight_schema_probe_generation_call_count") != 1
+        or receipt.get("completed_proposal_pass_count")
+        != history["completed_proposal_pass_count"]
+        or receipt.get("prior_integration_preflight_failure_count")
+        != history["prior_integration_preflight_failure_count"]
+        or receipt.get("corrected_pass_failure_count")
+        != history["corrected_pass_failure_count"]
+        or receipt.get("total_qwen_proposal_generation_call_count")
+        != history["total_qwen_proposal_generation_call_count"]
+        or receipt.get("preflight_schema_probe_generation_call_count")
+        != history["preflight_schema_probe_generation_call_count"]
         or receipt.get("no_further_retry_authorized") is not True
         or receipt.get("model") != MODEL_ID
         or receipt.get("model_revision") != MODEL_REVISION
         or receipt.get("prompt_contract_sha256")
-        != _proposal_prompt_contract_sha256()
-        or receipt.get("schema_sha256")
-        != _sha256_bytes(_compact_bytes(DISCOVERY_SCHEMA))
+        != history["prompt_contract_sha256"]
+        or receipt.get("schema_sha256") != history["schema_sha256"]
         or receipt.get("qrels_opened") is not False
         or receipt.get("network_call_count") != 0
         or receipt.get("retrieval_call_count") != 0
@@ -1605,68 +1864,28 @@ def verify_discovery_terminal(output_dir: Path) -> dict[str, object]:
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("terminal discovery artifacts are missing")
-    for name in ("corrected_pass_started.json", "corrected_pass_failure.json"):
-        binding = artifacts.get(name)
-        if (
-            not isinstance(binding, Mapping)
-            or binding.get("sha256") != _sha256_file(root / name)
-        ):
-            raise ValueError(f"terminal discovery artifact hash differs: {name}")
-    failure = _read_json(root / "corrected_pass_failure.json", "corrected failure")
-    if (
-        failure.get("schema_version")
-        != "adaptive-evidence-corrected-pass-failure-v1"
-        or failure.get("status") != "failed"
-        or failure.get("failed_generation_ordinal") != 1
-        or failure.get("completed_generation_count") != 0
-        or failure.get("expected_generation_count") != 48
-        or failure.get("completed_proposal_pass_count") != 0
-        or failure.get("model") != MODEL_ID
-        or failure.get("model_revision") != MODEL_REVISION
-        or failure.get("max_new_tokens") != DISCOVERY_MAX_NEW_TOKENS
-        or failure.get("prompt_contract_sha256")
-        != _proposal_prompt_contract_sha256()
-        or failure.get("schema_sha256")
-        != _sha256_bytes(_compact_bytes(DISCOVERY_SCHEMA))
-        or failure.get("error_type") != "ValueError"
-        or failure.get("error_message")
-        != "local model completion is not one exact JSON value"
-        or failure.get("cause_type") != "JSONDecodeError"
-        or failure.get("failure_classification")
-        != "schema_json_truncated_at_generation_ceiling"
-        or failure.get("model_output_retained") is not False
-        or failure.get("proposal_artifact_count") != 0
-        or failure.get("no_further_retry_authorized") is not True
-    ):
-        raise ValueError("corrected pass failure details differ")
-    forbidden = (
-        "proposed_o1.jsonl",
-        "proposed_n1.jsonl",
-        "proposal_receipt.json",
-        "validated_o1.jsonl",
-        "accepted_o1.jsonl",
-        "validated_n1.jsonl",
-        "accepted_n1.jsonl",
-    )
-    if any((root / name).exists() for name in forbidden):
-        raise ValueError("terminal discovery unexpectedly contains proposal artifacts")
-    scoring_root = root.parent / "scoring"
-    if (scoring_root / "provisional-o1").exists() or (scoring_root / "o1").exists():
-        raise ValueError("terminal discovery unexpectedly contains downstream scores")
     bindings = receipt.get("bindings")
     if not isinstance(bindings, Mapping):
         raise ValueError("terminal discovery bindings are missing")
-    integration_sha256 = bindings.get("integration_preflight_failure_sha256")
-    integration_path = root / "integration_preflight_failure.json"
-    if integration_sha256 is not None and integration_sha256 != _sha256_file(
-        integration_path
-    ):
-        raise ValueError("integration preflight failure hash differs")
-    preflight_sha256 = bindings.get("preflight_sha256")
-    if preflight_sha256 is not None and preflight_sha256 != _sha256_file(
-        root / "preflight.json"
-    ):
-        raise ValueError("discovery preflight hash differs")
+    hashes = history["hashes"]
+    assert isinstance(hashes, Mapping)
+    for name in _FAILURE_HISTORY_NAMES:
+        binding = artifacts.get(name)
+        if name == "preflight.json" and not isinstance(binding, Mapping):
+            binding = {"sha256": bindings.get("preflight_sha256")}
+        elif (
+            name == "integration_preflight_failure.json"
+            and not isinstance(binding, Mapping)
+        ):
+            binding = {
+                "sha256": bindings.get("integration_preflight_failure_sha256")
+            }
+        if (
+            not isinstance(binding, Mapping)
+            or binding.get("sha256") != hashes[name]
+        ):
+            raise ValueError(f"terminal discovery artifact hash differs: {name}")
+    _reject_terminal_extras(root)
     return receipt
 
 

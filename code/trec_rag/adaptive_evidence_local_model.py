@@ -23,18 +23,43 @@ _O1_PROPERTIES: dict[str, object] = {
     "label": {"type": "string", "minLength": 1},
     "scope_rationale": {"type": "string", "minLength": 1},
     "subject": {"type": "string", "minLength": 1},
-    "population": {"type": "string", "minLength": 1},
+    "population": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Population already named by the frozen parent O0 scope.",
+    },
+    "domain": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Domain already named by the frozen parent O0 scope.",
+    },
     "relation": {"type": "string", "minLength": 1},
     "support_document_id": {"type": "string", "minLength": 1},
     "support_span": {"type": "string", "minLength": 1},
 }
 _O1_REQUIRED = list(_O1_PROPERTIES)
 _N1_PROPERTIES: dict[str, object] = {
-    "subject": {"type": "string", "minLength": 1},
-    "relation": {"type": "string", "minLength": 1},
-    "object": {"type": "string", "minLength": 1},
+    "subject": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One atomic subject; no coordination or list.",
+    },
+    "relation": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One atomic relation; no coordination or second clause.",
+    },
+    "object": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One atomic object; no coordination or list.",
+    },
     "support_document_id": {"type": "string", "minLength": 1},
-    "support_span": {"type": "string", "minLength": 1},
+    "support_span": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One exact single-sentence span supporting only this SRO fact.",
+    },
 }
 _N1_REQUIRED = list(_N1_PROPERTIES)
 
