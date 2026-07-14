@@ -32,6 +32,7 @@ from .facet_aware_fusion_manifest import (
 )
 from .remote_client import rate_limited_session
 from .remote_config import RemotePyseriniConfig
+from .repo_env import find_repo_root, load_repo_env
 
 
 ENDPOINT = "http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search"
@@ -48,6 +49,9 @@ LIMITER_STATE_PATH = SHARED_CACHE_DIR / "rate-limit.sqlite"
 PREFLIGHT_SCHEMA_VERSION = "facet-aware-fusion-retrieval-preflight-v1"
 SUMMARY_SCHEMA_VERSION = "facet-aware-fusion-retrieval-summary-v1"
 CANDIDATE_SCHEMA_VERSION = "facet-aware-fusion-candidate-v1"
+RECOVERY_SCHEMA_VERSION = "facet-aware-fusion-recovery-receipt-v1"
+RECOVERY_ROOT_CAUSE = "repo_env_not_loaded_before_token_read_v1"
+RECOVERY_RECEIPT_NAME = "recovery_receipt.json"
 _TIMEOUT_SECONDS = 30.0
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FACET_COUNTS = {"233": 3, "273": 7, "161": 7, "14": 7}
@@ -74,6 +78,22 @@ def _create_json(path: Path, payload: Mapping[str, object]) -> None:
     with Path(path).open("x", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
+
+
+def _pretty_json_bytes(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _read_json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a JSON object: {path}")
+    return payload
 
 
 def _create_bytes(path: Path, payload: bytes) -> None:
@@ -388,6 +408,164 @@ def create_preflight(
     return payload
 
 
+def _failed_401_evidence(
+    manifest: Mapping[str, object],
+    failed_ledger: RetrievalLedger,
+    endpoint: str,
+    *,
+    cache_root: Path,
+) -> dict[str, object]:
+    requests_to_run = build_requests(manifest, endpoint, cache_root=cache_root)
+    report = failed_ledger.validate_run()
+    if (
+        report.reservations != 1
+        or report.failures != 1
+        or report.successes != 0
+        or report.pending != 0
+        or report.cache_hits != 0
+    ):
+        raise ValueError(
+            "recovery requires exactly one terminal failed external attempt"
+        )
+    request = requests_to_run[0]
+    request_key = request.identity.request_key
+    outcome_path = failed_ledger.outcome_path(request_key)
+    metadata_path = failed_ledger.raw_metadata_path(request_key)
+    preflight_path = failed_ledger.run_dir / "preflight.json"
+    if not outcome_path.is_file() or not metadata_path.is_file() or not preflight_path.is_file():
+        raise ValueError("recovery source lacks the first request's immutable evidence")
+    outcome = _read_json_object(outcome_path, "failed outcome")
+    metadata = _read_json_object(metadata_path, "failed raw metadata")
+    if (
+        outcome.get("status") != "failure"
+        or outcome.get("failure_type") != "response_validation_error"
+        or outcome.get("message") != "HTTP status 401 is not successful"
+        or outcome.get("raw_present") is not True
+        or metadata.get("http_status") != 401
+        or metadata.get("request_key") != request_key
+        or outcome.get("response_sha256") != metadata.get("response_sha256")
+    ):
+        raise ValueError("recovery source is not the expected preserved HTTP 401")
+    response_sha256 = outcome.get("response_sha256")
+    if not isinstance(response_sha256, str) or _SHA256_RE.fullmatch(response_sha256) is None:
+        raise ValueError("recovery source has an invalid response hash")
+    return {
+        "failed_run_dir": str(failed_ledger.run_dir.resolve()),
+        "failed_request_key": request_key,
+        "failed_response_sha256": response_sha256,
+        "failed_http_status": 401,
+        "failed_outcome_sha256": hashlib.sha256(outcome_path.read_bytes()).hexdigest(),
+        "failed_raw_metadata_sha256": hashlib.sha256(
+            metadata_path.read_bytes()
+        ).hexdigest(),
+        "failed_preflight_sha256": hashlib.sha256(
+            preflight_path.read_bytes()
+        ).hexdigest(),
+    }
+
+
+def _recovery_receipt(
+    manifest: Mapping[str, object],
+    failed_ledger: RetrievalLedger,
+    recovery_ledger: RetrievalLedger,
+    endpoint: str,
+    preflight: Mapping[str, object],
+    *,
+    cache_root: Path,
+) -> dict[str, object]:
+    evidence = _failed_401_evidence(
+        manifest,
+        failed_ledger,
+        endpoint,
+        cache_root=cache_root,
+    )
+    return {
+        "schema_version": RECOVERY_SCHEMA_VERSION,
+        "root_cause": RECOVERY_ROOT_CAUSE,
+        "root_cause_detail": (
+            "the runner read PYSERINI_API_TOKEN before loading the repository env"
+        ),
+        **evidence,
+        "recovery_run_dir": str(recovery_ledger.run_dir.resolve()),
+        "recovery_preflight_sha256": hashlib.sha256(
+            _pretty_json_bytes(preflight)
+        ).hexdigest(),
+        "planned_requests": MAX_EXTERNAL_REQUESTS,
+        "authorized_batches": 1,
+        "failed_run_replay_allowed": False,
+        "credentials_recorded": False,
+    }
+
+
+def create_recovery_preflight(
+    manifest: Mapping[str, object],
+    failed_ledger: RetrievalLedger,
+    recovery_ledger: RetrievalLedger,
+    endpoint: str = ENDPOINT,
+    *,
+    cache_root: Path = SHARED_CACHE_DIR,
+) -> dict[str, object]:
+    """Bind one fresh preflight to an immutable failed-401 ledger receipt."""
+
+    if failed_ledger.run_dir.resolve() == recovery_ledger.run_dir.resolve():
+        raise ValueError("recovery output must differ from the failed run directory")
+    _require_fresh_final_outputs(recovery_ledger.run_dir)
+    receipt_path = recovery_ledger.run_dir / RECOVERY_RECEIPT_NAME
+    preflight_path = recovery_ledger.run_dir / "preflight.json"
+    for path in (receipt_path, preflight_path):
+        if path.exists():
+            raise FileExistsError(f"create-only output already exists: {path}")
+    if recovery_ledger.validate_run().planned_requests != 0:
+        raise ValueError("recovery output must have no prior retrieval invocation")
+    preflight = preflight_retrieval(
+        manifest,
+        recovery_ledger,
+        endpoint,
+        cache_root=cache_root,
+    )
+    receipt = _recovery_receipt(
+        manifest,
+        failed_ledger,
+        recovery_ledger,
+        endpoint,
+        preflight,
+        cache_root=cache_root,
+    )
+    # Receipt first: a crash can leave an inert authorization without a runnable
+    # preflight, never an unbound runnable preflight.
+    _create_json(receipt_path, receipt)
+    _create_json(preflight_path, preflight)
+    return receipt
+
+
+def _validate_recovery_receipt_if_present(
+    manifest: Mapping[str, object],
+    recovery_ledger: RetrievalLedger,
+    endpoint: str,
+    preflight: Mapping[str, object],
+    *,
+    cache_root: Path,
+) -> None:
+    path = recovery_ledger.run_dir / RECOVERY_RECEIPT_NAME
+    if not path.exists():
+        return
+    stored = _read_json_object(path, "recovery receipt")
+    failed_run_dir = stored.get("failed_run_dir")
+    if not isinstance(failed_run_dir, str) or not failed_run_dir:
+        raise ValueError("recovery receipt has no failed run directory")
+    failed_ledger = _ledger(Path(failed_run_dir), cache_root=cache_root)
+    expected = _recovery_receipt(
+        manifest,
+        failed_ledger,
+        recovery_ledger,
+        endpoint,
+        preflight,
+        cache_root=cache_root,
+    )
+    if stored != expected or path.read_bytes() != _pretty_json_bytes(stored):
+        raise ValueError("recovery receipt differs from immutable failed-run evidence")
+
+
 def _read_preflight(
     manifest: Mapping[str, object],
     ledger: RetrievalLedger,
@@ -457,6 +635,13 @@ def execute_retrieval(
         endpoint,
         cache_root=cache_root,
     )
+    _validate_recovery_receipt_if_present(
+        manifest,
+        ledger,
+        endpoint,
+        preflight,
+        cache_root=cache_root,
+    )
     for request in requests_to_run:
         # Deliberately uncaught: one immutable failed attempt terminates the batch.
         ledger.retrieve(request, transport)
@@ -510,27 +695,46 @@ def _ledger(output: Path, *, cache_root: Path) -> RetrievalLedger:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("preflight", "run"):
+    for command in ("preflight", "run", "recover-preflight"):
         child = subparsers.add_parser(command)
         child.add_argument("--manifest", type=Path, required=True)
         child.add_argument("--output", type=Path, required=True)
         child.add_argument("--cache-root", type=Path, default=SHARED_CACHE_DIR)
+        if command == "recover-preflight":
+            child.add_argument("--failed-output", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    repo_root = find_repo_root(Path.cwd())
+    load_repo_env(repo_root)
     args = _parser().parse_args(argv)
     manifest = load_manifest(args.manifest, cache_root=args.cache_root)
     _validated_facets(manifest, cache_root=args.cache_root)
     ledger = _ledger(args.output, cache_root=args.cache_root)
     if args.command == "preflight":
         payload = create_preflight(manifest, ledger, cache_root=args.cache_root)
+    elif args.command == "recover-preflight":
+        failed_ledger = _ledger(args.failed_output, cache_root=args.cache_root)
+        payload = create_recovery_preflight(
+            manifest,
+            failed_ledger,
+            ledger,
+            cache_root=args.cache_root,
+        )
     else:
         _require_fresh_final_outputs(ledger.run_dir)
-        _read_preflight(
+        preflight, _ = _read_preflight(
             manifest,
             ledger,
             ENDPOINT,
+            cache_root=args.cache_root,
+        )
+        _validate_recovery_receipt_if_present(
+            manifest,
+            ledger,
+            ENDPOINT,
+            preflight,
             cache_root=args.cache_root,
         )
         config = build_live_config(

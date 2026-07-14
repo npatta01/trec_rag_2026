@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +29,7 @@ from trec_rag.facet_aware_fusion_run import (
     build_requests,
     create_preflight,
     execute_retrieval,
+    main,
     preflight_retrieval,
 )
 
@@ -418,3 +422,208 @@ def test_execution_writes_normalized_candidates_and_summary_create_only(tmp_path
     with pytest.raises(FileExistsError, match="retrieval_summary.json"):
         execute_retrieval(manifest, ledger, transport, ENDPOINT)
     assert len(calls) == 24
+
+
+def test_run_cli_loads_repo_env_before_token_and_never_logs_it(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    secret = "synthetic-secret-that-must-not-be-logged"
+    repo_root = tmp_path / "repo"
+    output = tmp_path / "recovery"
+    ledger = SimpleNamespace(run_dir=output)
+    events = []
+    monkeypatch.delenv("PYSERINI_API_TOKEN", raising=False)
+    monkeypatch.setattr(
+        module,
+        "find_repo_root",
+        lambda start: events.append(("find_repo_root", start)) or repo_root,
+        raising=False,
+    )
+
+    def fake_load_repo_env(root):
+        events.append(("load_repo_env", root))
+        os.environ["PYSERINI_API_TOKEN"] = secret
+
+    monkeypatch.setattr(
+        module,
+        "load_repo_env",
+        fake_load_repo_env,
+        raising=False,
+    )
+    monkeypatch.setattr(module, "load_manifest", lambda path, *, cache_root: _manifest())
+    monkeypatch.setattr(module, "_validated_facets", lambda payload, *, cache_root: ())
+    monkeypatch.setattr(module, "_ledger", lambda path, *, cache_root: ledger)
+    monkeypatch.setattr(module, "_require_fresh_final_outputs", lambda path: None)
+    monkeypatch.setattr(
+        module,
+        "_read_preflight",
+        lambda payload, run_ledger, endpoint, *, cache_root: ({}, output / "preflight.json"),
+    )
+    requests = build_requests(_manifest(), ENDPOINT)
+    monkeypatch.setattr(
+        module,
+        "build_requests",
+        lambda payload, endpoint, *, cache_root: requests,
+    )
+
+    def fake_build_live_config(*, api_token):
+        events.append(("build_live_config", api_token))
+        assert api_token == secret
+        return SimpleNamespace(api_token=api_token)
+
+    monkeypatch.setattr(module, "build_live_config", fake_build_live_config)
+    monkeypatch.setattr(
+        module,
+        "RateLimitedFacetTransport",
+        lambda config, allowed: SimpleNamespace(config=config, allowed=allowed),
+    )
+    monkeypatch.setattr(
+        module,
+        "execute_retrieval",
+        lambda *args, **kwargs: {"complete": True, "planned_requests": 24},
+    )
+
+    assert main(
+        [
+            "run",
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output",
+            str(output),
+            "--cache-root",
+            str(tmp_path / "cache"),
+        ]
+    ) == 0
+
+    captured = capsys.readouterr()
+    assert [event[0] for event in events] == [
+        "find_repo_root",
+        "load_repo_env",
+        "build_live_config",
+    ]
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def _failed_401_run(tmp_path, manifest):
+    failed = RetrievalLedger(
+        tmp_path / "failed",
+        max_calls=MAX_EXTERNAL_REQUESTS,
+        max_calls_per_topic=7,
+        min_results=50,
+        required_text_results=50,
+    )
+    create_preflight(manifest, failed, ENDPOINT)
+
+    def unauthorized(_request):
+        return RawTransportResponse(
+            401,
+            {"Content-Type": "application/json"},
+            b'{"error":"synthetic unauthorized"}',
+            0.01,
+        )
+
+    with pytest.raises(RetrievalLedgerError, match="HTTP status 401"):
+        execute_retrieval(manifest, failed, unauthorized, ENDPOINT)
+    return failed
+
+
+def test_recovery_preflight_binds_401_and_old_run_cannot_replay(tmp_path):
+    manifest = _manifest()
+    failed = _failed_401_run(tmp_path, manifest)
+    recovery = RetrievalLedger(
+        tmp_path / "recovery",
+        max_calls=MAX_EXTERNAL_REQUESTS,
+        max_calls_per_topic=7,
+        min_results=50,
+        required_text_results=50,
+    )
+
+    receipt = module.create_recovery_preflight(
+        manifest,
+        failed,
+        recovery,
+        ENDPOINT,
+    )
+
+    failed_report = failed.validate_run()
+    failed_request = build_requests(manifest, ENDPOINT)[0]
+    assert failed_report.external_calls == failed_report.failures == 1
+    assert receipt["failed_request_key"] == failed_request.identity.request_key
+    assert receipt["failed_response_sha256"] == hashlib.sha256(
+        failed.raw_path(failed_request.identity.request_key).read_bytes()
+    ).hexdigest()
+    assert receipt["failed_http_status"] == 401
+    assert receipt["root_cause"] == "repo_env_not_loaded_before_token_read_v1"
+    assert receipt["authorized_batches"] == 1
+    assert receipt["failed_run_replay_allowed"] is False
+    assert (recovery.run_dir / "recovery_receipt.json").is_file()
+    assert (recovery.run_dir / "preflight.json").is_file()
+
+    old_calls = []
+    with pytest.raises(ValueError, match="24-call global budget|stored preflight"):
+        execute_retrieval(
+            manifest,
+            failed,
+            lambda request: old_calls.append(request),
+            ENDPOINT,
+        )
+    assert old_calls == []
+
+    with pytest.raises(FileExistsError, match="recovery_receipt.json"):
+        module.create_recovery_preflight(
+            manifest,
+            failed,
+            recovery,
+            ENDPOINT,
+        )
+
+
+def test_recovery_receipt_tampering_stops_before_transport(tmp_path):
+    manifest = _manifest()
+    failed = _failed_401_run(tmp_path, manifest)
+    recovery = RetrievalLedger(
+        tmp_path / "recovery",
+        max_calls=MAX_EXTERNAL_REQUESTS,
+        max_calls_per_topic=7,
+        min_results=50,
+        required_text_results=50,
+    )
+    module.create_recovery_preflight(manifest, failed, recovery, ENDPOINT)
+    receipt_path = recovery.run_dir / "recovery_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["failed_response_sha256"] = "0" * 64
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+    calls = []
+
+    with pytest.raises(ValueError, match="recovery receipt"):
+        execute_retrieval(
+            manifest,
+            recovery,
+            lambda request: calls.append(request),
+            ENDPOINT,
+        )
+
+    assert calls == []
+
+
+def test_recovery_preflight_cli_requires_separate_failed_output(tmp_path):
+    args = module._parser().parse_args(
+        [
+            "recover-preflight",
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--failed-output",
+            str(tmp_path / "failed"),
+            "--output",
+            str(tmp_path / "recovery"),
+            "--cache-root",
+            str(tmp_path / "cache"),
+        ]
+    )
+
+    assert args.command == "recover-preflight"
+    assert args.failed_output == tmp_path / "failed"
+    assert args.output == tmp_path / "recovery"
