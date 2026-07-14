@@ -58,7 +58,7 @@ quality gates, parameters, rankings, and hashes are frozen.
 ## Frozen query manifest
 
 The original stream is the exact cached narrative query at depth 1,000. Each
-facet request uses depth 200. The 24 facet queries below partition explicit
+facet request uses depth 200. The 25 facet queries below partition explicit
 narrative obligations and introduce no candidate answer.
 
 ### Topic 219: technology's societal impact
@@ -71,9 +71,10 @@ Facets:
 1. `technology positive effects on society and daily life`
 2. `technology negative effects on society and daily life`
 3. `technology societal impact on government`
-4. `technology impact on business and telehealth`
-5. `role of technical societies in technology`
-6. `why rationing devices may be needed with technological advancements`
+4. `technology societal impact on business`
+5. `technology impact on telehealth and health care delivery`
+6. `role of technical societies in technology`
+7. `why rationing devices may be needed with technological advancements`
 
 ### Topic 72: deforestation
 
@@ -127,10 +128,10 @@ hash before retrieval.
 ## Retrieval and cost boundary
 
 - Reuse the four exact cached original-query top-1,000 responses.
-- Issue exactly 24 new facet requests, each with `hits=200`.
+- Issue exactly 25 new facet requests, each with `hits=200`.
 - Use the existing raw-first immutable ledger, exact-identity cache, and persistent
   limiter of one request start per three seconds.
-- Minimum uncached request-start time is 72 seconds.
+- Minimum uncached request-start time is 75 seconds.
 - Do not retry a failed immutable attempt. Any transport, HTTP, schema, identity,
   or short-response failure aborts the pilot before qrels access. A successful
   response must contain exactly 200 unique, text-bearing ClimbMix document IDs.
@@ -171,6 +172,12 @@ select at most four, apply weights `0.55, 0.25, 0.13, 0.07`, and renormalize the
 retained weights when fewer than four windows qualify. Phase-1 preflight must
 reproduce these values from the authenticated prior receipt rather than silently
 choosing new window settings or aggregation.
+
+The phase-1 manifest binds the authenticated source receipt at
+`outputs/rag25_facet_aware_fusion_v1/preflight_v1/preflight.json`, SHA-256
+`346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122`.
+If either its path or bytes differ, preflight stops rather than selecting another
+historical receipt.
 
 For scores sorted from best to worst in a stated population of size `n`, define:
 
@@ -257,10 +264,10 @@ This arm measures whether one common semantic query is sufficient.
 
 ### FACET: facet-local control
 
-Greedily maximize `0.70*L(d) + 0.30*B(d|S)`. Use `R(d)`, best contributing facet
-in manifest order, original rank, best facet rank, and document ID as tie-breakers.
-This isolates persistent facet-local relevance plus diminishing coverage without
-using common-query scores.
+Greedily maximize `0.70*L(d) + 0.30*B(d|S)`. Tie-break by `R(d)`, the earliest
+manifest facet attaining `L(d)`, the earliest manifest facet attaining `B(d|S)`,
+original rank, best facet rank, and document ID. This isolates persistent
+facet-local relevance plus diminishing coverage without common-query scores.
 
 ### DUAL: primary arm
 
@@ -289,13 +296,14 @@ than rescanning the selected set inside every candidate comparison.
 Before qrels access, create and hash:
 
 - topic-selection and protected-topic rejection receipts;
-- narrative, common-query, and 24-facet manifest;
+- narrative, common-query, and 25-facet manifest;
 - all raw requests, responses, cache identities, and candidate rows;
 - model, tokenizer, window, score-cache, inference, and runtime receipts;
 - facet gates and representative qrels-blind diagnostics;
 - `U_raw`, `U_accepted`, accepted/rejected stream records, and two frozen accepted
-  facet-prefix union families at depths 50, 100, and 200: one using each stream's
-  BM25 order and one using its facet-local MiniLM order;
+  facet-prefix union families at depths `h in {50,100,200}`:
+  `U_BM25@h = original@1000 union accepted-facet BM25 prefixes@h` and
+  `U_MiniLM@h = original@1000 union accepted-facet MiniLM prefixes@h`;
 - definitions and complete permutations for RRF, GLOBAL, FACET, DUAL, and DUAL-NR;
 - every normalization, coefficient, tie-break, and evaluated topic ID.
 
@@ -347,6 +355,11 @@ receive gain zero but are reported separately through judged rate. A metric with
 a zero denominator is `null`, never zero, and is excluded from macro means with
 the excluded topic count reported.
 
+All arm-level Recall, graded Recall, and nDCG comparisons in the advance rule use
+the macro mean over non-null topics. `NovelRel` retention uses the micro count over
+the pilot-wide union of topic-document identities. Both macro and micro diagnostic
+views are reported, but only these declared aggregations affect advancement.
+
 ## Advance and stop rule
 
 This four-topic pilot cannot promote a production method. Advance DUAL to a
@@ -392,7 +405,7 @@ diagnostic controls and cannot advance from this four-topic pilot.
 - retrieval, scoring, gating, and ranking refuse to run after the create-only
   `QRELS_ACCESSED` sentinel exists;
 - all external requests pass through the persistent limiter and respect the
-  exact 24-request ceiling;
+  exact 25-request ceiling;
 - raw BM25 or MiniLM scores never cross query boundaries;
 - full-narrative scoring cannot reject a document;
 - input reordering cannot change percentiles, rankings, or tie-breaks;
