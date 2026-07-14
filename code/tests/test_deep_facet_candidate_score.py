@@ -10,6 +10,7 @@ from trec_rag.deep_facet_candidate_score import (
     aggregate_top4,
     build_phase_preflight,
     phase1_candidates,
+    phase2_candidates,
     verify_source_receipt,
 )
 
@@ -124,3 +125,46 @@ def test_protected_or_qrels_exposed_topics_are_rejected() -> None:
     rows[0]["topic_id"] = "144"
     with pytest.raises(ValueError, match="excluded topic"):
         phase1_candidates(manifest, rows)
+
+
+def test_phase2_scores_every_accepted_document_with_common_and_narrative_queries() -> None:
+    manifest = {
+        "topic_ids": ["219"],
+        "topics": [
+            {
+                "topic_id": "219",
+                "query": "the exact full narrative",
+                "common_query": "technology societal impacts",
+            }
+        ],
+        "qrels_opened": False,
+    }
+    accepted = [
+        {
+            "topic_id": "219",
+            "document_id": "d1",
+            "text": "one document",
+            "text_sha256": hashlib.sha256(b"one document").hexdigest(),
+            "union_order": 1,
+            "provenance": [{"family": "original", "rank": 1}],
+        },
+        {
+            "topic_id": "219",
+            "document_id": "d2",
+            "text": "two document",
+            "text_sha256": hashlib.sha256(b"two document").hexdigest(),
+            "union_order": 2,
+            "provenance": [{"family": "facet", "facet_id": "219-positive"}],
+        },
+    ]
+
+    candidates = phase2_candidates(manifest, accepted)
+
+    assert len(candidates) == 4
+    assert {(row["document_id"], row["family"]) for row in candidates} == {
+        ("d1", "common"),
+        ("d1", "narrative"),
+        ("d2", "common"),
+        ("d2", "narrative"),
+    }
+    assert all("decision" not in row and "accepted" not in row for row in candidates)

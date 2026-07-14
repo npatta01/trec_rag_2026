@@ -194,6 +194,73 @@ def phase1_candidates(
     return candidates
 
 
+def phase2_candidates(
+    manifest: Mapping[str, object],
+    accepted_rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Bind every accepted document to common and full-narrative queries."""
+
+    if manifest.get("qrels_opened") is not False:
+        raise ValueError("phase 2 requires qrels_opened=false")
+    raw_topics = manifest.get("topics")
+    if not isinstance(raw_topics, list):
+        raise ValueError("manifest topics must be an array")
+    topics: dict[str, Mapping[str, object]] = {}
+    for topic in raw_topics:
+        if not isinstance(topic, Mapping):
+            raise ValueError("manifest topic must be an object")
+        topic_id = _reject_excluded(topic.get("topic_id"))
+        if not isinstance(topic.get("query"), str) or not isinstance(
+            topic.get("common_query"), str
+        ):
+            raise ValueError("manifest topic lacks narrative/common query")
+        topics[topic_id] = topic
+    seen: set[tuple[str, str]] = set()
+    candidates: list[dict[str, object]] = []
+    for row in accepted_rows:
+        topic_id = _reject_excluded(row.get("topic_id"))
+        topic = topics.get(topic_id)
+        document_id = row.get("document_id")
+        text = row.get("text")
+        union_order = row.get("union_order")
+        if (
+            topic is None
+            or not isinstance(document_id, str)
+            or not document_id
+            or not isinstance(text, str)
+            or not text
+            or row.get("text_sha256") != _sha256_bytes(text.encode("utf-8"))
+            or isinstance(union_order, bool)
+            or not isinstance(union_order, int)
+            or union_order < 1
+        ):
+            raise ValueError("accepted union row is invalid")
+        identity = (topic_id, document_id)
+        if identity in seen:
+            raise ValueError("accepted union contains a duplicate topic/document")
+        seen.add(identity)
+        for family, query_field in (("common", "common_query"), ("narrative", "query")):
+            query = str(topic[query_field])
+            candidates.append(
+                {
+                    "topic_id": topic_id,
+                    "family": family,
+                    "variant": f"{topic_id}:{family}",
+                    "rank": union_order,
+                    "document_id": document_id,
+                    "docid": document_id,
+                    "query": query,
+                    "query_sha256": _sha256_bytes(query.encode("utf-8")),
+                    "text": text,
+                    "text_sha256": _sha256_bytes(text.encode("utf-8")),
+                    "union_order": union_order,
+                }
+            )
+    if len(candidates) != 2 * len(seen):
+        raise ValueError("phase 2 must score each accepted document exactly twice")
+    return candidates
+
+
 def build_phase_preflight(
     candidates: Sequence[Mapping[str, object]],
     tokenizer: object,
@@ -342,6 +409,105 @@ def create_phase1_preflight(
             "span_distinct_minimum_new_tokens": 128,
             "top4_weights": [0.55, 0.25, 0.13, 0.07],
         },
+        "scorer_code_sha256": _sha256_bytes(Path(__file__).read_bytes()),
+    }
+    _exclusive_json(output / "preflight.json", payload)
+    return payload
+
+
+def _load_authenticated_accepted(gate_dir: Path) -> list[dict[str, object]]:
+    summary = _read_json(Path(gate_dir) / "summary.json", "gate summary")
+    accepted_path = Path(gate_dir) / "u_accepted.jsonl"
+    source = accepted_path.read_bytes()
+    artifacts = summary.get("artifacts")
+    binding = artifacts.get("u_accepted.jsonl") if isinstance(artifacts, Mapping) else None
+    if (
+        summary.get("status") != "complete"
+        or summary.get("qrels_opened") is not False
+        or not isinstance(binding, Mapping)
+        or binding.get("sha256") != _sha256_bytes(source)
+        or binding.get("bytes") != len(source)
+    ):
+        raise ValueError("gate summary does not authenticate U_accepted")
+    rows = _read_jsonl(accepted_path, "accepted union")
+    if not rows:
+        raise ValueError("accepted union cannot be empty")
+    return rows
+
+
+def create_phase2_preflight(
+    manifest: Mapping[str, object],
+    gate_dir: Path,
+    output: Path,
+    *,
+    cache_root: Path = SCORE_CACHE_ROOT,
+) -> dict[str, object]:
+    output = Path(output)
+    assert_mutation_allowed(output)
+    assert_mutation_allowed(output.parent)
+    for name in ("preflight.json", "windows.jsonl", "candidates.jsonl", "scores.jsonl"):
+        if (output / name).exists():
+            raise FileExistsError(f"create-only phase output already exists: {output / name}")
+    _source_receipt, model_receipt, model_receipt_sha, source_receipt_sha = (
+        _source_bindings()
+    )
+    tokenizer = load_verified_tokenizer(model_receipt)
+    cache = GlobalScoreCache(Path(cache_root), score_cache_context())
+    accepted_rows = _load_authenticated_accepted(gate_dir)
+    candidates = phase2_candidates(manifest, accepted_rows)
+    plan = build_phase_preflight(
+        candidates,
+        tokenizer,
+        cache_lookup=lambda query, text: cache.get(query_text=query, text=text),
+    )
+    candidate_bytes = _jsonl_bytes(candidates)
+    window_rows = plan.pop("windows")
+    window_bytes = _jsonl_bytes(window_rows)  # type: ignore[arg-type]
+    _exclusive_bytes(output / "candidates.jsonl", candidate_bytes)
+    _exclusive_bytes(output / "windows.jsonl", window_bytes)
+    payload: dict[str, object] = {
+        "schema_version": PREFLIGHT_SCHEMA_VERSION,
+        "experiment_id": EXPERIMENT_ID,
+        "phase": "phase2_common_narrative",
+        "status": "tokenizer_only_preflight_complete",
+        "qrels_opened": False,
+        "retrieval_path_supported": False,
+        "network_access_supported": False,
+        "hosted_inference_supported": False,
+        "model_constructed": False,
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "source_receipt_path": str(SOURCE_RECEIPT_PATH),
+        "source_receipt_sha256": source_receipt_sha,
+        "model_materialization_receipt": str(model_receipt),
+        "model_materialization_receipt_sha256": model_receipt_sha,
+        "gate_summary_sha256": _sha256_bytes(
+            (Path(gate_dir) / "summary.json").read_bytes()
+        ),
+        "accepted_union_sha256": _sha256_bytes(
+            (Path(gate_dir) / "u_accepted.jsonl").read_bytes()
+        ),
+        "accepted_document_count": len(accepted_rows),
+        "query_document_pair_count": len(candidates),
+        "candidates_sha256": _sha256_bytes(candidate_bytes),
+        "windows_sha256": _sha256_bytes(window_bytes),
+        "score_cache_path": str(cache.path),
+        "score_cache_bytes": cache.path.stat().st_size if cache.path.exists() else 0,
+        "summary": plan["summary"],
+        "pairs_per_second": plan["pairs_per_second"],
+        "fixed_seconds": plan["fixed_seconds"],
+        "projected_runtime_seconds": plan["projected_runtime_seconds"],
+        "runtime_ceiling_seconds": MAX_PHASE_SECONDS,
+        "window_policy": {
+            "pair_max_tokens": 512,
+            "query_max_tokens": 192,
+            "minimum_passage_tokens": 256,
+            "passage_overlap_tokens": 64,
+            "maximum_windows_per_document": 32,
+            "span_distinct_minimum_new_tokens": 128,
+            "top4_weights": [0.55, 0.25, 0.13, 0.07],
+        },
+        "narrative_is_eligibility_gate": False,
         "scorer_code_sha256": _sha256_bytes(Path(__file__).read_bytes()),
     }
     _exclusive_json(output / "preflight.json", payload)
@@ -519,21 +685,32 @@ def _parser() -> argparse.ArgumentParser:
     preflight.add_argument("--output", required=True, type=Path)
     score = subparsers.add_parser("score-phase1")
     score.add_argument("--preflight", required=True, type=Path)
+    phase2 = subparsers.add_parser("preflight-phase2")
+    phase2.add_argument("--manifest", required=True, type=Path)
+    phase2.add_argument("--gate", required=True, type=Path)
+    phase2.add_argument("--output", required=True, type=Path)
+    score2 = subparsers.add_parser("score-phase2")
+    score2.add_argument("--preflight", required=True, type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "preflight-phase1":
+    if args.command in {"preflight-phase1", "preflight-phase2"}:
         manifest = load_manifest(
             args.manifest,
             cache_root=Path(
                 "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote"
             ),
         )
-        result = create_phase1_preflight(
-            manifest, args.retrieval, args.output
-        )
+        if args.command == "preflight-phase1":
+            result = create_phase1_preflight(
+                manifest, args.retrieval, args.output
+            )
+        else:
+            result = create_phase2_preflight(
+                manifest, args.gate, args.output
+            )
     else:
         result = run_local_scoring(args.preflight)
     print(json.dumps(result, indent=2, sort_keys=True))
