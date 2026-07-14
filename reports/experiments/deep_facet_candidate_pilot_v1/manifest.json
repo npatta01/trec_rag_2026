@@ -1,0 +1,851 @@
+{
+  "analyzer": {
+    "rules": "lowercase ascii-alphanumeric; stop list; frozen suffix stemmer",
+    "stopwords_sha256": "47eccdd406782881aa86c9de31272b13f8f20d0139bbfceed195d8a264355d11",
+    "version": "deep_facet_ascii_stem_stop_v1"
+  },
+  "eligible_topic_ids": [
+    "31",
+    "37",
+    "58",
+    "72",
+    "84",
+    "219",
+    "300",
+    "477",
+    "499"
+  ],
+  "excluded_topic_ids": [
+    "14",
+    "144",
+    "161",
+    "200",
+    "213",
+    "224",
+    "225",
+    "233",
+    "273",
+    "407",
+    "515",
+    "707",
+    "897"
+  ],
+  "experiment_id": "rag25_deep_facet_candidates_v1",
+  "facets": [
+    {
+      "analyzer_terms": [
+        "technology",
+        "positive",
+        "effect",
+        "society",
+        "daily",
+        "life"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-positive",
+      "manifest_order": 0,
+      "obligation": "Positive effects of technology on society and daily life.",
+      "query": "technology positive effects on society and daily life",
+      "query_sha256": "0d1fb40f9ebc845883836c3b74422029e7030192858a68c9800d330c99c35fd7",
+      "relation_terms": [
+        "positive",
+        "society",
+        "daily life"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "technology stock",
+        "product review"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "neg",
+        "effect",
+        "society",
+        "daily",
+        "life"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-negative",
+      "manifest_order": 1,
+      "obligation": "Negative effects of technology on society and daily life.",
+      "query": "technology negative effects on society and daily life",
+      "query_sha256": "12f26bc159c0a84d9725c99d1839c9dcd6e266a00fcc579ccf9a41937c193cf4",
+      "relation_terms": [
+        "negative",
+        "society",
+        "daily life"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "technology stock",
+        "product review"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "societal",
+        "impact",
+        "govern"
+      ],
+      "anchor_terms": [
+        "technology",
+        "government"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-government",
+      "manifest_order": 2,
+      "obligation": "Technology's societal impact on government.",
+      "query": "technology societal impact on government",
+      "query_sha256": "da4592c404c79a0585eaaaa25ddce674f59bc890c449b9d07b84d2e390af70d4",
+      "relation_terms": [
+        "impact",
+        "society"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "company governance",
+        "government job"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "societal",
+        "impact",
+        "busi"
+      ],
+      "anchor_terms": [
+        "technology",
+        "business"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-business",
+      "manifest_order": 3,
+      "obligation": "Technology's societal impact on business.",
+      "query": "technology societal impact on business",
+      "query_sha256": "b6521d64e6e81ef25a217f8f1a21cf0248da36e5e04cfc2c95aa4acc1b766eee",
+      "relation_terms": [
+        "impact",
+        "society"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "business technology product",
+        "stock price"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "impact",
+        "telehealth",
+        "health",
+        "care",
+        "delivery"
+      ],
+      "anchor_terms": [
+        "technology",
+        "telehealth"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-telehealth",
+      "manifest_order": 4,
+      "obligation": "Technology's impact on telehealth and health-care delivery.",
+      "query": "technology impact on telehealth and health care delivery",
+      "query_sha256": "134c564dc783df4fa4a7cb3e97cd5e57aec748800e2cc31c6643491d766da16e",
+      "relation_terms": [
+        "impact",
+        "health care",
+        "delivery"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "delivery driver",
+        "food delivery"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "role",
+        "technic",
+        "societi",
+        "technology"
+      ],
+      "anchor_terms": [
+        "technical societies",
+        "technology"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-societies",
+      "manifest_order": 5,
+      "obligation": "Role of technical societies in technology.",
+      "query": "role of technical societies in technology",
+      "query_sha256": "2de3e60706e69ca0ac4ba7ecc3ef891e317892bf708a8b298706361ca91dc9aa",
+      "relation_terms": [
+        "role"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "secret society",
+        "social club"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "ration",
+        "devic",
+        "need",
+        "technologic",
+        "advance"
+      ],
+      "anchor_terms": [
+        "device",
+        "technology"
+      ],
+      "bridge_terms": [],
+      "facet_id": "219-rationing",
+      "manifest_order": 6,
+      "obligation": "Why technological advances may require device rationing.",
+      "query": "why rationing devices may be needed with technological advancements",
+      "query_sha256": "69e8f53456cb5fa9a6ad68dacf6bb4efad7c38dff543d349c8f95e52bef1d1b7",
+      "relation_terms": [
+        "rationing",
+        "needed",
+        "advancement"
+      ],
+      "topic_id": "219",
+      "wrong_domain_patterns": [
+        "food rationing",
+        "ration recipe"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "environmental",
+        "impact"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "facet_id": "72-environment",
+      "manifest_order": 7,
+      "obligation": "Environmental impacts of deforestation.",
+      "query": "deforestation environmental impacts",
+      "query_sha256": "e64c15705bf4c2c2f66b6a25de10288476959f108cc66ba9dc2e1c9b865e3d7f",
+      "relation_terms": [
+        "environment",
+        "impact"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "forest product",
+        "tree cutting tool"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "climate",
+        "impact"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "facet_id": "72-climate",
+      "manifest_order": 8,
+      "obligation": "Climate impacts of deforestation.",
+      "query": "deforestation climate impacts",
+      "query_sha256": "1da2dbb941cba751a6958763c675ff8f6d849bfa8875e4b97d88e16b7f046255",
+      "relation_terms": [
+        "climate",
+        "impact"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "weather forecast",
+        "forest product"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "impact",
+        "animal",
+        "biodiversity"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [
+        {
+          "purpose": "standard_concept_name",
+          "rationale": "Standard concept name for the explicitly requested animal and environmental effects; it is not a candidate answer.",
+          "term": "biodiversity"
+        }
+      ],
+      "facet_id": "72-animals",
+      "manifest_order": 9,
+      "obligation": "Effects of deforestation on animals.",
+      "query": "deforestation impacts on animals and biodiversity",
+      "query_sha256": "2b17d0794dd73f017834a7813768017c9201908d841626117855f223495ab550",
+      "relation_terms": [
+        "animal",
+        "biodiversity",
+        "impact"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "animal game",
+        "pet care"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "impact",
+        "human"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "facet_id": "72-humans",
+      "manifest_order": 10,
+      "obligation": "Effects of deforestation on people.",
+      "query": "deforestation impacts on humans",
+      "query_sha256": "a0a48d23154b4b08b8379e7bc795e700810e4d4e4f0d4b573f36110690473dd4",
+      "relation_terms": [
+        "human",
+        "people",
+        "impact"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "forest product",
+        "human anatomy"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "main",
+        "caus",
+        "deforestation"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "facet_id": "72-causes",
+      "manifest_order": 11,
+      "obligation": "Main causes of deforestation.",
+      "query": "main causes of deforestation",
+      "query_sha256": "e9c9e611cc14e2973a5f098cc7cfa40bd8eddc8066f545edc1b13c54d42126cf",
+      "relation_terms": [
+        "cause"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "forest product",
+        "tree disease"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "effect",
+        "amazon",
+        "rainforest"
+      ],
+      "anchor_terms": [
+        "deforestation",
+        "Amazon rainforest"
+      ],
+      "bridge_terms": [],
+      "facet_id": "72-amazon",
+      "manifest_order": 12,
+      "obligation": "Effects of deforestation on the Amazon rainforest.",
+      "query": "deforestation effects on the Amazon rainforest",
+      "query_sha256": "c24f9e962a207ca9092835e92d59b6e14bc761e69dd48873096aadfbeda32eac",
+      "relation_terms": [
+        "effect"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "Amazon company",
+        "Amazon product"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "action",
+        "prevent",
+        "deforestation"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "facet_id": "72-prevention",
+      "manifest_order": 13,
+      "obligation": "Actions that prevent deforestation.",
+      "query": "actions to prevent deforestation",
+      "query_sha256": "eb65d244f8e7396c46e2e4c1926e19b1764d12eea9e6ba4507385fca49d78007",
+      "relation_terms": [
+        "prevent",
+        "action"
+      ],
+      "topic_id": "72",
+      "wrong_domain_patterns": [
+        "forest product",
+        "tree disease prevention"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "effective",
+        "specific",
+        "strategi",
+        "prevent",
+        "reduce",
+        "global",
+        "warm",
+        "climate",
+        "change"
+      ],
+      "anchor_terms": [
+        "global warming",
+        "climate change"
+      ],
+      "bridge_terms": [],
+      "facet_id": "300-strategies",
+      "manifest_order": 14,
+      "obligation": "Specific strategies to prevent or reduce global warming and climate change.",
+      "query": "effective specific strategies to prevent and reduce global warming and climate change",
+      "query_sha256": "86cf28ff7a8d674b22035d02c17ae084486904ddac576bf6eee75f539459fc13",
+      "relation_terms": [
+        "prevent",
+        "reduce",
+        "strategy"
+      ],
+      "topic_id": "300",
+      "wrong_domain_patterns": [
+        "warming recipe",
+        "climate control product"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "climate",
+        "change",
+        "action",
+        "antarctica"
+      ],
+      "anchor_terms": [
+        "climate change",
+        "Antarctica"
+      ],
+      "bridge_terms": [],
+      "facet_id": "300-antarctica",
+      "manifest_order": 15,
+      "obligation": "Climate-change actions relevant to Antarctica.",
+      "query": "climate change actions for Antarctica",
+      "query_sha256": "323d8b5982c3e2cb1cef3f37a6705fc8750875b544264d8023ea996589323d73",
+      "relation_terms": [
+        "action"
+      ],
+      "topic_id": "300",
+      "wrong_domain_patterns": [
+        "Antarctica tourism",
+        "weather forecast"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "internate",
+        "govern",
+        "measur",
+        "prevent",
+        "reduce",
+        "climate",
+        "change"
+      ],
+      "anchor_terms": [
+        "climate change"
+      ],
+      "bridge_terms": [],
+      "facet_id": "300-global",
+      "manifest_order": 16,
+      "obligation": "International and government measures against climate change.",
+      "query": "international and government measures to prevent and reduce climate change",
+      "query_sha256": "d08a9f1bc70c153dec46fd3ac63ace738bd4e7cadb594c2f406e1908273e7f36",
+      "relation_terms": [
+        "international",
+        "government",
+        "measure",
+        "prevent",
+        "reduce"
+      ],
+      "topic_id": "300",
+      "wrong_domain_patterns": [
+        "climate control product",
+        "weather forecast"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "economic",
+        "cost",
+        "address",
+        "global",
+        "warm",
+        "compar",
+        "impact"
+      ],
+      "anchor_terms": [
+        "global warming"
+      ],
+      "bridge_terms": [],
+      "facet_id": "300-economics",
+      "manifest_order": 17,
+      "obligation": "Cost of addressing global warming versus bearing its impacts.",
+      "query": "economic cost of addressing global warming compared with its impacts",
+      "query_sha256": "75d86ab6a5d35b4a4a8f541bf8b033705b5095b8fcbb0767f3e432c96b205017",
+      "relation_terms": [
+        "economic cost",
+        "addressing",
+        "impact",
+        "compared"
+      ],
+      "topic_id": "300",
+      "wrong_domain_patterns": [
+        "warming product",
+        "heating cost"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "human",
+        "vaccine",
+        "safety"
+      ],
+      "anchor_terms": [
+        "vaccine",
+        "human"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-safety",
+      "manifest_order": 18,
+      "obligation": "Safety of human vaccines.",
+      "query": "human vaccine safety",
+      "query_sha256": "885ea52cf62a25f438932d29d2891cb628b9a7800bf86604c263729b24747388",
+      "relation_terms": [
+        "safety"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "animal vaccine",
+        "computer vaccine"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "caus",
+        "public",
+        "vaccine",
+        "hesitancy",
+        "especially",
+        "covid",
+        "19"
+      ],
+      "anchor_terms": [
+        "vaccine",
+        "COVID-19"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-hesitancy",
+      "manifest_order": 19,
+      "obligation": "Causes of public vaccine hesitancy, especially for COVID-19.",
+      "query": "causes of public vaccine hesitancy especially COVID-19",
+      "query_sha256": "acbb72fb28d44b3e57496b15b82de8f324f0af99a12e1e445a3b7afaa5ab1585",
+      "relation_terms": [
+        "hesitancy",
+        "cause",
+        "public"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "animal vaccine",
+        "computer vaccine"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "typ",
+        "human",
+        "vaccin"
+      ],
+      "anchor_terms": [
+        "vaccine",
+        "human"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-types",
+      "manifest_order": 20,
+      "obligation": "Types of vaccines used in humans.",
+      "query": "types of human vaccines",
+      "query_sha256": "e5b1fa0b3076f1dde86fa822672be760c552c367655dd78bf2df0950a2f6a56c",
+      "relation_terms": [
+        "type"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "animal vaccine",
+        "computer vaccine"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "recommend",
+        "human",
+        "vaccination",
+        "schedul"
+      ],
+      "anchor_terms": [
+        "vaccination",
+        "human"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-schedules",
+      "manifest_order": 21,
+      "obligation": "Recommended vaccination schedules for humans.",
+      "query": "recommended human vaccination schedules",
+      "query_sha256": "00657e13e55b19c5d024f4b76640d617de5d5fd1b2ca1b073e1a5546318f3aaf",
+      "relation_terms": [
+        "recommended",
+        "schedule"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "animal vaccination",
+        "computer schedule"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "vaccination",
+        "impact",
+        "global",
+        "health"
+      ],
+      "anchor_terms": [
+        "vaccination",
+        "global health"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-global-health",
+      "manifest_order": 22,
+      "obligation": "Impact of vaccination on global health.",
+      "query": "vaccination impact on global health",
+      "query_sha256": "997b270cea0f0ef1d61bbb0bc72dc156d2dfe1514bed67b6923a0ed032453b98",
+      "relation_terms": [
+        "impact"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "animal vaccination",
+        "travel schedule"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "historic",
+        "public",
+        "health",
+        "challeng",
+        "involv",
+        "vaccination"
+      ],
+      "anchor_terms": [
+        "vaccination",
+        "public health"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-history",
+      "manifest_order": 23,
+      "obligation": "Historical public-health challenges involving vaccination.",
+      "query": "historical public health challenges involving vaccination",
+      "query_sha256": "8c3ef8ad1f3dd1b3a67c26ecdd97da5d3a83510c6b7fe310cdc3dea83d9a48bc",
+      "relation_terms": [
+        "historical",
+        "challenge"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "animal vaccination",
+        "computer history"
+      ]
+    },
+    {
+      "analyzer_terms": [
+        "animal",
+        "vaccination",
+        "recommendation"
+      ],
+      "anchor_terms": [
+        "animal",
+        "vaccination"
+      ],
+      "bridge_terms": [],
+      "facet_id": "84-animals",
+      "manifest_order": 24,
+      "obligation": "Recommendations for animal vaccination.",
+      "query": "animal vaccination recommendations",
+      "query_sha256": "0fc9d08ef0e042242811854690e1ce2d1840b6b0862138c72006c12b2cd90c69",
+      "relation_terms": [
+        "recommendation"
+      ],
+      "topic_id": "84",
+      "wrong_domain_patterns": [
+        "human vaccination",
+        "computer vaccine"
+      ]
+    }
+  ],
+  "hashes": {
+    "facets_sha256": "0efb7ea187cfa7361e881c2568741f2c4412e651292704002ccce624a255ecb6",
+    "freeze_sha256": "1f6fb8358e8304337914211bdebe25db4a07533a1bfe2f128d00a3e3254f1b1a",
+    "topics_sha256": "06eb9c1c7f88f0afe88b4af3f9650ceba50030414f99df0f3fb34367fca308d9"
+  },
+  "qrels_opened": false,
+  "retrieval": {
+    "endpoint": "http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search",
+    "facet_hits": 200,
+    "index": "climbmix-400b",
+    "max_external_requests": 25,
+    "minimum_interval_seconds": 3,
+    "original_hits": 1000,
+    "retry_count": 0
+  },
+  "schema_version": "rag25_deep_facet_candidate_manifest_v1",
+  "topic_ids": [
+    "219",
+    "72",
+    "300",
+    "84"
+  ],
+  "topic_selection": [
+    {
+      "selected": true,
+      "selection_order": 0,
+      "selection_sha256": "1633b6a493ff12107f7d93dcc1eb0bcb49e2ad8a4a7be590df2acf197109bc7b",
+      "topic_id": "219"
+    },
+    {
+      "selected": true,
+      "selection_order": 1,
+      "selection_sha256": "2758021e04abfd541daaf0fe83e1683181f050bbd41cbbd117001897fcc25d14",
+      "topic_id": "72"
+    },
+    {
+      "selected": true,
+      "selection_order": 2,
+      "selection_sha256": "3f3b846ad93b75df33b397ad7159fc9e8dbb2a5093422d188104d97120a7a698",
+      "topic_id": "300"
+    },
+    {
+      "selected": true,
+      "selection_order": 3,
+      "selection_sha256": "41e85e7663c47ce64436b82c22e394bd083e33b4a384ca27a57f5b72de0fe829",
+      "topic_id": "84"
+    },
+    {
+      "selected": false,
+      "selection_order": 4,
+      "selection_sha256": "5a09d5596eef0176855843bcf6e50907d9f1aeea6ac6abb5ab1243b50fdba466",
+      "topic_id": "477"
+    },
+    {
+      "selected": false,
+      "selection_order": 5,
+      "selection_sha256": "5a39a898e20d7a92245a53e528b30c18115b7568cf49c7f5ea3f59660e4d9be1",
+      "topic_id": "499"
+    },
+    {
+      "selected": false,
+      "selection_order": 6,
+      "selection_sha256": "69aa070434884c981fe98b6fe7702e5455409742c8e7b74f7dfc4de42d07609f",
+      "topic_id": "58"
+    },
+    {
+      "selected": false,
+      "selection_order": 7,
+      "selection_sha256": "73f7d9709b749a2609228e65fcfa74edbad1b809b494c2ba2e7cc11056747e3b",
+      "topic_id": "31"
+    },
+    {
+      "selected": false,
+      "selection_order": 8,
+      "selection_sha256": "cebd46f6dcef5875b76f37a97324252e541c5ce9172b916bf4ae763f98141769",
+      "topic_id": "37"
+    }
+  ],
+  "topics": [
+    {
+      "common_query": "technology societal impacts daily life government business telehealth technical societies device rationing",
+      "manifest_order": 0,
+      "original_cache_filename": "219__original__climbmix_bm25__82040a9999215df4.json",
+      "original_cache_sha256": "7e8fbc1b1cde0c6cd689068326ad479f343435d4c908b36fb205db0638b262be",
+      "original_candidate_count": 1000,
+      "original_hits": 1000,
+      "query": "I'm interested in understanding technology's societal impact, exploring its positive and negative effects on daily life, government, and business sectors like telehealth. Could you also explain the role of technical societies and why rationing devices might be needed with technological advancements?",
+      "selection_sha256": "1633b6a493ff12107f7d93dcc1eb0bcb49e2ad8a4a7be590df2acf197109bc7b",
+      "topic_id": "219"
+    },
+    {
+      "common_query": "deforestation causes effects environment climate animals humans Amazon rainforest prevention",
+      "manifest_order": 1,
+      "original_cache_filename": "72__original__climbmix_bm25__4b315f86f1489359.json",
+      "original_cache_sha256": "c9718dfc564384e3f0da8536df092a922120fa7b7cae17d231f1fc9c3bd88364",
+      "original_candidate_count": 1000,
+      "original_hits": 1000,
+      "query": "I want to understand why deforestation is such a major problem. Specifically, how does it impact the environment, climate, animals, and humans? Could you also explain its main causes, effects on rainforests like the Amazon, and what actions can prevent it?",
+      "selection_sha256": "2758021e04abfd541daaf0fe83e1683181f050bbd41cbbd117001897fcc25d14",
+      "topic_id": "72"
+    },
+    {
+      "common_query": "global warming climate change prevention mitigation Antarctica global measures economic costs impacts",
+      "manifest_order": 2,
+      "original_cache_filename": "300__original__climbmix_bm25__e42dcb4a7247c265.json",
+      "original_cache_sha256": "8aa1dc9cd6cea7da438aad5f997f3e56f812d43604be04cfa745cc483b90dd07",
+      "original_candidate_count": 1000,
+      "original_hits": 1000,
+      "query": "I'm interested in learning about effective strategies to prevent and reduce global warming and climate change, including specific actions that can help regions like Antarctica. I’d also like to know what global measures can be taken and how the economic costs of addressing global warming compare to just dealing with its impacts.",
+      "selection_sha256": "3f3b846ad93b75df33b397ad7159fc9e8dbb2a5093422d188104d97120a7a698",
+      "topic_id": "300"
+    },
+    {
+      "common_query": "vaccine safety hesitancy COVID human vaccine types schedules global health history animal vaccination",
+      "manifest_order": 3,
+      "original_cache_filename": "84__original__climbmix_bm25__756f45ba9e99aca2.json",
+      "original_cache_sha256": "3bdcec58f4b568362518add507ee987565aec45950b37c4a0ecf411080e3ffce",
+      "original_candidate_count": 1000,
+      "original_hits": 1000,
+      "query": "I'm looking for detailed information about vaccines, including their safety, the causes of public hesitancy—especially around COVID-19—and the different types of human vaccines and their recommended schedules. I'm also interested in how vaccination affects global health, historical public health challenges, and recommendations for animal vaccinations.",
+      "selection_sha256": "41e85e7663c47ce64436b82c22e394bd083e33b4a384ca27a57f5b72de0fe829",
+      "topic_id": "84"
+    }
+  ]
+}
