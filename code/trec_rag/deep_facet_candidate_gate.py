@@ -18,8 +18,8 @@ from .deep_facet_candidate_manifest import (
 )
 from .facet_aware_fusion_rank import (
     quality_gate,
-    rank_facet_documents,
 )
+from .facet_local_minilm_rank import aggregate_top4
 from .remote_client import extract_text
 
 
@@ -116,6 +116,47 @@ def _ordered_ids(rows: Sequence[Mapping[str, object]], depth: int | None = None)
             seen.add(docid)
             result.append(docid)
     return result
+
+
+def rank_facet_documents_200(
+    candidates: Sequence[Mapping[str, object]],
+    scored_windows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Aggregate and rank one complete depth-200 stream without old depth caps."""
+
+    if len(candidates) != 200:
+        raise ValueError("facet-local ranking requires exactly 200 candidates")
+    ordered = sorted(candidates, key=lambda row: (int(row["rank"]), _docid(row)))
+    candidate_ids = [_docid(row) for row in ordered]
+    if len(set(candidate_ids)) != 200:
+        raise ValueError("facet-local candidates must have unique document IDs")
+    by_document: dict[str, list[Mapping[str, object]]] = defaultdict(list)
+    for window in scored_windows:
+        by_document[_docid(window)].append(window)
+    if set(by_document) != set(candidate_ids):
+        raise ValueError("scored windows must cover all 200 facet candidates")
+    aggregated: list[dict[str, object]] = []
+    for candidate in ordered:
+        document_id = _docid(candidate)
+        row = dict(candidate)
+        row.update(
+            {
+                "document_id": document_id,
+                "retrieval_rank": int(candidate["rank"]),
+                "score": aggregate_top4(by_document[document_id]),
+            }
+        )
+        aggregated.append(row)
+    aggregated.sort(
+        key=lambda row: (
+            -float(row["score"]),
+            int(row["retrieval_rank"]),
+            str(row["document_id"]),
+        )
+    )
+    for rank, row in enumerate(aggregated, start=1):
+        row["rank"] = rank
+    return aggregated
 
 
 def _stable_union(parts: Sequence[Sequence[str]]) -> list[str]:
@@ -260,7 +301,7 @@ def _rank_streams(
         )
         if len(bm25) != 200:
             raise ValueError("each facet requires exactly 200 phase-1 candidates")
-        minilm = rank_facet_documents(bm25, score_groups.get(facet_id, []))
+        minilm = rank_facet_documents_200(bm25, score_groups.get(facet_id, []))
         decision = quality_gate(facet, minilm)
         streams.append(
             {

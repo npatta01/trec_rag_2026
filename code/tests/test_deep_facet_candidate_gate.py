@@ -4,6 +4,7 @@ from trec_rag.deep_facet_candidate_gate import (
     build_prefix_unions,
     build_unions,
     quality_gate,
+    rank_facet_documents_200,
 )
 
 
@@ -96,3 +97,25 @@ def test_prefix_unions_freeze_bm25_and_minilm_at_50_100_200() -> None:
     assert len(prefixes["219"]["bm25@200"]) == 201
     assert len(prefixes["219"]["minilm@50"]) == 51
     assert prefixes["219"]["minilm@200"][-1] == "m200"
+
+
+def test_local_ranker_covers_all_200_facet_candidates() -> None:
+    candidates = [
+        _doc(f"d{rank}", rank, f"document {rank}") for rank in range(1, 201)
+    ]
+    windows = [
+        {
+            "document_id": f"d{rank}",
+            "score": float(rank),
+            "document_start_token": 0,
+            "document_end_token": 256,
+            "window_id": f"w{rank}",
+        }
+        for rank in range(1, 201)
+    ]
+
+    ranked = rank_facet_documents_200(candidates, windows)
+
+    assert len(ranked) == 200
+    assert ranked[0]["document_id"] == "d200"
+    assert ranked[-1]["document_id"] == "d1"
