@@ -427,7 +427,7 @@ def prepare_scoring_candidates(
 
 
 def _load_task2_candidates(
-    manifest_path: Path,
+    manifest: Mapping[str, object],
     retrieval_dir: Path,
 ) -> tuple[tuple[dict[str, object], ...], dict[str, object]]:
     candidate_path = Path(retrieval_dir) / "candidates.jsonl"
@@ -442,7 +442,8 @@ def _load_task2_candidates(
         or summary.get("complete") is not True
         or summary.get("qrels_opened") is not False
         or summary.get("candidates_sha256") != _sha256(candidate_source)
-        or summary.get("manifest_sha256") != _sha256(Path(manifest_path).read_bytes())
+        or summary.get("manifest_sha256")
+        != _sha256(_canonical_json_bytes(manifest, pretty=False).rstrip(b"\n"))
     ):
         raise ValueError("Task 2 retrieval summary bindings are invalid")
     rows: list[dict[str, object]] = []
@@ -469,7 +470,7 @@ def _load_rank_inputs(
     from .facet_aware_fusion_manifest import load_manifest
 
     manifest = load_manifest(Path(manifest_path), cache_root=Path(cache_root))
-    rows, summary = _load_task2_candidates(manifest_path, retrieval_dir)
+    rows, summary = _load_task2_candidates(manifest, retrieval_dir)
     return manifest, prepare_scoring_candidates(manifest, rows), summary
 
 

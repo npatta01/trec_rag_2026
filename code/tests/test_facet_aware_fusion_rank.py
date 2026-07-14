@@ -10,6 +10,7 @@ import pytest
 
 import trec_rag.facet_aware_fusion_rank as module
 import trec_rag.facet_local_minilm_preflight as preflight_module
+from trec_rag.facet_aware_fusion_run import _manifest_sha256 as task2_manifest_sha256
 from trec_rag.facet_local_minilm_score import load_scoring_inputs
 from trec_rag.facet_aware_fusion_rank import (
     ARM_NAMES,
@@ -383,6 +384,43 @@ def test_task2_candidates_are_adapted_to_existing_window_preflight_schema() -> N
             "query": "teenager social media positive mental health impacts",
         },
     )
+
+
+def test_task2_summary_binds_validated_manifest_by_canonical_content(
+    tmp_path: Path,
+) -> None:
+    manifest = {
+        "schema_version": "synthetic-pretty-manifest-v1",
+        "topic_ids": ["233"],
+        "qrels_opened": False,
+    }
+    manifest_path = tmp_path / "manifest.json"
+    _write_canonical_json(manifest_path, manifest)
+    assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() != (
+        task2_manifest_sha256(manifest)
+    )
+
+    retrieval = tmp_path / "retrieval"
+    retrieval.mkdir()
+    candidates_source = b""
+    (retrieval / "candidates.jsonl").write_bytes(candidates_source)
+    _write_canonical_json(
+        retrieval / "retrieval_summary.json",
+        {
+            "complete": True,
+            "qrels_opened": False,
+            "candidate_rows": 0,
+            "candidates_sha256": hashlib.sha256(candidates_source).hexdigest(),
+            "manifest_sha256": task2_manifest_sha256(manifest),
+        },
+    )
+
+    rows, summary = module._load_task2_candidates(manifest, retrieval)
+    assert rows == ()
+    assert summary["manifest_sha256"] == task2_manifest_sha256(manifest)
+
+    with pytest.raises(ValueError, match="summary bindings"):
+        module._load_task2_candidates({**manifest, "topic_ids": ["273"]}, retrieval)
 
 
 def test_cli_requires_and_forwards_explicit_original_cache_root(
