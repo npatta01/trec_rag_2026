@@ -38,9 +38,10 @@ Create the manifest once from the original-cache root:
 ```bash
 .venv/bin/python -m trec_rag.facet_aware_fusion_manifest create \
   --cache-root /home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote \
-  --output reports/experiments/facet_aware_fusion_pilot_v1/manifest.json
+  --output "/tmp/facet_aware_fusion_manifest.$$.json"
 ```
 
 The command uses exclusive creation and refuses to overwrite an existing
-manifest. `load_manifest()` accepts only the canonical sorted, indented JSON
-encoding and revalidates all frozen content and hashes.
+manifest. `load_manifest(path, cache_root=...)` accepts only the canonical
+sorted, indented JSON encoding and revalidates all frozen content, hashes, and
+recorded original-cache sources against the explicit cache root.

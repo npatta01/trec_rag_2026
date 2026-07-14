@@ -260,7 +260,7 @@ def build_manifest(cache_root: Path) -> dict[str, object]:
         "qrels_opened": False,
     }
     payload["hashes"] = _expected_hashes(payload)
-    validate_manifest(payload)
+    validate_manifest(payload, cache_root=cache_root)
     return payload
 
 
@@ -270,8 +270,8 @@ def _require_sequence(value: object, label: str) -> Sequence[object]:
     return value
 
 
-def validate_manifest(payload: Mapping[str, object]) -> None:
-    """Reject any manifest that differs from the frozen, audited contract."""
+def validate_manifest(payload: Mapping[str, object], *, cache_root: Path) -> None:
+    """Reject content drift and verify every recorded original cache source."""
 
     if not isinstance(payload, Mapping):
         raise ValueError("manifest must be a JSON object")
@@ -352,9 +352,48 @@ def validate_manifest(payload: Mapping[str, object]) -> None:
     if dict(hashes) != _expected_hashes(payload):
         raise ValueError("manifest hashes do not match canonical content")
 
+    _validate_source_cache(topics, Path(cache_root))
 
-def load_manifest(path: Path) -> dict[str, object]:
-    """Load a manifest only when its bytes and content are canonical."""
+
+def _validate_source_cache(topics: Sequence[object], cache_root: Path) -> None:
+    for row in topics:
+        if not isinstance(row, Mapping):  # Already enforced by validate_manifest.
+            raise ValueError("topic source record must be a JSON object")
+        topic_id = str(row["topic_id"])
+        filename = str(row["original_cache_filename"])
+        if Path(filename).name != filename:
+            raise ValueError(
+                f"original cache filename for topic {topic_id} is not a basename"
+            )
+        path = cache_root / filename
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"original cache file for topic {topic_id} does not exist: {path}"
+            ) from exc
+        except OSError as exc:
+            raise ValueError(
+                f"original cache file for topic {topic_id} is unreadable: {path}"
+            ) from exc
+        try:
+            source = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"invalid original cache JSON for topic {topic_id}: {path}"
+            ) from exc
+        if not isinstance(source, dict) or str(source.get("topic_id")) != topic_id:
+            raise ValueError(f"topic mismatch in original cache file for topic {topic_id}")
+        if source.get("query") != row["query"]:
+            raise ValueError(f"query mismatch in original cache file for topic {topic_id}")
+        if source.get("variant_name") != "original":
+            raise ValueError(f"variant mismatch in original cache file for topic {topic_id}")
+        if hashlib.sha256(raw).hexdigest() != row["original_cache_sha256"]:
+            raise ValueError(f"hash mismatch in original cache file for topic {topic_id}")
+
+
+def load_manifest(path: Path, *, cache_root: Path) -> dict[str, object]:
+    """Load canonical bytes and verify their sources under ``cache_root``."""
 
     path = Path(path)
     raw = path.read_bytes()
@@ -366,7 +405,7 @@ def load_manifest(path: Path) -> dict[str, object]:
         raise ValueError("manifest must be a JSON object")
     if raw != _canonical_bytes(payload, pretty=True):
         raise ValueError("manifest is not canonical JSON")
-    validate_manifest(payload)
+    validate_manifest(payload, cache_root=cache_root)
     return payload
 
 

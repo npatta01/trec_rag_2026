@@ -98,6 +98,20 @@ def _write_cache(cache_root: Path, topic_id: str, query: str) -> Path:
     return path
 
 
+def _canonical_sha256(value: object) -> str:
+    encoded = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _refresh_content_hashes(payload: dict[str, object]) -> None:
+    payload["hashes"]["topics_sha256"] = _canonical_sha256(payload["topics"])
+    unhashed = {key: value for key, value in payload.items() if key != "hashes"}
+    payload["hashes"]["freeze_sha256"] = _canonical_sha256(unhashed)
+
+
 @pytest.fixture
 def cache_root(tmp_path: Path) -> Path:
     root = tmp_path / "retrieval"
@@ -208,12 +222,12 @@ def test_validate_rejects_unsupported_keys_reordering_and_topic_firewall(cache_r
     unsupported = copy.deepcopy(payload)
     unsupported["qrels_path"] = "forbidden"
     with pytest.raises(ValueError, match="unsupported manifest keys"):
-        validate_manifest(unsupported)
+        validate_manifest(unsupported, cache_root=cache_root)
 
     unsupported_facet = copy.deepcopy(payload)
     unsupported_facet["facets"][0]["answer_hint"] = "forbidden"
     with pytest.raises(ValueError, match="unsupported facet keys"):
-        validate_manifest(unsupported_facet)
+        validate_manifest(unsupported_facet, cache_root=cache_root)
 
     reordered = copy.deepcopy(payload)
     reordered["facets"][0], reordered["facets"][1] = (
@@ -221,27 +235,27 @@ def test_validate_rejects_unsupported_keys_reordering_and_topic_firewall(cache_r
         reordered["facets"][0],
     )
     with pytest.raises(ValueError, match="facet records.*order"):
-        validate_manifest(reordered)
+        validate_manifest(reordered, cache_root=cache_root)
 
     protected = copy.deepcopy(payload)
     protected["topic_ids"][0] = "144"
     with pytest.raises(ValueError, match="protected topic"):
-        validate_manifest(protected)
+        validate_manifest(protected, cache_root=cache_root)
 
     prior = copy.deepcopy(payload)
     prior["topic_ids"][0] = "200"
     with pytest.raises(ValueError, match="prior-pilot topic"):
-        validate_manifest(prior)
+        validate_manifest(prior, cache_root=cache_root)
 
     protected_facet = copy.deepcopy(payload)
     protected_facet["facets"][0]["topic_id"] = "144"
     with pytest.raises(ValueError, match="protected topic"):
-        validate_manifest(protected_facet)
+        validate_manifest(protected_facet, cache_root=cache_root)
 
     prior_facet = copy.deepcopy(payload)
     prior_facet["facets"][0]["topic_id"] = "200"
     with pytest.raises(ValueError, match="prior-pilot topic"):
-        validate_manifest(prior_facet)
+        validate_manifest(prior_facet, cache_root=cache_root)
 
 
 def test_validate_rejects_changed_queries_and_hashes(cache_root: Path) -> None:
@@ -250,17 +264,29 @@ def test_validate_rejects_changed_queries_and_hashes(cache_root: Path) -> None:
     changed_query = copy.deepcopy(payload)
     changed_query["topics"][0]["query"] += " changed"
     with pytest.raises(ValueError, match="exact source query"):
-        validate_manifest(changed_query)
+        validate_manifest(changed_query, cache_root=cache_root)
 
     changed_hash = copy.deepcopy(payload)
     changed_hash["hashes"]["facets_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="hashes"):
-        validate_manifest(changed_hash)
+        validate_manifest(changed_hash, cache_root=cache_root)
 
     qrels_opened = copy.deepcopy(payload)
     qrels_opened["qrels_opened"] = True
     with pytest.raises(ValueError, match="qrels_opened"):
-        validate_manifest(qrels_opened)
+        validate_manifest(qrels_opened, cache_root=cache_root)
+
+
+def test_validate_rejects_rebound_nonexistent_original_cache(cache_root: Path) -> None:
+    payload = build_manifest(cache_root)
+    payload["topics"][0]["original_cache_filename"] = (
+        "233__original__climbmix_bm25__rebound.json"
+    )
+    payload["topics"][0]["original_cache_sha256"] = "a" * 64
+    _refresh_content_hashes(payload)
+
+    with pytest.raises(ValueError, match="original cache file.*topic 233.*does not exist"):
+        validate_manifest(payload, cache_root=cache_root)
 
 
 def test_load_requires_canonical_json_and_cli_is_create_only(
@@ -269,7 +295,7 @@ def test_load_requires_canonical_json_and_cli_is_create_only(
     output = tmp_path / "nested" / "manifest.json"
 
     assert main(["create", "--cache-root", str(cache_root), "--output", str(output)]) == 0
-    loaded = load_manifest(output)
+    loaded = load_manifest(output, cache_root=cache_root)
     assert loaded["topic_ids"] == list(TOPIC_IDS)
     assert output.read_text(encoding="utf-8").endswith("\n")
 
@@ -279,4 +305,4 @@ def test_load_requires_canonical_json_and_cli_is_create_only(
     noncanonical = tmp_path / "noncanonical.json"
     noncanonical.write_text(json.dumps(loaded), encoding="utf-8")
     with pytest.raises(ValueError, match="canonical JSON"):
-        load_manifest(noncanonical)
+        load_manifest(noncanonical, cache_root=cache_root)
