@@ -8,15 +8,16 @@
         "type": "markdown"
       },
       {
-        "body": "## Technical summary\n\n**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued 24 rate-limited BM25 facet requests, locally scored 9,698 windows with MiniLM, and incurred **$0** in paid cost. RRF improved nDCG@10 from 0.472 to 0.589 with essentially flat graded Recall@100.\n\n**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **66 of 73** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list: it allocated 311 of 400 positions to facet-only documents and did not demonstrate safe improvement.\n\n**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget.",
+        "body": "## Technical summary\n\n**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued 24 rate-limited BM25 facet requests, locally scored 9,698 windows with MiniLM, and incurred **$0** in paid cost because it used the existing endpoint and local ROCm inference. RRF improved nDCG@10 from 0.472 to 0.589 with essentially flat graded Recall@100.\n\n**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **66 of 73** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list and did not demonstrate safe improvement.\n\n**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget.",
         "id": "technical_summary",
         "layout": "full",
         "type": "markdown"
       },
       {
-        "body": "## Facets found relevant evidence that the main list missed\n\nThe residual set contains 73 unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are **absent from RRF@100**. RRF's zero is true by construction, not an independent failure. The advisor additionally verified 83 relevant facet documents absent from the original top 100; RRF recovered some and left 73 outside both lists.\n\nThe chart shows why the facet signal should be kept: XQ/CXQ retained 90.4% of that residual evidence. The unresolved problem is controlled insertion, not candidate discovery.",
+        "body": "## Facets found relevant evidence that the main list missed\n\nThe residual set contains 73 unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are **absent from RRF@100**. RRF's zero is true by construction, not an independent failure.\n\nThe chart shows why the facet signal should be kept: XQ/CXQ retained 90.4% of that residual evidence. The unresolved problem is controlled insertion, not candidate discovery.",
         "id": "facet_recall_finding",
         "layout": "full",
+        "sourceId": "gains_losses",
         "type": "markdown"
       },
       {
@@ -26,9 +27,23 @@
         "type": "chart"
       },
       {
-        "body": "## RRF improved the head; xQuAD consumed too much of the list\n\nRRF achieved the best nDCG@10 (0.589) and improved all four topics over the original query. XQ and CXQ fell to 0.284 because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. They replaced 290 RRF documents while only 51.5% of their top 100 was judged.\n\nThe preregistered guardrails correctly block promotion. Because 187 of 290 XQ additions were unjudged, the exact size of the apparent loss is uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’",
+        "body": "## Most verified residual evidence survived xQuAD\n\nOf 73 RRF-relative residual relevant documents, XQ/CXQ retained 66. This flow is real, but it is not sufficient for promotion because the arm also displaced too much of the RRF backbone.",
+        "id": "document_flow_intro",
+        "layout": "full",
+        "sourceId": "gains_losses",
+        "type": "markdown"
+      },
+      {
+        "chartId": "document_flow",
+        "id": "document_flow_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "body": "## RRF improved the head; xQuAD consumed too much of the list\n\nRRF achieved the best nDCG@10 (0.589) and improved all four topics over the original query. XQ and CXQ fell to 0.284 because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. Only 51.5% of their top 100 was judged.\n\nThe preregistered guardrails correctly block promotion. Differential judging makes the exact size of the apparent loss uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’",
         "id": "fusion_quality_finding",
         "layout": "full",
+        "sourceId": "metrics",
         "type": "markdown"
       },
       {
@@ -92,15 +107,29 @@
         "type": "markdown"
       },
       {
+        "body": "## Every report input is visibly hash-bound\n\nThe table lists the exact repository-relative file and SHA-256 identity used for this build. The builder also verifies the evaluation-to-freeze binding and the retrieval, preflight, scoring, gate, and provenance hash chain before rendering.",
+        "id": "provenance_intro",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "id": "provenance_table",
+        "layout": "full",
+        "tableId": "source_provenance",
+        "type": "table"
+      },
+      {
         "body": "# Independent advisor memo\n\n## Verdict\n\nKeep `RRF` as the promoted arm. The mechanical decision is correct.\n\nHowever, the experiment does **not** show that facets or facet-local MiniLM failed. It shows that the tested xQuAD relevance term and its unbounded list allocation were unsafe:\n\n- Facet retrieval found substantial new judged-relevant evidence.\n- RRF used facet agreement effectively to improve top-rank ordering.\n- XQ/CXQ admitted far too many facet-only documents.\n- Incomplete judging materially exaggerates the apparent XQ/CXQ collapse.\n\nThe right conclusion is: **retain facets, replace the fusion design.**\n\n## Verified results\n\n| Arm | nDCG@10 | Graded Recall@100 | Relevant@10 | Judged@100 |\n|---|---:|---:|---:|---:|\n| Original | 0.4720 | 0.11086 | 7.25 | 100.0% |\n| RRF | **0.5895** | **0.11098** | **8.00** | 98.25% |\n| BI | 0.4264 | 0.07920 | 6.50 | 71.0% |\n| XQ/CXQ | 0.2836 | 0.05758 | 4.75 | 51.5% |\n| TUS-C | 0.4848 | 0.10750 | 7.75 | 95.0% |\n\nRRF improved nDCG@10 over the original on all four topics, while aggregate Recall@100 was essentially unchanged.\n\n## Why RRF improved nDCG\n\nAll 40 RRF top-10 documents were already in the original top-100. RRF therefore improved nDCG primarily by **reranking original candidates**, not by flooding the head with new facet-only documents.\n\nIt promoted original documents that also appeared strongly in one or more facet lists. Examples include original ranks 87, 25, 23, and 19 being promoted because facet-local MiniLM supplied corroborating evidence.\n\nThis is a useful facet signal: cross-stream agreement identified better full-topic documents.\n\n## Why XQ/CXQ retained 66 novel documents but lost effectiveness\n\nThe xQuAD relevance term was:\n\n`Rel(d) = max(original-rank score, best facet-rank score)`\n\nThat makes every stream’s rank-1 document globally equivalent:\n\n- original rank 1 → `Rel = 1`\n- every facet rank 1 → `Rel = 1`\n\nThus a document that is merely best for one narrow facet receives the same base relevance as the best original-query document. The “Rel” term was therefore not global topic relevance; it was the best local rank from any stream.\n\nThe consequence was severe:\n\n| Arm | Facet-only documents in top 100 across four topics |\n|---|---:|\n| RRF | 21 / 400 |\n| TUS-C | 38 / 400 |\n| BI | 195 / 400 |\n| XQ/CXQ | **311 / 400** |\n\nXQ replaced 290 RRF documents. Under available judgments, it gained 75 relevant documents but lost 207 relevant RRF documents.\n\nIts high novel retention—66/73—is real, but it was achieved by spending most of the ranking budget on facet streams. Novel retention alone can therefore be maximized while overall recall falls.\n\nThe main defect is a **fusion-budget and relevance-calibration problem**, not evidence that facet-local MiniLM cannot identify useful documents.\n\n## Novelty-definition audit\n\nThe 73-document denominator is:\n\n> Unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are absent from RRF@100.\n\nTherefore RRF retaining zero of these 73 is true **by construction**. It is not an independent criticism of RRF.\n\nNevertheless, the underlying recall finding is strong:\n\n- Accepted facet top-20 lists contained **83 judged-relevant documents absent from the original top 100**.\n- RRF recovered some of them, leaving **73 judged-relevant documents absent from both O and RRF**.\n- Counts for those 73 were:\n  - topic 233: 16\n  - topic 273: 7\n  - topic 161: 28\n  - topic 14: 22\n- XQ/CXQ retained 66: all novel documents for three topics and 15/22 for topic 14.\n\nThus the experiment does prove that facet decomposition plus local MiniLM adds useful recall candidates. The failure is getting those candidates safely into a depth-100 result.\n\n## Judging artifact\n\nThe evaluation treats unjudged documents as grade zero, but coverage differs sharply:\n\n- Original: 100% judged at 100\n- RRF: 98.25%\n- XQ/CXQ: 51.5%\n\nOf the 290 documents XQ added relative to RRF:\n\n- only 103 were judged;\n- 187 were unjudged.\n\nAll 290 RRF documents it displaced were judged.\n\nAmong judged XQ top-100 documents, 159/206 were grade ≥2, versus 291/393 for RRF. This judged-only comparison is not unbiased because missingness is highly non-random, but it shows that the evidence does not support calling all facet additions irrelevant.\n\nTherefore:\n\n- The preregistered metrics correctly block promotion.\n- The magnitude of the apparent XQ collapse is partly a judging-coverage artifact.\n- We should say “XQ did not demonstrate safe improvement,” not “XQ documents were proven irrelevant.”\n\n## Why XQ and CXQ were identical\n\nThe files are byte-identical, and every one of the 400 CXQ selections was recorded as an ordinary `xquad` selection. No deadline insertion fired.\n\nOrdinary XQ had already covered all accepted facets extremely early:\n\n- topic 233: by rank 2\n- topic 273: by rank 5\n- topic 161: by rank 4\n- topic 14: by rank 5\n\nThis is not evidence of a bug. It means the CXQ deadlines were inactive and the pilot provides no independent evidence about deadline forcing. It also confirms that base XQ was already over-aggressive about facet coverage.\n\n## Single best next bounded experiment\n\nTest a **protected RRF backbone with globally scored residual facet slots** on fresh held-out topics.\n\n1. Reuse the same BM25 and accepted facet candidates.\n2. Score the complete topic-level candidate union once with MiniLM using the **full original narrative**. Because every document receives the same query, these scores are comparable within the topic.\n3. Keep existing facet-local MiniLM ranks as the coverage signal.\n4. Freeze RRF ranks 1–80 unchanged.\n5. For the remaining 20 positions, select from:\n   - RRF ranks 81–100; and\n   - accepted-facet top-20 candidates absent from the protected head.\n6. Rank that residual pool by full-narrative MiniLM score, with at most two new documents per facet and no forced insertion.\n7. Keep an RRF tail document whenever its global narrative score exceeds the proposed facet replacement.\n8. Evaluate only after ranking freezes, and ensure every added output document is judged—or blind-adjudicate the at-most-80 additions across four topics.\n\nThis directly tests the missing capability:\n\n> Can globally relevant facet evidence replace only weak RRF-tail documents?\n\nIt preserves nDCG@10 exactly by construction, limits maximum disruption to 20%, adds no retrieval calls, uses the already-cached cheap MiniLM, and avoids comparing facet-local scores across queries.",
         "id": "advisor_review",
         "layout": "full",
+        "sourceId": "advisor_review",
         "type": "markdown"
       },
       {
         "body": "## Next experiment: protect RRF ranks 1–80\n\nOn fresh held-out topics, score the complete candidate union once against the **full original narrative**, keep RRF ranks 1–80 unchanged, and let RRF ranks 81–100 compete with residual facet candidates for only 20 positions. Cap new documents at two per facet and never force insertion.\n\nThis tests whether globally relevant facet evidence can replace only weak RRF-tail documents. It preserves nDCG@10 by construction, needs no new retrieval calls, and uses the already-cached cheap MiniLM model.",
         "id": "next_step",
         "layout": "full",
+        "sourceId": "advisor_review",
         "type": "markdown"
       },
       {
@@ -223,6 +252,47 @@
         "title": "Novel relevant facet documents retained at depth 100",
         "type": "bar",
         "valueFormat": "percent"
+      },
+      {
+        "comparisonContext": {
+          "denominator": "73 residual relevant facet documents",
+          "grain": "document-topic pair",
+          "unit": "documents"
+        },
+        "dataset": "document_flow_rows",
+        "encodings": {
+          "x": {
+            "field": "stage",
+            "label": "Stage",
+            "type": "ordinal"
+          },
+          "y": {
+            "field": "document_count",
+            "format": "number",
+            "label": "Documents",
+            "type": "quantitative"
+          }
+        },
+        "id": "document_flow",
+        "intent": "funnel",
+        "labels": {
+          "values": "all"
+        },
+        "layout": "full",
+        "palette": {
+          "kind": "sequential",
+          "name": "blue"
+        },
+        "question": "How many verified residual facet documents survive the xQuAD fusion step?",
+        "rationale": "A two-stage funnel shows the document count before and after fusion without implying that RRF should contain its own residual denominator.",
+        "sourceId": "document_flow_query",
+        "subtitle": "RRF-relative accepted-facet candidates at depth 20 and their survival in XQ/CXQ at depth 100.",
+        "surface": {
+          "viewMode": "visualization"
+        },
+        "title": "Residual relevant-document flow into xQuAD",
+        "type": "funnel",
+        "valueFormat": "number"
       }
     ],
     "description": "Held-out sparse retrieval and facet-aware fusion pilot.",
@@ -339,6 +409,22 @@
         "source_sha256": "950b7d6a9b63c092f39b2f8ec059dafa877f7f70bc4820b4bdd988f2de53042c"
       },
       {
+        "id": "document_flow_query",
+        "label": "Residual relevant-document flow materialization",
+        "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+        "query": {
+          "description": "Exact RRF-relative residual and XQ-retained document counts materialized from the hash-verified gains/losses artifact.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT 'Residual relevant facet candidates' AS \"stage\", 73 AS \"document_count\"\nUNION ALL\nSELECT 'Retained by XQ/CXQ', 66"
+        },
+        "source_sha256": "2057593b6c403d5dee58a9ca4f01d72a184bef4484fd40b3b7e7776851de5c62"
+      },
+      {
         "id": "per_topic_metrics_query",
         "label": "Per-topic metrics materialization",
         "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
@@ -385,6 +471,22 @@
           "sql": "SELECT '161' AS \"topic_id\", '161-political-ideologies' AS \"facet_id\", 'shard_03277_46451' AS \"document_id\", 'anchor, anchor_relation' AS \"failed_checks\", 'In social science, access to contraception and abortion services is a critical aspect of reproductive health and rights. This section will delve into the disparities in access to contraception worldwide and explore the role of politics and ideology in shaping these disparities. We will use the example of Planned Parenthood in the United States and its defunding as a lens through which to examine broader global issues surrounding reproductive healthcare. First, let us define some key terms. Repr…' AS \"passage_excerpt\", 1 AS \"diagnostic_only\"\nUNION ALL\nSELECT '161', '161-historical-changes', 'shard_04451_75204', 'anchor, anchor_relation', 'Cart Uncategorized History of Abortion Legalization: How it Became Legal How Did Abortion Become Legal Abortion has been a highly controversial and polarizing topic for decades. The legality of abortion has been the subject of intense debate and activism, ultimately leading to landmark legal decisions that have shaped the laws surrounding the issue. In this blog post, we will explore the historical and legal journey that led to the legalization of abortion in the United States. Historical Backg…', 1\nUNION ALL\nSELECT '273', '273-economic-changes', 'shard_04477_70241', 'anchor_relation', 'The climate crisis is hitting hardest in countries that contribute to it the least — how can the UK move to be part of the solution rather than part of the problem? The UK-Africa Summit, held in January in London, has highlighted a policy conundrum. On the one hand, Boris Johnson''s opening speech stated that the country would refrain from investing in coal projects in Africa, a decision which actually goes back to 2002. On the other hand, Green Party MP Caroline Lucas and The Guardian revealed…', 1\nUNION ALL\nSELECT '161', '161-laws-and-rights', 'shard_05564_4782', 'anchor', 'The rationale behind the first abortion law was largely based on moral and religious beliefs, with many viewing abortion as a sin or immoral act. Additionally, concerns about population growth and the desire to protect fetal life played a role in shaping these early laws. 4. How have abortion laws evolved since the first one was passed? Abortion laws have evolved significantly since the first one was passed, with a gradual shift towards greater reproductive rights and autonomy for women. Howeve…', 1"
         },
         "source_sha256": "93dc193c46594fb5c74f8651644e92c7bbfe6c7fdafdd53a7da118b7467e310b"
+      },
+      {
+        "id": "provenance_query",
+        "label": "Report source hash materialization",
+        "path": "reports/experiments/facet_aware_fusion_pilot_v1/artifact.json",
+        "query": {
+          "description": "Exact repository-relative input identities and byte-level SHA-256 values used by this report build.",
+          "engine": "SQLite",
+          "filters": [
+            "topics 233, 273, 161, and 14 only",
+            "protected topics excluded"
+          ],
+          "language": "sql",
+          "sql": "SELECT 'pilot_manifest' AS \"source_id\", 'reports/experiments/facet_aware_fusion_pilot_v1/manifest.json' AS \"path\", 'a966bbdfb42e5fc3ff5b5e59b1a7365f408507ccc993eadadf3279c5331a0c66' AS \"sha256\"\nUNION ALL\nSELECT 'retrieval_summary', 'outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/retrieval_summary.json', '3973995d0b651d27a0dbf495faf30d83933264cdb21b2c9a6b83b50dd5a607d0'\nUNION ALL\nSELECT 'scoring_preflight', 'outputs/rag25_facet_aware_fusion_v1/preflight_v1/preflight.json', '346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122'\nUNION ALL\nSELECT 'benchmark', 'outputs/rag25_facet_aware_fusion_v1/benchmark_recovery_v1/benchmark_telemetry.json', 'e7d341c2b3dc9216f51c8f62842ef836a3595f220bf891ee5a270070e753d757'\nUNION ALL\nSELECT 'scoring_receipt', 'outputs/rag25_facet_aware_fusion_v1/scoring_v1/scoring_receipt.json', '1c986664b04d624629b4640dbef6ac98387df26855f85fd1416df4bd8eda3c3e'\nUNION ALL\nSELECT 'ranking_freeze', 'outputs/rag25_facet_aware_fusion_v1/freeze_v1/freeze.json', '2e39eedeed0eebef3329493531ef56809ee4a346ed6aa372698705c2ce4a085f'\nUNION ALL\nSELECT 'facet_gates', 'outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json', 'baaafd25173f6524cc9b8b423de9deb14e4101a08448da27a0182b0676d24c29'\nUNION ALL\nSELECT 'cxq_provenance', 'outputs/rag25_facet_aware_fusion_v1/freeze_v1/cxq_provenance.jsonl', 'a2a336b6c386ecf98d95dfff4342c3848d1824834703bb3d9bd3e28544b2ba11'\nUNION ALL\nSELECT 'retrieval_candidates', 'outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl', '5fd4cf2f22930950704291d9930eb737c1787f9d199bd8ae571a1ae6eb3066b6'\nUNION ALL\nSELECT 'metrics', 'outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json', '67d264c5aeabfe63c81401247db03a1dbd799c737db6be8c3b3897fcae5c8c9d'\nUNION ALL\nSELECT 'gains_losses', 'outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json', 'e03e9869f90154968e7651ee799330865ed36af9f7cb1a2a364f5942e45a3875'\nUNION ALL\nSELECT 'decision', 'outputs/rag25_facet_aware_fusion_v1/evaluation_v1/decision.json', 'd166f157a53e73b386247562a604442b2e8855e5adcec5ba6263c6ca6834f4d1'\nUNION ALL\nSELECT 'advisor_review', 'reports/experiments/facet_aware_fusion_pilot_v1/advisor_review.md', '9ed3858975fe6d561aa1c253fce882218b8907a9ab5f306fc1e5c1d5861f3d19'"
+        },
+        "source_sha256": "49214b62a80739aae4d61e7eaf8c1176147a4bf99bc09fedcc695b341b142633"
       }
     ],
     "surface": "report",
@@ -513,6 +615,36 @@
         "sourceId": "rejected_examples_query",
         "subtitle": "Top BM25 passage from each rejected stream; diagnostic excerpts only.",
         "title": "Representative rejected-stream evidence"
+      },
+      {
+        "columns": [
+          {
+            "field": "source_id",
+            "label": "Source",
+            "type": "text"
+          },
+          {
+            "field": "path",
+            "label": "Repository-relative path",
+            "type": "text"
+          },
+          {
+            "field": "sha256",
+            "label": "SHA-256",
+            "type": "text"
+          }
+        ],
+        "dataset": "source_provenance_rows",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "source_id"
+        },
+        "density": "dense",
+        "id": "source_provenance",
+        "layout": "full",
+        "sourceId": "provenance_query",
+        "subtitle": "Repository-relative inputs used by the report builder; SHA-256 values are exact file-byte identities.",
+        "title": "Frozen report source hashes"
       }
     ],
     "title": "Facet-aware fusion found useful evidence, but xQuAD spent too much ranking budget",
@@ -520,6 +652,16 @@
   },
   "snapshot": {
     "datasets": {
+      "document_flow_rows": [
+        {
+          "document_count": 73,
+          "stage": "Residual relevant facet candidates"
+        },
+        {
+          "document_count": 66,
+          "stage": "Retained by XQ/CXQ"
+        }
+      ],
       "facet_gate_rows": [
         {
           "accepted": 0,
@@ -1054,6 +1196,73 @@
           "topic_id": "161"
         }
       ],
+      "source_provenance_rows": [
+        {
+          "path": "reports/experiments/facet_aware_fusion_pilot_v1/manifest.json",
+          "sha256": "a966bbdfb42e5fc3ff5b5e59b1a7365f408507ccc993eadadf3279c5331a0c66",
+          "source_id": "pilot_manifest"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/retrieval_summary.json",
+          "sha256": "3973995d0b651d27a0dbf495faf30d83933264cdb21b2c9a6b83b50dd5a607d0",
+          "source_id": "retrieval_summary"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/preflight_v1/preflight.json",
+          "sha256": "346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122",
+          "source_id": "scoring_preflight"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/benchmark_recovery_v1/benchmark_telemetry.json",
+          "sha256": "e7d341c2b3dc9216f51c8f62842ef836a3595f220bf891ee5a270070e753d757",
+          "source_id": "benchmark"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/scoring_v1/scoring_receipt.json",
+          "sha256": "1c986664b04d624629b4640dbef6ac98387df26855f85fd1416df4bd8eda3c3e",
+          "source_id": "scoring_receipt"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/freeze.json",
+          "sha256": "2e39eedeed0eebef3329493531ef56809ee4a346ed6aa372698705c2ce4a085f",
+          "source_id": "ranking_freeze"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json",
+          "sha256": "baaafd25173f6524cc9b8b423de9deb14e4101a08448da27a0182b0676d24c29",
+          "source_id": "facet_gates"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/freeze_v1/cxq_provenance.jsonl",
+          "sha256": "a2a336b6c386ecf98d95dfff4342c3848d1824834703bb3d9bd3e28544b2ba11",
+          "source_id": "cxq_provenance"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl",
+          "sha256": "5fd4cf2f22930950704291d9930eb737c1787f9d199bd8ae571a1ae6eb3066b6",
+          "source_id": "retrieval_candidates"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
+          "sha256": "67d264c5aeabfe63c81401247db03a1dbd799c737db6be8c3b3897fcae5c8c9d",
+          "source_id": "metrics"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+          "sha256": "e03e9869f90154968e7651ee799330865ed36af9f7cb1a2a364f5942e45a3875",
+          "source_id": "gains_losses"
+        },
+        {
+          "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/decision.json",
+          "sha256": "d166f157a53e73b386247562a604442b2e8855e5adcec5ba6263c6ca6834f4d1",
+          "source_id": "decision"
+        },
+        {
+          "path": "reports/experiments/facet_aware_fusion_pilot_v1/advisor_review.md",
+          "sha256": "9ed3858975fe6d561aa1c253fce882218b8907a9ab5f306fc1e5c1d5861f3d19",
+          "source_id": "advisor_review"
+        }
+      ],
       "system_metric_rows": [
         {
           "arm": "O",
@@ -1221,6 +1430,22 @@
       "source_sha256": "950b7d6a9b63c092f39b2f8ec059dafa877f7f70bc4820b4bdd988f2de53042c"
     },
     {
+      "id": "document_flow_query",
+      "label": "Residual relevant-document flow materialization",
+      "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json",
+      "query": {
+        "description": "Exact RRF-relative residual and XQ-retained document counts materialized from the hash-verified gains/losses artifact.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT 'Residual relevant facet candidates' AS \"stage\", 73 AS \"document_count\"\nUNION ALL\nSELECT 'Retained by XQ/CXQ', 66"
+      },
+      "source_sha256": "2057593b6c403d5dee58a9ca4f01d72a184bef4484fd40b3b7e7776851de5c62"
+    },
+    {
       "id": "per_topic_metrics_query",
       "label": "Per-topic metrics materialization",
       "path": "outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json",
@@ -1267,6 +1492,22 @@
         "sql": "SELECT '161' AS \"topic_id\", '161-political-ideologies' AS \"facet_id\", 'shard_03277_46451' AS \"document_id\", 'anchor, anchor_relation' AS \"failed_checks\", 'In social science, access to contraception and abortion services is a critical aspect of reproductive health and rights. This section will delve into the disparities in access to contraception worldwide and explore the role of politics and ideology in shaping these disparities. We will use the example of Planned Parenthood in the United States and its defunding as a lens through which to examine broader global issues surrounding reproductive healthcare. First, let us define some key terms. Repr…' AS \"passage_excerpt\", 1 AS \"diagnostic_only\"\nUNION ALL\nSELECT '161', '161-historical-changes', 'shard_04451_75204', 'anchor, anchor_relation', 'Cart Uncategorized History of Abortion Legalization: How it Became Legal How Did Abortion Become Legal Abortion has been a highly controversial and polarizing topic for decades. The legality of abortion has been the subject of intense debate and activism, ultimately leading to landmark legal decisions that have shaped the laws surrounding the issue. In this blog post, we will explore the historical and legal journey that led to the legalization of abortion in the United States. Historical Backg…', 1\nUNION ALL\nSELECT '273', '273-economic-changes', 'shard_04477_70241', 'anchor_relation', 'The climate crisis is hitting hardest in countries that contribute to it the least — how can the UK move to be part of the solution rather than part of the problem? The UK-Africa Summit, held in January in London, has highlighted a policy conundrum. On the one hand, Boris Johnson''s opening speech stated that the country would refrain from investing in coal projects in Africa, a decision which actually goes back to 2002. On the other hand, Green Party MP Caroline Lucas and The Guardian revealed…', 1\nUNION ALL\nSELECT '161', '161-laws-and-rights', 'shard_05564_4782', 'anchor', 'The rationale behind the first abortion law was largely based on moral and religious beliefs, with many viewing abortion as a sin or immoral act. Additionally, concerns about population growth and the desire to protect fetal life played a role in shaping these early laws. 4. How have abortion laws evolved since the first one was passed? Abortion laws have evolved significantly since the first one was passed, with a gradual shift towards greater reproductive rights and autonomy for women. Howeve…', 1"
       },
       "source_sha256": "93dc193c46594fb5c74f8651644e92c7bbfe6c7fdafdd53a7da118b7467e310b"
+    },
+    {
+      "id": "provenance_query",
+      "label": "Report source hash materialization",
+      "path": "reports/experiments/facet_aware_fusion_pilot_v1/artifact.json",
+      "query": {
+        "description": "Exact repository-relative input identities and byte-level SHA-256 values used by this report build.",
+        "engine": "SQLite",
+        "filters": [
+          "topics 233, 273, 161, and 14 only",
+          "protected topics excluded"
+        ],
+        "language": "sql",
+        "sql": "SELECT 'pilot_manifest' AS \"source_id\", 'reports/experiments/facet_aware_fusion_pilot_v1/manifest.json' AS \"path\", 'a966bbdfb42e5fc3ff5b5e59b1a7365f408507ccc993eadadf3279c5331a0c66' AS \"sha256\"\nUNION ALL\nSELECT 'retrieval_summary', 'outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/retrieval_summary.json', '3973995d0b651d27a0dbf495faf30d83933264cdb21b2c9a6b83b50dd5a607d0'\nUNION ALL\nSELECT 'scoring_preflight', 'outputs/rag25_facet_aware_fusion_v1/preflight_v1/preflight.json', '346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122'\nUNION ALL\nSELECT 'benchmark', 'outputs/rag25_facet_aware_fusion_v1/benchmark_recovery_v1/benchmark_telemetry.json', 'e7d341c2b3dc9216f51c8f62842ef836a3595f220bf891ee5a270070e753d757'\nUNION ALL\nSELECT 'scoring_receipt', 'outputs/rag25_facet_aware_fusion_v1/scoring_v1/scoring_receipt.json', '1c986664b04d624629b4640dbef6ac98387df26855f85fd1416df4bd8eda3c3e'\nUNION ALL\nSELECT 'ranking_freeze', 'outputs/rag25_facet_aware_fusion_v1/freeze_v1/freeze.json', '2e39eedeed0eebef3329493531ef56809ee4a346ed6aa372698705c2ce4a085f'\nUNION ALL\nSELECT 'facet_gates', 'outputs/rag25_facet_aware_fusion_v1/freeze_v1/gates.json', 'baaafd25173f6524cc9b8b423de9deb14e4101a08448da27a0182b0676d24c29'\nUNION ALL\nSELECT 'cxq_provenance', 'outputs/rag25_facet_aware_fusion_v1/freeze_v1/cxq_provenance.jsonl', 'a2a336b6c386ecf98d95dfff4342c3848d1824834703bb3d9bd3e28544b2ba11'\nUNION ALL\nSELECT 'retrieval_candidates', 'outputs/rag25_facet_aware_fusion_v1/retrieval_recovery_v1/candidates.jsonl', '5fd4cf2f22930950704291d9930eb737c1787f9d199bd8ae571a1ae6eb3066b6'\nUNION ALL\nSELECT 'metrics', 'outputs/rag25_facet_aware_fusion_v1/evaluation_v1/metrics.json', '67d264c5aeabfe63c81401247db03a1dbd799c737db6be8c3b3897fcae5c8c9d'\nUNION ALL\nSELECT 'gains_losses', 'outputs/rag25_facet_aware_fusion_v1/evaluation_v1/gains_losses.json', 'e03e9869f90154968e7651ee799330865ed36af9f7cb1a2a364f5942e45a3875'\nUNION ALL\nSELECT 'decision', 'outputs/rag25_facet_aware_fusion_v1/evaluation_v1/decision.json', 'd166f157a53e73b386247562a604442b2e8855e5adcec5ba6263c6ca6834f4d1'\nUNION ALL\nSELECT 'advisor_review', 'reports/experiments/facet_aware_fusion_pilot_v1/advisor_review.md', '9ed3858975fe6d561aa1c253fce882218b8907a9ab5f306fc1e5c1d5861f3d19'"
+      },
+      "source_sha256": "49214b62a80739aae4d61e7eaf8c1176147a4bf99bc09fedcc695b341b142633"
     }
   ],
   "surface": "report"

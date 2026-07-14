@@ -10,9 +10,11 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 from typing import Any, Mapping
 
 from .facet_aware_fusion_evaluate import validate_self_hash
@@ -90,6 +92,118 @@ def _validate_topic_boundary(*payloads: Any) -> None:
         observed = {str(value) for value in payload["topic_ids"]}
         if observed & PROTECTED_TOPICS:
             raise ValueError("report source violates the protected topic boundary")
+
+
+def _validate_run_bindings(
+    inputs: ReportInputs,
+    manifest: Mapping[str, Any],
+    retrieval: Mapping[str, Any],
+    preflight: Mapping[str, Any],
+    benchmark: Mapping[str, Any],
+    scoring: Mapping[str, Any],
+    freeze: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    gains: Mapping[str, Any],
+    decision: Mapping[str, Any],
+) -> None:
+    """Reject a report assembled from individually valid but different runs."""
+
+    expected_schemas = {
+        "pilot_manifest": "rag25_facet_aware_fusion_manifest_v1",
+        "retrieval_summary": "facet-aware-fusion-retrieval-summary-v1",
+        "scoring_preflight": "facet-local-minilm-preflight-v2",
+        "benchmark": "facet-local-minilm-benchmark-telemetry-v2",
+        "scoring_receipt": "facet-local-minilm-scoring-receipt-v2",
+        "ranking_freeze": "facet-aware-fusion-freeze-v1",
+    }
+    payloads = {
+        "pilot_manifest": manifest,
+        "retrieval_summary": retrieval,
+        "scoring_preflight": preflight,
+        "benchmark": benchmark,
+        "scoring_receipt": scoring,
+        "ranking_freeze": freeze,
+    }
+    for source_id, expected_schema in expected_schemas.items():
+        if payloads[source_id].get("schema_version") != expected_schema:
+            raise ValueError(f"{source_id} schema binding differs")
+    if not (
+        manifest.get("qrels_opened") is False
+        and preflight.get("qrels_opened") is False
+        and freeze.get("qrels_opened") is False
+    ):
+        raise ValueError("pre-freeze qrels state differs")
+    if not (
+        retrieval.get("complete") is True
+        and retrieval.get("failures") == 0
+        and preflight.get("status") == "tokenizer_only_preflight_complete"
+        and benchmark.get("status") == "benchmark_complete"
+        and scoring.get("status") == "complete"
+        and freeze.get("complete") is True
+    ):
+        raise ValueError("pipeline completion binding differs")
+
+    freeze_sha = _sha256(inputs.source_bytes["ranking_freeze"])
+    bindings = [payload.get("bindings") for payload in (metrics, gains, decision)]
+    if not all(isinstance(binding, Mapping) for binding in bindings):
+        raise ValueError("mixed-run evaluation binding is missing")
+    if not all(dict(binding) == dict(bindings[0]) for binding in bindings[1:]):
+        raise ValueError("mixed-run evaluation binding differs")
+    if bindings[0].get("ranking_freeze_sha256") != freeze_sha:
+        raise ValueError("mixed-run evaluation binding differs from freeze.json")
+
+    artifacts = freeze.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise ValueError("ranking freeze lacks artifact hash bindings")
+    for source_id, relative in (
+        ("facet_gates", "gates.json"),
+        ("cxq_provenance", "cxq_provenance.jsonl"),
+    ):
+        record = artifacts.get(relative)
+        expected = record.get("sha256") if isinstance(record, Mapping) else None
+        if expected != _sha256(inputs.source_bytes[source_id]):
+            raise ValueError(f"{source_id} artifact hash binding differs")
+
+    candidates_sha = _sha256(inputs.source_bytes["retrieval_candidates"])
+    if retrieval.get("candidates_sha256") != candidates_sha:
+        raise ValueError("retrieval_candidates artifact hash binding differs")
+    freeze_inputs = freeze.get("input_hashes")
+    if not isinstance(freeze_inputs, Mapping) or freeze_inputs.get(
+        "retrieval_sha256"
+    ) != candidates_sha:
+        raise ValueError("retrieval_candidates artifact hash binding differs from freeze")
+
+    manifest_sha = _sha256(inputs.source_bytes["pilot_manifest"])
+    preflight_sha = _sha256(inputs.source_bytes["scoring_preflight"])
+    scoring_sha = _sha256(inputs.source_bytes["scoring_receipt"])
+    windows_sha = preflight.get("windows_sha256")
+    if not (
+        preflight.get("manifest_sha256") == manifest_sha
+        and freeze_inputs.get("manifest_sha256") == manifest_sha
+        and preflight.get("source_candidates_sha256") == candidates_sha
+        and preflight.get("task3_retrieval_candidates_sha256") == candidates_sha
+        and benchmark.get("preflight_sha256") == preflight_sha
+        and scoring.get("preflight_sha256") == preflight_sha
+        and freeze_inputs.get("preflight_sha256") == preflight_sha
+        and freeze_inputs.get("scoring_receipt_sha256") == scoring_sha
+        and benchmark.get("windows_sha256") == windows_sha
+        and scoring.get("windows_sha256") == windows_sha
+        and freeze_inputs.get("windows_sha256") == windows_sha
+        and benchmark.get("model_materialization_receipt_sha256")
+        == scoring.get("model_materialization_receipt_sha256")
+        == preflight.get("model_materialization_receipt_sha256")
+    ):
+        raise ValueError("pipeline lineage hash binding differs")
+    preflight_summary = preflight.get("summary")
+    if not isinstance(preflight_summary, Mapping) or not (
+        preflight_summary.get("window_count") == scoring.get("completed_window_count")
+        and preflight_summary.get("unique_uncached_pair_count")
+        == scoring.get("forward_pass_count")
+        and preflight_summary.get("qrels_access_count") == 0
+        and preflight_summary.get("retrieval_call_count") == 0
+        and preflight_summary.get("hosted_inference_call_count") == 0
+    ):
+        raise ValueError("pipeline count binding differs")
 
 
 def _paragraph_after_heading(markdown: str, heading: str) -> str:
@@ -188,7 +302,7 @@ def _derived_source(
     }
 
 
-def _charts() -> list[dict[str, Any]]:
+def _charts(novel_denominator: int) -> list[dict[str, Any]]:
     return [
         {
             "id": "system_ndcg",
@@ -219,12 +333,12 @@ def _charts() -> list[dict[str, Any]]:
         {
             "id": "novel_retention",
             "title": "Novel relevant facet documents retained at depth 100",
-            "subtitle": "Share of 73 grade-≥2 accepted-facet candidates absent from the RRF top 100.",
+            "subtitle": f"Share of {novel_denominator} grade-≥2 accepted-facet candidates absent from the RRF top 100.",
             "type": "bar",
             "intent": "comparison",
             "question": "How much of the verified residual facet evidence does each alternative retain?",
             "rationale": "A bar chart exposes the coverage gain and its sharp tradeoff with ranking quality.",
-            "comparisonContext": {"grain": "fusion arm", "unit": "fraction", "denominator": "73 residual relevant facet documents"},
+            "comparisonContext": {"grain": "fusion arm", "unit": "fraction", "denominator": f"{novel_denominator} residual relevant facet documents"},
             "dataset": "novel_retention_rows",
             "sourceId": "novel_retention_query",
             "encodings": {
@@ -240,6 +354,27 @@ def _charts() -> list[dict[str, Any]]:
             "palette": {"kind": "sequential", "name": "blue"},
             "labels": {"values": "all"},
             "settings": {"sort": "none"},
+            "surface": {"viewMode": "visualization"},
+        },
+        {
+            "id": "document_flow",
+            "title": "Residual relevant-document flow into xQuAD",
+            "subtitle": "RRF-relative accepted-facet candidates at depth 20 and their survival in XQ/CXQ at depth 100.",
+            "type": "funnel",
+            "intent": "funnel",
+            "question": "How many verified residual facet documents survive the xQuAD fusion step?",
+            "rationale": "A two-stage funnel shows the document count before and after fusion without implying that RRF should contain its own residual denominator.",
+            "comparisonContext": {"grain": "document-topic pair", "unit": "documents", "denominator": f"{novel_denominator} residual relevant facet documents"},
+            "dataset": "document_flow_rows",
+            "sourceId": "document_flow_query",
+            "encodings": {
+                "x": {"field": "stage", "type": "ordinal", "label": "Stage"},
+                "y": {"field": "document_count", "type": "quantitative", "format": "number", "label": "Documents"},
+            },
+            "valueFormat": "number",
+            "layout": "full",
+            "palette": {"kind": "sequential", "name": "blue"},
+            "labels": {"values": "all"},
             "surface": {"viewMode": "visualization"},
         },
     ]
@@ -299,6 +434,21 @@ def _tables() -> list[dict[str, Any]]:
                 {"field": "passage_excerpt", "label": "Top passage excerpt", "type": "text"},
             ],
         },
+        {
+            "id": "source_provenance",
+            "title": "Frozen report source hashes",
+            "subtitle": "Repository-relative inputs used by the report builder; SHA-256 values are exact file-byte identities.",
+            "dataset": "source_provenance_rows",
+            "sourceId": "provenance_query",
+            "layout": "full",
+            "density": "dense",
+            "defaultSort": {"field": "source_id", "direction": "asc"},
+            "columns": [
+                {"field": "source_id", "label": "Source", "type": "text"},
+                {"field": "path", "label": "Repository-relative path", "type": "text"},
+                {"field": "sha256", "label": "SHA-256", "type": "text"},
+            ],
+        },
     ]
 
 
@@ -319,6 +469,18 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
     _validate_topic_boundary(manifest, freeze, metrics, gains, decision)
     for payload in (metrics, gains, decision):
         validate_self_hash(payload)
+    _validate_run_bindings(
+        inputs,
+        manifest,
+        retrieval,
+        preflight,
+        benchmark,
+        scoring,
+        freeze,
+        metrics,
+        gains,
+        decision,
+    )
     if not isinstance(gates, list) or len(gates) != 24:
         raise ValueError("facet gate artifact must contain exactly 24 streams")
     if {str(row.get("topic_id")) for row in gates} != set(PILOT_TOPICS):
@@ -370,8 +532,13 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
                 "topics_with_positive_retention": comparison["topics_with_positive_novel_retention"],
             }
         )
-    if any(row["eligible_relevant"] != 73 for row in retention_rows):
+    denominators = {int(row["eligible_relevant"]) for row in retention_rows}
+    if len(denominators) != 1 or next(iter(denominators)) <= 0:
         raise ValueError("novel relevant denominator differs across arms")
+    novel_denominator = next(iter(denominators))
+    xq_comparison = gains["comparisons"]["XQ"]
+    xq_retained = int(xq_comparison["novel_relevant_retained"])
+    xq_retention_fraction = float(xq_comparison["novel_retention_fraction"])
 
     gate_rows = [
         {
@@ -431,6 +598,19 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "retention_fraction",
             "topics_with_positive_retention",
         ),
+    )
+    document_flow_sql, document_flow_rows = _materialize_sql_rows(
+        [
+            {
+                "stage": "Residual relevant facet candidates",
+                "document_count": novel_denominator,
+            },
+            {
+                "stage": "Retained by XQ/CXQ",
+                "document_count": xq_retained,
+            },
+        ],
+        ("stage", "document_count"),
     )
     per_topic_sql, per_topic_rows = _materialize_sql_rows(
         per_topic_rows,
@@ -495,7 +675,7 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
     headline = [{
         "rrf_ndcg_at_10": metrics["systems"]["RRF"]["aggregate"]["ndcg@10"],
         "rrf_graded_recall_at_100": metrics["systems"]["RRF"]["aggregate"]["graded_recall@100"],
-        "novel_relevant_candidates": 73,
+        "novel_relevant_candidates": novel_denominator,
         "accepted_facets": accepted,
         "external_calls": external_calls,
         "local_cost_usd": 0,
@@ -508,8 +688,8 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
         "systems": {arm: metrics["systems"][arm]["aggregate"] for arm in arm_order},
         "facets": {"planned": 24, "accepted": accepted, "rejected": rejected},
         "novel_relevant": {
-            "denominator": 73,
-            "retained_by_xq": 66,
+            "denominator": novel_denominator,
+            "retained_by_xq": xq_retained,
             "denominator_definition": "Unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are absent from RRF@100.",
         },
         "fusion": {"xq_cxq_byte_identical": xq_cxq_identical, "cxq_forced_selection_count": forced_count},
@@ -530,6 +710,17 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
     }
 
     sources = _source_specs(inputs)
+    provenance_sql, provenance_rows = _materialize_sql_rows(
+        [
+            {
+                "source_id": source["id"],
+                "path": source["path"],
+                "sha256": source["source_sha256"],
+            }
+            for source in sources
+        ],
+        ("source_id", "path", "sha256"),
+    )
     sources.extend(
         [
             _derived_source(
@@ -545,6 +736,13 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
                 inputs.source_paths["gains_losses"],
                 retention_sql,
                 "Exact novel-retention rows materialized from the hash-verified gains/losses artifact.",
+            ),
+            _derived_source(
+                "document_flow_query",
+                "Residual relevant-document flow materialization",
+                inputs.source_paths["gains_losses"],
+                document_flow_sql,
+                "Exact RRF-relative residual and XQ-retained document counts materialized from the hash-verified gains/losses artifact.",
             ),
             _derived_source(
                 "per_topic_metrics_query",
@@ -567,9 +765,16 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
                 examples_sql,
                 "Four bounded rank-one diagnostic excerpts materialized from frozen retrieval candidates.",
             ),
+            _derived_source(
+                "provenance_query",
+                "Report source hash materialization",
+                "reports/experiments/facet_aware_fusion_pilot_v1/artifact.json",
+                provenance_sql,
+                "Exact repository-relative input identities and byte-level SHA-256 values used by this report build.",
+            ),
         ]
     )
-    charts = _charts()
+    charts = _charts(novel_denominator)
     tables = _tables()
     blocks = [
         {"id": "title", "type": "markdown", "body": f"# {REPORT_TITLE}", "layout": "full"},
@@ -579,8 +784,8 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "layout": "full",
             "body": (
                 "## Technical summary\n\n"
-                "**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued 24 rate-limited BM25 facet requests, locally scored 9,698 windows with MiniLM, and incurred **$0** in paid cost. RRF improved nDCG@10 from 0.472 to 0.589 with essentially flat graded Recall@100.\n\n"
-                "**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **66 of 73** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list: it allocated 311 of 400 positions to facet-only documents and did not demonstrate safe improvement.\n\n"
+                f"**Decision: retain the current RRF; no new fusion arm is safe to promote.** The four-topic held-out pilot issued {retrieval['external_calls']} rate-limited BM25 facet requests, locally scored {scoring['completed_window_count']:,} windows with MiniLM, and incurred **$0** in paid cost because it used the existing endpoint and local ROCm inference. RRF improved nDCG@10 from {metrics['systems']['O']['aggregate']['ndcg@10']:.3f} to {metrics['systems']['RRF']['aggregate']['ndcg@10']:.3f} with essentially flat graded Recall@100.\n\n"
+                f"**The facets worked as candidate generators.** Accepted facet lists contained relevant evidence missing from the original and RRF pools, and XQ/CXQ retained **{xq_retained} of {novel_denominator}** residual relevant candidates. But xQuAD over-replaced the globally useful RRF list and did not demonstrate safe improvement.\n\n"
                 "**Advisor verdict:** retain facets, replace the fusion design. Protect the RRF head and use full-narrative MiniLM scores only for a small residual tail budget."
             ),
         },
@@ -590,20 +795,33 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "layout": "full",
             "body": (
                 "## Facets found relevant evidence that the main list missed\n\n"
-                "The residual set contains 73 unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are **absent from RRF@100**. RRF's zero is true by construction, not an independent failure. The advisor additionally verified 83 relevant facet documents absent from the original top 100; RRF recovered some and left 73 outside both lists.\n\n"
-                "The chart shows why the facet signal should be kept: XQ/CXQ retained 90.4% of that residual evidence. The unresolved problem is controlled insertion, not candidate discovery."
+                f"The residual set contains {novel_denominator} unique grade-≥2 documents in accepted-facet MiniLM top-20 lists that are **absent from RRF@100**. RRF's zero is true by construction, not an independent failure.\n\n"
+                f"The chart shows why the facet signal should be kept: XQ/CXQ retained {xq_retention_fraction:.1%} of that residual evidence. The unresolved problem is controlled insertion, not candidate discovery."
             ),
+            "sourceId": "gains_losses",
         },
         {"id": "novel_retention_chart", "type": "chart", "chartId": "novel_retention", "layout": "full"},
+        {
+            "id": "document_flow_intro",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "gains_losses",
+            "body": (
+                "## Most verified residual evidence survived xQuAD\n\n"
+                f"Of {novel_denominator} RRF-relative residual relevant documents, XQ/CXQ retained {xq_retained}. This flow is real, but it is not sufficient for promotion because the arm also displaced too much of the RRF backbone."
+            ),
+        },
+        {"id": "document_flow_chart", "type": "chart", "chartId": "document_flow", "layout": "full"},
         {
             "id": "fusion_quality_finding",
             "type": "markdown",
             "layout": "full",
             "body": (
                 "## RRF improved the head; xQuAD consumed too much of the list\n\n"
-                "RRF achieved the best nDCG@10 (0.589) and improved all four topics over the original query. XQ and CXQ fell to 0.284 because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. They replaced 290 RRF documents while only 51.5% of their top 100 was judged.\n\n"
-                "The preregistered guardrails correctly block promotion. Because 187 of 290 XQ additions were unjudged, the exact size of the apparent loss is uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’"
+                f"RRF achieved the best nDCG@10 ({metrics['systems']['RRF']['aggregate']['ndcg@10']:.3f}) and improved all four topics over the original query. XQ and CXQ fell to {metrics['systems']['XQ']['aggregate']['ndcg@10']:.3f} because their relevance term treated the best document from every narrow facet as globally comparable to original rank 1. Only {metrics['systems']['XQ']['aggregate']['judged_rate@100']:.1%} of their top 100 was judged.\n\n"
+                "The preregistered guardrails correctly block promotion. Differential judging makes the exact size of the apparent loss uncertain; the evidence supports ‘did not demonstrate safe improvement,’ not ‘facet documents were proven irrelevant.’"
             ),
+            "sourceId": "metrics",
         },
         {"id": "ndcg_chart", "type": "chart", "chartId": "system_ndcg", "layout": "full"},
         {"id": "per_topic_intro", "type": "markdown", "body": "## Every held-out topic improved at the top under RRF\n\nThe per-topic table preserves the exact metrics, judged coverage, and negative-result arms so aggregate gains cannot hide a topic regression.", "layout": "full"},
@@ -638,11 +856,18 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "layout": "full",
             "body": (
                 "## Limitations and robustness\n\n"
-                "This is a four-topic pilot, not production generalization. Judging coverage is differential: O is 100% judged at depth 100, RRF 98.25%, and XQ/CXQ 51.5%. Unjudged documents are scored as zero, so the measured xQuAD loss combines real displacement with non-random missing judgments.\n\n"
+                f"This is a four-topic pilot, not production generalization. Judging coverage is differential: O is {metrics['systems']['O']['aggregate']['judged_rate@100']:.0%} judged at depth 100, RRF {metrics['systems']['RRF']['aggregate']['judged_rate@100']:.2%}, and XQ/CXQ {metrics['systems']['XQ']['aggregate']['judged_rate@100']:.1%}. Unjudged documents are scored as zero, so the measured xQuAD loss combines real displacement with non-random missing judgments.\n\n"
                 "The ranking and evaluation files pass their native hash checks. No ranking was constructed after qrels access, no protected topic entered the pipeline, and no paid model or retrieval call was used."
             ),
         },
-        {"id": "advisor_review", "type": "markdown", "body": advisor, "layout": "full"},
+        {
+            "id": "provenance_intro",
+            "type": "markdown",
+            "layout": "full",
+            "body": "## Every report input is visibly hash-bound\n\nThe table lists the exact repository-relative file and SHA-256 identity used for this build. The builder also verifies the evaluation-to-freeze binding and the retrieval, preflight, scoring, gate, and provenance hash chain before rendering.",
+        },
+        {"id": "provenance_table", "type": "table", "tableId": "source_provenance", "layout": "full"},
+        {"id": "advisor_review", "type": "markdown", "body": advisor, "layout": "full", "sourceId": "advisor_review"},
         {
             "id": "next_step",
             "type": "markdown",
@@ -652,6 +877,7 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
                 "On fresh held-out topics, score the complete candidate union once against the **full original narrative**, keep RRF ranks 1–80 unchanged, and let RRF ranks 81–100 compete with residual facet candidates for only 20 positions. Cap new documents at two per facet and never force insertion.\n\n"
                 "This tests whether globally relevant facet evidence can replace only weak RRF-tail documents. It preserves nDCG@10 by construction, needs no new retrieval calls, and uses the already-cached cheap MiniLM model."
             ),
+            "sourceId": "advisor_review",
         },
         {
             "id": "further_questions",
@@ -659,7 +885,7 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
             "layout": "full",
             "body": (
                 "## Further questions\n\n"
-                "- Does full-narrative MiniLM separate the 73 residual candidates from weak RRF-tail documents?\n"
+                f"- Does full-narrative MiniLM separate the {novel_denominator} residual candidates from weak RRF-tail documents?\n"
                 "- How many of the at-most-80 inserted documents require blind adjudication to remove differential-judging bias?\n"
                 "- Is the two-per-facet cap sufficient across topics with three versus seven accepted facets?"
             ),
@@ -688,9 +914,11 @@ def build_report(inputs: ReportInputs) -> tuple[dict[str, Any], dict[str, Any]]:
                 "headline_metrics": headline,
                 "system_metric_rows": system_rows,
                 "novel_retention_rows": retention_rows,
+                "document_flow_rows": document_flow_rows,
                 "per_topic_metric_rows": per_topic_rows,
                 "facet_gate_rows": gate_rows,
                 "rejected_facet_example_rows": rejected_examples,
+                "source_provenance_rows": provenance_rows,
             },
         },
         "sources": sources,
@@ -706,16 +934,79 @@ def _write_json(path: Path, value: Any) -> None:
     )
 
 
+def _discover_portable_delivery_script() -> Path:
+    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    candidates = list(
+        (
+            codex_home
+            / "plugins/cache/openai-curated-remote/data-analytics"
+        ).glob("*/skills/build-report/scripts/deliver_portable_artifact.mjs")
+    )
+    if not candidates:
+        raise ValueError(
+            "portable report packager was not found; pass --portable-delivery-script"
+        )
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+
+def _deliver_html(
+    artifact: Path,
+    output: Path,
+    delivery_script: Path,
+    tmpdir: Path | None,
+) -> None:
+    if not delivery_script.is_file():
+        raise ValueError("portable report packager does not exist")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    if tmpdir is not None:
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        environment["TMPDIR"] = str(tmpdir.resolve())
+    try:
+        subprocess.run(
+            [
+                "node",
+                str(delivery_script),
+                "--input",
+                str(artifact),
+                "--output",
+                str(output),
+            ],
+            check=True,
+            env=environment,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError("portable HTML delivery failed") from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument("--output", type=Path, help="Optional packaged report.html path")
+    parser.add_argument("--portable-delivery-script", type=Path)
+    parser.add_argument("--tmpdir", type=Path)
     args = parser.parse_args(argv)
     artifact, summary = build_report(ReportInputs.from_repo(args.repo_root))
     _write_json(args.artifact, artifact)
     _write_json(args.summary, summary)
-    print(json.dumps({"artifact": str(args.artifact), "summary": str(args.summary), "selected_arm": summary["decision"]["selected_arm"]}, sort_keys=True))
+    if args.output is not None:
+        script = args.portable_delivery_script or _discover_portable_delivery_script()
+        _deliver_html(args.artifact, args.output, script, args.tmpdir)
+    elif args.portable_delivery_script is not None or args.tmpdir is not None:
+        parser.error("--portable-delivery-script and --tmpdir require --output")
+    print(
+        json.dumps(
+            {
+                "artifact": str(args.artifact),
+                "summary": str(args.summary),
+                "output": str(args.output) if args.output else None,
+                "selected_arm": summary["decision"]["selected_arm"],
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
