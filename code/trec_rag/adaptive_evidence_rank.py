@@ -502,8 +502,12 @@ def build_fixed_o0_continuation(data: object) -> list[dict[str, object]]:
 
         for obligation_id in queue_ids:
             source = _next_unselected(queue_rows[(topic_id, obligation_id)], selected)
-            if source is not None:
-                select(source, obligation_id, "coverage_floor")
+            if source is None:
+                raise ValueError(
+                    "coverage floor cannot select a distinct document for "
+                    f"obligation {obligation_id}"
+                )
+            select(source, obligation_id, "coverage_floor")
 
         priority = {obligation_id: index for index, obligation_id in enumerate(queue_ids)}
         while True:
@@ -617,19 +621,30 @@ def load_authenticated_ranking_data(
 
 
 def _source_bindings(data: object) -> dict[str, object]:
-    try:
-        raw = _data_value(data, "source_bindings")
-    except ValueError:
-        raw = {
-            "mode": "provided_data",
-            "contract_summary_sha256": "0" * 64,
-            "base_score_receipt_sha256": "0" * 64,
-            "terminal_discovery_receipt_sha256": "0" * 64,
-        }
+    raw = _data_value(data, "source_bindings")
     if not isinstance(raw, Mapping):
         raise ValueError("ranking source bindings must be an object")
     bindings = dict(raw)
-    if bindings.get("mode") not in {"provided_data", "authenticated_paths"} or any(
+    common_fields = {
+        "mode",
+        "contract_summary_sha256",
+        "base_score_receipt_sha256",
+        "terminal_discovery_receipt_sha256",
+    }
+    authenticated_fields = {
+        *common_fields,
+        "contract_dir",
+        "base_scores_dir",
+        "discovery_dir",
+    }
+    mode = bindings.get("mode")
+    if mode == "fixture_only":
+        expected_fields = common_fields
+    elif mode == "authenticated_paths":
+        expected_fields = authenticated_fields
+    else:
+        raise ValueError("ranking source mode must be fixture_only or authenticated_paths")
+    if set(bindings) != expected_fields or any(
         not _is_sha256(bindings.get(name))
         for name in (
             "contract_summary_sha256",
@@ -638,6 +653,11 @@ def _source_bindings(data: object) -> dict[str, object]:
         )
     ):
         raise ValueError("ranking source receipt hashes are invalid")
+    if mode == "authenticated_paths" and any(
+        not isinstance(bindings.get(name), str) or not bindings[name]
+        for name in ("contract_dir", "base_scores_dir", "discovery_dir")
+    ):
+        raise ValueError("authenticated ranking source paths are invalid")
     return bindings
 
 
@@ -746,6 +766,8 @@ def build_rankings(data: object, *, output_dir: Path) -> dict[str, object]:
 
 
 def _require_output_inventory(root: Path) -> None:
+    if root.is_symlink():
+        raise ValueError("ranking output inventory root must not be a symlink")
     try:
         entries = list(root.iterdir())
     except OSError as exc:
@@ -816,9 +838,9 @@ def _verify_ranking_rows(
     return identities
 
 
-def _verify_source_bindings(bindings: Mapping[str, object]) -> dict[str, object] | None:
+def _verify_source_bindings(bindings: Mapping[str, object]) -> dict[str, object]:
     if bindings.get("mode") != "authenticated_paths":
-        return None
+        raise ValueError("public verification requires exact authenticated_paths sources")
     path_fields = {
         "contract_dir": "contract_summary_sha256",
         "base_scores_dir": "base_score_receipt_sha256",
@@ -838,10 +860,13 @@ def _verify_source_bindings(bindings: Mapping[str, object]) -> dict[str, object]
     return data
 
 
-def verify_baseline_rankings(
-    output_dir: Path, *, data: object | None = None
+def _verify_rankings(
+    output_dir: Path,
+    *,
+    required_mode: str,
+    fixture_data: object | None = None,
 ) -> dict[str, object]:
-    """Authenticate output inventory, bindings, completeness, and deterministic rows."""
+    """Shared verifier with an explicit public or private trust boundary."""
 
     root = Path(output_dir)
     _require_output_inventory(root)
@@ -862,6 +887,22 @@ def verify_baseline_rankings(
         or receipt.get("external_cost_usd") != 0.0
     ):
         raise ValueError("ranking receipt status or safety counters differ")
+    bindings = receipt.get("source_bindings")
+    if not isinstance(bindings, Mapping):
+        raise ValueError("ranking source bindings are missing")
+    if bindings.get("mode") != required_mode:
+        raise ValueError(f"ranking verification requires exact {required_mode} sources")
+    if required_mode == "authenticated_paths":
+        comparison_data = _verify_source_bindings(bindings)
+    elif required_mode == "fixture_only" and fixture_data is not None:
+        expected_bindings = _source_bindings(fixture_data)
+        if expected_bindings.get("mode") != "fixture_only" or dict(bindings) != expected_bindings:
+            raise ValueError("fixture-only ranking source binding differs")
+        comparison_data = fixture_data
+    else:
+        raise ValueError("fixture-only verification requires exact fixture data")
+    if _topic_ids(comparison_data) != topic_ids:
+        raise ValueError("ranking topics differ from authenticated sources")
     rankings = receipt.get("rankings")
     if not isinstance(rankings, Mapping) or set(rankings) != set(_AVAILABLE_ARMS):
         raise ValueError("ranking receipt arm bindings differ")
@@ -892,9 +933,6 @@ def verify_baseline_rankings(
     availability = _read_json(root / "availability.json", "ranking availability")
     if availability_content != _pretty_bytes(availability):
         raise ValueError("ranking availability is not canonical JSON")
-    bindings = receipt.get("source_bindings")
-    if not isinstance(bindings, Mapping):
-        raise ValueError("ranking source bindings are missing")
     terminal_sha256 = bindings.get("terminal_discovery_receipt_sha256")
     arms = availability.get("arms")
     if (
@@ -916,18 +954,31 @@ def verify_baseline_rankings(
         if not isinstance(value, Mapping) or dict(value) != expected_unavailable:
             raise ValueError(f"{arm} must be explicitly unavailable")
 
-    authenticated_data = _verify_source_bindings(bindings)
-    comparison_data = data if data is not None else authenticated_data
-    if comparison_data is not None:
-        if _topic_ids(comparison_data) != topic_ids:
-            raise ValueError("ranking topics differ from authenticated sources")
-        expected = {
-            "NARRATIVE": build_narrative_continuation(comparison_data),
-            "FIXED-O0": build_fixed_o0_continuation(comparison_data),
-        }
-        if any(parsed[arm] != expected[arm] for arm in _AVAILABLE_ARMS):
-            raise ValueError("ranking rows differ from deterministic source reconstruction")
+    expected = {
+        "NARRATIVE": build_narrative_continuation(comparison_data),
+        "FIXED-O0": build_fixed_o0_continuation(comparison_data),
+    }
+    if any(parsed[arm] != expected[arm] for arm in _AVAILABLE_ARMS):
+        raise ValueError("ranking rows differ from deterministic source reconstruction")
     return receipt
+
+
+def _verify_fixture_rankings(
+    output_dir: Path, *, data: object
+) -> dict[str, object]:
+    """Verify a unit-test fixture without weakening the public trust boundary."""
+
+    return _verify_rankings(
+        output_dir,
+        required_mode="fixture_only",
+        fixture_data=data,
+    )
+
+
+def verify_baseline_rankings(output_dir: Path) -> dict[str, object]:
+    """Authenticate and reconstruct rankings only from bound Task 1/3/4 paths."""
+
+    return _verify_rankings(output_dir, required_mode="authenticated_paths")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

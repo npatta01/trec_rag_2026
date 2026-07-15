@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -101,7 +103,7 @@ def _fixture() -> dict[str, object]:
         "documents": documents,
         "score_rows": scores,
         "source_bindings": {
-            "mode": "provided_data",
+            "mode": "fixture_only",
             "contract_summary_sha256": "c" * 64,
             "base_score_receipt_sha256": "d" * 64,
             "terminal_discovery_receipt_sha256": "e" * 64,
@@ -144,6 +146,83 @@ def _all_document_ids(data: dict[str, object] | None = None) -> set[str]:
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _compact_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode("utf-8")
+
+
+def _pretty_bytes(value: object) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+
+
+def _artifact(path: str, source: bytes, rows: int) -> dict[str, object]:
+    return {
+        "path": path,
+        "rows": rows,
+        "bytes": len(source),
+        "sha256": hashlib.sha256(source).hexdigest(),
+    }
+
+
+def _reseal_rankings(
+    output: Path,
+    transform: object,
+    *,
+    topic_ids: list[str] | None = None,
+) -> None:
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    rows_by_arm: dict[str, list[dict[str, object]]] = {}
+    names = {"NARRATIVE": "narrative.jsonl", "FIXED-O0": "fixed_o0.jsonl"}
+    for arm, name in names.items():
+        rows = _read_jsonl(output / name)
+        changed = transform(arm, rows)  # type: ignore[operator]
+        source = b"".join(_compact_bytes(row) for row in changed)
+        (output / name).write_bytes(source)
+        receipt["rankings"][arm] = _artifact(name, source, len(changed))
+        rows_by_arm[arm] = changed
+    if topic_ids is not None:
+        receipt["topic_ids"] = topic_ids
+    receipt["document_count"] = len(rows_by_arm["NARRATIVE"])
+    receipt["selection_reason_counts"] = {
+        arm: dict(
+            sorted(Counter(str(row["selection_reason"]) for row in rows).items())
+        )
+        for arm, rows in rows_by_arm.items()
+    }
+    availability_path = output / "availability.json"
+    availability = json.loads(availability_path.read_bytes())
+    for arm in names:
+        availability["arms"][arm] = {
+            "status": "available",
+            **receipt["rankings"][arm],
+        }
+    availability_source = _pretty_bytes(availability)
+    availability_path.write_bytes(availability_source)
+    receipt["availability"] = _artifact(
+        "availability.json", availability_source, 1
+    )
+    receipt_path.write_bytes(_pretty_bytes(receipt))
+
+
+def _authenticated_fixture(tmp_path: Path) -> dict[str, object]:
+    data = copy.deepcopy(_fixture())
+    data["source_bindings"] = {
+        "mode": "authenticated_paths",
+        "contract_dir": str(tmp_path / "contract"),
+        "contract_summary_sha256": "c" * 64,
+        "base_scores_dir": str(tmp_path / "scores"),
+        "base_score_receipt_sha256": "d" * 64,
+        "discovery_dir": str(tmp_path / "discovery"),
+        "terminal_discovery_receipt_sha256": "e" * 64,
+    }
+    return data
 
 
 def test_narrative_uses_each_documents_best_broad_window() -> None:
@@ -249,6 +328,33 @@ def test_fixed_exhausts_facet_queues_then_uses_broad_tail() -> None:
     assert rows[-1]["primary_obligation"] == "219:broad"
 
 
+@pytest.mark.parametrize("obligation_id", ["219-positive", "219-negative"])
+def test_fixed_coverage_floor_rejects_an_empty_o0_queue(
+    obligation_id: str,
+) -> None:
+    data = _fixture()
+    data["score_rows"] = [
+        row
+        for row in data["score_rows"]  # type: ignore[index]
+        if row["variant"] != obligation_id
+    ]
+
+    with pytest.raises(ValueError, match=obligation_id):
+        build_fixed_o0_continuation(data)
+
+
+def test_fixed_coverage_floor_rejects_an_o0_exhausted_by_prior_selection() -> None:
+    data = _fixture()
+    data["score_rows"] = [
+        row
+        for row in data["score_rows"]  # type: ignore[index]
+        if row["variant"] != "219-positive" or row["document_id"] == "d2"
+    ]
+
+    with pytest.raises(ValueError, match="219-positive"):
+        build_fixed_o0_continuation(data)
+
+
 def test_output_rows_bind_scored_queues_without_claiming_semantic_support() -> None:
     row = build_fixed_o0_continuation(_fixture())[0]
 
@@ -342,7 +448,7 @@ def test_verifier_detects_ranking_and_receipt_hash_tampering(tmp_path: Path) -> 
     source = narrative.read_bytes()
     narrative.write_bytes(source + b"\n")
     with pytest.raises(ValueError, match="hash"):
-        verify_baseline_rankings(output, data=data)
+        rank_module._verify_fixture_rankings(output, data=data)
 
     narrative.write_bytes(source)
     receipt_path = output / "receipt.json"
@@ -350,7 +456,132 @@ def test_verifier_detects_ranking_and_receipt_hash_tampering(tmp_path: Path) -> 
     receipt["rankings"]["NARRATIVE"]["sha256"] = "0" * 64
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     with pytest.raises(ValueError, match="hash"):
-        verify_baseline_rankings(output, data=data)
+        rank_module._verify_fixture_rankings(output, data=data)
+
+
+@pytest.mark.parametrize("mode", ["provided_data", "unknown"])
+def test_public_verifier_rejects_source_authentication_downgrade(
+    tmp_path: Path, mode: str
+) -> None:
+    output = tmp_path / "rankings"
+    build_rankings(_fixture(), output_dir=output)
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["source_bindings"]["mode"] = mode
+    receipt_path.write_bytes(_pretty_bytes(receipt))
+
+    with pytest.raises(ValueError, match="authenticated_paths"):
+        verify_baseline_rankings(output)
+
+
+def test_public_verifier_has_no_caller_data_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_data = _authenticated_fixture(tmp_path)
+    output = tmp_path / "rankings"
+    build_rankings(source_data, output_dir=output)
+    altered_source = copy.deepcopy(source_data)
+    for row in altered_source["score_rows"]:  # type: ignore[index]
+        if row["variant"] == "219:broad" and row["document_id"] == "d3":
+            row["score"] = 100_000.0
+    monkeypatch.setattr(
+        rank_module,
+        "load_authenticated_ranking_data",
+        lambda **kwargs: altered_source,
+    )
+
+    with pytest.raises(TypeError, match="data"):
+        verify_baseline_rankings(output, data=source_data)
+
+
+def test_public_verifier_rejects_missing_authenticated_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_data = _authenticated_fixture(tmp_path)
+    output = tmp_path / "rankings"
+    build_rankings(source_data, output_dir=output)
+    monkeypatch.setattr(
+        rank_module,
+        "load_authenticated_ranking_data",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("missing authenticated source")),
+    )
+
+    with pytest.raises(ValueError, match="missing authenticated source"):
+        verify_baseline_rankings(output)
+
+
+def test_public_verifier_rejects_altered_authenticated_source_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_data = _authenticated_fixture(tmp_path)
+    output = tmp_path / "rankings"
+    build_rankings(source_data, output_dir=output)
+    altered_source = copy.deepcopy(source_data)
+    altered_source["source_bindings"]["contract_summary_sha256"] = "f" * 64  # type: ignore[index]
+    monkeypatch.setattr(
+        rank_module,
+        "load_authenticated_ranking_data",
+        lambda **kwargs: altered_source,
+    )
+
+    with pytest.raises(ValueError, match="source receipt hash"):
+        verify_baseline_rankings(output)
+
+
+@pytest.mark.parametrize("tamper", ["shorten", "replace"])
+def test_public_verifier_reconstructs_after_fully_resealed_ranking_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    source_data = _authenticated_fixture(tmp_path)
+    output = tmp_path / "rankings"
+    build_rankings(source_data, output_dir=output)
+    monkeypatch.setattr(
+        rank_module,
+        "load_authenticated_ranking_data",
+        lambda **kwargs: source_data,
+    )
+
+    def transform(
+        _arm: str, rows: list[dict[str, object]]
+    ) -> list[dict[str, object]]:
+        changed = copy.deepcopy(rows)
+        if tamper == "shorten":
+            return changed[:-1]
+        changed[-1]["document_id"] = "forged-document"
+        return changed
+
+    _reseal_rankings(output, transform)
+
+    with pytest.raises(ValueError, match="deterministic source reconstruction"):
+        verify_baseline_rankings(output)
+
+
+def test_public_verifier_rejects_resealed_topic_and_population_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_data = _authenticated_fixture(tmp_path)
+    output = tmp_path / "rankings"
+    build_rankings(source_data, output_dir=output)
+    monkeypatch.setattr(
+        rank_module,
+        "load_authenticated_ranking_data",
+        lambda **kwargs: source_data,
+    )
+
+    def transform(
+        _arm: str, rows: list[dict[str, object]]
+    ) -> list[dict[str, object]]:
+        changed = copy.deepcopy(rows)
+        for row in changed:
+            row["topic_id"] = "72"
+        return changed
+
+    _reseal_rankings(output, transform, topic_ids=["72"])
+
+    with pytest.raises(ValueError, match="topics differ"):
+        verify_baseline_rankings(output)
 
 
 @pytest.mark.parametrize("mode", ["unexpected", "partial", "symlink"])
@@ -370,7 +601,17 @@ def test_verifier_rejects_unexpected_partial_and_symlink_artifacts(
         (output / "fixed_o0.jsonl").symlink_to(target)
 
     with pytest.raises(ValueError, match="inventory"):
-        verify_baseline_rankings(output, data=_fixture())
+        rank_module._verify_fixture_rankings(output, data=_fixture())
+
+
+def test_public_verifier_rejects_symlinked_output_root(tmp_path: Path) -> None:
+    output = tmp_path / "rankings"
+    build_rankings(_fixture(), output_dir=output)
+    linked = tmp_path / "linked-rankings"
+    linked.symlink_to(output, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="inventory"):
+        verify_baseline_rankings(linked)
 
 
 def test_build_is_create_only_even_for_partial_existing_output(tmp_path: Path) -> None:
