@@ -333,6 +333,58 @@ def test_incomplete_json_recognizes_literal_and_exponent_prefixes(suffix: bytes)
     assert result["classification"] == "truncated_at_ceiling"
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"status":"SUP',
+        b'{"status":"escaped\\',
+        b'{"status":"escaped\\u12',
+        b'{"status":true',
+        b'{"status":true,',
+        b'{"status":true,"nested":[',
+        b'{"status":true,"nested":[1,{"value":null',
+        b'{"status":-1.',
+        b'{"status":"caf\xc3',
+    ],
+)
+def test_incomplete_json_accepts_only_structurally_valid_whole_prefixes(
+    raw: bytes,
+) -> None:
+    result = classify_completion(
+        raw,
+        schema=PROPOSAL_SCHEMA,
+        output_token_count=256,
+        max_new_tokens=256,
+    )
+    assert result["classification"] == "truncated_at_ceiling"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{} {"status":tru',
+        b'{"status" tru',
+        b'{"bad":"\\q","status":tru',
+        b'{"bad":01,"status":tru',
+        b'{"bad":1e+,"status":tru',
+        b'{"bad":true,}',
+        b'{"bad":--1',
+        b'{"bad":1.e',
+        b'{"bad":"line\nbreak',
+        b'{"bad":truth',
+        b'{"bad":"caf\xc3(',
+    ],
+)
+def test_incomplete_json_rejects_any_earlier_structural_error(raw: bytes) -> None:
+    result = classify_completion(
+        raw,
+        schema=PROPOSAL_SCHEMA,
+        output_token_count=256,
+        max_new_tokens=256,
+    )
+    assert result["classification"] == "parse_error"
+
+
 def test_incomplete_json_rejects_invalid_complete_literal_syntax() -> None:
     result = classify_completion(
         b'{"status":truth}',

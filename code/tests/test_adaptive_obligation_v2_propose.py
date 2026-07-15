@@ -514,7 +514,7 @@ def _approval_record(preflight_sha256: str) -> dict[str, object]:
     }
 
 
-def test_approval_capture_rejects_symlink_parent_and_nonexact_count_types(
+def test_approval_capture_accepts_audit_metadata_but_rejects_required_field_changes(
     tmp_path: Path,
 ) -> None:
     real = tmp_path / "real"
@@ -526,18 +526,27 @@ def test_approval_capture_rejects_symlink_parent_and_nonexact_count_types(
     with pytest.raises(PermissionError, match="proposal inference approval required"):
         propose_module._capture_inference_approval(linked_parent / "approval.json")
 
-    wrong_type = {
+    audited = {
         **_approval_record("a" * 64),
-        "primary_call_count": 48.0,
+        "created_by": "independent-approver",
+        "audit": {"ticket": "RAG-2026"},
     }
-    approval.write_bytes(_pretty(wrong_type))
-    with pytest.raises(PermissionError, match="proposal inference approval required"):
-        propose_module._capture_inference_approval(approval)
+    approval.write_bytes(_pretty(audited))
+    captured = propose_module._capture_inference_approval(approval)
+    assert captured.value == audited
+    assert captured.sha256 == hashlib.sha256(_pretty(audited)).hexdigest()
 
-    extra_key = {**_approval_record("a" * 64), "created_by": "not-in-contract"}
-    approval.write_bytes(_pretty(extra_key))
-    with pytest.raises(PermissionError, match="proposal inference approval required"):
-        propose_module._capture_inference_approval(approval)
+    for wrong_required in (
+        {"primary_call_count": 48.0},
+        {"retry_call_ceiling": True},
+        {"approved": 1},
+        {"approved": False},
+        {"model": "wrong/model"},
+    ):
+        changed = {**_approval_record("a" * 64), **wrong_required}
+        approval.write_bytes(_pretty(changed))
+        with pytest.raises(PermissionError, match="proposal inference approval required"):
+            propose_module._capture_inference_approval(approval)
 
 
 def _captured_preflight_fixture(tmp_path: Path) -> tuple[Path, bytes, list[dict[str, object]]]:

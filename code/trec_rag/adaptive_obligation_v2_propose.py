@@ -1089,7 +1089,7 @@ def _capture_inference_approval(path: Path) -> _CapturedApproval:
     if (
         not isinstance(approval, dict)
         or source != _pretty_bytes(approval)
-        or set(approval) != required_names
+        or not required_names <= set(approval)
         or approval.get("schema_version")
         != "adaptive-obligation-v2-proposal-approval-v1"
         or approval.get("stage") != "proposal"

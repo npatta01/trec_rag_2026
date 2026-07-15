@@ -68,9 +68,12 @@ def test_v2_local_json_model_interface_exists() -> None:
 
 def test_approval_requires_exact_stage_and_preflight_binding() -> None:
     assert verify_inference_approval(_approval(), _preflight()) == _approval()
-    audited = {**_approval(), "created_by": "independent-approver"}
-    with pytest.raises(PermissionError, match="proposal inference approval required"):
-        verify_inference_approval(audited, _preflight())
+    audited = {
+        **_approval(),
+        "created_by": "independent-approver",
+        "audit": {"ticket": "RAG-2026"},
+    }
+    assert verify_inference_approval(audited, _preflight()) == audited
     wrong = {**_approval(), "stage": "validation"}
     with pytest.raises(PermissionError, match="proposal inference approval required"):
         verify_inference_approval(wrong, _preflight())
@@ -86,6 +89,8 @@ def test_approval_requires_exact_stage_and_preflight_binding() -> None:
         ({"primary_call_count": 48.0}, {}),
         ({"retry_call_ceiling": True}, {}),
         ({"approved": 1}, {}),
+        ({"approved": False}, {}),
+        ({"model_revision": "0" * 40}, {}),
         ({}, {"primary_call_count": 48.0}),
         ({}, {"retry_call_ceiling": True}),
     ],

@@ -11,6 +11,7 @@ import stat
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from enum import Enum, auto
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -122,36 +123,245 @@ class AttemptSpec:
             raise ValueError("attempt ordinal and output ceiling differ")
 
 
+class _JSONPrefixState(Enum):
+    COMPLETE = auto()
+    INCOMPLETE = auto()
+    INVALID = auto()
+
+
+class _IncompleteJSONPrefix(Exception):
+    pass
+
+
+class _InvalidJSONPrefix(Exception):
+    pass
+
+
+class _JSONPrefixParser:
+    """Classify one UTF-8 JSON byte prefix without repairing earlier syntax."""
+
+    _WHITESPACE = frozenset(b" \t\r\n")
+    _HEX = frozenset(b"0123456789abcdefABCDEF")
+    _SIMPLE_ESCAPES = frozenset(b'"\\/bfnrt')
+
+    def __init__(self, source: bytes) -> None:
+        self.source = source
+        self.length = len(source)
+
+    def classify(self) -> _JSONPrefixState:
+        try:
+            position = self._parse_value(self._skip_whitespace(0))
+            position = self._skip_whitespace(position)
+        except _IncompleteJSONPrefix:
+            return _JSONPrefixState.INCOMPLETE
+        except _InvalidJSONPrefix:
+            return _JSONPrefixState.INVALID
+        return (
+            _JSONPrefixState.COMPLETE
+            if position == self.length
+            else _JSONPrefixState.INVALID
+        )
+
+    def _skip_whitespace(self, position: int) -> int:
+        while position < self.length and self.source[position] in self._WHITESPACE:
+            position += 1
+        return position
+
+    def _parse_value(self, position: int) -> int:
+        if position >= self.length:
+            raise _IncompleteJSONPrefix
+        token = self.source[position]
+        if token == ord('"'):
+            return self._parse_string(position)
+        if token == ord("{"):
+            return self._parse_object(position)
+        if token == ord("["):
+            return self._parse_array(position)
+        if token == ord("t"):
+            return self._parse_literal(position, b"true")
+        if token == ord("f"):
+            return self._parse_literal(position, b"false")
+        if token == ord("n"):
+            return self._parse_literal(position, b"null")
+        if token == ord("-") or ord("0") <= token <= ord("9"):
+            return self._parse_number(position)
+        raise _InvalidJSONPrefix
+
+    def _parse_literal(self, position: int, literal: bytes) -> int:
+        available = self.source[position : position + len(literal)]
+        if len(available) < len(literal):
+            if literal.startswith(available):
+                raise _IncompleteJSONPrefix
+            raise _InvalidJSONPrefix
+        if available != literal:
+            raise _InvalidJSONPrefix
+        return position + len(literal)
+
+    def _parse_string(self, position: int) -> int:
+        position += 1
+        while position < self.length:
+            token = self.source[position]
+            if token == ord('"'):
+                return position + 1
+            if token < 0x20:
+                raise _InvalidJSONPrefix
+            if token == ord("\\"):
+                position += 1
+                if position >= self.length:
+                    raise _IncompleteJSONPrefix
+                escaped = self.source[position]
+                if escaped in self._SIMPLE_ESCAPES:
+                    position += 1
+                    continue
+                if escaped != ord("u"):
+                    raise _InvalidJSONPrefix
+                for _offset in range(4):
+                    position += 1
+                    if position >= self.length:
+                        raise _IncompleteJSONPrefix
+                    if self.source[position] not in self._HEX:
+                        raise _InvalidJSONPrefix
+                position += 1
+                continue
+            if token < 0x80:
+                position += 1
+                continue
+            position = self._parse_utf8_character(position)
+        raise _IncompleteJSONPrefix
+
+    def _parse_utf8_character(self, position: int) -> int:
+        first = self.source[position]
+        if 0xC2 <= first <= 0xDF:
+            width = 2
+            second_min, second_max = 0x80, 0xBF
+        elif first == 0xE0:
+            width = 3
+            second_min, second_max = 0xA0, 0xBF
+        elif 0xE1 <= first <= 0xEC or 0xEE <= first <= 0xEF:
+            width = 3
+            second_min, second_max = 0x80, 0xBF
+        elif first == 0xED:
+            width = 3
+            second_min, second_max = 0x80, 0x9F
+        elif first == 0xF0:
+            width = 4
+            second_min, second_max = 0x90, 0xBF
+        elif 0xF1 <= first <= 0xF3:
+            width = 4
+            second_min, second_max = 0x80, 0xBF
+        elif first == 0xF4:
+            width = 4
+            second_min, second_max = 0x80, 0x8F
+        else:
+            raise _InvalidJSONPrefix
+        for offset in range(1, width):
+            index = position + offset
+            if index >= self.length:
+                raise _IncompleteJSONPrefix
+            token = self.source[index]
+            if offset == 1:
+                if not second_min <= token <= second_max:
+                    raise _InvalidJSONPrefix
+            elif not 0x80 <= token <= 0xBF:
+                raise _InvalidJSONPrefix
+        return position + width
+
+    def _parse_number(self, position: int) -> int:
+        if self.source[position] == ord("-"):
+            position += 1
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+        if self.source[position] == ord("0"):
+            position += 1
+        elif ord("1") <= self.source[position] <= ord("9"):
+            position += 1
+            while (
+                position < self.length
+                and ord("0") <= self.source[position] <= ord("9")
+            ):
+                position += 1
+        else:
+            raise _InvalidJSONPrefix
+        if position < self.length and self.source[position] == ord("."):
+            position += 1
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+            if not ord("0") <= self.source[position] <= ord("9"):
+                raise _InvalidJSONPrefix
+            while (
+                position < self.length
+                and ord("0") <= self.source[position] <= ord("9")
+            ):
+                position += 1
+        if position < self.length and self.source[position] in b"eE":
+            position += 1
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+            if self.source[position] in b"+-":
+                position += 1
+                if position >= self.length:
+                    raise _IncompleteJSONPrefix
+            if not ord("0") <= self.source[position] <= ord("9"):
+                raise _InvalidJSONPrefix
+            while (
+                position < self.length
+                and ord("0") <= self.source[position] <= ord("9")
+            ):
+                position += 1
+        return position
+
+    def _parse_array(self, position: int) -> int:
+        position = self._skip_whitespace(position + 1)
+        if position >= self.length:
+            raise _IncompleteJSONPrefix
+        if self.source[position] == ord("]"):
+            return position + 1
+        while True:
+            position = self._parse_value(position)
+            position = self._skip_whitespace(position)
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+            token = self.source[position]
+            if token == ord("]"):
+                return position + 1
+            if token != ord(","):
+                raise _InvalidJSONPrefix
+            position = self._skip_whitespace(position + 1)
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+
+    def _parse_object(self, position: int) -> int:
+        position = self._skip_whitespace(position + 1)
+        if position >= self.length:
+            raise _IncompleteJSONPrefix
+        if self.source[position] == ord("}"):
+            return position + 1
+        while True:
+            if self.source[position] != ord('"'):
+                raise _InvalidJSONPrefix
+            position = self._parse_string(position)
+            position = self._skip_whitespace(position)
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+            if self.source[position] != ord(":"):
+                raise _InvalidJSONPrefix
+            position = self._skip_whitespace(position + 1)
+            position = self._parse_value(position)
+            position = self._skip_whitespace(position)
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+            token = self.source[position]
+            if token == ord("}"):
+                return position + 1
+            if token != ord(","):
+                raise _InvalidJSONPrefix
+            position = self._skip_whitespace(position + 1)
+            if position >= self.length:
+                raise _IncompleteJSONPrefix
+
+
 def _incomplete_json(source: bytes) -> bool:
-    try:
-        text = source.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    stripped = text.lstrip()
-    if not stripped.startswith("{"):
-        return False
-    unfinished_literal = re.search(
-        r'(?:^|[:,\[\s])(t|tr|tru|f|fa|fal|fals|n|nu|nul)$',
-        stripped,
-    )
-    unfinished_exponent = re.search(
-        r'(?:^|[:,\[\s])-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[eE][+-]?$',
-        stripped,
-    )
-    if unfinished_literal is not None or unfinished_exponent is not None:
-        return True
-    try:
-        json.loads(text)
-    except json.JSONDecodeError as exc:
-        if exc.msg.startswith("Unterminated string"):
-            return True
-        return exc.pos >= len(text.rstrip()) and exc.msg in {
-            "Expecting value",
-            "Expecting property name enclosed in double quotes",
-            "Expecting ':' delimiter",
-            "Expecting ',' delimiter",
-        }
-    return False
+    return _JSONPrefixParser(source).classify() is _JSONPrefixState.INCOMPLETE
 
 
 def _schema_error(value: object) -> str | None:

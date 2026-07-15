@@ -48,7 +48,7 @@ def verify_inference_approval(
         "retry_call_ceiling": 48,
         "approved": True,
     }
-    if set(approval) != set(required) or any(
+    if not set(required) <= set(approval) or any(
         approval.get(name) != value for name, value in required.items()
     ):
         raise PermissionError("proposal inference approval required")
