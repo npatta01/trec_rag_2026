@@ -26,7 +26,12 @@
 - Retrieval depth is 1,000 from one request per accepted O1. Maximum accepted requests are 16. Initial transport retry count is zero, timeout is 120 seconds, and the persistent limiter allows at most one request start per three seconds.
 - The semantic MiniLM query, planned for a later approved stage, is unchanged narrative + complete O0 + accepted O1.
 - No raw BM25 or MiniLM score crosses query boundaries.
-- No model weights may load. A locally materialized tokenizer may load only during proposal preflight; record 'tokenizer_load_count=1', 'model_load_count=0', and 'inference_count=0'.
+- No model weights may load in this plan. A locally materialized tokenizer may
+  load once during proposal preflight. After proposals exist, a separately
+  invoked validation preflight may load the same pinned tokenizer once when
+  `V > 0` so it can freeze exact validation prompt counts; it must load no
+  tokenizer when `V = 0`. Both preflights record `model_load_count=0` and
+  `inference_count=0`.
 - Do not create any approval artifact. Execution commands must reject unless a later, separately supplied approval binds the exact preflight SHA-256.
 - Do not make network, retrieval, hosted inference, paid, Qwen generation, MiniLM inference, qrels, organizer-nugget, reference-answer, or review-label calls.
 - Use process-local 'TMPDIR=/var/tmp' for Python commands.
@@ -638,7 +643,7 @@ def acceptance_key(row):
 
 Reject unknown unit IDs, source-fold validation units, protected topics, source identity mismatch, copied support text as a label, exact/normalized O0 duplicates, invalid finite codes, and same-document cross-validation. The validator prompt sees narrative, complete O0, proposed label, and opposite-fold units only; it never sees proposing units or rationale.
 
-Validation preflight is two-stage: it can be built only after a complete authenticated proposal receipt. It records exact surviving job count 'V', primary calls 'V', retry ceiling 'V', worst-case '2V', and all zero execution counters. Implement and fixture-test the guarded runner using Task 3's ledger, but do not create a canonical preflight or execute it in this plan.
+Validation preflight is two-stage: it can be built only after a complete authenticated proposal receipt. It records exact surviving job count 'V', primary calls 'V', retry ceiling 'V', worst-case '2V', and all zero model-inference, network, retrieval, hosted, paid, and qrels counters. For `V > 0`, it authenticates and loads exactly one pinned tokenizer (never model weights) to freeze the exact prompt-token count for every job and records `tokenizer_load_count=1`; for `V = 0`, it records `tokenizer_load_count=0` and does not construct a tokenizer or model. The preflight and separate approval bind the validator role, model ID, revision, model-snapshot manifest, tokenizer identity, schema, prompts, code, jobs, counts, and create-only ledger destination. Implement and fixture-test an approval-first production executor using Task 3's real append-only ledger. The executor must replay the authenticated proposal/contract chain, construct the pinned validation runtime only when `V > 0`, run the bounded retry policy, and seal the ledger; an approved `V = 0` run seals and returns without model construction. Do not create a canonical preflight or execute it in this plan.
 
 - [ ] **Step 4: Run Task 1-4 v2 tests and compatibility tests**
 

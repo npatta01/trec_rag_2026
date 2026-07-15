@@ -205,7 +205,17 @@ Proposal preflight declares:
 
 After proposals freeze, validation preflight declares the exact number `V` of
 surviving jobs, where `0 <= V <= 48`, and a worst-case ceiling of `2V` validation
-calls under the same single truncation-retry rule.
+calls under the same single truncation-retry rule. When `V > 0`, validation
+preflight loads exactly one authenticated tokenizer-only runtime to freeze the
+prompt-token count for every validation job; it loads no model weights and
+records zero inference. When `V = 0`, it loads neither tokenizer nor model.
+
+Validation execution is a separate approval-first production boundary. Its
+approval binds the validator role, exact model ID and revision, model-snapshot
+manifest, tokenizer identity, prompt counts, schema, code and job hashes, call
+ceilings, and create-only ledger destination. The executor replays the complete
+proposal and contract chain before constructing the pinned runtime. An approved
+zero-job run creates and seals the empty ledger without constructing a model.
 
 No retry is allowed for invalid semantics, schema violations that are not
 truncation, unsupported results, runtime/model mismatch, or operator error.

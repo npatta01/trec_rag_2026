@@ -1,0 +1,810 @@
+{
+  "manifest": {
+    "blocks": [
+      {
+        "body": "# Adaptive obligation search v2",
+        "id": "title",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Technical summary\n\n**Current result: the fixed baselines are sealed; adaptive v2 has not run.** No adaptive relevance result exists yet. The current status is `proposal_preflight_ready`, which proves execution readiness—not retrieval or relevance quality.",
+        "id": "technical_summary",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "type": "markdown"
+      },
+      {
+        "body": "**What is ready:** the frozen proposal preflight contains 48 exact jobs, 48 primary calls, and at most 48 truncation retries—a 96-call worst-case ceiling. These are planned limits, not completed inference.",
+        "id": "technical_summary_proposal",
+        "layout": "full",
+        "sourceId": "proposal_preflight",
+        "type": "markdown"
+      },
+      {
+        "body": "**What the retrieval design permits later:** at most 16 focused BM25 requests, each with `hits=1000`, followed by query-local O1 MiniLM scoring. The design does not permit a recursive search-generation loop.",
+        "id": "technical_summary_retrieval",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "**What still needs separate approval:** proposal generation, validation, retrieval, semantic scoring, and qrels. No canonical output for any of those stages exists in the verified v2 output root.",
+        "id": "technical_summary_execution",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "type": "markdown"
+      },
+      {
+        "body": "## The fixed evidence boundary verifies readiness, not effectiveness\n\nThe two metric strips summarize different units—documents, obligations, reservoirs, evidence units, jobs, and call ceilings. They are shown as source-backed status cards rather than a count chart because a shared visual scale would imply a false comparison. The only chart below uses a single binary readiness definition shared by every pipeline stage.",
+        "id": "key_evidence",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "type": "markdown"
+      },
+      {
+        "cardIds": [
+          "baseline_documents",
+          "o0_parents",
+          "fold_reservoirs",
+          "evidence_units"
+        ],
+        "id": "evidence_metrics",
+        "type": "metric-strip"
+      },
+      {
+        "cardIds": [
+          "proposal_primary_jobs",
+          "proposal_retry_ceiling",
+          "proposal_worst_case"
+        ],
+        "id": "proposal_metrics",
+        "type": "metric-strip"
+      },
+      {
+        "body": "**Read the table as a state machine, not a performance funnel.** Only the baselines, evidence contract, and tokenizer-only proposal preflight exist. Every later row is explicitly unavailable rather than silently treated as a zero-quality result. The binary chart visualizes that artifact boundary; it does not measure relevance quality, completion percentage, or progress.",
+        "id": "stage_status_interpretation",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "type": "markdown"
+      },
+      {
+        "chartId": "stage_readiness",
+        "id": "stage_readiness_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "id": "stage_status_table",
+        "layout": "full",
+        "tableId": "stage_status",
+        "type": "table"
+      },
+      {
+        "body": "**Every visible count above is anchored to one of four verifier-approved receipts.** The exact paths and hashes below are the reproducibility boundary; machine-specific absolute paths are intentionally excluded.",
+        "id": "source_receipt_interpretation",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "type": "markdown"
+      },
+      {
+        "id": "source_receipt_table",
+        "layout": "full",
+        "tableId": "source_receipts",
+        "type": "table"
+      },
+      {
+        "body": "## Scope and definitions keep facets tied to the user need\n\n- **O0** is a fixed, explicit information obligation already frozen from the original narrative.\n- **O1** is an optional abstract child need proposed from corpus evidence. It must stay within one O0's subject, population, domain, and relation; it is not an answer fact.\n- A **fold** is one of two deterministic document partitions. Proposal evidence comes from one fold; validation must use the opposite fold and a different document. This gives evidence independence, not model independence.\n- **Raw-first** means an attempt and its exact raw bytes are durably recorded before parsing or normalization.\n- **Query-local** means BM25 or MiniLM scores order only candidates from the query that produced them; raw scores never cross query boundaries.",
+        "id": "scope_definitions",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "## The bounded pipeline can add candidates without becoming a free-running agent\n\nStart from the sealed NARRATIVE and FIXED-O0 rankings. They remain the complete protected baseline baskets.",
+        "id": "methodology",
+        "layout": "full",
+        "sourceId": "baseline_rankings",
+        "type": "markdown"
+      },
+      {
+        "body": "The evidence contract binds 24 O0 parents to two deterministic document folds, producing 48 frozen reservoirs and 8,247 exact evidence units.",
+        "id": "methodology_contract",
+        "layout": "full",
+        "sourceId": "contract",
+        "type": "markdown"
+      },
+      {
+        "body": "After separate approval, each frozen parent/fold job may propose at most one evidence-supported O1. The preflight binds the pinned Qwen model and the finite primary/retry budgets before inference.",
+        "id": "methodology_proposal",
+        "layout": "full",
+        "sourceId": "proposal_preflight",
+        "type": "markdown"
+      },
+      {
+        "body": "Validate a surviving O1 only on opposite-fold evidence; accept at most one O1 per parent and four per topic. Render its focused BM25 text as ordered parent anchors + complete O0 + accepted O1. A single `hits=1000` response supplies both top-100 and top-1,000 diagnostics.",
+        "id": "methodology_retrieval",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "In a later approved stage, score each O1 queue locally with MiniLM using the unchanged narrative + complete O0 + accepted O1. The focused BM25 query favors lexical matching; the broader semantic query judges each candidate against the original user need and its local facet. Preserve the complete baseline union, append new candidates, freeze all rankings, and only then open qrels. There is no recursive search-generation loop.",
+        "id": "methodology_scoring",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "## Limitations and robustness checks\n\n**There is no adaptive effectiveness evidence.** No accepted O1, BM25 response, O1 MiniLM score, ADAPTIVE-V2 ranking, or qrels-backed metric exists. Readiness must not be reported as improvement.",
+        "id": "limitations",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "type": "markdown"
+      },
+      {
+        "body": "**The pilot is bounded to four topics.** Even a later positive result would be descriptive, not production generalization.",
+        "id": "limitations_pilot",
+        "layout": "full",
+        "sourceId": "contract",
+        "type": "markdown"
+      },
+      {
+        "body": "**The hosted retriever is plain text plus `hits`.** Field selection, required terms, boosts, phrase/slop, RM3, and BM25 parameter changes are not assumed.",
+        "id": "limitations_retriever",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "**Discovery v1 remains terminal.** Its historical status is `discovery_unavailable` after JSON truncation; it is provenance, not an adaptive result or a mutable v2 input.",
+        "id": "limitations_v1",
+        "layout": "full",
+        "sourceId": "v1_discovery",
+        "type": "markdown"
+      },
+      {
+        "body": "**Cross-fold validation is not model independence.** The same pinned local model may propose and validate, but it sees disjoint evidence and different prompts.",
+        "id": "limitations_validation",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "**Robustness is enforced structurally so far.** Protected-topic checks, exact hashes, create-only ledgers, finite retries, query-local scoring, and the qrels firewall are implemented; relevance robustness remains untested.",
+        "id": "limitations_structural",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "## Recommended next approval step\n\nApprove only the frozen proposal stage if you want empirical progress. The approval must bind proposal receipt SHA-256 `2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5`, model `Qwen/Qwen3-4B-Instruct-2507`, revision `cdbee75f17c01a7cc42f958dc650907174af0554`, 48 primary calls, and a maximum 48 truncation retries.",
+        "id": "recommended_next_step",
+        "layout": "full",
+        "sourceId": "proposal_preflight",
+        "type": "markdown"
+      },
+      {
+        "body": "After that run seals, inspect supported/unsupported outcomes and freeze a separate validation preflight. Do not authorize validation, BM25, MiniLM, or qrels in the same approval.",
+        "id": "recommended_followup",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      },
+      {
+        "body": "## Further questions\n\n- How many proposal jobs yield a valid abstract O1 rather than answer facts, duplicates, or unsupported needs?\n- Do accepted O1 queries retrieve genuinely new documents, or mainly rediscover the sealed baseline union?\n- Does query-local MiniLM keep facet-specific evidence that a single global narrative score would miss?\n- If qrels are sparse for newly retrieved documents, what blinded review is needed before concluding that adaptive recall failed?",
+        "id": "further_questions",
+        "layout": "full",
+        "sourceId": "retrieval_design",
+        "type": "markdown"
+      }
+    ],
+    "cards": [
+      {
+        "dataset": "baseline_metrics",
+        "description": "Rows in each sealed baseline arm; not a relevance metric.",
+        "id": "baseline_documents",
+        "metrics": [
+          {
+            "field": "documents_per_arm",
+            "format": "number",
+            "label": "Documents per baseline arm"
+          }
+        ],
+        "sourceId": "baseline_rankings"
+      },
+      {
+        "dataset": "contract_metrics",
+        "description": "Fixed explicit obligations across the four pilot topics.",
+        "id": "o0_parents",
+        "metrics": [
+          {
+            "field": "parents",
+            "format": "number",
+            "label": "O0 parents"
+          }
+        ],
+        "sourceId": "contract"
+      },
+      {
+        "dataset": "contract_metrics",
+        "description": "One frozen evidence reservoir per O0 and document fold.",
+        "id": "fold_reservoirs",
+        "metrics": [
+          {
+            "field": "reservoirs",
+            "format": "number",
+            "label": "Fold reservoirs"
+          }
+        ],
+        "sourceId": "contract"
+      },
+      {
+        "dataset": "contract_metrics",
+        "description": "Exact sentence/list-item units available to proposal jobs.",
+        "id": "evidence_units",
+        "metrics": [
+          {
+            "field": "units",
+            "format": "number",
+            "label": "Evidence units"
+          }
+        ],
+        "sourceId": "contract"
+      },
+      {
+        "dataset": "proposal_metrics",
+        "description": "Exactly one proposal job for every parent/fold pair.",
+        "id": "proposal_primary_jobs",
+        "metrics": [
+          {
+            "field": "primary_jobs",
+            "format": "number",
+            "label": "Primary proposal jobs"
+          }
+        ],
+        "sourceId": "proposal_preflight"
+      },
+      {
+        "dataset": "proposal_metrics",
+        "description": "At most one retry per job, only for exact-ceiling JSON truncation.",
+        "id": "proposal_retry_ceiling",
+        "metrics": [
+          {
+            "field": "retry_ceiling",
+            "format": "number",
+            "label": "Proposal retry ceiling"
+          }
+        ],
+        "sourceId": "proposal_preflight"
+      },
+      {
+        "dataset": "proposal_metrics",
+        "description": "Maximum proposal calls; actual v2 proposal calls remain zero.",
+        "id": "proposal_worst_case",
+        "metrics": [
+          {
+            "field": "worst_case_calls",
+            "format": "number",
+            "label": "Worst-case proposal calls"
+          }
+        ],
+        "sourceId": "proposal_preflight"
+      }
+    ],
+    "charts": [
+      {
+        "dataset": "stage_readiness",
+        "encodings": {
+          "label": {
+            "field": "canonical_artifact_ready",
+            "label": "Readiness",
+            "type": "quantitative"
+          },
+          "tooltip": [
+            {
+              "field": "status",
+              "label": "Status",
+              "type": "nominal"
+            },
+            {
+              "field": "calls_completed",
+              "label": "V2 calls completed",
+              "type": "quantitative"
+            },
+            {
+              "field": "evidence",
+              "label": "Verified evidence",
+              "type": "text"
+            }
+          ],
+          "x": {
+            "field": "stage",
+            "label": "Stage",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "canonical_artifact_ready",
+            "format": "number",
+            "label": "Canonical artifact ready (1=yes, 0=no)",
+            "type": "quantitative"
+          }
+        },
+        "id": "stage_readiness",
+        "layout": "full",
+        "settings": {
+          "orientation": "horizontal",
+          "showValues": true,
+          "sort": "custom"
+        },
+        "sourceId": "filesystem_inventory",
+        "subtitle": "Binary audit state: 1 = canonical artifact exists and verifies; 0 = not run or unavailable. This is not relevance quality or progress.",
+        "title": "Canonical artifact readiness by pipeline stage",
+        "type": "horizontalBar",
+        "valueFormat": "number"
+      }
+    ],
+    "description": "Technical inference-free readiness report. Counts have heterogeneous denominators, so no chart compares counts. Source-backed scorecards, a binary readiness visual, and exact tables avoid a false comparison.",
+    "generatedAt": "2026-07-15T18:39:06Z",
+    "sources": [
+      {
+        "id": "contract",
+        "label": "Verified v2 evidence contract receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json"
+      },
+      {
+        "id": "proposal_preflight",
+        "label": "Verified v2 proposal preflight receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json"
+      },
+      {
+        "id": "baseline_rankings",
+        "label": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json"
+      },
+      {
+        "id": "v1_discovery",
+        "label": "Terminal discovery v1 receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json"
+      },
+      {
+        "id": "retrieval_design",
+        "label": "Pinned adaptive retrieval implementation and design",
+        "path": "docs/superpowers/specs/2026-07-15-adaptive-obligation-search-v2-design.md"
+      },
+      {
+        "id": "filesystem_inventory",
+        "label": "Verified output and report-source filesystem inventory",
+        "path": "code/trec_rag/build_adaptive_obligation_v2_report.py"
+      }
+    ],
+    "surface": "report",
+    "tables": [
+      {
+        "columns": [
+          {
+            "field": "order",
+            "label": "Step",
+            "type": "number"
+          },
+          {
+            "field": "stage",
+            "label": "Stage",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "text"
+          },
+          {
+            "field": "evidence",
+            "label": "Verified evidence",
+            "type": "text"
+          },
+          {
+            "field": "calls_completed",
+            "label": "V2 calls completed",
+            "type": "number"
+          },
+          {
+            "field": "approval",
+            "label": "Approval state",
+            "type": "text"
+          }
+        ],
+        "dataset": "stage_status",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "order"
+        },
+        "density": "spacious",
+        "id": "stage_status",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "subtitle": "Current canonical state; planned ceilings are not completed work.",
+        "title": "Exact adaptive v2 stage status"
+      },
+      {
+        "columns": [
+          {
+            "field": "source",
+            "label": "Source",
+            "type": "text"
+          },
+          {
+            "field": "path",
+            "label": "Repository path",
+            "type": "text"
+          },
+          {
+            "field": "sha256",
+            "label": "SHA-256",
+            "type": "text"
+          },
+          {
+            "field": "verification",
+            "label": "Verification",
+            "type": "text"
+          }
+        ],
+        "dataset": "source_receipts",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "source"
+        },
+        "density": "dense",
+        "id": "source_receipts",
+        "layout": "full",
+        "sourceId": "filesystem_inventory",
+        "subtitle": "Exact repository-relative paths and file SHA-256 identities.",
+        "title": "Authenticated source receipts"
+      }
+    ],
+    "title": "Adaptive obligation search v2",
+    "version": 1
+  },
+  "snapshot": {
+    "accessIssues": [
+      {
+        "id": "adaptive_result_unavailable",
+        "message": "Proposal inference has not been approved or run. No accepted O1, adaptive retrieval, O1 scoring, ranking, or qrels evaluation exists.",
+        "scope": "Adaptive v2 relevance result"
+      }
+    ],
+    "datasets": {
+      "baseline_metrics": [
+        {
+          "documents_per_arm": 8114
+        }
+      ],
+      "contract_metrics": [
+        {
+          "parents": 24,
+          "reservoirs": 48,
+          "units": 8247
+        }
+      ],
+      "proposal_metrics": [
+        {
+          "primary_jobs": 48,
+          "retry_ceiling": 48,
+          "worst_case_calls": 96
+        }
+      ],
+      "source_receipts": [
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
+          "sha256": "f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444",
+          "source": "Verified v2 evidence contract receipt",
+          "verification": "passed"
+        },
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json",
+          "sha256": "2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5",
+          "source": "Verified v2 proposal preflight receipt",
+          "verification": "passed"
+        },
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
+          "sha256": "edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71",
+          "source": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
+          "verification": "passed"
+        },
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json",
+          "sha256": "eb499da5a0af1787370d9346dc187877eaf244a43ad5b4ba42f9ce20b2ae34d8",
+          "source": "Terminal discovery v1 receipt",
+          "verification": "passed"
+        }
+      ],
+      "stage_readiness": [
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 1,
+          "evidence": "NARRATIVE and FIXED-O0; 8,114 rows each",
+          "order": 1,
+          "stage": "Fixed baselines",
+          "status": "sealed"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 1,
+          "evidence": "24 O0 parents; 48 fold reservoirs; 8,247 exact units",
+          "order": 2,
+          "stage": "V2 evidence contract",
+          "status": "verified"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 1,
+          "evidence": "48 exact jobs; 48 primary + at most 48 truncation retries",
+          "order": 3,
+          "stage": "O1 proposal preflight",
+          "status": "ready"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "No proposal ledger or canonical proposal inventory",
+          "order": 4,
+          "stage": "Qwen O1 proposals",
+          "status": "not run"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "Requires frozen proposals; no validation preflight exists",
+          "order": 5,
+          "stage": "Opposite-fold validation",
+          "status": "unavailable"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "Design: one hits=1,000 request per accepted O1, maximum 16",
+          "order": 6,
+          "stage": "Focused BM25 retrieval",
+          "status": "unavailable"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "No accepted O1 candidates or scoring preflight",
+          "order": 7,
+          "stage": "O1-local MiniLM",
+          "status": "unavailable"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "No ADAPTIVE-V2 ranking; qrels unopened",
+          "order": 8,
+          "stage": "Adaptive ranking and evaluation",
+          "status": "unavailable"
+        }
+      ],
+      "stage_status": [
+        {
+          "approval": "not required (already frozen)",
+          "calls_completed": 0,
+          "evidence": "NARRATIVE and FIXED-O0; 8,114 rows each",
+          "order": 1,
+          "stage": "Fixed baselines",
+          "status": "sealed"
+        },
+        {
+          "approval": "not required (deterministic)",
+          "calls_completed": 0,
+          "evidence": "24 O0 parents; 48 fold reservoirs; 8,247 exact units",
+          "order": 2,
+          "stage": "V2 evidence contract",
+          "status": "verified"
+        },
+        {
+          "approval": "separate proposal approval required",
+          "calls_completed": 0,
+          "evidence": "48 exact jobs; 48 primary + at most 48 truncation retries",
+          "order": 3,
+          "stage": "O1 proposal preflight",
+          "status": "ready"
+        },
+        {
+          "approval": "unopened",
+          "calls_completed": 0,
+          "evidence": "No proposal ledger or canonical proposal inventory",
+          "order": 4,
+          "stage": "Qwen O1 proposals",
+          "status": "not run"
+        },
+        {
+          "approval": "unopened",
+          "calls_completed": 0,
+          "evidence": "Requires frozen proposals; no validation preflight exists",
+          "order": 5,
+          "stage": "Opposite-fold validation",
+          "status": "unavailable"
+        },
+        {
+          "approval": "unopened",
+          "calls_completed": 0,
+          "evidence": "Design: one hits=1,000 request per accepted O1, maximum 16",
+          "order": 6,
+          "stage": "Focused BM25 retrieval",
+          "status": "unavailable"
+        },
+        {
+          "approval": "unopened",
+          "calls_completed": 0,
+          "evidence": "No accepted O1 candidates or scoring preflight",
+          "order": 7,
+          "stage": "O1-local MiniLM",
+          "status": "unavailable"
+        },
+        {
+          "approval": "unopened",
+          "calls_completed": 0,
+          "evidence": "No ADAPTIVE-V2 ranking; qrels unopened",
+          "order": 8,
+          "stage": "Adaptive ranking and evaluation",
+          "status": "unavailable"
+        }
+      ]
+    },
+    "generatedAt": "2026-07-15T18:39:06Z",
+    "status": "partial",
+    "version": 1
+  },
+  "sources": [
+    {
+      "id": "contract",
+      "label": "Verified v2 evidence contract receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt only after its repository verifier has authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels or later adaptive output opened"
+        ],
+        "id": "sha256:f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is the exact file SHA-256 f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444."
+        ],
+        "sql": "SELECT status, topic_ids, parent_count, reservoir_count, unit_count, protected_topic_count, qrels_opened, model_load_count, inference_count FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "proposal_preflight",
+      "label": "Verified v2 proposal preflight receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt only after its repository verifier has authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels or later adaptive output opened"
+        ],
+        "id": "sha256:2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is the exact file SHA-256 2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5."
+        ],
+        "sql": "SELECT status, topic_ids, job_count, primary_call_count, retry_call_ceiling, worst_case_call_ceiling, model, model_revision, tokenizer_load_count, model_load_count, inference_count, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "baseline_rankings",
+      "label": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt only after its repository verifier has authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels or later adaptive output opened"
+        ],
+        "id": "sha256:edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is the exact file SHA-256 edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71."
+        ],
+        "sql": "SELECT status, topic_ids, document_count, rankings, qrels_opened, model_load_count, inference_count FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "v1_discovery",
+      "label": "Terminal discovery v1 receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt only after its repository verifier has authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels or later adaptive output opened"
+        ],
+        "id": "sha256:eb499da5a0af1787370d9346dc187877eaf244a43ad5b4ba42f9ce20b2ae34d8",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is the exact file SHA-256 eb499da5a0af1787370d9346dc187877eaf244a43ad5b4ba42f9ce20b2ae34d8."
+        ],
+        "sql": "SELECT status, reason, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "retrieval_design",
+      "label": "Pinned adaptive retrieval implementation and design",
+      "path": "docs/superpowers/specs/2026-07-15-adaptive-obligation-search-v2-design.md",
+      "query": {
+        "description": "Exact configuration transcribed from the hashed retrieval implementation, implementation plan, and design specification.",
+        "engine": "duckdb",
+        "filters": [
+          "Plain-text hosted retrieval only",
+          "One frozen request per accepted O1",
+          "No recursive query generation"
+        ],
+        "id": "sha256:1def551baa5b087dcc6ebacc4bb783dcf37875f872c1f9d18a7c4296f342e106",
+        "language": "sql",
+        "metric_definitions": [
+          "hits=1000 is one response reused for top-100 and top-1,000 views.",
+          "Maximum 16 requests follows four accepted O1 records per pilot topic."
+        ],
+        "sql": "SELECT * FROM (VALUES (16, 1000, 1, 4, 'ordered parent anchors + complete O0 + accepted O1', 'unchanged narrative + complete O0 + accepted O1', FALSE)) AS retrieval_design(maximum_requests, hits, max_per_parent, max_per_topic, bm25_query, minilm_query, recursive_search);",
+        "tables_used": [
+          "code/trec_rag/adaptive_obligation_v2_retrieve.py",
+          "docs/superpowers/plans/2026-07-15-adaptive-obligation-search-v2.md",
+          "docs/superpowers/specs/2026-07-15-adaptive-obligation-search-v2-design.md"
+        ]
+      }
+    },
+    {
+      "id": "filesystem_inventory",
+      "label": "Verified output and report-source filesystem inventory",
+      "path": "code/trec_rag/build_adaptive_obligation_v2_report.py",
+      "query": {
+        "description": "Reproduces every stage/readiness and receipt-table field after the builder verified the four receipts and observed exactly the contract and proposal_preflight children under the v2 output root.",
+        "engine": "duckdb",
+        "filters": [
+          "Observed v2 children: contract and proposal_preflight only",
+          "All later adaptive artifacts and approval files absent",
+          "No model, endpoint, cache, qrels, or network access"
+        ],
+        "id": "sha256:b039eeaf8bab19d4a68963c8d21e429c76192e1a0c725cb64ecc2e435317bdd9",
+        "language": "sql",
+        "metric_definitions": [
+          "canonical_artifact_ready=1 only for a sealed or verifier-passed artifact.",
+          "calls_completed reports executed v2 work; planned ceilings remain in evidence text."
+        ],
+        "sql": "SELECT * FROM (VALUES ('stage', 1, 'Fixed baselines', 'sealed', 'NARRATIVE and FIXED-O0; 8,114 rows each', 0, 'not required (already frozen)', 1, NULL, NULL, NULL, NULL), ('stage', 2, 'V2 evidence contract', 'verified', '24 O0 parents; 48 fold reservoirs; 8,247 exact units', 0, 'not required (deterministic)', 1, NULL, NULL, NULL, NULL), ('stage', 3, 'O1 proposal preflight', 'ready', '48 exact jobs; 48 primary + at most 48 truncation retries', 0, 'separate proposal approval required', 1, NULL, NULL, NULL, NULL), ('stage', 4, 'Qwen O1 proposals', 'not run', 'No proposal ledger or canonical proposal inventory', 0, 'unopened', 0, NULL, NULL, NULL, NULL), ('stage', 5, 'Opposite-fold validation', 'unavailable', 'Requires frozen proposals; no validation preflight exists', 0, 'unopened', 0, NULL, NULL, NULL, NULL), ('stage', 6, 'Focused BM25 retrieval', 'unavailable', 'Design: one hits=1,000 request per accepted O1, maximum 16', 0, 'unopened', 0, NULL, NULL, NULL, NULL), ('stage', 7, 'O1-local MiniLM', 'unavailable', 'No accepted O1 candidates or scoring preflight', 0, 'unopened', 0, NULL, NULL, NULL, NULL), ('stage', 8, 'Adaptive ranking and evaluation', 'unavailable', 'No ADAPTIVE-V2 ranking; qrels unopened', 0, 'unopened', 0, NULL, NULL, NULL, NULL), ('source', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'Verified v2 evidence contract receipt', 'outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json', 'f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444', 'passed'), ('source', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'Verified v2 proposal preflight receipt', 'outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json', '2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5', 'passed'), ('source', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'Sealed NARRATIVE and FIXED-O0 ranking receipt', 'outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json', 'edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71', 'passed'), ('source', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'Terminal discovery v1 receipt', 'outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json', 'eb499da5a0af1787370d9346dc187877eaf244a43ad5b4ba42f9ce20b2ae34d8', 'passed')) AS verified_inventory(record_type, \"order\", stage, status, evidence, calls_completed, approval, canonical_artifact_ready, source, path, sha256, verification);",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery/receipt.json",
+          "code/trec_rag/adaptive_obligation_v2_retrieve.py",
+          "docs/superpowers/plans/2026-07-15-adaptive-obligation-search-v2.md",
+          "docs/superpowers/specs/2026-07-15-adaptive-obligation-search-v2-design.md",
+          "code/trec_rag/build_adaptive_obligation_v2_report.py"
+        ]
+      }
+    }
+  ],
+  "surface": "report"
+}

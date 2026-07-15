@@ -556,6 +556,59 @@ def test_validation_preflight_binds_validator_model_tokenizer_and_prompt_counts(
     assert validate_module._verify_validation_preflight_payload(preflight) == preflight
 
 
+def test_zero_job_validation_preflight_never_loads_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposal_preflight_dir = (
+        Path(__file__).resolve().parents[2]
+        / "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2"
+        / "proposal_preflight"
+    )
+    proposal_preflight_sha256 = hashlib.sha256(
+        (proposal_preflight_dir / "receipt.json").read_bytes()
+    ).hexdigest()
+    authenticated = _authenticated_proposal_inventory(
+        [], proposal_preflight_receipt_sha256=proposal_preflight_sha256
+    )
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: authenticated,
+    )
+    contract = _contract_fixture()
+    monkeypatch.setattr(
+        validate_module,
+        "_capture_and_verify_contract_snapshot",
+        lambda _path, *, expected_receipt_sha256: (
+            contract,
+            expected_receipt_sha256,
+        ),
+    )
+    monkeypatch.setattr(
+        validate_module,
+        "_load_pinned_validation_tokenizer",
+        lambda _metadata: pytest.fail("zero validation jobs must not load tokenizer"),
+    )
+
+    preflight = build_validation_preflight(
+        Path("unused-contract"),
+        proposal_inventory_dir=object(),
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=object(),
+    )
+
+    assert preflight["job_count"] == 0
+    assert preflight["tokenizer_load_count"] == 0
+    assert preflight["prompt_token_counts"] == {
+        "count": 0,
+        "minimum": None,
+        "maximum": None,
+        "total": 0,
+        "by_job": [],
+    }
+    assert validate_module._verify_validation_preflight_payload(preflight) == preflight
+
+
 def _validation_approval_fixture(
     preflight: dict[str, object], ledger_dir: Path
 ) -> dict[str, object]:
@@ -808,6 +861,75 @@ def test_execute_validation_uses_authenticated_fake_runtime_with_real_sealed_led
             proposal_ledger_dir=tmp_path / "unused-proposal-ledger",
             source_contract_dir=tmp_path / "unused-contract",
         )
+
+
+def test_execute_validation_seals_zero_job_ledger_without_loading_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preflight = {
+        "receipt_sha256": "a" * 64,
+        "jobs": [],
+        "validator_role": validate_module.VALIDATOR_ROLE,
+        "model": propose_module.MODEL_ID,
+        "model_revision": propose_module.MODEL_REVISION,
+        "model_snapshot_manifest_sha256": "b" * 64,
+        "tokenizer_identity_sha256": "c" * 64,
+        "prompt_sha256": "d" * 64,
+        "code_sha256": {
+            "adaptive_obligation_v2_validate.py": "e" * 64,
+            "adaptive_obligation_v2_local_model.py": "f" * 64,
+        },
+        "jobs_sha256": canonical_sha256([]),
+        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
+        "job_count": 0,
+        "primary_call_count": 0,
+        "retry_call_ceiling": 0,
+        "worst_case_call_ceiling": 0,
+    }
+    ledger_dir = tmp_path / "validation-ledger"
+    approval = _validation_approval_fixture(preflight, ledger_dir)
+    approval_path = tmp_path / "validation-approval.json"
+    approval_path.write_bytes(validate_module._pretty_bytes(approval))
+    monkeypatch.setattr(
+        validate_module,
+        "_authenticate_validation_after_approval",
+        lambda **_kwargs: preflight,
+    )
+    monkeypatch.setattr(
+        validate_module,
+        "_load_validation_model",
+        lambda **_kwargs: pytest.fail("zero validation jobs must not load model"),
+    )
+
+    result = validate_module.execute_validation(
+        preflight_dir=tmp_path / "unused-preflight",
+        approval_path=approval_path,
+        ledger_dir=ledger_dir,
+        proposal_inventory_dir=tmp_path / "unused-proposal-inventory",
+        proposal_preflight_dir=tmp_path / "unused-proposal-preflight",
+        proposal_ledger_dir=tmp_path / "unused-proposal-ledger",
+        source_contract_dir=tmp_path / "unused-contract",
+    )
+
+    expected_anchor = validate_module._build_validation_run_anchor(
+        [],
+        preflight_sha256="a" * 64,
+        approval_sha256=hashlib.sha256(approval_path.read_bytes()).hexdigest(),
+        provenance=validate_module._validation_anchor_provenance(preflight),
+    )
+    reopened = AppendOnlyAttemptLedger(
+        ledger_dir, expected_anchor=expected_anchor, create_only=False
+    )
+    sealed = reopened.read_sealed_results()
+    assert result == {
+        "status": "complete",
+        "job_count": 0,
+        "results": [],
+        "event_count": 0,
+        "completion": sealed["completion"],
+    }
+    assert sealed["results"] == []
+    assert sealed["completion"]["completed_job_count"] == 0
 
 
 def test_validation_preflight_rejects_an_altered_opposite_fold_contract(

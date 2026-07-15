@@ -817,10 +817,10 @@ def _extract_document_container(value: object) -> str:
         try:
             decoded = json.loads(value)
         except json.JSONDecodeError:
-            return _normalize_content_text(value)
+            return ""
         if isinstance(decoded, (Mapping, list)):
             return _extract_document_container(decoded)
-        return _normalize_content_text(value)
+        return ""
     if isinstance(value, Mapping):
         for field in _WIRE_CONTENT_FIELDS:
             text = _normalize_content_text(value.get(field))

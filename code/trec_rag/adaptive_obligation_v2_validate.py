@@ -908,11 +908,19 @@ def _build_validation_preflight(
         ),
         authenticated_preflight=authenticated.get("proposal_preflight"),
     )
-    if tokenizer is None:
-        tokenizer = _load_pinned_validation_tokenizer(model_metadata)
-    jobs, prompt_token_counts = _count_validation_prompts(
-        build_validation_jobs(proposals, contract), tokenizer
-    )
+    jobs = build_validation_jobs(proposals, contract)
+    if jobs:
+        if tokenizer is None:
+            tokenizer = _load_pinned_validation_tokenizer(model_metadata)
+        jobs, prompt_token_counts = _count_validation_prompts(jobs, tokenizer)
+    else:
+        prompt_token_counts = {
+            "count": 0,
+            "minimum": None,
+            "maximum": None,
+            "total": 0,
+            "by_job": [],
+        }
     job_count = len(jobs)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -965,7 +973,7 @@ def _build_validation_preflight(
         "hosted_inference_call_count": 0,
         "paid_call_count": 0,
         "model_load_count": 0,
-        "tokenizer_load_count": 1,
+        "tokenizer_load_count": 1 if jobs else 0,
         "inference_count": 0,
         "external_cost_usd": 0.0,
     }
@@ -1333,7 +1341,7 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
                     "inference_count",
                 )
             )
-        or value.get("tokenizer_load_count") != 1
+        or value.get("tokenizer_load_count") != (1 if jobs else 0)
     ):
         raise ValueError("validation preflight receipt differs")
     snapshot = value.get("model_snapshot")
@@ -1833,6 +1841,15 @@ def execute_validation(
     ledger = AppendOnlyAttemptLedger(
         Path(ledger_dir), expected_anchor=anchor, create_only=True
     )
+    if not jobs:
+        completion = ledger.seal_completion()
+        return {
+            "status": "complete",
+            "job_count": 0,
+            "results": [],
+            "event_count": 0,
+            "completion": completion,
+        }
     model = _load_validation_model(approval=approval, preflight=preflight)
     results = _execute_authenticated_validation_jobs(
         preflight, ledger=ledger, model=model

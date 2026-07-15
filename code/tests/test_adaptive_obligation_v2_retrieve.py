@@ -1069,6 +1069,111 @@ def test_response_normalization_rejects_arbitrary_nested_metadata() -> None:
         module._normalize_response(json.dumps({"results": candidates}).encode())
 
 
+@pytest.mark.parametrize(
+    "doc_value",
+    [
+        "nested-document-identifier",
+        "https://example.test/not-document-content",
+        json.dumps("JSON scalar string is not a content envelope"),
+    ],
+)
+def test_response_normalization_rejects_raw_document_container_strings(
+    doc_value: str,
+) -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            "doc": doc_value,
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    with pytest.raises(ValueError, match="text-bearing"):
+        module._normalize_response(json.dumps({"candidates": candidates}).encode())
+
+
+@pytest.mark.parametrize("doc_value", [42, 3.5, True, False, None])
+def test_response_normalization_rejects_scalar_document_containers(
+    doc_value: object,
+) -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            "doc": doc_value,
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    with pytest.raises(ValueError, match="text-bearing"):
+        module._normalize_response(json.dumps({"hits": candidates}).encode())
+
+
+@pytest.mark.parametrize(
+    "content_field", ["contents", "text", "body", "passage", "abstract"]
+)
+def test_response_normalization_preserves_direct_explicit_content_fields(
+    content_field: str,
+) -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            content_field: f"Direct explicit content {rank - 1}.",
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    rows = module._normalize_response(
+        json.dumps({"results": candidates}).encode()
+    )
+
+    assert rows[0]["text"] == "Direct explicit content 0."
+
+
+@pytest.mark.parametrize(
+    ("envelope", "expected"),
+    [
+        (
+            json.dumps({"docid": "metadata", "contents": "Object content."}),
+            "Object content.",
+        ),
+        (
+            json.dumps(
+                [
+                    {"docid": "metadata"},
+                    {"passage": "First passage."},
+                    {"abstract": "Second passage."},
+                ]
+            ),
+            "First passage. Second passage.",
+        ),
+    ],
+)
+def test_response_normalization_preserves_json_content_envelopes(
+    envelope: str, expected: str
+) -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            "doc": envelope,
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    rows = module._normalize_response(
+        json.dumps({"candidates": candidates}).encode()
+    )
+
+    assert rows[0]["text"] == expected
+
+
 def test_executor_rejects_transport_with_retry_or_wrong_limiter_before_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
