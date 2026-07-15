@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -1054,6 +1055,133 @@ def _copy_canonical_terminal(tmp_path: Path) -> Path:
     root = tmp_path / "discovery"
     shutil.copytree(_canonical_terminal_root(), root)
     return root
+
+
+def _write_pretty_json(path: Path, value: object) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _rewrite_terminal_cross_hashes(root: Path, preflight: dict[str, object]) -> None:
+    _write_pretty_json(root / "preflight.json", preflight)
+    integration_path = root / "integration_preflight_failure.json"
+    integration = json.loads(integration_path.read_text(encoding="utf-8"))
+    integration["preflight_sha256"] = _file_sha256(root / "preflight.json")
+    _write_pretty_json(integration_path, integration)
+
+    integration_sha256 = _file_sha256(integration_path)
+    marker_path = root / "corrected_pass_started.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["integration_preflight_failure_sha256"] = integration_sha256
+    _write_pretty_json(marker_path, marker)
+
+    failure_path = root / "corrected_pass_failure.json"
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    failure["corrected_pass_started_sha256"] = _file_sha256(marker_path)
+    failure["integration_preflight_failure_sha256"] = integration_sha256
+    _write_pretty_json(failure_path, failure)
+
+    receipt_path = root / "receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["bindings"]["preflight_sha256"] = _file_sha256(root / "preflight.json")
+    receipt["bindings"]["integration_preflight_failure_sha256"] = integration_sha256
+    receipt["artifacts"]["corrected_pass_started.json"]["sha256"] = (
+        _file_sha256(marker_path)
+    )
+    receipt["artifacts"]["corrected_pass_failure.json"]["sha256"] = (
+        _file_sha256(failure_path)
+    )
+    _write_pretty_json(receipt_path, receipt)
+
+    verification_path = root / "verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    verification["terminal_receipt_sha256"] = _file_sha256(receipt_path)
+    _write_pretty_json(verification_path, verification)
+
+
+@pytest.mark.parametrize(
+    "required_name",
+    [
+        "broad.jsonl",
+        "parents.jsonl",
+        "reservoirs.jsonl",
+        "repeated_phrases.jsonl",
+        "verification.json",
+    ],
+)
+def test_terminal_verifier_requires_every_canonical_artifact(
+    tmp_path: Path,
+    required_name: str,
+) -> None:
+    root = _copy_canonical_terminal(tmp_path)
+    (root / required_name).unlink()
+
+    with pytest.raises(ValueError, match="canonical inventory"):
+        verify_discovery_terminal(root)
+
+
+@pytest.mark.parametrize(
+    "tampered_name",
+    [
+        "broad.jsonl",
+        "parents.jsonl",
+        "reservoirs.jsonl",
+        "repeated_phrases.jsonl",
+        "verification.json",
+    ],
+)
+def test_terminal_verifier_authenticates_every_canonical_artifact(
+    tmp_path: Path,
+    tampered_name: str,
+) -> None:
+    root = _copy_canonical_terminal(tmp_path)
+    with (root / tampered_name).open("ab") as stream:
+        stream.write(b" ")
+
+    with pytest.raises(ValueError, match="canonical artifact"):
+        verify_discovery_terminal(root)
+
+
+def test_terminal_verifier_checks_preflight_artifact_metadata(
+    tmp_path: Path,
+) -> None:
+    root = _copy_canonical_terminal(tmp_path)
+    preflight = json.loads((root / "preflight.json").read_text(encoding="utf-8"))
+    preflight["artifacts"]["broad.jsonl"]["rows"] = 5
+    _rewrite_terminal_cross_hashes(root, preflight)
+
+    with pytest.raises(ValueError, match="preflight artifact metadata"):
+        verify_discovery_terminal(root)
+
+
+def test_terminal_verifier_rejects_protected_topic_with_recomputed_bindings(
+    tmp_path: Path,
+) -> None:
+    root = _copy_canonical_terminal(tmp_path)
+    preflight = json.loads((root / "preflight.json").read_text(encoding="utf-8"))
+    preflight["topic_ids"] = ["144", "72", "300", "84"]
+    _rewrite_terminal_cross_hashes(root, preflight)
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        verify_discovery_terminal(root)
+
+
+def test_terminal_verifier_requires_exact_canonical_topic_scope(
+    tmp_path: Path,
+) -> None:
+    root = _copy_canonical_terminal(tmp_path)
+    preflight = json.loads((root / "preflight.json").read_text(encoding="utf-8"))
+    preflight["topic_ids"] = ["999", "72", "300", "84"]
+    _rewrite_terminal_cross_hashes(root, preflight)
+
+    with pytest.raises(ValueError, match="canonical pilot topic scope"):
+        verify_discovery_terminal(root)
 
 
 @pytest.mark.parametrize(

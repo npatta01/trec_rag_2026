@@ -1809,15 +1809,158 @@ _FAILURE_HISTORY_NAMES = (
     "corrected_pass_started.json",
     "corrected_pass_failure.json",
 )
-_TERMINAL_ALLOWED_NAMES = {
-    *_FAILURE_HISTORY_NAMES,
-    "receipt.json",
-    "verification.json",
+_CANONICAL_TERMINAL_ARTIFACTS: dict[str, dict[str, object]] = {
+    "broad.jsonl": {
+        "bytes": 2966,
+        "rows": 4,
+        "sha256": "342b9d635dd88f307e87cec3de0a53a864855a921b5f9cabb9a028026713706a",
+    },
+    "corrected_pass_failure.json": {
+        "bytes": 3969,
+        "rows": 140,
+        "sha256": "32590aa8a6ef138b0a4c8a2bfe34ef5c20e948bc449e346713cd97705a0381a1",
+    },
+    "corrected_pass_started.json": {
+        "bytes": 605,
+        "rows": 12,
+        "sha256": "c65cc0ac3cc55c62c49d5206c2886208c25eb16579a8ffbf0986e283938bbadf",
+    },
+    "integration_preflight_failure.json": {
+        "bytes": 31549,
+        "rows": 144,
+        "sha256": "7267b4b1728680ea77745274b677553ca75d6c8876504318da6f803e18a1520f",
+    },
+    "parents.jsonl": {
+        "bytes": 17319,
+        "rows": 24,
+        "sha256": "a4bd5b8c395afbefd9c665bdf75906e1a078af55e7774cc03a8dc80a01e79047",
+    },
+    "preflight.json": {
+        "bytes": 7645,
+        "rows": 250,
+        "sha256": "97a3febae8c21bcbed9620ace9d884d305aed015a2ba399293d5d9b36e7412ce",
+    },
+    "receipt.json": {
+        "bytes": 3250,
+        "rows": 79,
+        "sha256": "eb499da5a0af1787370d9346dc187877eaf244a43ad5b4ba42f9ce20b2ae34d8",
+    },
+    "repeated_phrases.jsonl": {
+        "bytes": 5715519,
+        "rows": 18705,
+        "sha256": "d44acf589aa2bdfe9f7f120d9252483e4d3305778c067bc35e37be582aed4651",
+    },
+    "reservoirs.jsonl": {
+        "bytes": 1336229,
+        "rows": 480,
+        "sha256": "3a2d92e1a6a7c9cad20557b85181d3fc4de34daf814c0512e094354b98348b7a",
+    },
+    "verification.json": {
+        "bytes": 1434,
+        "rows": 36,
+        "sha256": "2c0a9fc43bb44ad849443fc648f0aa3fc0b1e49f4b8f0e280672902cd1c24b3d",
+    },
+}
+_CANONICAL_TERMINAL_ROOT_SHA256 = (
+    "783735e5b12579004cc8e5d7d3c1dcfe8d58c1f2c63c6343375ea3793769bb2e"
+)
+_TERMINAL_ALLOWED_NAMES = frozenset(_CANONICAL_TERMINAL_ARTIFACTS)
+_PREFLIGHT_ARTIFACT_NAMES = (
     "broad.jsonl",
     "parents.jsonl",
     "reservoirs.jsonl",
     "repeated_phrases.jsonl",
-}
+)
+
+
+def _artifact_identity(path: Path) -> dict[str, object]:
+    source = path.read_bytes()
+    return {
+        "name": path.name,
+        "bytes": len(source),
+        "rows": len(source.splitlines()),
+        "sha256": _sha256_bytes(source),
+    }
+
+
+def _require_canonical_terminal_inventory(root: Path) -> None:
+    try:
+        entries = list(root.iterdir())
+    except OSError as exc:
+        raise ValueError("terminal discovery canonical inventory is unreadable") from exc
+    names = {path.name for path in entries}
+    if names != _TERMINAL_ALLOWED_NAMES or any(
+        path.is_symlink() or not path.is_file() for path in entries
+    ):
+        raise ValueError("terminal discovery canonical inventory is unreadable or differs")
+
+
+def _authenticate_preflight_scope_and_artifacts(
+    root: Path,
+    preflight: Mapping[str, object],
+) -> None:
+    topic_ids = preflight.get("topic_ids")
+    if not isinstance(topic_ids, list) or any(
+        not isinstance(topic_id, str) for topic_id in topic_ids
+    ):
+        raise ValueError("discovery preflight canonical pilot topic scope is invalid")
+    _reject_protected(topic_ids)
+    if topic_ids != list(PILOT_TOPIC_IDS):
+        raise ValueError("discovery preflight canonical pilot topic scope differs")
+
+    artifacts = preflight.get("artifacts")
+    if not isinstance(artifacts, Mapping) or set(artifacts) != set(
+        _PREFLIGHT_ARTIFACT_NAMES
+    ):
+        raise ValueError("canonical artifact differs from preflight artifact metadata")
+    for name in _PREFLIGHT_ARTIFACT_NAMES:
+        expected = _CANONICAL_TERMINAL_ARTIFACTS[name]
+        binding = artifacts.get(name)
+        actual = _artifact_identity(root / name)
+        actual.pop("name")
+        if (
+            not isinstance(binding, Mapping)
+            or dict(binding) != expected
+            or actual != expected
+        ):
+            raise ValueError(
+                f"canonical artifact differs from preflight artifact metadata: {name}"
+            )
+
+
+def _authenticate_terminal_verification(root: Path) -> None:
+    verification = _read_json(root / "verification.json", "terminal verification")
+    if (
+        verification.get("schema_version")
+        != "adaptive-evidence-terminal-verification-v1"
+        or verification.get("status") != "verified_discovery_unavailable"
+        or verification.get("terminal_status") != "discovery_unavailable"
+        or verification.get("completed_proposal_pass_count") != 0
+        or verification.get("total_qwen_proposal_generation_call_count") != 2
+        or verification.get("provisional_o1_score_status") != "not_run"
+        or verification.get("accepted_o1_score_status") != "not_run"
+        or verification.get("validation_model_call_count") != 0
+        or verification.get("qrels_opened") is not False
+        or verification.get("network_call_count") != 0
+        or verification.get("retrieval_call_count") != 0
+        or verification.get("hosted_inference_call_count") != 0
+        or verification.get("paid_call_count") != 0
+        or verification.get("external_cost_usd") != 0.0
+        or verification.get("terminal_receipt_sha256")
+        != _sha256_file(root / "receipt.json")
+    ):
+        raise ValueError("terminal verification differs from canonical history")
+
+
+def _authenticate_canonical_terminal_root(root: Path) -> None:
+    records: list[dict[str, object]] = []
+    for name, expected in sorted(_CANONICAL_TERMINAL_ARTIFACTS.items()):
+        actual = _artifact_identity(root / name)
+        if {key: actual[key] for key in ("bytes", "rows", "sha256")} != expected:
+            raise ValueError(f"terminal discovery canonical artifact differs: {name}")
+        records.append(actual)
+    if _sha256_bytes(_compact_bytes(records)) != _CANONICAL_TERMINAL_ROOT_SHA256:
+        raise ValueError("terminal discovery canonical root identity differs")
 
 
 def _is_sha256(value: object) -> bool:
@@ -2071,6 +2214,10 @@ def verify_discovery_terminal(output_dir: Path) -> dict[str, object]:
     """Authenticate the terminal discovery-unavailable state and zero downstream work."""
 
     root = Path(output_dir)
+    _reject_terminal_extras(root)
+    _require_canonical_terminal_inventory(root)
+    preflight = _read_json(root / "preflight.json", "discovery preflight")
+    _authenticate_preflight_scope_and_artifacts(root, preflight)
     receipt = _read_json(root / "receipt.json", "terminal discovery receipt")
     history = _authenticate_failure_history(root)
     if (
@@ -2151,7 +2298,8 @@ def verify_discovery_terminal(output_dir: Path) -> dict[str, object]:
             or binding.get("sha256") != hashes[name]
         ):
             raise ValueError(f"terminal discovery artifact hash differs: {name}")
-    _reject_terminal_extras(root)
+    _authenticate_terminal_verification(root)
+    _authenticate_canonical_terminal_root(root)
     return receipt
 
 
