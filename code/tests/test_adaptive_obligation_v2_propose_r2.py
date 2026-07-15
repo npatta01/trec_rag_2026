@@ -26,12 +26,17 @@ from trec_rag.adaptive_obligation_v2_propose import (
 from trec_rag.adaptive_obligation_v2_propose_r2 import (
     R2_OUTPUT_CONTRACT,
     R2_PROPOSAL_SCHEMA,
+    _execute_authenticated_r2_jobs,
     _build_authenticated_r2_preflight,
     _ordered_compact,
     build_r2_proposal_jobs,
     build_r2_proposal_preflight,
+    execute_r2_proposals,
+    finalize_r2_proposal_inventory,
+    load_authenticated_r2_proposal_inventory,
     publish_r2_proposal_preflight,
     render_r2_proposal_messages,
+    run_r2_job_with_retry,
     verify_r2_proposal_preflight,
 )
 
@@ -698,3 +703,326 @@ def test_verifier_rejects_r1_preflight_schema_version(
     )
     with pytest.raises(ValueError, match="R2 preflight schema"):
         verify_r2_proposal_preflight(root)
+
+
+def _runtime_preflight(material: object) -> dict[str, object]:
+    contents = material.contents
+    jobs = [
+        json.loads(line) for line in contents["jobs.jsonl"].splitlines()
+    ]
+    receipt_source = contents["receipt.json"]
+    return {
+        **dict(material),
+        "receipt_sha256": hashlib.sha256(receipt_source).hexdigest(),
+        "jobs": jobs,
+    }
+
+
+def _runtime_approval(
+    preflight: dict[str, object], ledger_dir: Path
+) -> dict[str, object]:
+    return {
+        "schema_version": "adaptive-obligation-v2-proposal-approval-r2",
+        "stage": "proposal_r2",
+        "preflight_sha256": preflight["receipt_sha256"],
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "primary_call_count": 48,
+        "retry_call_ceiling": 48,
+        "ledger_dir": str(ledger_dir),
+        "approved": True,
+    }
+
+
+def _runtime_fixture(tmp_path: Path) -> tuple[dict[str, object], object, Path]:
+    _contract, material, root = _captured_material_fixture(tmp_path)
+    return _runtime_preflight(material), material, root
+
+
+def _runtime_ledger(
+    preflight: dict[str, object],
+    ledger_dir: Path,
+    *,
+    approval_sha256: str = "e" * 64,
+) -> object:
+    jobs = preflight["jobs"]
+    assert isinstance(jobs, list)
+    anchor = r2_module.r1._build_run_anchor(
+        jobs,
+        preflight_sha256=str(preflight["receipt_sha256"]),
+        approval_sha256=approval_sha256,
+    )
+    return r2_module.r1.AppendOnlyAttemptLedger(
+        ledger_dir,
+        expected_anchor=anchor,
+        create_only=True,
+    )
+
+
+def _reopen_runtime_ledger(
+    preflight: dict[str, object],
+    ledger_dir: Path,
+    *,
+    approval_sha256: str = "e" * 64,
+) -> object:
+    jobs = preflight["jobs"]
+    assert isinstance(jobs, list)
+    anchor = r2_module.r1._build_run_anchor(
+        jobs,
+        preflight_sha256=str(preflight["receipt_sha256"]),
+        approval_sha256=approval_sha256,
+    )
+    return r2_module.r1.AppendOnlyAttemptLedger(
+        ledger_dir,
+        expected_anchor=anchor,
+        create_only=False,
+    )
+
+
+def _valid_completion_value() -> dict[str, object]:
+    return {
+        "status": "UNSUPPORTED",
+        "reason_code": "NO_ABSTRACT_CHILD",
+        "o1": None,
+    }
+
+
+def _valid_completion() -> bytes:
+    return json.dumps(
+        _valid_completion_value(), separators=(",", ":"), sort_keys=True
+    ).encode()
+
+
+class _SequenceModel:
+    def __init__(self, completions: list[tuple[bytes, int]]) -> None:
+        self.completions = list(completions)
+        self.calls = 0
+
+    def generate(
+        self,
+        *args: object,
+        max_new_tokens: int | None = None,
+    ) -> tuple[bytes, int]:
+        if max_new_tokens is None:
+            assert len(args) == 1 and isinstance(args[0], int)
+        else:
+            assert len(args) == 2
+        self.calls += 1
+        return self.completions.pop(0)
+
+
+class _ValidFakeModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(
+        self,
+        _messages: object,
+        _schema: object,
+        *,
+        max_new_tokens: int,
+    ) -> tuple[bytes, int]:
+        assert max_new_tokens == 256
+        self.calls += 1
+        return _valid_completion(), 17
+
+
+def test_r1_approval_cannot_authorize_r2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    approval_path = tmp_path / "approval-r1.json"
+    approval_path.write_bytes(
+        _pretty(
+            {
+                "schema_version": "adaptive-obligation-v2-proposal-approval-v1",
+                "stage": "proposal",
+                "preflight_sha256": "a" * 64,
+                "model": MODEL_ID,
+                "model_revision": MODEL_REVISION,
+                "primary_call_count": 48,
+                "retry_call_ceiling": 48,
+                "approved": True,
+            }
+        )
+    )
+    touched: list[str] = []
+    monkeypatch.setattr(
+        r2_module,
+        "_load_r2_model_after_approval",
+        lambda **_kwargs: touched.append("model"),
+        raising=False,
+    )
+    ledger_dir = tmp_path / "r2-ledger"
+    with pytest.raises(PermissionError, match="R2 proposal approval required"):
+        execute_r2_proposals(
+            preflight_dir=tmp_path / "r2-preflight",
+            approval_path=approval_path,
+            ledger_dir=ledger_dir,
+        )
+    assert touched == []
+    assert not ledger_dir.exists()
+
+
+def test_first_schema_error_leaves_47_jobs_uncalled(tmp_path: Path) -> None:
+    preflight, _material, _root = _runtime_fixture(tmp_path)
+    jobs = preflight["jobs"]
+    assert isinstance(jobs, list)
+    support_unit_id = jobs[0]["input_unit_ids"][0]
+    invalid = {
+        "status": "SUPPORTED",
+        "reason_code": "SUPPORTED",
+        "o1": {
+            "label": "bounded abstract need",
+            "scope_rationale": "x" * 241,
+            "support_unit_ids": [support_unit_id],
+        },
+    }
+    model = _SequenceModel(
+        [
+            (
+                json.dumps(invalid, separators=(",", ":"), sort_keys=True).encode(),
+                80,
+            )
+        ]
+    )
+    ledger = _runtime_ledger(
+        preflight, Path(str(preflight["ledger_dir"]))
+    )
+    with pytest.raises(ValueError, match="scope_rationale"):
+        _execute_authenticated_r2_jobs(
+            preflight, ledger=ledger, model=model
+        )
+    assert model.calls == 1
+
+
+def test_only_exact_ceiling_incomplete_json_retries(tmp_path: Path) -> None:
+    preflight, _material, _root = _runtime_fixture(tmp_path)
+    jobs = preflight["jobs"]
+    assert isinstance(jobs, list)
+    model = _SequenceModel(
+        [(b'{"status":', 256), (_valid_completion(), 143)]
+    )
+    result = run_r2_job_with_retry(
+        jobs[0],
+        generate=model.generate,
+        ledger=_runtime_ledger(
+            preflight, Path(str(preflight["ledger_dir"]))
+        ),
+    )
+    assert result == _valid_completion_value()
+    assert model.calls == 2
+
+
+def test_incomplete_json_below_ceiling_is_terminal(tmp_path: Path) -> None:
+    preflight, _material, _root = _runtime_fixture(tmp_path)
+    jobs = preflight["jobs"]
+    assert isinstance(jobs, list)
+    model = _SequenceModel([(b'{"status":', 255)])
+    with pytest.raises(ValueError, match="JSON"):
+        run_r2_job_with_retry(
+            jobs[0],
+            generate=model.generate,
+            ledger=_runtime_ledger(
+                preflight, Path(str(preflight["ledger_dir"]))
+            ),
+        )
+    assert model.calls == 1
+
+
+def test_public_executor_exposes_no_runtime_injection() -> None:
+    assert list(inspect.signature(execute_r2_proposals).parameters) == [
+        "preflight_dir",
+        "approval_path",
+        "ledger_dir",
+    ]
+
+
+def test_complete_fake_r2_run_seals_48_results(tmp_path: Path) -> None:
+    preflight, _material, _root = _runtime_fixture(tmp_path)
+    ledger_dir = Path(str(preflight["ledger_dir"]))
+    model = _ValidFakeModel()
+    result = _execute_authenticated_r2_jobs(
+        preflight,
+        ledger=_runtime_ledger(preflight, ledger_dir),
+        model=model,
+    )
+    assert result["job_count"] == 48
+    assert len(result["results"]) == 48
+    assert model.calls == 48
+    assert _reopen_runtime_ledger(
+        preflight, ledger_dir
+    ).read_sealed_results()["results"] == result["results"]
+
+
+def _complete_r2_run_fixture(tmp_path: Path) -> dict[str, object]:
+    preflight, _material, preflight_dir = _runtime_fixture(tmp_path)
+    ledger_dir = Path(str(preflight["ledger_dir"]))
+    proposal_dir = Path(str(preflight["proposal_dir"]))
+    approval = _runtime_approval(preflight, ledger_dir)
+    approval_source = _pretty(approval)
+    approval_path = tmp_path / "approval-r2.json"
+    approval_path.write_bytes(approval_source)
+    approval_sha256 = hashlib.sha256(approval_source).hexdigest()
+    _execute_authenticated_r2_jobs(
+        preflight,
+        ledger=_runtime_ledger(
+            preflight,
+            ledger_dir,
+            approval_sha256=approval_sha256,
+        ),
+        model=_ValidFakeModel(),
+    )
+    return {
+        "preflight": preflight,
+        "preflight_dir": preflight_dir,
+        "approval_path": approval_path,
+        "ledger_dir": ledger_dir,
+        "proposal_dir": proposal_dir,
+    }
+
+
+def test_finalizer_rejects_nonfrozen_proposal_destination(tmp_path: Path) -> None:
+    frozen = _complete_r2_run_fixture(tmp_path)
+    with pytest.raises(ValueError, match="frozen proposal destination"):
+        finalize_r2_proposal_inventory(
+            preflight_dir=frozen["preflight_dir"],
+            approval_path=frozen["approval_path"],
+            ledger_dir=frozen["ledger_dir"],
+            output_dir=tmp_path / "different-proposals-r2",
+        )
+    assert not (tmp_path / "different-proposals-r2").exists()
+
+
+def test_r2_finalizer_and_authenticated_loader_replay_sealed_results(
+    tmp_path: Path,
+) -> None:
+    frozen = _complete_r2_run_fixture(tmp_path)
+    receipt = finalize_r2_proposal_inventory(
+        preflight_dir=frozen["preflight_dir"],
+        approval_path=frozen["approval_path"],
+        ledger_dir=frozen["ledger_dir"],
+        output_dir=frozen["proposal_dir"],
+    )
+    assert receipt["schema_version"] == (
+        "adaptive-obligation-v2-proposal-receipt-r2"
+    )
+    assert receipt["proposal_count"] == 48
+    loaded = load_authenticated_r2_proposal_inventory(
+        output_dir=frozen["proposal_dir"],
+        preflight_dir=frozen["preflight_dir"],
+        ledger_dir=frozen["ledger_dir"],
+    )
+    assert len(loaded["proposals"]) == 48
+    assert loaded["receipt"] == receipt
+
+
+def test_r2_finalizer_requires_approval_before_any_output(tmp_path: Path) -> None:
+    output_dir = tmp_path / "proposals-r2"
+    with pytest.raises(PermissionError, match="R2 proposal approval required"):
+        finalize_r2_proposal_inventory(
+            preflight_dir=tmp_path / "missing-preflight",
+            approval_path=tmp_path / "missing-approval",
+            ledger_dir=tmp_path / "missing-ledger",
+            output_dir=output_dir,
+        )
+    assert not output_dir.exists()

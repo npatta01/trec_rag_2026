@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 
@@ -22,6 +22,9 @@ R2_PREFLIGHT_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-preflight-r2"
 R2_JOB_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-job-r2"
 R2_PROMPT_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-prompt-r2"
 R2_PROMPT_REVISION = "tail-contract-r2"
+R2_PROPOSAL_RECEIPT_SCHEMA_VERSION = (
+    "adaptive-obligation-v2-proposal-receipt-r2"
+)
 
 R2_PROPOSAL_SCHEMA: dict[str, object] = deepcopy(r1.PROPOSAL_SCHEMA)
 R2_SYSTEM_INSTRUCTIONS = r1._PROPOSAL_INSTRUCTIONS + """
@@ -760,6 +763,581 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
     if recomputed != counts:
         raise ValueError("R2 prompt counts differ from the pinned tokenizer")
     return receipt
+
+
+def _capture_r2_inference_approval(path: Path) -> object:
+    """Capture exact canonical R2 approval bytes before any other access."""
+
+    try:
+        source = r1._capture_regular_file_no_symlinks(Path(path))
+        approval = json.loads(source)
+        canonical = r1._pretty_bytes(approval) if isinstance(approval, dict) else None
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise PermissionError("R2 proposal approval required") from exc
+    required_names = {
+        "schema_version",
+        "stage",
+        "preflight_sha256",
+        "model",
+        "model_revision",
+        "primary_call_count",
+        "retry_call_ceiling",
+        "ledger_dir",
+        "approved",
+    }
+    preflight_sha256 = (
+        approval.get("preflight_sha256") if isinstance(approval, Mapping) else None
+    )
+    ledger_value = approval.get("ledger_dir") if isinstance(approval, Mapping) else None
+    if (
+        not isinstance(approval, dict)
+        or source != canonical
+        or set(approval) != required_names
+        or approval.get("schema_version")
+        != "adaptive-obligation-v2-proposal-approval-r2"
+        or approval.get("stage") != "proposal_r2"
+        or approval.get("model") != r1.MODEL_ID
+        or approval.get("model_revision") != r1.MODEL_REVISION
+        or type(approval.get("primary_call_count")) is not int
+        or approval.get("primary_call_count") != r1.PRIMARY_JOB_COUNT
+        or type(approval.get("retry_call_ceiling")) is not int
+        or approval.get("retry_call_ceiling") != r1.PRIMARY_JOB_COUNT
+        or approval.get("approved") is not True
+        or not isinstance(preflight_sha256, str)
+        or len(preflight_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in preflight_sha256)
+        or not isinstance(ledger_value, str)
+        or not Path(ledger_value).is_absolute()
+    ):
+        raise PermissionError("R2 proposal approval required")
+    return r1._CapturedApproval(
+        value=approval,
+        source=source,
+        sha256=r1._sha256(source),
+    )
+
+
+def _capture_and_verify_r2_preflight(
+    path: Path,
+    *,
+    expected_receipt_sha256: str,
+) -> object:
+    """Capture once and reconstruct all R2 jobs in an isolated verifier copy."""
+
+    return r1._capture_and_verify_preflight(
+        Path(path),
+        expected_receipt_sha256=expected_receipt_sha256,
+        verifier=verify_r2_proposal_preflight,
+    )
+
+
+def _validate_static_r2_jobs(
+    jobs: list[dict[str, object]], receipt: Mapping[str, object]
+) -> None:
+    job_ids = [job.get("job_id") for job in jobs]
+    if (
+        len(jobs) != r1.PRIMARY_JOB_COUNT
+        or any(
+            not isinstance(job_id, str)
+            or len(job_id) != 64
+            or any(char not in "0123456789abcdef" for char in job_id)
+            for job_id in job_ids
+        )
+        or len(set(job_ids)) != r1.PRIMARY_JOB_COUNT
+    ):
+        raise ValueError("captured R2 proposal jobs must be exactly 48 unique rows")
+    pairs: set[tuple[str, int]] = set()
+    for job in jobs:
+        fold = job.get("fold")
+        messages = job.get("messages")
+        unit_ids = job.get("input_unit_ids")
+        prompt_token_count = job.get("prompt_token_count")
+        if (
+            job.get("schema_version") != R2_JOB_SCHEMA_VERSION
+            or isinstance(fold, bool)
+            or fold not in (0, 1)
+            or not isinstance(messages, list)
+            or job.get("messages_sha256") != canonical_sha256(messages)
+            or job.get("schema_sha256") != canonical_sha256(R2_PROPOSAL_SCHEMA)
+            or job.get("primary_max_new_tokens") != r1.PRIMARY_MAX_NEW_TOKENS
+            or job.get("retry_max_new_tokens") != r1.RETRY_MAX_NEW_TOKENS
+            or not _json_exact(
+                job.get("retry_policy"), _prompt_contract()["retry_policy"]
+            )
+            or type(prompt_token_count) is not int
+            or prompt_token_count < 1
+            or not isinstance(unit_ids, list)
+            or job.get("input_unit_count") != len(unit_ids)
+            or any(
+                not isinstance(unit_id, str)
+                or len(unit_id) != 64
+                or any(char not in "0123456789abcdef" for char in unit_id)
+                for unit_id in unit_ids
+            )
+            or len(set(unit_ids)) != len(unit_ids)
+        ):
+            raise ValueError("captured R2 proposal job binding differs")
+        identity = {
+            "topic_id": job.get("topic_id"),
+            "parent_id": job.get("parent_id"),
+            "fold": fold,
+            "reservoir_id": job.get("reservoir_id"),
+            "messages_sha256": job.get("messages_sha256"),
+            "schema_sha256": job.get("schema_sha256"),
+        }
+        if job.get("job_id") != canonical_sha256(identity):
+            raise ValueError("captured R2 proposal job identity differs")
+        pairs.add((str(job.get("parent_id")), int(fold)))
+    if len(pairs) != r1.PRIMARY_JOB_COUNT:
+        raise ValueError("captured R2 proposal parent/fold inventory differs")
+    counts = [int(job["prompt_token_count"]) for job in jobs]
+    expected_counts = {
+        "count": len(counts),
+        "minimum": min(counts),
+        "maximum": max(counts),
+        "total": sum(counts),
+        "by_job": [
+            {
+                "job_id": job["job_id"],
+                "prompt_token_count": job["prompt_token_count"],
+            }
+            for job in jobs
+        ],
+    }
+    if not _json_exact(receipt.get("prompt_token_counts"), expected_counts):
+        raise ValueError("captured R2 prompt token metadata differs")
+
+
+def _capture_static_r2_preflight(
+    path: Path,
+    *,
+    expected_receipt_sha256: str,
+) -> object:
+    """Authenticate approved R2 bytes without requiring frozen outputs absent."""
+
+    contents = r1._capture_preflight_files(Path(path))
+    receipt_source = contents["receipt.json"]
+    receipt_sha256 = r1._sha256(receipt_source)
+    if receipt_sha256 != expected_receipt_sha256:
+        raise ValueError("R2 proposal preflight receipt hash differs")
+    try:
+        receipt = json.loads(receipt_source)
+        schema = json.loads(contents["schema.json"])
+        prompt = json.loads(contents["prompt.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("captured R2 proposal preflight JSON is invalid") from exc
+    if (
+        not isinstance(receipt, dict)
+        or receipt_source != r1._pretty_bytes(receipt)
+        or not isinstance(schema, dict)
+        or contents["schema.json"] != r1._pretty_bytes(schema)
+        or not isinstance(prompt, dict)
+        or contents["prompt.json"] != r1._pretty_bytes(prompt)
+        or not _json_exact(schema, R2_PROPOSAL_SCHEMA)
+        or not _json_exact(prompt, _prompt_contract())
+    ):
+        raise ValueError("captured R2 proposal preflight is not canonical")
+    destinations = _validate_receipt_metadata(receipt)
+    for destination in destinations.values():
+        try:
+            exact = str(destination.resolve(strict=False)) == str(destination)
+        except (OSError, RuntimeError):
+            exact = False
+        if not destination.is_absolute() or not exact:
+            raise ValueError("captured R2 proposal destinations differ")
+    if (
+        receipt.get("schema_sha256") != canonical_sha256(schema)
+        or receipt.get("prompt_sha256") != canonical_sha256(prompt)
+        or not isinstance(receipt.get("model_snapshot"), Mapping)
+    ):
+        raise ValueError("captured R2 proposal preflight identity differs")
+    jobs, jobs_source = r1._read_jobs_bytes(contents["jobs.jsonl"])
+    artifacts = receipt.get("artifacts")
+    expected_artifacts = {
+        "jobs.jsonl": {
+            "path": "jobs.jsonl",
+            "bytes": len(jobs_source),
+            "rows": len(jobs),
+            "sha256": r1._sha256(jobs_source),
+        },
+        "schema.json": {
+            "path": "schema.json",
+            "bytes": len(contents["schema.json"]),
+            "rows": 1,
+            "sha256": r1._sha256(contents["schema.json"]),
+        },
+        "prompt.json": {
+            "path": "prompt.json",
+            "bytes": len(contents["prompt.json"]),
+            "rows": 1,
+            "sha256": r1._sha256(contents["prompt.json"]),
+        },
+    }
+    if not _json_exact(artifacts, expected_artifacts):
+        raise ValueError("captured R2 proposal artifact bindings differ")
+    _validate_static_r2_jobs(jobs, receipt)
+    source_binding = receipt.get("contract_receipt")
+    source_path = (
+        source_binding.get("path") if isinstance(source_binding, Mapping) else None
+    )
+    try:
+        source_path_exact = (
+            isinstance(source_path, str)
+            and bool(source_path)
+            and Path(source_path).is_absolute()
+            and str(Path(source_path).resolve(strict=False)) == source_path
+        )
+    except (OSError, RuntimeError):
+        source_path_exact = False
+    if (
+        not isinstance(source_binding, Mapping)
+        or set(source_binding) != {"path", "sha256", "schema_version", "status"}
+        or not source_path_exact
+        or not isinstance(source_binding.get("sha256"), str)
+        or len(str(source_binding["sha256"])) != 64
+        or any(
+            char not in "0123456789abcdef"
+            for char in str(source_binding["sha256"])
+        )
+        or source_binding.get("schema_version") != CONTRACT_SCHEMA_VERSION
+        or source_binding.get("status") != "complete"
+    ):
+        raise ValueError("captured R2 source contract binding differs")
+    return r1._CapturedPreflight(
+        receipt=receipt,
+        receipt_sha256=receipt_sha256,
+        jobs=jobs,
+        contents=contents,
+    )
+
+
+def _load_r2_model_after_approval(
+    *,
+    approval: object,
+    preflight: Mapping[str, object],
+    ledger_dir: Path,
+) -> object:
+    from .adaptive_obligation_v2_local_model_r2 import R2LocalJsonModel
+
+    return R2LocalJsonModel(
+        approval=approval,
+        preflight=preflight,
+        ledger_dir=ledger_dir,
+    )
+
+
+def run_r2_job_with_retry(
+    job: Mapping[str, object],
+    *,
+    generate: Callable[[int], object],
+    ledger: object,
+) -> dict[str, object]:
+    """Run the unchanged proposal classifier under the frozen R2 schema."""
+
+    if not _json_exact(R2_PROPOSAL_SCHEMA, r1.PROPOSAL_SCHEMA):
+        raise RuntimeError("R2 accepted proposal schema differs from R1")
+    try:
+        return r1.run_job_with_retry(
+            job,
+            generate=generate,
+            ledger=ledger,
+        )
+    except ValueError as exc:
+        if "parse:" in str(exc):
+            raise ValueError(f"R2 proposal JSON {exc}") from exc
+        raise
+
+
+def _execute_authenticated_r2_jobs(
+    preflight: Mapping[str, object],
+    *,
+    ledger: object,
+    model: object,
+) -> dict[str, object]:
+    jobs = preflight.get("jobs")
+    job_ids = (
+        [job.get("job_id") for job in jobs if isinstance(job, Mapping)]
+        if isinstance(jobs, list)
+        else []
+    )
+    if (
+        not isinstance(jobs, list)
+        or len(jobs) != r1.PRIMARY_JOB_COUNT
+        or len(job_ids) != r1.PRIMARY_JOB_COUNT
+        or any(not isinstance(job_id, str) for job_id in job_ids)
+        or len(set(job_ids)) != r1.PRIMARY_JOB_COUNT
+    ):
+        raise ValueError("R2 proposal execution requires exactly 48 frozen jobs")
+    generate_method = getattr(model, "generate", None)
+    if not callable(generate_method):
+        raise TypeError("R2 proposal model must expose generate")
+    for job in jobs:
+        if not isinstance(job, Mapping):
+            raise ValueError("R2 proposal execution job differs")
+
+        def generate(
+            ceiling: int,
+            *,
+            frozen_job: Mapping[str, object] = job,
+        ) -> object:
+            return generate_method(
+                frozen_job["messages"],
+                R2_PROPOSAL_SCHEMA,
+                max_new_tokens=ceiling,
+            )
+
+        run_r2_job_with_retry(job, generate=generate, ledger=ledger)
+    completion = ledger.seal_completion()
+    sealed = ledger.read_sealed_results()
+    results = sealed.get("results")
+    if not isinstance(results, list) or len(results) != r1.PRIMARY_JOB_COUNT:
+        raise ValueError("R2 proposal sealed result inventory differs")
+    return {
+        "status": "complete",
+        "job_count": len(results),
+        "results": results,
+        "event_count": len(ledger.read_events()),
+        "completion": completion,
+    }
+
+
+def execute_r2_proposals(
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+) -> dict[str, object]:
+    """Execute R2 only after its exact path-bound approval authenticates."""
+
+    captured_approval = _capture_r2_inference_approval(Path(approval_path))
+    captured_preflight = _capture_and_verify_r2_preflight(
+        Path(preflight_dir),
+        expected_receipt_sha256=str(
+            captured_approval.value["preflight_sha256"]
+        ),
+    )
+    preflight = {
+        **captured_preflight.receipt,
+        "receipt_sha256": captured_preflight.receipt_sha256,
+        "jobs": captured_preflight.jobs,
+    }
+    from .adaptive_obligation_v2_local_model_r2 import (
+        verify_r2_inference_approval,
+    )
+
+    destination = Path(ledger_dir)
+    verify_r2_inference_approval(
+        captured_approval.value,
+        preflight,
+        ledger_dir=destination,
+    )
+    anchor = r1._build_run_anchor(
+        captured_preflight.jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=captured_approval.sha256,
+    )
+    ledger = r1.AppendOnlyAttemptLedger(
+        destination,
+        expected_anchor=anchor,
+        create_only=True,
+    )
+    model = _load_r2_model_after_approval(
+        approval=captured_approval.value,
+        preflight=preflight,
+        ledger_dir=destination,
+    )
+    return _execute_authenticated_r2_jobs(
+        preflight,
+        ledger=ledger,
+        model=model,
+    )
+
+
+def _r2_proposal_inventory_material(
+    captured_preflight: object,
+    *,
+    approval_sha256: str,
+    sealed: Mapping[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object], dict[str, bytes]]:
+    rows, receipt, contents = r1._proposal_inventory_material(
+        captured_preflight,
+        approval_sha256=approval_sha256,
+        sealed=sealed,
+    )
+    receipt = {
+        **receipt,
+        "schema_version": R2_PROPOSAL_RECEIPT_SCHEMA_VERSION,
+    }
+    contents = {
+        "proposals.jsonl": contents["proposals.jsonl"],
+        "receipt.json": r1._pretty_bytes(receipt),
+    }
+    return rows, receipt, contents
+
+
+def _require_frozen_proposal_destination(
+    output_dir: Path,
+    receipt: Mapping[str, object],
+) -> Path:
+    destination = Path(output_dir)
+    frozen = receipt.get("proposal_dir")
+    try:
+        exact = str(destination.resolve(strict=False)) == str(destination)
+    except (OSError, RuntimeError):
+        exact = False
+    if (
+        not isinstance(frozen, str)
+        or not destination.is_absolute()
+        or str(destination) != frozen
+        or not exact
+    ):
+        raise ValueError("R2 finalization requires the frozen proposal destination")
+    try:
+        descriptor = r1._open_directory_no_symlinks(destination.parent)
+    except OSError as exc:
+        raise ValueError(
+            "R2 finalization requires the frozen proposal destination"
+        ) from exc
+    else:
+        os.close(descriptor)
+    return destination
+
+
+def finalize_r2_proposal_inventory(
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    """Publish R2 proposals only from the full sealed approved ledger."""
+
+    captured_approval = _capture_r2_inference_approval(Path(approval_path))
+    captured_preflight = _capture_static_r2_preflight(
+        Path(preflight_dir),
+        expected_receipt_sha256=str(
+            captured_approval.value["preflight_sha256"]
+        ),
+    )
+    preflight = {
+        **captured_preflight.receipt,
+        "receipt_sha256": captured_preflight.receipt_sha256,
+        "jobs": captured_preflight.jobs,
+    }
+    from .adaptive_obligation_v2_local_model_r2 import (
+        verify_r2_inference_approval,
+    )
+
+    ledger_destination = Path(ledger_dir)
+    verify_r2_inference_approval(
+        captured_approval.value,
+        preflight,
+        ledger_dir=ledger_destination,
+    )
+    proposal_destination = _require_frozen_proposal_destination(
+        Path(output_dir), captured_preflight.receipt
+    )
+    anchor = r1._build_run_anchor(
+        captured_preflight.jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=captured_approval.sha256,
+    )
+    ledger = r1.AppendOnlyAttemptLedger(
+        ledger_destination,
+        expected_anchor=anchor,
+        create_only=False,
+    )
+    sealed = ledger.read_sealed_results()
+    _rows, receipt, contents = _r2_proposal_inventory_material(
+        captured_preflight,
+        approval_sha256=captured_approval.sha256,
+        sealed=sealed,
+    )
+    r1._publish_proposal_inventory(proposal_destination, contents)
+    return receipt
+
+
+def load_authenticated_r2_proposal_inventory(
+    *,
+    output_dir: Path,
+    preflight_dir: Path,
+    ledger_dir: Path,
+) -> dict[str, object]:
+    """Replay the complete R2 chain before returning durable proposals."""
+
+    contents = r1._capture_proposal_inventory_files(Path(output_dir))
+    try:
+        receipt = json.loads(contents["receipt.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("R2 proposal inventory receipt is invalid JSON") from exc
+    approval_sha256 = (
+        receipt.get("approval_sha256") if isinstance(receipt, Mapping) else None
+    )
+    preflight_sha256 = (
+        receipt.get("proposal_preflight_receipt_sha256")
+        if isinstance(receipt, Mapping)
+        else None
+    )
+    if (
+        not isinstance(receipt, dict)
+        or contents["receipt.json"] != r1._pretty_bytes(receipt)
+        or receipt.get("schema_version")
+        != R2_PROPOSAL_RECEIPT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or not isinstance(approval_sha256, str)
+        or len(approval_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in approval_sha256)
+        or not isinstance(preflight_sha256, str)
+        or len(preflight_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in preflight_sha256)
+    ):
+        raise ValueError("R2 proposal inventory receipt differs")
+    captured_preflight = _capture_static_r2_preflight(
+        Path(preflight_dir),
+        expected_receipt_sha256=preflight_sha256,
+    )
+    _require_frozen_proposal_destination(
+        Path(output_dir), captured_preflight.receipt
+    )
+    if captured_preflight.receipt.get("ledger_dir") != str(Path(ledger_dir)):
+        raise ValueError("R2 proposal inventory frozen ledger destination differs")
+    anchor = r1._build_run_anchor(
+        captured_preflight.jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=approval_sha256,
+    )
+    ledger = r1.AppendOnlyAttemptLedger(
+        Path(ledger_dir),
+        expected_anchor=anchor,
+        create_only=False,
+    )
+    sealed = ledger.read_sealed_results()
+    expected_rows, expected_receipt, expected_contents = (
+        _r2_proposal_inventory_material(
+            captured_preflight,
+            approval_sha256=approval_sha256,
+            sealed=sealed,
+        )
+    )
+    observed_rows = r1._read_proposal_rows(contents["proposals.jsonl"])
+    if (
+        contents != expected_contents
+        or receipt != expected_receipt
+        or observed_rows != expected_rows
+    ):
+        raise ValueError("R2 proposal inventory differs from sealed ledger replay")
+    return {
+        "proposals": observed_rows,
+        "receipt": receipt,
+        "receipt_sha256": r1._sha256(contents["receipt.json"]),
+        "proposal_preflight": dict(captured_preflight.receipt),
+    }
 
 
 def build_r2_proposal_preflight(
