@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import tempfile
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .adaptive_obligation_v2_contract import canonical_sha256, sha256_text
 from .adaptive_obligation_v2_ledger import AttemptSpec
 from .adaptive_obligation_v2_propose import (
     PROPOSAL_RECEIPT_SCHEMA_VERSION,
+    _compact_bytes,
+    _fsync_directory,
+    _load_verified_contract,
+    _open_directory_no_symlinks,
+    _pretty_bytes,
+    _read_stable_regular_at,
+    _write_fsynced,
     load_authenticated_proposal_inventory,
 )
 
@@ -28,6 +39,15 @@ SCHEMA_VERSION = "adaptive-obligation-v2-validation-preflight-v1"
 JOB_SCHEMA_VERSION = "adaptive-obligation-v2-validation-job-v1"
 PRIMARY_MAX_NEW_TOKENS = 256
 RETRY_MAX_NEW_TOKENS = 512
+_CONTRACT_OUTPUT_NAMES = frozenset(
+    {
+        "manifest.json",
+        "parents.jsonl",
+        "reservoirs.jsonl",
+        "units.jsonl",
+        "receipt.json",
+    }
+)
 
 VALIDATION_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -74,6 +94,88 @@ def _rows(value: object, name: str) -> list[Mapping[str, object]]:
     if any(not isinstance(row, Mapping) for row in value):
         raise ValueError(f"validation contract {name} must contain objects")
     return list(value)  # type: ignore[return-value]
+
+
+def _capture_contract_files(path: Path) -> dict[str, bytes]:
+    try:
+        directory_fd = _open_directory_no_symlinks(Path(path))
+        try:
+            before = os.fstat(directory_fd)
+            names_before = set(os.listdir(directory_fd))
+            if names_before != _CONTRACT_OUTPUT_NAMES:
+                raise OSError("contract inventory differs")
+            contents = {
+                name: _read_stable_regular_at(
+                    directory_fd, name, require_single_link=True
+                )
+                for name in sorted(_CONTRACT_OUTPUT_NAMES)
+            }
+            names_after = set(os.listdir(directory_fd))
+            after = os.fstat(directory_fd)
+            if (
+                names_after != names_before
+                or before.st_dev != after.st_dev
+                or before.st_ino != after.st_ino
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise OSError("contract changed while being captured")
+            return contents
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise ValueError("validation source contract is missing or unsafe") from exc
+
+
+def _capture_and_verify_contract_snapshot(
+    path: Path, *, expected_receipt_sha256: str
+) -> tuple[dict[str, object], str]:
+    """Verify an isolated immutable copy and return only its captured rows."""
+
+    contents = _capture_contract_files(Path(path))
+    receipt_source = contents["receipt.json"]
+    receipt_sha256 = hashlib.sha256(receipt_source).hexdigest()
+    if receipt_sha256 != expected_receipt_sha256:
+        raise ValueError("validation source contract receipt hash differs")
+    try:
+        receipt = json.loads(receipt_source)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("validation source contract receipt is invalid") from exc
+    if not isinstance(receipt, dict) or receipt_source != _pretty_bytes(receipt):
+        raise ValueError("validation source contract receipt is not canonical")
+    raw_topics = receipt.get("topic_ids")
+    if not isinstance(raw_topics, list):
+        raise ValueError("validation source contract topics are missing")
+    for topic_id in map(str, raw_topics):
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+    with tempfile.TemporaryDirectory(prefix="adaptive-v2-contract-") as temporary:
+        private_root = Path(temporary) / "snapshot"
+        private_root.mkdir(mode=0o700)
+        try:
+            for name in sorted(_CONTRACT_OUTPUT_NAMES):
+                _write_fsynced(private_root / name, contents[name])
+                os.chmod(private_root / name, 0o400)
+            _fsync_directory(private_root)
+            os.chmod(private_root, 0o500)
+            contract = _load_verified_contract(private_root)
+        finally:
+            os.chmod(private_root, 0o700)
+    if contract.get("receipt") != receipt:
+        raise ValueError("validation verified contract receipt differs")
+    expected_rows = {
+        "parents": contents["parents.jsonl"],
+        "reservoirs": contents["reservoirs.jsonl"],
+        "units": contents["units.jsonl"],
+    }
+    for name, source in expected_rows.items():
+        rows = contract.get(name)
+        if (
+            not isinstance(rows, list)
+            or source != b"".join(_compact_bytes(row) for row in rows)
+        ):
+            raise ValueError("validation contract rows differ from captured bytes")
+    return contract, receipt_sha256
 
 
 def _valid_unit(unit: Mapping[str, object]) -> None:
@@ -587,7 +689,7 @@ def accept_validated_o1(
 
 
 def build_validation_preflight(
-    contract: object,
+    contract_dir: object,
     *,
     proposal_inventory_dir: object,
     proposal_preflight_dir: object,
@@ -625,6 +727,33 @@ def build_validation_preflight(
     ):
         raise ValueError("validation proposal receipt binding differs")
 
+    for proposal in proposals:
+        topic_id = str(proposal.get("topic_id"))
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+    source_contract_receipt_sha256 = proposal_receipt.get(
+        "source_contract_receipt_sha256"
+    )
+    if (
+        not isinstance(source_contract_receipt_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", source_contract_receipt_sha256)
+    ):
+        raise ValueError("validation proposal source contract binding differs")
+    try:
+        contract_path = Path(contract_dir)
+    except TypeError as exc:
+        raise ValueError(
+            "validation source contract path must be a filesystem path"
+        ) from exc
+    contract, observed_contract_receipt_sha256 = (
+        _capture_and_verify_contract_snapshot(
+            contract_path,
+            expected_receipt_sha256=source_contract_receipt_sha256,
+        )
+    )
+    if observed_contract_receipt_sha256 != source_contract_receipt_sha256:
+        raise ValueError("validation source contract receipt hash differs")
+
     jobs = build_validation_jobs(proposals, contract)
     job_count = len(jobs)
     return {
@@ -640,6 +769,7 @@ def build_validation_preflight(
         "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
         "jobs_sha256": canonical_sha256(jobs),
         "jobs": jobs,
+        "source_contract_receipt_sha256": observed_contract_receipt_sha256,
         "proposal_receipt": {
             "schema_version": proposal_receipt["schema_version"],
             "status": proposal_receipt["status"],
@@ -649,6 +779,7 @@ def build_validation_preflight(
             "proposal_preflight_receipt_sha256": proposal_receipt[
                 "proposal_preflight_receipt_sha256"
             ],
+            "source_contract_receipt_sha256": source_contract_receipt_sha256,
             "run_anchor_sha256": proposal_receipt["run_anchor_sha256"],
             "completion_sha256": proposal_receipt["completion_sha256"],
         },

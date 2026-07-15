@@ -1157,6 +1157,138 @@ def _capture_preflight_files(path: Path) -> dict[str, bytes]:
         raise ValueError("proposal preflight is missing or unsafe") from exc
 
 
+def _capture_static_preflight_for_task4(
+    path: Path, *, expected_receipt_sha256: str
+) -> _CapturedPreflight:
+    """Authenticate frozen Task 2 bytes without reconstructing its tokenizer."""
+
+    contents = _capture_preflight_files(path)
+    receipt_source = contents["receipt.json"]
+    receipt_sha256 = _sha256(receipt_source)
+    if receipt_sha256 != expected_receipt_sha256:
+        raise ValueError("proposal preflight receipt hash differs")
+    try:
+        receipt = json.loads(receipt_source)
+        schema = json.loads(contents["schema.json"])
+        prompt = json.loads(contents["prompt.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("captured proposal preflight JSON is invalid") from exc
+    if (
+        not isinstance(receipt, dict)
+        or receipt_source != _pretty_bytes(receipt)
+        or not isinstance(schema, dict)
+        or contents["schema.json"] != _pretty_bytes(schema)
+        or not isinstance(prompt, dict)
+        or contents["prompt.json"] != _pretty_bytes(prompt)
+        or schema != PROPOSAL_SCHEMA
+        or prompt != _prompt_contract()
+    ):
+        raise ValueError("captured proposal preflight is not canonical")
+    if (
+        receipt.get("schema_version") != SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or receipt.get("topic_ids") != list(PILOT_TOPIC_IDS)
+        or receipt.get("job_count") != PRIMARY_JOB_COUNT
+        or receipt.get("primary_call_count") != PRIMARY_JOB_COUNT
+        or receipt.get("retry_call_ceiling") != PRIMARY_JOB_COUNT
+        or receipt.get("worst_case_call_ceiling") != PRIMARY_JOB_COUNT * 2
+        or receipt.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+        or receipt.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
+        or receipt.get("tokenizer_load_count") != 1
+        or any(receipt.get(name) != 0 for name in _ZERO_COUNTERS)
+        or receipt.get("qrels_opened") is not False
+        or receipt.get("external_cost_usd") != 0.0
+        or receipt.get("model") != MODEL_ID
+        or receipt.get("model_revision") != MODEL_REVISION
+        or receipt.get("model_construction_allowed") is not False
+        or receipt.get("generation_allowed") is not False
+        or receipt.get("schema_sha256") != canonical_sha256(schema)
+        or receipt.get("prompt_sha256") != canonical_sha256(prompt)
+    ):
+        raise ValueError("proposal preflight static receipt differs")
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, Mapping) or set(artifacts) != {
+        "jobs.jsonl",
+        "schema.json",
+        "prompt.json",
+    }:
+        raise ValueError("proposal preflight artifact bindings differ")
+    jobs, jobs_source = _read_jobs_bytes(contents["jobs.jsonl"])
+    _artifact_matches("jobs.jsonl", jobs_source, len(jobs), artifacts)
+    _artifact_matches("schema.json", contents["schema.json"], 1, artifacts)
+    _artifact_matches("prompt.json", contents["prompt.json"], 1, artifacts)
+    if (
+        len(jobs) != PRIMARY_JOB_COUNT
+        or len({row.get("job_id") for row in jobs}) != PRIMARY_JOB_COUNT
+    ):
+        raise ValueError("captured proposal jobs must be exactly 48 unique rows")
+    pairs: set[tuple[str, int]] = set()
+    for row in jobs:
+        fold = row.get("fold")
+        messages = row.get("messages")
+        if (
+            row.get("schema_version") != JOB_SCHEMA_VERSION
+            or fold not in (0, 1)
+            or isinstance(fold, bool)
+            or not isinstance(messages, list)
+            or row.get("messages_sha256") != canonical_sha256(messages)
+            or row.get("schema_sha256") != canonical_sha256(PROPOSAL_SCHEMA)
+            or row.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+            or row.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
+            or not isinstance(row.get("prompt_token_count"), int)
+            or isinstance(row.get("prompt_token_count"), bool)
+            or int(row["prompt_token_count"]) < 1
+        ):
+            raise ValueError("captured proposal job static binding differs")
+        identity = {
+            "topic_id": row.get("topic_id"),
+            "parent_id": row.get("parent_id"),
+            "fold": fold,
+            "reservoir_id": row.get("reservoir_id"),
+            "messages_sha256": row.get("messages_sha256"),
+            "schema_sha256": row.get("schema_sha256"),
+        }
+        if row.get("job_id") != canonical_sha256(identity):
+            raise ValueError("captured proposal job identity differs")
+        pairs.add((str(row.get("parent_id")), int(fold)))
+    if len(pairs) != PRIMARY_JOB_COUNT:
+        raise ValueError("captured proposal parent/fold inventory differs")
+    prompt_counts = receipt.get("prompt_token_counts")
+    counts = [int(row["prompt_token_count"]) for row in jobs]
+    if (
+        not isinstance(prompt_counts, Mapping)
+        or prompt_counts.get("count") != len(counts)
+        or prompt_counts.get("minimum") != min(counts)
+        or prompt_counts.get("maximum") != max(counts)
+        or prompt_counts.get("total") != sum(counts)
+        or prompt_counts.get("by_job")
+        != [
+            {"job_id": row["job_id"], "prompt_token_count": row["prompt_token_count"]}
+            for row in jobs
+        ]
+    ):
+        raise ValueError("captured proposal prompt token metadata differs")
+    source_binding = receipt.get("contract_receipt")
+    if (
+        not isinstance(source_binding, Mapping)
+        or not isinstance(source_binding.get("sha256"), str)
+        or len(str(source_binding["sha256"])) != 64
+        or any(
+            char not in "0123456789abcdef"
+            for char in str(source_binding["sha256"])
+        )
+        or source_binding.get("schema_version") != CONTRACT_SCHEMA_VERSION
+        or source_binding.get("status") != "complete"
+    ):
+        raise ValueError("captured proposal source contract binding differs")
+    return _CapturedPreflight(
+        receipt=receipt,
+        receipt_sha256=receipt_sha256,
+        jobs=jobs,
+        contents=contents,
+    )
+
+
 def _capture_and_verify_preflight(
     path: Path,
     *,
@@ -1675,7 +1807,7 @@ def load_authenticated_proposal_inventory(
         or not isinstance(receipt.get("approval_sha256"), str)
     ):
         raise ValueError("proposal inventory receipt differs")
-    captured_preflight = _capture_and_verify_preflight(
+    captured_preflight = _capture_static_preflight_for_task4(
         Path(preflight_dir),
         expected_receipt_sha256=str(receipt["proposal_preflight_receipt_sha256"]),
     )

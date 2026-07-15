@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -229,7 +230,7 @@ def test_preflight_rejects_protected_unsupported_before_contract_access(
     )
     with pytest.raises(ValueError, match="protected"):
         build_validation_preflight(
-            object(),
+            contract_dir=object(),
             proposal_inventory_dir=object(),
             proposal_preflight_dir=object(),
             proposal_ledger_dir=object(),
@@ -412,6 +413,8 @@ def test_acceptance_rejects_duplicate_proposal_ids_before_capping() -> None:
 
 def _authenticated_proposal_inventory(
     proposals: list[dict[str, object]],
+    *,
+    source_contract_receipt_sha256: str = "f" * 64,
 ) -> dict[str, object]:
     receipt = {
         "schema_version": PROPOSAL_RECEIPT_SCHEMA_VERSION,
@@ -420,6 +423,7 @@ def _authenticated_proposal_inventory(
         "proposal_count": len(proposals),
         "proposals_sha256": "a" * 64,
         "proposal_preflight_receipt_sha256": "b" * 64,
+        "source_contract_receipt_sha256": source_contract_receipt_sha256,
         "run_anchor_sha256": "c" * 64,
         "completion_sha256": "d" * 64,
         "completion": {
@@ -434,6 +438,84 @@ def _authenticated_proposal_inventory(
     }
 
 
+def test_validation_preflight_rejects_an_altered_opposite_fold_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proposals = [_supported_proposal()]
+    original_receipt_bytes = (
+        json.dumps(
+            {"schema_version": "contract-v1", "status": "complete"},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    authenticated = _authenticated_proposal_inventory(
+        proposals,
+        source_contract_receipt_sha256=hashlib.sha256(
+            original_receipt_bytes
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: authenticated,
+    )
+    altered = copy.deepcopy(_contract_fixture())
+    altered["reservoirs"][1]["documents"] = altered["reservoirs"][1][  # type: ignore[index]
+        "documents"
+    ][1:]
+    contract_root = tmp_path / "altered-contract"
+    contract_root.mkdir()
+    altered_receipt = {
+        "schema_version": "contract-v1",
+        "status": "complete",
+        "topic_ids": ["219"],
+        "alteration": "opposite-fold reservoir changed",
+    }
+    (contract_root / "receipt.json").write_bytes(
+        (
+            json.dumps(altered_receipt, indent=2, sort_keys=True) + "\n"
+        ).encode()
+    )
+    (contract_root / "manifest.json").write_bytes(b"{}\n")
+    for name in ("parents", "reservoirs", "units"):
+        (contract_root / f"{name}.jsonl").write_bytes(
+            b"".join(
+                (
+                    json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n"
+                ).encode()
+                for row in altered[name]  # type: ignore[index]
+            )
+        )
+
+    with pytest.raises(ValueError, match="source contract receipt"):
+        build_validation_preflight(
+            contract_dir=contract_root,
+            proposal_inventory_dir=object(),
+            proposal_preflight_dir=object(),
+            proposal_ledger_dir=object(),
+        )
+
+
+def test_validation_preflight_rejects_a_caller_supplied_contract_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authenticated = _authenticated_proposal_inventory([_supported_proposal()])
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: authenticated,
+    )
+    with pytest.raises(ValueError, match="contract path"):
+        build_validation_preflight(
+            contract_dir=_contract_fixture(),
+            proposal_inventory_dir=object(),
+            proposal_preflight_dir=object(),
+            proposal_ledger_dir=object(),
+        )
+
+
 def test_validation_preflight_requires_authenticated_complete_proposals_and_v_caps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -444,8 +526,17 @@ def test_validation_preflight_requires_authenticated_complete_proposals_and_v_ca
         "load_authenticated_proposal_inventory",
         lambda **_kwargs: authenticated,
     )
+    contract = _contract_fixture()
+    monkeypatch.setattr(
+        validate_module,
+        "_capture_and_verify_contract_snapshot",
+        lambda _path, *, expected_receipt_sha256: (
+            contract,
+            expected_receipt_sha256,
+        ),
+    )
     preflight = build_validation_preflight(
-        _contract_fixture(),
+        contract_dir=Path("unused-contract"),
         proposal_inventory_dir=object(),
         proposal_preflight_dir=object(),
         proposal_ledger_dir=object(),
@@ -474,7 +565,7 @@ def test_validation_preflight_requires_authenticated_complete_proposals_and_v_ca
     )
     with pytest.raises(ValueError, match="authenticated"):
         build_validation_preflight(
-            _contract_fixture(),
+            contract_dir=object(),
             proposal_inventory_dir=object(),
             proposal_preflight_dir=object(),
             proposal_ledger_dir=object(),
@@ -490,7 +581,7 @@ def test_validation_preflight_requires_authenticated_complete_proposals_and_v_ca
     )
     with pytest.raises(ValueError, match="authenticated"):
         build_validation_preflight(
-            _contract_fixture(),
+            contract_dir=object(),
             proposal_inventory_dir=object(),
             proposal_preflight_dir=object(),
             proposal_ledger_dir=object(),

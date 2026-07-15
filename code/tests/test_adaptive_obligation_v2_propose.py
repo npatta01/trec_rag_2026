@@ -656,8 +656,33 @@ def _sealed_proposal_handoff_fixture(
     list[dict[str, object]],
 ]:
     contract = _contract_fixture()
-    jobs = build_proposal_jobs(contract)
-    preflight_sha256 = "d" * 64
+    preflight_receipt, contract, contract_root, preflight_root = (
+        _build_fixture_preflight(
+            tmp_path,
+            tokenizer=_fake_tokenizer(),
+            name="captured-preflight",
+            contract=contract,
+        )
+    )
+    for name, value in (
+        ("manifest.json", contract["receipt"]),
+        ("parents.jsonl", contract["parents"]),
+        ("reservoirs.jsonl", contract["reservoirs"]),
+        ("units.jsonl", contract["units"]),
+    ):
+        destination = contract_root / name
+        if name.endswith(".jsonl"):
+            destination.write_bytes(
+                b"".join(propose_module._compact_bytes(row) for row in value)
+            )
+        else:
+            destination.write_bytes(_pretty(value))
+    jobs = [
+        json.loads(line)
+        for line in (preflight_root / "jobs.jsonl").read_bytes().splitlines()
+    ]
+    preflight_source = (preflight_root / "receipt.json").read_bytes()
+    preflight_sha256 = hashlib.sha256(preflight_source).hexdigest()
     approval_value = _approval_record(preflight_sha256)
     approval_source = _pretty(approval_value)
     approval = propose_module._CapturedApproval(
@@ -665,27 +690,14 @@ def _sealed_proposal_handoff_fixture(
         source=approval_source,
         sha256=hashlib.sha256(approval_source).hexdigest(),
     )
-    jobs_source = b"".join(propose_module._compact_bytes(job) for job in jobs)
-    preflight_receipt = {
-        "schema_version": propose_module.SCHEMA_VERSION,
-        "status": "complete",
-        "job_count": 48,
-        "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
-        "contract_receipt": {"sha256": "c" * 64},
-        "artifacts": {
-            "jobs.jsonl": {
-                "path": "jobs.jsonl",
-                "rows": 48,
-                "bytes": len(jobs_source),
-                "sha256": hashlib.sha256(jobs_source).hexdigest(),
-            }
-        },
-    }
     preflight = propose_module._CapturedPreflight(
         receipt=preflight_receipt,
         receipt_sha256=preflight_sha256,
         jobs=jobs,
-        contents={"jobs.jsonl": jobs_source},
+        contents={
+            name: (preflight_root / name).read_bytes()
+            for name in ("jobs.jsonl", "schema.json", "prompt.json", "receipt.json")
+        },
     )
     anchor = propose_module._build_run_anchor(
         jobs,
@@ -736,6 +748,7 @@ def test_sealed_ledger_finalizer_feeds_authenticated_task4_preflight(
     monkeypatch.setattr(
         propose_module, "_capture_inference_approval", lambda _path: approval
     )
+    real_capture_and_verify_preflight = propose_module._capture_and_verify_preflight
     monkeypatch.setattr(
         propose_module,
         "_capture_and_verify_preflight",
@@ -797,8 +810,38 @@ def test_sealed_ledger_finalizer_feeds_authenticated_task4_preflight(
         )
     assert not (real_parent / "inventory").exists()
 
+    monkeypatch.setattr(
+        propose_module,
+        "_capture_and_verify_preflight",
+        real_capture_and_verify_preflight,
+    )
+    monkeypatch.setattr(
+        propose_module, "_load_verified_contract", lambda _path: contract
+    )
+    monkeypatch.setattr(
+        "trec_rag.adaptive_obligation_v2_validate._load_verified_contract",
+        lambda _path: contract,
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_snapshot_inventory",
+        lambda: preflight.receipt["model_snapshot"],
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_tokenizer_contract",
+        lambda: preflight.receipt["tokenizer_contract"],
+    )
+
+    def tokenizer_load_forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Task 4 must not load the Task 2 tokenizer")
+
+    monkeypatch.setattr(
+        propose_module, "_load_local_tokenizer", tokenizer_load_forbidden
+    )
+    contract_root = Path(str(preflight.receipt["contract_receipt"]["path"]))
     validation = build_validation_preflight(
-        contract,
+        contract_dir=contract_root,
         proposal_inventory_dir=inventory_root,
         proposal_preflight_dir=tmp_path / "captured-preflight",
         proposal_ledger_dir=ledger_root,
@@ -807,12 +850,18 @@ def test_sealed_ledger_finalizer_feeds_authenticated_task4_preflight(
     assert validation["proposal_receipt"]["sha256"] == hashlib.sha256(
         (inventory_root / "receipt.json").read_bytes()
     ).hexdigest()
+    assert validation["source_contract_receipt_sha256"] == receipt[
+        "source_contract_receipt_sha256"
+    ]
+    assert validation["proposal_receipt"]["source_contract_receipt_sha256"] == receipt[
+        "source_contract_receipt_sha256"
+    ]
 
     linked_inventory = tmp_path / "linked-proposal-inventory"
     linked_inventory.symlink_to(inventory_root, target_is_directory=True)
     with pytest.raises(ValueError, match="inventory.*unsafe"):
         build_validation_preflight(
-            contract,
+            contract_dir=contract_root,
             proposal_inventory_dir=linked_inventory,
             proposal_preflight_dir=tmp_path / "captured-preflight",
             proposal_ledger_dir=ledger_root,
@@ -841,7 +890,7 @@ def test_sealed_ledger_finalizer_feeds_authenticated_task4_preflight(
     (forged_root / "receipt.json").write_bytes(_pretty(forged_receipt))
     with pytest.raises(ValueError, match="sealed ledger"):
         build_validation_preflight(
-            contract,
+            contract_dir=contract_root,
             proposal_inventory_dir=forged_root,
             proposal_preflight_dir=tmp_path / "captured-preflight",
             proposal_ledger_dir=ledger_root,
