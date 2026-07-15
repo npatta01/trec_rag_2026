@@ -4,16 +4,17 @@ import copy
 import hashlib
 import inspect
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+import trec_rag.adaptive_obligation_v2_propose as propose_module
 import trec_rag.adaptive_obligation_v2_retrieve as module
 import trec_rag.adaptive_obligation_v2_validate as validate_module
 from trec_rag.adaptive_obligation_v2_retrieve import (
     INDEX_ID,
-    MAX_ACCEPTED_O1_PER_TOPIC,
     MAX_RETRIEVAL_REQUESTS,
     REQUEST_START_INTERVAL_SECONDS,
     RETRIEVAL_HITS,
@@ -21,7 +22,6 @@ from trec_rag.adaptive_obligation_v2_retrieve import (
     TRANSPORT_RETRY_COUNT,
     RateLimitedO1Transport,
     audit_retrieval_cache,
-    build_retrieval_jobs,
     execute_retrieval,
     freeze_retrieval_inputs,
     load_authenticated_retrieval_inputs,
@@ -30,18 +30,192 @@ from trec_rag.adaptive_obligation_v2_retrieve import (
 )
 from trec_rag.adaptive_obligation_v2_contract import canonical_sha256
 from trec_rag.adaptive_obligation_v2_ledger import AppendOnlyAttemptLedger
-from trec_rag.adaptive_obligation_v2_validate import (
-    VALIDATION_SCHEMA,
-    build_validation_jobs,
-    finalize_validation_inventory,
-    publish_validation_preflight,
-    run_validation_job_with_retry,
-)
 from trec_rag.det_sparse_ledger import RawTransportResponse
 
 
 PILOT_TOPICS = ("219", "72", "300", "84")
 ENDPOINT = "https://example.test/v1/climbmix-400b/search"
+
+
+@pytest.fixture(scope="module")
+def real_v2_validation_handoff(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Build a no-inference authenticated proposal→validation fixture."""
+
+    repo = Path(__file__).resolve().parents[2]
+    source_root = (
+        repo
+        / "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2"
+    )
+    contract_dir = source_root / "contract"
+    proposal_preflight_dir = source_root / "proposal_preflight"
+    root = tmp_path_factory.mktemp("real-v2-validation-handoff")
+
+    proposal_preflight_source = (proposal_preflight_dir / "receipt.json").read_bytes()
+    proposal_preflight_sha256 = hashlib.sha256(
+        proposal_preflight_source
+    ).hexdigest()
+    captured_proposal_preflight = (
+        propose_module._capture_static_preflight_for_task4(
+            proposal_preflight_dir,
+            expected_receipt_sha256=proposal_preflight_sha256,
+        )
+    )
+    proposal_approval = {
+        "schema_version": "adaptive-obligation-v2-proposal-approval-v1",
+        "stage": "proposal",
+        "preflight_sha256": proposal_preflight_sha256,
+        "model": propose_module.MODEL_ID,
+        "model_revision": propose_module.MODEL_REVISION,
+        "primary_call_count": 48,
+        "retry_call_ceiling": 48,
+        "approved": True,
+    }
+    proposal_approval_path = root / "proposal-approval.json"
+    proposal_approval_source = _pretty(proposal_approval)
+    proposal_approval_path.write_bytes(proposal_approval_source)
+    proposal_approval_sha256 = hashlib.sha256(proposal_approval_source).hexdigest()
+    proposal_anchor = propose_module._build_run_anchor(
+        captured_proposal_preflight.jobs,
+        preflight_sha256=proposal_preflight_sha256,
+        approval_sha256=proposal_approval_sha256,
+    )
+    proposal_ledger_dir = root / "proposal-ledger"
+    proposal_ledger = AppendOnlyAttemptLedger(
+        proposal_ledger_dir, expected_anchor=proposal_anchor, create_only=True
+    )
+    selected_job = next(
+        job
+        for job in captured_proposal_preflight.jobs
+        if job["parent_id"] == "219-positive" and job["fold"] == 0
+    )
+    for job in captured_proposal_preflight.jobs:
+        value = (
+            {
+                "status": "SUPPORTED",
+                "reason_code": "SUPPORTED",
+                "o1": {
+                    "label": "access barriers for disadvantaged communities",
+                    "scope_rationale": "Independent sources identify a reusable need.",
+                    "support_unit_ids": [job["input_unit_ids"][0]],
+                },
+            }
+            if job["job_id"] == selected_job["job_id"]
+            else {
+                "status": "UNSUPPORTED",
+                "reason_code": "NO_ABSTRACT_CHILD",
+                "o1": None,
+            }
+        )
+        raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+        propose_module.run_job_with_retry(
+            job,
+            generate=lambda _ceiling, result=raw: (result, 20),
+            ledger=proposal_ledger,
+        )
+    proposal_ledger.seal_completion()
+    _rows, _receipt, proposal_contents = propose_module._proposal_inventory_material(
+        captured_proposal_preflight,
+        approval_sha256=proposal_approval_sha256,
+        sealed=proposal_ledger.read_sealed_results(),
+    )
+    proposal_inventory_dir = root / "proposal-inventory"
+    propose_module._publish_proposal_inventory(
+        proposal_inventory_dir, proposal_contents
+    )
+
+    validation_preflight = validate_module.build_validation_preflight(
+        contract_dir,
+        proposal_inventory_dir=proposal_inventory_dir,
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=proposal_ledger_dir,
+    )
+    validation_preflight_dir = root / "validation-preflight"
+    validate_module.publish_validation_preflight(
+        validation_preflight, validation_preflight_dir
+    )
+    validation_preflight_source = (
+        validation_preflight_dir / "receipt.json"
+    ).read_bytes()
+    validation_preflight_sha256 = hashlib.sha256(
+        validation_preflight_source
+    ).hexdigest()
+    validation_approval = {
+        "schema_version": validate_module.VALIDATION_APPROVAL_SCHEMA_VERSION,
+        "stage": "validation",
+        "preflight_sha256": validation_preflight_sha256,
+        "job_count": validation_preflight["job_count"],
+        "primary_call_count": validation_preflight["primary_call_count"],
+        "retry_call_ceiling": validation_preflight["retry_call_ceiling"],
+        "approved": True,
+    }
+    validation_approval_path = root / "validation-approval.json"
+    validation_approval_source = _pretty(validation_approval)
+    validation_approval_path.write_bytes(validation_approval_source)
+    validation_approval_sha256 = hashlib.sha256(
+        validation_approval_source
+    ).hexdigest()
+    validation_jobs = validation_preflight["jobs"]
+    assert isinstance(validation_jobs, list) and validation_jobs
+    validation_anchor = validate_module._build_validation_run_anchor(
+        validation_jobs,
+        preflight_sha256=validation_preflight_sha256,
+        approval_sha256=validation_approval_sha256,
+    )
+    validation_ledger_dir = root / "validation-ledger"
+    validation_ledger = AppendOnlyAttemptLedger(
+        validation_ledger_dir, expected_anchor=validation_anchor, create_only=True
+    )
+
+    class ValidationModel:
+        def __init__(self, unit_id: str) -> None:
+            self.unit_id = unit_id
+
+        def generate(self, _messages, _schema, *, max_new_tokens):
+            assert max_new_tokens == validate_module.PRIMARY_MAX_NEW_TOKENS
+            return (
+                json.dumps(
+                    {
+                        "decision": "SUPPORTED",
+                        "support_unit_ids": [self.unit_id],
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode(),
+                20,
+            )
+
+    for job in validation_jobs:
+        validate_module.run_validation_job_with_retry(
+            job,
+            ledger=validation_ledger,
+            model=ValidationModel(str(job["input_unit_ids"][0])),
+        )
+    validation_ledger.seal_completion()
+    validation_output_dir = root / "validation-output"
+    validate_module.finalize_validation_inventory(
+        preflight_dir=validation_preflight_dir,
+        approval_path=validation_approval_path,
+        ledger_dir=validation_ledger_dir,
+        output_dir=validation_output_dir,
+        proposal_inventory_dir=proposal_inventory_dir,
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=proposal_ledger_dir,
+        source_contract_dir=contract_dir,
+    )
+    return {
+        "contract_dir": contract_dir,
+        "proposal_preflight_dir": proposal_preflight_dir,
+        "proposal_approval_path": proposal_approval_path,
+        "proposal_ledger_dir": proposal_ledger_dir,
+        "proposal_inventory_dir": proposal_inventory_dir,
+        "validation_preflight_dir": validation_preflight_dir,
+        "validation_approval_path": validation_approval_path,
+        "validation_ledger_dir": validation_ledger_dir,
+        "validation_output_dir": validation_output_dir,
+        "validation_jobs": validation_jobs,
+    }
 
 
 def _accepted_row(number: int = 0, *, topic_id: str = "219") -> dict[str, object]:
@@ -127,11 +301,27 @@ def _preflight(
         endpoint=ENDPOINT,
         cache_root=cache,
         retrieval_output_dir=tmp_path / "run",
-        output_dir=output,
     )
+    module._publish_preflight(output, receipt)
     approval = tmp_path / "approval.json"
     _write_approval(output, approval)
     return output, approval, cache, receipt
+
+
+def _execute_fixture(
+    preflight: Path, approval: Path, *, api_token: str | None = None
+) -> dict[str, object]:
+    approval_value, approval_sha256 = module._capture_retrieval_approval(approval)
+    receipt, receipt_source = module._capture_retrieval_preflight(
+        preflight, expected_sha256=str(approval_value["preflight_sha256"])
+    )
+    module._verify_approval_against_preflight(approval_value, receipt)
+    return module._execute_verified_retrieval(
+        receipt=receipt,
+        receipt_source=receipt_source,
+        approval_sha256=approval_sha256,
+        api_token=api_token,
+    )
 
 
 def test_bm25_query_is_focused_and_deduplicated() -> None:
@@ -393,6 +583,50 @@ def test_public_executor_has_no_transport_or_destination_override() -> None:
     assert "output_dir" not in parameters
     assert "cache_root" not in parameters
     assert "session" not in inspect.signature(RateLimitedO1Transport).parameters
+    assert "output_dir" not in inspect.signature(
+        module._audit_retrieval_cache_rows
+    ).parameters
+
+
+def test_forged_free_row_preflight_cannot_verify_or_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    receipt = module._audit_retrieval_cache_rows(
+        [_accepted_row()],
+        endpoint=ENDPOINT,
+        cache_root=cache,
+        retrieval_output_dir=tmp_path / "run",
+        cache_loader=lambda _job: None,
+    )
+    preflight = tmp_path / "forged-preflight"
+    module._publish_preflight(preflight, receipt)
+    with pytest.raises(ValueError, match="retrieval input"):
+        verify_retrieval_preflight(preflight)
+
+    approval = tmp_path / "approval.json"
+    _write_approval(preflight, approval)
+    touched: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "_SecureCacheStore",
+        lambda *_args, **_kwargs: touched.append("cache"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_approved_transport",
+        lambda *_args, **_kwargs: touched.append("transport"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_claim_output_root",
+        lambda *_args, **_kwargs: touched.append("output"),
+    )
+    with pytest.raises(ValueError, match="retrieval input"):
+        execute_retrieval(preflight_dir=preflight, approval_path=approval)
+    assert touched == []
+    assert not (tmp_path / "run").exists()
 
 
 def test_cache_probe_rejects_malformed_status_without_transport() -> None:
@@ -405,7 +639,9 @@ def test_cache_probe_rejects_malformed_status_without_transport() -> None:
         )
 
 
-def test_preflight_is_create_only_hash_bound_and_verifiable(tmp_path: Path) -> None:
+def test_preflight_is_create_only_hash_bound_and_verifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     output = tmp_path / "preflight"
     (tmp_path / "cache").mkdir()
     receipt = module._audit_retrieval_cache_rows(
@@ -413,23 +649,19 @@ def test_preflight_is_create_only_hash_bound_and_verifiable(tmp_path: Path) -> N
         endpoint=ENDPOINT,
         cache_root=tmp_path / "cache",
         retrieval_output_dir=tmp_path / "run",
-        output_dir=output,
     )
-    assert verify_retrieval_preflight(output) == receipt
+    module._publish_preflight(output, receipt)
+    assert module._parse_preflight_source(
+        module._capture_preflight_source(output)
+    ) == receipt
     with pytest.raises(FileExistsError):
-        module._audit_retrieval_cache_rows(
-            [_accepted_row()],
-            endpoint=ENDPOINT,
-            cache_root=tmp_path / "cache",
-            retrieval_output_dir=tmp_path / "run",
-            output_dir=output,
-        )
+        module._publish_preflight(output, receipt)
 
     mutated = json.loads((output / "receipt.json").read_bytes())
     mutated["hits"] = 100
     (output / "receipt.json").write_bytes(_pretty(mutated))
     with pytest.raises(ValueError):
-        verify_retrieval_preflight(output)
+        module._parse_preflight_source(module._capture_preflight_source(output))
 
 
 @pytest.mark.parametrize(
@@ -440,7 +672,10 @@ def test_preflight_is_create_only_hash_bound_and_verifiable(tmp_path: Path) -> N
     ],
 )
 def test_preflight_receipt_has_an_exact_closed_schema(
-    tmp_path: Path, change: dict[str, object], message: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: dict[str, object],
+    message: str,
 ) -> None:
     output, _approval, _cache, _receipt = _preflight(tmp_path)
     mutated = json.loads((output / "receipt.json").read_bytes())
@@ -456,17 +691,20 @@ def test_preflight_publish_rejects_symlinked_parent(tmp_path: Path) -> None:
     linked = tmp_path / "linked"
     linked.symlink_to(real, target_is_directory=True)
     with pytest.raises(ValueError, match="unsafe"):
-        module._audit_retrieval_cache_rows(
+        receipt = module._audit_retrieval_cache_rows(
             [_accepted_row()],
             endpoint=ENDPOINT,
             cache_root=tmp_path / "cache",
             retrieval_output_dir=tmp_path / "run",
-            output_dir=linked / "preflight",
+            cache_loader=lambda _job: None,
         )
+        module._publish_preflight(linked / "preflight", receipt)
     assert not (real / "preflight").exists()
 
 
-def test_preflight_rejects_symlink_root_and_unexpected_children(tmp_path: Path) -> None:
+def test_preflight_rejects_symlink_root_and_unexpected_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     real, _approval, _cache, _receipt = _preflight(tmp_path)
     linked = tmp_path / "linked"
     linked.symlink_to(real, target_is_directory=True)
@@ -524,7 +762,10 @@ def test_execute_requires_separate_retrieval_approval_before_every_other_access(
     ],
 )
 def test_approval_types_and_exact_bindings_fail_closed(
-    tmp_path: Path, change: dict[str, object], message: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: dict[str, object],
+    message: str,
 ) -> None:
     preflight, approval, _cache, _receipt = _preflight(tmp_path)
     _write_approval(preflight, approval, **change)
@@ -539,7 +780,7 @@ def test_approval_types_and_exact_bindings_fail_closed(
 
 
 def test_symlinked_approval_fails_before_preflight_cache_session_or_output(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     preflight, approval, _cache, _receipt = _preflight(tmp_path)
     real = tmp_path / "real-approval.json"
@@ -586,10 +827,7 @@ def test_executor_reserves_before_transport_and_raw_before_parse(
         module, "_build_approved_transport", lambda *_args, **_kwargs: Transport()
     )
 
-    result = execute_retrieval(
-        preflight_dir=preflight,
-        approval_path=approval,
-    )
+    result = _execute_fixture(preflight, approval)
     assert events == ["transport", "parse"]
     assert result["external_attempts"] == 1
     assert result["candidate_rows"] == 1000
@@ -636,10 +874,7 @@ def test_bound_cache_and_output_swaps_cannot_redirect_nested_writes(
     monkeypatch.setattr(
         module, "_build_approved_transport", lambda *_args, **_kwargs: Transport()
     )
-    result = execute_retrieval(
-        preflight_dir=preflight,
-        approval_path=approval,
-    )
+    result = _execute_fixture(preflight, approval)
     assert result["candidate_rows"] == 1000
     assert not list(outside_cache.iterdir())
     assert not list(outside_output.iterdir())
@@ -648,7 +883,7 @@ def test_bound_cache_and_output_swaps_cannot_redirect_nested_writes(
 
 
 def test_fully_cached_execution_still_requires_approval_but_never_builds_transport(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache = tmp_path / "cache"
     job = module._build_retrieval_jobs_from_inputs(
@@ -666,10 +901,7 @@ def test_fully_cached_execution_still_requires_approval_but_never_builds_transpo
     )
     assert receipt["verified_cache_hits"] == 1
     touched: list[str] = []
-    result = execute_retrieval(
-        preflight_dir=preflight,
-        approval_path=approval,
-    )
+    result = _execute_fixture(preflight, approval)
     assert touched == []
     assert result["cache_hits"] == 1
     assert result["external_attempts"] == 0
@@ -695,10 +927,7 @@ def test_malformed_raw_response_is_preserved_before_terminal_failure(
     )
 
     with pytest.raises(ValueError, match="UTF-8 JSON"):
-        execute_retrieval(
-            preflight_dir=preflight,
-            approval_path=approval,
-        )
+        _execute_fixture(preflight, approval)
     assert [path.read_bytes() for path in (output / "raw").glob("*.body")] == [
         b"not-json"
     ]
@@ -744,10 +973,7 @@ def test_executor_rejects_transport_with_retry_or_wrong_limiter_before_output(
     )
 
     with pytest.raises(ValueError, match="one-shot no-retry"):
-        execute_retrieval(
-            preflight_dir=preflight,
-            approval_path=approval,
-        )
+        _execute_fixture(preflight, approval)
     assert not (tmp_path / "run").exists()
 
 
@@ -773,10 +999,7 @@ def test_existing_output_is_create_only_and_transport_is_not_entered(
     )
 
     with pytest.raises(FileExistsError):
-        execute_retrieval(
-            preflight_dir=preflight,
-            approval_path=approval,
-        )
+        _execute_fixture(preflight, approval)
     assert touched == []
 
 
@@ -827,92 +1050,65 @@ def test_rate_limited_transport_uses_tracked_session_and_frozen_request_shape(
 
 
 def test_real_task4_acceptance_freezes_authenticated_retrieval_inputs(
-    tmp_path: Path,
+    tmp_path: Path, real_v2_validation_handoff: dict[str, object]
 ) -> None:
-    repo = Path(__file__).resolve().parents[2]
-    contract_dir = (
-        repo
-        / "outputs/rag25_deep_facet_candidates_v1/"
-        "adaptive_obligation_search_v2/contract"
+    paths = real_v2_validation_handoff
+    contract_dir = Path(paths["contract_dir"])
+    validation = validate_module.load_authenticated_validation_inventory(
+        output_dir=Path(paths["validation_output_dir"]),
+        preflight_dir=Path(paths["validation_preflight_dir"]),
+        approval_path=Path(paths["validation_approval_path"]),
+        ledger_dir=Path(paths["validation_ledger_dir"]),
+        proposal_inventory_dir=Path(paths["proposal_inventory_dir"]),
+        proposal_preflight_dir=Path(paths["proposal_preflight_dir"]),
+        proposal_ledger_dir=Path(paths["proposal_ledger_dir"]),
+        source_contract_dir=contract_dir,
     )
+    validation_jobs = paths["validation_jobs"]
+    assert isinstance(validation_jobs, list) and len(validation_jobs) == 1
+    assert validation["receipt"]["approval_sha256"] == hashlib.sha256(
+        Path(paths["validation_approval_path"]).read_bytes()
+    ).hexdigest()
+    assert validation["accepted"][0]["proposal_id"] == validation_jobs[0][
+        "proposal_id"
+    ]
+    assert validation["accepted"][0]["validation_support_unit_ids"] == [
+        validation_jobs[0]["input_unit_ids"][0]
+    ]
     contract = validate_module._load_verified_contract(contract_dir)
     parent = next(
         row for row in contract["parents"] if row["parent_id"] == "219-positive"
     )
-    source = next(
-        row
-        for row in contract["units"]
-        if row["parent_id"] == parent["parent_id"] and row["fold"] == 0
-    )
-    proposal = {
-        "proposal_id": "actual-task4-proposal",
-        "status": "SUPPORTED",
-        "reason_code": "SUPPORTED",
-        "topic_id": parent["topic_id"],
-        "parent_id": parent["parent_id"],
-        "proposal_fold": 0,
-        "parent_manifest_order": parent["manifest_order"],
-        "label": "access barriers for disadvantaged communities",
-        "scope_rationale": "fixture rationale excluded from validator",
-        "support_unit_ids": [source["unit_id"]],
-    }
-    job = build_validation_jobs([proposal], contract)[0]
-    preflight = _validation_preflight_for_job(
-        job,
-        source_contract_receipt_sha256=hashlib.sha256(
-            (contract_dir / "receipt.json").read_bytes()
-        ).hexdigest(),
-    )
-    validation_preflight = tmp_path / "validation-preflight"
-    publish_validation_preflight(preflight, validation_preflight)
-    preflight_sha256 = hashlib.sha256(
-        (validation_preflight / "receipt.json").read_bytes()
-    ).hexdigest()
-    anchor = validate_module._build_validation_run_anchor(
-        [job], preflight_sha256=preflight_sha256, approval_sha256="b" * 64
-    )
-    validation_ledger = tmp_path / "validation-ledger"
-    ledger = AppendOnlyAttemptLedger(
-        validation_ledger, expected_anchor=anchor, create_only=True
-    )
-    opposite_id = str(job["input_unit_ids"][0])  # type: ignore[index]
-
-    class Model:
-        def generate(self, _messages, _schema, *, max_new_tokens):
-            assert max_new_tokens == 256
-            return (
-                json.dumps(
-                    {
-                        "decision": "SUPPORTED",
-                        "support_unit_ids": [opposite_id],
-                    }
-                ).encode(),
-                20,
-            )
-
-    assert run_validation_job_with_retry(job, ledger=ledger, model=Model())[
-        "accepted"
-    ] is True
-    ledger.seal_completion()
-    validation_output = tmp_path / "validation-output"
-    finalize_validation_inventory(
-        preflight_dir=validation_preflight,
-        ledger_dir=validation_ledger,
-        output_dir=validation_output,
-    )
-
     retrieval_inputs = tmp_path / "retrieval-inputs"
     receipt = freeze_retrieval_inputs(
-        validation_output_dir=validation_output,
-        validation_preflight_dir=validation_preflight,
-        validation_ledger_dir=validation_ledger,
+        validation_output_dir=Path(paths["validation_output_dir"]),
+        validation_preflight_dir=Path(paths["validation_preflight_dir"]),
+        validation_approval_path=Path(paths["validation_approval_path"]),
+        validation_ledger_dir=Path(paths["validation_ledger_dir"]),
+        proposal_inventory_dir=Path(paths["proposal_inventory_dir"]),
+        proposal_preflight_dir=Path(paths["proposal_preflight_dir"]),
+        proposal_ledger_dir=Path(paths["proposal_ledger_dir"]),
         contract_dir=contract_dir,
         output_dir=retrieval_inputs,
     )
     authenticated = load_authenticated_retrieval_inputs(retrieval_inputs)
     assert receipt == authenticated["receipt"]
-    public_jobs = build_retrieval_jobs(retrieval_inputs, endpoint=ENDPOINT)
-    assert len(public_jobs) == 1
+    (retrieval_inputs / "unexpected.txt").write_text("not allowed", encoding="utf-8")
+    with pytest.raises(ValueError, match="inventory"):
+        load_authenticated_retrieval_inputs(retrieval_inputs)
+    (retrieval_inputs / "unexpected.txt").unlink()
+    cache = tmp_path / "public-cache"
+    cache.mkdir()
+    retrieval_preflight = tmp_path / "retrieval-preflight"
+    public_receipt = audit_retrieval_cache(
+        retrieval_inputs,
+        endpoint=ENDPOINT,
+        cache_root=cache,
+        retrieval_output_dir=tmp_path / "retrieval-output",
+        output_dir=retrieval_preflight,
+    )
+    assert public_receipt["planned_request_count"] == 1
+    assert verify_retrieval_preflight(retrieval_preflight) == public_receipt
     row = authenticated["inputs"][0]
     assert row["anchor_terms"] == ["technology"]
     assert row["parent_text"] == parent["text"]
@@ -925,56 +1121,98 @@ def test_real_task4_acceptance_freezes_authenticated_retrieval_inputs(
     assert row["narrative_sha256"] == hashlib.sha256(
         str(row["narrative"]).encode()
     ).hexdigest()
-    assert row["o1_label"] == proposal["label"]
-    assert row["validation_support_unit_ids"] == [opposite_id]
-    assert row["proposal_document_ids"] == [source["document_id"]]
+    assert row["o1_label"] == "access barriers for disadvantaged communities"
+    assert len(row["validation_support_unit_ids"]) == 1
+    assert len(row["proposal_document_ids"]) == 1
     assert row["source_manifest"]["sha256"] == (
         "14954020d5edae579d31a1f2f68e6a98b21b151de139aed664615884a2013eb4"
     )
 
+    tampered_output = tmp_path / "tampered-validation"
+    tampered_output.mkdir()
+    for name in ("validated.jsonl", "accepted.jsonl", "receipt.json"):
+        (tampered_output / name).write_bytes(
+            (Path(paths["validation_output_dir"]) / name).read_bytes()
+        )
+    accepted_path = tampered_output / "accepted.jsonl"
+    accepted_path.write_bytes(
+        accepted_path.read_bytes().replace(b"access", b"denied")
+    )
+    with pytest.raises(ValueError, match="sealed ledger replay"):
+        validate_module.load_authenticated_validation_inventory(
+            output_dir=tampered_output,
+            preflight_dir=Path(paths["validation_preflight_dir"]),
+            approval_path=Path(paths["validation_approval_path"]),
+            ledger_dir=Path(paths["validation_ledger_dir"]),
+            proposal_inventory_dir=Path(paths["proposal_inventory_dir"]),
+            proposal_preflight_dir=Path(paths["proposal_preflight_dir"]),
+            proposal_ledger_dir=Path(paths["proposal_ledger_dir"]),
+            source_contract_dir=contract_dir,
+        )
 
-def _validation_preflight_for_job(
-    job: dict[str, object], *, source_contract_receipt_sha256: str
-) -> dict[str, object]:
-    return {
-        "schema_version": validate_module.SCHEMA_VERSION,
-        "status": "complete",
-        "topic_ids": list(validate_module.PILOT_TOPIC_IDS),
-        "job_count": 1,
-        "primary_call_count": 1,
-        "retry_call_ceiling": 1,
-        "worst_case_call_ceiling": 2,
-        "primary_max_new_tokens": validate_module.PRIMARY_MAX_NEW_TOKENS,
-        "retry_max_new_tokens": validate_module.RETRY_MAX_NEW_TOKENS,
-        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
-        "jobs_sha256": canonical_sha256([job]),
-        "jobs": [job],
-        "source_contract_receipt_sha256": source_contract_receipt_sha256,
-        "proposal_receipt": {
-            "schema_version": validate_module.PROPOSAL_RECEIPT_SCHEMA_VERSION,
-            "status": "complete",
-            "sha256": "1" * 64,
-            "proposal_count": 1,
-            "proposals_sha256": "2" * 64,
-            "proposal_preflight_receipt_sha256": "3" * 64,
-            "source_contract_receipt_sha256": source_contract_receipt_sha256,
-            "run_anchor_sha256": "4" * 64,
-            "completion_sha256": "5" * 64,
-        },
-        "expected_runtime": {
-            "phase": "inference_free_preflight",
-            "proposal_calls_executed": 0,
-            "validation_calls_executed": 0,
-        },
-        "model_construction_allowed": False,
-        "generation_allowed": False,
-        "qrels_opened": False,
-        "network_call_count": 0,
-        "retrieval_call_count": 0,
-        "hosted_inference_call_count": 0,
-        "paid_call_count": 0,
-        "model_load_count": 0,
-        "tokenizer_load_count": 0,
-        "inference_count": 0,
-        "external_cost_usd": 0.0,
+
+def test_validation_finalizer_rejects_forged_upstream_hashes_before_ledger(
+    tmp_path: Path, real_v2_validation_handoff: dict[str, object]
+) -> None:
+    paths = real_v2_validation_handoff
+    forged = json.loads(
+        (Path(paths["validation_preflight_dir"]) / "receipt.json").read_bytes()
+    )
+    forged["source_contract_receipt_sha256"] = "f" * 64
+    proposal_receipt = forged["proposal_receipt"]
+    assert isinstance(proposal_receipt, dict)
+    proposal_receipt["source_contract_receipt_sha256"] = "f" * 64
+    proposal_receipt["sha256"] = "e" * 64
+    proposal_receipt["proposals_sha256"] = "d" * 64
+    forged_preflight = tmp_path / "forged-validation-preflight"
+    validate_module.publish_validation_preflight(forged, forged_preflight)
+    forged_source = (forged_preflight / "receipt.json").read_bytes()
+    approval = {
+        "schema_version": validate_module.VALIDATION_APPROVAL_SCHEMA_VERSION,
+        "stage": "validation",
+        "preflight_sha256": hashlib.sha256(forged_source).hexdigest(),
+        "job_count": forged["job_count"],
+        "primary_call_count": forged["primary_call_count"],
+        "retry_call_ceiling": forged["retry_call_ceiling"],
+        "approved": True,
     }
+    approval_path = tmp_path / "forged-validation-approval.json"
+    approval_path.write_bytes(validate_module._pretty_bytes(approval))
+    output = tmp_path / "must-not-exist"
+    with pytest.raises(ValueError, match="authenticated upstream replay"):
+        validate_module.finalize_validation_inventory(
+            preflight_dir=forged_preflight,
+            approval_path=approval_path,
+            ledger_dir=tmp_path / "missing-ledger",
+            output_dir=output,
+            proposal_inventory_dir=Path(paths["proposal_inventory_dir"]),
+            proposal_preflight_dir=Path(paths["proposal_preflight_dir"]),
+            proposal_ledger_dir=Path(paths["proposal_ledger_dir"]),
+            source_contract_dir=Path(paths["contract_dir"]),
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("publisher", ["retrieval-inputs", "preflight"])
+def test_task5_publish_race_is_create_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publisher: str
+) -> None:
+    destination = tmp_path / publisher
+    real = getattr(module, "_rename_noreplace_at", None)
+
+    def race(parent_fd: int, staging_name: str, destination_name: str) -> None:
+        os.mkdir(destination_name, mode=0o700, dir_fd=parent_fd)
+        assert real is not None
+        real(parent_fd, staging_name, destination_name)
+
+    monkeypatch.setattr(module, "_rename_noreplace_at", race, raising=False)
+    with pytest.raises(FileExistsError, match="create-only"):
+        if publisher == "retrieval-inputs":
+            module._publish_retrieval_inputs(
+                destination,
+                {"inputs.jsonl": b"", "receipt.json": b"{}\n"},
+            )
+        else:
+            module._publish_preflight(destination, {"status": "fixture"})
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []

@@ -7,6 +7,8 @@ before decoding or normalization.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import math
@@ -146,13 +148,22 @@ def render_o1_bm25_query(
     return " ".join(remove_exact_duplicate_phrases(parts))
 
 
-def _capture_selected_files(path: Path, names: frozenset[str], label: str) -> dict[str, bytes]:
+def _capture_selected_files(
+    path: Path,
+    names: frozenset[str],
+    label: str,
+    *,
+    exact: bool = False,
+) -> dict[str, bytes]:
     try:
         descriptor = _open_directory_no_symlinks(Path(path))
         try:
             before = os.fstat(descriptor)
             available_before = set(os.listdir(descriptor))
-            if not names <= available_before:
+            inventory_differs = (
+                available_before != names if exact else not names <= available_before
+            )
+            if inventory_differs:
                 raise OSError(f"{label} inventory differs")
             contents = {
                 name: _read_stable_regular_at(
@@ -437,42 +448,62 @@ def _retrieval_input_rows(
 
 
 def _publish_retrieval_inputs(destination: Path, contents: Mapping[str, bytes]) -> None:
-    if os.path.lexists(destination):
-        raise FileExistsError(f"create-only retrieval inputs exist: {destination}")
+    destination = Path(destination)
+    if not destination.name or destination.name in {".", ".."}:
+        raise ValueError("retrieval input output path is unsafe")
     try:
-        descriptor = _open_directory_no_symlinks(destination.parent)
+        parent_fd = _open_directory_no_symlinks(destination.parent)
     except OSError as exc:
         raise ValueError("retrieval input output parent is missing or unsafe") from exc
-    else:
-        os.close(descriptor)
-    staging = destination.parent / f".{destination.name}.staging-{uuid.uuid4().hex}"
-    staging.mkdir(mode=0o700)
+    staging_name = f".{destination.name}.staging-{uuid.uuid4().hex}"
+    staging_fd: int | None = None
     published = False
     try:
+        os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
+        staging_fd = _open_dir_at(parent_fd, staging_name, create=False)
         for name, source in contents.items():
-            _exclusive_bytes(staging / name, source)
-        _fsync_directory(staging)
-        os.rename(staging, destination)
+            _write_exclusive_at(staging_fd, name, source)
+        os.fsync(staging_fd)
+        _rename_noreplace_at(parent_fd, staging_name, destination.name)
         published = True
-        _fsync_directory(destination.parent)
+        os.fsync(parent_fd)
     finally:
-        if not published and staging.exists():
-            for child in staging.iterdir():
-                child.unlink()
-            staging.rmdir()
+        if staging_fd is not None:
+            if not published:
+                for name in contents:
+                    try:
+                        os.unlink(name, dir_fd=staging_fd)
+                    except FileNotFoundError:
+                        pass
+            os.close(staging_fd)
+        if not published:
+            try:
+                os.rmdir(staging_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
 
 
 def _retrieval_input_material(
     *,
     validation_output_dir: Path,
     validation_preflight_dir: Path,
+    validation_approval_path: Path,
     validation_ledger_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
     contract_dir: Path,
 ) -> tuple[list[dict[str, object]], dict[str, object], dict[str, bytes]]:
     authenticated = load_authenticated_validation_inventory(
         output_dir=validation_output_dir,
         preflight_dir=validation_preflight_dir,
+        approval_path=validation_approval_path,
         ledger_dir=validation_ledger_dir,
+        proposal_inventory_dir=proposal_inventory_dir,
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=proposal_ledger_dir,
+        source_contract_dir=contract_dir,
     )
     accepted = authenticated.get("accepted")
     validation_receipt = authenticated.get("receipt")
@@ -504,7 +535,11 @@ def _retrieval_input_material(
         "validation_inventory": {
             "output_dir": str(validation_output_dir.absolute()),
             "preflight_dir": str(validation_preflight_dir.absolute()),
+            "approval_path": str(validation_approval_path.absolute()),
             "ledger_dir": str(validation_ledger_dir.absolute()),
+            "proposal_inventory_dir": str(proposal_inventory_dir.absolute()),
+            "proposal_preflight_dir": str(proposal_preflight_dir.absolute()),
+            "proposal_ledger_dir": str(proposal_ledger_dir.absolute()),
             "receipt_sha256": validation_receipt_sha256,
             "preflight_sha256": validation_receipt[
                 "validation_preflight_sha256"
@@ -544,7 +579,11 @@ def freeze_retrieval_inputs(
     *,
     validation_output_dir: Path,
     validation_preflight_dir: Path,
+    validation_approval_path: Path,
     validation_ledger_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
     contract_dir: Path,
     output_dir: Path,
 ) -> dict[str, object]:
@@ -553,7 +592,11 @@ def freeze_retrieval_inputs(
     _rows, receipt, contents = _retrieval_input_material(
         validation_output_dir=Path(validation_output_dir),
         validation_preflight_dir=Path(validation_preflight_dir),
+        validation_approval_path=Path(validation_approval_path),
         validation_ledger_dir=Path(validation_ledger_dir),
+        proposal_inventory_dir=Path(proposal_inventory_dir),
+        proposal_preflight_dir=Path(proposal_preflight_dir),
+        proposal_ledger_dir=Path(proposal_ledger_dir),
         contract_dir=Path(contract_dir),
     )
     _publish_retrieval_inputs(Path(output_dir), contents)
@@ -565,6 +608,7 @@ def load_authenticated_retrieval_inputs(input_dir: Path) -> dict[str, object]:
         Path(input_dir),
         frozenset({"inputs.jsonl", "receipt.json"}),
         "retrieval input inventory",
+        exact=True,
     )
     receipt = _json_object(contents["receipt.json"], "retrieval input receipt")
     if (
@@ -580,7 +624,11 @@ def load_authenticated_retrieval_inputs(input_dir: Path) -> dict[str, object]:
     path_names = (
         "output_dir",
         "preflight_dir",
+        "approval_path",
         "ledger_dir",
+        "proposal_inventory_dir",
+        "proposal_preflight_dir",
+        "proposal_ledger_dir",
     )
     if any(
         not isinstance(validation.get(name), str)
@@ -591,7 +639,11 @@ def load_authenticated_retrieval_inputs(input_dir: Path) -> dict[str, object]:
     rows, expected_receipt, expected_contents = _retrieval_input_material(
         validation_output_dir=Path(str(validation["output_dir"])),
         validation_preflight_dir=Path(str(validation["preflight_dir"])),
+        validation_approval_path=Path(str(validation["approval_path"])),
         validation_ledger_dir=Path(str(validation["ledger_dir"])),
+        proposal_inventory_dir=Path(str(validation["proposal_inventory_dir"])),
+        proposal_preflight_dir=Path(str(validation["proposal_preflight_dir"])),
+        proposal_ledger_dir=Path(str(validation["proposal_ledger_dir"])),
         contract_dir=Path(str(source["path"])),
     )
     if contents != expected_contents or receipt != expected_receipt:
@@ -1106,6 +1158,8 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
         "timeout_seconds",
         "transport_retry_count",
         "rate_limiter",
+        "endpoint",
+        "index_id",
         "cache_root",
         "output_dir",
         "cache_audit",
@@ -1171,6 +1225,16 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
         "timeout_seconds": TIMEOUT_SECONDS,
         "transport_retry_count": TRANSPORT_RETRY_COUNT,
         "rate_limiter": RATE_LIMITER_IDENTITY,
+        "endpoint": (
+            str(verified_jobs[0]["endpoint"])
+            if verified_jobs
+            else receipt.get("endpoint")
+        ),
+        "index_id": (
+            str(verified_jobs[0]["index_id"])
+            if verified_jobs
+            else receipt.get("index_id")
+        ),
         "request_inventory_sha256": canonical_sha256(jobs),
         "qrels_opened": False,
         "network_call_count": 0,
@@ -1187,7 +1251,15 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
         "retrieval_input_receipt_sha256"
     )
     if (
-        not isinstance(cache_root, str)
+        receipt.get("endpoint") != _validated_endpoint(receipt.get("endpoint"))
+        or not isinstance(receipt.get("index_id"), str)
+        or not str(receipt["index_id"]).strip()
+        or any(
+            job.get("endpoint") != receipt["endpoint"]
+            or job.get("index_id") != receipt["index_id"]
+            for job in verified_jobs
+        )
+        or not isinstance(cache_root, str)
         or not Path(cache_root).is_absolute()
         or not isinstance(output_dir, str)
         or not Path(output_dir).is_absolute()
@@ -1198,15 +1270,6 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
     ):
         raise ValueError("retrieval preflight destinations must be absolute")
     return receipt
-
-
-def _exclusive_bytes(path: Path, source: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("xb") as handle:
-        handle.write(source)
-        handle.flush()
-        os.fsync(handle.fileno())
-    _fsync_directory(path.parent)
 
 
 def _publish_preflight(output_dir: Path, receipt: Mapping[str, object]) -> None:
@@ -1256,12 +1319,7 @@ def _publish_preflight(output_dir: Path, receipt: Mapping[str, object]) -> None:
         finally:
             os.close(file_fd)
         os.fsync(staging_fd)
-        os.rename(
-            staging_name,
-            output.name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
+        _rename_noreplace_at(parent_fd, staging_name, output.name)
         published = True
         os.fsync(parent_fd)
     finally:
@@ -1280,6 +1338,43 @@ def _publish_preflight(output_dir: Path, receipt: Mapping[str, object]) -> None:
         os.close(parent_fd)
 
 
+def _rename_noreplace_at(
+    parent_fd: int, staging_name: str, destination_name: str
+) -> None:
+    if any(
+        not name or name in {".", ".."} or "/" in name
+        for name in (staging_name, destination_name)
+    ):
+        raise ValueError("retrieval publish name differs")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("atomic create-only rename is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        parent_fd,
+        os.fsencode(staging_name),
+        parent_fd,
+        os.fsencode(destination_name),
+        1,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in (errno.EEXIST, errno.ENOTEMPTY):
+        raise FileExistsError(
+            f"create-only retrieval publication exists: {destination_name}"
+        )
+    raise OSError(error, os.strerror(error), destination_name)
+
+
 def _audit_retrieval_cache_rows(
     accepted_o1_rows: Sequence[Mapping[str, object]],
     *,
@@ -1288,7 +1383,6 @@ def _audit_retrieval_cache_rows(
     cache_root: Path = SHARED_CACHE_DIR,
     retrieval_output_dir: Path,
     cache_loader: Callable[[dict[str, object]], object] | None = None,
-    output_dir: Path | None = None,
     retrieval_input_dir: Path = Path("/var/tmp/adaptive-v2-fixture-inputs"),
     retrieval_input_receipt_sha256: str = "f" * 64,
 ) -> dict[str, object]:
@@ -1335,6 +1429,8 @@ def _audit_retrieval_cache_rows(
         "timeout_seconds": TIMEOUT_SECONDS,
         "transport_retry_count": TRANSPORT_RETRY_COUNT,
         "rate_limiter": dict(RATE_LIMITER_IDENTITY),
+        "endpoint": _validated_endpoint(endpoint),
+        "index_id": str(index_id),
         "cache_root": str(root),
         "output_dir": str(final_output),
         "cache_audit": statuses,
@@ -1346,8 +1442,6 @@ def _audit_retrieval_cache_rows(
         "paid_call_count": 0,
     }
     _verify_receipt(receipt)
-    if output_dir is not None:
-        _publish_preflight(Path(output_dir), receipt)
     return receipt
 
 
@@ -1371,16 +1465,18 @@ def audit_retrieval_cache(
         or not _SHA256_RE.fullmatch(receipt_sha256)
     ):
         raise ValueError("retrieval input inventory differs")
-    return _audit_retrieval_cache_rows(
+    receipt = _audit_retrieval_cache_rows(
         inputs,
         endpoint=endpoint,
         index_id=index_id,
         cache_root=cache_root,
         retrieval_output_dir=retrieval_output_dir,
-        output_dir=output_dir,
         retrieval_input_dir=Path(retrieval_input_dir),
         retrieval_input_receipt_sha256=receipt_sha256,
     )
+    if output_dir is not None:
+        _publish_preflight(Path(output_dir), receipt)
+    return receipt
 
 
 def _capture_preflight_source(path: Path) -> bytes:
@@ -1426,8 +1522,47 @@ def _parse_preflight_source(source: bytes) -> dict[str, object]:
     return _verify_receipt(receipt)
 
 
+def _verify_retrieval_preflight_sources(
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    input_dir = receipt.get("retrieval_input_dir")
+    expected_receipt_sha256 = receipt.get("retrieval_input_receipt_sha256")
+    if (
+        not isinstance(input_dir, str)
+        or not Path(input_dir).is_absolute()
+        or not isinstance(expected_receipt_sha256, str)
+        or not _SHA256_RE.fullmatch(expected_receipt_sha256)
+    ):
+        raise ValueError("retrieval input binding differs")
+    authenticated = load_authenticated_retrieval_inputs(Path(input_dir))
+    rows = authenticated.get("inputs")
+    observed_receipt_sha256 = authenticated.get("receipt_sha256")
+    if (
+        not isinstance(rows, list)
+        or observed_receipt_sha256 != expected_receipt_sha256
+    ):
+        raise ValueError("retrieval input receipt binding differs")
+    expected_jobs = _build_retrieval_jobs_from_inputs(
+        rows,
+        endpoint=receipt.get("endpoint"),
+        index_id=receipt.get("index_id"),
+    )
+    observed_jobs = receipt.get("requests")
+    if (
+        not isinstance(observed_jobs, list)
+        or _canonical_bytes(observed_jobs) != _canonical_bytes(expected_jobs)
+        or receipt.get("request_inventory_sha256")
+        != canonical_sha256(expected_jobs)
+    ):
+        raise ValueError("retrieval jobs differ from authenticated input replay")
+    return dict(receipt)
+
+
 def verify_retrieval_preflight(preflight_dir: Path) -> dict[str, object]:
-    return _parse_preflight_source(_capture_preflight_source(Path(preflight_dir)))
+    receipt = _parse_preflight_source(
+        _capture_preflight_source(Path(preflight_dir))
+    )
+    return _verify_retrieval_preflight_sources(receipt)
 
 
 def _capture_retrieval_approval(path: Path) -> tuple[dict[str, object], str]:
@@ -1754,6 +1889,24 @@ def execute_retrieval(
         Path(preflight_dir), expected_sha256=str(approval["preflight_sha256"])
     )
     _verify_approval_against_preflight(approval, receipt)
+    _verify_retrieval_preflight_sources(receipt)
+    return _execute_verified_retrieval(
+        receipt=receipt,
+        receipt_source=receipt_source,
+        approval_sha256=approval_sha256,
+        api_token=api_token,
+    )
+
+
+def _execute_verified_retrieval(
+    *,
+    receipt: Mapping[str, object],
+    receipt_source: bytes,
+    approval_sha256: str,
+    api_token: str | None = None,
+) -> dict[str, object]:
+    """Execute only after the public boundary authenticates every source."""
+
     root = Path(str(receipt["cache_root"]))
     output = Path(str(receipt["output_dir"]))
     cache_store = _SecureCacheStore(root)

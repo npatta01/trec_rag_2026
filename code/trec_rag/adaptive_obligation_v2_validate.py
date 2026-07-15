@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import re
-import shutil
 import tempfile
+import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -992,6 +994,7 @@ VALIDATION_INVENTORY_SCHEMA_VERSION = (
     "adaptive-obligation-v2-validation-inventory-v1"
 )
 VALIDATION_RECEIPT_SCHEMA_VERSION = "adaptive-obligation-v2-validation-receipt-v1"
+VALIDATION_APPROVAL_SCHEMA_VERSION = "adaptive-obligation-v2-validation-approval-v1"
 _VALIDATION_INVENTORY_NAMES = frozenset(
     {"validated.jsonl", "accepted.jsonl", "receipt.json"}
 )
@@ -1101,28 +1104,110 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
 def _publish_validation_directory(
     destination: Path, contents: Mapping[str, bytes]
 ) -> None:
-    if os.path.lexists(destination):
-        raise FileExistsError(f"create-only validation output exists: {destination}")
+    destination = Path(destination)
+    if not destination.name or destination.name in {".", ".."}:
+        raise ValueError("validation output path is unsafe")
     try:
-        descriptor = _open_directory_no_symlinks(destination.parent)
+        parent_fd = _open_directory_no_symlinks(destination.parent)
     except OSError as exc:
         raise ValueError("validation output parent is missing or unsafe") from exc
-    else:
-        os.close(descriptor)
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
-    )
+    staging_name = f".{destination.name}.staging-{uuid.uuid4().hex}"
+    staging_fd: int | None = None
     published = False
     try:
+        os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
+        staging_fd = os.open(
+            staging_name,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
         for name, source in contents.items():
-            _write_fsynced(staging / name, source)
-        _fsync_directory(staging)
-        os.rename(staging, destination)
+            _write_exclusive_at(staging_fd, name, source)
+        os.fsync(staging_fd)
+        _rename_noreplace_at(parent_fd, staging_name, destination.name)
         published = True
-        _fsync_directory(destination.parent)
+        os.fsync(parent_fd)
     finally:
-        if not published and staging.exists():
-            shutil.rmtree(staging)
+        if staging_fd is not None:
+            if not published:
+                for name in contents:
+                    try:
+                        os.unlink(name, dir_fd=staging_fd)
+                    except FileNotFoundError:
+                        pass
+            os.close(staging_fd)
+        if not published:
+            try:
+                os.rmdir(staging_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
+
+
+def _write_exclusive_at(directory_fd: int, name: str, source: bytes) -> None:
+    if not name or name in {".", ".."} or "/" in name:
+        raise ValueError("validation output file name differs")
+    descriptor = os.open(
+        name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        view = memoryview(source)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short validation output write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.fsync(directory_fd)
+
+
+def _rename_noreplace_at(
+    parent_fd: int, staging_name: str, destination_name: str
+) -> None:
+    if any(
+        not name or name in {".", ".."} or "/" in name
+        for name in (staging_name, destination_name)
+    ):
+        raise ValueError("validation publish name differs")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("atomic create-only rename is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        parent_fd,
+        os.fsencode(staging_name),
+        parent_fd,
+        os.fsencode(destination_name),
+        1,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in (errno.EEXIST, errno.ENOTEMPTY):
+        raise FileExistsError(
+            f"create-only validation output exists: {destination_name}"
+        )
+    raise OSError(error, os.strerror(error), destination_name)
 
 
 def publish_validation_preflight(
@@ -1183,6 +1268,87 @@ def _capture_validation_preflight(path: Path) -> tuple[dict[str, object], bytes]
     if not isinstance(value, dict) or source != _pretty_bytes(value):
         raise ValueError("validation preflight receipt is not canonical")
     return _verify_validation_preflight_payload(value), source
+
+
+def _capture_validation_approval(
+    path: Path,
+) -> tuple[dict[str, object], bytes, str]:
+    try:
+        source = _capture_regular_file_no_symlinks(Path(path))
+        value = json.loads(source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PermissionError("validation approval required") from exc
+    expected_fields = {
+        "schema_version",
+        "stage",
+        "preflight_sha256",
+        "job_count",
+        "primary_call_count",
+        "retry_call_ceiling",
+        "approved",
+    }
+    if (
+        not isinstance(value, dict)
+        or source != _pretty_bytes(value)
+        or set(value) != expected_fields
+        or value.get("schema_version") != VALIDATION_APPROVAL_SCHEMA_VERSION
+        or value.get("stage") != "validation"
+        or not isinstance(value.get("preflight_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", str(value["preflight_sha256"]))
+        or any(
+            type(value.get(name)) is not int
+            for name in ("job_count", "primary_call_count", "retry_call_ceiling")
+        )
+        or value.get("approved") is not True
+    ):
+        raise PermissionError("validation approval required")
+    return value, source, hashlib.sha256(source).hexdigest()
+
+
+def _authenticated_validation_run(
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
+    source_contract_dir: Path,
+) -> tuple[
+    dict[str, object],
+    bytes,
+    str,
+    AppendOnlyAttemptLedger,
+]:
+    approval, _approval_source, approval_sha256 = _capture_validation_approval(
+        Path(approval_path)
+    )
+    preflight, source = _capture_validation_preflight(Path(preflight_dir))
+    preflight_sha256 = hashlib.sha256(source).hexdigest()
+    if approval.get("preflight_sha256") != preflight_sha256:
+        raise PermissionError("validation approval required")
+    rebuilt = build_validation_preflight(
+        Path(source_contract_dir),
+        proposal_inventory_dir=Path(proposal_inventory_dir),
+        proposal_preflight_dir=Path(proposal_preflight_dir),
+        proposal_ledger_dir=Path(proposal_ledger_dir),
+    )
+    if source != _pretty_bytes(rebuilt) or preflight != rebuilt:
+        raise ValueError("validation preflight differs from authenticated upstream replay")
+    if any(
+        approval.get(name) != preflight.get(name)
+        for name in ("job_count", "primary_call_count", "retry_call_ceiling")
+    ):
+        raise PermissionError("validation approval required")
+    ledger, observed_approval_sha256 = _ledger_from_validation_preflight(
+        preflight,
+        preflight_sha256,
+        Path(ledger_dir),
+        approval_sha256=approval_sha256,
+    )
+    if observed_approval_sha256 != approval_sha256:
+        raise ValueError("validation ledger approval binding differs")
+    return preflight, source, approval_sha256, ledger
 
 
 def _read_canonical_rows(source: bytes, name: str) -> list[dict[str, object]]:
@@ -1319,15 +1485,28 @@ def _ledger_from_validation_preflight(
 
 
 def finalize_validation_inventory(
-    *, preflight_dir: Path, ledger_dir: Path, output_dir: Path
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+    output_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
+    source_contract_dir: Path,
 ) -> dict[str, object]:
     """Publish accepted O1 rows only by replaying a sealed validation ledger."""
 
-    preflight, source = _capture_validation_preflight(Path(preflight_dir))
-    preflight_sha256 = hashlib.sha256(source).hexdigest()
-    ledger, approval_sha256 = _ledger_from_validation_preflight(
-        preflight, preflight_sha256, Path(ledger_dir)
+    preflight, source, approval_sha256, ledger = _authenticated_validation_run(
+        preflight_dir=Path(preflight_dir),
+        approval_path=Path(approval_path),
+        ledger_dir=Path(ledger_dir),
+        proposal_inventory_dir=Path(proposal_inventory_dir),
+        proposal_preflight_dir=Path(proposal_preflight_dir),
+        proposal_ledger_dir=Path(proposal_ledger_dir),
+        source_contract_dir=Path(source_contract_dir),
     )
+    preflight_sha256 = hashlib.sha256(source).hexdigest()
     _validated, _accepted, receipt, contents = _validation_inventory_material(
         preflight,
         preflight_sha256=preflight_sha256,
@@ -1339,7 +1518,15 @@ def finalize_validation_inventory(
 
 
 def load_authenticated_validation_inventory(
-    *, output_dir: Path, preflight_dir: Path, ledger_dir: Path
+    *,
+    output_dir: Path,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
+    source_contract_dir: Path,
 ) -> dict[str, object]:
     """Authenticate accepted O1 rows against the exact sealed Task 4 replay."""
 
@@ -1358,16 +1545,20 @@ def load_authenticated_validation_inventory(
         or not isinstance(receipt.get("approval_sha256"), str)
     ):
         raise ValueError("validation inventory receipt differs")
-    preflight, source = _capture_validation_preflight(Path(preflight_dir))
+    preflight, source, approval_sha256, ledger = _authenticated_validation_run(
+        preflight_dir=Path(preflight_dir),
+        approval_path=Path(approval_path),
+        ledger_dir=Path(ledger_dir),
+        proposal_inventory_dir=Path(proposal_inventory_dir),
+        proposal_preflight_dir=Path(proposal_preflight_dir),
+        proposal_ledger_dir=Path(proposal_ledger_dir),
+        source_contract_dir=Path(source_contract_dir),
+    )
     preflight_sha256 = hashlib.sha256(source).hexdigest()
     if receipt.get("validation_preflight_sha256") != preflight_sha256:
         raise ValueError("validation inventory preflight binding differs")
-    ledger, approval_sha256 = _ledger_from_validation_preflight(
-        preflight,
-        preflight_sha256,
-        Path(ledger_dir),
-        approval_sha256=str(receipt["approval_sha256"]),
-    )
+    if receipt.get("approval_sha256") != approval_sha256:
+        raise ValueError("validation inventory approval binding differs")
     validated, accepted, expected_receipt, expected_contents = (
         _validation_inventory_material(
             preflight,

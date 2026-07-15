@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,6 @@ from trec_rag.adaptive_obligation_v2_validate import (
     build_validation_preflight,
     build_validation_jobs,
     finalize_validation_inventory,
-    load_authenticated_validation_inventory,
     publish_validation_preflight,
     run_validation_job_with_retry,
     validate_semantic_decision,
@@ -717,103 +717,41 @@ def test_task3_real_ledger_runs_validation_retry_and_sealed_reopen(
     assert len(reopened.read_events()) == 4
 
 
-def test_real_validation_preflight_ledger_and_acceptance_are_durably_replayable(
+def test_validation_finalizer_requires_actual_upstream_and_approval_artifacts(
     tmp_path: Path,
 ) -> None:
-    job = build_validation_jobs([_supported_proposal()], _contract_fixture())[0]
-    preflight = {
-        "schema_version": validate_module.SCHEMA_VERSION,
-        "status": "complete",
-        "topic_ids": list(validate_module.PILOT_TOPIC_IDS),
-        "job_count": 1,
-        "primary_call_count": 1,
-        "retry_call_ceiling": 1,
-        "worst_case_call_ceiling": 2,
-        "primary_max_new_tokens": validate_module.PRIMARY_MAX_NEW_TOKENS,
-        "retry_max_new_tokens": validate_module.RETRY_MAX_NEW_TOKENS,
-        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
-        "jobs_sha256": canonical_sha256([job]),
-        "jobs": [job],
-        "source_contract_receipt_sha256": "c" * 64,
-        "proposal_receipt": {
-            "schema_version": PROPOSAL_RECEIPT_SCHEMA_VERSION,
-            "status": "complete",
-            "sha256": "1" * 64,
-            "proposal_count": 1,
-            "proposals_sha256": "2" * 64,
-            "proposal_preflight_receipt_sha256": "3" * 64,
-            "source_contract_receipt_sha256": "c" * 64,
-            "run_anchor_sha256": "4" * 64,
-            "completion_sha256": "5" * 64,
-        },
-        "expected_runtime": {
-            "phase": "inference_free_preflight",
-            "proposal_calls_executed": 0,
-            "validation_calls_executed": 0,
-        },
-        "model_construction_allowed": False,
-        "generation_allowed": False,
-        "qrels_opened": False,
-        "network_call_count": 0,
-        "retrieval_call_count": 0,
-        "hosted_inference_call_count": 0,
-        "paid_call_count": 0,
-        "model_load_count": 0,
-        "tokenizer_load_count": 0,
-        "inference_count": 0,
-        "external_cost_usd": 0.0,
-    }
-    preflight_dir = tmp_path / "validation-preflight"
-    receipt = publish_validation_preflight(preflight, preflight_dir)
-    preflight_sha256 = hashlib.sha256(
-        (preflight_dir / "receipt.json").read_bytes()
-    ).hexdigest()
-    assert receipt == preflight
-
-    anchor = validate_module._build_validation_run_anchor(
-        [job], preflight_sha256=preflight_sha256, approval_sha256="b" * 64
-    )
-    ledger_dir = tmp_path / "validation-ledger"
-    ledger = AppendOnlyAttemptLedger(
-        ledger_dir, expected_anchor=anchor, create_only=True
-    )
-    opposite_id = str(job["input_unit_ids"][0])  # type: ignore[index]
-    completion = json.dumps(
-        {"decision": "SUPPORTED", "support_unit_ids": [opposite_id]}
-    ).encode()
-    result = run_validation_job_with_retry(
-        job,
-        ledger=ledger,
-        model=_FakeValidationModel([(completion, 20)]),
-    )
-    assert result["accepted"] is True
-    ledger.seal_completion()
-
-    output = tmp_path / "accepted-validation"
-    finalized = finalize_validation_inventory(
-        preflight_dir=preflight_dir,
-        ledger_dir=ledger_dir,
-        output_dir=output,
-    )
-    assert finalized["accepted_count"] == 1
-    authenticated = load_authenticated_validation_inventory(
-        output_dir=output,
-        preflight_dir=preflight_dir,
-        ledger_dir=ledger_dir,
-    )
-    assert authenticated["accepted"][0]["proposal_id"] == job["proposal_id"]
-    assert authenticated["accepted"][0]["proposal_document_ids"] == job[
-        "proposal_document_ids"
-    ]
-    assert authenticated["accepted"][0]["validation_support_unit_ids"] == [
-        opposite_id
-    ]
-
-    accepted_path = output / "accepted.jsonl"
-    accepted_path.write_bytes(accepted_path.read_bytes().replace(b"bias", b"drift"))
-    with pytest.raises(ValueError, match="sealed ledger replay"):
-        load_authenticated_validation_inventory(
+    output = tmp_path / "must-not-exist"
+    with pytest.raises(PermissionError, match="validation approval required"):
+        finalize_validation_inventory(
+            preflight_dir=tmp_path / "validation-preflight",
+            approval_path=tmp_path / "validation-approval.json",
+            ledger_dir=tmp_path / "validation-ledger",
             output_dir=output,
-            preflight_dir=preflight_dir,
-            ledger_dir=ledger_dir,
+            proposal_inventory_dir=tmp_path / "proposal-inventory",
+            proposal_preflight_dir=tmp_path / "proposal-preflight",
+            proposal_ledger_dir=tmp_path / "proposal-ledger",
+            source_contract_dir=tmp_path / "source-contract",
         )
+    assert not output.exists()
+
+
+def test_validation_publish_race_is_create_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "validation-output"
+    real = getattr(validate_module, "_rename_noreplace_at", None)
+
+    def race(parent_fd: int, staging_name: str, destination_name: str) -> None:
+        os.mkdir(destination_name, mode=0o700, dir_fd=parent_fd)
+        assert real is not None
+        real(parent_fd, staging_name, destination_name)
+
+    monkeypatch.setattr(
+        validate_module, "_rename_noreplace_at", race, raising=False
+    )
+    with pytest.raises(FileExistsError, match="create-only"):
+        validate_module._publish_validation_directory(
+            destination, {"receipt.json": b"new bytes\n"}
+        )
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []
