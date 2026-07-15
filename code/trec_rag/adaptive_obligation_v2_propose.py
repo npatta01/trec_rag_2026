@@ -16,6 +16,11 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
+from .adaptive_obligation_v2_ledger import (
+    AppendOnlyAttemptLedger,
+    AttemptSpec,
+    classify_completion,
+)
 from .adaptive_obligation_v2_contract import (
     SCHEMA_VERSION as CONTRACT_SCHEMA_VERSION,
     canonical_sha256,
@@ -959,6 +964,196 @@ def _load_local_tokenizer(snapshot_dir: Path = MODEL_SNAPSHOT) -> object:
     return LocalChatTokenizer()
 
 
+def _load_inference_approval(path: Path) -> dict[str, object]:
+    """Authenticate the approval artifact without touching any preflight path."""
+
+    approval_path = Path(path)
+    if approval_path.is_symlink() or not approval_path.is_file():
+        raise PermissionError("proposal inference approval required")
+    try:
+        source = approval_path.read_bytes()
+        approval = json.loads(source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PermissionError("proposal inference approval required") from exc
+    required_names = {
+        "schema_version",
+        "stage",
+        "preflight_sha256",
+        "model",
+        "model_revision",
+        "primary_call_count",
+        "retry_call_ceiling",
+        "approved",
+    }
+    if (
+        not isinstance(approval, dict)
+        or source != _pretty_bytes(approval)
+        or not required_names <= set(approval)
+        or approval.get("schema_version")
+        != "adaptive-obligation-v2-proposal-approval-v1"
+        or approval.get("stage") != "proposal"
+        or approval.get("model") != MODEL_ID
+        or approval.get("model_revision") != MODEL_REVISION
+        or approval.get("primary_call_count") != PRIMARY_JOB_COUNT
+        or approval.get("retry_call_ceiling") != PRIMARY_JOB_COUNT
+        or approval.get("approved") is not True
+        or not isinstance(approval.get("preflight_sha256"), str)
+        or len(str(approval["preflight_sha256"])) != 64
+        or any(
+            char not in "0123456789abcdef"
+            for char in str(approval["preflight_sha256"])
+        )
+    ):
+        raise PermissionError("proposal inference approval required")
+    return approval
+
+
+def _completion_parts(generated: object, ceiling: int) -> tuple[bytes, int]:
+    if isinstance(generated, bytes):
+        return generated, ceiling
+    if (
+        isinstance(generated, tuple)
+        and len(generated) == 2
+        and isinstance(generated[0], bytes)
+        and isinstance(generated[1], int)
+        and not isinstance(generated[1], bool)
+    ):
+        return generated[0], generated[1]
+    raise TypeError("model generation must return raw bytes and an exact token count")
+
+
+def run_job_with_retry(
+    job: Mapping[str, object],
+    *,
+    generate: Callable[[int], object],
+    ledger: AppendOnlyAttemptLedger | None = None,
+) -> dict[str, object]:
+    """Run one job, retrying only incomplete JSON at the exact primary ceiling."""
+
+    if (
+        job.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+        or job.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
+        or not isinstance(job.get("job_id"), str)
+        or len(str(job["job_id"])) != 64
+        or not isinstance(job.get("messages"), list)
+        or not isinstance(job.get("input_unit_ids"), list)
+    ):
+        raise ValueError("proposal execution job differs from the frozen contract")
+    ceilings = (PRIMARY_MAX_NEW_TOKENS, RETRY_MAX_NEW_TOKENS)
+    for attempt_ordinal, ceiling in enumerate(ceilings, start=1):
+        if ledger is None:
+            raw, output_tokens = _completion_parts(generate(ceiling), ceiling)
+            classified = classify_completion(
+                raw,
+                schema=PROPOSAL_SCHEMA,
+                output_token_count=output_tokens,
+                max_new_tokens=ceiling,
+                allowed_support_unit_ids=[str(value) for value in job["input_unit_ids"]],
+            )
+        else:
+            request = {
+                "stage": "proposal",
+                "job_id": job["job_id"],
+                "messages_sha256": canonical_sha256(job["messages"]),
+                "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+                "max_new_tokens": ceiling,
+            }
+            spec = AttemptSpec(
+                stage="proposal",
+                job_id=str(job["job_id"]),
+                attempt_ordinal=attempt_ordinal,
+                request_sha256=canonical_sha256(request),
+                max_new_tokens=ceiling,
+            )
+
+            def invoke(_messages: object, _schema: object, value: int) -> object:
+                if value != ceiling:
+                    raise ValueError("proposal ledger output ceiling differs")
+                return generate(value)
+
+            classified = ledger.run_attempt(
+                spec,
+                invoke,
+                messages=job["messages"],
+                schema=PROPOSAL_SCHEMA,
+                allowed_support_unit_ids=[str(value) for value in job["input_unit_ids"]],
+            )
+        classification = classified.get("classification")
+        if classification == "valid":
+            value = classified.get("value")
+            if not isinstance(value, dict):
+                raise ValueError("proposal schema result is not an object")
+            return value
+        if classification == "truncated_at_ceiling" and attempt_ordinal == 1:
+            continue
+        error = classified.get("error", classification)
+        if classification == "truncated_at_ceiling":
+            raise ValueError(f"proposal parse truncated at retry ceiling: {error}")
+        raise ValueError(f"proposal {error}")
+    raise RuntimeError("proposal retry policy exhausted unexpectedly")
+
+
+def execute_proposals(
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    output_dir: Path,
+    model_factory: Callable[[], object] | None = None,
+) -> dict[str, object]:
+    """Execute frozen jobs only after a separate create-only approval authenticates."""
+
+    approval = _load_inference_approval(Path(approval_path))
+    preflight_root = Path(preflight_dir)
+    receipt_path = preflight_root / "receipt.json"
+    if (
+        preflight_root.is_symlink()
+        or not preflight_root.is_dir()
+        or receipt_path.is_symlink()
+        or not receipt_path.is_file()
+    ):
+        raise ValueError("proposal preflight is missing or unsafe")
+    receipt_sha256 = _sha256_file(receipt_path)
+    if approval.get("preflight_sha256") != receipt_sha256:
+        raise PermissionError("proposal inference approval required")
+    preflight_receipt = verify_proposal_preflight(preflight_root)
+    preflight = {**preflight_receipt, "receipt_sha256": receipt_sha256}
+    from .adaptive_obligation_v2_local_model import (
+        V2LocalJsonModel,
+        verify_inference_approval,
+    )
+
+    verify_inference_approval(approval, preflight)
+    destination = Path(output_dir)
+    if _path_present(destination):
+        raise FileExistsError(f"create-only proposal output exists: {destination}")
+    jobs, _source = _read_jobs(preflight_root / "jobs.jsonl")
+    if model_factory is None:
+        model = V2LocalJsonModel(approval=approval, preflight=preflight)
+    else:
+        model = model_factory()
+    generate_method = getattr(model, "generate", None)
+    if not callable(generate_method):
+        raise TypeError("proposal model factory must return a generate-capable model")
+    ledger = AppendOnlyAttemptLedger(destination)
+    results: list[dict[str, object]] = []
+    for job in jobs:
+
+        def generate(ceiling: int, *, frozen_job: Mapping[str, object] = job) -> object:
+            return generate_method(
+                frozen_job["messages"],
+                PROPOSAL_SCHEMA,
+                max_new_tokens=ceiling,
+            )
+
+        results.append(run_job_with_retry(job, generate=generate, ledger=ledger))
+    return {
+        "status": "complete",
+        "job_count": len(results),
+        "results": results,
+        "event_count": len(ledger.read_events()),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -967,6 +1162,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     build.add_argument("--output", type=Path, required=True)
     verify = subparsers.add_parser("verify-preflight", help="verify frozen proposal jobs")
     verify.add_argument("--output", type=Path, required=True)
+    execute = subparsers.add_parser("execute", help="execute separately approved jobs")
+    execute.add_argument("--preflight", type=Path, required=True)
+    execute.add_argument("--approval", type=Path, required=True)
+    execute.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "build-preflight":
         contract = _load_verified_contract(args.contract)
@@ -983,8 +1182,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             contract_receipt_sha256=_sha256_file(args.contract / "receipt.json"),
             model_snapshot=snapshot,
         )
-    else:
+    elif args.command == "verify-preflight":
         receipt = verify_proposal_preflight(args.output)
+    else:
+        result = execute_proposals(
+            preflight_dir=args.preflight,
+            approval_path=args.approval,
+            output_dir=args.output,
+        )
+        print(_compact(result))
+        return 0
     print(
         _compact(
             {

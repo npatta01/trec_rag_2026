@@ -26,7 +26,9 @@ from trec_rag.adaptive_obligation_v2_propose import (
     _load_local_tokenizer,
     build_proposal_jobs,
     build_proposal_preflight,
+    execute_proposals,
     main,
+    run_job_with_retry,
     verify_proposal_preflight,
 )
 
@@ -429,9 +431,171 @@ def test_verifier_recomputes_resealed_prompt_token_counts(
         verify_proposal_preflight(output)
 
 
-def test_cli_has_no_execute_action() -> None:
-    with pytest.raises(SystemExit):
-        main(["execute"])
+def test_execute_rejects_before_model_or_output_without_approval(
+    tmp_path: Path,
+) -> None:
+    touched: list[str] = []
+    with pytest.raises(PermissionError, match="proposal inference approval required"):
+        execute_proposals(
+            preflight_dir=tmp_path / "missing",
+            approval_path=tmp_path / "missing-approval.json",
+            output_dir=tmp_path / "out",
+            model_factory=lambda: touched.append("model"),
+        )
+    assert touched == []
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("approval_kind", ["malformed", "symlink", "wrong-stage"])
+def test_bad_approval_fails_before_preflight_model_or_output_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    approval_kind: str,
+) -> None:
+    approval_path = tmp_path / "approval.json"
+    if approval_kind == "malformed":
+        approval_path.write_bytes(b"not JSON")
+    else:
+        approval = {
+            "schema_version": "adaptive-obligation-v2-proposal-approval-v1",
+            "stage": "validation" if approval_kind == "wrong-stage" else "proposal",
+            "preflight_sha256": "a" * 64,
+            "model": MODEL_ID,
+            "model_revision": MODEL_REVISION,
+            "primary_call_count": 48,
+            "retry_call_ceiling": 48,
+            "approved": True,
+        }
+        target = tmp_path / "approval-target.json"
+        target.write_bytes(_pretty(approval))
+        if approval_kind == "symlink":
+            approval_path.symlink_to(target)
+        else:
+            approval_path.write_bytes(target.read_bytes())
+    touched: list[str] = []
+    monkeypatch.setattr(
+        propose_module,
+        "verify_proposal_preflight",
+        lambda _path: touched.append("preflight"),
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_load_local_tokenizer",
+        lambda: touched.append("tokenizer"),
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_path_present",
+        lambda _path: touched.append("output"),
+    )
+    with pytest.raises(PermissionError, match="proposal inference approval required"):
+        execute_proposals(
+            preflight_dir=tmp_path / "preflight-sentinel",
+            approval_path=approval_path,
+            output_dir=tmp_path / "output-sentinel",
+            model_factory=lambda: touched.append("model"),
+        )
+    assert touched == []
+    assert not (tmp_path / "output-sentinel").exists()
+
+
+def test_only_ceiling_truncation_gets_one_retry() -> None:
+    calls: list[int] = []
+    job = {
+        "job_id": "a" * 64,
+        "messages": [],
+        "input_unit_ids": [],
+        "primary_max_new_tokens": 256,
+        "retry_max_new_tokens": 512,
+    }
+    valid = b'{"status":"UNSUPPORTED","reason_code":"NO_ABSTRACT_CHILD","o1":null}'
+    result = run_job_with_retry(
+        job,
+        generate=lambda ceiling: calls.append(ceiling)
+        or (b'{"status":' if ceiling == 256 else valid),
+    )
+    assert calls == [256, 512]
+    assert result["status"] == "UNSUPPORTED"
+
+
+def test_schema_error_is_not_retried() -> None:
+    calls: list[int] = []
+    job = {
+        "job_id": "a" * 64,
+        "messages": [],
+        "input_unit_ids": [],
+        "primary_max_new_tokens": 256,
+        "retry_max_new_tokens": 512,
+    }
+    with pytest.raises(ValueError, match="schema"):
+        run_job_with_retry(
+            job,
+            generate=lambda ceiling: calls.append(ceiling) or b'{"status":"BAD"}',
+        )
+    assert calls == [256]
+
+
+def test_under_ceiling_incomplete_json_is_not_retried() -> None:
+    calls: list[int] = []
+    job = {
+        "job_id": "a" * 64,
+        "messages": [],
+        "input_unit_ids": [],
+        "primary_max_new_tokens": 256,
+        "retry_max_new_tokens": 512,
+    }
+    with pytest.raises(ValueError, match="parse"):
+        run_job_with_retry(
+            job,
+            generate=lambda ceiling: calls.append(ceiling) or (b'{"status":', 255),
+        )
+    assert calls == [256]
+
+
+def test_semantic_error_is_not_retried() -> None:
+    calls: list[int] = []
+    job = {
+        "job_id": "a" * 64,
+        "messages": [],
+        "input_unit_ids": ["b" * 64],
+        "primary_max_new_tokens": 256,
+        "retry_max_new_tokens": 512,
+    }
+    raw = json.dumps(
+        {
+            "status": "SUPPORTED",
+            "reason_code": "SUPPORTED",
+            "o1": {
+                "label": "Abstract need",
+                "scope_rationale": "Supported only by an out-of-job unit.",
+                "support_unit_ids": ["c" * 64],
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    with pytest.raises(ValueError, match="semantic"):
+        run_job_with_retry(
+            job,
+            generate=lambda ceiling: calls.append(ceiling) or (raw, 100),
+        )
+    assert calls == [256]
+
+
+def test_retry_happens_at_most_once() -> None:
+    calls: list[int] = []
+    job = {
+        "job_id": "a" * 64,
+        "messages": [],
+        "input_unit_ids": [],
+        "primary_max_new_tokens": 256,
+        "retry_max_new_tokens": 512,
+    }
+    with pytest.raises(ValueError, match="retry ceiling"):
+        run_job_with_retry(
+            job,
+            generate=lambda ceiling: calls.append(ceiling) or (b'{"status":', ceiling),
+        )
+    assert calls == [256, 512]
 
 
 def test_local_tokenizer_loader_does_not_import_the_rocm_torch_runtime() -> None:
