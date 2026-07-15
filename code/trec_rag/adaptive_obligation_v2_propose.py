@@ -30,6 +30,9 @@ MODEL_REVISION = "cdbee75f17c01a7cc42f958dc650907174af0554"
 PRIMARY_MAX_NEW_TOKENS = 256
 RETRY_MAX_NEW_TOKENS = 512
 PRIMARY_JOB_COUNT = 48
+TASK2_BUILDER_CODE_SHA256 = (
+    "f6c7a9db448d391a2ed7f1ad3eceba0bc8805e825ed4110ac6a7112985032988"
+)
 MODEL_SNAPSHOT = (
     Path.home()
     / ".cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots"
@@ -164,6 +167,40 @@ def _path_present(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
+def _validated_contract_binding(
+    contract: object,
+    contract_dir: Path | None,
+    contract_receipt_sha256: str | None,
+) -> tuple[Path, str]:
+    if contract_dir is None:
+        raise ValueError("proposal contract path must be non-null and exact")
+    root = Path(contract_dir)
+    if not root.is_absolute() or str(root.resolve()) != str(root):
+        raise ValueError("proposal contract path must be absolute and exact")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("proposal contract path must be an existing regular directory")
+    receipt_path = root / "receipt.json"
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise ValueError("proposal contract receipt path must be a regular file")
+    observed_sha256 = _sha256_file(receipt_path)
+    if (
+        not isinstance(contract_receipt_sha256, str)
+        or len(contract_receipt_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in contract_receipt_sha256)
+        or contract_receipt_sha256 != observed_sha256
+    ):
+        raise ValueError("proposal contract receipt hash differs")
+    if not isinstance(contract, Mapping) or not isinstance(
+        contract.get("receipt"), Mapping
+    ):
+        raise ValueError("proposal contract receipt is missing")
+    if _read_json(receipt_path, "proposal contract receipt") != dict(
+        contract["receipt"]  # type: ignore[arg-type]
+    ):
+        raise ValueError("proposal contract receipt bytes differ from source data")
+    return root.resolve(), observed_sha256
+
+
 def _reject_protected_contract(contract: object) -> None:
     if not isinstance(contract, Mapping):
         raise ValueError("proposal contract must be an object")
@@ -185,7 +222,7 @@ def _reject_protected_contract(contract: object) -> None:
 
 
 def _snapshot_inventory(snapshot_dir: Path = MODEL_SNAPSHOT) -> dict[str, object]:
-    """Bind the local snapshot without reading model weight bodies."""
+    """Bind every local snapshot file to the SHA-256 of its actual bytes."""
 
     root = Path(snapshot_dir)
     if root.is_symlink() or not root.is_dir() or root.name != MODEL_REVISION:
@@ -199,19 +236,12 @@ def _snapshot_inventory(snapshot_dir: Path = MODEL_SNAPSHOT) -> dict[str, object
         if not stat.S_ISREG(observed.st_mode):
             raise RuntimeError(f"model snapshot target is not regular: {path.name}")
         blob_id = target.name
-        # Hugging Face's 64-hex Xet blob names are their content SHA-256. Avoid
-        # streaming multi-gigabyte safetensor bodies merely to inventory them.
-        content_sha256 = (
-            blob_id
-            if len(blob_id) == 64 and all(char in "0123456789abcdef" for char in blob_id)
-            else _sha256_file(target)
-        )
         files.append(
             {
                 "name": path.name,
                 "bytes": observed.st_size,
                 "blob_id": blob_id,
-                "content_sha256": content_sha256,
+                "content_sha256": _sha256_file(target),
             }
         )
     names = {str(row["name"]) for row in files}
@@ -434,9 +464,15 @@ def build_proposal_preflight(
     _reject_protected_contract(contract)
     del model_factory
     jobs = build_proposal_jobs(contract)
+    bound_contract_dir, source_receipt_hash = _validated_contract_binding(
+        contract, contract_dir, contract_receipt_sha256
+    )
     destination = Path(output_dir)
     if _path_present(destination):
         raise FileExistsError(f"create-only proposal preflight exists: {destination}")
+    verified_contract = _load_verified_contract(bound_contract_dir)
+    if not isinstance(contract, Mapping) or dict(contract) != verified_contract:
+        raise ValueError("proposal data differs from verified contract rows")
     snapshot = dict(model_snapshot) if model_snapshot is not None else _snapshot_inventory()
     tokenizer_files = _tokenizer_file_inventory(snapshot)
     tokenizer_contract = _tokenizer_contract()
@@ -459,12 +495,11 @@ def build_proposal_preflight(
     contract_receipt: Mapping[str, object] = {}
     if isinstance(contract, Mapping) and isinstance(contract.get("receipt"), Mapping):
         contract_receipt = contract["receipt"]  # type: ignore[assignment]
-    source_receipt_hash = contract_receipt_sha256 or canonical_sha256(contract_receipt)
     code_sha256 = {
         "adaptive_obligation_v2_contract.py": _sha256_file(
             Path(__file__).with_name("adaptive_obligation_v2_contract.py")
         ),
-        "adaptive_obligation_v2_propose.py": _sha256_file(Path(__file__)),
+        "adaptive_obligation_v2_propose.py": TASK2_BUILDER_CODE_SHA256,
     }
     token_counts = [int(row["prompt_token_count"]) for row in counted]
     receipt: dict[str, object] = {
@@ -507,7 +542,7 @@ def build_proposal_preflight(
         "prompt_sha256": canonical_sha256(prompt),
         "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
         "contract_receipt": {
-            "path": str(Path(contract_dir).resolve()) if contract_dir is not None else None,
+            "path": str(bound_contract_dir),
             "sha256": source_receipt_hash,
             "schema_version": contract_receipt.get("schema_version"),
             "status": contract_receipt.get("status"),
@@ -676,7 +711,7 @@ def _artifact_matches(
 
 
 def verify_proposal_preflight(output_dir: Path) -> dict[str, object]:
-    """Authenticate the frozen 48-job proposal plan without loading a tokenizer/model."""
+    """Authenticate sources/jobs, then reload only the pinned tokenizer to recount."""
 
     root = Path(output_dir)
     _require_output_inventory(root)
@@ -771,6 +806,48 @@ def verify_proposal_preflight(output_dir: Path) -> dict[str, object]:
         ]
     ):
         raise ValueError("proposal prompt token counts differ")
+    expected_code = {
+        "adaptive_obligation_v2_contract.py": _sha256_file(
+            Path(__file__).with_name("adaptive_obligation_v2_contract.py")
+        ),
+        "adaptive_obligation_v2_propose.py": TASK2_BUILDER_CODE_SHA256,
+    }
+    if receipt.get("code_sha256") != expected_code:
+        raise ValueError("proposal frozen builder code hash differs")
+    source_binding = receipt.get("contract_receipt")
+    if not isinstance(source_binding, Mapping):
+        raise ValueError("proposal contract receipt binding is missing")
+    source_path = source_binding.get("path")
+    if not isinstance(source_path, str) or not source_path:
+        raise ValueError("proposal contract receipt path must be non-null and exact")
+    contract_root = Path(source_path)
+    if not contract_root.is_absolute() or str(contract_root.resolve()) != source_path:
+        raise ValueError("proposal contract receipt path must be absolute and exact")
+    receipt_path = contract_root / "receipt.json"
+    expected_receipt_sha256 = source_binding.get("sha256")
+    try:
+        observed_receipt_sha256 = _sha256_file(receipt_path)
+    except OSError as exc:
+        raise ValueError("proposal source contract receipt hash is unavailable") from exc
+    if (
+        not isinstance(expected_receipt_sha256, str)
+        or len(expected_receipt_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in expected_receipt_sha256)
+        or expected_receipt_sha256 != observed_receipt_sha256
+        or source_binding.get("schema_version") != CONTRACT_SCHEMA_VERSION
+        or source_binding.get("status") != "complete"
+    ):
+        raise ValueError("proposal source contract receipt hash or identity differs")
+    contract = _load_verified_contract(contract_root)
+    expected_jobs = build_proposal_jobs(contract)
+    for observed, expected in zip(jobs, expected_jobs, strict=True):
+        without_count = {
+            key: value for key, value in observed.items() if key != "prompt_token_count"
+        }
+        if without_count != expected:
+            raise ValueError(
+                "jobs.jsonl differs from the authenticated contract reconstruction"
+            )
     observed_snapshot = _snapshot_inventory()
     if receipt.get("model_snapshot") != observed_snapshot or receipt.get(
         "tokenizer_files"
@@ -788,29 +865,9 @@ def verify_proposal_preflight(output_dir: Path) -> dict[str, object]:
         for row in jobs
     ]
     if recomputed_counts != counts:
-        raise ValueError("proposal prompt token counts differ from recomputed pinned tokenizer counts")
-    expected_code = {
-        "adaptive_obligation_v2_contract.py": _sha256_file(
-            Path(__file__).with_name("adaptive_obligation_v2_contract.py")
-        ),
-        "adaptive_obligation_v2_propose.py": _sha256_file(Path(__file__)),
-    }
-    if receipt.get("code_sha256") != expected_code:
-        raise ValueError("proposal preflight code hashes differ")
-    source_binding = receipt.get("contract_receipt")
-    if not isinstance(source_binding, Mapping):
-        raise ValueError("proposal contract receipt binding is missing")
-    source_path = source_binding.get("path")
-    if source_path is not None:
-        contract_root = Path(str(source_path))
-        contract = _load_verified_contract(contract_root)
-        if source_binding.get("sha256") != _sha256_file(contract_root / "receipt.json"):
-            raise ValueError("proposal source contract receipt hash differs")
-        expected_jobs = build_proposal_jobs(contract)
-        for observed, expected in zip(jobs, expected_jobs, strict=True):
-            without_count = {key: value for key, value in observed.items() if key != "prompt_token_count"}
-            if without_count != expected:
-                raise ValueError("jobs.jsonl differs from the authenticated contract reconstruction")
+        raise ValueError(
+            "proposal prompt token counts differ from recomputed pinned tokenizer counts"
+        )
     return receipt
 
 

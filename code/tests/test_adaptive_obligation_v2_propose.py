@@ -4,9 +4,11 @@ import json
 import hashlib
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import trec_rag.adaptive_obligation_v2_propose as propose_module
 from trec_rag.adaptive_evidence_contract import PILOT_TOPIC_IDS
 from trec_rag.adaptive_obligation_v2_contract import (
     PARENT_SCHEMA_VERSION,
@@ -20,6 +22,7 @@ from trec_rag.adaptive_obligation_v2_propose import (
     MODEL_ID,
     MODEL_REVISION,
     PROPOSAL_SCHEMA,
+    _snapshot_inventory,
     _load_local_tokenizer,
     build_proposal_jobs,
     build_proposal_preflight,
@@ -158,6 +161,81 @@ def _fake_tokenizer() -> _FakeTokenizer:
     return _FakeTokenizer()
 
 
+def _pretty(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+
+
+def _snapshot_fixture() -> dict[str, object]:
+    files = [
+        {
+            "name": name,
+            "bytes": index + 1,
+            "blob_id": f"blob-{index}",
+            "content_sha256": f"{index:x}" * 64,
+        }
+        for index, name in enumerate(
+            ("config.json", "merges.txt", "tokenizer.json", "tokenizer_config.json", "vocab.json")
+        )
+    ]
+    payload = {"model": MODEL_ID, "revision": MODEL_REVISION, "files": files}
+    return {**payload, "manifest_sha256": canonical_sha256(payload)}
+
+
+def _fixture_source(
+    tmp_path: Path, contract: dict[str, object], *, name: str
+) -> tuple[Path, str]:
+    root = tmp_path / name
+    root.mkdir()
+    receipt_bytes = _pretty(contract["receipt"])
+    (root / "receipt.json").write_bytes(receipt_bytes)
+    return root, hashlib.sha256(receipt_bytes).hexdigest()
+
+
+def _build_fixture_preflight(
+    tmp_path: Path,
+    *,
+    tokenizer: object,
+    model_factory: object = None,
+    name: str = "preflight",
+    contract: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object], Path, Path]:
+    source = contract or _contract_fixture()
+    source_dir, receipt_sha256 = _fixture_source(
+        tmp_path, source, name=f"{name}-contract"
+    )
+    output = tmp_path / name
+    with patch.object(propose_module, "_load_verified_contract", return_value=source):
+        receipt = build_proposal_preflight(
+            source,
+            tokenizer=tokenizer,
+            model_factory=model_factory,  # type: ignore[arg-type]
+            output_dir=output,
+            contract_dir=source_dir,
+            contract_receipt_sha256=receipt_sha256,
+            model_snapshot=_snapshot_fixture(),
+        )
+    return receipt, source, source_dir, output
+
+
+def _patch_fixture_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    contract: dict[str, object],
+    receipt: dict[str, object],
+    tokenizer: object,
+) -> None:
+    monkeypatch.setattr(propose_module, "_load_verified_contract", lambda _path: contract)
+    monkeypatch.setattr(
+        propose_module, "_snapshot_inventory", lambda: receipt["model_snapshot"]
+    )
+    monkeypatch.setattr(
+        propose_module, "_tokenizer_contract", lambda: receipt["tokenizer_contract"]
+    )
+    monkeypatch.setattr(propose_module, "_load_local_tokenizer", lambda: tokenizer)
+
+
 def _expected_pairs() -> set[tuple[str, int]]:
     contract = _contract_fixture()
     return {
@@ -184,11 +262,10 @@ def test_jobs_are_exactly_parent_by_fold() -> None:
 
 def test_preflight_never_constructs_a_model(tmp_path: Path) -> None:
     touched: list[str] = []
-    receipt = build_proposal_preflight(
-        _contract_fixture(),
+    receipt, _contract, _source, _output = _build_fixture_preflight(
+        tmp_path,
         tokenizer=_fake_tokenizer(),
         model_factory=lambda: touched.append("model"),
-        output_dir=tmp_path / "preflight",
     )
     assert touched == []
     assert receipt["primary_call_count"] == 48
@@ -217,13 +294,14 @@ def test_messages_bind_narrative_complete_o0_units_and_schema() -> None:
     assert "unsupported" in folded
 
 
-def test_preflight_seals_snapshot_tokenizer_prompt_and_code(tmp_path: Path) -> None:
-    output = tmp_path / "preflight"
-    receipt = build_proposal_preflight(
-        _contract_fixture(),
+def test_preflight_seals_snapshot_tokenizer_prompt_and_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokenizer = _load_local_tokenizer()
+    receipt, contract, _source, output = _build_fixture_preflight(
+        tmp_path,
         tokenizer=_load_local_tokenizer(),
         model_factory=lambda: pytest.fail("model factory must remain unreachable"),
-        output_dir=output,
     )
     assert set(path.name for path in output.iterdir()) == {
         "jobs.jsonl",
@@ -250,6 +328,9 @@ def test_preflight_seals_snapshot_tokenizer_prompt_and_code(tmp_path: Path) -> N
         "adaptive_obligation_v2_contract.py",
         "adaptive_obligation_v2_propose.py",
     }
+    _patch_fixture_verifier(
+        monkeypatch, contract=contract, receipt=receipt, tokenizer=tokenizer
+    )
     verified = verify_proposal_preflight(output)
     assert verified == receipt
 
@@ -265,33 +346,40 @@ def test_protected_topic_fails_before_tokenizer_or_output(tmp_path: Path) -> Non
             tokenizer=tokenizer,
             model_factory=lambda: pytest.fail("model factory must remain unreachable"),
             output_dir=output,
+            contract_dir=tmp_path / "must-not-open",
+            contract_receipt_sha256="a" * 64,
+            model_snapshot=_snapshot_fixture(),
         )
     assert tokenizer.calls == 0
     assert not output.exists()
 
 
 def test_preflight_is_create_only_before_retokenizing(tmp_path: Path) -> None:
-    output = tmp_path / "preflight"
     first = _fake_tokenizer()
-    build_proposal_preflight(
-        _contract_fixture(), tokenizer=first, model_factory=None, output_dir=output
+    _receipt, contract, source, output = _build_fixture_preflight(
+        tmp_path, tokenizer=first
     )
     second = _fake_tokenizer()
     with pytest.raises(FileExistsError, match="create-only"):
         build_proposal_preflight(
-            _contract_fixture(), tokenizer=second, model_factory=None, output_dir=output
+            contract,
+            tokenizer=second,
+            model_factory=None,
+            output_dir=output,
+            contract_dir=source,
+            contract_receipt_sha256=hashlib.sha256(
+                (source / "receipt.json").read_bytes()
+            ).hexdigest(),
+            model_snapshot=_snapshot_fixture(),
         )
     assert first.calls == 48
     assert second.calls == 0
 
 
 def test_verifier_rejects_job_tampering(tmp_path: Path) -> None:
-    output = tmp_path / "preflight"
-    build_proposal_preflight(
-        _contract_fixture(),
+    _receipt, _contract, _source, output = _build_fixture_preflight(
+        tmp_path,
         tokenizer=_load_local_tokenizer(),
-        model_factory=None,
-        output_dir=output,
     )
     with (output / "jobs.jsonl").open("ab") as sink:
         sink.write(b"{}\n")
@@ -299,13 +387,12 @@ def test_verifier_rejects_job_tampering(tmp_path: Path) -> None:
         verify_proposal_preflight(output)
 
 
-def test_verifier_recomputes_resealed_prompt_token_counts(tmp_path: Path) -> None:
-    output = tmp_path / "preflight"
-    build_proposal_preflight(
-        _contract_fixture(),
-        tokenizer=_load_local_tokenizer(),
-        model_factory=None,
-        output_dir=output,
+def test_verifier_recomputes_resealed_prompt_token_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokenizer = _load_local_tokenizer()
+    receipt, contract, _source, output = _build_fixture_preflight(
+        tmp_path, tokenizer=tokenizer
     )
     rows = [json.loads(line) for line in (output / "jobs.jsonl").read_text().splitlines()]
     rows[0]["prompt_token_count"] += 1
@@ -335,6 +422,9 @@ def test_verifier_recomputes_resealed_prompt_token_counts(tmp_path: Path) -> Non
     (output / "receipt.json").write_text(
         json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     )
+    _patch_fixture_verifier(
+        monkeypatch, contract=contract, receipt=receipt, tokenizer=tokenizer
+    )
     with pytest.raises(ValueError, match="recomputed"):
         verify_proposal_preflight(output)
 
@@ -362,3 +452,225 @@ def test_local_tokenizer_loader_does_not_import_the_rocm_torch_runtime() -> None
     assert not any(
         name == "transformers" or name.startswith("transformers.") for name in imported
     )
+
+
+def test_builder_rejects_missing_contract_path_before_tokenizer(tmp_path: Path) -> None:
+    tokenizer = _fake_tokenizer()
+    with pytest.raises(ValueError, match="contract.*path"):
+        build_proposal_preflight(
+            _contract_fixture(),
+            tokenizer=tokenizer,
+            model_factory=None,
+            output_dir=tmp_path / "preflight",
+            contract_dir=None,
+            contract_receipt_sha256=None,
+            model_snapshot=_snapshot_fixture(),
+        )
+    assert tokenizer.calls == 0
+    assert not (tmp_path / "preflight").exists()
+
+
+def test_builder_rejects_nonexistent_contract_path_before_tokenizer(
+    tmp_path: Path,
+) -> None:
+    tokenizer = _fake_tokenizer()
+    with pytest.raises(ValueError, match="contract.*path"):
+        build_proposal_preflight(
+            _contract_fixture(),
+            tokenizer=tokenizer,
+            model_factory=None,
+            output_dir=tmp_path / "preflight",
+            contract_dir=tmp_path / "missing",
+            contract_receipt_sha256="a" * 64,
+            model_snapshot=_snapshot_fixture(),
+        )
+    assert tokenizer.calls == 0
+
+
+def test_builder_rejects_nonexact_relative_contract_path_before_tokenizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract = _contract_fixture()
+    source, receipt_sha256 = _fixture_source(tmp_path, contract, name="contract")
+    tokenizer = _fake_tokenizer()
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="absolute and exact"):
+        build_proposal_preflight(
+            contract,
+            tokenizer=tokenizer,
+            model_factory=None,
+            output_dir=tmp_path / "preflight",
+            contract_dir=Path(source.name),
+            contract_receipt_sha256=receipt_sha256,
+            model_snapshot=_snapshot_fixture(),
+        )
+    assert tokenizer.calls == 0
+
+
+def test_builder_rejects_supplied_rows_that_differ_from_verified_contract(
+    tmp_path: Path,
+) -> None:
+    verified = _contract_fixture()
+    supplied = json.loads(json.dumps(verified))
+    supplied["units"][0]["text"] = "resealed forged evidence"
+    source, receipt_sha256 = _fixture_source(tmp_path, verified, name="contract")
+    tokenizer = _fake_tokenizer()
+    with patch.object(
+        propose_module, "_load_verified_contract", return_value=verified
+    ), pytest.raises(ValueError, match="verified contract rows"):
+        build_proposal_preflight(
+            supplied,
+            tokenizer=tokenizer,
+            model_factory=None,
+            output_dir=tmp_path / "preflight",
+            contract_dir=source,
+            contract_receipt_sha256=receipt_sha256,
+            model_snapshot=_snapshot_fixture(),
+        )
+    assert tokenizer.calls == 0
+
+
+def test_verifier_rejects_resealed_null_contract_path_before_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt, _contract, _source, output = _build_fixture_preflight(
+        tmp_path, tokenizer=_fake_tokenizer()
+    )
+    receipt["contract_receipt"]["path"] = None  # type: ignore[index]
+    (output / "receipt.json").write_bytes(_pretty(receipt))
+    touched: list[str] = []
+    monkeypatch.setattr(
+        propose_module,
+        "_snapshot_inventory",
+        lambda: touched.append("snapshot"),
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_load_local_tokenizer",
+        lambda: touched.append("tokenizer"),
+    )
+    with pytest.raises(ValueError, match="contract.*path"):
+        verify_proposal_preflight(output)
+    assert touched == []
+
+
+def test_verifier_rejects_resealed_contract_hash_before_source_or_tokenizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt, _contract, _source, output = _build_fixture_preflight(
+        tmp_path, tokenizer=_fake_tokenizer()
+    )
+    receipt["contract_receipt"]["sha256"] = "0" * 64  # type: ignore[index]
+    (output / "receipt.json").write_bytes(_pretty(receipt))
+    touched: list[str] = []
+    monkeypatch.setattr(
+        propose_module,
+        "_load_verified_contract",
+        lambda _path: touched.append("source"),
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_snapshot_inventory",
+        lambda: touched.append("snapshot"),
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_load_local_tokenizer",
+        lambda: touched.append("tokenizer"),
+    )
+    with pytest.raises(ValueError, match="receipt hash"):
+        verify_proposal_preflight(output)
+    assert touched == []
+
+
+def test_verifier_authenticates_source_before_snapshot_or_tokenizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _receipt, _contract, _source, output = _build_fixture_preflight(
+        tmp_path, tokenizer=_fake_tokenizer()
+    )
+    touched: list[str] = []
+
+    def fail_source(_path: Path) -> object:
+        touched.append("source")
+        raise ValueError("source authentication failed")
+
+    monkeypatch.setattr(propose_module, "_load_verified_contract", fail_source)
+    monkeypatch.setattr(
+        propose_module,
+        "_snapshot_inventory",
+        lambda: touched.append("snapshot"),
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_load_local_tokenizer",
+        lambda: touched.append("tokenizer"),
+    )
+    with pytest.raises(ValueError, match="source authentication failed"):
+        verify_proposal_preflight(output)
+    assert touched == ["source"]
+
+
+def test_frozen_builder_hash_survives_future_module_edits_and_rejects_wrong_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokenizer = _fake_tokenizer()
+    receipt, contract, _source, output = _build_fixture_preflight(
+        tmp_path, tokenizer=tokenizer
+    )
+    assert receipt["code_sha256"]["adaptive_obligation_v2_propose.py"] == (
+        "f6c7a9db448d391a2ed7f1ad3eceba0bc8805e825ed4110ac6a7112985032988"
+    )
+    _patch_fixture_verifier(
+        monkeypatch, contract=contract, receipt=receipt, tokenizer=tokenizer
+    )
+    assert verify_proposal_preflight(output) == receipt
+    receipt["code_sha256"]["adaptive_obligation_v2_propose.py"] = "0" * 64
+    (output / "receipt.json").write_bytes(_pretty(receipt))
+    with pytest.raises(ValueError, match="builder.*hash"):
+        verify_proposal_preflight(output)
+
+
+def test_snapshot_inventory_hashes_bytes_even_for_64_hex_blob_name(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / MODEL_REVISION
+    blobs = tmp_path / "blobs"
+    snapshot.mkdir()
+    blobs.mkdir()
+    target = blobs / ("f" * 64)
+    target.write_bytes(b"corrupt bytes do not match the target name")
+    required = (
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model-00001-of-00003.safetensors",
+        "model-00002-of-00003.safetensors",
+        "model-00003-of-00003.safetensors",
+        "model.safetensors.index.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+    )
+    for name in required:
+        path = snapshot / name
+        if name == "model-00001-of-00003.safetensors":
+            path.symlink_to(target)
+        else:
+            path.write_bytes(name.encode())
+    inventory = _snapshot_inventory(snapshot)
+    row = next(
+        item
+        for item in inventory["files"]
+        if item["name"] == "model-00001-of-00003.safetensors"
+    )
+    assert row["blob_id"] == "f" * 64
+    assert row["content_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert row["content_sha256"] != row["blob_id"]
+
+
+def test_verifier_docstring_discloses_tokenizer_loading() -> None:
+    assert "tokenizer" in (verify_proposal_preflight.__doc__ or "").casefold()
+    assert "without loading a tokenizer" not in (
+        verify_proposal_preflight.__doc__ or ""
+    ).casefold()
