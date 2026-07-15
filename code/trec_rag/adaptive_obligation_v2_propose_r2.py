@@ -401,30 +401,6 @@ class _R2PreflightMaterial(dict[str, object]):
         self.output_dir = Path(output_dir)
 
 
-_PRODUCTION_PUBLICATION_CAPABILITY = object()
-
-
-class _R2PublishableMaterial(_R2PreflightMaterial):
-    """Material minted only by the authenticated production tokenizer path."""
-
-    def __init__(
-        self,
-        material: _R2PreflightMaterial,
-        *,
-        capability: object,
-    ) -> None:
-        if capability is not _PRODUCTION_PUBLICATION_CAPABILITY:
-            raise PermissionError(
-                "R2 publication requires production-authenticated material"
-            )
-        super().__init__(
-            material,
-            contents=material.contents,
-            output_dir=material.output_dir,
-        )
-        self._capability = capability
-
-
 def _build_authenticated_r2_preflight(
     contract: object,
     *,
@@ -548,37 +524,6 @@ def _build_authenticated_r2_preflight(
     )
 
 
-def _build_production_r2_preflight_material(
-    contract: object,
-    *,
-    model_snapshot: Mapping[str, object],
-    tokenizer_contract: Mapping[str, object],
-    contract_dir: Path,
-    contract_receipt_sha256: str,
-    output_dir: Path,
-    ledger_dir: Path,
-    proposal_dir: Path,
-) -> _R2PublishableMaterial:
-    """Mint publishable bytes only after internally loading the pinned tokenizer."""
-
-    tokenizer = _load_pinned_tokenizer_after_auth(snapshot_dir=r1.MODEL_SNAPSHOT)
-    material = _build_authenticated_r2_preflight(
-        contract,
-        tokenizer=tokenizer,
-        model_snapshot=model_snapshot,
-        tokenizer_contract=tokenizer_contract,
-        contract_dir=contract_dir,
-        contract_receipt_sha256=contract_receipt_sha256,
-        output_dir=output_dir,
-        ledger_dir=ledger_dir,
-        proposal_dir=proposal_dir,
-    )
-    return _R2PublishableMaterial(
-        material,
-        capability=_PRODUCTION_PUBLICATION_CAPABILITY,
-    )
-
-
 def _require_output_inventory(root: Path) -> None:
     if root.is_symlink() or not root.is_dir():
         raise ValueError("R2 preflight root must be a regular directory")
@@ -590,48 +535,20 @@ def _require_output_inventory(root: Path) -> None:
 
 
 def publish_r2_proposal_preflight(
-    preflight: Mapping[str, object], *, output_dir: Path
+    *,
+    contract_dir: Path,
+    output_dir: Path,
+    ledger_dir: Path,
+    proposal_dir: Path,
 ) -> dict[str, object]:
-    """Verify a sibling staging tree before atomically publishing it no-replace."""
+    """Path-only production alias for the authenticated R2 builder/publisher."""
 
-    if not isinstance(preflight, _R2PublishableMaterial) or not (
-        preflight._capability is _PRODUCTION_PUBLICATION_CAPABILITY
-    ):
-        raise PermissionError("R2 publication requires production-authenticated material")
-    destination = _require_absent_safe_destination(
-        output_dir, label="R2 preflight"
+    return build_r2_proposal_preflight(
+        contract_dir=contract_dir,
+        output_dir=output_dir,
+        ledger_dir=ledger_dir,
+        proposal_dir=proposal_dir,
     )
-    if destination != preflight.output_dir:
-        raise ValueError("R2 publication output differs from the authenticated destination")
-    for name in ("ledger_dir", "proposal_dir"):
-        value = preflight.get(name)
-        if not isinstance(value, str):
-            raise ValueError("R2 frozen destination is missing")
-        _require_absent_safe_destination(Path(value), label=f"R2 {name}")
-    if set(preflight.contents) != _OUTPUT_NAMES or preflight.contents[
-        "receipt.json"
-    ] != r1._pretty_bytes(dict(preflight)):
-        raise ValueError("R2 publication material differs from its receipt")
-
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
-    )
-    published = False
-    try:
-        for name in ("jobs.jsonl", "schema.json", "prompt.json", "receipt.json"):
-            r1._write_fsynced(staging / name, preflight.contents[name])
-        _require_output_inventory(staging)
-        r1._fsync_directory(staging)
-        verified = verify_r2_proposal_preflight(staging)
-        if verified != dict(preflight):
-            raise ValueError("staged R2 verification receipt differs")
-        r1._rename_noreplace(staging, destination)
-        published = True
-        r1._fsync_directory(destination.parent)
-        return verified
-    finally:
-        if not published and staging.exists():
-            shutil.rmtree(staging)
 
 
 def _validate_receipt_metadata(
@@ -707,8 +624,8 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
     schema = r1._read_json(root / "schema.json", "R2 proposal schema")
     prompt = r1._read_json(root / "prompt.json", "R2 proposal prompt")
     if (
-        schema != R2_PROPOSAL_SCHEMA
-        or prompt != _prompt_contract()
+        not _json_exact(schema, R2_PROPOSAL_SCHEMA)
+        or not _json_exact(prompt, _prompt_contract())
         or prompt.get("schema_version") != R2_PROMPT_SCHEMA_VERSION
         or receipt.get("schema_sha256") != canonical_sha256(schema)
         or receipt.get("prompt_sha256") != canonical_sha256(prompt)
@@ -788,7 +705,7 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
             for key, value in observed.items()
             if key != "prompt_token_count"
         }
-        if without_count != expected:
+        if not _json_exact(without_count, expected):
             raise ValueError("R2 jobs differ from authenticated contract reconstruction")
 
     observed_snapshot = _snapshot_inventory()
@@ -864,8 +781,10 @@ def build_r2_proposal_preflight(
     frozen_tokenizer_contract = _tokenizer_contract()
     contract_root = supplied_contract_root.resolve()
     source_receipt_sha256 = r1._sha256_file(contract_root / "receipt.json")
-    material = _build_production_r2_preflight_material(
+    tokenizer = _load_pinned_tokenizer_after_auth(snapshot_dir=r1.MODEL_SNAPSHOT)
+    material = _build_authenticated_r2_preflight(
         contract,
+        tokenizer=tokenizer,
         model_snapshot=snapshot,
         tokenizer_contract=frozen_tokenizer_contract,
         contract_dir=contract_root,
@@ -874,4 +793,51 @@ def build_r2_proposal_preflight(
         ledger_dir=ledger,
         proposal_dir=proposals,
     )
-    return publish_r2_proposal_preflight(material, output_dir=output)
+    publication_capability = object()
+
+    def publish_authenticated_material(*, capability: object) -> dict[str, object]:
+        if capability is not publication_capability:  # pragma: no cover - closure only
+            raise PermissionError(
+                "R2 publication requires production-authenticated material"
+            )
+        destination = _require_absent_safe_destination(
+            output, label="R2 preflight"
+        )
+        for name, frozen in (("ledger_dir", ledger), ("proposal_dir", proposals)):
+            _require_absent_safe_destination(frozen, label=f"R2 {name}")
+        if set(material.contents) != _OUTPUT_NAMES or material.contents[
+            "receipt.json"
+        ] != r1._pretty_bytes(dict(material)):
+            raise ValueError("R2 publication material differs from its receipt")
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{destination.name}.staging-",
+                dir=destination.parent,
+            )
+        )
+        published = False
+        try:
+            for artifact_name in (
+                "jobs.jsonl",
+                "schema.json",
+                "prompt.json",
+                "receipt.json",
+            ):
+                r1._write_fsynced(
+                    staging / artifact_name,
+                    material.contents[artifact_name],
+                )
+            _require_output_inventory(staging)
+            r1._fsync_directory(staging)
+            verified = verify_r2_proposal_preflight(staging)
+            if not _json_exact(verified, dict(material)):
+                raise ValueError("staged R2 verification receipt differs")
+            r1._rename_noreplace(staging, destination)
+            published = True
+            r1._fsync_directory(destination.parent)
+            return verified
+        finally:
+            if not published and staging.exists():
+                shutil.rmtree(staging)
+
+    return publish_authenticated_material(capability=publication_capability)

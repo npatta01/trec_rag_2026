@@ -464,12 +464,24 @@ def test_private_fake_tokenizer_material_cannot_be_published(tmp_path: Path) -> 
         **_absolute_destination_bindings(tmp_path),
     )
     assert not hasattr(material, "publication_authorized")
-    with pytest.raises(PermissionError, match="production-authenticated"):
+    with pytest.raises(TypeError):
         publish_r2_proposal_preflight(
-            material,
+            preflight=material,
             output_dir=tmp_path / "preflight-r2",
         )
     assert not (tmp_path / "preflight-r2").exists()
+
+
+def test_publication_has_no_module_level_material_authority() -> None:
+    assert not hasattr(r2_module, "_PRODUCTION_PUBLICATION_CAPABILITY")
+    assert not hasattr(r2_module, "_R2PublishableMaterial")
+    assert not hasattr(r2_module, "_build_production_r2_preflight_material")
+    assert list(inspect.signature(publish_r2_proposal_preflight).parameters) == [
+        "contract_dir",
+        "output_dir",
+        "ledger_dir",
+        "proposal_dir",
+    ]
 
 
 def test_publication_verifies_staging_before_no_replace_rename(
@@ -519,6 +531,75 @@ def test_verifier_reconstructs_r2_jobs_and_recounts_with_pinned_tokenizer(
     verified = verify_r2_proposal_preflight(root)
     assert verified == dict(material)
     assert recount.calls == 48
+
+
+@pytest.mark.parametrize("artifact_name", ["prompt.json", "schema.json"])
+def test_verifier_rejects_json_bool_integer_substitution_in_frozen_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_name: str,
+) -> None:
+    contract, _material, root = _captured_material_fixture(tmp_path)
+    value = json.loads((root / artifact_name).read_bytes())
+    if artifact_name == "prompt.json":
+        assert value["decoding"]["seed"] == 0
+        value["decoding"]["seed"] = False
+        receipt_hash_name = "prompt_sha256"
+    else:
+        assert value["additionalProperties"] is False
+        value["additionalProperties"] = 0
+        receipt_hash_name = "schema_sha256"
+    content = _pretty(value)
+    (root / artifact_name).write_bytes(content)
+    receipt = json.loads((root / "receipt.json").read_bytes())
+    receipt[receipt_hash_name] = canonical_sha256(value)
+    receipt["artifacts"][artifact_name].update(
+        {
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+    )
+    (root / "receipt.json").write_bytes(_pretty(receipt))
+    _patch_verifier_dependencies(monkeypatch, contract=contract)
+    with pytest.raises(ValueError, match="schema or prompt"):
+        verify_r2_proposal_preflight(root)
+
+
+def test_verifier_rejects_json_bool_integer_substitution_in_reconstructed_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, _material, root = _captured_material_fixture(tmp_path)
+    rows = [
+        json.loads(line)
+        for line in (root / "jobs.jsonl").read_bytes().splitlines()
+    ]
+    assert rows[0]["parent_manifest_order"] == 0
+    rows[0]["parent_manifest_order"] = False
+    jobs_bytes = b"".join(
+        (
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        for row in rows
+    )
+    (root / "jobs.jsonl").write_bytes(jobs_bytes)
+    receipt = json.loads((root / "receipt.json").read_bytes())
+    receipt["artifacts"]["jobs.jsonl"].update(
+        {
+            "bytes": len(jobs_bytes),
+            "sha256": hashlib.sha256(jobs_bytes).hexdigest(),
+        }
+    )
+    (root / "receipt.json").write_bytes(_pretty(receipt))
+    _patch_verifier_dependencies(monkeypatch, contract=contract)
+    with pytest.raises(ValueError, match="authenticated contract reconstruction"):
+        verify_r2_proposal_preflight(root)
 
 
 @pytest.mark.parametrize(
