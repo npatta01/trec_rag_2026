@@ -629,6 +629,20 @@ class AppendOnlyAttemptLedger:
             if isinstance(schema, dict)
             else None
         )
+        if stage == "validation":
+            required.add("provenance")
+        provenance = value.get("provenance")
+        provenance_names = {
+            "validator_role",
+            "model",
+            "model_revision",
+            "model_snapshot_manifest_sha256",
+            "tokenizer_identity_sha256",
+            "prompt_sha256",
+            "code_identity_sha256",
+            "jobs_sha256",
+            "schema_sha256",
+        }
         if (
             set(value) != required
             or value.get("schema_version") != _ANCHOR_SCHEMA_VERSION
@@ -653,6 +667,27 @@ class AppendOnlyAttemptLedger:
             )
             or schema_sha256
             != _SCHEMA_SHA256_BY_STAGE.get(stage if isinstance(stage, str) else "")
+            or (
+                stage == "validation"
+                and (
+                    not isinstance(provenance, dict)
+                    or set(provenance) != provenance_names
+                    or provenance.get("validator_role")
+                    != "opposite_fold_semantic_validator"
+                    or not isinstance(provenance.get("model"), str)
+                    or not provenance.get("model")
+                    or not isinstance(provenance.get("model_revision"), str)
+                    or not provenance.get("model_revision")
+                    or any(
+                        not isinstance(provenance.get(name), str)
+                        or not _SHA256.fullmatch(provenance[name])
+                        for name in provenance_names
+                        - {"validator_role", "model", "model_revision"}
+                    )
+                    or provenance.get("schema_sha256")
+                    != _VALIDATION_SCHEMA_SHA256
+                )
+            )
         ):
             raise ValueError("proposal ledger anchor differs")
         seen: set[str] = set()

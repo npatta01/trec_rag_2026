@@ -11,7 +11,9 @@ import trec_rag.adaptive_obligation_v2_local_model as model_module
 from trec_rag.adaptive_obligation_v2_contract import canonical_sha256
 from trec_rag.adaptive_obligation_v2_local_model import (
     V2LocalJsonModel,
+    V2ValidationLocalJsonModel,
     verify_inference_approval,
+    verify_validation_inference_approval,
 )
 from trec_rag.adaptive_obligation_v2_propose import MODEL_ID, MODEL_REVISION
 
@@ -58,6 +60,59 @@ def _approval() -> dict[str, object]:
         "model_revision": MODEL_REVISION,
         "primary_call_count": 48,
         "retry_call_ceiling": 48,
+        "approved": True,
+    }
+
+
+def _validation_schema() -> dict[str, object]:
+    return {"type": "object", "additionalProperties": False}
+
+
+def _validation_preflight() -> dict[str, object]:
+    manifest = _model_manifest({"config.json": b"config"})
+    messages = [{"role": "user", "content": "validate this obligation"}]
+    return {
+        "receipt_sha256": "b" * 64,
+        "stage": "validation",
+        "validator_role": "opposite_fold_semantic_validator",
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "model_snapshot": manifest,
+        "model_snapshot_manifest_sha256": manifest["manifest_sha256"],
+        "tokenizer_identity_sha256": "c" * 64,
+        "schema_sha256": canonical_sha256(_validation_schema()),
+        "job_count": 1,
+        "primary_call_count": 1,
+        "retry_call_ceiling": 1,
+        "worst_case_call_ceiling": 2,
+        "jobs": [
+            {
+                "job_id": "validation:job-1",
+                "messages": messages,
+                "prompt_token_count": 17,
+            }
+        ],
+    }
+
+
+def _validation_approval() -> dict[str, object]:
+    preflight = _validation_preflight()
+    return {
+        "schema_version": "adaptive-obligation-v2-validation-approval-v1",
+        "stage": "validation",
+        "validator_role": "opposite_fold_semantic_validator",
+        "preflight_sha256": preflight["receipt_sha256"],
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "model_snapshot_manifest_sha256": preflight[
+            "model_snapshot_manifest_sha256"
+        ],
+        "tokenizer_identity_sha256": preflight["tokenizer_identity_sha256"],
+        "job_count": 1,
+        "primary_call_count": 1,
+        "retry_call_ceiling": 1,
+        "worst_case_call_ceiling": 2,
+        "ledger_dir": "/tmp/adaptive-obligation-v2-validation-ledger",
         "approved": True,
     }
 
@@ -131,6 +186,157 @@ def test_adapter_gates_before_injected_runtime_loader(
         }
     ]
     assert adapter.generate([], {}, max_new_tokens=256) == (b"{}", 1)
+
+
+@pytest.mark.parametrize(
+    ("approval_change", "preflight_change"),
+    [
+        ({"model_revision": "0" * 40}, {}),
+        ({"model_snapshot_manifest_sha256": "0" * 64}, {}),
+        ({"tokenizer_identity_sha256": "0" * 64}, {}),
+        ({"worst_case_call_ceiling": 1}, {}),
+        ({}, {"model_snapshot_manifest_sha256": "0" * 64}),
+    ],
+)
+def test_validation_approval_binds_exact_model_tokenizer_and_call_ceiling(
+    approval_change: dict[str, object], preflight_change: dict[str, object]
+) -> None:
+    with pytest.raises(PermissionError, match="validation inference approval required"):
+        verify_validation_inference_approval(
+            {**_validation_approval(), **approval_change},
+            {**_validation_preflight(), **preflight_change},
+        )
+
+
+def test_validation_adapter_rechecks_approved_prompt_count_before_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class Runtime:
+        def generate_json_bytes(
+            self,
+            messages: object,
+            schema: object,
+            **kwargs: object,
+        ) -> tuple[bytes, int]:
+            calls.append(
+                {
+                    "messages": messages,
+                    "schema": schema,
+                    **kwargs,
+                }
+            )
+            return b'{"decision":"NO_EVIDENCE","support_unit_ids":[]}', 8
+
+    loader_calls: list[dict[str, object]] = []
+
+    def load(**kwargs: object) -> object:
+        loader_calls.append(dict(kwargs))
+        return Runtime()
+
+    monkeypatch.setattr(model_module, "load_pinned_local_runtime", load)
+    preflight = _validation_preflight()
+    adapter = V2ValidationLocalJsonModel(
+        approval=_validation_approval(), preflight=preflight
+    )
+    messages = preflight["jobs"][0]["messages"]  # type: ignore[index]
+    assert adapter.generate(
+        messages, _validation_schema(), max_new_tokens=256
+    ) == (b'{"decision":"NO_EVIDENCE","support_unit_ids":[]}', 8)
+    assert loader_calls == [
+        {
+            "model_id": MODEL_ID,
+            "revision": MODEL_REVISION,
+            "local_files_only": True,
+            "model_manifest": preflight["model_snapshot"],
+        }
+    ]
+    assert calls == [
+        {
+            "messages": messages,
+            "schema": _validation_schema(),
+            "max_new_tokens": 256,
+            "do_sample": False,
+            "expected_prompt_tokens": 17,
+        }
+    ]
+    with pytest.raises(ValueError, match="prompt identity"):
+        adapter.generate(
+            [{"role": "user", "content": "different"}],
+            _validation_schema(),
+            max_new_tokens=256,
+        )
+    with pytest.raises(ValueError, match="schema"):
+        adapter.generate(messages, {"type": "array"}, max_new_tokens=256)
+
+
+def test_validation_preflight_loader_constructs_only_the_pinned_tokenizer(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / MODEL_REVISION
+    files = {
+        "config.json": b"exact config",
+        "tokenizer.json": b"exact tokenizer",
+    }
+    manifest = _write_snapshot(snapshot, files)
+    calls: list[tuple[Path, dict[str, object]]] = []
+
+    class Tokenizer:
+        def apply_chat_template(self, *_args: object, **_kwargs: object) -> list[int]:
+            return [1, 2, 3]
+
+    class TokenizerClass:
+        @staticmethod
+        def from_pretrained(path: object, **kwargs: object) -> object:
+            private = Path(path)
+            assert private != snapshot
+            assert {child.name for child in private.iterdir()} == set(files)
+            calls.append((private, dict(kwargs)))
+            return Tokenizer()
+
+    tokenizer = model_module.load_pinned_local_tokenizer(
+        model_id=MODEL_ID,
+        revision=MODEL_REVISION,
+        local_files_only=True,
+        snapshot_dir=snapshot,
+        model_manifest=manifest,
+        runtime_modules=SimpleNamespace(auto_tokenizer_cls=TokenizerClass),
+    )
+    assert tokenizer.apply_chat_template([]) == [1, 2, 3]  # type: ignore[attr-defined]
+    assert calls[0][1] == {
+        "local_files_only": True,
+        "trust_remote_code": False,
+    }
+
+
+def test_pinned_runtime_rejects_prompt_count_drift_before_inference() -> None:
+    class Tensor:
+        shape = (1, 3)
+
+        def to(self, _device: str) -> "Tensor":
+            return self
+
+    tokenizer = SimpleNamespace(
+        apply_chat_template=lambda *_args, **_kwargs: {"input_ids": Tensor()}
+    )
+    model = SimpleNamespace(
+        generate=lambda **_kwargs: pytest.fail("inference must remain unreachable")
+    )
+    runtime = model_module._PinnedLocalRuntime(
+        modules=SimpleNamespace(torch=pytest.fail),
+        tokenizer=tokenizer,
+        model=model,
+        private_snapshot=SimpleNamespace(),
+    )
+    with pytest.raises(ValueError, match="prompt token count"):
+        runtime.generate_json_bytes(
+            [{"role": "user", "content": "prompt"}],
+            {"type": "object"},
+            max_new_tokens=256,
+            do_sample=False,
+            expected_prompt_tokens=4,
+        )
 
 
 def test_injected_loader_uses_exact_offline_safetensor_bfloat16_rocm_contract(

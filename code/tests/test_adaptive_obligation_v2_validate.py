@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
 
 import pytest
 
+import trec_rag.adaptive_obligation_v2_propose as propose_module
 import trec_rag.adaptive_obligation_v2_validate as validate_module
 from trec_rag.adaptive_obligation_v2_contract import canonical_sha256, sha256_text
 from trec_rag.adaptive_obligation_v2_ledger import AppendOnlyAttemptLedger
@@ -418,6 +420,7 @@ def _authenticated_proposal_inventory(
     proposals: list[dict[str, object]],
     *,
     source_contract_receipt_sha256: str = "f" * 64,
+    proposal_preflight_receipt_sha256: str = "b" * 64,
 ) -> dict[str, object]:
     receipt = {
         "schema_version": PROPOSAL_RECEIPT_SCHEMA_VERSION,
@@ -425,7 +428,7 @@ def _authenticated_proposal_inventory(
         "job_count": len(proposals),
         "proposal_count": len(proposals),
         "proposals_sha256": "a" * 64,
-        "proposal_preflight_receipt_sha256": "b" * 64,
+        "proposal_preflight_receipt_sha256": proposal_preflight_receipt_sha256,
         "source_contract_receipt_sha256": source_contract_receipt_sha256,
         "run_anchor_sha256": "c" * 64,
         "completion_sha256": "d" * 64,
@@ -439,6 +442,372 @@ def _authenticated_proposal_inventory(
         "receipt": receipt,
         "receipt_sha256": "e" * 64,
     }
+
+
+class _FakeValidationTokenizer:
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, str]]] = []
+
+    def apply_chat_template(
+        self,
+        messages: object,
+        *,
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ) -> list[int]:
+        assert isinstance(messages, list)
+        assert tokenize is True
+        assert add_generation_prompt is True
+        self.calls.append(messages)
+        return list(range(max(1, len(json.dumps(messages).encode()) // 7)))
+
+
+def test_validation_preflight_binds_validator_model_tokenizer_and_prompt_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposal_preflight_dir = (
+        Path(__file__).resolve().parents[2]
+        / "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2"
+        / "proposal_preflight"
+    )
+    proposal_preflight_sha256 = hashlib.sha256(
+        (proposal_preflight_dir / "receipt.json").read_bytes()
+    ).hexdigest()
+    proposals = [_supported_proposal()]
+    authenticated = _authenticated_proposal_inventory(
+        proposals,
+        proposal_preflight_receipt_sha256=proposal_preflight_sha256,
+    )
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: authenticated,
+    )
+    contract = _contract_fixture()
+    monkeypatch.setattr(
+        validate_module,
+        "_capture_and_verify_contract_snapshot",
+        lambda _path, *, expected_receipt_sha256: (
+            contract,
+            expected_receipt_sha256,
+        ),
+    )
+    tokenizer = _FakeValidationTokenizer()
+    tokenizer_loads: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        validate_module,
+        "_load_pinned_validation_tokenizer",
+        lambda metadata: tokenizer_loads.append(dict(metadata)) or tokenizer,
+    )
+
+    preflight = build_validation_preflight(
+        Path("unused-contract"),
+        proposal_inventory_dir=object(),
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=object(),
+    )
+
+    captured = propose_module._capture_static_preflight_for_task4(
+        proposal_preflight_dir,
+        expected_receipt_sha256=proposal_preflight_sha256,
+    )
+    assert preflight["stage"] == "validation"
+    assert preflight["validator_role"] == "opposite_fold_semantic_validator"
+    assert preflight["model"] == captured.receipt["model"]
+    assert preflight["model_revision"] == captured.receipt["model_revision"]
+    assert preflight["model_snapshot"] == captured.receipt["model_snapshot"]
+    assert preflight["tokenizer_files"] == captured.receipt["tokenizer_files"]
+    assert preflight["tokenizer_contract"] == captured.receipt["tokenizer_contract"]
+    assert len(preflight["model_snapshot_manifest_sha256"]) == 64
+    assert len(preflight["tokenizer_identity_sha256"]) == 64
+    assert len(preflight["prompt_sha256"]) == 64
+    assert set(preflight["code_sha256"]) == {
+        "adaptive_obligation_v2_validate.py",
+        "adaptive_obligation_v2_local_model.py",
+    }
+    counts = preflight["prompt_token_counts"]
+    assert counts["count"] == preflight["job_count"] == 1
+    assert counts["minimum"] == counts["maximum"] == counts["total"]
+    assert counts["by_job"] == [
+        {
+            "job_id": preflight["jobs"][0]["job_id"],
+            "prompt_token_count": counts["total"],
+        }
+    ]
+    assert len(tokenizer.calls) == 1
+    assert tokenizer_loads == [
+        {
+            key: preflight[key]
+            for key in (
+                "model",
+                "model_revision",
+                "model_snapshot",
+                "model_snapshot_manifest_sha256",
+                "tokenizer_files",
+                "tokenizer_contract",
+                "tokenizer_identity_sha256",
+                "proposal_preflight_receipt_sha256",
+            )
+        }
+    ]
+    assert preflight["tokenizer_load_count"] == 1
+    assert preflight["model_load_count"] == 0
+    assert preflight["inference_count"] == 0
+    assert validate_module._verify_validation_preflight_payload(preflight) == preflight
+
+
+def _validation_approval_fixture(
+    preflight: dict[str, object], ledger_dir: Path
+) -> dict[str, object]:
+    return {
+        "schema_version": validate_module.VALIDATION_APPROVAL_SCHEMA_VERSION,
+        "stage": "validation",
+        "validator_role": validate_module.VALIDATOR_ROLE,
+        "preflight_sha256": preflight["receipt_sha256"],
+        "model": preflight["model"],
+        "model_revision": preflight["model_revision"],
+        "model_snapshot_manifest_sha256": preflight[
+            "model_snapshot_manifest_sha256"
+        ],
+        "tokenizer_identity_sha256": preflight["tokenizer_identity_sha256"],
+        "job_count": preflight["job_count"],
+        "primary_call_count": preflight["primary_call_count"],
+        "retry_call_ceiling": preflight["retry_call_ceiling"],
+        "worst_case_call_ceiling": preflight["worst_case_call_ceiling"],
+        "ledger_dir": str(ledger_dir),
+        "approved": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "model",
+        "model_revision",
+        "model_snapshot_manifest_sha256",
+        "tokenizer_identity_sha256",
+    ],
+)
+def test_validation_approval_binds_exact_model_tokenizer_and_ledger(
+    tmp_path: Path, field: str
+) -> None:
+    ledger_dir = tmp_path / "validation-ledger"
+    preflight = {
+        "receipt_sha256": "a" * 64,
+        "stage": "validation",
+        "validator_role": validate_module.VALIDATOR_ROLE,
+        "model": propose_module.MODEL_ID,
+        "model_revision": propose_module.MODEL_REVISION,
+        "model_snapshot_manifest_sha256": "b" * 64,
+        "tokenizer_identity_sha256": "c" * 64,
+        "job_count": 1,
+        "primary_call_count": 1,
+        "retry_call_ceiling": 1,
+        "worst_case_call_ceiling": 2,
+    }
+    approval = _validation_approval_fixture(preflight, ledger_dir)
+    path = tmp_path / f"approval-{field}.json"
+    path.write_bytes(validate_module._pretty_bytes(approval))
+    captured, source, source_sha256 = validate_module._capture_validation_approval(
+        path
+    )
+    assert source_sha256 == hashlib.sha256(source).hexdigest()
+    assert validate_module.verify_validation_approval(
+        captured, preflight, ledger_dir=ledger_dir
+    ) == approval
+
+    forged = {**approval, field: "0" * 64}
+    forged_path = tmp_path / f"forged-{field}.json"
+    forged_path.write_bytes(validate_module._pretty_bytes(forged))
+    with pytest.raises(PermissionError, match="validation approval required"):
+        forged_value, _source, _sha256 = validate_module._capture_validation_approval(
+            forged_path
+        )
+        validate_module.verify_validation_approval(
+            forged_value, preflight, ledger_dir=ledger_dir
+        )
+
+
+def test_validation_ledger_anchor_explicitly_binds_model_tokenizer_and_code(
+    tmp_path: Path,
+) -> None:
+    job = build_validation_jobs([_supported_proposal()], _contract_fixture())[0]
+    preflight = {
+        "validator_role": validate_module.VALIDATOR_ROLE,
+        "model": propose_module.MODEL_ID,
+        "model_revision": propose_module.MODEL_REVISION,
+        "model_snapshot_manifest_sha256": "b" * 64,
+        "tokenizer_identity_sha256": "c" * 64,
+        "prompt_sha256": "d" * 64,
+        "code_sha256": {
+            "adaptive_obligation_v2_validate.py": "e" * 64,
+            "adaptive_obligation_v2_local_model.py": "f" * 64,
+        },
+        "jobs_sha256": canonical_sha256([job]),
+        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
+    }
+    provenance = validate_module._validation_anchor_provenance(preflight)
+    anchor = validate_module._build_validation_run_anchor(
+        [job],
+        preflight_sha256="a" * 64,
+        approval_sha256="9" * 64,
+        provenance=provenance,
+    )
+    assert anchor["provenance"] == provenance
+    assert provenance == {
+        "validator_role": validate_module.VALIDATOR_ROLE,
+        "model": propose_module.MODEL_ID,
+        "model_revision": propose_module.MODEL_REVISION,
+        "model_snapshot_manifest_sha256": "b" * 64,
+        "tokenizer_identity_sha256": "c" * 64,
+        "prompt_sha256": "d" * 64,
+        "code_identity_sha256": canonical_sha256(preflight["code_sha256"]),
+        "jobs_sha256": canonical_sha256([job]),
+        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
+    }
+    ledger = AppendOnlyAttemptLedger(
+        tmp_path / "validation-ledger",
+        expected_anchor=anchor,
+        create_only=True,
+    )
+    assert ledger.anchor == anchor
+
+
+@pytest.mark.parametrize("approval_kind", ["missing", "symlink", "wrong"])
+def test_execute_validation_requires_approval_before_preflight_model_or_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    approval_kind: str,
+) -> None:
+    approval_path = tmp_path / "validation-approval.json"
+    if approval_kind == "symlink":
+        target = tmp_path / "real-approval.json"
+        target.write_bytes(b"{}\n")
+        approval_path.symlink_to(target)
+    elif approval_kind == "wrong":
+        approval_path.write_bytes(b"{}\n")
+    touched: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        touched.append("unsafe")
+        raise AssertionError("approval must be checked first")
+
+    monkeypatch.setattr(
+        validate_module, "_capture_validation_preflight", forbidden
+    )
+    monkeypatch.setattr(validate_module, "_load_validation_model", forbidden, raising=False)
+    ledger_dir = tmp_path / "validation-ledger"
+    with pytest.raises(PermissionError, match="validation approval required"):
+        validate_module.execute_validation(
+            preflight_dir=tmp_path / "validation-preflight",
+            approval_path=approval_path,
+            ledger_dir=ledger_dir,
+            proposal_inventory_dir=tmp_path / "proposal-inventory",
+            proposal_preflight_dir=tmp_path / "proposal-preflight",
+            proposal_ledger_dir=tmp_path / "proposal-ledger",
+            source_contract_dir=tmp_path / "source-contract",
+        )
+    assert touched == []
+    assert not ledger_dir.exists()
+
+
+def test_execute_validation_public_api_has_no_runtime_or_ledger_injection() -> None:
+    parameters = inspect.signature(validate_module.execute_validation).parameters
+    assert "model" not in parameters
+    assert "model_factory" not in parameters
+    assert "ledger" not in parameters
+
+
+def test_validation_preflight_public_api_has_no_tokenizer_injection() -> None:
+    parameters = inspect.signature(build_validation_preflight).parameters
+    assert "tokenizer" not in parameters
+
+
+def test_execute_validation_uses_authenticated_fake_runtime_with_real_sealed_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = {
+        **build_validation_jobs([_supported_proposal()], _contract_fixture())[0],
+        "prompt_token_count": 23,
+    }
+    preflight = {
+        "receipt_sha256": "a" * 64,
+        "jobs": [job],
+        "validator_role": validate_module.VALIDATOR_ROLE,
+        "model": propose_module.MODEL_ID,
+        "model_revision": propose_module.MODEL_REVISION,
+        "model_snapshot_manifest_sha256": "b" * 64,
+        "tokenizer_identity_sha256": "c" * 64,
+        "prompt_sha256": "d" * 64,
+        "code_sha256": {
+            "adaptive_obligation_v2_validate.py": "e" * 64,
+            "adaptive_obligation_v2_local_model.py": "f" * 64,
+        },
+        "jobs_sha256": canonical_sha256([job]),
+        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
+        "job_count": 1,
+        "primary_call_count": 1,
+        "retry_call_ceiling": 1,
+        "worst_case_call_ceiling": 2,
+    }
+    ledger_dir = tmp_path / "validation-ledger"
+    approval = _validation_approval_fixture(preflight, ledger_dir)
+    approval_path = tmp_path / "validation-approval.json"
+    approval_path.write_bytes(validate_module._pretty_bytes(approval))
+    monkeypatch.setattr(
+        validate_module,
+        "_authenticate_validation_after_approval",
+        lambda **_kwargs: preflight,
+        raising=False,
+    )
+    decision = {
+        "decision": "SUPPORTED",
+        "support_unit_ids": [job["input_unit_ids"][0]],
+    }
+    model = _FakeValidationModel(
+        [(json.dumps(decision, separators=(",", ":")).encode(), 20)]
+    )
+    monkeypatch.setattr(
+        validate_module,
+        "_load_validation_model",
+        lambda **_kwargs: model,
+        raising=False,
+    )
+
+    result = validate_module.execute_validation(
+        preflight_dir=tmp_path / "unused-preflight",
+        approval_path=approval_path,
+        ledger_dir=ledger_dir,
+        proposal_inventory_dir=tmp_path / "unused-proposal-inventory",
+        proposal_preflight_dir=tmp_path / "unused-proposal-preflight",
+        proposal_ledger_dir=tmp_path / "unused-proposal-ledger",
+        source_contract_dir=tmp_path / "unused-contract",
+    )
+
+    assert result["status"] == "complete"
+    assert result["job_count"] == 1
+    assert result["completion"]["completed_job_count"] == 1
+    reopened = AppendOnlyAttemptLedger(
+        ledger_dir,
+        expected_anchor=validate_module._build_validation_run_anchor(
+            [job],
+            preflight_sha256="a" * 64,
+            approval_sha256=hashlib.sha256(approval_path.read_bytes()).hexdigest(),
+            provenance=validate_module._validation_anchor_provenance(preflight),
+        ),
+        create_only=False,
+    )
+    assert len(reopened.read_sealed_results()["results"]) == 1
+    with pytest.raises(FileExistsError, match="create-only"):
+        validate_module.execute_validation(
+            preflight_dir=tmp_path / "unused-preflight",
+            approval_path=approval_path,
+            ledger_dir=ledger_dir,
+            proposal_inventory_dir=tmp_path / "unused-proposal-inventory",
+            proposal_preflight_dir=tmp_path / "unused-proposal-preflight",
+            proposal_ledger_dir=tmp_path / "unused-proposal-ledger",
+            source_contract_dir=tmp_path / "unused-contract",
+        )
 
 
 def test_validation_preflight_rejects_an_altered_opposite_fold_contract(
@@ -538,11 +907,31 @@ def test_validation_preflight_requires_authenticated_complete_proposals_and_v_ca
             expected_receipt_sha256,
         ),
     )
-    preflight = build_validation_preflight(
+    monkeypatch.setattr(
+        validate_module,
+        "_validator_model_metadata",
+        lambda *_args, **_kwargs: {
+            "model": propose_module.MODEL_ID,
+            "model_revision": propose_module.MODEL_REVISION,
+            "model_snapshot": {
+                "model": propose_module.MODEL_ID,
+                "revision": propose_module.MODEL_REVISION,
+                "files": [],
+                "manifest_sha256": "1" * 64,
+            },
+            "model_snapshot_manifest_sha256": "1" * 64,
+            "tokenizer_files": [],
+            "tokenizer_contract": {"chat_template": "pinned"},
+            "tokenizer_identity_sha256": "2" * 64,
+            "proposal_preflight_receipt_sha256": "b" * 64,
+        },
+    )
+    preflight = validate_module._build_validation_preflight_with_tokenizer(
         contract_dir=Path("unused-contract"),
         proposal_inventory_dir=object(),
-        proposal_preflight_dir=object(),
+        proposal_preflight_dir=Path("unused-proposal-preflight"),
         proposal_ledger_dir=object(),
+        tokenizer=_FakeValidationTokenizer(),
     )
     assert preflight["job_count"] == 1
     assert preflight["primary_call_count"] == 1
@@ -555,10 +944,10 @@ def test_validation_preflight_requires_authenticated_complete_proposals_and_v_ca
         "hosted_inference_call_count",
         "paid_call_count",
         "model_load_count",
-        "tokenizer_load_count",
         "inference_count",
     ):
         assert preflight[counter] == 0
+    assert preflight["tokenizer_load_count"] == 1
     assert preflight["qrels_opened"] is False
 
     monkeypatch.setattr(
@@ -686,7 +1075,20 @@ def test_task3_real_ledger_runs_validation_retry_and_sealed_reopen(
 ) -> None:
     job = build_validation_jobs([_supported_proposal()], _contract_fixture())[0]
     anchor = validate_module._build_validation_run_anchor(
-        [job], preflight_sha256="a" * 64, approval_sha256="b" * 64
+        [job],
+        preflight_sha256="a" * 64,
+        approval_sha256="b" * 64,
+        provenance={
+            "validator_role": validate_module.VALIDATOR_ROLE,
+            "model": propose_module.MODEL_ID,
+            "model_revision": propose_module.MODEL_REVISION,
+            "model_snapshot_manifest_sha256": "c" * 64,
+            "tokenizer_identity_sha256": "d" * 64,
+            "prompt_sha256": "e" * 64,
+            "code_identity_sha256": "f" * 64,
+            "jobs_sha256": canonical_sha256([job]),
+            "schema_sha256": canonical_sha256(validate_module.VALIDATION_SCHEMA),
+        },
     )
     root = tmp_path / "task3-ledger"
     ledger = AppendOnlyAttemptLedger(

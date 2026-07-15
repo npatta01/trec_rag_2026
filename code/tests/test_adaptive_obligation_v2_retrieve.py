@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import hashlib
 import inspect
 import json
@@ -125,11 +126,27 @@ def real_v2_validation_handoff(
         proposal_inventory_dir, proposal_contents
     )
 
-    validation_preflight = validate_module.build_validation_preflight(
-        contract_dir,
-        proposal_inventory_dir=proposal_inventory_dir,
-        proposal_preflight_dir=proposal_preflight_dir,
-        proposal_ledger_dir=proposal_ledger_dir,
+    class ValidationTokenizer:
+        def apply_chat_template(
+            self,
+            messages: object,
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> list[int]:
+            assert isinstance(messages, list)
+            assert tokenize is True
+            assert add_generation_prompt is True
+            return list(range(max(1, len(json.dumps(messages).encode()) // 7)))
+
+    validation_preflight = (
+        validate_module._build_validation_preflight_with_tokenizer(
+            contract_dir,
+            proposal_inventory_dir=proposal_inventory_dir,
+            proposal_preflight_dir=proposal_preflight_dir,
+            proposal_ledger_dir=proposal_ledger_dir,
+            tokenizer=ValidationTokenizer(),
+        )
     )
     validation_preflight_dir = root / "validation-preflight"
     validate_module.publish_validation_preflight(
@@ -141,13 +158,27 @@ def real_v2_validation_handoff(
     validation_preflight_sha256 = hashlib.sha256(
         validation_preflight_source
     ).hexdigest()
+    validation_ledger_dir = root / "validation-ledger"
     validation_approval = {
         "schema_version": validate_module.VALIDATION_APPROVAL_SCHEMA_VERSION,
         "stage": "validation",
+        "validator_role": validation_preflight["validator_role"],
         "preflight_sha256": validation_preflight_sha256,
+        "model": validation_preflight["model"],
+        "model_revision": validation_preflight["model_revision"],
+        "model_snapshot_manifest_sha256": validation_preflight[
+            "model_snapshot_manifest_sha256"
+        ],
+        "tokenizer_identity_sha256": validation_preflight[
+            "tokenizer_identity_sha256"
+        ],
         "job_count": validation_preflight["job_count"],
         "primary_call_count": validation_preflight["primary_call_count"],
         "retry_call_ceiling": validation_preflight["retry_call_ceiling"],
+        "worst_case_call_ceiling": validation_preflight[
+            "worst_case_call_ceiling"
+        ],
+        "ledger_dir": str(validation_ledger_dir.resolve()),
         "approved": True,
     }
     validation_approval_path = root / "validation-approval.json"
@@ -162,23 +193,30 @@ def real_v2_validation_handoff(
         validation_jobs,
         preflight_sha256=validation_preflight_sha256,
         approval_sha256=validation_approval_sha256,
+        provenance=validate_module._validation_anchor_provenance(
+            validation_preflight
+        ),
     )
-    validation_ledger_dir = root / "validation-ledger"
     validation_ledger = AppendOnlyAttemptLedger(
         validation_ledger_dir, expected_anchor=validation_anchor, create_only=True
     )
 
     class ValidationModel:
-        def __init__(self, unit_id: str) -> None:
-            self.unit_id = unit_id
+        def __init__(self) -> None:
+            self.unit_ids = {
+                canonical_sha256(job["messages"]): str(job["input_unit_ids"][0])
+                for job in validation_jobs
+            }
 
-        def generate(self, _messages, _schema, *, max_new_tokens):
+        def generate(self, messages, _schema, *, max_new_tokens):
             assert max_new_tokens == validate_module.PRIMARY_MAX_NEW_TOKENS
             return (
                 json.dumps(
                     {
                         "decision": "SUPPORTED",
-                        "support_unit_ids": [self.unit_id],
+                        "support_unit_ids": [
+                            self.unit_ids[canonical_sha256(messages)]
+                        ],
                     },
                     separators=(",", ":"),
                     sort_keys=True,
@@ -186,13 +224,25 @@ def real_v2_validation_handoff(
                 20,
             )
 
+    validation_model = ValidationModel()
     for job in validation_jobs:
         validate_module.run_validation_job_with_retry(
             job,
             ledger=validation_ledger,
-            model=ValidationModel(str(job["input_unit_ids"][0])),
+            model=validation_model,
         )
     validation_ledger.seal_completion()
+    del (
+        captured_proposal_preflight,
+        proposal_anchor,
+        proposal_ledger,
+        selected_job,
+        proposal_contents,
+        validation_ledger,
+        validation_model,
+        job,
+    )
+    gc.collect()
     validation_output_dir = root / "validation-output"
     validate_module.finalize_validation_inventory(
         preflight_dir=validation_preflight_dir,
@@ -958,6 +1008,67 @@ def test_response_normalization_matches_tracked_wire_keys_and_never_uses_docid_a
         module._normalize_response(json.dumps(payload).encode())
 
 
+def test_response_normalization_rejects_nested_docid_only_documents() -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            "doc": {"docid": f"nested-{rank - 1}"},
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    with pytest.raises(ValueError, match="text-bearing"):
+        module._normalize_response(json.dumps({"candidates": candidates}).encode())
+
+
+def test_response_normalization_uses_only_explicit_nested_content() -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            "doc": {
+                "docid": f"nested-{rank - 1}",
+                "url": f"https://example.test/{rank - 1}",
+                "title": f"Metadata title {rank - 1}",
+                "score": 99.0,
+                "text": f"Explicit document content {rank - 1}.",
+            },
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    rows = module._normalize_response(
+        json.dumps({"candidates": candidates}).encode()
+    )
+
+    assert rows[0]["text"] == "Explicit document content 0."
+    assert "nested-0" not in str(rows[0]["text"])
+    assert "Metadata title" not in str(rows[0]["text"])
+    assert "example.test" not in str(rows[0]["text"])
+
+
+def test_response_normalization_rejects_arbitrary_nested_metadata() -> None:
+    candidates = [
+        {
+            "rank": rank,
+            "docid": f"d{rank - 1}",
+            "score": 1.0,
+            "doc": {
+                "metadata": ["not content", f"tag-{rank - 1}", 42],
+                "url": f"https://example.test/{rank - 1}",
+                "quality_score": 0.9,
+            },
+        }
+        for rank in range(1, RETRIEVAL_HITS + 1)
+    ]
+
+    with pytest.raises(ValueError, match="text-bearing"):
+        module._normalize_response(json.dumps({"results": candidates}).encode())
+
+
 def test_executor_rejects_transport_with_retry_or_wrong_limiter_before_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1170,10 +1281,19 @@ def test_validation_finalizer_rejects_forged_upstream_hashes_before_ledger(
     approval = {
         "schema_version": validate_module.VALIDATION_APPROVAL_SCHEMA_VERSION,
         "stage": "validation",
+        "validator_role": forged["validator_role"],
         "preflight_sha256": hashlib.sha256(forged_source).hexdigest(),
+        "model": forged["model"],
+        "model_revision": forged["model_revision"],
+        "model_snapshot_manifest_sha256": forged[
+            "model_snapshot_manifest_sha256"
+        ],
+        "tokenizer_identity_sha256": forged["tokenizer_identity_sha256"],
         "job_count": forged["job_count"],
         "primary_call_count": forged["primary_call_count"],
         "retry_call_ceiling": forged["retry_call_ceiling"],
+        "worst_case_call_ceiling": forged["worst_case_call_ceiling"],
+        "ledger_dir": str((tmp_path / "missing-ledger").resolve()),
         "approved": True,
     }
     approval_path = tmp_path / "forged-validation-approval.json"

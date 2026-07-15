@@ -1836,6 +1836,7 @@ def load_authenticated_proposal_inventory(
         "proposals": observed_rows,
         "receipt": receipt,
         "receipt_sha256": _sha256(contents["receipt.json"]),
+        "proposal_preflight": dict(captured_preflight.receipt),
     }
 
 

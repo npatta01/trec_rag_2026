@@ -20,6 +20,10 @@ from .adaptive_obligation_v2_propose import (
 
 
 APPROVAL_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-approval-v1"
+VALIDATION_APPROVAL_SCHEMA_VERSION = (
+    "adaptive-obligation-v2-validation-approval-v1"
+)
+VALIDATOR_ROLE = "opposite_fold_semantic_validator"
 _FICLONE = 0x40049409
 _HEX = frozenset("0123456789abcdef")
 
@@ -68,6 +72,101 @@ def verify_inference_approval(
     return dict(approval)
 
 
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and not any(char not in _HEX for char in value)
+    )
+
+
+def verify_validation_inference_approval(
+    approval: object, preflight: Mapping[str, object]
+) -> dict[str, object]:
+    """Require validation approval bound to exact runtime provenance and counts."""
+
+    error = PermissionError("validation inference approval required")
+    if not isinstance(approval, Mapping) or not isinstance(preflight, Mapping):
+        raise error
+    manifest = preflight.get("model_snapshot")
+    jobs = preflight.get("jobs")
+    ledger_dir = approval.get("ledger_dir")
+    integer_fields = (
+        "job_count",
+        "primary_call_count",
+        "retry_call_ceiling",
+        "worst_case_call_ceiling",
+    )
+    if (
+        preflight.get("stage") != "validation"
+        or preflight.get("validator_role") != VALIDATOR_ROLE
+        or preflight.get("model") != MODEL_ID
+        or preflight.get("model_revision") != MODEL_REVISION
+        or not _is_sha256(preflight.get("receipt_sha256"))
+        or not _is_sha256(preflight.get("model_snapshot_manifest_sha256"))
+        or not _is_sha256(preflight.get("tokenizer_identity_sha256"))
+        or not _is_sha256(preflight.get("schema_sha256"))
+        or not isinstance(manifest, Mapping)
+        or manifest.get("model") != MODEL_ID
+        or manifest.get("revision") != MODEL_REVISION
+        or manifest.get("manifest_sha256")
+        != preflight.get("model_snapshot_manifest_sha256")
+        or not isinstance(jobs, list)
+        or any(type(preflight.get(name)) is not int for name in integer_fields)
+        or preflight.get("job_count") != len(jobs)
+        or preflight.get("primary_call_count") != len(jobs)
+        or preflight.get("retry_call_ceiling") != len(jobs)
+        or preflight.get("worst_case_call_ceiling") != len(jobs) * 2
+        or not isinstance(ledger_dir, str)
+        or not Path(ledger_dir).is_absolute()
+        or str(Path(ledger_dir).resolve()) != ledger_dir
+    ):
+        raise error
+    prompt_identities: set[str] = set()
+    for job in jobs:
+        if not isinstance(job, Mapping):
+            raise error
+        messages = job.get("messages")
+        prompt_token_count = job.get("prompt_token_count")
+        if (
+            not isinstance(messages, list)
+            or type(prompt_token_count) is not int
+            or prompt_token_count < 1
+        ):
+            raise error
+        identity = canonical_sha256(messages)
+        if identity in prompt_identities:
+            raise error
+        prompt_identities.add(identity)
+    expected = {
+        "schema_version": VALIDATION_APPROVAL_SCHEMA_VERSION,
+        "stage": "validation",
+        "validator_role": VALIDATOR_ROLE,
+        "preflight_sha256": preflight.get("receipt_sha256"),
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "model_snapshot_manifest_sha256": preflight.get(
+            "model_snapshot_manifest_sha256"
+        ),
+        "tokenizer_identity_sha256": preflight.get(
+            "tokenizer_identity_sha256"
+        ),
+        "job_count": preflight.get("job_count"),
+        "primary_call_count": preflight.get("primary_call_count"),
+        "retry_call_ceiling": preflight.get("retry_call_ceiling"),
+        "worst_case_call_ceiling": preflight.get(
+            "worst_case_call_ceiling"
+        ),
+        "ledger_dir": ledger_dir,
+        "approved": True,
+    }
+    if set(approval) != set(expected) or any(
+        approval.get(name) != value for name, value in expected.items()
+    ):
+        raise error
+    return dict(approval)
+
+
 def _default_runtime_modules() -> object:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -77,6 +176,12 @@ def _default_runtime_modules() -> object:
         auto_tokenizer_cls=AutoTokenizer,
         auto_model_cls=AutoModelForCausalLM,
     )
+
+
+def _default_tokenizer_modules() -> object:
+    from transformers import AutoTokenizer
+
+    return SimpleNamespace(auto_tokenizer_cls=AutoTokenizer)
 
 
 class _PrivateSnapshot:
@@ -290,6 +395,7 @@ class _PinnedLocalRuntime:
         *,
         max_new_tokens: int,
         do_sample: bool,
+        expected_prompt_tokens: int | None = None,
     ) -> tuple[bytes, int]:
         if not isinstance(schema, Mapping) or not schema:
             raise ValueError("proposal JSON schema is required")
@@ -305,12 +411,21 @@ class _PinnedLocalRuntime:
         )
         if not isinstance(encoded, Mapping) or "input_ids" not in encoded:
             raise ValueError("local tokenizer returned invalid model inputs")
+        prompt_tokens = int(encoded["input_ids"].shape[-1])  # type: ignore[attr-defined]
+        if (
+            expected_prompt_tokens is not None
+            and (
+                type(expected_prompt_tokens) is not int
+                or expected_prompt_tokens < 1
+                or prompt_tokens != expected_prompt_tokens
+            )
+        ):
+            raise ValueError("approved prompt token count differs")
         device_inputs = {
             name: tensor.to("cuda")  # type: ignore[attr-defined]
             for name, tensor in encoded.items()
         }
         input_ids = device_inputs["input_ids"]
-        prompt_tokens = int(input_ids.shape[-1])  # type: ignore[attr-defined]
         torch_module = self._modules.torch  # type: ignore[attr-defined]
         with torch_module.inference_mode():
             output = self._model.generate(  # type: ignore[attr-defined]
@@ -324,6 +439,59 @@ class _PinnedLocalRuntime:
         if not isinstance(text, str):
             raise ValueError("local tokenizer decode did not return text")
         return text.encode("utf-8"), output_token_count
+
+
+class _PinnedLocalTokenizer:
+    """Keep the authenticated private snapshot alive while counting prompts."""
+
+    def __init__(self, tokenizer: object, private_snapshot: _PrivateSnapshot) -> None:
+        self._tokenizer = tokenizer
+        self._private_snapshot = private_snapshot
+
+    def apply_chat_template(self, *args: object, **kwargs: object) -> object:
+        return self._tokenizer.apply_chat_template(  # type: ignore[attr-defined,no-any-return]
+            *args, **kwargs
+        )
+
+
+def load_pinned_local_tokenizer(
+    *,
+    model_id: str,
+    revision: str,
+    local_files_only: bool,
+    model_manifest: Mapping[str, object],
+    snapshot_dir: Path = MODEL_SNAPSHOT,
+    runtime_modules: object | None = None,
+) -> object:
+    """Load only the exact offline tokenizer from an authenticated snapshot."""
+
+    if (
+        model_id != MODEL_ID
+        or revision != MODEL_REVISION
+        or local_files_only is not True
+    ):
+        raise RuntimeError("pinned local validation tokenizer identity differs")
+    private_snapshot = _materialize_private_snapshot(
+        Path(snapshot_dir),
+        model_manifest,
+        model_id=model_id,
+        revision=revision,
+    )
+    try:
+        modules = (
+            runtime_modules
+            if runtime_modules is not None
+            else _default_tokenizer_modules()
+        )
+        tokenizer = modules.auto_tokenizer_cls.from_pretrained(  # type: ignore[attr-defined]
+            private_snapshot.path,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        return _PinnedLocalTokenizer(tokenizer, private_snapshot)
+    except Exception:
+        private_snapshot.cleanup()
+        raise
 
 
 def load_pinned_local_runtime(
@@ -417,4 +585,56 @@ class V2LocalJsonModel:
             schema,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+        )
+
+
+class V2ValidationLocalJsonModel:
+    """Approval-gated validation facade with exact prompt-count replay."""
+
+    def __init__(self, *, approval: object, preflight: Mapping[str, object]) -> None:
+        verify_validation_inference_approval(approval, preflight)
+        manifest = preflight["model_snapshot"]
+        jobs = preflight["jobs"]
+        schema_sha256 = preflight["schema_sha256"]
+        if (
+            not isinstance(manifest, Mapping)
+            or not isinstance(jobs, list)
+            or not isinstance(schema_sha256, str)
+        ):
+            raise PermissionError("validation inference approval required")
+        self._schema_sha256 = schema_sha256
+        self._prompt_counts: dict[str, int] = {}
+        for job in jobs:
+            if not isinstance(job, Mapping):
+                raise PermissionError("validation inference approval required")
+            messages = job.get("messages")
+            count = job.get("prompt_token_count")
+            if not isinstance(messages, list) or type(count) is not int:
+                raise PermissionError("validation inference approval required")
+            self._prompt_counts[canonical_sha256(messages)] = count
+        self._runtime = load_pinned_local_runtime(
+            model_id=MODEL_ID,
+            revision=MODEL_REVISION,
+            local_files_only=True,
+            model_manifest=manifest,
+        )
+
+    def generate(
+        self,
+        messages: Sequence[Mapping[str, str]],
+        schema: Mapping[str, object],
+        *,
+        max_new_tokens: int,
+    ) -> tuple[bytes, int]:
+        if canonical_sha256(schema) != self._schema_sha256:
+            raise ValueError("validation response schema differs")
+        prompt_count = self._prompt_counts.get(canonical_sha256(messages))
+        if prompt_count is None:
+            raise ValueError("validation prompt identity differs")
+        return self._runtime.generate_json_bytes(  # type: ignore[attr-defined,no-any-return]
+            messages,
+            schema,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            expected_prompt_tokens=prompt_count,
         )

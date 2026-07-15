@@ -36,7 +36,7 @@ from .adaptive_obligation_v2_validate import (
     load_authenticated_validation_inventory,
 )
 from .det_sparse_ledger import RawTransportResponse
-from .remote_client import extract_text, rate_limited_session
+from .remote_client import rate_limited_session
 from .remote_config import RemotePyseriniConfig
 from .repo_env import find_repo_root
 
@@ -77,6 +77,8 @@ RETRIEVAL_INPUT_RECEIPT_SCHEMA_VERSION = (
 ESTIMATED_RAW_BYTES_PER_REQUEST = 8_000_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOPIC_ORDER = {topic_id: index for index, topic_id in enumerate(PILOT_TOPIC_IDS)}
+_WIRE_CONTENT_FIELDS = ("contents", "text", "body", "passage", "abstract")
+_WIRE_DOCUMENT_CONTAINERS = ("doc",)
 
 
 class RetrievalTransport(Protocol):
@@ -804,6 +806,57 @@ def build_retrieval_jobs(
     )
 
 
+def _normalize_content_text(value: object) -> str:
+    return " ".join(value.split()) if isinstance(value, str) else ""
+
+
+def _extract_document_container(value: object) -> str:
+    """Read only declared content fields from a hosted document container."""
+
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return _normalize_content_text(value)
+        if isinstance(decoded, (Mapping, list)):
+            return _extract_document_container(decoded)
+        return _normalize_content_text(value)
+    if isinstance(value, Mapping):
+        for field in _WIRE_CONTENT_FIELDS:
+            text = _normalize_content_text(value.get(field))
+            if text:
+                return text
+        for container in _WIRE_DOCUMENT_CONTAINERS:
+            if container in value:
+                text = _extract_document_container(value[container])
+                if text:
+                    return text
+        return ""
+    if isinstance(value, list):
+        parts = [
+            text
+            for item in value
+            if isinstance(item, Mapping)
+            for text in (_extract_document_container(item),)
+            if text
+        ]
+        return " ".join(parts)
+    return ""
+
+
+def _extract_candidate_content(candidate: Mapping[str, object]) -> str:
+    for container in _WIRE_DOCUMENT_CONTAINERS:
+        if container in candidate:
+            text = _extract_document_container(candidate[container])
+            if text:
+                return text
+    for field in _WIRE_CONTENT_FIELDS:
+        text = _normalize_content_text(candidate.get(field))
+        if text:
+            return text
+    return ""
+
+
 def _normalize_response(raw: bytes) -> tuple[dict[str, object], ...]:
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -826,13 +879,7 @@ def _normalize_response(raw: bytes) -> tuple[dict[str, object], ...]:
         docid = value.get("docid") or value.get("id") or value.get("_id")
         rank = value.get("rank", position)
         score = value.get("score", 0.0)
-        content: object | None = value.get("doc")
-        if content is None:
-            for content_key in ("contents", "text", "body", "passage", "abstract"):
-                if content_key in value:
-                    content = value[content_key]
-                    break
-        text = extract_text(content) if content is not None else ""
+        text = _extract_candidate_content(value)
         if (
             not isinstance(docid, str)
             or not docid.strip()

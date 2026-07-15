@@ -13,6 +13,7 @@ import pytest
 
 import trec_rag.adaptive_obligation_v2_propose as propose_module
 import trec_rag.adaptive_obligation_v2_local_model as local_model_module
+import trec_rag.adaptive_obligation_v2_validate as validate_module
 from trec_rag.adaptive_evidence_contract import PILOT_TOPIC_IDS
 from trec_rag.adaptive_obligation_v2_contract import (
     PARENT_SCHEMA_VERSION,
@@ -839,12 +840,27 @@ def test_sealed_ledger_finalizer_feeds_authenticated_task4_preflight(
     monkeypatch.setattr(
         propose_module, "_load_local_tokenizer", tokenizer_load_forbidden
     )
+    class ValidationTokenizer:
+        def apply_chat_template(
+            self,
+            messages: object,
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> list[int]:
+            assert isinstance(messages, list)
+            assert tokenize is True
+            assert add_generation_prompt is True
+            return list(range(max(1, len(json.dumps(messages).encode()) // 7)))
+
+    validation_tokenizer = ValidationTokenizer()
     contract_root = Path(str(preflight.receipt["contract_receipt"]["path"]))
-    validation = build_validation_preflight(
+    validation = validate_module._build_validation_preflight_with_tokenizer(
         contract_dir=contract_root,
         proposal_inventory_dir=inventory_root,
         proposal_preflight_dir=tmp_path / "captured-preflight",
         proposal_ledger_dir=ledger_root,
+        tokenizer=validation_tokenizer,
     )
     assert validation["job_count"] == 1
     assert validation["proposal_receipt"]["sha256"] == hashlib.sha256(

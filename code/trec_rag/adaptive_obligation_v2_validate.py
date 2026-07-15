@@ -17,7 +17,10 @@ from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .adaptive_obligation_v2_contract import canonical_sha256, sha256_text
 from .adaptive_obligation_v2_ledger import AppendOnlyAttemptLedger, AttemptSpec
 from .adaptive_obligation_v2_propose import (
+    MODEL_ID,
+    MODEL_REVISION,
     PROPOSAL_RECEIPT_SCHEMA_VERSION,
+    _capture_static_preflight_for_task4,
     _compact_bytes,
     _capture_regular_file_no_symlinks,
     _fsync_directory,
@@ -25,6 +28,7 @@ from .adaptive_obligation_v2_propose import (
     _open_directory_no_symlinks,
     _pretty_bytes,
     _read_stable_regular_at,
+    _sha256_file,
     _write_fsynced,
     load_authenticated_proposal_inventory,
 )
@@ -43,6 +47,7 @@ SCHEMA_VERSION = "adaptive-obligation-v2-validation-preflight-v1"
 JOB_SCHEMA_VERSION = "adaptive-obligation-v2-validation-job-v1"
 PRIMARY_MAX_NEW_TOKENS = 256
 RETRY_MAX_NEW_TOKENS = 512
+VALIDATOR_ROLE = "opposite_fold_semantic_validator"
 _CONTRACT_OUTPUT_NAMES = frozenset(
     {
         "manifest.json",
@@ -80,6 +85,105 @@ def normalize_label(value: object) -> str:
     """Normalize a label for deterministic copy and duplicate checks."""
 
     return " ".join(re.findall(r"[a-z0-9]+", str(value).casefold()))
+
+
+def _validation_prompt_contract() -> dict[str, object]:
+    return {
+        "stage": "validation",
+        "validator_role": VALIDATOR_ROLE,
+        "instructions": _VALIDATION_INSTRUCTIONS,
+        "job_schema_version": JOB_SCHEMA_VERSION,
+        "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
+    }
+
+
+def _validator_model_metadata(
+    proposal_preflight_dir: Path,
+    *,
+    expected_receipt_sha256: str,
+    authenticated_preflight: object = None,
+) -> dict[str, object]:
+    if authenticated_preflight is None:
+        captured = _capture_static_preflight_for_task4(
+            Path(proposal_preflight_dir),
+            expected_receipt_sha256=expected_receipt_sha256,
+        )
+        receipt = captured.receipt
+        receipt_sha256 = captured.receipt_sha256
+    elif isinstance(authenticated_preflight, Mapping):
+        receipt = authenticated_preflight
+        receipt_sha256 = expected_receipt_sha256
+    else:
+        raise ValueError("validation validator model metadata differs")
+    snapshot = receipt.get("model_snapshot")
+    tokenizer_files = receipt.get("tokenizer_files")
+    tokenizer_contract = receipt.get("tokenizer_contract")
+    if (
+        receipt.get("model") != MODEL_ID
+        or receipt.get("model_revision") != MODEL_REVISION
+        or not isinstance(snapshot, Mapping)
+        or snapshot.get("model") != MODEL_ID
+        or snapshot.get("revision") != MODEL_REVISION
+        or not isinstance(snapshot.get("manifest_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", str(snapshot["manifest_sha256"]))
+        or not isinstance(tokenizer_files, list)
+        or any(not isinstance(row, Mapping) for row in tokenizer_files)
+        or not isinstance(tokenizer_contract, Mapping)
+    ):
+        raise ValueError("validation validator model metadata differs")
+    tokenizer_identity = {
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "tokenizer_files": tokenizer_files,
+        "tokenizer_contract": dict(tokenizer_contract),
+    }
+    return {
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "model_snapshot": dict(snapshot),
+        "model_snapshot_manifest_sha256": snapshot["manifest_sha256"],
+        "tokenizer_files": [dict(row) for row in tokenizer_files],
+        "tokenizer_contract": dict(tokenizer_contract),
+        "tokenizer_identity_sha256": canonical_sha256(tokenizer_identity),
+        "proposal_preflight_receipt_sha256": receipt_sha256,
+    }
+
+
+def _count_validation_prompts(
+    jobs: Sequence[Mapping[str, object]], tokenizer: object
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        raise TypeError("validation preflight tokenizer cannot count chat prompts")
+    counted: list[dict[str, object]] = []
+    counts: list[int] = []
+    for job in jobs:
+        token_ids = apply_chat_template(
+            job["messages"], tokenize=True, add_generation_prompt=True
+        )
+        if (
+            not isinstance(token_ids, Sequence)
+            or isinstance(token_ids, (str, bytes))
+            or not token_ids
+        ):
+            raise ValueError("validation tokenizer returned an invalid token sequence")
+        count = len(token_ids)
+        counts.append(count)
+        counted.append({**dict(job), "prompt_token_count": count})
+    summary: dict[str, object] = {
+        "count": len(counts),
+        "minimum": min(counts) if counts else None,
+        "maximum": max(counts) if counts else None,
+        "total": sum(counts),
+        "by_job": [
+            {
+                "job_id": job["job_id"],
+                "prompt_token_count": job["prompt_token_count"],
+            }
+            for job in counted
+        ],
+    }
+    return counted, summary
 
 
 def _compact(value: object) -> str:
@@ -693,14 +797,52 @@ def accept_validated_o1(
     return accepted
 
 
-def build_validation_preflight(
+def _load_pinned_validation_tokenizer(
+    model_metadata: Mapping[str, object],
+) -> object:
+    snapshot = model_metadata.get("model_snapshot")
+    tokenizer_files = model_metadata.get("tokenizer_files")
+    tokenizer_contract = model_metadata.get("tokenizer_contract")
+    tokenizer_identity = {
+        "model": model_metadata.get("model"),
+        "model_revision": model_metadata.get("model_revision"),
+        "tokenizer_files": tokenizer_files,
+        "tokenizer_contract": tokenizer_contract,
+    }
+    if (
+        model_metadata.get("model") != MODEL_ID
+        or model_metadata.get("model_revision") != MODEL_REVISION
+        or not isinstance(snapshot, Mapping)
+        or snapshot.get("model") != MODEL_ID
+        or snapshot.get("revision") != MODEL_REVISION
+        or snapshot.get("manifest_sha256")
+        != model_metadata.get("model_snapshot_manifest_sha256")
+        or not isinstance(tokenizer_files, list)
+        or any(not isinstance(row, Mapping) for row in tokenizer_files)
+        or not isinstance(tokenizer_contract, Mapping)
+        or canonical_sha256(tokenizer_identity)
+        != model_metadata.get("tokenizer_identity_sha256")
+    ):
+        raise ValueError("validation tokenizer metadata differs before load")
+    from .adaptive_obligation_v2_local_model import load_pinned_local_tokenizer
+
+    return load_pinned_local_tokenizer(
+        model_id=MODEL_ID,
+        revision=MODEL_REVISION,
+        local_files_only=True,
+        model_manifest=snapshot,
+    )
+
+
+def _build_validation_preflight(
     contract_dir: object,
     *,
     proposal_inventory_dir: object,
     proposal_preflight_dir: object,
     proposal_ledger_dir: object,
+    tokenizer: object | None,
 ) -> dict[str, object]:
-    """Plan exact V/V/2V calls from a replay-authenticated proposal inventory."""
+    """Private authenticated builder with an optional post-auth test tokenizer."""
 
     authenticated = load_authenticated_proposal_inventory(
         output_dir=proposal_inventory_dir,  # type: ignore[arg-type]
@@ -759,11 +901,24 @@ def build_validation_preflight(
     if observed_contract_receipt_sha256 != source_contract_receipt_sha256:
         raise ValueError("validation source contract receipt hash differs")
 
-    jobs = build_validation_jobs(proposals, contract)
+    model_metadata = _validator_model_metadata(
+        Path(proposal_preflight_dir),
+        expected_receipt_sha256=str(
+            proposal_receipt["proposal_preflight_receipt_sha256"]
+        ),
+        authenticated_preflight=authenticated.get("proposal_preflight"),
+    )
+    if tokenizer is None:
+        tokenizer = _load_pinned_validation_tokenizer(model_metadata)
+    jobs, prompt_token_counts = _count_validation_prompts(
+        build_validation_jobs(proposals, contract), tokenizer
+    )
     job_count = len(jobs)
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "complete",
+        "stage": "validation",
+        "validator_role": VALIDATOR_ROLE,
         "topic_ids": list(PILOT_TOPIC_IDS),
         "job_count": job_count,
         "primary_call_count": job_count,
@@ -772,8 +927,17 @@ def build_validation_preflight(
         "primary_max_new_tokens": PRIMARY_MAX_NEW_TOKENS,
         "retry_max_new_tokens": RETRY_MAX_NEW_TOKENS,
         "schema_sha256": canonical_sha256(VALIDATION_SCHEMA),
+        "prompt_sha256": canonical_sha256(_validation_prompt_contract()),
+        "code_sha256": {
+            "adaptive_obligation_v2_validate.py": _sha256_file(Path(__file__)),
+            "adaptive_obligation_v2_local_model.py": _sha256_file(
+                Path(__file__).with_name("adaptive_obligation_v2_local_model.py")
+            ),
+        },
         "jobs_sha256": canonical_sha256(jobs),
         "jobs": jobs,
+        "prompt_token_counts": prompt_token_counts,
+        **model_metadata,
         "source_contract_receipt_sha256": observed_contract_receipt_sha256,
         "proposal_receipt": {
             "schema_version": proposal_receipt["schema_version"],
@@ -801,10 +965,47 @@ def build_validation_preflight(
         "hosted_inference_call_count": 0,
         "paid_call_count": 0,
         "model_load_count": 0,
-        "tokenizer_load_count": 0,
+        "tokenizer_load_count": 1,
         "inference_count": 0,
         "external_cost_usd": 0.0,
     }
+
+
+def _build_validation_preflight_with_tokenizer(
+    contract_dir: object,
+    *,
+    proposal_inventory_dir: object,
+    proposal_preflight_dir: object,
+    proposal_ledger_dir: object,
+    tokenizer: object,
+) -> dict[str, object]:
+    """Private post-auth seam for tests that must not load the real tokenizer."""
+
+    return _build_validation_preflight(
+        contract_dir,
+        proposal_inventory_dir=proposal_inventory_dir,
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=proposal_ledger_dir,
+        tokenizer=tokenizer,
+    )
+
+
+def build_validation_preflight(
+    contract_dir: object,
+    *,
+    proposal_inventory_dir: object,
+    proposal_preflight_dir: object,
+    proposal_ledger_dir: object,
+) -> dict[str, object]:
+    """Authenticate metadata, then load one pinned tokenizer and plan V/V/2V."""
+
+    return _build_validation_preflight(
+        contract_dir,
+        proposal_inventory_dir=proposal_inventory_dir,
+        proposal_preflight_dir=proposal_preflight_dir,
+        proposal_ledger_dir=proposal_ledger_dir,
+        tokenizer=None,
+    )
 
 
 def _validation_request(
@@ -817,11 +1018,57 @@ def _validation_request(
     }
 
 
+def _validation_anchor_provenance(
+    preflight: Mapping[str, object],
+) -> dict[str, object]:
+    code_sha256 = preflight.get("code_sha256")
+    provenance = {
+        "validator_role": preflight.get("validator_role"),
+        "model": preflight.get("model"),
+        "model_revision": preflight.get("model_revision"),
+        "model_snapshot_manifest_sha256": preflight.get(
+            "model_snapshot_manifest_sha256"
+        ),
+        "tokenizer_identity_sha256": preflight.get(
+            "tokenizer_identity_sha256"
+        ),
+        "prompt_sha256": preflight.get("prompt_sha256"),
+        "code_identity_sha256": (
+            canonical_sha256(code_sha256)
+            if isinstance(code_sha256, Mapping)
+            else None
+        ),
+        "jobs_sha256": preflight.get("jobs_sha256"),
+        "schema_sha256": preflight.get("schema_sha256"),
+    }
+    if (
+        provenance["validator_role"] != VALIDATOR_ROLE
+        or provenance["model"] != MODEL_ID
+        or provenance["model_revision"] != MODEL_REVISION
+        or any(
+            not isinstance(provenance[name], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(provenance[name]))
+            for name in (
+                "model_snapshot_manifest_sha256",
+                "tokenizer_identity_sha256",
+                "prompt_sha256",
+                "code_identity_sha256",
+                "jobs_sha256",
+                "schema_sha256",
+            )
+        )
+        or provenance["schema_sha256"] != canonical_sha256(VALIDATION_SCHEMA)
+    ):
+        raise ValueError("validation run provenance differs")
+    return provenance
+
+
 def _build_validation_run_anchor(
     jobs: Sequence[Mapping[str, object]],
     *,
     preflight_sha256: str,
     approval_sha256: str,
+    provenance: Mapping[str, object],
 ) -> dict[str, object]:
     """Bind the real append-only ledger to exact validation jobs and schema."""
 
@@ -877,6 +1124,7 @@ def _build_validation_run_anchor(
         "job_inventory_sha256": canonical_sha256(anchored_jobs),
         "jobs": anchored_jobs,
         "schema": VALIDATION_SCHEMA,
+        "provenance": dict(provenance),
     }
 
 
@@ -1007,6 +1255,8 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
     expected_names = {
         "schema_version",
         "status",
+        "stage",
+        "validator_role",
         "topic_ids",
         "job_count",
         "primary_call_count",
@@ -1015,8 +1265,19 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
         "primary_max_new_tokens",
         "retry_max_new_tokens",
         "schema_sha256",
+        "prompt_sha256",
+        "code_sha256",
         "jobs_sha256",
         "jobs",
+        "prompt_token_counts",
+        "model",
+        "model_revision",
+        "model_snapshot",
+        "model_snapshot_manifest_sha256",
+        "tokenizer_files",
+        "tokenizer_contract",
+        "tokenizer_identity_sha256",
+        "proposal_preflight_receipt_sha256",
         "source_contract_receipt_sha256",
         "proposal_receipt",
         "expected_runtime",
@@ -1037,6 +1298,8 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
         set(value) != expected_names
         or value.get("schema_version") != SCHEMA_VERSION
         or value.get("status") != "complete"
+        or value.get("stage") != "validation"
+        or value.get("validator_role") != VALIDATOR_ROLE
         or value.get("topic_ids") != list(PILOT_TOPIC_IDS)
         or not isinstance(jobs, list)
         or any(not isinstance(job, Mapping) for job in jobs)
@@ -1048,6 +1311,8 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
         or value.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
         or value.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
         or value.get("schema_sha256") != canonical_sha256(VALIDATION_SCHEMA)
+        or value.get("prompt_sha256")
+        != canonical_sha256(_validation_prompt_contract())
         or value.get("jobs_sha256") != canonical_sha256(jobs)
         or not isinstance(value.get("source_contract_receipt_sha256"), str)
         or not re.fullmatch(
@@ -1062,15 +1327,74 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
             for name in (
                 "network_call_count",
                 "retrieval_call_count",
-                "hosted_inference_call_count",
-                "paid_call_count",
-                "model_load_count",
-                "tokenizer_load_count",
-                "inference_count",
+                    "hosted_inference_call_count",
+                    "paid_call_count",
+                    "model_load_count",
+                    "inference_count",
+                )
             )
-        )
+        or value.get("tokenizer_load_count") != 1
     ):
         raise ValueError("validation preflight receipt differs")
+    snapshot = value.get("model_snapshot")
+    tokenizer_files = value.get("tokenizer_files")
+    tokenizer_contract = value.get("tokenizer_contract")
+    tokenizer_identity = {
+        "model": value.get("model"),
+        "model_revision": value.get("model_revision"),
+        "tokenizer_files": tokenizer_files,
+        "tokenizer_contract": tokenizer_contract,
+    }
+    code_sha256 = value.get("code_sha256")
+    expected_code = {
+        "adaptive_obligation_v2_validate.py": _sha256_file(Path(__file__)),
+        "adaptive_obligation_v2_local_model.py": _sha256_file(
+            Path(__file__).with_name("adaptive_obligation_v2_local_model.py")
+        ),
+    }
+    if (
+        value.get("model") != MODEL_ID
+        or value.get("model_revision") != MODEL_REVISION
+        or not isinstance(snapshot, Mapping)
+        or snapshot.get("model") != MODEL_ID
+        or snapshot.get("revision") != MODEL_REVISION
+        or snapshot.get("manifest_sha256")
+        != value.get("model_snapshot_manifest_sha256")
+        or not isinstance(value.get("model_snapshot_manifest_sha256"), str)
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(value["model_snapshot_manifest_sha256"])
+        )
+        or not isinstance(tokenizer_files, list)
+        or any(not isinstance(row, Mapping) for row in tokenizer_files)
+        or not isinstance(tokenizer_contract, Mapping)
+        or value.get("tokenizer_identity_sha256")
+        != canonical_sha256(tokenizer_identity)
+        or code_sha256 != expected_code
+    ):
+        raise ValueError("validation validator model provenance differs")
+    prompt_counts = value.get("prompt_token_counts")
+    observed_counts = [job.get("prompt_token_count") for job in jobs]
+    if any(type(count) is not int or count < 1 for count in observed_counts):
+        raise ValueError("validation prompt token counts differ")
+    integer_counts = [int(count) for count in observed_counts]
+    if (
+        not isinstance(prompt_counts, Mapping)
+        or prompt_counts.get("count") != len(integer_counts)
+        or prompt_counts.get("minimum")
+        != (min(integer_counts) if integer_counts else None)
+        or prompt_counts.get("maximum")
+        != (max(integer_counts) if integer_counts else None)
+        or prompt_counts.get("total") != sum(integer_counts)
+        or prompt_counts.get("by_job")
+        != [
+            {
+                "job_id": job.get("job_id"),
+                "prompt_token_count": job.get("prompt_token_count"),
+            }
+            for job in jobs
+        ]
+    ):
+        raise ValueError("validation prompt token counts differ")
     proposal_receipt = value.get("proposal_receipt")
     if (
         not isinstance(proposal_receipt, Mapping)
@@ -1079,6 +1403,8 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
         or proposal_receipt.get("status") != "complete"
         or proposal_receipt.get("source_contract_receipt_sha256")
         != value["source_contract_receipt_sha256"]
+        or proposal_receipt.get("proposal_preflight_receipt_sha256")
+        != value.get("proposal_preflight_receipt_sha256")
         or any(
             not isinstance(proposal_receipt.get(name), str)
             or not re.fullmatch(r"[0-9a-f]{64}", str(proposal_receipt[name]))
@@ -1097,6 +1423,7 @@ def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
         jobs,
         preflight_sha256="a" * 64,
         approval_sha256="b" * 64,
+        provenance=_validation_anchor_provenance(value),
     )
     return value
 
@@ -1281,10 +1608,17 @@ def _capture_validation_approval(
     expected_fields = {
         "schema_version",
         "stage",
+        "validator_role",
         "preflight_sha256",
+        "model",
+        "model_revision",
+        "model_snapshot_manifest_sha256",
+        "tokenizer_identity_sha256",
         "job_count",
         "primary_call_count",
         "retry_call_ceiling",
+        "worst_case_call_ceiling",
+        "ledger_dir",
         "approved",
     }
     if (
@@ -1293,16 +1627,224 @@ def _capture_validation_approval(
         or set(value) != expected_fields
         or value.get("schema_version") != VALIDATION_APPROVAL_SCHEMA_VERSION
         or value.get("stage") != "validation"
+        or value.get("validator_role") != VALIDATOR_ROLE
+        or value.get("model") != MODEL_ID
+        or value.get("model_revision") != MODEL_REVISION
         or not isinstance(value.get("preflight_sha256"), str)
         or not re.fullmatch(r"[0-9a-f]{64}", str(value["preflight_sha256"]))
         or any(
-            type(value.get(name)) is not int
-            for name in ("job_count", "primary_call_count", "retry_call_ceiling")
+            not isinstance(value.get(name), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value[name]))
+            for name in (
+                "model_snapshot_manifest_sha256",
+                "tokenizer_identity_sha256",
+            )
         )
+        or any(
+            type(value.get(name)) is not int
+            for name in (
+                "job_count",
+                "primary_call_count",
+                "retry_call_ceiling",
+                "worst_case_call_ceiling",
+            )
+        )
+        or value.get("job_count") < 0
+        or value.get("primary_call_count") != value.get("job_count")
+        or value.get("retry_call_ceiling") != value.get("job_count")
+        or value.get("worst_case_call_ceiling") != value.get("job_count") * 2
+        or not isinstance(value.get("ledger_dir"), str)
+        or not Path(str(value["ledger_dir"])).is_absolute()
+        or str(Path(str(value["ledger_dir"])).resolve()) != value["ledger_dir"]
         or value.get("approved") is not True
     ):
         raise PermissionError("validation approval required")
     return value, source, hashlib.sha256(source).hexdigest()
+
+
+def verify_validation_approval(
+    approval: object,
+    preflight: Mapping[str, object],
+    *,
+    ledger_dir: Path,
+) -> dict[str, object]:
+    """Bind one exact validation approval to its preflight and ledger path."""
+
+    if not isinstance(approval, Mapping):
+        raise PermissionError("validation approval required")
+    required = {
+        "schema_version": VALIDATION_APPROVAL_SCHEMA_VERSION,
+        "stage": "validation",
+        "validator_role": VALIDATOR_ROLE,
+        "preflight_sha256": preflight.get("receipt_sha256"),
+        "model": preflight.get("model"),
+        "model_revision": preflight.get("model_revision"),
+        "model_snapshot_manifest_sha256": preflight.get(
+            "model_snapshot_manifest_sha256"
+        ),
+        "tokenizer_identity_sha256": preflight.get(
+            "tokenizer_identity_sha256"
+        ),
+        "job_count": preflight.get("job_count"),
+        "primary_call_count": preflight.get("primary_call_count"),
+        "retry_call_ceiling": preflight.get("retry_call_ceiling"),
+        "worst_case_call_ceiling": preflight.get("worst_case_call_ceiling"),
+        "ledger_dir": str(Path(ledger_dir).resolve()),
+        "approved": True,
+    }
+    if set(approval) != set(required) or any(
+        approval.get(name) != expected for name, expected in required.items()
+    ):
+        raise PermissionError("validation approval required")
+    return dict(approval)
+
+
+class _CapturedPromptCountTokenizer:
+    """Replay approved prompt counts without loading tokenizer code or files."""
+
+    def __init__(self, preflight: Mapping[str, object]) -> None:
+        jobs = preflight.get("jobs")
+        if not isinstance(jobs, list):
+            raise ValueError("validation preflight jobs are missing")
+        self._count_by_messages_sha256: dict[str, int] = {}
+        for job in jobs:
+            if not isinstance(job, Mapping):
+                raise ValueError("validation preflight job differs")
+            messages = job.get("messages")
+            count = job.get("prompt_token_count")
+            if not isinstance(messages, list) or type(count) is not int or count < 1:
+                raise ValueError("validation preflight prompt token count differs")
+            digest = canonical_sha256(messages)
+            if digest in self._count_by_messages_sha256:
+                raise ValueError("validation preflight prompt identity is duplicate")
+            self._count_by_messages_sha256[digest] = count
+
+    def apply_chat_template(
+        self,
+        messages: object,
+        *,
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ) -> list[int]:
+        if (
+            not isinstance(messages, list)
+            or tokenize is not True
+            or add_generation_prompt is not True
+        ):
+            raise ValueError("validation captured prompt count request differs")
+        count = self._count_by_messages_sha256.get(canonical_sha256(messages))
+        if count is None:
+            raise ValueError("validation captured prompt identity differs")
+        return list(range(count))
+
+
+def _authenticate_validation_after_approval(
+    *,
+    approval: Mapping[str, object],
+    preflight_dir: Path,
+    ledger_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
+    source_contract_dir: Path,
+) -> dict[str, object]:
+    preflight, source = _capture_validation_preflight(Path(preflight_dir))
+    preflight_sha256 = hashlib.sha256(source).hexdigest()
+    authenticated = {**preflight, "receipt_sha256": preflight_sha256}
+    verify_validation_approval(
+        approval, authenticated, ledger_dir=Path(ledger_dir)
+    )
+    rebuilt = _build_validation_preflight_with_tokenizer(
+        Path(source_contract_dir),
+        proposal_inventory_dir=Path(proposal_inventory_dir),
+        proposal_preflight_dir=Path(proposal_preflight_dir),
+        proposal_ledger_dir=Path(proposal_ledger_dir),
+        tokenizer=_CapturedPromptCountTokenizer(preflight),
+    )
+    if source != _pretty_bytes(rebuilt) or preflight != rebuilt:
+        raise ValueError(
+            "validation preflight differs from authenticated upstream replay"
+        )
+    verify_validation_approval(
+        approval, authenticated, ledger_dir=Path(ledger_dir)
+    )
+    return authenticated
+
+
+def _load_validation_model(
+    *, approval: Mapping[str, object], preflight: Mapping[str, object]
+) -> object:
+    from .adaptive_obligation_v2_local_model import V2ValidationLocalJsonModel
+
+    return V2ValidationLocalJsonModel(approval=approval, preflight=preflight)
+
+
+def _execute_authenticated_validation_jobs(
+    preflight: Mapping[str, object],
+    *,
+    ledger: AppendOnlyAttemptLedger,
+    model: object,
+) -> list[dict[str, object]]:
+    jobs = preflight.get("jobs")
+    if not isinstance(jobs, list) or any(
+        not isinstance(job, Mapping) for job in jobs
+    ):
+        raise ValueError("validation execution jobs differ")
+    return [
+        run_validation_job_with_retry(job, ledger=ledger, model=model)
+        for job in jobs
+    ]
+
+
+def execute_validation(
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+    proposal_inventory_dir: Path,
+    proposal_preflight_dir: Path,
+    proposal_ledger_dir: Path,
+    source_contract_dir: Path,
+) -> dict[str, object]:
+    """Execute exact validation jobs through an approved create-only ledger."""
+
+    approval, _approval_source, approval_sha256 = _capture_validation_approval(
+        Path(approval_path)
+    )
+    preflight = _authenticate_validation_after_approval(
+        approval=approval,
+        preflight_dir=Path(preflight_dir),
+        ledger_dir=Path(ledger_dir),
+        proposal_inventory_dir=Path(proposal_inventory_dir),
+        proposal_preflight_dir=Path(proposal_preflight_dir),
+        proposal_ledger_dir=Path(proposal_ledger_dir),
+        source_contract_dir=Path(source_contract_dir),
+    )
+    preflight_sha256 = str(preflight["receipt_sha256"])
+    jobs = preflight.get("jobs")
+    if not isinstance(jobs, list):
+        raise ValueError("validation execution jobs differ")
+    anchor = _build_validation_run_anchor(
+        jobs,
+        preflight_sha256=preflight_sha256,
+        approval_sha256=approval_sha256,
+        provenance=_validation_anchor_provenance(preflight),
+    )
+    ledger = AppendOnlyAttemptLedger(
+        Path(ledger_dir), expected_anchor=anchor, create_only=True
+    )
+    model = _load_validation_model(approval=approval, preflight=preflight)
+    results = _execute_authenticated_validation_jobs(
+        preflight, ledger=ledger, model=model
+    )
+    completion = ledger.seal_completion()
+    return {
+        "status": "complete",
+        "job_count": len(results),
+        "results": results,
+        "event_count": len(ledger.read_events()),
+        "completion": completion,
+    }
 
 
 def _authenticated_validation_run(
@@ -1323,23 +1865,19 @@ def _authenticated_validation_run(
     approval, _approval_source, approval_sha256 = _capture_validation_approval(
         Path(approval_path)
     )
-    preflight, source = _capture_validation_preflight(Path(preflight_dir))
-    preflight_sha256 = hashlib.sha256(source).hexdigest()
-    if approval.get("preflight_sha256") != preflight_sha256:
-        raise PermissionError("validation approval required")
-    rebuilt = build_validation_preflight(
-        Path(source_contract_dir),
+    preflight = _authenticate_validation_after_approval(
+        approval=approval,
+        preflight_dir=Path(preflight_dir),
+        ledger_dir=Path(ledger_dir),
         proposal_inventory_dir=Path(proposal_inventory_dir),
         proposal_preflight_dir=Path(proposal_preflight_dir),
         proposal_ledger_dir=Path(proposal_ledger_dir),
+        source_contract_dir=Path(source_contract_dir),
     )
-    if source != _pretty_bytes(rebuilt) or preflight != rebuilt:
-        raise ValueError("validation preflight differs from authenticated upstream replay")
-    if any(
-        approval.get(name) != preflight.get(name)
-        for name in ("job_count", "primary_call_count", "retry_call_ceiling")
-    ):
-        raise PermissionError("validation approval required")
+    source = _pretty_bytes(
+        {name: value for name, value in preflight.items() if name != "receipt_sha256"}
+    )
+    preflight_sha256 = str(preflight["receipt_sha256"])
     ledger, observed_approval_sha256 = _ledger_from_validation_preflight(
         preflight,
         preflight_sha256,
@@ -1377,6 +1915,7 @@ def _validation_inventory_material(
         jobs,
         preflight_sha256=preflight_sha256,
         approval_sha256=approval_sha256,
+        provenance=_validation_anchor_provenance(preflight),
     )
     results = sealed.get("results")
     completion = sealed.get("completion")
@@ -1473,6 +2012,7 @@ def _ledger_from_validation_preflight(
         preflight["jobs"],  # type: ignore[arg-type]
         preflight_sha256=preflight_sha256,
         approval_sha256=observed_approval,
+        provenance=_validation_anchor_provenance(preflight),
     )
     if anchor != expected:
         raise ValueError("validation ledger anchor differs")
