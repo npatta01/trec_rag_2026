@@ -252,6 +252,7 @@ def _pretty(value: object) -> bytes:
 def _source_binding(tmp_path: Path, contract: dict[str, object]) -> tuple[Path, str]:
     root = tmp_path / "contract"
     root.mkdir()
+    artifacts: dict[str, dict[str, object]] = {}
     for name in ("parents", "reservoirs", "units"):
         rows = contract[name]
         assert isinstance(rows, list)
@@ -268,7 +269,18 @@ def _source_binding(tmp_path: Path, contract: dict[str, object]) -> tuple[Path, 
             ).encode("utf-8")
             for row in rows
         )
-        (root / f"{name}.jsonl").write_bytes(source_rows)
+        artifact_name = f"{name}.jsonl"
+        (root / artifact_name).write_bytes(source_rows)
+        artifacts[artifact_name] = {
+            "path": artifact_name,
+            "rows": len(rows),
+            "bytes": len(source_rows),
+            "sha256": hashlib.sha256(source_rows).hexdigest(),
+        }
+    contract["receipt"] = {
+        **contract["receipt"],  # type: ignore[dict-item]
+        "artifacts": artifacts,
+    }
     source = _pretty(contract["receipt"])
     (root / "receipt.json").write_bytes(source)
     return root, hashlib.sha256(source).hexdigest()
@@ -333,6 +345,53 @@ def _captured_material_fixture(
     for name, content in material.contents.items():
         (root / name).write_bytes(content)
     return authenticated_contract, material, root
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_artifacts",
+        "missing_reservoir_binding",
+        "boolean_row_count",
+        "boolean_byte_count",
+        "changed_path",
+        "changed_sha256",
+        "unexpected_binding_field",
+    ],
+)
+def test_returned_contract_row_artifact_bindings_fail_closed_on_exact_types(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    contract = _contract_fixture()
+    source_root, _receipt_sha256 = _source_binding(tmp_path, contract)
+    authenticated = _load_minimally_authenticated_contract_source(source_root)
+    receipt = authenticated["receipt"]
+    assert isinstance(receipt, dict)
+    artifacts = receipt["artifacts"]
+    assert isinstance(artifacts, dict)
+    if mutation == "missing_artifacts":
+        del receipt["artifacts"]
+    elif mutation == "missing_reservoir_binding":
+        del artifacts["reservoirs.jsonl"]
+    elif mutation == "boolean_row_count":
+        artifacts["reservoirs.jsonl"]["rows"] = True
+    elif mutation == "boolean_byte_count":
+        artifacts["reservoirs.jsonl"]["bytes"] = True
+    elif mutation == "changed_path":
+        artifacts["reservoirs.jsonl"]["path"] = "other.jsonl"
+    elif mutation == "changed_sha256":
+        artifacts["reservoirs.jsonl"]["sha256"] = "f" * 64
+    elif mutation == "unexpected_binding_field":
+        artifacts["reservoirs.jsonl"]["extra"] = 0
+    else:  # pragma: no cover - parametrization controls this branch
+        raise AssertionError(mutation)
+
+    with pytest.raises(ValueError, match="artifact|binding"):
+        r2_module._authenticate_returned_r2_contract_rows(
+            authenticated,
+            receipt,
+        )
 
 
 def _patch_verifier_dependencies(
@@ -1094,6 +1153,23 @@ def _install_post_execution_drift(
                 for row in rows
             )
         )
+    elif drift == "verified_loader_non_prompt_reservoir":
+        verified_loader = r2_module._load_verified_contract
+
+        def load_changed_contract(root: Path) -> dict[str, object]:
+            changed = verified_loader(root)
+            reservoirs = changed["reservoirs"]
+            assert isinstance(reservoirs, list)
+            documents = reservoirs[0]["documents"]
+            assert isinstance(documents, list)
+            documents[0]["score"] = 999.0
+            return changed
+
+        monkeypatch.setattr(
+            r2_module,
+            "_load_verified_contract",
+            load_changed_contract,
+        )
     elif drift == "model_snapshot":
         changed = _snapshot_fixture()
         changed["manifest_sha256"] = "f" * 64
@@ -1131,6 +1207,7 @@ _POST_EXECUTION_SOURCE_DRIFTS = (
     "missing_contract_receipt",
     "changed_contract_receipt",
     "changed_contract_content",
+    "verified_loader_non_prompt_reservoir",
     "model_snapshot",
     "tokenizer_files",
     "tokenizer_contract",

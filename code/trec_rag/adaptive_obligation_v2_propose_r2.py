@@ -1018,6 +1018,39 @@ def _capture_static_r2_preflight(
     )
 
 
+def _authenticate_returned_r2_contract_rows(
+    contract: Mapping[str, object],
+    contract_receipt: Mapping[str, object],
+) -> None:
+    """Bind every loader-returned row to the captured contract artifacts."""
+
+    artifacts = contract_receipt.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise ValueError("authenticated R2 contract artifact bindings are missing")
+    for row_name in ("parents", "reservoirs", "units"):
+        artifact_name = f"{row_name}.jsonl"
+        rows = contract.get(row_name)
+        binding = artifacts.get(artifact_name)
+        if type(rows) is not list or any(type(row) is not dict for row in rows):
+            raise ValueError("authenticated R2 contract rows are malformed")
+        try:
+            source = b"".join(r1._compact_bytes(row) for row in rows)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("authenticated R2 contract rows are not canonical") from exc
+        expected_binding = {
+            "path": artifact_name,
+            "rows": len(rows),
+            "bytes": len(source),
+            "sha256": r1._sha256(source),
+        }
+        if not isinstance(binding, Mapping) or not _json_exact(
+            binding, expected_binding
+        ):
+            raise ValueError(
+                f"authenticated R2 contract {artifact_name} binding differs"
+            )
+
+
 def _capture_and_replay_authenticated_r2_source_chain(
     path: Path,
     *,
@@ -1089,6 +1122,7 @@ def _capture_and_replay_authenticated_r2_source_chain(
         or not _json_exact(contract.get("receipt"), contract_receipt)
     ):
         raise ValueError("authenticated R2 contract content differs from its receipt")
+    _authenticate_returned_r2_contract_rows(contract, contract_receipt)
     expected_jobs = build_r2_proposal_jobs(contract)
     if len(expected_jobs) != len(jobs):
         raise ValueError("authenticated R2 job reconstruction count differs")
