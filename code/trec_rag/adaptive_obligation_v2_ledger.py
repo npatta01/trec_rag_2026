@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -14,7 +17,11 @@ from typing import Callable, Mapping, Sequence
 
 LEDGER_SCHEMA_VERSION = "adaptive-obligation-v2-attempt-ledger-v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_ROOT_NAMES = frozenset({"events.jsonl", "head.json", "raw"})
+_ROOT_NAMES = frozenset(
+    {"events.jsonl", "head.json", "anchor.json", "mutation.lock", "raw"}
+)
+_ANCHOR_SCHEMA_VERSION = "adaptive-obligation-v2-run-anchor-v1"
+_COMPLETION_SCHEMA_VERSION = "adaptive-obligation-v2-run-completion-v1"
 _PROPOSAL_SCHEMA_SHA256 = (
     "dc09881657e08a49f98757505fb725534b13c579596f550056f1df889ac634dd"
 )
@@ -50,6 +57,29 @@ def _write_exclusive(path: Path, content: bytes) -> None:
         sink.write(content)
         sink.flush()
         os.fsync(sink.fileno())
+
+
+def _claim_directory_no_symlinks(path: Path) -> None:
+    target = Path(path)
+    if not target.name or target.name in (".", ".."):
+        raise OSError("output directory name is unsafe")
+    parent = target.parent
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open("/" if parent.is_absolute() else ".", flags)
+    try:
+        for component in parent.parts:
+            if component in (parent.anchor, "", "."):
+                continue
+            if component == "..":
+                raise OSError("output parent traversal is unsafe")
+            child = os.open(component, flags | nofollow, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        os.mkdir(target.name, 0o700, dir_fd=descriptor)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _replace_fsynced(path: Path, content: bytes) -> None:
@@ -100,6 +130,16 @@ def _incomplete_json(source: bytes) -> bool:
     stripped = text.lstrip()
     if not stripped.startswith("{"):
         return False
+    unfinished_literal = re.search(
+        r'(?:^|[:,\[\s])(t|tr|tru|f|fa|fal|fals|n|nu|nul)$',
+        stripped,
+    )
+    unfinished_exponent = re.search(
+        r'(?:^|[:,\[\s])-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[eE][+-]?$',
+        stripped,
+    )
+    if unfinished_literal is not None or unfinished_exponent is not None:
+        return True
     try:
         json.loads(text)
     except json.JSONDecodeError as exc:
@@ -225,23 +265,185 @@ def classify_completion(
 
 
 class AppendOnlyAttemptLedger:
-    """Durable raw-first attempts with an anchored SHA-256 event chain."""
+    """Raw-first attempts anchored to one approved immutable job inventory."""
 
-    def __init__(self, root: Path) -> None:
+    _COMMON_EVENT_KEYS = {
+        "schema_version",
+        "sequence",
+        "previous_event_sha256",
+        "event_sha256",
+        "state",
+        "stage",
+        "job_id",
+        "attempt_ordinal",
+        "request_sha256",
+        "max_new_tokens",
+    }
+    _TERMINAL_KEYS = _COMMON_EVENT_KEYS | {
+        "classification",
+        "output_token_count",
+        "raw_path",
+        "raw_bytes",
+        "raw_sha256",
+    }
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        expected_anchor: Mapping[str, object] | None = None,
+        create_only: bool,
+    ) -> None:
+        if expected_anchor is None:
+            raise ValueError("proposal ledger expected anchor is required")
         self.root = Path(root)
         self.events_path = self.root / "events.jsonl"
         self.head_path = self.root / "head.json"
+        self.anchor_path = self.root / "anchor.json"
+        self.lock_path = self.root / "mutation.lock"
+        self.completion_path = self.root / "completion.json"
         self.raw_dir = self.root / "raw"
-        self._active_key: tuple[str, int] | None = None
         self._active_raw_name: str | None = None
-        if not self.root.exists():
-            self.root.mkdir(parents=True)
-            self.raw_dir.mkdir()
+        self.anchor = self._validated_anchor(expected_anchor)
+        self._anchor_source = _canonical_bytes(self.anchor)
+        self._anchor_sha256 = _sha256(self._anchor_source)
+        self._expected_specs, self._support_by_job = self._anchor_indexes(self.anchor)
+        if create_only:
+            try:
+                _claim_directory_no_symlinks(self.root)
+            except FileExistsError as exc:
+                raise FileExistsError(
+                    f"create-only proposal output exists: {self.root}"
+                ) from exc
+            except OSError as exc:
+                raise ValueError("proposal output parent is missing or unsafe") from exc
+            self.raw_dir.mkdir(mode=0o700)
             _write_exclusive(self.events_path, b"")
             _write_exclusive(self.head_path, _canonical_bytes(self._head(0, "0" * 64)))
+            _write_exclusive(self.anchor_path, self._anchor_source)
+            _write_exclusive(self.lock_path, b"")
             _fsync_directory(self.raw_dir)
             _fsync_directory(self.root)
-        self._verify(allow_incomplete=False)
+        elif not self.root.is_dir() or self.root.is_symlink():
+            raise ValueError("proposal ledger root is unsafe")
+        events = self._verify(allow_incomplete=False)
+        if not create_only and events and not self.completion_path.is_file():
+            raise ValueError("proposal ledger nonempty reopen requires completion seal")
+
+    @staticmethod
+    def _validated_anchor(anchor: Mapping[str, object]) -> dict[str, object]:
+        try:
+            value = json.loads(_canonical_bytes(dict(anchor)))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("proposal ledger anchor is invalid") from exc
+        required = {
+            "schema_version",
+            "stage",
+            "preflight_sha256",
+            "approval_sha256",
+            "job_count",
+            "job_inventory_sha256",
+            "jobs",
+            "schema",
+        }
+        jobs = value.get("jobs")
+        if (
+            set(value) != required
+            or value.get("schema_version") != _ANCHOR_SCHEMA_VERSION
+            or value.get("stage") != "proposal"
+            or not isinstance(value.get("preflight_sha256"), str)
+            or not _SHA256.fullmatch(value["preflight_sha256"])
+            or not isinstance(value.get("approval_sha256"), str)
+            or not _SHA256.fullmatch(value["approval_sha256"])
+            or type(value.get("job_count")) is not int
+            or not isinstance(jobs, list)
+            or value.get("job_count") != len(jobs)
+            or value.get("job_inventory_sha256")
+            != _sha256(
+                json.dumps(
+                    jobs,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+            or not isinstance(value.get("schema"), dict)
+            or _sha256(
+                json.dumps(
+                    value["schema"],
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+            != _PROPOSAL_SCHEMA_SHA256
+        ):
+            raise ValueError("proposal ledger anchor differs")
+        seen: set[str] = set()
+        for job in jobs:
+            if not isinstance(job, dict) or set(job) != {
+                "job_id",
+                "input_unit_ids",
+                "attempts",
+            }:
+                raise ValueError("proposal ledger anchor job differs")
+            job_id = job.get("job_id")
+            unit_ids = job.get("input_unit_ids")
+            attempts = job.get("attempts")
+            if (
+                not isinstance(job_id, str)
+                or not _SHA256.fullmatch(job_id)
+                or job_id in seen
+                or not isinstance(unit_ids, list)
+                or len(set(unit_ids)) != len(unit_ids)
+                or any(
+                    not isinstance(item, str) or not _SHA256.fullmatch(item)
+                    for item in unit_ids
+                )
+                or not isinstance(attempts, list)
+                or len(attempts) != 2
+            ):
+                raise ValueError("proposal ledger anchor job inventory differs")
+            seen.add(job_id)
+            for expected_ordinal, attempt in enumerate(attempts, start=1):
+                if not isinstance(attempt, dict) or set(attempt) != {
+                    "attempt_ordinal",
+                    "request_sha256",
+                    "max_new_tokens",
+                }:
+                    raise ValueError("proposal ledger anchor attempt differs")
+                AttemptSpec(
+                    stage="proposal",
+                    job_id=job_id,
+                    attempt_ordinal=attempt.get("attempt_ordinal"),
+                    request_sha256=attempt.get("request_sha256"),
+                    max_new_tokens=attempt.get("max_new_tokens"),
+                )
+                if attempt.get("attempt_ordinal") != expected_ordinal:
+                    raise ValueError("proposal ledger anchor attempt order differs")
+        return value
+
+    @staticmethod
+    def _anchor_indexes(
+        anchor: Mapping[str, object],
+    ) -> tuple[dict[tuple[str, int], AttemptSpec], dict[str, list[str]]]:
+        specs: dict[tuple[str, int], AttemptSpec] = {}
+        supports: dict[str, list[str]] = {}
+        for job in anchor["jobs"]:  # type: ignore[index]
+            job_id = str(job["job_id"])
+            supports[job_id] = list(job["input_unit_ids"])
+            for attempt in job["attempts"]:
+                spec = AttemptSpec(
+                    stage="proposal",
+                    job_id=job_id,
+                    attempt_ordinal=attempt["attempt_ordinal"],
+                    request_sha256=attempt["request_sha256"],
+                    max_new_tokens=attempt["max_new_tokens"],
+                )
+                specs[(job_id, spec.attempt_ordinal)] = spec
+        return specs, supports
 
     @staticmethod
     def _head(count: int, head_sha256: str) -> dict[str, object]:
@@ -263,21 +465,42 @@ class AppendOnlyAttemptLedger:
             rows.append(row)
         return rows
 
+    def _expected_completion(
+        self, events: Sequence[Mapping[str, object]], head: Mapping[str, object]
+    ) -> dict[str, object]:
+        valid_jobs = sorted(
+            {
+                str(event["job_id"])
+                for event in events
+                if event.get("state") == "terminal"
+                and event.get("classification") == "valid"
+            }
+        )
+        return {
+            "schema_version": _COMPLETION_SCHEMA_VERSION,
+            "anchor_sha256": self._anchor_sha256,
+            "event_count": len(events),
+            "final_head_sha256": head["head_sha256"],
+            "completed_job_count": len(valid_jobs),
+            "completed_job_ids_sha256": _sha256(_canonical_bytes(valid_jobs)),
+        }
+
     def _verify(self, *, allow_incomplete: bool) -> list[dict[str, object]]:
         if self.root.is_symlink() or not self.root.is_dir():
             raise ValueError("proposal ledger root is unsafe")
         entries = list(self.root.iterdir())
-        if {entry.name for entry in entries} != _ROOT_NAMES:
+        names = {entry.name for entry in entries}
+        if names not in (_ROOT_NAMES, _ROOT_NAMES | {"completion.json"}):
             raise ValueError("proposal ledger contains extra or missing artifacts")
-        if (
-            self.events_path.is_symlink()
-            or not self.events_path.is_file()
-            or self.head_path.is_symlink()
-            or not self.head_path.is_file()
-            or self.raw_dir.is_symlink()
-            or not self.raw_dir.is_dir()
+        regular = (self.events_path, self.head_path, self.anchor_path, self.lock_path)
+        if any(path.is_symlink() or not path.is_file() for path in regular) or (
+            self.raw_dir.is_symlink() or not self.raw_dir.is_dir()
         ):
             raise ValueError("proposal ledger inventory is unsafe")
+        if self.lock_path.stat().st_size != 0:
+            raise ValueError("proposal ledger lock artifact differs")
+        if self.anchor_path.read_bytes() != self._anchor_source:
+            raise ValueError("proposal ledger anchor differs")
         try:
             head_source = self.head_path.read_bytes()
             head = json.loads(head_source)
@@ -287,10 +510,17 @@ class AppendOnlyAttemptLedger:
             raise ValueError("proposal ledger head is not canonical")
         events = self._load_events()
         previous = "0" * 64
-        pending: dict[tuple[str, int], dict[str, object]] = {}
+        pending: dict[tuple[str, int], AttemptSpec] = {}
         completed: set[tuple[str, int]] = set()
+        classifications: dict[tuple[str, int], str] = {}
         raw_names: set[str] = set()
         for index, event in enumerate(events, start=1):
+            state = event.get("state")
+            expected_keys = (
+                self._COMMON_EVENT_KEYS if state == "started" else self._TERMINAL_KEYS
+            )
+            if set(event) != expected_keys:
+                raise ValueError("proposal ledger event key set differs")
             claimed = event.get("event_sha256")
             payload = {key: value for key, value in event.items() if key != "event_sha256"}
             if (
@@ -301,53 +531,112 @@ class AppendOnlyAttemptLedger:
             ):
                 raise ValueError("proposal ledger hash chain differs")
             previous = str(claimed)
-            key = (str(event.get("job_id")), int(event.get("attempt_ordinal", -1)))
-            state = event.get("state")
+            try:
+                spec = AttemptSpec(
+                    stage=event["stage"],
+                    job_id=event["job_id"],
+                    attempt_ordinal=event["attempt_ordinal"],
+                    request_sha256=event["request_sha256"],
+                    max_new_tokens=event["max_new_tokens"],
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("proposal ledger attempt spec differs") from exc
+            key = (spec.job_id, spec.attempt_ordinal)
+            if self._expected_specs.get(key) != spec:
+                raise ValueError("proposal ledger attempt spec differs from anchor")
             if state == "started":
                 if key in pending or key in completed:
                     raise ValueError("proposal ledger contains duplicate ordinals")
-                pending[key] = event
-            elif state == "terminal":
-                if key not in pending:
-                    raise ValueError("proposal ledger terminal event is reordered")
-                raw_name = event.get("raw_path")
-                if not isinstance(raw_name, str) or raw_name in raw_names:
-                    raise ValueError("proposal ledger raw binding differs")
-                raw_path = self.raw_dir / raw_name
-                if (
-                    "/" in raw_name
-                    or raw_path.is_symlink()
-                    or not raw_path.is_file()
-                    or event.get("raw_bytes") != raw_path.stat().st_size
-                    or event.get("raw_sha256") != _sha256(raw_path.read_bytes())
-                ):
-                    raise ValueError("proposal ledger raw completion differs")
-                raw_names.add(raw_name)
-                del pending[key]
-                completed.add(key)
-            else:
-                raise ValueError("proposal ledger state differs")
-        if (
-            head
-            != self._head(len(events), previous)
-        ):
+                if spec.attempt_ordinal == 2 and classifications.get(
+                    (spec.job_id, 1)
+                ) != "truncated_at_ceiling":
+                    raise ValueError("proposal retry requires recomputed primary truncation")
+                pending[key] = spec
+                continue
+            if state != "terminal" or pending.get(key) != spec:
+                raise ValueError("proposal ledger terminal spec is reordered or differs")
+            raw_name = event.get("raw_path")
+            expected_raw_name = f"{spec.job_id}.{spec.attempt_ordinal}.completion"
+            raw_path = self.raw_dir / expected_raw_name
+            output_count = event.get("output_token_count")
+            if (
+                raw_name != expected_raw_name
+                or raw_name in raw_names
+                or type(output_count) is not int
+                or not 0 <= output_count <= spec.max_new_tokens
+                or raw_path.is_symlink()
+                or not raw_path.is_file()
+            ):
+                raise ValueError("proposal ledger raw name or token count differs")
+            raw = raw_path.read_bytes()
+            if (
+                type(event.get("raw_bytes")) is not int
+                or event.get("raw_bytes") != len(raw)
+                or event.get("raw_sha256") != _sha256(raw)
+            ):
+                raise ValueError("proposal ledger raw completion differs")
+            recomputed = classify_completion(
+                raw,
+                schema=self.anchor["schema"],  # type: ignore[arg-type]
+                output_token_count=output_count,
+                max_new_tokens=spec.max_new_tokens,
+                allowed_support_unit_ids=self._support_by_job[spec.job_id],
+            )
+            if event.get("classification") != recomputed.get("classification"):
+                raise ValueError("proposal ledger classification differs from raw bytes")
+            raw_names.add(expected_raw_name)
+            classifications[key] = str(recomputed["classification"])
+            del pending[key]
+            completed.add(key)
+        if head != self._head(len(events), previous):
             raise ValueError("proposal ledger deletion or head tampering detected")
-        actual_raw = {path.name for path in self.raw_dir.iterdir()}
-        if any(path.is_symlink() or not path.is_file() for path in self.raw_dir.iterdir()):
+        raw_entries = list(self.raw_dir.iterdir())
+        actual_raw = {path.name for path in raw_entries}
+        if any(path.is_symlink() or not path.is_file() for path in raw_entries):
             raise ValueError("proposal ledger raw inventory is unsafe")
         if actual_raw != raw_names:
-            active_raw = (
-                {self._active_raw_name}
-                if self._active_raw_name is not None
-                else set()
-            )
+            active_raw = {self._active_raw_name} if self._active_raw_name else set()
             if not allow_incomplete or actual_raw - raw_names != active_raw:
                 raise ValueError("proposal ledger contains incomplete or extra raw state")
         if pending and not allow_incomplete:
             raise ValueError("proposal ledger contains an incomplete started attempt")
         if len(pending) > 1:
             raise ValueError("proposal ledger contains multiple incomplete attempts")
+        if self.completion_path.exists() or self.completion_path.is_symlink():
+            if self.completion_path.is_symlink() or not self.completion_path.is_file():
+                raise ValueError("proposal ledger completion is unsafe")
+            try:
+                source = self.completion_path.read_bytes()
+                completion = json.loads(source)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("proposal ledger completion is invalid") from exc
+            if (
+                not isinstance(completion, dict)
+                or source != _canonical_bytes(completion)
+                or completion != self._expected_completion(events, head)
+                or completion.get("completed_job_count") != self.anchor["job_count"]
+            ):
+                raise ValueError("proposal ledger completion final head differs")
         return events
+
+    @contextmanager
+    def _mutation_lock(self) -> object:
+        flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(self.lock_path, flags)
+        try:
+            observed = os.fstat(descriptor)
+            if not stat.S_ISREG(observed.st_mode) or observed.st_size != 0:
+                raise ValueError("proposal ledger lock artifact differs")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("proposal ledger is locked by another executor") from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
     def read_events(self) -> list[dict[str, object]]:
         return [dict(row) for row in self._verify(allow_incomplete=True)]
@@ -381,58 +670,45 @@ class AppendOnlyAttemptLedger:
         schema: Mapping[str, object] | None = None,
         allowed_support_unit_ids: Sequence[str] | None = None,
     ) -> dict[str, object]:
-        existing = self._verify(allow_incomplete=False)
-        key = (spec.job_id, spec.attempt_ordinal)
-        if any(
-            (event.get("job_id"), event.get("attempt_ordinal")) == key
-            for event in existing
-        ):
-            raise ValueError("proposal ledger contains duplicate ordinals")
-        if spec.attempt_ordinal == 2 and not any(
-            event.get("state") == "terminal"
-            and event.get("job_id") == spec.job_id
-            and event.get("attempt_ordinal") == 1
-            and event.get("classification") == "truncated_at_ceiling"
-            for event in existing
-        ):
-            raise ValueError("proposal retry requires a truncated primary attempt")
-        self._append({"state": "started", **asdict(spec)})
-        self._active_key = key
-        generated = generate(messages, schema, spec.max_new_tokens)
-        if isinstance(generated, bytes):
-            raw_completion = generated
-            output_token_count = spec.max_new_tokens
-        elif (
-            isinstance(generated, tuple)
-            and len(generated) == 2
-            and isinstance(generated[0], bytes)
-            and isinstance(generated[1], int)
-            and not isinstance(generated[1], bool)
-        ):
+        with self._mutation_lock():
+            existing = self._verify(allow_incomplete=False)
+            key = (spec.job_id, spec.attempt_ordinal)
+            if self._expected_specs.get(key) != spec:
+                raise ValueError("proposal attempt differs from anchored job inventory")
+            if any(
+                (event.get("job_id"), event.get("attempt_ordinal")) == key
+                for event in existing
+            ):
+                raise ValueError("proposal ledger contains duplicate ordinals")
+            if spec.attempt_ordinal == 2 and not any(
+                event.get("state") == "terminal"
+                and event.get("job_id") == spec.job_id
+                and event.get("attempt_ordinal") == 1
+                and event.get("classification") == "truncated_at_ceiling"
+                for event in existing
+            ):
+                raise ValueError("proposal retry requires a truncated primary attempt")
+            self._append({"state": "started", **asdict(spec)})
+            generated = generate(messages, schema, spec.max_new_tokens)
+            if not (
+                isinstance(generated, tuple)
+                and len(generated) == 2
+                and isinstance(generated[0], bytes)
+                and type(generated[1]) is int
+            ):
+                raise TypeError(
+                    "model generation must return raw bytes and an exact token count"
+                )
             raw_completion, output_token_count = generated
-        else:
-            raise TypeError("model generation must return raw bytes and an exact token count")
-        raw_name = f"{spec.job_id}.{spec.attempt_ordinal}.completion"
-        self._active_raw_name = raw_name
-        raw_path = self.raw_dir / raw_name
-        _write_exclusive(raw_path, raw_completion)
-        _fsync_directory(self.raw_dir)
-        if schema is None:
-            try:
-                value = json.loads(raw_completion)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                result = {
-                    "classification": "parse_error",
-                    "error": f"parse: {exc}",
-                    "output_token_count": output_token_count,
-                }
-            else:
-                result = {
-                    "classification": "valid",
-                    "value": value,
-                    "output_token_count": output_token_count,
-                }
-        else:
+            raw_name = f"{spec.job_id}.{spec.attempt_ordinal}.completion"
+            self._active_raw_name = raw_name
+            raw_path = self.raw_dir / raw_name
+            _write_exclusive(raw_path, raw_completion)
+            _fsync_directory(self.raw_dir)
+            if schema is None:
+                raise ValueError("proposal schema is required for ledger classification")
+            if list(allowed_support_unit_ids or ()) != self._support_by_job[spec.job_id]:
+                raise ValueError("proposal support inventory differs from run anchor")
             result = classify_completion(
                 raw_completion,
                 schema=schema,
@@ -440,18 +716,31 @@ class AppendOnlyAttemptLedger:
                 max_new_tokens=spec.max_new_tokens,
                 allowed_support_unit_ids=allowed_support_unit_ids,
             )
-        self._append(
-            {
-                "state": "terminal",
-                **asdict(spec),
-                "classification": result["classification"],
-                "output_token_count": output_token_count,
-                "raw_path": raw_name,
-                "raw_bytes": len(raw_completion),
-                "raw_sha256": _sha256(raw_completion),
-            }
-        )
-        self._verify(allow_incomplete=False)
-        self._active_key = None
-        self._active_raw_name = None
-        return result
+            self._append(
+                {
+                    "state": "terminal",
+                    **asdict(spec),
+                    "classification": result["classification"],
+                    "output_token_count": output_token_count,
+                    "raw_path": raw_name,
+                    "raw_bytes": len(raw_completion),
+                    "raw_sha256": _sha256(raw_completion),
+                }
+            )
+            self._active_raw_name = None
+            self._verify(allow_incomplete=False)
+            return result
+
+    def seal_completion(self) -> dict[str, object]:
+        with self._mutation_lock():
+            events = self._verify(allow_incomplete=False)
+            if self.completion_path.exists() or self.completion_path.is_symlink():
+                raise FileExistsError("proposal ledger completion already exists")
+            head = json.loads(self.head_path.read_bytes())
+            completion = self._expected_completion(events, head)
+            if completion["completed_job_count"] != self.anchor["job_count"]:
+                raise ValueError("proposal ledger cannot seal an incomplete run")
+            _write_exclusive(self.completion_path, _canonical_bytes(completion))
+            _fsync_directory(self.root)
+            self._verify(allow_incomplete=False)
+            return completion

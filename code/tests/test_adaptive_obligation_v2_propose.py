@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import hashlib
 import sys
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -499,6 +501,219 @@ def test_bad_approval_fails_before_preflight_model_or_output_access(
     assert not (tmp_path / "output-sentinel").exists()
 
 
+def _approval_record(preflight_sha256: str) -> dict[str, object]:
+    return {
+        "schema_version": "adaptive-obligation-v2-proposal-approval-v1",
+        "stage": "proposal",
+        "preflight_sha256": preflight_sha256,
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "primary_call_count": 48,
+        "retry_call_ceiling": 48,
+        "approved": True,
+    }
+
+
+def test_approval_capture_rejects_symlink_parent_and_nonexact_count_types(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    approval = real / "approval.json"
+    approval.write_bytes(_pretty(_approval_record("a" * 64)))
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(real, target_is_directory=True)
+    with pytest.raises(PermissionError, match="proposal inference approval required"):
+        propose_module._capture_inference_approval(linked_parent / "approval.json")
+
+    wrong_type = {
+        **_approval_record("a" * 64),
+        "primary_call_count": 48.0,
+    }
+    approval.write_bytes(_pretty(wrong_type))
+    with pytest.raises(PermissionError, match="proposal inference approval required"):
+        propose_module._capture_inference_approval(approval)
+
+    extra_key = {**_approval_record("a" * 64), "created_by": "not-in-contract"}
+    approval.write_bytes(_pretty(extra_key))
+    with pytest.raises(PermissionError, match="proposal inference approval required"):
+        propose_module._capture_inference_approval(approval)
+
+
+def _captured_preflight_fixture(tmp_path: Path) -> tuple[Path, bytes, list[dict[str, object]]]:
+    root = tmp_path / "preflight"
+    root.mkdir()
+    jobs = [
+        {
+            "job_id": f"{index:064x}",
+            "messages": [],
+            "messages_sha256": canonical_sha256([]),
+            "input_unit_ids": [],
+            "primary_max_new_tokens": 256,
+            "retry_max_new_tokens": 512,
+        }
+        for index in range(48)
+    ]
+    jobs_bytes = b"".join(
+        (
+            json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n"
+        ).encode()
+        for row in jobs
+    )
+    receipt_bytes = _pretty({"marker": "captured"})
+    (root / "jobs.jsonl").write_bytes(jobs_bytes)
+    (root / "schema.json").write_bytes(_pretty(PROPOSAL_SCHEMA))
+    (root / "prompt.json").write_bytes(_pretty({"prompt": "captured"}))
+    (root / "receipt.json").write_bytes(receipt_bytes)
+    return root, receipt_bytes, jobs
+
+
+def test_preflight_capture_validates_isolated_bytes_and_never_reopens_live_jobs(
+    tmp_path: Path,
+) -> None:
+    root, receipt_bytes, jobs = _captured_preflight_fixture(tmp_path)
+    original_jobs = (root / "jobs.jsonl").read_bytes()
+
+    def verify_isolated(path: Path) -> dict[str, object]:
+        (root / "jobs.jsonl").write_bytes(b'{"job_id":"live-race"}\n')
+        assert (path / "jobs.jsonl").read_bytes() == original_jobs
+        return {"marker": "captured"}
+
+    captured = propose_module._capture_and_verify_preflight(
+        root,
+        expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        verifier=verify_isolated,
+    )
+    assert captured.jobs == jobs
+    assert captured.receipt_sha256 == hashlib.sha256(receipt_bytes).hexdigest()
+    assert (root / "jobs.jsonl").read_bytes() != original_jobs
+
+
+def test_preflight_capture_rejects_a_symlinked_parent_before_verifier(
+    tmp_path: Path,
+) -> None:
+    root, receipt_bytes, _jobs = _captured_preflight_fixture(tmp_path)
+    linked = tmp_path / "linked-preflight"
+    linked.symlink_to(root, target_is_directory=True)
+    touched: list[str] = []
+    with pytest.raises(ValueError, match="preflight.*unsafe"):
+        propose_module._capture_and_verify_preflight(
+            linked,
+            expected_receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+            verifier=lambda _path: touched.append("verify"),
+        )
+    assert touched == []
+
+
+def _execution_capture(tmp_path: Path) -> tuple[object, object]:
+    _root, _receipt_bytes, jobs = _captured_preflight_fixture(tmp_path)
+    preflight_sha256 = "d" * 64
+    approval_value = _approval_record(preflight_sha256)
+    approval_source = _pretty(approval_value)
+    approval = propose_module._CapturedApproval(
+        value=approval_value,
+        source=approval_source,
+        sha256=hashlib.sha256(approval_source).hexdigest(),
+    )
+    receipt = {
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "primary_call_count": 48,
+        "retry_call_ceiling": 48,
+        "model_snapshot": {"manifest_sha256": "f" * 64},
+    }
+    preflight = propose_module._CapturedPreflight(
+        receipt=receipt,
+        receipt_sha256=preflight_sha256,
+        jobs=jobs,
+        contents={},
+    )
+    return approval, preflight
+
+
+def test_execute_atomically_claims_output_before_model_and_second_executor_loses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, preflight = _execution_capture(tmp_path)
+    monkeypatch.setattr(
+        propose_module, "_capture_inference_approval", lambda _path: approval
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_capture_and_verify_preflight",
+        lambda _path, **_kwargs: preflight,
+    )
+    output = tmp_path / "proposals"
+    entered = threading.Event()
+    release = threading.Event()
+    first_failures: list[BaseException] = []
+
+    def first_factory() -> object:
+        entered.set()
+        assert release.wait(timeout=5)
+        raise RuntimeError("stop after atomic claim")
+
+    def run_first() -> None:
+        try:
+            execute_proposals(
+                preflight_dir=tmp_path / "unused-preflight",
+                approval_path=tmp_path / "unused-approval",
+                output_dir=output,
+                model_factory=first_factory,
+            )
+        except BaseException as exc:
+            first_failures.append(exc)
+
+    worker = threading.Thread(target=run_first)
+    worker.start()
+    assert entered.wait(timeout=5)
+    assert output.is_dir()
+    second_model: list[str] = []
+    with pytest.raises(FileExistsError, match="create-only proposal output"):
+        execute_proposals(
+            preflight_dir=tmp_path / "unused-preflight",
+            approval_path=tmp_path / "unused-approval",
+            output_dir=output,
+            model_factory=lambda: second_model.append("model"),
+        )
+    release.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert len(first_failures) == 1
+    assert isinstance(first_failures[0], RuntimeError)
+    assert second_model == []
+
+
+def test_execute_rejects_symlinked_output_parent_before_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, preflight = _execution_capture(tmp_path)
+    monkeypatch.setattr(
+        propose_module, "_capture_inference_approval", lambda _path: approval
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_capture_and_verify_preflight",
+        lambda _path, **_kwargs: preflight,
+    )
+    real_parent = tmp_path / "real-output-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-output-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    touched: list[str] = []
+    with pytest.raises(ValueError, match="output.*unsafe"):
+        execute_proposals(
+            preflight_dir=tmp_path / "unused-preflight",
+            approval_path=tmp_path / "unused-approval",
+            output_dir=linked_parent / "proposals",
+            model_factory=lambda: touched.append("model"),
+        )
+    assert touched == []
+    assert not (real_parent / "proposals").exists()
+
+
 def test_only_ceiling_truncation_gets_one_retry() -> None:
     calls: list[int] = []
     job = {
@@ -512,7 +727,7 @@ def test_only_ceiling_truncation_gets_one_retry() -> None:
     result = run_job_with_retry(
         job,
         generate=lambda ceiling: calls.append(ceiling)
-        or (b'{"status":' if ceiling == 256 else valid),
+        or ((b'{"status":', 256) if ceiling == 256 else (valid, 9)),
     )
     assert calls == [256, 512]
     assert result["status"] == "UNSUPPORTED"
@@ -530,7 +745,8 @@ def test_schema_error_is_not_retried() -> None:
     with pytest.raises(ValueError, match="schema"):
         run_job_with_retry(
             job,
-            generate=lambda ceiling: calls.append(ceiling) or b'{"status":"BAD"}',
+            generate=lambda ceiling: calls.append(ceiling)
+            or (b'{"status":"BAD"}', 4),
         )
     assert calls == [256]
 
@@ -596,6 +812,28 @@ def test_retry_happens_at_most_once() -> None:
             generate=lambda ceiling: calls.append(ceiling) or (b'{"status":', ceiling),
         )
     assert calls == [256, 512]
+
+
+@pytest.mark.parametrize(
+    "generated",
+    [
+        b'{"status":"UNSUPPORTED","reason_code":"NO_ABSTRACT_CHILD","o1":null}',
+        (b"{}", True),
+        (b"{}", 1.0),
+    ],
+)
+def test_injected_generation_requires_raw_bytes_and_exact_nonbool_token_count(
+    generated: object,
+) -> None:
+    job = {
+        "job_id": "a" * 64,
+        "messages": [],
+        "input_unit_ids": [],
+        "primary_max_new_tokens": 256,
+        "retry_max_new_tokens": 512,
+    }
+    with pytest.raises(TypeError, match="raw bytes.*exact token count"):
+        run_job_with_retry(job, generate=lambda _ceiling: generated)
 
 
 def test_local_tokenizer_loader_does_not_import_the_rocm_torch_runtime() -> None:

@@ -13,6 +13,7 @@ import stat
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
@@ -689,6 +690,10 @@ def _read_jobs(path: Path) -> tuple[list[dict[str, object]], bytes]:
         source = path.read_bytes()
     except OSError as exc:
         raise ValueError("jobs.jsonl is unreadable") from exc
+    return _read_jobs_bytes(source)
+
+
+def _read_jobs_bytes(source: bytes) -> tuple[list[dict[str, object]], bytes]:
     rows: list[dict[str, object]] = []
     for line_number, line in enumerate(source.splitlines(), start=1):
         try:
@@ -964,14 +969,110 @@ def _load_local_tokenizer(snapshot_dir: Path = MODEL_SNAPSHOT) -> object:
     return LocalChatTokenizer()
 
 
-def _load_inference_approval(path: Path) -> dict[str, object]:
-    """Authenticate the approval artifact without touching any preflight path."""
+@dataclass(frozen=True)
+class _CapturedApproval:
+    value: dict[str, object]
+    source: bytes
+    sha256: str
 
-    approval_path = Path(path)
-    if approval_path.is_symlink() or not approval_path.is_file():
-        raise PermissionError("proposal inference approval required")
+
+@dataclass(frozen=True)
+class _CapturedPreflight:
+    receipt: dict[str, object]
+    receipt_sha256: str
+    jobs: list[dict[str, object]]
+    contents: dict[str, bytes]
+
+
+def _open_directory_no_symlinks(path: Path) -> int:
+    raw = Path(path)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open("/" if raw.is_absolute() else ".", flags)
     try:
-        source = approval_path.read_bytes()
+        for component in raw.parts:
+            if component in (raw.anchor, "", "."):
+                continue
+            if component == "..":
+                raise OSError("parent traversal is forbidden")
+            child = os.open(component, flags | nofollow, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        observed = os.fstat(descriptor)
+        if not stat.S_ISDIR(observed.st_mode):
+            raise OSError("path is not a directory")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_stable_regular_at(
+    directory_fd: int,
+    name: str,
+    *,
+    require_single_link: bool,
+) -> bytes:
+    if not name or name in (".", "..") or "/" in name:
+        raise OSError("unsafe file name")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or (
+            require_single_link and before.st_nlink != 1
+        ):
+            raise OSError("path is not a single-link regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        source = b"".join(chunks)
+        if identity_before != identity_after or len(source) != after.st_size:
+            raise OSError("file changed while being captured")
+        return source
+    finally:
+        os.close(descriptor)
+
+
+def _capture_regular_file_no_symlinks(path: Path) -> bytes:
+    source_path = Path(path)
+    if not source_path.name:
+        raise OSError("file path is missing")
+    directory_fd = _open_directory_no_symlinks(source_path.parent)
+    try:
+        return _read_stable_regular_at(
+            directory_fd,
+            source_path.name,
+            require_single_link=True,
+        )
+    finally:
+        os.close(directory_fd)
+
+
+def _capture_inference_approval(path: Path) -> _CapturedApproval:
+    """Capture and authenticate approval bytes through a no-symlink descriptor walk."""
+
+    try:
+        source = _capture_regular_file_no_symlinks(Path(path))
         approval = json.loads(source)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PermissionError("proposal inference approval required") from exc
@@ -988,13 +1089,15 @@ def _load_inference_approval(path: Path) -> dict[str, object]:
     if (
         not isinstance(approval, dict)
         or source != _pretty_bytes(approval)
-        or not required_names <= set(approval)
+        or set(approval) != required_names
         or approval.get("schema_version")
         != "adaptive-obligation-v2-proposal-approval-v1"
         or approval.get("stage") != "proposal"
         or approval.get("model") != MODEL_ID
         or approval.get("model_revision") != MODEL_REVISION
+        or type(approval.get("primary_call_count")) is not int
         or approval.get("primary_call_count") != PRIMARY_JOB_COUNT
+        or type(approval.get("retry_call_ceiling")) is not int
         or approval.get("retry_call_ceiling") != PRIMARY_JOB_COUNT
         or approval.get("approved") is not True
         or not isinstance(approval.get("preflight_sha256"), str)
@@ -1005,21 +1108,175 @@ def _load_inference_approval(path: Path) -> dict[str, object]:
         )
     ):
         raise PermissionError("proposal inference approval required")
-    return approval
+    return _CapturedApproval(
+        value=approval,
+        source=source,
+        sha256=_sha256(source),
+    )
+
+
+def _load_inference_approval(path: Path) -> dict[str, object]:
+    return _capture_inference_approval(path).value
+
+
+def _capture_preflight_files(path: Path) -> dict[str, bytes]:
+    expected = {"jobs.jsonl", "schema.json", "prompt.json", "receipt.json"}
+    try:
+        directory_fd = _open_directory_no_symlinks(Path(path))
+        try:
+            before = os.fstat(directory_fd)
+            names_before = set(os.listdir(directory_fd))
+            if names_before != expected:
+                raise OSError("preflight inventory differs")
+            contents = {
+                name: _read_stable_regular_at(
+                    directory_fd,
+                    name,
+                    require_single_link=True,
+                )
+                for name in sorted(expected)
+            }
+            names_after = set(os.listdir(directory_fd))
+            after = os.fstat(directory_fd)
+            if (
+                names_after != names_before
+                or before.st_dev != after.st_dev
+                or before.st_ino != after.st_ino
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise OSError("preflight changed while being captured")
+            return contents
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise ValueError("proposal preflight is missing or unsafe") from exc
+
+
+def _capture_and_verify_preflight(
+    path: Path,
+    *,
+    expected_receipt_sha256: str,
+    verifier: Callable[[Path], dict[str, object]] = verify_proposal_preflight,
+) -> _CapturedPreflight:
+    """Capture once, verify an isolated copy, and retain only captured jobs."""
+
+    contents = _capture_preflight_files(path)
+    receipt_source = contents["receipt.json"]
+    receipt_sha256 = _sha256(receipt_source)
+    if receipt_sha256 != expected_receipt_sha256:
+        raise PermissionError("proposal inference approval required")
+    try:
+        receipt = json.loads(receipt_source)
+        schema = json.loads(contents["schema.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("captured proposal preflight JSON is invalid") from exc
+    if (
+        not isinstance(receipt, dict)
+        or receipt_source != _pretty_bytes(receipt)
+        or not isinstance(schema, dict)
+        or contents["schema.json"] != _pretty_bytes(schema)
+        or schema != PROPOSAL_SCHEMA
+    ):
+        raise ValueError("captured proposal preflight is not canonical")
+    jobs, jobs_source = _read_jobs_bytes(contents["jobs.jsonl"])
+    if (
+        jobs_source != contents["jobs.jsonl"]
+        or len(jobs) != PRIMARY_JOB_COUNT
+        or len({row.get("job_id") for row in jobs}) != PRIMARY_JOB_COUNT
+    ):
+        raise ValueError("captured proposal jobs must be exactly 48 unique rows")
+    with tempfile.TemporaryDirectory(prefix="adaptive-v2-preflight-") as temporary:
+        private_root = Path(temporary) / "snapshot"
+        private_root.mkdir(mode=0o700)
+        try:
+            for name in ("jobs.jsonl", "schema.json", "prompt.json", "receipt.json"):
+                _write_fsynced(private_root / name, contents[name])
+                os.chmod(private_root / name, 0o400)
+            _fsync_directory(private_root)
+            os.chmod(private_root, 0o500)
+            verified = verifier(private_root)
+        finally:
+            os.chmod(private_root, 0o700)
+        if verified != receipt:
+            raise ValueError("isolated proposal preflight verifier receipt differs")
+    return _CapturedPreflight(
+        receipt=receipt,
+        receipt_sha256=receipt_sha256,
+        jobs=jobs,
+        contents=contents,
+    )
 
 
 def _completion_parts(generated: object, ceiling: int) -> tuple[bytes, int]:
-    if isinstance(generated, bytes):
-        return generated, ceiling
     if (
         isinstance(generated, tuple)
         and len(generated) == 2
         and isinstance(generated[0], bytes)
-        and isinstance(generated[1], int)
-        and not isinstance(generated[1], bool)
+        and type(generated[1]) is int
     ):
         return generated[0], generated[1]
     raise TypeError("model generation must return raw bytes and an exact token count")
+
+
+def _proposal_request(job: Mapping[str, object], ceiling: int) -> dict[str, object]:
+    return {
+        "stage": "proposal",
+        "job_id": job["job_id"],
+        "messages_sha256": canonical_sha256(job["messages"]),
+        "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+        "max_new_tokens": ceiling,
+    }
+
+
+def _build_run_anchor(
+    jobs: Sequence[Mapping[str, object]],
+    *,
+    preflight_sha256: str,
+    approval_sha256: str,
+) -> dict[str, object]:
+    if len(jobs) != PRIMARY_JOB_COUNT or len(
+        {row.get("job_id") for row in jobs}
+    ) != PRIMARY_JOB_COUNT:
+        raise ValueError("proposal execution requires exactly 48 captured jobs")
+    anchored_jobs: list[dict[str, object]] = []
+    for job in jobs:
+        job_id = job.get("job_id")
+        unit_ids = job.get("input_unit_ids")
+        if (
+            not isinstance(job_id, str)
+            or len(job_id) != 64
+            or any(char not in "0123456789abcdef" for char in job_id)
+            or not isinstance(unit_ids, list)
+        ):
+            raise ValueError("captured proposal job inventory differs")
+        attempts = [
+            {
+                "attempt_ordinal": ordinal,
+                "request_sha256": canonical_sha256(_proposal_request(job, ceiling)),
+                "max_new_tokens": ceiling,
+            }
+            for ordinal, ceiling in enumerate(
+                (PRIMARY_MAX_NEW_TOKENS, RETRY_MAX_NEW_TOKENS), start=1
+            )
+        ]
+        anchored_jobs.append(
+            {
+                "job_id": job_id,
+                "input_unit_ids": list(unit_ids),
+                "attempts": attempts,
+            }
+        )
+    return {
+        "schema_version": "adaptive-obligation-v2-run-anchor-v1",
+        "stage": "proposal",
+        "preflight_sha256": preflight_sha256,
+        "approval_sha256": approval_sha256,
+        "job_count": len(anchored_jobs),
+        "job_inventory_sha256": canonical_sha256(anchored_jobs),
+        "jobs": anchored_jobs,
+        "schema": PROPOSAL_SCHEMA,
+    }
 
 
 def run_job_with_retry(
@@ -1051,13 +1308,7 @@ def run_job_with_retry(
                 allowed_support_unit_ids=[str(value) for value in job["input_unit_ids"]],
             )
         else:
-            request = {
-                "stage": "proposal",
-                "job_id": job["job_id"],
-                "messages_sha256": canonical_sha256(job["messages"]),
-                "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
-                "max_new_tokens": ceiling,
-            }
+            request = _proposal_request(job, ceiling)
             spec = AttemptSpec(
                 stage="proposal",
                 job_id=str(job["job_id"]),
@@ -1102,31 +1353,33 @@ def execute_proposals(
 ) -> dict[str, object]:
     """Execute frozen jobs only after a separate create-only approval authenticates."""
 
-    approval = _load_inference_approval(Path(approval_path))
-    preflight_root = Path(preflight_dir)
-    receipt_path = preflight_root / "receipt.json"
-    if (
-        preflight_root.is_symlink()
-        or not preflight_root.is_dir()
-        or receipt_path.is_symlink()
-        or not receipt_path.is_file()
-    ):
-        raise ValueError("proposal preflight is missing or unsafe")
-    receipt_sha256 = _sha256_file(receipt_path)
-    if approval.get("preflight_sha256") != receipt_sha256:
-        raise PermissionError("proposal inference approval required")
-    preflight_receipt = verify_proposal_preflight(preflight_root)
-    preflight = {**preflight_receipt, "receipt_sha256": receipt_sha256}
+    captured_approval = _capture_inference_approval(Path(approval_path))
+    approval = captured_approval.value
+    captured_preflight = _capture_and_verify_preflight(
+        Path(preflight_dir),
+        expected_receipt_sha256=str(approval["preflight_sha256"]),
+    )
+    preflight = {
+        **captured_preflight.receipt,
+        "receipt_sha256": captured_preflight.receipt_sha256,
+    }
     from .adaptive_obligation_v2_local_model import (
         V2LocalJsonModel,
         verify_inference_approval,
     )
 
     verify_inference_approval(approval, preflight)
-    destination = Path(output_dir)
-    if _path_present(destination):
-        raise FileExistsError(f"create-only proposal output exists: {destination}")
-    jobs, _source = _read_jobs(preflight_root / "jobs.jsonl")
+    jobs = captured_preflight.jobs
+    anchor = _build_run_anchor(
+        jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=captured_approval.sha256,
+    )
+    ledger = AppendOnlyAttemptLedger(
+        Path(output_dir),
+        expected_anchor=anchor,
+        create_only=True,
+    )
     if model_factory is None:
         model = V2LocalJsonModel(approval=approval, preflight=preflight)
     else:
@@ -1134,7 +1387,6 @@ def execute_proposals(
     generate_method = getattr(model, "generate", None)
     if not callable(generate_method):
         raise TypeError("proposal model factory must return a generate-capable model")
-    ledger = AppendOnlyAttemptLedger(destination)
     results: list[dict[str, object]] = []
     for job in jobs:
 
@@ -1146,11 +1398,13 @@ def execute_proposals(
             )
 
         results.append(run_job_with_retry(job, generate=generate, ledger=ledger))
+    completion = ledger.seal_completion()
     return {
         "status": "complete",
         "job_count": len(results),
         "results": results,
         "event_count": len(ledger.read_events()),
+        "completion": completion,
     }
 
 
