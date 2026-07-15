@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and run a four-topic, full-union passage ranker that preserves all 8,114 candidate rows, discovers bounded corpus-derived sub-obligations, selects novel evidence with weight-free token fairness, and renders a source-backed diagnostic report.
+**Goal:** Build and run a four-topic, full-union passage ranker that preserves all 8,114 candidate rows and first seals two qrels-blind baselines: the full narrative and the 24 fixed facet queries.
 
-**Architecture:** Freeze a qrels-blind contract over the existing accepted union, score query-local passage queues with the pinned MiniLM model, and run one cross-fitted local Qwen discovery pass. Build complete NARRATIVE, FIXED-O0, ADAPTIVE, and non-promoting COMPOSITE continuations; extract exact-span evidence cards; seal all packets before qrels and review labels are joined; then evaluate and render the existing report.
+**Architecture:** Freeze a qrels-blind contract over the existing accepted union and score query-local passage queues with the pinned MiniLM model. Discovery v1 terminated without a completed proposal pass and is now immutable and terminal-only, so the current run builds only complete `NARRATIVE` and `FIXED-O0` candidate continuations. Corpus-derived adaptive discovery will use a separately versioned v2 design and output identity after its implementation and exact inference preflight receive separate approval.
 
 **Tech Stack:** Python 3.12, pytest, PyTorch ROCm, Transformers, the existing global score cache, JSON/JSONL immutable artifacts, SQLite-backed portable report data, and headless Google Chrome for desktop/mobile rendering checks.
 
@@ -18,14 +18,19 @@
 - No 100, 500, 1,000, or other document-count eligibility cutoff.
 - No new retrieval, query rewrite, dense primary retrieval, network call, model download, hosted inference, or paid call in this plan.
 - MiniLM is `cross-encoder/ms-marco-MiniLM-L6-v2` revision `c5ee24cb16019beea0893ab7796b1df96625c6b8`.
-- Corpus discovery uses local `Qwen/Qwen3-4B-Instruct-2507` revision `cdbee75f17c01a7cc42f958dc650907174af0554`, temperature `0`, seed `0`, and frozen JSON schemas.
+- Discovery v1 is permanently terminal-only. It may only verify or inspect the existing immutable `discovery_unavailable` history; every mutation, proposal, validation, finalization, and local-model boundary must fail with `discovery v1 is terminal-only` before resource access.
 - Cross-encoder scores order only their own query queue; raw or normalized scores never cross query boundaries.
-- Explicit obligations `O0` always precede corpus-derived `O1`; `O1` never receives recurring equal allocation with `O0`.
-- Run one discovery pass only; no recursion, new search, self-selected goal, or model-selected stopping rule.
-- Evidence packets are nested complete prefixes at 8,000, 16,000, and 32,000 Qwen-token evidence budgets.
-- Qrels, organizer nuggets, reference answers, and review labels stay unread until continuations, packets, cards, hashes, and the freeze seal exist.
+- The current ranking run contains exactly two available arms: `NARRATIVE` and `FIXED-O0`. `ADAPTIVE` and `COMPOSITE` are recorded as unavailable and must not be materialized as empty or successful rankings.
+- No v2 Qwen or additional MiniLM inference is authorized by this plan amendment. V2 may be implemented and preflighted without inference; exact call counts and a separate run approval are required before any model execution.
+- Qrels, organizer nuggets, reference answers, and review labels stay unread throughout baseline continuation construction and until a later complete freeze seal exists.
 - Use create-only output under `outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/`.
 - Keep unrelated untracked sparse-relevance files untouched and out of every commit.
+
+## Superseding execution amendment (2026-07-14)
+
+Task 4's attempted adaptive-discovery run is canonically `discovery_unavailable`: two proposal-generation calls, zero completed proposal passes, zero O1/N1 records, and no downstream validation or O1 scoring. The successful-path instructions retained in Task 4 below are historical design context only. Commit `000cbd8` makes discovery v1 terminal-only; its final integrity review and any required hardening commits govern before Task 5 begins.
+
+Task 5 now seals only the two baselines that actually exist. Tasks 6--8 are deferred because their three-arm packet/card/evaluation contracts require a successful adaptive arm and a writable local JSON model adapter. After Task 5, create a separate discovery-v2 implementation plan using a new API and output identity. V2 implementation and exact preflight are permitted; v2 Qwen/MiniLM inference, qrels access, and review-label access remain separately gated.
 
 ---
 
@@ -33,9 +38,9 @@
 
 - `code/trec_rag/adaptive_evidence_contract.py`: source binding, protected-topic checks, O0 records, fold assignment, canonical hashes, and create-only manifest.
 - `code/trec_rag/adaptive_evidence_score.py`: query-local score populations, window planning, cache audit, ROCm scoring, resumable shards, and receipts.
-- `code/trec_rag/adaptive_evidence_local_model.py`: pinned local Qwen loader and schema-constrained JSON generation shared by discovery and evidence cards.
-- `code/trec_rag/adaptive_evidence_discovery.py`: fold reservoirs, O1/N1 proposals, opposite-fold corroboration, repeated-phrase control, and frozen discovery records.
-- `code/trec_rag/adaptive_evidence_rank.py`: qualification, duplicate/source rules, queue construction, coverage floors, token-deficit fill, packet prefixes, and complete continuations.
+- `code/trec_rag/adaptive_evidence_local_model.py`: terminal-only discovery-v1 model boundary; every operation rejects before runtime or model access.
+- `code/trec_rag/adaptive_evidence_discovery.py`: read-only verification/inspection of the exact terminal discovery-v1 history.
+- `code/trec_rag/adaptive_evidence_rank.py`: query-local best-window reduction, fixed-facet coverage scheduling, full-union tail completion, and two-arm baseline verification.
 - `code/trec_rag/adaptive_evidence_cards.py`: exact-span evidence atomization, card verification, and blinded review slots.
 - `code/trec_rag/adaptive_evidence_evaluate.py`: freeze seal, qrels firewall, packet/card metrics, review-label joins, and advancement decision.
 - `code/trec_rag/build_deep_facet_candidate_report.py`: verified adaptive-result loader plus answer-first report sections, tables, and charts.
@@ -628,7 +633,7 @@ git commit -m "Add cross-fitted evidence discovery"
 
 ---
 
-### Task 5: Build weight-free complete continuations and nested packets
+### Task 5: Seal the narrative and fixed-facet candidate baselines
 
 **Files:**
 - Create: `code/trec_rag/adaptive_evidence_rank.py`
@@ -636,40 +641,49 @@ git commit -m "Add cross-fitted evidence discovery"
 - Create at run time: `outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/`
 
 **Interfaces:**
-- Consumes: contract, base/O1 scores, frozen discovery records, Qwen token counts, and provenance.
-- Produces: `qualify_passage(...)`, `qualified_deficit_round_robin(...)`, `packet_prefix(...)`, `build_arm_continuation(...)`, complete arm JSONL, and packet JSONL.
+- Consumes: the authenticated Task 1 contract, the authenticated Task 3 base score receipt and 28 score shards, and the read-only Task 4 terminal receipt.
+- Produces: `best_window_per_document(...)`, `build_narrative_continuation(...)`, `build_fixed_o0_continuation(...)`, `verify_baseline_rankings(...)`, `narrative.jsonl`, `fixed_o0.jsonl`, `availability.json`, and `receipt.json`.
 
-- [ ] **Step 1: Write failing fairness, novelty, and completeness tests**
+- [ ] **Step 1: Write failing baseline ordering, coverage, and completeness tests**
 
 ```python
-def test_coverage_floor_is_broad_then_all_o0_then_o1() -> None:
-    rows = build_arm_continuation(_fixture(), arm="ADAPTIVE")
-    assert [row["primary_obligation"] for row in rows[:4]] == [
-        "219:broad", "219-positive", "219-negative", "219-positive:o1:access"
+def test_narrative_uses_each_documents_best_broad_window() -> None:
+    rows = build_narrative_continuation(_fixture())
+    assert [row["document_id"] for row in rows] == ["d2", "d1", "d3"]
+    assert rows[0]["window_id"] == "d2-best-broad"
+    assert all(row["primary_obligation"] == "219:broad" for row in rows)
+
+
+def test_fixed_o0_starts_with_broad_then_each_o0_in_manifest_order() -> None:
+    rows = build_fixed_o0_continuation(_fixture())
+    assert [row["primary_obligation"] for row in rows[:3]] == [
+        "219:broad", "219-positive", "219-negative"
     ]
 
 
-def test_deficit_fill_uses_fewest_tokens_and_prefers_unseen_nugget() -> None:
-    selected = qualified_deficit_round_robin(_queues(), initial=_coverage_floor())
-    assert selected[0]["primary_obligation"] == "219-negative"
-    assert selected[0]["nugget_id"] == "new-negative-nugget"
+def test_fixed_o0_uses_query_local_scores_and_never_compares_raw_scores() -> None:
+    rows = build_fixed_o0_continuation(_fixture())
+    assert rows[1]["selection_reason"] == "coverage_floor"
+    assert rows[1]["score_scope"] == "219-positive"
+    assert rows[2]["score_scope"] == "219-negative"
+    assert all(row["score_scope"] == row["primary_obligation"] for row in rows[:3])
 
 
-def test_packets_are_nested_and_continuation_represents_every_document() -> None:
-    continuation = build_arm_continuation(_fixture(), arm="ADAPTIVE")
-    p8 = packet_prefix(continuation, 8_000)
-    p16 = packet_prefix(continuation, 16_000)
-    p32 = packet_prefix(continuation, 32_000)
-    assert p16[:len(p8)] == p8
-    assert p32[:len(p16)] == p16
-    assert {row["document_id"] for row in continuation} == _all_document_ids()
+def test_both_complete_continuations_preserve_every_document_once() -> None:
+    narrative = build_narrative_continuation(_fixture())
+    fixed = build_fixed_o0_continuation(_fixture())
+    assert [row["document_id"] for row in narrative].count("d1") == 1
+    assert {row["document_id"] for row in narrative} == _all_document_ids()
+    assert {row["document_id"] for row in fixed} == _all_document_ids()
 
 
-def test_source_warning_cannot_reject_and_o1_never_recurs() -> None:
-    qualified = qualify_passage(_warning_passage(), _o0(), selected=[])
-    assert qualified["qualified"] is True
-    continuation = build_arm_continuation(_fixture(), arm="ADAPTIVE")
-    assert sum(row["primary_obligation"].endswith(":o1:access") for row in continuation[:20]) == 1
+def test_adaptive_is_unavailable_not_an_empty_ranking(tmp_path: Path) -> None:
+    build_rankings(_fixture(), output_dir=tmp_path)
+    availability = json.loads((tmp_path / "availability.json").read_text())
+    assert availability["arms"]["ADAPTIVE"]["status"] == "unavailable"
+    assert availability["arms"]["COMPOSITE"]["status"] == "unavailable"
+    assert not (tmp_path / "adaptive.jsonl").exists()
+    assert not (tmp_path / "composite.jsonl").exists()
 ```
 
 - [ ] **Step 2: Run tests and verify missing ranker**
@@ -678,50 +692,50 @@ Run: `.venv/bin/python -m pytest code/tests/test_adaptive_evidence_rank.py -q`
 
 Expected: import failure for `adaptive_evidence_rank`.
 
-- [ ] **Step 3: Implement qualification and token-deficit selection**
+- [ ] **Step 3: Implement query-local best-window reduction and two complete continuations**
 
 ```python
-def qualified_deficit_round_robin(queues, *, initial):
-    selected = list(initial)
-    assigned = defaultdict(int)
-    for row in selected:
-        assigned[row["primary_obligation"]] += int(row["evidence_tokens"])
-    active = {key: list(rows) for key, rows in queues.items() if rows}
-    while active:
-        obligation_id = min(
-            active,
-            key=lambda key: (
-                assigned[key],
-                0 if key.endswith(":broad") else 1,
-                active[key][0]["manifest_order"],
-                key,
-            ),
-        )
-        candidate = next_qualified_novel(active[obligation_id], obligation_id, selected)
-        if candidate is None:
-            del active[obligation_id]
-            continue
-        selected.append(candidate)
-        assigned[obligation_id] += int(candidate["evidence_tokens"])
-    return selected
-
-
-def packet_prefix(rows, token_budget):
-    selected, used = [], 0
+def best_window_per_document(rows):
+    best = {}
     for row in rows:
-        cost = int(row["evidence_tokens"])
-        if used + cost > token_budget:
-            break
-        selected.append(row)
-        used += cost
-    return selected
+        key = (str(row["topic_id"]), str(row["obligation_id"]), str(row["document_id"]))
+        rank_key = (
+            -float(row["score"]),
+            int(row["document_start_token"]),
+            str(row["window_id"]),
+        )
+        if key not in best or rank_key < best[key][0]:
+            best[key] = (rank_key, dict(row))
+    return [value[1] for _, value in sorted(best.items())]
+
+
+def build_narrative_continuation(data):
+    return rank_each_topic(
+        data,
+        queue_ids=data.broad_obligation_ids,
+        selection="broad_score_descending",
+    )
+
+
+def build_fixed_o0_continuation(data):
+    return rank_each_topic(
+        data,
+        queue_ids=data.broad_then_o0_manifest_order,
+        selection="coverage_floor_then_token_deficit_round_robin_then_broad_tail",
+    )
 ```
 
-Qualification must emit reasons and permit `unsupported` when a nonempty queue lacks anchor/relation/domain-coherent exact support. Apply Jaccard `>=0.80` as a hard finite-packet duplicate deferral, unseen host before reused host within an obligation, and at most three finite-packet passages per document. Deferred rows remain in deterministic tail order. Implement NARRATIVE, FIXED-O0, ADAPTIVE, and the exact commit-`1aacea7` COMPOSITE sensitivity; only the first three are eligible for decisions.
+For every `(topic_id, obligation_id, document_id)`, reduce windows only within that query queue by descending finite MiniLM score, then earliest document start token, then window ID. Never normalize or compare raw MiniLM scores across different obligations.
 
-Every ranked passage record must include one `primary_obligation` and the complete deterministic `supported_obligations` list. These fields are frozen here and reused by packet construction, cards, and blinded review; downstream stages may validate them but cannot infer or rewrite them.
+`NARRATIVE` ranks every topic's documents by its best broad-query window score, with `union_order` and `document_id` as deterministic tie breakers.
 
-- [ ] **Step 4: Run tests, build all continuations, and verify complete eligibility**
+`FIXED-O0` uses a deterministic coverage floor: one distinct best document from the broad queue followed by one distinct best document from every O0 queue in manifest order. It then cycles the broad and O0 queues by the fewest selected passage tokens for that queue, skipping already selected documents and breaking ties by broad-before-O0, manifest order, and obligation ID. When the facet-local queues are exhausted, append every remaining topic document in broad-query order. This tail preserves eligibility; it is not evidence that the document supports a facet.
+
+Each output row must contain `topic_rank`, `document_id`, `window_id`, exact `window_text`, `primary_obligation`, `score_scope`, query-local `score`, `selection_reason`, `union_order`, `passage_tokens`, `scored_obligations`, and immutable source hashes. `scored_obligations` means only that a query-local score exists; it must never be named or interpreted as semantic support. Each arm contains each of the 8,114 topic-document identities exactly once.
+
+`availability.json` must mark `NARRATIVE` and `FIXED-O0` `available`, and mark `ADAPTIVE` and `COMPOSITE` `unavailable` with the authenticated Task 4 terminal receipt hash and zero O1/N1 counts. Do not create adaptive/composite ranking files. `receipt.json` binds the contract, base score receipt, terminal discovery receipt, both complete ranking hashes/counts, exact topic IDs, protected-topic count zero, `qrels_opened=false`, and all network/retrieval/hosted/paid counters at zero. Create the ranking output once; a partial or existing output must fail closed.
+
+- [ ] **Step 4: Run tests, build the two baselines, and verify the sealed population**
 
 Run:
 
@@ -729,14 +743,14 @@ Run:
 .venv/bin/python -m pytest code/tests/test_adaptive_evidence_rank.py -q
 .venv/bin/python -m trec_rag.adaptive_evidence_rank build \
   --contract outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/contract \
-  --scores outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/scoring \
+  --scores outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/scoring/base \
   --discovery outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/discovery \
   --output outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings
 .venv/bin/python -m trec_rag.adaptive_evidence_rank verify \
   --output outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings
 ```
 
-Expected: all tests pass; every arm has nested packet prefixes; every complete continuation covers the same 8,114 topic-document identities; COMPOSITE is marked `decision_eligible=false`.
+Expected: all tests pass; `NARRATIVE` and `FIXED-O0` each cover the same 8,114 topic-document identities exactly once; protected topics are absent; no adaptive/composite ranking exists; the receipt reports qrels unopened and all external/model/retrieval counters at zero.
 
 - [ ] **Step 5: Commit ranking**
 
@@ -748,6 +762,8 @@ git commit -m "Add novelty-aware evidence ranking"
 ---
 
 ### Task 6: Atomize packets into exact-span cards and blind review slots
+
+> **Deferred by the 2026-07-14 execution amendment.** Do not execute this task against discovery v1 or the two-arm baseline output. Rewrite it in the separate discovery-v2 plan only after v2 produces an approved, authenticated adaptive arm. No card-model inference or review packet is authorized now.
 
 **Files:**
 - Create: `code/trec_rag/adaptive_evidence_cards.py`
@@ -849,6 +865,8 @@ git commit -m "Add adaptive evidence cards and review"
 ---
 
 ### Task 7: Seal packets, open qrels once, and evaluate mechanisms
+
+> **Deferred by the 2026-07-14 execution amendment.** Do not open qrels, organizer nuggets, reference answers, or review labels for the two-arm baseline run. Evaluation resumes only after the v2 ranking/card design is complete, all arms are frozen, and the user separately approves the exact qrels access.
 
 **Files:**
 - Create: `code/trec_rag/adaptive_evidence_evaluate.py`
@@ -988,6 +1006,8 @@ git commit -m "Evaluate adaptive evidence packets"
 ---
 
 ### Task 8: Obtain findings review and render the durable HTML report
+
+> **Deferred by the 2026-07-14 execution amendment.** The final findings review and rendered comparison require the later v2 adaptive arm and the sealed evaluation from the rewritten Task 7. Do not present the current unavailable adaptive arm as an empty result or as evidence that adaptation failed.
 
 **Files:**
 - Modify: `code/trec_rag/build_deep_facet_candidate_report.py`
