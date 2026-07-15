@@ -6,16 +6,18 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .adaptive_obligation_v2_contract import canonical_sha256, sha256_text
-from .adaptive_obligation_v2_ledger import AttemptSpec
+from .adaptive_obligation_v2_ledger import AppendOnlyAttemptLedger, AttemptSpec
 from .adaptive_obligation_v2_propose import (
     PROPOSAL_RECEIPT_SCHEMA_VERSION,
     _compact_bytes,
+    _capture_regular_file_no_symlinks,
     _fsync_directory,
     _load_verified_contract,
     _open_directory_no_symlinks,
@@ -341,6 +343,7 @@ def validate_proposal_record(
         "proposal_document_ids": list(
             dict.fromkeys(str(unit["document_id"]) for unit in supporting_units)
         ),
+        "proposal_support_unit_ids": list(support_ids),
     }
 
 
@@ -983,3 +986,405 @@ def run_validation_job_with_retry(
             raise ValueError(f"validation truncated at retry ceiling: {error}")
         raise ValueError(f"validation {error}")
     raise RuntimeError("validation retry policy exhausted unexpectedly")
+
+
+VALIDATION_INVENTORY_SCHEMA_VERSION = (
+    "adaptive-obligation-v2-validation-inventory-v1"
+)
+VALIDATION_RECEIPT_SCHEMA_VERSION = "adaptive-obligation-v2-validation-receipt-v1"
+_VALIDATION_INVENTORY_NAMES = frozenset(
+    {"validated.jsonl", "accepted.jsonl", "receipt.json"}
+)
+_VALIDATION_PREFLIGHT_NAMES = frozenset({"receipt.json"})
+
+
+def _verify_validation_preflight_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("validation preflight receipt must be an object")
+    expected_names = {
+        "schema_version",
+        "status",
+        "topic_ids",
+        "job_count",
+        "primary_call_count",
+        "retry_call_ceiling",
+        "worst_case_call_ceiling",
+        "primary_max_new_tokens",
+        "retry_max_new_tokens",
+        "schema_sha256",
+        "jobs_sha256",
+        "jobs",
+        "source_contract_receipt_sha256",
+        "proposal_receipt",
+        "expected_runtime",
+        "model_construction_allowed",
+        "generation_allowed",
+        "qrels_opened",
+        "network_call_count",
+        "retrieval_call_count",
+        "hosted_inference_call_count",
+        "paid_call_count",
+        "model_load_count",
+        "tokenizer_load_count",
+        "inference_count",
+        "external_cost_usd",
+    }
+    jobs = value.get("jobs")
+    if (
+        set(value) != expected_names
+        or value.get("schema_version") != SCHEMA_VERSION
+        or value.get("status") != "complete"
+        or value.get("topic_ids") != list(PILOT_TOPIC_IDS)
+        or not isinstance(jobs, list)
+        or any(not isinstance(job, Mapping) for job in jobs)
+        or type(value.get("job_count")) is not int
+        or value.get("job_count") != len(jobs)
+        or value.get("primary_call_count") != len(jobs)
+        or value.get("retry_call_ceiling") != len(jobs)
+        or value.get("worst_case_call_ceiling") != len(jobs) * 2
+        or value.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+        or value.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
+        or value.get("schema_sha256") != canonical_sha256(VALIDATION_SCHEMA)
+        or value.get("jobs_sha256") != canonical_sha256(jobs)
+        or not isinstance(value.get("source_contract_receipt_sha256"), str)
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(value["source_contract_receipt_sha256"])
+        )
+        or value.get("model_construction_allowed") is not False
+        or value.get("generation_allowed") is not False
+        or value.get("qrels_opened") is not False
+        or value.get("external_cost_usd") != 0.0
+        or any(
+            value.get(name) != 0
+            for name in (
+                "network_call_count",
+                "retrieval_call_count",
+                "hosted_inference_call_count",
+                "paid_call_count",
+                "model_load_count",
+                "tokenizer_load_count",
+                "inference_count",
+            )
+        )
+    ):
+        raise ValueError("validation preflight receipt differs")
+    proposal_receipt = value.get("proposal_receipt")
+    if (
+        not isinstance(proposal_receipt, Mapping)
+        or proposal_receipt.get("schema_version")
+        != PROPOSAL_RECEIPT_SCHEMA_VERSION
+        or proposal_receipt.get("status") != "complete"
+        or proposal_receipt.get("source_contract_receipt_sha256")
+        != value["source_contract_receipt_sha256"]
+        or any(
+            not isinstance(proposal_receipt.get(name), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(proposal_receipt[name]))
+            for name in (
+                "sha256",
+                "proposals_sha256",
+                "proposal_preflight_receipt_sha256",
+                "source_contract_receipt_sha256",
+                "run_anchor_sha256",
+                "completion_sha256",
+            )
+        )
+    ):
+        raise ValueError("validation proposal receipt binding differs")
+    _build_validation_run_anchor(
+        jobs,
+        preflight_sha256="a" * 64,
+        approval_sha256="b" * 64,
+    )
+    return value
+
+
+def _publish_validation_directory(
+    destination: Path, contents: Mapping[str, bytes]
+) -> None:
+    if os.path.lexists(destination):
+        raise FileExistsError(f"create-only validation output exists: {destination}")
+    try:
+        descriptor = _open_directory_no_symlinks(destination.parent)
+    except OSError as exc:
+        raise ValueError("validation output parent is missing or unsafe") from exc
+    else:
+        os.close(descriptor)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
+    )
+    published = False
+    try:
+        for name, source in contents.items():
+            _write_fsynced(staging / name, source)
+        _fsync_directory(staging)
+        os.rename(staging, destination)
+        published = True
+        _fsync_directory(destination.parent)
+    finally:
+        if not published and staging.exists():
+            shutil.rmtree(staging)
+
+
+def publish_validation_preflight(
+    preflight: Mapping[str, object], output_dir: Path
+) -> dict[str, object]:
+    """Freeze one exact Task 4 preflight before its approved ledger run."""
+
+    verified = _verify_validation_preflight_payload(dict(preflight))
+    _publish_validation_directory(
+        Path(output_dir), {"receipt.json": _pretty_bytes(verified)}
+    )
+    return verified
+
+
+def _capture_exact_directory(path: Path, names: frozenset[str], label: str) -> dict[str, bytes]:
+    try:
+        descriptor = _open_directory_no_symlinks(Path(path))
+        try:
+            before = os.fstat(descriptor)
+            names_before = set(os.listdir(descriptor))
+            if names_before != names:
+                raise OSError(f"{label} inventory differs")
+            contents = {
+                name: _read_stable_regular_at(
+                    descriptor, name, require_single_link=True
+                )
+                for name in sorted(names)
+            }
+            after = os.fstat(descriptor)
+            if set(os.listdir(descriptor)) != names_before or (
+                before.st_dev,
+                before.st_ino,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                raise OSError(f"{label} changed while captured")
+            return contents
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} is missing or unsafe") from exc
+
+
+def _capture_validation_preflight(path: Path) -> tuple[dict[str, object], bytes]:
+    contents = _capture_exact_directory(
+        path, _VALIDATION_PREFLIGHT_NAMES, "validation preflight"
+    )
+    source = contents["receipt.json"]
+    try:
+        value = json.loads(source)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("validation preflight receipt is invalid") from exc
+    if not isinstance(value, dict) or source != _pretty_bytes(value):
+        raise ValueError("validation preflight receipt is not canonical")
+    return _verify_validation_preflight_payload(value), source
+
+
+def _read_canonical_rows(source: bytes, name: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        try:
+            row = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{name}:{line_number} is invalid") from exc
+        if not isinstance(row, dict) or line + b"\n" != _compact_bytes(row):
+            raise ValueError(f"{name}:{line_number} is not canonical")
+        rows.append(row)
+    return rows
+
+
+def _validation_inventory_material(
+    preflight: Mapping[str, object],
+    *,
+    preflight_sha256: str,
+    approval_sha256: str,
+    sealed: Mapping[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object], dict[str, bytes]]:
+    jobs = preflight["jobs"]
+    assert isinstance(jobs, list)
+    expected_anchor = _build_validation_run_anchor(
+        jobs,
+        preflight_sha256=preflight_sha256,
+        approval_sha256=approval_sha256,
+    )
+    results = sealed.get("results")
+    completion = sealed.get("completion")
+    if (
+        sealed.get("anchor") != expected_anchor
+        or not isinstance(results, list)
+        or len(results) != len(jobs)
+        or not isinstance(completion, Mapping)
+        or completion.get("completed_job_count") != len(jobs)
+        or sealed.get("anchor_sha256") != completion.get("anchor_sha256")
+    ):
+        raise ValueError("validation inventory differs from sealed ledger")
+    validated: list[dict[str, object]] = []
+    for job, result in zip(jobs, results, strict=True):
+        if not isinstance(job, Mapping) or not isinstance(result, Mapping):
+            raise ValueError("validation inventory sealed result differs")
+        if result.get("job_id") != job.get("job_id"):
+            raise ValueError("validation inventory job identity differs")
+        units = job.get("units")
+        if not isinstance(units, list) or any(not isinstance(row, Mapping) for row in units):
+            raise ValueError("validation inventory unit identity differs")
+        unit_by_id = {str(row["unit_id"]): row for row in units}
+        value = _validate_decision_value(
+            result.get("value"), [str(value) for value in job["input_unit_ids"]]
+        )
+        row = validate_semantic_decision(job, value, units=unit_by_id)
+        row["schema_version"] = VALIDATION_INVENTORY_SCHEMA_VERSION
+        row["validation_job_id"] = job["job_id"]
+        row["validation_result_sha256"] = canonical_sha256(dict(result))
+        validated.append(row)
+    accepted = accept_validated_o1(validated)
+    validated_source = b"".join(_compact_bytes(row) for row in validated)
+    accepted_source = b"".join(_compact_bytes(row) for row in accepted)
+    proposal_receipt = preflight["proposal_receipt"]
+    assert isinstance(proposal_receipt, Mapping)
+    receipt: dict[str, object] = {
+        "schema_version": VALIDATION_RECEIPT_SCHEMA_VERSION,
+        "status": "complete",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "validation_count": len(validated),
+        "accepted_count": len(accepted),
+        "validation_preflight_sha256": preflight_sha256,
+        "validation_jobs_sha256": preflight["jobs_sha256"],
+        "source_contract_receipt_sha256": preflight[
+            "source_contract_receipt_sha256"
+        ],
+        "proposal_receipt_sha256": proposal_receipt["sha256"],
+        "proposal_inventory_sha256": proposal_receipt["proposals_sha256"],
+        "proposal_preflight_receipt_sha256": proposal_receipt[
+            "proposal_preflight_receipt_sha256"
+        ],
+        "approval_sha256": approval_sha256,
+        "run_anchor_sha256": sealed["anchor_sha256"],
+        "completion_sha256": sealed["completion_sha256"],
+        "completion": dict(completion),
+        "artifacts": {
+            "validated.jsonl": {
+                "rows": len(validated),
+                "bytes": len(validated_source),
+                "sha256": hashlib.sha256(validated_source).hexdigest(),
+            },
+            "accepted.jsonl": {
+                "rows": len(accepted),
+                "bytes": len(accepted_source),
+                "sha256": hashlib.sha256(accepted_source).hexdigest(),
+            },
+        },
+    }
+    contents = {
+        "validated.jsonl": validated_source,
+        "accepted.jsonl": accepted_source,
+        "receipt.json": _pretty_bytes(receipt),
+    }
+    return validated, accepted, receipt, contents
+
+
+def _ledger_from_validation_preflight(
+    preflight: Mapping[str, object], preflight_sha256: str, ledger_dir: Path,
+    *, approval_sha256: str | None = None,
+) -> tuple[AppendOnlyAttemptLedger, str]:
+    try:
+        anchor_source = _capture_regular_file_no_symlinks(Path(ledger_dir) / "anchor.json")
+        anchor = json.loads(anchor_source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("validation ledger anchor is missing or unsafe") from exc
+    observed_approval = anchor.get("approval_sha256") if isinstance(anchor, Mapping) else None
+    if (
+        not isinstance(observed_approval, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", observed_approval)
+        or (approval_sha256 is not None and observed_approval != approval_sha256)
+    ):
+        raise ValueError("validation ledger approval binding differs")
+    expected = _build_validation_run_anchor(
+        preflight["jobs"],  # type: ignore[arg-type]
+        preflight_sha256=preflight_sha256,
+        approval_sha256=observed_approval,
+    )
+    if anchor != expected:
+        raise ValueError("validation ledger anchor differs")
+    return (
+        AppendOnlyAttemptLedger(
+            Path(ledger_dir), expected_anchor=expected, create_only=False
+        ),
+        observed_approval,
+    )
+
+
+def finalize_validation_inventory(
+    *, preflight_dir: Path, ledger_dir: Path, output_dir: Path
+) -> dict[str, object]:
+    """Publish accepted O1 rows only by replaying a sealed validation ledger."""
+
+    preflight, source = _capture_validation_preflight(Path(preflight_dir))
+    preflight_sha256 = hashlib.sha256(source).hexdigest()
+    ledger, approval_sha256 = _ledger_from_validation_preflight(
+        preflight, preflight_sha256, Path(ledger_dir)
+    )
+    _validated, _accepted, receipt, contents = _validation_inventory_material(
+        preflight,
+        preflight_sha256=preflight_sha256,
+        approval_sha256=approval_sha256,
+        sealed=ledger.read_sealed_results(),
+    )
+    _publish_validation_directory(Path(output_dir), contents)
+    return receipt
+
+
+def load_authenticated_validation_inventory(
+    *, output_dir: Path, preflight_dir: Path, ledger_dir: Path
+) -> dict[str, object]:
+    """Authenticate accepted O1 rows against the exact sealed Task 4 replay."""
+
+    contents = _capture_exact_directory(
+        Path(output_dir), _VALIDATION_INVENTORY_NAMES, "validation inventory"
+    )
+    try:
+        receipt = json.loads(contents["receipt.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("validation inventory receipt is invalid") from exc
+    if (
+        not isinstance(receipt, dict)
+        or contents["receipt.json"] != _pretty_bytes(receipt)
+        or receipt.get("schema_version") != VALIDATION_RECEIPT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or not isinstance(receipt.get("approval_sha256"), str)
+    ):
+        raise ValueError("validation inventory receipt differs")
+    preflight, source = _capture_validation_preflight(Path(preflight_dir))
+    preflight_sha256 = hashlib.sha256(source).hexdigest()
+    if receipt.get("validation_preflight_sha256") != preflight_sha256:
+        raise ValueError("validation inventory preflight binding differs")
+    ledger, approval_sha256 = _ledger_from_validation_preflight(
+        preflight,
+        preflight_sha256,
+        Path(ledger_dir),
+        approval_sha256=str(receipt["approval_sha256"]),
+    )
+    validated, accepted, expected_receipt, expected_contents = (
+        _validation_inventory_material(
+            preflight,
+            preflight_sha256=preflight_sha256,
+            approval_sha256=approval_sha256,
+            sealed=ledger.read_sealed_results(),
+        )
+    )
+    if contents != expected_contents or receipt != expected_receipt:
+        raise ValueError("validation inventory differs from the sealed ledger replay")
+    if _read_canonical_rows(contents["validated.jsonl"], "validated.jsonl") != validated:
+        raise ValueError("validation inventory differs from the sealed ledger replay")
+    if _read_canonical_rows(contents["accepted.jsonl"], "accepted.jsonl") != accepted:
+        raise ValueError("validation inventory differs from the sealed ledger replay")
+    return {
+        "validated": validated,
+        "accepted": accepted,
+        "receipt": receipt,
+        "receipt_sha256": hashlib.sha256(contents["receipt.json"]).hexdigest(),
+    }

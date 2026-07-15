@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import stat
 import time
 import uuid
 from collections import Counter
@@ -19,8 +20,6 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
-
-import requests
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .adaptive_obligation_v2_contract import canonical_sha256
@@ -30,9 +29,14 @@ from .adaptive_obligation_v2_propose import (
     _open_directory_no_symlinks,
     _read_stable_regular_at,
 )
+from .adaptive_obligation_v2_validate import (
+    _capture_and_verify_contract_snapshot,
+    load_authenticated_validation_inventory,
+)
 from .det_sparse_ledger import RawTransportResponse
 from .remote_client import extract_text, rate_limited_session
 from .remote_config import RemotePyseriniConfig
+from .repo_env import find_repo_root
 
 
 RETRIEVAL_HITS = 1_000
@@ -64,6 +68,10 @@ JOB_SCHEMA_VERSION = "adaptive-obligation-v2-retrieval-job-v1"
 CACHE_SCHEMA_VERSION = "adaptive-obligation-v2-retrieval-cache-v1"
 LEDGER_SCHEMA_VERSION = "adaptive-obligation-v2-retrieval-ledger-v1"
 SUMMARY_SCHEMA_VERSION = "adaptive-obligation-v2-retrieval-summary-v1"
+RETRIEVAL_INPUT_SCHEMA_VERSION = "adaptive-obligation-v2-retrieval-input-v1"
+RETRIEVAL_INPUT_RECEIPT_SCHEMA_VERSION = (
+    "adaptive-obligation-v2-retrieval-input-receipt-v1"
+)
 ESTIMATED_RAW_BYTES_PER_REQUEST = 8_000_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOPIC_ORDER = {topic_id: index for index, topic_id in enumerate(PILOT_TOPIC_IDS)}
@@ -138,6 +146,462 @@ def render_o1_bm25_query(
     return " ".join(remove_exact_duplicate_phrases(parts))
 
 
+def _capture_selected_files(path: Path, names: frozenset[str], label: str) -> dict[str, bytes]:
+    try:
+        descriptor = _open_directory_no_symlinks(Path(path))
+        try:
+            before = os.fstat(descriptor)
+            available_before = set(os.listdir(descriptor))
+            if not names <= available_before:
+                raise OSError(f"{label} inventory differs")
+            contents = {
+                name: _read_stable_regular_at(
+                    descriptor, name, require_single_link=True
+                )
+                for name in sorted(names)
+            }
+            after = os.fstat(descriptor)
+            if set(os.listdir(descriptor)) != available_before or (
+                before.st_dev,
+                before.st_ino,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                raise OSError(f"{label} changed while captured")
+            return contents
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise ValueError(f"{label} is missing or unsafe") from exc
+
+
+def _json_object(source: bytes, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(source)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _jsonl_objects(source: bytes, label: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        try:
+            value = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{label}:{line_number} is invalid JSON") from exc
+        if not isinstance(value, dict) or line != _canonical_bytes(value):
+            raise ValueError(f"{label}:{line_number} is not canonical")
+        rows.append(value)
+    return rows
+
+
+def _source_chain(contract_dir: Path, expected_contract_sha256: str) -> dict[str, object]:
+    contract, contract_sha256 = _capture_and_verify_contract_snapshot(
+        Path(contract_dir), expected_receipt_sha256=expected_contract_sha256
+    )
+    receipt = contract.get("receipt")
+    if not isinstance(receipt, Mapping):
+        raise ValueError("retrieval source contract receipt is missing")
+    bindings = receipt.get("source_bindings")
+    if not isinstance(bindings, Mapping):
+        raise ValueError("retrieval source contract bindings are missing")
+    base_dir_text = bindings.get("contract_dir")
+    summary_sha256 = bindings.get("contract_summary_sha256")
+    if (
+        not isinstance(base_dir_text, str)
+        or not Path(base_dir_text).is_absolute()
+        or not isinstance(summary_sha256, str)
+        or not _SHA256_RE.fullmatch(summary_sha256)
+    ):
+        raise ValueError("retrieval adaptive contract binding differs")
+    base_dir = Path(base_dir_text)
+    base_contents = _capture_selected_files(
+        base_dir,
+        frozenset({"summary.json", "manifest.json", "obligations.jsonl"}),
+        "adaptive evidence contract",
+    )
+    if _sha256(base_contents["summary.json"]) != summary_sha256:
+        raise ValueError("retrieval adaptive contract summary hash differs")
+    summary = _json_object(base_contents["summary.json"], "adaptive contract summary")
+    base_manifest = _json_object(
+        base_contents["manifest.json"], "adaptive contract manifest"
+    )
+    artifact_sha = summary.get("artifact_sha256")
+    if (
+        summary.get("status") != "complete"
+        or summary.get("topic_ids") != list(PILOT_TOPIC_IDS)
+        or not isinstance(artifact_sha, Mapping)
+        or artifact_sha.get("manifest.json") != _sha256(base_contents["manifest.json"])
+        or artifact_sha.get("obligations.jsonl")
+        != _sha256(base_contents["obligations.jsonl"])
+    ):
+        raise ValueError("retrieval adaptive contract artifact binding differs")
+    sources = base_manifest.get("sources")
+    manifest_binding = sources.get("manifest") if isinstance(sources, Mapping) else None
+    if (
+        not isinstance(manifest_binding, Mapping)
+        or not isinstance(manifest_binding.get("path"), str)
+        or Path(str(manifest_binding["path"])).is_absolute()
+        or not isinstance(manifest_binding.get("sha256"), str)
+        or not _SHA256_RE.fullmatch(str(manifest_binding["sha256"]))
+    ):
+        raise ValueError("retrieval source manifest binding differs")
+    repo_root = find_repo_root(base_dir)
+    manifest_path = repo_root / str(manifest_binding["path"])
+    try:
+        manifest_source = _capture_regular_file_no_symlinks(manifest_path)
+    except OSError as exc:
+        raise ValueError("retrieval source manifest is missing or unsafe") from exc
+    if _sha256(manifest_source) != manifest_binding["sha256"]:
+        raise ValueError("retrieval source manifest hash differs")
+    source_manifest = _json_object(manifest_source, "retrieval source manifest")
+    if (
+        source_manifest.get("topic_ids") != list(PILOT_TOPIC_IDS)
+        or source_manifest.get("qrels_opened") is not False
+    ):
+        raise ValueError("retrieval source manifest topic boundary differs")
+    obligations = _jsonl_objects(
+        base_contents["obligations.jsonl"], "adaptive obligations"
+    )
+    return {
+        "contract": contract,
+        "contract_receipt_sha256": contract_sha256,
+        "adaptive_summary_sha256": summary_sha256,
+        "adaptive_manifest_sha256": _sha256(base_contents["manifest.json"]),
+        "adaptive_obligations_sha256": _sha256(base_contents["obligations.jsonl"]),
+        "obligations": obligations,
+        "source_manifest": source_manifest,
+        "source_manifest_path": str(manifest_binding["path"]),
+        "source_manifest_sha256": str(manifest_binding["sha256"]),
+    }
+
+
+def _retrieval_input_rows(
+    accepted: Sequence[Mapping[str, object]],
+    *,
+    validation_receipt_sha256: str,
+    chain: Mapping[str, object],
+) -> list[dict[str, object]]:
+    contract = chain.get("contract")
+    obligations = chain.get("obligations")
+    source_manifest = chain.get("source_manifest")
+    if (
+        not isinstance(contract, Mapping)
+        or not isinstance(obligations, list)
+        or not isinstance(source_manifest, Mapping)
+    ):
+        raise ValueError("retrieval authenticated source chain differs")
+    parents = contract.get("parents")
+    if not isinstance(parents, list):
+        raise ValueError("retrieval source parents are missing")
+    parent_by_id = {str(row.get("parent_id")): row for row in parents if isinstance(row, Mapping)}
+    obligation_by_id = {
+        str(row.get("obligation_id")): row
+        for row in obligations
+        if isinstance(row, Mapping)
+    }
+    broad_by_topic = {
+        str(row.get("topic_id")): row
+        for row in obligations
+        if isinstance(row, Mapping) and row.get("kind") == "broad"
+    }
+    topics = source_manifest.get("topics")
+    facets = source_manifest.get("facets")
+    if not isinstance(topics, list) or not isinstance(facets, list):
+        raise ValueError("retrieval source manifest rows are missing")
+    topic_by_id = {str(row.get("topic_id")): row for row in topics if isinstance(row, Mapping)}
+    facet_by_id = {str(row.get("facet_id")): row for row in facets if isinstance(row, Mapping)}
+    rows: list[dict[str, object]] = []
+    for accepted_row in accepted:
+        topic_id = str(accepted_row.get("topic_id"))
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+        if topic_id not in _TOPIC_ORDER:
+            raise ValueError("retrieval accepted topic is unknown")
+        parent_id = str(accepted_row.get("parent_id"))
+        parent = parent_by_id.get(parent_id)
+        obligation = obligation_by_id.get(parent_id)
+        facet = facet_by_id.get(parent_id)
+        broad = broad_by_topic.get(topic_id)
+        topic = topic_by_id.get(topic_id)
+        if not all(isinstance(value, Mapping) for value in (parent, obligation, facet, broad, topic)):
+            raise ValueError("retrieval accepted parent source join is incomplete")
+        assert isinstance(parent, Mapping)
+        assert isinstance(obligation, Mapping)
+        assert isinstance(facet, Mapping)
+        assert isinstance(broad, Mapping)
+        assert isinstance(topic, Mapping)
+        parent_text = parent.get("text")
+        parent_query = parent.get("query")
+        narrative = topic.get("query")
+        anchors = facet.get("anchor_terms")
+        label = accepted_row.get("label")
+        if (
+            not isinstance(parent_text, str)
+            or parent.get("text_sha256") != _sha256(parent_text.encode("utf-8"))
+            or not isinstance(parent_query, str)
+            or parent.get("query_sha256") != _sha256(parent_query.encode("utf-8"))
+            or not isinstance(narrative, str)
+            or not isinstance(label, str)
+            or not label.strip()
+            or not isinstance(anchors, list)
+            or not anchors
+            or any(not isinstance(anchor, str) or not anchor.strip() for anchor in anchors)
+            or parent.get("topic_id") != topic_id
+            or obligation.get("topic_id") != topic_id
+            or obligation.get("text") != parent_text
+            or obligation.get("query") != parent_query
+            or obligation.get("manifest_order") != parent.get("manifest_order")
+            or obligation.get("source_facet_id") != parent_id
+            or obligation.get("anchor_terms") != anchors
+            or facet.get("topic_id") != topic_id
+            or facet.get("obligation") != parent_text
+            or broad.get("text") != narrative
+            or broad.get("query") != narrative
+            or parent_query != f"{narrative}\n\nExplicit obligation:\n{parent_text}"
+        ):
+            raise ValueError("retrieval O0/narrative/anchor source join differs")
+        support_names = (
+            "proposal_document_ids",
+            "validation_support_unit_ids",
+            "validation_document_ids",
+            "support_document_ids",
+        )
+        if any(
+            not isinstance(accepted_row.get(name), list)
+            or any(not isinstance(value, str) or not value for value in accepted_row[name])
+            for name in support_names
+        ):
+            raise ValueError("retrieval accepted support lineage differs")
+        identity = {
+            "accepted_validation_sha256": canonical_sha256(dict(accepted_row)),
+            "validation_receipt_sha256": validation_receipt_sha256,
+            "topic_id": topic_id,
+            "parent_id": parent_id,
+            "proposal_id": accepted_row.get("proposal_id"),
+            "validation_job_id": accepted_row.get("validation_job_id"),
+            "o1_label": label,
+        }
+        row: dict[str, object] = {
+            "schema_version": RETRIEVAL_INPUT_SCHEMA_VERSION,
+            "input_id": canonical_sha256(identity),
+            **identity,
+            "parent_manifest_order": parent["manifest_order"],
+            "anchor_terms": list(anchors),
+            "parent_text": parent_text,
+            "parent_text_sha256": parent["text_sha256"],
+            "parent_query": parent_query,
+            "parent_query_sha256": parent["query_sha256"],
+            "narrative": narrative,
+            "narrative_sha256": _sha256(narrative.encode("utf-8")),
+            "o1_label_sha256": _sha256(label.encode("utf-8")),
+            "proposal_fold": accepted_row.get("proposal_fold"),
+            "validation_fold": accepted_row.get("validation_fold"),
+            "proposal_document_ids": list(accepted_row["proposal_document_ids"]),
+            "validation_support_unit_ids": list(
+                accepted_row["validation_support_unit_ids"]
+            ),
+            "validation_document_ids": list(accepted_row["validation_document_ids"]),
+            "support_document_ids": list(accepted_row["support_document_ids"]),
+            "validation_result_sha256": accepted_row.get(
+                "validation_result_sha256"
+            ),
+            "source_manifest": {
+                "path": chain["source_manifest_path"],
+                "sha256": chain["source_manifest_sha256"],
+                "facet_id": parent_id,
+            },
+            "source_chain": {
+                "v2_contract_receipt_sha256": chain["contract_receipt_sha256"],
+                "adaptive_contract_summary_sha256": chain[
+                    "adaptive_summary_sha256"
+                ],
+                "adaptive_contract_manifest_sha256": chain[
+                    "adaptive_manifest_sha256"
+                ],
+                "adaptive_contract_obligations_sha256": chain[
+                    "adaptive_obligations_sha256"
+                ],
+            },
+        }
+        rows.append(row)
+    return rows
+
+
+def _publish_retrieval_inputs(destination: Path, contents: Mapping[str, bytes]) -> None:
+    if os.path.lexists(destination):
+        raise FileExistsError(f"create-only retrieval inputs exist: {destination}")
+    try:
+        descriptor = _open_directory_no_symlinks(destination.parent)
+    except OSError as exc:
+        raise ValueError("retrieval input output parent is missing or unsafe") from exc
+    else:
+        os.close(descriptor)
+    staging = destination.parent / f".{destination.name}.staging-{uuid.uuid4().hex}"
+    staging.mkdir(mode=0o700)
+    published = False
+    try:
+        for name, source in contents.items():
+            _exclusive_bytes(staging / name, source)
+        _fsync_directory(staging)
+        os.rename(staging, destination)
+        published = True
+        _fsync_directory(destination.parent)
+    finally:
+        if not published and staging.exists():
+            for child in staging.iterdir():
+                child.unlink()
+            staging.rmdir()
+
+
+def _retrieval_input_material(
+    *,
+    validation_output_dir: Path,
+    validation_preflight_dir: Path,
+    validation_ledger_dir: Path,
+    contract_dir: Path,
+) -> tuple[list[dict[str, object]], dict[str, object], dict[str, bytes]]:
+    authenticated = load_authenticated_validation_inventory(
+        output_dir=validation_output_dir,
+        preflight_dir=validation_preflight_dir,
+        ledger_dir=validation_ledger_dir,
+    )
+    accepted = authenticated.get("accepted")
+    validation_receipt = authenticated.get("receipt")
+    validation_receipt_sha256 = authenticated.get("receipt_sha256")
+    if (
+        not isinstance(accepted, list)
+        or any(not isinstance(row, Mapping) for row in accepted)
+        or not isinstance(validation_receipt, Mapping)
+        or not isinstance(validation_receipt_sha256, str)
+        or not _SHA256_RE.fullmatch(validation_receipt_sha256)
+    ):
+        raise ValueError("retrieval requires authenticated Task 4 acceptance")
+    expected_contract_sha = validation_receipt.get("source_contract_receipt_sha256")
+    if not isinstance(expected_contract_sha, str) or not _SHA256_RE.fullmatch(expected_contract_sha):
+        raise ValueError("retrieval Task 4 source contract binding differs")
+    chain = _source_chain(contract_dir, expected_contract_sha)
+    rows = _retrieval_input_rows(
+        accepted,
+        validation_receipt_sha256=validation_receipt_sha256,
+        chain=chain,
+    )
+    input_source = b"".join(_canonical_bytes(row) + b"\n" for row in rows)
+    receipt: dict[str, object] = {
+        "schema_version": RETRIEVAL_INPUT_RECEIPT_SCHEMA_VERSION,
+        "status": "complete",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "input_count": len(rows),
+        "inputs_sha256": _sha256(input_source),
+        "validation_inventory": {
+            "output_dir": str(validation_output_dir.absolute()),
+            "preflight_dir": str(validation_preflight_dir.absolute()),
+            "ledger_dir": str(validation_ledger_dir.absolute()),
+            "receipt_sha256": validation_receipt_sha256,
+            "preflight_sha256": validation_receipt[
+                "validation_preflight_sha256"
+            ],
+            "run_anchor_sha256": validation_receipt["run_anchor_sha256"],
+            "completion_sha256": validation_receipt["completion_sha256"],
+            "proposal_receipt_sha256": validation_receipt[
+                "proposal_receipt_sha256"
+            ],
+        },
+        "source_contract": {
+            "path": str(Path(contract_dir).absolute()),
+            "receipt_sha256": chain["contract_receipt_sha256"],
+            "adaptive_summary_sha256": chain["adaptive_summary_sha256"],
+            "adaptive_manifest_sha256": chain["adaptive_manifest_sha256"],
+            "adaptive_obligations_sha256": chain[
+                "adaptive_obligations_sha256"
+            ],
+            "source_manifest_path": chain["source_manifest_path"],
+            "source_manifest_sha256": chain["source_manifest_sha256"],
+        },
+        "artifacts": {
+            "inputs.jsonl": {
+                "rows": len(rows),
+                "bytes": len(input_source),
+                "sha256": _sha256(input_source),
+            }
+        },
+    }
+    return rows, receipt, {
+        "inputs.jsonl": input_source,
+        "receipt.json": _pretty_bytes(receipt),
+    }
+
+
+def freeze_retrieval_inputs(
+    *,
+    validation_output_dir: Path,
+    validation_preflight_dir: Path,
+    validation_ledger_dir: Path,
+    contract_dir: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    """Freeze Task 5 inputs from the replay-authenticated Task 4 product."""
+
+    _rows, receipt, contents = _retrieval_input_material(
+        validation_output_dir=Path(validation_output_dir),
+        validation_preflight_dir=Path(validation_preflight_dir),
+        validation_ledger_dir=Path(validation_ledger_dir),
+        contract_dir=Path(contract_dir),
+    )
+    _publish_retrieval_inputs(Path(output_dir), contents)
+    return receipt
+
+
+def load_authenticated_retrieval_inputs(input_dir: Path) -> dict[str, object]:
+    contents = _capture_selected_files(
+        Path(input_dir),
+        frozenset({"inputs.jsonl", "receipt.json"}),
+        "retrieval input inventory",
+    )
+    receipt = _json_object(contents["receipt.json"], "retrieval input receipt")
+    if (
+        contents["receipt.json"] != _pretty_bytes(receipt)
+        or receipt.get("schema_version") != RETRIEVAL_INPUT_RECEIPT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+    ):
+        raise ValueError("retrieval input receipt differs")
+    validation = receipt.get("validation_inventory")
+    source = receipt.get("source_contract")
+    if not isinstance(validation, Mapping) or not isinstance(source, Mapping):
+        raise ValueError("retrieval input source bindings are missing")
+    path_names = (
+        "output_dir",
+        "preflight_dir",
+        "ledger_dir",
+    )
+    if any(
+        not isinstance(validation.get(name), str)
+        or not Path(str(validation[name])).is_absolute()
+        for name in path_names
+    ) or not isinstance(source.get("path"), str) or not Path(str(source["path"])).is_absolute():
+        raise ValueError("retrieval input source paths differ")
+    rows, expected_receipt, expected_contents = _retrieval_input_material(
+        validation_output_dir=Path(str(validation["output_dir"])),
+        validation_preflight_dir=Path(str(validation["preflight_dir"])),
+        validation_ledger_dir=Path(str(validation["ledger_dir"])),
+        contract_dir=Path(str(source["path"])),
+    )
+    if contents != expected_contents or receipt != expected_receipt:
+        raise ValueError("retrieval inputs differ from authenticated source replay")
+    observed_rows = _jsonl_objects(contents["inputs.jsonl"], "inputs.jsonl")
+    if observed_rows != rows:
+        raise ValueError("retrieval inputs differ from authenticated source replay")
+    return {"inputs": rows, "receipt": receipt, "receipt_sha256": _sha256(contents["receipt.json"])}
+
+
 def _protected_precheck(rows: object) -> list[Mapping[str, object]]:
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         raise ValueError("accepted O1 rows must be an array")
@@ -164,7 +628,7 @@ def _validated_endpoint(value: object) -> str:
     return endpoint
 
 
-def build_retrieval_jobs(
+def _build_retrieval_jobs_from_inputs(
     accepted_o1_rows: Sequence[Mapping[str, object]],
     *,
     endpoint: object = DEFAULT_ENDPOINT,
@@ -185,7 +649,10 @@ def build_retrieval_jobs(
         topic_id = str(row.get("topic_id"))
         if topic_id not in _TOPIC_ORDER:
             raise ValueError("accepted O1 topic is unknown")
-        if row.get("accepted") is not True or row.get("decision") != "SUPPORTED":
+        frozen_input = row.get("schema_version") == RETRIEVAL_INPUT_SCHEMA_VERSION
+        if not frozen_input and (
+            row.get("accepted") is not True or row.get("decision") != "SUPPORTED"
+        ):
             raise ValueError("retrieval requires an accepted SUPPORTED O1")
         proposal_id = _require_text(row.get("proposal_id"), "accepted O1 ID")
         if proposal_id in seen_ids:
@@ -196,7 +663,8 @@ def build_retrieval_jobs(
         if type(manifest_order) is not int or manifest_order < 0:
             raise ValueError("parent_manifest_order must be a non-negative integer")
         _require_text(row.get("parent_text"), "parent_text")
-        _require_text(row.get("label"), "label")
+        label_name = "o1_label" if frozen_input else "label"
+        _require_text(row.get(label_name), "label")
         anchors = row.get("anchor_terms")
         if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes)):
             raise TypeError("anchor_terms must be an array of text")
@@ -215,18 +683,16 @@ def build_retrieval_jobs(
         )
 
     jobs: list[dict[str, object]] = []
-    query_hashes: set[str] = set()
     for _key, row in sorted(validated, key=lambda pair: pair[0]):
         query_text = render_o1_bm25_query(
             anchor_terms=row["anchor_terms"],  # type: ignore[arg-type]
             parent_text=row["parent_text"],
-            o1_label=row["label"],
+            o1_label=row["o1_label"]
+            if row.get("schema_version") == RETRIEVAL_INPUT_SCHEMA_VERSION
+            else row["label"],
             narrative=row.get("narrative"),
         )
         query_sha256 = _sha256(query_text.encode("utf-8"))
-        if query_sha256 in query_hashes:
-            raise ValueError("retrieval query hashes must be unique")
-        query_hashes.add(query_sha256)
         accepted_o1_sha256 = canonical_sha256(dict(row))
         identity: dict[str, object] = {
             "topic_id": str(row["topic_id"]),
@@ -263,17 +729,26 @@ def build_retrieval_jobs(
                 "transport_retry_count": TRANSPORT_RETRY_COUNT,
                 "rate_limiter": dict(RATE_LIMITER_IDENTITY),
                 "request_identity": identity,
+                "retrieval_input": dict(row),
             }
         )
     return jobs
 
 
-def _cache_paths(cache_root: Path, request_key: str) -> tuple[Path, Path, Path]:
-    prefix = Path(cache_root) / "adaptive-obligation-v2" / request_key[:2]
-    return (
-        prefix / f"{request_key}.raw.json",
-        prefix / f"{request_key}.candidates.json",
-        prefix / f"{request_key}.manifest.json",
+def build_retrieval_jobs(
+    retrieval_input_dir: Path,
+    *,
+    endpoint: object = DEFAULT_ENDPOINT,
+    index_id: object = INDEX_ID,
+) -> list[dict[str, object]]:
+    """Build jobs only from replay-authenticated, source-joined Task 5 inputs."""
+
+    authenticated = load_authenticated_retrieval_inputs(Path(retrieval_input_dir))
+    inputs = authenticated.get("inputs")
+    if not isinstance(inputs, list):
+        raise ValueError("retrieval input inventory differs")
+    return _build_retrieval_jobs_from_inputs(
+        inputs, endpoint=endpoint, index_id=index_id
     )
 
 
@@ -282,7 +757,13 @@ def _normalize_response(raw: bytes) -> tuple[dict[str, object], ...]:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("response is not valid UTF-8 JSON") from exc
-    candidates = payload.get("candidates") if isinstance(payload, Mapping) else None
+    candidates = None
+    if isinstance(payload, Mapping):
+        for key in ("candidates", "hits", "results"):
+            value = payload.get(key)
+            if isinstance(value, list) and value:
+                candidates = value
+                break
     if not isinstance(candidates, list) or len(candidates) != RETRIEVAL_HITS:
         raise ValueError("response must contain exactly 1000 unique text-bearing candidates")
     normalized: list[dict[str, object]] = []
@@ -293,7 +774,13 @@ def _normalize_response(raw: bytes) -> tuple[dict[str, object], ...]:
         docid = value.get("docid") or value.get("id") or value.get("_id")
         rank = value.get("rank", position)
         score = value.get("score", 0.0)
-        text = extract_text(value.get("doc") or value.get("contents") or value)
+        content: object | None = value.get("doc")
+        if content is None:
+            for content_key in ("contents", "text", "body", "passage", "abstract"):
+                if content_key in value:
+                    content = value[content_key]
+                    break
+        text = extract_text(content) if content is not None else ""
         if (
             not isinstance(docid, str)
             or not docid.strip()
@@ -309,31 +796,24 @@ def _normalize_response(raw: bytes) -> tuple[dict[str, object], ...]:
         docid = docid.strip()
         seen.add(docid)
         normalized.append(
-            {"docid": docid, "rank": position, "score": float(score), "text": text}
+            {
+                "docid": docid,
+                "rank": position,
+                "score": float(score),
+                "text": text,
+                "text_sha256": _sha256(text.encode("utf-8")),
+            }
         )
     return tuple(normalized)
 
 
-def _capture_cache_file(path: Path) -> bytes:
-    try:
-        return _capture_regular_file_no_symlinks(path)
-    except OSError as exc:
-        raise ValueError("exact cache is missing or unsafe") from exc
-
-
-def _load_verified_cache(
-    cache_root: Path, job: Mapping[str, object]
-) -> dict[str, object] | None:
+def _verified_cache_sources(
+    job: Mapping[str, object],
+    raw: bytes,
+    candidate_source: bytes,
+    manifest_source: bytes,
+) -> dict[str, object]:
     request_key = str(job.get("request_key"))
-    raw_path, candidates_path, manifest_path = _cache_paths(cache_root, request_key)
-    exists = tuple(os.path.lexists(path) for path in (raw_path, candidates_path, manifest_path))
-    if not any(exists):
-        return None
-    if not all(exists):
-        raise ValueError(f"partial exact cache exists for {request_key}")
-    raw = _capture_cache_file(raw_path)
-    candidate_source = _capture_cache_file(candidates_path)
-    manifest_source = _capture_cache_file(manifest_path)
     try:
         candidates = json.loads(candidate_source)
         manifest = json.loads(manifest_source)
@@ -366,11 +846,112 @@ def _load_verified_cache(
     }
 
 
+class _SecureCacheStore:
+    """Hold the approved cache root descriptor through audit and publication."""
+
+    def __init__(self, root: Path) -> None:
+        try:
+            self.root_fd = _open_directory_no_symlinks(Path(root))
+        except OSError as exc:
+            raise ValueError("approved cache root is missing or unsafe") from exc
+
+    def _prefix(self, request_key: str, *, create: bool) -> tuple[int, int]:
+        adaptive = _open_dir_at(self.root_fd, "adaptive-obligation-v2", create=create)
+        try:
+            prefix = _open_dir_at(adaptive, request_key[:2], create=create)
+        except BaseException:
+            os.close(adaptive)
+            raise
+        return adaptive, prefix
+
+    def load(self, job: Mapping[str, object]) -> dict[str, object] | None:
+        key = str(job["request_key"])
+        try:
+            adaptive, prefix = self._prefix(key, create=False)
+        except FileNotFoundError:
+            return None
+        try:
+            names = (
+                f"{key}.raw.json",
+                f"{key}.candidates.json",
+                f"{key}.manifest.json",
+            )
+            exists: list[bool] = []
+            for name in names:
+                try:
+                    os.stat(name, dir_fd=prefix, follow_symlinks=False)
+                    exists.append(True)
+                except FileNotFoundError:
+                    exists.append(False)
+            if not any(exists):
+                return None
+            if not all(exists):
+                raise ValueError(f"partial exact cache exists for {key}")
+            raw = _read_stable_regular_at(prefix, names[0], require_single_link=True)
+            candidates = _read_stable_regular_at(
+                prefix, names[1], require_single_link=True
+            )
+            manifest = _read_stable_regular_at(
+                prefix, names[2], require_single_link=True
+            )
+            return _verified_cache_sources(job, raw, candidates, manifest)
+        finally:
+            os.close(prefix)
+            os.close(adaptive)
+
+    def store(
+        self,
+        job: Mapping[str, object],
+        raw: bytes,
+        candidates: Sequence[Mapping[str, object]],
+    ) -> None:
+        key = str(job["request_key"])
+        adaptive, prefix = self._prefix(key, create=True)
+        try:
+            candidate_source = _pretty_bytes(list(candidates))
+            manifest = {
+                "schema_version": CACHE_SCHEMA_VERSION,
+                "request_key": key,
+                "request_identity": job["request_identity"],
+                "query_text": job["query_text"],
+                "raw_sha256": _sha256(raw),
+                "candidates_sha256": _sha256(candidate_source),
+                "candidate_count": RETRIEVAL_HITS,
+            }
+            _write_exclusive_at(prefix, f"{key}.raw.json", raw)
+            _write_exclusive_at(
+                prefix, f"{key}.candidates.json", candidate_source
+            )
+            _write_exclusive_at(
+                prefix, f"{key}.manifest.json", _pretty_bytes(manifest)
+            )
+        finally:
+            os.close(prefix)
+            os.close(adaptive)
+
+    def close(self) -> None:
+        os.fsync(self.root_fd)
+        os.close(self.root_fd)
+
+
 def _cache_status(value: object, job: Mapping[str, object]) -> dict[str, object]:
     if value is None:
         return {"request_key": job["request_key"], "hit": False, "raw_bytes": 0}
     if not isinstance(value, Mapping):
         raise ValueError("cache probe must return an object or None")
+    allowed_probe_fields = {
+        "request_key",
+        "hit",
+        "raw_bytes",
+        "raw_sha256",
+        "candidate_count",
+        "raw",
+        "candidates",
+    }
+    if not set(value) <= allowed_probe_fields:
+        raise ValueError("cache probe fields differ")
+    if "request_key" in value and value.get("request_key") != job["request_key"]:
+        raise ValueError("cache probe request_key differs")
     hit = value.get("hit")
     raw_bytes = value.get("raw_bytes")
     candidate_count = value.get("candidate_count")
@@ -396,9 +977,58 @@ def _cache_status(value: object, job: Mapping[str, object]) -> dict[str, object]
 def _verify_job(job: object) -> Mapping[str, object]:
     if not isinstance(job, Mapping):
         raise ValueError("retrieval job must be an object")
+    job_fields = {
+        "schema_version",
+        "job_id",
+        "request_key",
+        "topic_id",
+        "parent_id",
+        "accepted_o1_id",
+        "accepted_o1_sha256",
+        "query_text",
+        "query_sha256",
+        "endpoint",
+        "index_id",
+        "retriever_version",
+        "hits",
+        "timeout_seconds",
+        "transport_retry_count",
+        "rate_limiter",
+        "request_identity",
+        "retrieval_input",
+    }
+    if set(job) != job_fields:
+        raise ValueError("retrieval job fields differ")
     identity = job.get("request_identity")
     if not isinstance(identity, Mapping):
         raise ValueError("retrieval request identity is missing")
+    identity_fields = {
+        "topic_id",
+        "parent_id",
+        "accepted_o1_id",
+        "accepted_o1_sha256",
+        "query_text",
+        "query_sha256",
+        "endpoint",
+        "index_id",
+        "retriever_version",
+        "hits",
+        "timeout_seconds",
+        "transport_retry_count",
+        "rate_limiter",
+    }
+    if set(identity) != identity_fields:
+        raise ValueError("retrieval request identity fields differ")
+    limiter = identity.get("rate_limiter")
+    if not isinstance(limiter, Mapping) or set(limiter) != set(RATE_LIMITER_IDENTITY):
+        raise ValueError("retrieval rate limiter identity fields differ")
+    retrieval_input = job.get("retrieval_input")
+    if (
+        not isinstance(retrieval_input, Mapping)
+        or canonical_sha256(dict(retrieval_input))
+        != identity.get("accepted_o1_sha256")
+    ):
+        raise ValueError("retrieval frozen input differs")
     request_key = job.get("request_key")
     if (
         job.get("schema_version") != JOB_SCHEMA_VERSION
@@ -428,7 +1058,28 @@ def _verify_job(job: object) -> Mapping[str, object]:
         "transport_retry_count": TRANSPORT_RETRY_COUNT,
         "rate_limiter": RATE_LIMITER_IDENTITY,
     }
-    if dict(identity) != expected or topic_id not in _TOPIC_ORDER:
+    if (
+        dict(identity) != expected
+        or topic_id not in _TOPIC_ORDER
+        or any(
+            not isinstance(identity.get(name), str) or not str(identity[name]).strip()
+            for name in (
+                "topic_id",
+                "parent_id",
+                "accepted_o1_id",
+                "query_text",
+                "endpoint",
+                "index_id",
+                "retriever_version",
+            )
+        )
+        or any(
+            not isinstance(identity.get(name), str)
+            or not _SHA256_RE.fullmatch(str(identity[name]))
+            for name in ("accepted_o1_sha256", "query_sha256")
+        )
+        or _validated_endpoint(identity["endpoint"]) != identity["endpoint"]
+    ):
         raise ValueError("retrieval request identity differs")
     return job
 
@@ -440,6 +1091,8 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
         "schema_version",
         "status",
         "topic_ids",
+        "retrieval_input_dir",
+        "retrieval_input_receipt_sha256",
         "planned_request_count",
         "verified_cache_hits",
         "verified_cache_misses",
@@ -454,6 +1107,7 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
         "transport_retry_count",
         "rate_limiter",
         "cache_root",
+        "output_dir",
         "cache_audit",
         "request_inventory_sha256",
         "requests",
@@ -476,11 +1130,9 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
     if any(count > MAX_ACCEPTED_O1_PER_TOPIC for count in counts.values()):
         raise ValueError("retrieval preflight exceeds the per-topic ceiling")
     keys = [str(job["request_key"]) for job in verified_jobs]
-    queries = [str(job["query_sha256"]) for job in verified_jobs]
     cache_audit = receipt.get("cache_audit")
     if (
         len(set(keys)) != len(keys)
-        or len(set(queries)) != len(queries)
         or not isinstance(cache_audit, list)
         or len(cache_audit) != len(jobs)
     ):
@@ -488,6 +1140,13 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
     for job, status in zip(verified_jobs, cache_audit, strict=True):
         if not isinstance(status, Mapping) or status.get("request_key") != job["request_key"]:
             raise ValueError("retrieval preflight cache audit differs")
+        expected_status_fields = (
+            {"request_key", "hit", "raw_bytes", "raw_sha256", "candidate_count"}
+            if status.get("hit") is True
+            else {"request_key", "hit", "raw_bytes"}
+        )
+        if set(status) != expected_status_fields or type(status.get("hit")) is not bool:
+            raise ValueError("retrieval preflight cache audit fields differ")
         _cache_status(status if status.get("hit") is True else None, job)
     hits = sum(status.get("hit") is True for status in cache_audit if isinstance(status, Mapping))
     misses = len(jobs) - hits
@@ -522,8 +1181,22 @@ def _verify_receipt(receipt: object) -> dict[str, object]:
         if receipt.get(name) != expected:
             raise ValueError(f"retrieval preflight {name} differs")
     cache_root = receipt.get("cache_root")
-    if not isinstance(cache_root, str) or not Path(cache_root).is_absolute():
-        raise ValueError("retrieval preflight cache_root must be absolute")
+    output_dir = receipt.get("output_dir")
+    retrieval_input_dir = receipt.get("retrieval_input_dir")
+    retrieval_input_receipt_sha256 = receipt.get(
+        "retrieval_input_receipt_sha256"
+    )
+    if (
+        not isinstance(cache_root, str)
+        or not Path(cache_root).is_absolute()
+        or not isinstance(output_dir, str)
+        or not Path(output_dir).is_absolute()
+        or not isinstance(retrieval_input_dir, str)
+        or not Path(retrieval_input_dir).is_absolute()
+        or not isinstance(retrieval_input_receipt_sha256, str)
+        or not _SHA256_RE.fullmatch(retrieval_input_receipt_sha256)
+    ):
+        raise ValueError("retrieval preflight destinations must be absolute")
     return receipt
 
 
@@ -534,10 +1207,6 @@ def _exclusive_bytes(path: Path, source: bytes) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     _fsync_directory(path.parent)
-
-
-def _exclusive_json(path: Path, value: object) -> None:
-    _exclusive_bytes(path, _pretty_bytes(value))
 
 
 def _publish_preflight(output_dir: Path, receipt: Mapping[str, object]) -> None:
@@ -611,29 +1280,39 @@ def _publish_preflight(output_dir: Path, receipt: Mapping[str, object]) -> None:
         os.close(parent_fd)
 
 
-def audit_retrieval_cache(
+def _audit_retrieval_cache_rows(
     accepted_o1_rows: Sequence[Mapping[str, object]],
     *,
     endpoint: object = DEFAULT_ENDPOINT,
     index_id: object = INDEX_ID,
     cache_root: Path = SHARED_CACHE_DIR,
+    retrieval_output_dir: Path,
     cache_loader: Callable[[dict[str, object]], object] | None = None,
     output_dir: Path | None = None,
+    retrieval_input_dir: Path = Path("/var/tmp/adaptive-v2-fixture-inputs"),
+    retrieval_input_receipt_sha256: str = "f" * 64,
 ) -> dict[str, object]:
     """Audit exact cache identities without constructing transport or sessions."""
 
-    jobs = build_retrieval_jobs(
+    jobs = _build_retrieval_jobs_from_inputs(
         accepted_o1_rows, endpoint=endpoint, index_id=index_id
     )
+    input_root = Path(retrieval_input_dir).absolute()
+    if not _SHA256_RE.fullmatch(retrieval_input_receipt_sha256):
+        raise ValueError("retrieval input receipt hash differs")
     root = Path(cache_root).absolute()
+    final_output = Path(retrieval_output_dir).absolute()
     statuses: list[dict[str, object]] = []
-    for job in jobs:
-        observed = (
-            cache_loader(job)
-            if cache_loader is not None
-            else _load_verified_cache(root, job)
-        )
-        statuses.append(_cache_status(observed, job))
+    cache_store: _SecureCacheStore | None = None
+    if cache_loader is None:
+        cache_store = _SecureCacheStore(root)
+        cache_loader = cache_store.load
+    try:
+        for job in jobs:
+            statuses.append(_cache_status(cache_loader(job), job))
+    finally:
+        if cache_store is not None:
+            cache_store.close()
     hits = sum(status["hit"] is True for status in statuses)
     misses = len(statuses) - hits
     cached_bytes = sum(int(status["raw_bytes"]) for status in statuses if status["hit"] is True)
@@ -641,6 +1320,8 @@ def audit_retrieval_cache(
         "schema_version": PREFLIGHT_SCHEMA_VERSION,
         "status": "complete",
         "topic_ids": list(PILOT_TOPIC_IDS),
+        "retrieval_input_dir": str(input_root),
+        "retrieval_input_receipt_sha256": retrieval_input_receipt_sha256,
         "planned_request_count": len(jobs),
         "verified_cache_hits": hits,
         "verified_cache_misses": misses,
@@ -655,6 +1336,7 @@ def audit_retrieval_cache(
         "transport_retry_count": TRANSPORT_RETRY_COUNT,
         "rate_limiter": dict(RATE_LIMITER_IDENTITY),
         "cache_root": str(root),
+        "output_dir": str(final_output),
         "cache_audit": statuses,
         "request_inventory_sha256": canonical_sha256(jobs),
         "requests": jobs,
@@ -667,6 +1349,38 @@ def audit_retrieval_cache(
     if output_dir is not None:
         _publish_preflight(Path(output_dir), receipt)
     return receipt
+
+
+def audit_retrieval_cache(
+    retrieval_input_dir: Path,
+    *,
+    endpoint: object = DEFAULT_ENDPOINT,
+    index_id: object = INDEX_ID,
+    cache_root: Path = SHARED_CACHE_DIR,
+    retrieval_output_dir: Path,
+    output_dir: Path | None = None,
+) -> dict[str, object]:
+    """Audit only the authenticated frozen Task 4→5 retrieval input bundle."""
+
+    authenticated = load_authenticated_retrieval_inputs(Path(retrieval_input_dir))
+    inputs = authenticated.get("inputs")
+    receipt_sha256 = authenticated.get("receipt_sha256")
+    if (
+        not isinstance(inputs, list)
+        or not isinstance(receipt_sha256, str)
+        or not _SHA256_RE.fullmatch(receipt_sha256)
+    ):
+        raise ValueError("retrieval input inventory differs")
+    return _audit_retrieval_cache_rows(
+        inputs,
+        endpoint=endpoint,
+        index_id=index_id,
+        cache_root=cache_root,
+        retrieval_output_dir=retrieval_output_dir,
+        output_dir=output_dir,
+        retrieval_input_dir=Path(retrieval_input_dir),
+        retrieval_input_receipt_sha256=receipt_sha256,
+    )
 
 
 def _capture_preflight_source(path: Path) -> bytes:
@@ -730,6 +1444,8 @@ def _capture_retrieval_approval(path: Path) -> tuple[dict[str, object], str]:
         "primary_external_attempts",
         "maximum_external_attempts",
         "transport_retry_count",
+        "cache_root",
+        "output_dir",
         "approved",
     }
     if (
@@ -752,6 +1468,10 @@ def _capture_retrieval_approval(path: Path) -> tuple[dict[str, object], str]:
             )
         )
         or value.get("transport_retry_count") != 0
+        or not isinstance(value.get("cache_root"), str)
+        or not Path(str(value["cache_root"])).is_absolute()
+        or not isinstance(value.get("output_dir"), str)
+        or not Path(str(value["output_dir"])).is_absolute()
     ):
         raise PermissionError("retrieval approval required")
     return value, _sha256(source)
@@ -774,13 +1494,15 @@ def _verify_approval_against_preflight(
         "primary_external_attempts",
         "maximum_external_attempts",
         "transport_retry_count",
+        "cache_root",
+        "output_dir",
     ):
         if approval.get(name) != receipt.get(name):
             raise PermissionError("retrieval approval required")
 
 
 def _current_cache(
-    receipt: Mapping[str, object], cache_root: Path
+    receipt: Mapping[str, object], cache: _SecureCacheStore
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     hits: list[dict[str, object]] = []
     misses: list[dict[str, object]] = []
@@ -789,7 +1511,7 @@ def _current_cache(
     assert isinstance(jobs, list)
     for raw_job in jobs:
         job = dict(raw_job)
-        cached = _load_verified_cache(cache_root, job)
+        cached = cache.load(job)
         observed.append(_cache_status(cached, job))
         (hits if cached is not None else misses).append(
             {"job": job, "cache": cached} if cached is not None else {"job": job}
@@ -799,64 +1521,152 @@ def _current_cache(
     return hits, misses
 
 
-def _claim_output_root(output: Path) -> None:
-    output = Path(output)
-    parent_fd = _open_directory_no_symlinks(output.parent)
-    try:
-        os.mkdir(output.name, mode=0o700, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    except FileExistsError:
-        raise FileExistsError(f"create-only retrieval output exists: {output}") from None
-    finally:
-        os.close(parent_fd)
-    for name in ("attempts", "raw", "metadata", "candidates", "outcomes", "cache_hits"):
-        (output / name).mkdir(mode=0o700)
-    _fsync_directory(output)
-
-
-def _store_cache(
-    cache_root: Path,
-    job: Mapping[str, object],
-    raw: bytes,
-    candidates: Sequence[Mapping[str, object]],
-) -> None:
-    raw_path, candidates_path, manifest_path = _cache_paths(
-        cache_root, str(job["request_key"])
+def _open_dir_at(parent_fd: int, name: str, *, create: bool) -> int:
+    if not name or name in {".", ".."} or "/" in name:
+        raise ValueError("secure directory name differs")
+    if create:
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except FileExistsError:
+            pass
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
     )
-    candidate_source = _pretty_bytes(list(candidates))
-    manifest = {
-        "schema_version": CACHE_SCHEMA_VERSION,
+    descriptor = os.open(name, flags, dir_fd=parent_fd)
+    observed = os.fstat(descriptor)
+    if not stat.S_ISDIR(observed.st_mode):
+        os.close(descriptor)
+        raise ValueError("secure directory identity differs")
+    return descriptor
+
+
+def _write_exclusive_at(directory_fd: int, name: str, source: bytes) -> None:
+    if not name or name in {".", ".."} or "/" in name:
+        raise ValueError("secure output file name differs")
+    descriptor = os.open(
+        name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        view = memoryview(source)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short secure write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.fsync(directory_fd)
+
+
+class _SecureRunLedger:
+    _SUBDIRS = (
+        "attempts",
+        "raw",
+        "metadata",
+        "candidates",
+        "outcomes",
+        "cache_hits",
+    )
+
+    def __init__(self, output: Path) -> None:
+        self.output = Path(output)
+        self.parent_fd = _open_directory_no_symlinks(self.output.parent)
+        self.root_fd: int | None = None
+        self.subdirs: dict[str, int] = {}
+        try:
+            os.mkdir(self.output.name, mode=0o700, dir_fd=self.parent_fd)
+            os.fsync(self.parent_fd)
+        except FileExistsError:
+            os.close(self.parent_fd)
+            raise FileExistsError(
+                f"create-only retrieval output exists: {self.output}"
+            ) from None
+        try:
+            self.root_fd = _open_dir_at(
+                self.parent_fd, self.output.name, create=False
+            )
+            for name in self._SUBDIRS:
+                self.subdirs[name] = _open_dir_at(self.root_fd, name, create=True)
+            os.fsync(self.root_fd)
+        except BaseException:
+            self.close()
+            raise
+
+    def write_bytes(self, directory: str | None, name: str, source: bytes) -> None:
+        descriptor = self.root_fd if directory is None else self.subdirs[directory]
+        assert descriptor is not None
+        _write_exclusive_at(descriptor, name, source)
+
+    def write_json(self, directory: str | None, name: str, value: object) -> None:
+        self.write_bytes(directory, name, _pretty_bytes(value))
+
+    def close(self) -> None:
+        for descriptor in self.subdirs.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self.subdirs.clear()
+        if self.root_fd is not None:
+            try:
+                os.fsync(self.root_fd)
+                os.close(self.root_fd)
+            except OSError:
+                pass
+            self.root_fd = None
+        if hasattr(self, "parent_fd"):
+            try:
+                os.fsync(self.parent_fd)
+                os.close(self.parent_fd)
+            except OSError:
+                pass
+
+
+def _claim_output_root(output: Path) -> _SecureRunLedger:
+    return _SecureRunLedger(output)
+
+
+def _candidate_with_provenance(
+    job: Mapping[str, object],
+    candidate: Mapping[str, object],
+    *,
+    raw_response_sha256: str,
+) -> dict[str, object]:
+    """Bind every persisted candidate to its local scoring and source lineage."""
+
+    frozen_input = job.get("retrieval_input")
+    if not isinstance(frozen_input, Mapping):
+        raise ValueError("retrieval candidate source lineage is missing")
+    return {
+        "schema_version": "adaptive-obligation-v2-candidate-v1",
         "request_key": job["request_key"],
         "request_identity": job["request_identity"],
         "query_text": job["query_text"],
-        "raw_sha256": _sha256(raw),
-        "candidates_sha256": _sha256(candidate_source),
-        "candidate_count": RETRIEVAL_HITS,
+        "query_sha256": job["query_sha256"],
+        "raw_response_sha256": raw_response_sha256,
+        "topic_id": job["topic_id"],
+        "parent_id": job["parent_id"],
+        "accepted_o1_id": job["accepted_o1_id"],
+        "accepted_o1_sha256": job["accepted_o1_sha256"],
+        "retrieval_input": dict(frozen_input),
+        "docid": candidate["docid"],
+        "rank": candidate["rank"],
+        "score": candidate["score"],
+        "text": candidate["text"],
+        "text_sha256": candidate["text_sha256"],
     }
-    _exclusive_bytes(raw_path, raw)
-    _exclusive_bytes(candidates_path, candidate_source)
-    _exclusive_json(manifest_path, manifest)
-
-
-def _failure(
-    output: Path,
-    job: Mapping[str, object],
-    *,
-    failure_type: str,
-    message: str,
-    raw_sha256: str | None,
-) -> None:
-    _exclusive_json(
-        output / "outcomes" / f"{job['request_key']}.json",
-        {
-            "schema_version": LEDGER_SCHEMA_VERSION,
-            "request_key": job["request_key"],
-            "status": "failure",
-            "failure_type": failure_type,
-            "message": message,
-            "raw_sha256": raw_sha256,
-        },
-    )
 
 
 class RateLimitedO1Transport:
@@ -871,7 +1681,6 @@ class RateLimitedO1Transport:
         allowed_jobs: Sequence[Mapping[str, object]],
         *,
         api_token: str | None,
-        session: requests.Session | None = None,
     ) -> None:
         jobs = [dict(_verify_job(job)) for job in allowed_jobs]
         self._allowed = {str(job["request_key"]): job for job in jobs}
@@ -891,7 +1700,7 @@ class RateLimitedO1Transport:
             burst=1,
             limiter_state_path=LIMITER_STATE_PATH,
         )
-        self.session = session if session is not None else rate_limited_session(config)
+        self.session = rate_limited_session(config)
 
     def __call__(self, job: Mapping[str, object]) -> RawTransportResponse:
         allowed = self._allowed.get(str(job.get("request_key")))
@@ -926,13 +1735,17 @@ class RateLimitedO1Transport:
         )
 
 
+def _build_approved_transport(
+    jobs: Sequence[Mapping[str, object]], *, api_token: str | None
+) -> RetrievalTransport:
+    return RateLimitedO1Transport(jobs, api_token=api_token)
+
+
 def execute_retrieval(
     *,
     preflight_dir: Path,
     approval_path: Path,
-    transport_factory: Callable[[Sequence[Mapping[str, object]]], RetrievalTransport],
-    output_dir: Path | None = None,
-    cache_root: Path | None = None,
+    api_token: str | None = None,
 ) -> dict[str, object]:
     """Execute an approved immutable request inventory exactly once."""
 
@@ -941,165 +1754,193 @@ def execute_retrieval(
         Path(preflight_dir), expected_sha256=str(approval["preflight_sha256"])
     )
     _verify_approval_against_preflight(approval, receipt)
-    root = Path(cache_root or str(receipt["cache_root"])).absolute()
-    cache_hits, cache_misses = _current_cache(receipt, root)
-    miss_jobs = [row["job"] for row in cache_misses]
-    transport: RetrievalTransport | None = None
-    if miss_jobs:
-        transport = transport_factory(miss_jobs)
-        if getattr(transport, "one_shot_no_retry", None) is not True:
-            raise ValueError("retrieval transport must be one-shot no-retry")
-        if (
-            getattr(transport, "request_start_interval_seconds", None)
-            != REQUEST_START_INTERVAL_SECONDS
-            or getattr(transport, "timeout_seconds", None) != TIMEOUT_SECONDS
-        ):
-            raise ValueError("retrieval transport limiter or timeout differs")
-    output = Path(output_dir or (Path(preflight_dir).parent / "retrieval"))
-    _claim_output_root(output)
+    root = Path(str(receipt["cache_root"]))
+    output = Path(str(receipt["output_dir"]))
+    cache_store = _SecureCacheStore(root)
+    writer: _SecureRunLedger | None = None
+    try:
+        cache_hits, cache_misses = _current_cache(receipt, cache_store)
+        miss_jobs = [row["job"] for row in cache_misses]
+        transport: RetrievalTransport | None = None
+        if miss_jobs:
+            transport = _build_approved_transport(miss_jobs, api_token=api_token)
+            if getattr(transport, "one_shot_no_retry", None) is not True:
+                raise ValueError("retrieval transport must be one-shot no-retry")
+            if (
+                getattr(transport, "request_start_interval_seconds", None)
+                != REQUEST_START_INTERVAL_SECONDS
+                or getattr(transport, "timeout_seconds", None) != TIMEOUT_SECONDS
+            ):
+                raise ValueError("retrieval transport limiter or timeout differs")
+        writer = _claim_output_root(output)
+        combined: list[dict[str, object]] = []
+        external_attempts = 0
+        cached_by_key = {
+            str(row["job"]["request_key"]): row for row in cache_hits
+        }
+        jobs = receipt["requests"]
+        assert isinstance(jobs, list)
+        for order, raw_job in enumerate(jobs):
+            job = dict(raw_job)
+            key = str(job["request_key"])
+            cached_row = cached_by_key.get(key)
+            if cached_row is not None:
+                cached = cached_row["cache"]
+                assert isinstance(cached, Mapping)
+                raw = cached["raw"]
+                candidates = cached["candidates"]
+                assert isinstance(raw, bytes) and isinstance(candidates, tuple)
+                writer.write_json(
+                    "cache_hits",
+                    f"{key}.json",
+                    {
+                        "schema_version": LEDGER_SCHEMA_VERSION,
+                        "request_key": key,
+                        "request_identity": job["request_identity"],
+                        "raw_sha256": cached["raw_sha256"],
+                        "candidate_count": RETRIEVAL_HITS,
+                        "external_attempts": 0,
+                    },
+                )
+                writer.write_bytes("raw", f"{key}.body", raw)
+                raw_sha256 = str(cached["raw_sha256"])
+                writer.write_json(
+                    "outcomes",
+                    f"{key}.json",
+                    {
+                        "schema_version": LEDGER_SCHEMA_VERSION,
+                        "request_key": key,
+                        "status": "cache_hit",
+                        "candidate_count": RETRIEVAL_HITS,
+                        "raw_sha256": raw_sha256,
+                    },
+                )
+            else:
+                assert transport is not None
+                writer.write_json(
+                    "attempts",
+                    f"{key}.json",
+                    {
+                        "schema_version": LEDGER_SCHEMA_VERSION,
+                        "request_key": key,
+                        "request_identity": job["request_identity"],
+                        "query_text": job["query_text"],
+                        "attempt_ordinal": 1,
+                        "transport_retry_count": 0,
+                        "manifest_order": order,
+                    },
+                )
+                external_attempts += 1
+                try:
+                    response = transport(job)
+                except Exception as exc:
+                    writer.write_json(
+                        "outcomes",
+                        f"{key}.json",
+                        {
+                            "schema_version": LEDGER_SCHEMA_VERSION,
+                            "request_key": key,
+                            "status": "failure",
+                            "failure_type": "transport_exception",
+                            "message": f"{type(exc).__name__}: {exc}",
+                            "raw_sha256": None,
+                        },
+                    )
+                    raise
+                raw = response.body
+                writer.write_bytes("raw", f"{key}.body", raw)
+                raw_sha256 = _sha256(raw)
+                writer.write_json(
+                    "metadata",
+                    f"{key}.json",
+                    {
+                        "schema_version": LEDGER_SCHEMA_VERSION,
+                        "request_key": key,
+                        "http_status": response.status,
+                        "headers": dict(response.headers),
+                        "elapsed_seconds": float(response.elapsed_seconds),
+                        "raw_sha256": raw_sha256,
+                    },
+                )
+                if response.status != 200:
+                    message = f"HTTP status {response.status} is not successful"
+                    writer.write_json(
+                        "outcomes",
+                        f"{key}.json",
+                        {
+                            "schema_version": LEDGER_SCHEMA_VERSION,
+                            "request_key": key,
+                            "status": "failure",
+                            "failure_type": "http_error",
+                            "message": message,
+                            "raw_sha256": raw_sha256,
+                        },
+                    )
+                    raise ValueError(message)
+                try:
+                    candidates = _normalize_response(raw)
+                except ValueError as exc:
+                    writer.write_json(
+                        "outcomes",
+                        f"{key}.json",
+                        {
+                            "schema_version": LEDGER_SCHEMA_VERSION,
+                            "request_key": key,
+                            "status": "failure",
+                            "failure_type": "response_validation_error",
+                            "message": str(exc),
+                            "raw_sha256": raw_sha256,
+                        },
+                    )
+                    raise
+                cache_store.store(job, raw, candidates)
+                writer.write_json(
+                    "outcomes",
+                    f"{key}.json",
+                    {
+                        "schema_version": LEDGER_SCHEMA_VERSION,
+                        "request_key": key,
+                        "status": "success",
+                        "candidate_count": RETRIEVAL_HITS,
+                        "raw_sha256": raw_sha256,
+                    },
+                )
+            provenance_candidates = [
+                _candidate_with_provenance(
+                    job, candidate, raw_response_sha256=raw_sha256
+                )
+                for candidate in candidates
+            ]
+            writer.write_json(
+                "candidates", f"{key}.json", provenance_candidates
+            )
+            combined.extend(provenance_candidates)
 
-    combined: list[dict[str, object]] = []
-    external_attempts = 0
-    cached_by_key = {
-        str(row["job"]["request_key"]): row for row in cache_hits
-    }
-    jobs = receipt["requests"]
-    assert isinstance(jobs, list)
-    for order, raw_job in enumerate(jobs):
-        job = dict(raw_job)
-        key = str(job["request_key"])
-        cached_row = cached_by_key.get(key)
-        if cached_row is not None:
-            cached = cached_row["cache"]
-            assert isinstance(cached, Mapping)
-            raw = cached["raw"]
-            candidates = cached["candidates"]
-            assert isinstance(raw, bytes) and isinstance(candidates, tuple)
-            _exclusive_json(
-                output / "cache_hits" / f"{key}.json",
-                {
-                    "schema_version": LEDGER_SCHEMA_VERSION,
-                    "request_key": key,
-                    "request_identity": job["request_identity"],
-                    "raw_sha256": cached["raw_sha256"],
-                    "candidate_count": RETRIEVAL_HITS,
-                    "external_attempts": 0,
-                },
-            )
-            _exclusive_bytes(output / "raw" / f"{key}.body", raw)
-            _exclusive_json(output / "candidates" / f"{key}.json", list(candidates))
-            _exclusive_json(
-                output / "outcomes" / f"{key}.json",
-                {
-                    "schema_version": LEDGER_SCHEMA_VERSION,
-                    "request_key": key,
-                    "status": "cache_hit",
-                    "candidate_count": RETRIEVAL_HITS,
-                    "raw_sha256": cached["raw_sha256"],
-                },
-            )
-        else:
-            assert transport is not None
-            _exclusive_json(
-                output / "attempts" / f"{key}.json",
-                {
-                    "schema_version": LEDGER_SCHEMA_VERSION,
-                    "request_key": key,
-                    "request_identity": job["request_identity"],
-                    "query_text": job["query_text"],
-                    "attempt_ordinal": 1,
-                    "transport_retry_count": 0,
-                    "manifest_order": order,
-                },
-            )
-            external_attempts += 1
-            try:
-                response = transport(job)
-            except Exception as exc:
-                _failure(
-                    output,
-                    job,
-                    failure_type="transport_exception",
-                    message=f"{type(exc).__name__}: {exc}",
-                    raw_sha256=None,
-                )
-                raise
-            raw = response.body
-            _exclusive_bytes(output / "raw" / f"{key}.body", raw)
-            raw_sha256 = _sha256(raw)
-            _exclusive_json(
-                output / "metadata" / f"{key}.json",
-                {
-                    "schema_version": LEDGER_SCHEMA_VERSION,
-                    "request_key": key,
-                    "http_status": response.status,
-                    "headers": dict(response.headers),
-                    "elapsed_seconds": float(response.elapsed_seconds),
-                    "raw_sha256": raw_sha256,
-                },
-            )
-            if response.status != 200:
-                message = f"HTTP status {response.status} is not successful"
-                _failure(
-                    output,
-                    job,
-                    failure_type="http_error",
-                    message=message,
-                    raw_sha256=raw_sha256,
-                )
-                raise ValueError(message)
-            try:
-                candidates = _normalize_response(raw)
-            except ValueError as exc:
-                _failure(
-                    output,
-                    job,
-                    failure_type="response_validation_error",
-                    message=str(exc),
-                    raw_sha256=raw_sha256,
-                )
-                raise
-            _store_cache(root, job, raw, candidates)
-            _exclusive_json(output / "candidates" / f"{key}.json", list(candidates))
-            _exclusive_json(
-                output / "outcomes" / f"{key}.json",
-                {
-                    "schema_version": LEDGER_SCHEMA_VERSION,
-                    "request_key": key,
-                    "status": "success",
-                    "candidate_count": RETRIEVAL_HITS,
-                    "raw_sha256": raw_sha256,
-                },
-            )
-        for candidate in candidates:
-            combined.append(
-                {
-                    "request_key": key,
-                    "topic_id": job["topic_id"],
-                    "parent_id": job["parent_id"],
-                    "accepted_o1_id": job["accepted_o1_id"],
-                    **candidate,
-                }
-            )
-
-    _exclusive_bytes(
-        output / "candidates.jsonl",
-        b"".join(_canonical_bytes(row) + b"\n" for row in combined),
-    )
-    summary: dict[str, object] = {
-        "schema_version": SUMMARY_SCHEMA_VERSION,
-        "status": "complete",
-        "preflight_sha256": _sha256(receipt_source),
-        "approval_sha256": approval_sha256,
-        "planned_request_count": len(jobs),
-        "cache_hits": len(cache_hits),
-        "external_attempts": external_attempts,
-        "candidate_rows": len(combined),
-        "transport_retry_count": 0,
-        "qrels_opened": False,
-    }
-    _exclusive_json(output / "summary.json", summary)
-    return summary
+        writer.write_bytes(
+            None,
+            "candidates.jsonl",
+            b"".join(_canonical_bytes(row) + b"\n" for row in combined),
+        )
+        summary: dict[str, object] = {
+            "schema_version": SUMMARY_SCHEMA_VERSION,
+            "status": "complete",
+            "preflight_sha256": _sha256(receipt_source),
+            "approval_sha256": approval_sha256,
+            "cache_root": str(root),
+            "output_dir": str(output),
+            "planned_request_count": len(jobs),
+            "cache_hits": len(cache_hits),
+            "external_attempts": external_attempts,
+            "candidate_rows": len(combined),
+            "transport_retry_count": 0,
+            "qrels_opened": False,
+        }
+        writer.write_json(None, "summary.json", summary)
+        return summary
+    finally:
+        if writer is not None:
+            writer.close()
+        cache_store.close()
 
 
 __all__ = [
