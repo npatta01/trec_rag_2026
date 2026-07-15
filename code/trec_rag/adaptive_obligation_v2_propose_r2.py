@@ -46,6 +46,48 @@ R2_OUTPUT_CONTRACT: dict[str, object] = {
 }
 
 _OUTPUT_NAMES = frozenset({"jobs.jsonl", "schema.json", "prompt.json", "receipt.json"})
+_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "prompt_revision",
+        "status",
+        "topic_ids",
+        "job_count",
+        "primary_call_count",
+        "retry_call_ceiling",
+        "worst_case_call_ceiling",
+        "primary_max_new_tokens",
+        "retry_max_new_tokens",
+        "prompt_token_counts",
+        "tokenizer_load_count",
+        "model_load_count",
+        "inference_count",
+        "model",
+        "model_revision",
+        "model_snapshot",
+        "tokenizer_files",
+        "tokenizer_contract",
+        "tokenizer_identity_sha256",
+        "tokenizer_loading",
+        "model_construction_allowed",
+        "generation_allowed",
+        "prompt_sha256",
+        "schema_sha256",
+        "contract_receipt",
+        "code_sha256",
+        "ledger_dir",
+        "proposal_dir",
+        "artifacts",
+        "expected_runtime",
+        "planned_storage",
+        "qrels_opened",
+        "network_call_count",
+        "retrieval_call_count",
+        "hosted_inference_call_count",
+        "paid_call_count",
+        "external_cost_usd",
+    }
+)
 
 # Stable R1 primitives are deliberately named in this module so tests can replace
 # only the production I/O boundary without changing any R1 behavior.
@@ -62,6 +104,67 @@ def _ordered_compact(value: object) -> str:
         allow_nan=False,
         separators=(",", ":"),
     )
+
+
+def _json_exact(observed: object, expected: object) -> bool:
+    """Compare JSON values without Python's bool/number equality coercions."""
+
+    return r1._compact(observed) == r1._compact(expected)
+
+
+def _static_receipt_metadata(
+    *, ledger_dir: Path, proposal_dir: Path
+) -> dict[str, object]:
+    return {
+        "schema_version": R2_PREFLIGHT_SCHEMA_VERSION,
+        "prompt_revision": R2_PROMPT_REVISION,
+        "status": "complete",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "job_count": r1.PRIMARY_JOB_COUNT,
+        "primary_call_count": r1.PRIMARY_JOB_COUNT,
+        "retry_call_ceiling": r1.PRIMARY_JOB_COUNT,
+        "worst_case_call_ceiling": r1.PRIMARY_JOB_COUNT * 2,
+        "primary_max_new_tokens": r1.PRIMARY_MAX_NEW_TOKENS,
+        "retry_max_new_tokens": r1.RETRY_MAX_NEW_TOKENS,
+        "tokenizer_load_count": 1,
+        "model_load_count": 0,
+        "inference_count": 0,
+        "model": r1.MODEL_ID,
+        "model_revision": r1.MODEL_REVISION,
+        "tokenizer_loading": {
+            "backend": "tokenizers",
+            "local_files_only": True,
+            "trust_remote_code": False,
+            "torch_required": False,
+            "transformers_required": False,
+        },
+        "model_construction_allowed": False,
+        "generation_allowed": False,
+        "ledger_dir": str(ledger_dir),
+        "proposal_dir": str(proposal_dir),
+        "expected_runtime": {
+            "phase": "inference_free_preflight_r2",
+            "proposal_calls_executed": 0,
+            "validation_calls_executed": 0,
+        },
+        "planned_storage": {
+            "artifact_names": [
+                "jobs.jsonl",
+                "schema.json",
+                "prompt.json",
+                "receipt.json",
+            ],
+            "job_rows": r1.PRIMARY_JOB_COUNT,
+            "ledger_dir": str(ledger_dir),
+            "proposal_dir": str(proposal_dir),
+        },
+        "qrels_opened": False,
+        "network_call_count": 0,
+        "retrieval_call_count": 0,
+        "hosted_inference_call_count": 0,
+        "paid_call_count": 0,
+        "external_cost_usd": 0.0,
+    }
 
 
 def _prompt_contract() -> dict[str, object]:
@@ -276,6 +379,9 @@ def _code_contract() -> dict[str, str]:
         "adaptive_obligation_v2_contract.py": r1._sha256_file(
             Path(__file__).with_name("adaptive_obligation_v2_contract.py")
         ),
+        "adaptive_obligation_v2_propose.py": r1._sha256_file(
+            Path(__file__).with_name("adaptive_obligation_v2_propose.py")
+        ),
         "adaptive_obligation_v2_propose_r2.py": r1._sha256_file(Path(__file__)),
     }
 
@@ -289,12 +395,34 @@ class _R2PreflightMaterial(dict[str, object]):
         *,
         contents: Mapping[str, bytes],
         output_dir: Path,
-        publication_authorized: bool,
     ) -> None:
         super().__init__(receipt)
         self.contents = dict(contents)
         self.output_dir = Path(output_dir)
-        self.publication_authorized = publication_authorized
+
+
+_PRODUCTION_PUBLICATION_CAPABILITY = object()
+
+
+class _R2PublishableMaterial(_R2PreflightMaterial):
+    """Material minted only by the authenticated production tokenizer path."""
+
+    def __init__(
+        self,
+        material: _R2PreflightMaterial,
+        *,
+        capability: object,
+    ) -> None:
+        if capability is not _PRODUCTION_PUBLICATION_CAPABILITY:
+            raise PermissionError(
+                "R2 publication requires production-authenticated material"
+            )
+        super().__init__(
+            material,
+            contents=material.contents,
+            output_dir=material.output_dir,
+        )
+        self._capability = capability
 
 
 def _build_authenticated_r2_preflight(
@@ -308,7 +436,6 @@ def _build_authenticated_r2_preflight(
     tokenizer_contract: Mapping[str, object] | None = None,
     contract_dir: Path | None = None,
     contract_receipt_sha256: str | None = None,
-    _publication_authorized: bool = False,
 ) -> _R2PreflightMaterial:
     """Unit-test seam for already authenticated sources and an injected tokenizer."""
 
@@ -357,16 +484,10 @@ def _build_authenticated_r2_preflight(
     if isinstance(contract, Mapping) and isinstance(contract.get("receipt"), Mapping):
         contract_receipt = contract["receipt"]  # type: ignore[assignment]
     receipt: dict[str, object] = {
-        "schema_version": R2_PREFLIGHT_SCHEMA_VERSION,
-        "prompt_revision": R2_PROMPT_REVISION,
-        "status": "complete",
-        "topic_ids": list(PILOT_TOPIC_IDS),
-        "job_count": len(counted),
-        "primary_call_count": r1.PRIMARY_JOB_COUNT,
-        "retry_call_ceiling": r1.PRIMARY_JOB_COUNT,
-        "worst_case_call_ceiling": r1.PRIMARY_JOB_COUNT * 2,
-        "primary_max_new_tokens": r1.PRIMARY_MAX_NEW_TOKENS,
-        "retry_max_new_tokens": r1.RETRY_MAX_NEW_TOKENS,
+        **_static_receipt_metadata(
+            ledger_dir=ledger,
+            proposal_dir=proposals,
+        ),
         "prompt_token_counts": {
             "count": len(counts),
             "minimum": min(counts),
@@ -380,24 +501,10 @@ def _build_authenticated_r2_preflight(
                 for job in counted
             ],
         },
-        "tokenizer_load_count": 1,
-        "model_load_count": 0,
-        "inference_count": 0,
-        "model": r1.MODEL_ID,
-        "model_revision": r1.MODEL_REVISION,
         "model_snapshot": snapshot,
         "tokenizer_files": tokenizer_files,
         "tokenizer_contract": frozen_tokenizer,
         "tokenizer_identity_sha256": canonical_sha256(frozen_tokenizer),
-        "tokenizer_loading": {
-            "backend": "tokenizers",
-            "local_files_only": True,
-            "trust_remote_code": False,
-            "torch_required": False,
-            "transformers_required": False,
-        },
-        "model_construction_allowed": False,
-        "generation_allowed": False,
         "prompt_sha256": canonical_sha256(prompt),
         "schema_sha256": canonical_sha256(R2_PROPOSAL_SCHEMA),
         "contract_receipt": {
@@ -407,8 +514,6 @@ def _build_authenticated_r2_preflight(
             "status": contract_receipt.get("status"),
         },
         "code_sha256": _code_contract(),
-        "ledger_dir": str(ledger),
-        "proposal_dir": str(proposals),
         "artifacts": {
             "jobs.jsonl": {
                 "path": "jobs.jsonl",
@@ -429,28 +534,6 @@ def _build_authenticated_r2_preflight(
                 "sha256": r1._sha256(prompt_bytes),
             },
         },
-        "expected_runtime": {
-            "phase": "inference_free_preflight_r2",
-            "proposal_calls_executed": 0,
-            "validation_calls_executed": 0,
-        },
-        "planned_storage": {
-            "artifact_names": [
-                "jobs.jsonl",
-                "schema.json",
-                "prompt.json",
-                "receipt.json",
-            ],
-            "job_rows": r1.PRIMARY_JOB_COUNT,
-            "ledger_dir": str(ledger),
-            "proposal_dir": str(proposals),
-        },
-        "qrels_opened": False,
-        "network_call_count": 0,
-        "retrieval_call_count": 0,
-        "hosted_inference_call_count": 0,
-        "paid_call_count": 0,
-        "external_cost_usd": 0.0,
     }
     contents = {
         "jobs.jsonl": jobs_bytes,
@@ -462,7 +545,37 @@ def _build_authenticated_r2_preflight(
         receipt,
         contents=contents,
         output_dir=output,
-        publication_authorized=_publication_authorized,
+    )
+
+
+def _build_production_r2_preflight_material(
+    contract: object,
+    *,
+    model_snapshot: Mapping[str, object],
+    tokenizer_contract: Mapping[str, object],
+    contract_dir: Path,
+    contract_receipt_sha256: str,
+    output_dir: Path,
+    ledger_dir: Path,
+    proposal_dir: Path,
+) -> _R2PublishableMaterial:
+    """Mint publishable bytes only after internally loading the pinned tokenizer."""
+
+    tokenizer = _load_pinned_tokenizer_after_auth(snapshot_dir=r1.MODEL_SNAPSHOT)
+    material = _build_authenticated_r2_preflight(
+        contract,
+        tokenizer=tokenizer,
+        model_snapshot=model_snapshot,
+        tokenizer_contract=tokenizer_contract,
+        contract_dir=contract_dir,
+        contract_receipt_sha256=contract_receipt_sha256,
+        output_dir=output_dir,
+        ledger_dir=ledger_dir,
+        proposal_dir=proposal_dir,
+    )
+    return _R2PublishableMaterial(
+        material,
+        capability=_PRODUCTION_PUBLICATION_CAPABILITY,
     )
 
 
@@ -481,8 +594,8 @@ def publish_r2_proposal_preflight(
 ) -> dict[str, object]:
     """Verify a sibling staging tree before atomically publishing it no-replace."""
 
-    if not isinstance(preflight, _R2PreflightMaterial) or not (
-        preflight.publication_authorized
+    if not isinstance(preflight, _R2PublishableMaterial) or not (
+        preflight._capability is _PRODUCTION_PUBLICATION_CAPABILITY
     ):
         raise PermissionError("R2 publication requires production-authenticated material")
     destination = _require_absent_safe_destination(
@@ -521,29 +634,29 @@ def publish_r2_proposal_preflight(
             shutil.rmtree(staging)
 
 
-def _validate_receipt_header(receipt: Mapping[str, object]) -> None:
+def _validate_receipt_metadata(
+    receipt: Mapping[str, object],
+) -> dict[str, Path]:
     if receipt.get("schema_version") != R2_PREFLIGHT_SCHEMA_VERSION:
         raise ValueError("R2 preflight schema version differs")
-    if (
-        receipt.get("prompt_revision") != R2_PROMPT_REVISION
-        or receipt.get("status") != "complete"
-        or receipt.get("topic_ids") != list(PILOT_TOPIC_IDS)
-        or receipt.get("job_count") != r1.PRIMARY_JOB_COUNT
-        or receipt.get("primary_call_count") != r1.PRIMARY_JOB_COUNT
-        or receipt.get("retry_call_ceiling") != r1.PRIMARY_JOB_COUNT
-        or receipt.get("worst_case_call_ceiling") != r1.PRIMARY_JOB_COUNT * 2
-        or receipt.get("primary_max_new_tokens") != r1.PRIMARY_MAX_NEW_TOKENS
-        or receipt.get("retry_max_new_tokens") != r1.RETRY_MAX_NEW_TOKENS
-        or receipt.get("tokenizer_load_count") != 1
-        or any(receipt.get(name) != 0 for name in r1._ZERO_COUNTERS)
-        or receipt.get("qrels_opened") is not False
-        or receipt.get("external_cost_usd") != 0.0
-        or receipt.get("model") != r1.MODEL_ID
-        or receipt.get("model_revision") != r1.MODEL_REVISION
-        or receipt.get("model_construction_allowed") is not False
-        or receipt.get("generation_allowed") is not False
-    ):
-        raise ValueError("R2 preflight counts, model, or safety receipt differs")
+    if set(receipt) != _RECEIPT_KEYS:
+        raise ValueError("R2 preflight metadata keys differ")
+    ledger_value = receipt.get("ledger_dir")
+    proposal_value = receipt.get("proposal_dir")
+    if not isinstance(ledger_value, str) or not isinstance(proposal_value, str):
+        raise ValueError("R2 preflight metadata destinations differ")
+    destinations = {
+        "ledger_dir": Path(ledger_value),
+        "proposal_dir": Path(proposal_value),
+    }
+    expected = _static_receipt_metadata(
+        ledger_dir=destinations["ledger_dir"],
+        proposal_dir=destinations["proposal_dir"],
+    )
+    observed = {name: receipt[name] for name in expected}
+    if not _json_exact(observed, expected):
+        raise ValueError("R2 preflight metadata values differ")
+    return destinations
 
 
 def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
@@ -552,21 +665,12 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
     root = Path(output_dir)
     _require_output_inventory(root)
     receipt = r1._read_json(root / "receipt.json", "R2 proposal preflight receipt")
-    _validate_receipt_header(receipt)
+    frozen_destinations = _validate_receipt_metadata(receipt)
 
-    frozen_destinations: dict[str, Path] = {}
-    for name in ("ledger_dir", "proposal_dir"):
-        value = receipt.get(name)
-        if not isinstance(value, str):
-            raise ValueError("R2 frozen destination is missing")
-        frozen_destinations[name] = _require_absent_safe_destination(
-            Path(value), label=f"R2 {name}"
+    for name, destination in frozen_destinations.items():
+        _require_absent_safe_destination(
+            destination, label=f"R2 {name}"
         )
-    planned = receipt.get("planned_storage")
-    if not isinstance(planned, Mapping) or any(
-        planned.get(name) != str(path) for name, path in frozen_destinations.items()
-    ):
-        raise ValueError("R2 planned destinations differ")
 
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != {
@@ -578,9 +682,28 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
     jobs, jobs_bytes = r1._read_jobs(root / "jobs.jsonl")
     schema_bytes = (root / "schema.json").read_bytes()
     prompt_bytes = (root / "prompt.json").read_bytes()
-    r1._artifact_matches("jobs.jsonl", jobs_bytes, len(jobs), artifacts)
-    r1._artifact_matches("schema.json", schema_bytes, 1, artifacts)
-    r1._artifact_matches("prompt.json", prompt_bytes, 1, artifacts)
+    expected_artifacts = {
+        "jobs.jsonl": {
+            "path": "jobs.jsonl",
+            "bytes": len(jobs_bytes),
+            "rows": len(jobs),
+            "sha256": r1._sha256(jobs_bytes),
+        },
+        "schema.json": {
+            "path": "schema.json",
+            "bytes": len(schema_bytes),
+            "rows": 1,
+            "sha256": r1._sha256(schema_bytes),
+        },
+        "prompt.json": {
+            "path": "prompt.json",
+            "bytes": len(prompt_bytes),
+            "rows": 1,
+            "sha256": r1._sha256(prompt_bytes),
+        },
+    }
+    if not _json_exact(artifacts, expected_artifacts):
+        raise ValueError("R2 preflight artifact bindings differ")
     schema = r1._read_json(root / "schema.json", "R2 proposal schema")
     prompt = r1._read_json(root / "prompt.json", "R2 proposal prompt")
     if (
@@ -629,7 +752,12 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
         raise ValueError("R2 parent/fold identities differ")
 
     source_binding = receipt.get("contract_receipt")
-    if not isinstance(source_binding, Mapping):
+    if not isinstance(source_binding, Mapping) or set(source_binding) != {
+        "path",
+        "sha256",
+        "schema_version",
+        "status",
+    }:
         raise ValueError("R2 contract receipt binding is missing")
     source_path = source_binding.get("path")
     source_sha256 = source_binding.get("sha256")
@@ -638,13 +766,18 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
     contract_root = Path(source_path)
     if not contract_root.is_absolute() or str(contract_root.resolve()) != source_path:
         raise ValueError("R2 contract path must be absolute and exact")
+    expected_source_binding = {
+        "path": source_path,
+        "sha256": source_sha256,
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+        "status": "complete",
+    }
     if (
         not isinstance(source_sha256, str)
         or len(source_sha256) != 64
         or any(char not in "0123456789abcdef" for char in source_sha256)
         or source_sha256 != r1._sha256_file(contract_root / "receipt.json")
-        or source_binding.get("schema_version") != CONTRACT_SCHEMA_VERSION
-        or source_binding.get("status") != "complete"
+        or not _json_exact(source_binding, expected_source_binding)
     ):
         raise ValueError("R2 contract receipt hash or identity differs")
     contract = _load_verified_contract(contract_root)
@@ -659,36 +792,39 @@ def verify_r2_proposal_preflight(output_dir: Path) -> dict[str, object]:
             raise ValueError("R2 jobs differ from authenticated contract reconstruction")
 
     observed_snapshot = _snapshot_inventory()
-    if receipt.get("model_snapshot") != observed_snapshot or receipt.get(
-        "tokenizer_files"
-    ) != _tokenizer_file_inventory(observed_snapshot):
+    if not _json_exact(
+        receipt.get("model_snapshot"), observed_snapshot
+    ) or not _json_exact(
+        receipt.get("tokenizer_files"), _tokenizer_file_inventory(observed_snapshot)
+    ):
         raise ValueError("R2 model snapshot or tokenizer inventory differs")
     observed_tokenizer_contract = _tokenizer_contract()
     if (
-        receipt.get("tokenizer_contract") != observed_tokenizer_contract
+        not _json_exact(receipt.get("tokenizer_contract"), observed_tokenizer_contract)
         or receipt.get("tokenizer_identity_sha256")
         != canonical_sha256(observed_tokenizer_contract)
     ):
         raise ValueError("R2 pinned tokenizer identity differs")
-    if receipt.get("code_sha256") != _code_contract():
+    if not _json_exact(receipt.get("code_sha256"), _code_contract()):
         raise ValueError("R2 frozen builder code hashes differ")
 
     prompt_counts = receipt.get("prompt_token_counts")
     counts = [int(job["prompt_token_count"]) for job in jobs]
-    if (
-        not isinstance(prompt_counts, Mapping)
-        or prompt_counts.get("count") != len(counts)
-        or prompt_counts.get("minimum") != min(counts)
-        or prompt_counts.get("maximum") != max(counts)
-        or prompt_counts.get("total") != sum(counts)
-        or prompt_counts.get("by_job")
-        != [
+    expected_prompt_counts = {
+        "count": len(counts),
+        "minimum": min(counts),
+        "maximum": max(counts),
+        "total": sum(counts),
+        "by_job": [
             {
                 "job_id": job["job_id"],
                 "prompt_token_count": job["prompt_token_count"],
             }
             for job in jobs
-        ]
+        ],
+    }
+    if not isinstance(prompt_counts, Mapping) or not _json_exact(
+        prompt_counts, expected_prompt_counts
     ):
         raise ValueError("R2 prompt token count receipt differs")
     tokenizer = _load_pinned_tokenizer_after_auth(snapshot_dir=r1.MODEL_SNAPSHOT)
@@ -726,12 +862,10 @@ def build_r2_proposal_preflight(
     ledger = _require_absent_safe_destination(ledger_dir, label="R2 ledger")
     proposals = _require_absent_safe_destination(proposal_dir, label="R2 proposal")
     frozen_tokenizer_contract = _tokenizer_contract()
-    tokenizer = _load_pinned_tokenizer_after_auth(snapshot_dir=r1.MODEL_SNAPSHOT)
     contract_root = supplied_contract_root.resolve()
     source_receipt_sha256 = r1._sha256_file(contract_root / "receipt.json")
-    material = _build_authenticated_r2_preflight(
+    material = _build_production_r2_preflight_material(
         contract,
-        tokenizer=tokenizer,
         model_snapshot=snapshot,
         tokenizer_contract=frozen_tokenizer_contract,
         contract_dir=contract_root,
@@ -739,6 +873,5 @@ def build_r2_proposal_preflight(
         output_dir=output,
         ledger_dir=ledger,
         proposal_dir=proposals,
-        _publication_authorized=True,
     )
     return publish_r2_proposal_preflight(material, output_dir=output)

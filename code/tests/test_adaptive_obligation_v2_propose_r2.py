@@ -252,6 +252,47 @@ def _source_binding(tmp_path: Path, contract: dict[str, object]) -> tuple[Path, 
     return root, hashlib.sha256(source).hexdigest()
 
 
+def _captured_material_fixture(
+    tmp_path: Path,
+) -> tuple[dict[str, object], object, Path]:
+    contract = _contract_fixture()
+    contract_dir, receipt_sha256 = _source_binding(tmp_path, contract)
+    material = _build_authenticated_r2_preflight(
+        contract,
+        tokenizer=_fake_tokenizer(),
+        model_snapshot=_snapshot_fixture(),
+        tokenizer_contract=_tokenizer_contract_fixture(),
+        contract_dir=contract_dir,
+        contract_receipt_sha256=receipt_sha256,
+        **_absolute_destination_bindings(tmp_path),
+    )
+    root = tmp_path / "captured-preflight"
+    root.mkdir()
+    for name, content in material.contents.items():
+        (root / name).write_bytes(content)
+    return contract, material, root
+
+
+def _patch_verifier_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    contract: dict[str, object],
+    tokenizer: object | None = None,
+) -> _FakeTokenizer:
+    recount = tokenizer if tokenizer is not None else _fake_tokenizer()
+    monkeypatch.setattr(r2_module, "_load_verified_contract", lambda _path: contract)
+    monkeypatch.setattr(r2_module, "_snapshot_inventory", _snapshot_fixture)
+    monkeypatch.setattr(
+        r2_module, "_tokenizer_contract", _tokenizer_contract_fixture
+    )
+    monkeypatch.setattr(
+        r2_module,
+        "_load_pinned_tokenizer_after_auth",
+        lambda **_kwargs: recount,
+    )
+    return recount  # type: ignore[return-value]
+
+
 def test_r2_output_contract_is_last_user_payload_field() -> None:
     messages = render_r2_proposal_messages(_parent(), _reservoir(), _evidence_units())
     payload = json.loads(messages[1]["content"])
@@ -320,6 +361,23 @@ def test_public_preflight_has_no_tokenizer_or_model_injection() -> None:
         "ledger_dir",
         "proposal_dir",
     ]
+
+
+def test_private_fake_tokenizer_seam_has_no_publication_authorization_argument(
+    tmp_path: Path,
+) -> None:
+    parameters = inspect.signature(_build_authenticated_r2_preflight).parameters
+    assert "_publication_authorized" not in parameters
+    assert not any("publication" in name for name in parameters)
+    with pytest.raises(TypeError):
+        _build_authenticated_r2_preflight(
+            _contract_fixture(),
+            tokenizer=_fake_tokenizer(),
+            model_snapshot=_snapshot_fixture(),
+            tokenizer_contract=_tokenizer_contract_fixture(),
+            _publication_authorized=True,
+            **_absolute_destination_bindings(tmp_path),
+        )
 
 
 def test_r2_rejects_protected_topic_before_tokenizer_access(
@@ -405,6 +463,7 @@ def test_private_fake_tokenizer_material_cannot_be_published(tmp_path: Path) -> 
         tokenizer_contract=_tokenizer_contract_fixture(),
         **_absolute_destination_bindings(tmp_path),
     )
+    assert not hasattr(material, "publication_authorized")
     with pytest.raises(PermissionError, match="production-authenticated"):
         publish_r2_proposal_preflight(
             material,
@@ -455,38 +514,79 @@ def test_publication_verifies_staging_before_no_replace_rename(
 def test_verifier_reconstructs_r2_jobs_and_recounts_with_pinned_tokenizer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    contract = _contract_fixture()
-    contract_dir, receipt_sha256 = _source_binding(tmp_path, contract)
-    tokenizer = _fake_tokenizer()
-    material = _build_authenticated_r2_preflight(
-        contract,
-        tokenizer=tokenizer,
-        model_snapshot=_snapshot_fixture(),
-        tokenizer_contract=_tokenizer_contract_fixture(),
-        contract_dir=contract_dir,
-        contract_receipt_sha256=receipt_sha256,
-        _publication_authorized=True,
-        **_absolute_destination_bindings(tmp_path),
-    )
-    root = tmp_path / "captured-preflight"
-    root.mkdir()
-    for name, content in material.contents.items():
-        (root / name).write_bytes(content)
-
-    recount = _fake_tokenizer()
-    monkeypatch.setattr(r2_module, "_load_verified_contract", lambda _path: contract)
-    monkeypatch.setattr(r2_module, "_snapshot_inventory", _snapshot_fixture)
-    monkeypatch.setattr(
-        r2_module, "_tokenizer_contract", _tokenizer_contract_fixture
-    )
-    monkeypatch.setattr(
-        r2_module,
-        "_load_pinned_tokenizer_after_auth",
-        lambda **_kwargs: recount,
-    )
+    contract, material, root = _captured_material_fixture(tmp_path)
+    recount = _patch_verifier_dependencies(monkeypatch, contract=contract)
     verified = verify_r2_proposal_preflight(root)
     assert verified == dict(material)
     assert recount.calls == 48
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown_top_level",
+        "tokenizer_loading_local_files_only",
+        "expected_runtime_proposal_calls",
+        "planned_storage_job_rows",
+    ],
+)
+def test_verifier_rejects_any_frozen_receipt_metadata_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    contract, _material, root = _captured_material_fixture(tmp_path)
+    receipt = json.loads((root / "receipt.json").read_bytes())
+    if mutation == "unknown_top_level":
+        receipt["unreviewed_extension"] = True
+    elif mutation == "tokenizer_loading_local_files_only":
+        receipt["tokenizer_loading"]["local_files_only"] = False
+    elif mutation == "expected_runtime_proposal_calls":
+        receipt["expected_runtime"]["proposal_calls_executed"] = 1
+    elif mutation == "planned_storage_job_rows":
+        receipt["planned_storage"]["job_rows"] = 47
+    else:  # pragma: no cover - parametrization controls this branch
+        raise AssertionError(mutation)
+    (root / "receipt.json").write_bytes(_pretty(receipt))
+    _patch_verifier_dependencies(monkeypatch, contract=contract)
+    with pytest.raises(ValueError, match="R2 preflight metadata"):
+        verify_r2_proposal_preflight(root)
+
+
+def test_code_contract_freezes_inherited_r1_builder_bytes(tmp_path: Path) -> None:
+    receipt = _build_authenticated_r2_preflight(
+        _contract_fixture(),
+        tokenizer=_fake_tokenizer(),
+        model_snapshot=_snapshot_fixture(),
+        tokenizer_contract=_tokenizer_contract_fixture(),
+        **_absolute_destination_bindings(tmp_path),
+    )
+    r1_path = Path(r2_module.r1.__file__)
+    assert set(receipt["code_sha256"]) == {
+        "adaptive_obligation_v2_contract.py",
+        "adaptive_obligation_v2_propose.py",
+        "adaptive_obligation_v2_propose_r2.py",
+    }
+    assert receipt["code_sha256"]["adaptive_obligation_v2_propose.py"] == (
+        hashlib.sha256(r1_path.read_bytes()).hexdigest()
+    )
+
+
+def test_verifier_rejects_inherited_r1_builder_hash_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, _material, root = _captured_material_fixture(tmp_path)
+    _patch_verifier_dependencies(monkeypatch, contract=contract)
+    original = r2_module.r1._sha256_file
+
+    def changed_r1_hash(path: Path) -> str:
+        if Path(path).name == "adaptive_obligation_v2_propose.py":
+            return "f" * 64
+        return original(path)
+
+    monkeypatch.setattr(r2_module.r1, "_sha256_file", changed_r1_hash)
+    with pytest.raises(ValueError, match="builder code hashes"):
+        verify_r2_proposal_preflight(root)
 
 
 def test_verifier_rejects_r1_preflight_schema_version(
@@ -501,7 +601,6 @@ def test_verifier_rejects_r1_preflight_schema_version(
         tokenizer_contract=_tokenizer_contract_fixture(),
         contract_dir=contract_dir,
         contract_receipt_sha256=receipt_sha256,
-        _publication_authorized=True,
         **_absolute_destination_bindings(tmp_path),
     )
     root = tmp_path / "wrong-version"
