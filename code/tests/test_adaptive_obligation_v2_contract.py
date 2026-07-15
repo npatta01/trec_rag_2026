@@ -797,6 +797,44 @@ def test_score_validator_b_cannot_authorize_restored_snapshot_a(
 
 
 @pytest.mark.parametrize(
+    "field",
+    ["restored_cache_pair_count", "resumed_shard_count"],
+)
+@pytest.mark.parametrize("value", [1, True, "0", 0.0, None])
+def test_captured_legacy_resume_field_must_be_exact_integer_zero_before_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    contract, scores, expected = _write_snapshot_sources(tmp_path, monkeypatch)
+    captured_receipt = expected["receipt"][0]
+    captured_receipt[field] = value
+    (scores / "receipt.json").write_bytes(_compact(captured_receipt))
+    monkeypatch.setattr(
+        contract_module,
+        "load_score_contract",
+        lambda _root: {
+            "schema_version": "adaptive-evidence-contract-v1",
+            "obligations": expected["obligations"],
+            "documents": expected["documents"],
+        },
+    )
+    deep_receipt = copy.deepcopy(captured_receipt)
+    deep_receipt.pop(field)
+
+    def validate_b_then_restore_a(root: Path) -> object:
+        assert root == scores
+        return _return_while_original_directory_is_restored(root, deep_receipt)
+
+    monkeypatch.setattr(
+        contract_module, "verify_local_scoring", validate_b_then_restore_a
+    )
+    with pytest.raises(ValueError, match="legacy.*integer zero"):
+        contract_module.load_authenticated_v2_sources(contract, scores)
+
+
+@pytest.mark.parametrize(
     "kind",
     ["declared_count", "pair_count", "document_hash", "window_hash", "query_hash"],
 )

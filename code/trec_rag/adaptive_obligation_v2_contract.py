@@ -1141,8 +1141,15 @@ def load_authenticated_v2_sources(
         _assert_snapshot_current(snapshot)
     verified_scores = verify_local_scoring(scores_root)
     expected_verified_scores = dict(score_receipt)
-    expected_verified_scores.pop("restored_cache_pair_count", None)
-    expected_verified_scores.pop("resumed_shard_count", None)
+    for field in ("restored_cache_pair_count", "resumed_shard_count"):
+        if field not in expected_verified_scores:
+            continue
+        value = expected_verified_scores[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+            raise ValueError(
+                f"legacy score receipt field {field} must be exact integer zero"
+            )
+        expected_verified_scores.pop(field)
     if (
         not isinstance(verified_scores, Mapping)
         or dict(verified_scores) != expected_verified_scores
