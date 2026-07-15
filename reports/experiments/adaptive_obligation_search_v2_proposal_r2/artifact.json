@@ -1,0 +1,1069 @@
+{
+  "manifest": {
+    "blocks": [
+      {
+        "body": "# Adaptive obligation proposal R2 readiness",
+        "id": "title",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "## Technical summary\n\n**R1 stopped safely, and R2 is preflight-ready but unrun.** No adaptive relevance result exists. The report records an incident and an approval boundary—not an effectiveness comparison.",
+        "id": "technical_summary",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "**R1 stopped after exactly one schema-invalid call.** The valid JSON carried a 245-character rationale against the unchanged 240-character accepted limit; 47 jobs remained uncalled, and the exact raw bytes and ledger chain remain immutable.",
+        "id": "technical_summary_r1",
+        "layout": "full",
+        "sourceId": "r1_incident",
+        "type": "markdown"
+      },
+      {
+        "body": "**R2 proposal inference has not run.** The tokenizer-only preflight freezes 48 primary calls, at most 48 truncation retries, a 96-call worst-case ceiling, and zero completed R2 calls.",
+        "id": "technical_summary_r2",
+        "layout": "full",
+        "sourceId": "r2_preflight",
+        "type": "markdown"
+      },
+      {
+        "cardIds": [
+          "r1_calls",
+          "r2_calls",
+          "r2_primary_calls",
+          "r2_worst_case_calls",
+          "r2_prompt_tokens"
+        ],
+        "id": "headline_metrics",
+        "type": "metric-strip"
+      },
+      {
+        "body": "## The evidence separates an immutable incident from unopened execution",
+        "id": "key_findings",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "**The R1 failure is terminal, narrow, and preserved.** One attempted job ended in one schema error with 186 output tokens and a 546-byte raw completion. It was not truncated, repaired, accepted, retried, or sealed.",
+        "id": "r1_incident_evidence",
+        "layout": "full",
+        "sourceId": "r1_incident",
+        "type": "markdown"
+      },
+      {
+        "id": "r1_hash_table",
+        "layout": "full",
+        "tableId": "r1_hashes",
+        "type": "table"
+      },
+      {
+        "body": "**R2 is ready only at the preflight boundary.** Its 48 prompts contain 33,610–64,264 tokens each (2,300,662 total), the pinned model/revision and tail-adjacent output contract are frozen, and model loads and inference calls remain zero.",
+        "id": "r2_readiness_evidence",
+        "layout": "full",
+        "sourceId": "r2_preflight",
+        "type": "markdown"
+      },
+      {
+        "id": "proposal_run_table",
+        "layout": "full",
+        "tableId": "proposal_runs",
+        "type": "table"
+      },
+      {
+        "id": "r2_contract_table",
+        "layout": "full",
+        "tableId": "r2_contract",
+        "type": "table"
+      },
+      {
+        "id": "r2_hash_table",
+        "layout": "full",
+        "tableId": "r2_hashes",
+        "type": "table"
+      },
+      {
+        "body": "**Read readiness as a binary artifact audit, not progress or quality.** The chart marks only whether each named canonical artifact exists and verifies. A zero means not run or unavailable; it is not a relevance score.",
+        "id": "stage_interpretation",
+        "layout": "full",
+        "sourceId": "verified_status_inventory",
+        "type": "markdown"
+      },
+      {
+        "chartId": "stage_readiness",
+        "id": "stage_chart",
+        "layout": "full",
+        "type": "chart"
+      },
+      {
+        "id": "stage_table",
+        "layout": "full",
+        "tableId": "pipeline_state",
+        "type": "table"
+      },
+      {
+        "body": "## Scope and definitions preserve the original evidence boundary\n\nThe pilot covers topics 219, 72, 300, and 84 only: 24 fixed O0 parents, 48 parent/fold reservoirs, and 8,247 exact evidence units. **Preflight ready** means inputs, hashes, token counts, budgets, and destinations verify before inference. It does not mean a proposal or relevance result exists.",
+        "id": "scope_definitions",
+        "layout": "full",
+        "sourceId": "contract",
+        "type": "markdown"
+      },
+      {
+        "body": "## Recovery changes prompt salience without weakening acceptance\n\nR2 preserves the accepted 120-character label and 240-character rationale schema while adding stricter generation targets at the tail of every long prompt: label at most 80 characters/10 words and one rationale sentence at most 160 characters/25 words. Only incomplete JSON that reaches the 256-token primary ceiling may receive one 512-token retry.",
+        "id": "methodology",
+        "layout": "full",
+        "sourceId": "recovery_contract",
+        "type": "markdown"
+      },
+      {
+        "id": "implementation_hash_table",
+        "layout": "full",
+        "tableId": "implementation_hashes",
+        "type": "table"
+      },
+      {
+        "body": "## Limitations keep readiness from becoming an effectiveness claim\n\n**No adaptive relevance result exists.** R2 proposals, validation, BM25 retrieval, MiniLM reranking, adaptive rankings, and qrels-backed evaluation are all absent. No comparison to the sealed baselines is possible.",
+        "id": "limitations",
+        "layout": "full",
+        "sourceId": "verified_status_inventory",
+        "type": "markdown"
+      },
+      {
+        "body": "**R2 validation integration is unavailable and deferred.** R2 proposal output cannot enter validation until a separate end-to-end revision and provenance plan versions proposal loading, preflight, approval, execution, finalization, and receipt verification.",
+        "id": "limitations_validation",
+        "layout": "full",
+        "sourceId": "recovery_contract",
+        "type": "markdown"
+      },
+      {
+        "body": "**Operator estimate: 2–3 hours for the 48 primary R2 calls.** This is based on the observed approximately three-minute, 54,402-token R1 call. It is a planning estimate, not a receipt-verified runtime metric, and truncation retries could extend it.",
+        "id": "runtime_estimate",
+        "layout": "full",
+        "sourceId": "recovery_contract",
+        "type": "markdown"
+      },
+      {
+        "body": "## The only next action is exact R2 proposal approval\n\n**Approve only this exact R2 preflight** SHA-256 `4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4` for model `Qwen/Qwen3-4B-Instruct-2507`, revision `cdbee75f17c01a7cc42f958dc650907174af0554`, 48 primary calls, 48 possible truncation retries, a 96-call worst-case ceiling, and ledger destination `/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_ledger_r2`. Do not approve validation, BM25, MiniLM, or qrels.",
+        "id": "recommended_next_step",
+        "layout": "full",
+        "sourceId": "r2_preflight",
+        "type": "markdown"
+      },
+      {
+        "body": "## Questions only after a separately approved R2 proposal run\n\n- Does the first fail-fast canary produce schema-valid output?\n- How many of 48 jobs produce supported abstract O1 proposals?\n- Which separate provenance changes are required before any R2 proposal can enter validation?",
+        "id": "further_questions",
+        "layout": "full",
+        "type": "markdown"
+      },
+      {
+        "body": "**Every report claim is anchored to verifier-approved receipts or hashed recovery sources.** The exact identities below are the reproducibility boundary.",
+        "id": "source_receipt_interpretation",
+        "layout": "full",
+        "sourceId": "verified_status_inventory",
+        "type": "markdown"
+      },
+      {
+        "id": "source_receipt_table",
+        "layout": "full",
+        "tableId": "source_receipts",
+        "type": "table"
+      }
+    ],
+    "cards": [
+      {
+        "dataset": "r1_metrics",
+        "description": "Observed R1 calls before the terminal schema error.",
+        "id": "r1_calls",
+        "metrics": [
+          {
+            "field": "calls_completed",
+            "format": "number",
+            "label": "R1 calls completed"
+          }
+        ],
+        "sourceId": "r1_incident"
+      },
+      {
+        "dataset": "r2_metrics",
+        "description": "Observed R2 inference calls; planned calls are separate.",
+        "id": "r2_calls",
+        "metrics": [
+          {
+            "field": "calls_completed",
+            "format": "number",
+            "label": "R2 calls completed"
+          }
+        ],
+        "sourceId": "r2_preflight"
+      },
+      {
+        "dataset": "r2_metrics",
+        "description": "Frozen primary-call count awaiting exact R2 approval.",
+        "id": "r2_primary_calls",
+        "metrics": [
+          {
+            "field": "primary_calls",
+            "format": "number",
+            "label": "R2 primary calls planned"
+          }
+        ],
+        "sourceId": "r2_preflight"
+      },
+      {
+        "dataset": "r2_metrics",
+        "description": "Primary calls plus the truncation-only retry ceiling.",
+        "id": "r2_worst_case_calls",
+        "metrics": [
+          {
+            "field": "worst_case_calls",
+            "format": "number",
+            "label": "R2 worst-case call ceiling"
+          }
+        ],
+        "sourceId": "r2_preflight"
+      },
+      {
+        "dataset": "r2_metrics",
+        "description": "Exact total prompt tokens across all 48 frozen jobs.",
+        "id": "r2_prompt_tokens",
+        "metrics": [
+          {
+            "field": "prompt_tokens_total",
+            "format": "number",
+            "label": "R2 prompt tokens total"
+          }
+        ],
+        "sourceId": "r2_preflight"
+      }
+    ],
+    "charts": [
+      {
+        "dataset": "stage_readiness",
+        "encodings": {
+          "label": {
+            "field": "canonical_artifact_ready",
+            "label": "Readiness",
+            "type": "quantitative"
+          },
+          "tooltip": [
+            {
+              "field": "status",
+              "label": "Status",
+              "type": "nominal"
+            },
+            {
+              "field": "calls_completed",
+              "label": "Calls completed",
+              "type": "quantitative"
+            },
+            {
+              "field": "evidence",
+              "label": "Evidence",
+              "type": "text"
+            }
+          ],
+          "x": {
+            "field": "stage",
+            "label": "Stage",
+            "type": "nominal"
+          },
+          "y": {
+            "field": "canonical_artifact_ready",
+            "format": "number",
+            "label": "Canonical artifact ready (1=yes, 0=no)",
+            "type": "quantitative"
+          }
+        },
+        "id": "stage_readiness",
+        "layout": "full",
+        "settings": {
+          "orientation": "horizontal",
+          "showValues": true,
+          "sort": "custom"
+        },
+        "sourceId": "verified_status_inventory",
+        "subtitle": "Binary audit state: 1 = named artifact exists and verifies; 0 = not run or unavailable. Not relevance quality or progress.",
+        "title": "Canonical artifact readiness by stage",
+        "type": "horizontalBar",
+        "valueFormat": "number"
+      }
+    ],
+    "description": "Technical incident/readiness report with one binary artifact chart. No chart compares heterogeneous counts or implies a relevance result.",
+    "generatedAt": "2026-07-15T21:48:47Z",
+    "sources": [
+      {
+        "id": "contract",
+        "label": "Verified adaptive obligation v2 contract receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json"
+      },
+      {
+        "id": "baseline_rankings",
+        "label": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json"
+      },
+      {
+        "id": "r1_incident",
+        "label": "Verified immutable proposal R1 incident receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json"
+      },
+      {
+        "id": "r2_preflight",
+        "label": "Verified inference-free proposal R2 preflight receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json"
+      },
+      {
+        "id": "r1_preflight",
+        "label": "Incident-authenticated proposal R1 preflight receipt",
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json"
+      },
+      {
+        "id": "recovery_contract",
+        "label": "Hashed R2 recovery plan, design, and implementations",
+        "path": "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md"
+      },
+      {
+        "id": "verified_status_inventory",
+        "label": "Verified R1/R2 status and source inventory",
+        "path": "code/trec_rag/build_adaptive_obligation_v2_r2_report.py"
+      }
+    ],
+    "surface": "report",
+    "tables": [
+      {
+        "columns": [
+          {
+            "field": "run",
+            "label": "Run",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "text"
+          },
+          {
+            "field": "calls_completed",
+            "label": "Calls completed",
+            "type": "number"
+          },
+          {
+            "field": "primary_call_count",
+            "label": "Primary ceiling",
+            "type": "number"
+          },
+          {
+            "field": "retry_call_ceiling",
+            "label": "Retry ceiling",
+            "type": "number"
+          },
+          {
+            "field": "worst_case_call_ceiling",
+            "label": "Worst-case ceiling",
+            "type": "number"
+          },
+          {
+            "field": "prompt_tokens_minimum",
+            "label": "Prompt tokens min",
+            "type": "number"
+          },
+          {
+            "field": "prompt_tokens_maximum",
+            "label": "Prompt tokens max",
+            "type": "number"
+          },
+          {
+            "field": "prompt_tokens_total",
+            "label": "Prompt tokens total",
+            "type": "number"
+          },
+          {
+            "field": "preflight_sha256",
+            "label": "Preflight SHA-256",
+            "type": "text"
+          }
+        ],
+        "dataset": "proposal_runs",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "run"
+        },
+        "density": "spacious",
+        "id": "proposal_runs",
+        "layout": "full",
+        "sourceId": "verified_status_inventory",
+        "subtitle": "Observed calls are separate from frozen call ceilings.",
+        "title": "R1 incident and R2 preflight state"
+      },
+      {
+        "columns": [
+          {
+            "field": "order",
+            "label": "Step",
+            "type": "number"
+          },
+          {
+            "field": "stage",
+            "label": "Stage",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "text"
+          },
+          {
+            "field": "evidence",
+            "label": "Evidence",
+            "type": "text"
+          },
+          {
+            "field": "calls_completed",
+            "label": "Calls completed",
+            "type": "number"
+          }
+        ],
+        "dataset": "stage_readiness",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "order"
+        },
+        "density": "spacious",
+        "id": "pipeline_state",
+        "layout": "full",
+        "sourceId": "verified_status_inventory",
+        "subtitle": "Unavailable stages are not zero-quality results.",
+        "title": "Exact downstream state"
+      },
+      {
+        "columns": [
+          {
+            "field": "artifact",
+            "label": "Artifact",
+            "type": "text"
+          },
+          {
+            "field": "sha256",
+            "label": "SHA-256",
+            "type": "text"
+          }
+        ],
+        "dataset": "r1_hashes",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "artifact"
+        },
+        "density": "dense",
+        "id": "r1_hashes",
+        "layout": "full",
+        "sourceId": "r1_incident",
+        "subtitle": "Incident, approval, ledger, and raw-completion identities.",
+        "title": "Immutable R1 hashes"
+      },
+      {
+        "columns": [
+          {
+            "field": "artifact",
+            "label": "Artifact",
+            "type": "text"
+          },
+          {
+            "field": "sha256",
+            "label": "SHA-256",
+            "type": "text"
+          }
+        ],
+        "dataset": "r2_hashes",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "artifact"
+        },
+        "density": "dense",
+        "id": "r2_hashes",
+        "layout": "full",
+        "sourceId": "r2_preflight",
+        "subtitle": "Receipt, prompt, schema, tokenizer, model, artifacts, and code.",
+        "title": "Frozen R2 preflight hashes"
+      },
+      {
+        "columns": [
+          {
+            "field": "prompt_revision",
+            "label": "Prompt revision",
+            "type": "text"
+          },
+          {
+            "field": "target_label_max_characters",
+            "label": "Label target chars",
+            "type": "number"
+          },
+          {
+            "field": "target_rationale_max_characters",
+            "label": "Rationale target chars",
+            "type": "number"
+          },
+          {
+            "field": "accepted_rationale_max_characters",
+            "label": "Accepted rationale chars",
+            "type": "number"
+          },
+          {
+            "field": "retry_rule",
+            "label": "Retry rule",
+            "type": "text"
+          }
+        ],
+        "dataset": "r2_contract",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "prompt_revision"
+        },
+        "density": "spacious",
+        "id": "r2_contract",
+        "layout": "full",
+        "sourceId": "r2_preflight",
+        "subtitle": "Generation targets are tighter than the unchanged accepted schema.",
+        "title": "R2 prompt and retry contract"
+      },
+      {
+        "columns": [
+          {
+            "field": "source",
+            "label": "Source",
+            "type": "text"
+          },
+          {
+            "field": "path",
+            "label": "Repository path",
+            "type": "text"
+          },
+          {
+            "field": "sha256",
+            "label": "SHA-256",
+            "type": "text"
+          }
+        ],
+        "dataset": "implementation_hashes",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "source"
+        },
+        "density": "dense",
+        "id": "implementation_hashes",
+        "layout": "full",
+        "sourceId": "recovery_contract",
+        "subtitle": "Exact plan, design, implementation, and report-builder identities.",
+        "title": "Hashed recovery sources"
+      },
+      {
+        "columns": [
+          {
+            "field": "source",
+            "label": "Source",
+            "type": "text"
+          },
+          {
+            "field": "path",
+            "label": "Repository path",
+            "type": "text"
+          },
+          {
+            "field": "sha256",
+            "label": "SHA-256",
+            "type": "text"
+          },
+          {
+            "field": "verification",
+            "label": "Verification",
+            "type": "text"
+          }
+        ],
+        "dataset": "source_receipts",
+        "defaultSort": {
+          "direction": "asc",
+          "field": "source"
+        },
+        "density": "dense",
+        "id": "source_receipts",
+        "layout": "full",
+        "sourceId": "verified_status_inventory",
+        "subtitle": "Exact repository-relative receipt paths and file hashes.",
+        "title": "Authenticated report receipts"
+      }
+    ],
+    "title": "Adaptive obligation proposal R2 readiness",
+    "version": 1
+  },
+  "snapshot": {
+    "accessIssues": [
+      {
+        "id": "adaptive_result_unavailable",
+        "message": "R2 proposal inference has not run; no adaptive relevance result exists.",
+        "scope": "Adaptive relevance result"
+      },
+      {
+        "id": "r2_validation_integration_deferred",
+        "message": "R2 validation integration is unavailable and deferred pending a separate end-to-end revision/provenance plan.",
+        "scope": "R2 validation integration"
+      }
+    ],
+    "datasets": {
+      "implementation_hashes": [
+        {
+          "path": "docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md",
+          "sha256": "09943785f2a43d363bdb5667edfab17d86145b36a7395b0fc9b0254f9e41cb06",
+          "source": "recovery_plan"
+        },
+        {
+          "path": "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md",
+          "sha256": "a94219922345dfbed925ac91a483726cbb1491913191a5ac17e96bec21835ef8",
+          "source": "recovery_design"
+        },
+        {
+          "path": "code/trec_rag/adaptive_obligation_v2_proposal_incident.py",
+          "sha256": "e4d2f0ebff04325e7c5aded7a29c8119df4420b098091dc61ac03bf07e10728c",
+          "source": "incident_implementation"
+        },
+        {
+          "path": "code/trec_rag/adaptive_obligation_v2_propose_r2.py",
+          "sha256": "0b2de34e988546f9314d999f1f2c24acb1e26740433f9c015fba7240e431243a",
+          "source": "r2_implementation"
+        },
+        {
+          "path": "code/trec_rag/adaptive_obligation_v2_local_model_r2.py",
+          "sha256": "b5ea8e3daa4e794608c43fce35b6a481b8b824d10fd08a46b1d1762cb4bebaea",
+          "source": "r2_model_implementation"
+        },
+        {
+          "path": "code/trec_rag/build_adaptive_obligation_v2_r2_report.py",
+          "sha256": "b0975c92134768b01684cd6ad662c148b59f65d1542d0fa4bc82e84fab869a85",
+          "source": "report_builder"
+        }
+      ],
+      "proposal_runs": [
+        {
+          "calls_completed": 1,
+          "evidence": "One call attempted; rationale 245 characters versus accepted maximum 240",
+          "ledger_dir": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_ledger",
+          "model": null,
+          "model_revision": null,
+          "preflight_sha256": "2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5",
+          "primary_call_count": null,
+          "prompt_tokens_maximum": null,
+          "prompt_tokens_minimum": null,
+          "prompt_tokens_total": null,
+          "r2_calls_completed": 0,
+          "retry_call_ceiling": null,
+          "run": "R1",
+          "status": "aborted after terminal schema error",
+          "worst_case_call_ceiling": null
+        },
+        {
+          "calls_completed": 0,
+          "evidence": "Tokenizer-only preflight verified; approval, ledger, and proposals absent",
+          "ledger_dir": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_ledger_r2",
+          "model": "Qwen/Qwen3-4B-Instruct-2507",
+          "model_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+          "preflight_sha256": "4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4",
+          "primary_call_count": 48,
+          "prompt_tokens_maximum": 64264,
+          "prompt_tokens_minimum": 33610,
+          "prompt_tokens_total": 2300662,
+          "r2_calls_completed": 0,
+          "retry_call_ceiling": 48,
+          "run": "R2",
+          "status": "preflight ready; inference not run",
+          "worst_case_call_ceiling": 96
+        }
+      ],
+      "r1_hashes": [
+        {
+          "artifact": "R1 incident receipt",
+          "sha256": "3dbcb69a3a9b07b214578220e0242cf98b8d3f7e3b148c3e65657c5b4adae932"
+        },
+        {
+          "artifact": "R1 preflight receipt",
+          "sha256": "2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5"
+        },
+        {
+          "artifact": "R1 approval",
+          "sha256": "444479b5afab37edd70365fdf42adc64ec339d1db1fb6c6088f44ac553d4c6fb"
+        },
+        {
+          "artifact": "R1 ledger anchor",
+          "sha256": "60adb4317cf864a9161c7535d2140e23b9e4b9a2e131ae9c96cd3e383670b54d"
+        },
+        {
+          "artifact": "R1 ledger events",
+          "sha256": "0c62977e16436ab9e9b7eaea7697f4795b02aab4c245d3365571e93ed82b1778"
+        },
+        {
+          "artifact": "R1 ledger head",
+          "sha256": "028dbcdfd588cb324e0ca885614eea3f740b06dba1211ed555a8f52a40f87317"
+        },
+        {
+          "artifact": "R1 raw completion",
+          "sha256": "683174f0ca3353b8dc901ec889974d83b2c02bac9cc79d00db6a08f26e4bb667"
+        }
+      ],
+      "r1_metrics": [
+        {
+          "calls_completed": 1,
+          "output_tokens": 186,
+          "raw_bytes": 546,
+          "uncalled_jobs": 47
+        }
+      ],
+      "r2_contract": [
+        {
+          "accepted_label_max_characters": 120,
+          "accepted_rationale_max_characters": 240,
+          "primary_max_new_tokens": 256,
+          "prompt_revision": "tail-contract-r2",
+          "retry_max_new_tokens": 512,
+          "retry_rule": "One retry only for incomplete JSON at the 256-token ceiling",
+          "target_label_max_characters": 80,
+          "target_label_max_words": 10,
+          "target_rationale_exact_sentences": 1,
+          "target_rationale_max_characters": 160,
+          "target_rationale_max_words": 25
+        }
+      ],
+      "r2_hashes": [
+        {
+          "artifact": "R2 preflight receipt",
+          "sha256": "4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4"
+        },
+        {
+          "artifact": "R2 prompt contract",
+          "sha256": "2597216ccb88b5a72467460b90d7c4f14337cb2bf65d6217caeb9b5927581433"
+        },
+        {
+          "artifact": "R2 accepted schema",
+          "sha256": "dc09881657e08a49f98757505fb725534b13c579596f550056f1df889ac634dd"
+        },
+        {
+          "artifact": "R2 tokenizer identity",
+          "sha256": "90a9b37efb354aff89f218a2bb9c5dae9a979100b61815df81ee540daca89cb5"
+        },
+        {
+          "artifact": "R2 model snapshot manifest",
+          "sha256": "c5d5ee806009bb72b94a6c99e03dfb2bfbdc8184166ce3ce6e4948ba059cd742"
+        },
+        {
+          "artifact": "R2 jobs.jsonl",
+          "sha256": "b293435b49e5a7f3b9a7970ca1fb6ad96f826e51a0949fed720cc8bac39cd91b"
+        },
+        {
+          "artifact": "R2 prompt.json",
+          "sha256": "3f9b66cf8e11dafa9f1926a09a3a197a79e2533fe959b86e122857b37a426f6a"
+        },
+        {
+          "artifact": "R2 schema.json",
+          "sha256": "0d469af5862ab1ab3ed2883ce56878ad2d4c549d58795d2164bb4ee3a2aa9d4a"
+        },
+        {
+          "artifact": "Frozen code: adaptive_obligation_v2_contract.py",
+          "sha256": "7534234908481eba97d4d23ccc722fc3588871104b86408e9e73f1a4705f4157"
+        },
+        {
+          "artifact": "Frozen code: adaptive_obligation_v2_propose.py",
+          "sha256": "25733c0d21c7a50218f03036d6e14dbd0607057e04d7aec21d75a7e3bad8c754"
+        },
+        {
+          "artifact": "Frozen code: adaptive_obligation_v2_propose_r2.py",
+          "sha256": "0b2de34e988546f9314d999f1f2c24acb1e26740433f9c015fba7240e431243a"
+        }
+      ],
+      "r2_metrics": [
+        {
+          "calls_completed": 0,
+          "primary_calls": 48,
+          "prompt_tokens_total": 2300662,
+          "retry_ceiling": 48,
+          "worst_case_calls": 96
+        }
+      ],
+      "runtime_estimate": [
+        {
+          "basis": "approximately three-minute, 54,402-token R1 call",
+          "estimate_high_hours": 3,
+          "estimate_low_hours": 2,
+          "receipt_verified": false
+        }
+      ],
+      "source_receipts": [
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
+          "sha256": "f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444",
+          "source": "Verified adaptive obligation v2 contract receipt",
+          "verification": "passed"
+        },
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
+          "sha256": "edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71",
+          "source": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
+          "verification": "passed"
+        },
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json",
+          "sha256": "3dbcb69a3a9b07b214578220e0242cf98b8d3f7e3b148c3e65657c5b4adae932",
+          "source": "Verified immutable proposal R1 incident receipt",
+          "verification": "passed"
+        },
+        {
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json",
+          "sha256": "4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4",
+          "source": "Verified inference-free proposal R2 preflight receipt",
+          "verification": "passed"
+        }
+      ],
+      "stage_readiness": [
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 1,
+          "evidence": "NARRATIVE and FIXED-O0; 8,114 rows each",
+          "order": 1,
+          "stage": "Sealed baselines",
+          "status": "sealed"
+        },
+        {
+          "calls_completed": 1,
+          "canonical_artifact_ready": 1,
+          "evidence": "Exactly one schema-invalid call; 47 jobs uncalled",
+          "order": 2,
+          "stage": "R1 incident record",
+          "status": "verified aborted run"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 1,
+          "evidence": "48 jobs; tokenizer-only; exact approval boundary frozen",
+          "order": 3,
+          "stage": "R2 proposal preflight",
+          "status": "ready"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "Approval, ledger, and proposals absent",
+          "order": 4,
+          "stage": "R2 proposal inference",
+          "status": "not run"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "Separate end-to-end revision/provenance plan required",
+          "order": 5,
+          "stage": "R2 validation integration",
+          "status": "unavailable and deferred"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "No authenticated R2 proposal inventory can enter retrieval",
+          "order": 6,
+          "stage": "Focused BM25 retrieval",
+          "status": "not run"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "No R2 retrieval candidates or scoring preflight",
+          "order": 7,
+          "stage": "MiniLM reranking",
+          "status": "not run"
+        },
+        {
+          "calls_completed": 0,
+          "canonical_artifact_ready": 0,
+          "evidence": "No adaptive ranking; qrels remain unopened",
+          "order": 8,
+          "stage": "Qrels evaluation",
+          "status": "unopened"
+        }
+      ]
+    },
+    "generatedAt": "2026-07-15T21:48:47Z",
+    "status": "partial",
+    "version": 1
+  },
+  "sources": [
+    {
+      "id": "contract",
+      "label": "Verified adaptive obligation v2 contract receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt after its repository verifier authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels opened"
+        ],
+        "id": "sha256:f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is exact file SHA-256 f70c8e2dfb47b369275c2807a77c14f4ae7b0daa56f2940549a345217d8ca444."
+        ],
+        "sql": "SELECT status, topic_ids, parent_count, reservoir_count, unit_count, protected_topic_count, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "baseline_rankings",
+      "label": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt after its repository verifier authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels opened"
+        ],
+        "id": "sha256:edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is exact file SHA-256 edde5232a00b5a0611abd31d10887e4508e8123df43f77326bfea808fefa1f71."
+        ],
+        "sql": "SELECT status, topic_ids, document_count, rankings, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "r1_incident",
+      "label": "Verified immutable proposal R1 incident receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt after its repository verifier authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels opened"
+        ],
+        "id": "sha256:3dbcb69a3a9b07b214578220e0242cf98b8d3f7e3b148c3e65657c5b4adae932",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is exact file SHA-256 3dbcb69a3a9b07b214578220e0242cf98b8d3f7e3b148c3e65657c5b4adae932."
+        ],
+        "sql": "SELECT status, reason_code, attempted_job_count, terminal_schema_error_count, uncalled_job_count, output_token_count, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "r2_preflight",
+      "label": "Verified inference-free proposal R2 preflight receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json",
+      "query": {
+        "description": "Reads the canonical receipt after its repository verifier authenticated the complete bound artifact.",
+        "engine": "duckdb",
+        "filters": [
+          "Pilot topics 219, 72, 300, and 84 only",
+          "Protected topics 144, 213, 224, 407, and 515 excluded",
+          "No qrels opened"
+        ],
+        "id": "sha256:4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is exact file SHA-256 4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4."
+        ],
+        "sql": "SELECT status, topic_ids, job_count, primary_call_count, retry_call_ceiling, worst_case_call_ceiling, prompt_token_counts, model, model_revision, ledger_dir, model_load_count, inference_count, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "r1_preflight",
+      "label": "Incident-authenticated proposal R1 preflight receipt",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json",
+      "query": {
+        "description": "The immutable R1 incident verifier replays and authenticates this preflight before accepting the incident receipt.",
+        "engine": "duckdb",
+        "filters": [
+          "First attempted R1 job only for the observed-call basis"
+        ],
+        "id": "sha256:2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5",
+        "language": "sql",
+        "metric_definitions": [
+          "Receipt identity is exact file SHA-256 2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5."
+        ],
+        "sql": "SELECT prompt_token_counts, model, model_revision FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json');",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight/receipt.json"
+        ]
+      }
+    },
+    {
+      "id": "recovery_contract",
+      "label": "Hashed R2 recovery plan, design, and implementations",
+      "path": "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md",
+      "query": {
+        "description": "Exact implementation and operator-estimate claims transcribed from the hashed recovery sources.",
+        "engine": "duckdb",
+        "filters": [
+          "R2 recovery scope only",
+          "Runtime is an operator estimate, not a receipt metric",
+          "Validation integration remains deferred"
+        ],
+        "id": "sha256:2e29abaef12b402dd59887c63a9b9312ff416264dc2c2b8b8d5c98a07fd1196d",
+        "language": "sql",
+        "metric_definitions": [
+          "The 2–3 hour estimate is based on the observed approximately three-minute, 54,402-token R1 call."
+        ],
+        "sql": "SELECT * FROM (VALUES ('recovery_plan', 'docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md', '09943785f2a43d363bdb5667edfab17d86145b36a7395b0fc9b0254f9e41cb06'), ('recovery_design', 'docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md', 'a94219922345dfbed925ac91a483726cbb1491913191a5ac17e96bec21835ef8'), ('incident_implementation', 'code/trec_rag/adaptive_obligation_v2_proposal_incident.py', 'e4d2f0ebff04325e7c5aded7a29c8119df4420b098091dc61ac03bf07e10728c'), ('r2_implementation', 'code/trec_rag/adaptive_obligation_v2_propose_r2.py', '0b2de34e988546f9314d999f1f2c24acb1e26740433f9c015fba7240e431243a'), ('r2_model_implementation', 'code/trec_rag/adaptive_obligation_v2_local_model_r2.py', 'b5ea8e3daa4e794608c43fce35b6a481b8b824d10fd08a46b1d1762cb4bebaea'), ('report_builder', 'code/trec_rag/build_adaptive_obligation_v2_r2_report.py', 'b0975c92134768b01684cd6ad662c148b59f65d1542d0fa4bc82e84fab869a85')) AS recovery_sources(name, path, sha256);",
+        "tables_used": [
+          "docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md",
+          "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md",
+          "code/trec_rag/adaptive_obligation_v2_proposal_incident.py",
+          "code/trec_rag/adaptive_obligation_v2_propose_r2.py",
+          "code/trec_rag/adaptive_obligation_v2_local_model_r2.py",
+          "code/trec_rag/build_adaptive_obligation_v2_r2_report.py"
+        ]
+      }
+    },
+    {
+      "id": "verified_status_inventory",
+      "label": "Verified R1/R2 status and source inventory",
+      "path": "code/trec_rag/build_adaptive_obligation_v2_r2_report.py",
+      "query": {
+        "description": "Reproduces the reviewed chart and status-table rows from the four verified receipts and hashed implementation sources.",
+        "engine": "duckdb",
+        "filters": [
+          "R2 approval absent",
+          "R2 ledger absent",
+          "R2 proposals absent",
+          "No model inference, validation, BM25, MiniLM, or qrels"
+        ],
+        "id": "sha256:78566b1d47815d8888599ab6dd0844abc0b8cd6bc7cb65ec369bd69c13ab521f",
+        "language": "sql",
+        "metric_definitions": [
+          "canonical_artifact_ready=1 only when the named frozen artifact exists and verifies.",
+          "calls_completed counts observed calls; planned call ceilings are separate fields."
+        ],
+        "sql": "SELECT * FROM (VALUES ('stage', 1, 'Sealed baselines', 'sealed', 'NARRATIVE and FIXED-O0; 8,114 rows each', 0, 1, NULL, NULL), ('stage', 2, 'R1 incident record', 'verified aborted run', 'Exactly one schema-invalid call; 47 jobs uncalled', 1, 1, NULL, NULL), ('stage', 3, 'R2 proposal preflight', 'ready', '48 jobs; tokenizer-only; exact approval boundary frozen', 0, 1, NULL, NULL), ('stage', 4, 'R2 proposal inference', 'not run', 'Approval, ledger, and proposals absent', 0, 0, NULL, NULL), ('stage', 5, 'R2 validation integration', 'unavailable and deferred', 'Separate end-to-end revision/provenance plan required', 0, 0, NULL, NULL), ('stage', 6, 'Focused BM25 retrieval', 'not run', 'No authenticated R2 proposal inventory can enter retrieval', 0, 0, NULL, NULL), ('stage', 7, 'MiniLM reranking', 'not run', 'No R2 retrieval candidates or scoring preflight', 0, 0, NULL, NULL), ('stage', 8, 'Qrels evaluation', 'unopened', 'No adaptive ranking; qrels remain unopened', 0, 0, NULL, NULL), ('proposal_run', NULL, 'R1', 'aborted after terminal schema error', 'One call attempted; rationale 245 characters versus accepted maximum 240', 1, NULL, '2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5', 0), ('proposal_run', NULL, 'R2', 'preflight ready; inference not run', 'Tokenizer-only preflight verified; approval, ledger, and proposals absent', 0, NULL, '4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4', 0)) AS verified_status(record_type, \"order\", stage, status, evidence, calls_completed, canonical_artifact_ready, preflight_sha256, r2_calls_completed);",
+        "tables_used": [
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json",
+          "docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md",
+          "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md",
+          "code/trec_rag/adaptive_obligation_v2_proposal_incident.py",
+          "code/trec_rag/adaptive_obligation_v2_propose_r2.py",
+          "code/trec_rag/adaptive_obligation_v2_local_model_r2.py",
+          "code/trec_rag/build_adaptive_obligation_v2_r2_report.py"
+        ]
+      }
+    }
+  ],
+  "surface": "report"
+}
