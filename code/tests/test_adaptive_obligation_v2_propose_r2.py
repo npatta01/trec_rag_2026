@@ -252,9 +252,63 @@ def _pretty(value: object) -> bytes:
 def _source_binding(tmp_path: Path, contract: dict[str, object]) -> tuple[Path, str]:
     root = tmp_path / "contract"
     root.mkdir()
+    for name in ("parents", "reservoirs", "units"):
+        rows = contract[name]
+        assert isinstance(rows, list)
+        source_rows = b"".join(
+            (
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode("utf-8")
+            for row in rows
+        )
+        (root / f"{name}.jsonl").write_bytes(source_rows)
     source = _pretty(contract["receipt"])
     (root / "receipt.json").write_bytes(source)
     return root, hashlib.sha256(source).hexdigest()
+
+
+def _load_minimally_authenticated_contract_source(
+    root: Path,
+) -> dict[str, object]:
+    source_root = Path(root)
+    receipt_source = (source_root / "receipt.json").read_bytes()
+    receipt = json.loads(receipt_source)
+    if (
+        receipt_source != _pretty(receipt)
+        or receipt.get("schema_version") != CONTRACT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+    ):
+        raise ValueError("fake contract receipt authentication failed")
+
+    def load_rows(name: str) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for line in (source_root / f"{name}.jsonl").read_bytes().splitlines():
+            row = json.loads(line)
+            canonical = json.dumps(
+                row,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            if line != canonical:
+                raise ValueError("fake contract row authentication failed")
+            rows.append(row)
+        return rows
+
+    return {
+        "parents": load_rows("parents"),
+        "reservoirs": load_rows("reservoirs"),
+        "units": load_rows("units"),
+        "receipt": receipt,
+    }
 
 
 def _captured_material_fixture(
@@ -262,8 +316,11 @@ def _captured_material_fixture(
 ) -> tuple[dict[str, object], object, Path]:
     contract = _contract_fixture()
     contract_dir, receipt_sha256 = _source_binding(tmp_path, contract)
+    authenticated_contract = _load_minimally_authenticated_contract_source(
+        contract_dir
+    )
     material = _build_authenticated_r2_preflight(
-        contract,
+        authenticated_contract,
         tokenizer=_fake_tokenizer(),
         model_snapshot=_snapshot_fixture(),
         tokenizer_contract=_tokenizer_contract_fixture(),
@@ -275,7 +332,7 @@ def _captured_material_fixture(
     root.mkdir()
     for name, content in material.contents.items():
         (root / name).write_bytes(content)
-    return contract, material, root
+    return authenticated_contract, material, root
 
 
 def _patch_verifier_dependencies(
@@ -285,7 +342,11 @@ def _patch_verifier_dependencies(
     tokenizer: object | None = None,
 ) -> _FakeTokenizer:
     recount = tokenizer if tokenizer is not None else _fake_tokenizer()
-    monkeypatch.setattr(r2_module, "_load_verified_contract", lambda _path: contract)
+    monkeypatch.setattr(
+        r2_module,
+        "_load_verified_contract",
+        _load_minimally_authenticated_contract_source,
+    )
     monkeypatch.setattr(r2_module, "_snapshot_inventory", _snapshot_fixture)
     monkeypatch.setattr(
         r2_module, "_tokenizer_contract", _tokenizer_contract_fixture
@@ -827,6 +888,21 @@ class _ValidFakeModel:
         return _valid_completion(), 17
 
 
+class _OffsetTokenizer(_FakeTokenizer):
+    def apply_chat_template(
+        self,
+        messages: object,
+        *,
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ) -> list[int]:
+        return super().apply_chat_template(
+            messages,
+            tokenize=tokenize,
+            add_generation_prompt=add_generation_prompt,
+        ) + [999]
+
+
 def test_r1_approval_cannot_authorize_r2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -981,8 +1057,156 @@ def _complete_r2_run_fixture(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def test_finalizer_rejects_nonfrozen_proposal_destination(tmp_path: Path) -> None:
+def _install_post_execution_drift(
+    frozen: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    preflight = frozen["preflight"]
+    assert isinstance(preflight, dict)
+    source_binding = preflight["contract_receipt"]
+    assert isinstance(source_binding, dict)
+    contract_root = Path(str(source_binding["path"]))
+    if drift == "missing_contract_receipt":
+        (contract_root / "receipt.json").unlink()
+    elif drift == "changed_contract_receipt":
+        receipt_path = contract_root / "receipt.json"
+        receipt = json.loads(receipt_path.read_bytes())
+        receipt["unit_count"] += 1
+        receipt_path.write_bytes(_pretty(receipt))
+    elif drift == "changed_contract_content":
+        units_path = contract_root / "units.jsonl"
+        rows = [json.loads(line) for line in units_path.read_bytes().splitlines()]
+        rows[0]["text"] += " Changed after execution."
+        rows[0]["text_sha256"] = sha256_text(rows[0]["text"])
+        units_path.write_bytes(
+            b"".join(
+                (
+                    json.dumps(
+                        row,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                    + "\n"
+                ).encode("utf-8")
+                for row in rows
+            )
+        )
+    elif drift == "model_snapshot":
+        changed = _snapshot_fixture()
+        changed["manifest_sha256"] = "f" * 64
+        monkeypatch.setattr(r2_module, "_snapshot_inventory", lambda: changed)
+    elif drift == "tokenizer_files":
+        changed_files = list(
+            r2_module._tokenizer_file_inventory(_snapshot_fixture())
+        )
+        changed_files[0] = {**changed_files[0], "content_sha256": "f" * 64}
+        monkeypatch.setattr(
+            r2_module,
+            "_tokenizer_file_inventory",
+            lambda _snapshot: changed_files,
+        )
+    elif drift == "tokenizer_contract":
+        changed = _tokenizer_contract_fixture()
+        changed["chat_template_sha256"] = "f" * 64
+        monkeypatch.setattr(r2_module, "_tokenizer_contract", lambda: changed)
+    elif drift == "code":
+        changed = dict(preflight["code_sha256"])
+        changed["adaptive_obligation_v2_propose.py"] = "f" * 64
+        monkeypatch.setattr(r2_module, "_code_contract", lambda: changed)
+    elif drift == "prompt_token_count":
+        tokenizer = _OffsetTokenizer()
+        monkeypatch.setattr(
+            r2_module,
+            "_load_pinned_tokenizer_after_auth",
+            lambda **_kwargs: tokenizer,
+        )
+    else:  # pragma: no cover - parametrization controls this branch
+        raise AssertionError(drift)
+
+
+_POST_EXECUTION_SOURCE_DRIFTS = (
+    "missing_contract_receipt",
+    "changed_contract_receipt",
+    "changed_contract_content",
+    "model_snapshot",
+    "tokenizer_files",
+    "tokenizer_contract",
+    "code",
+    "prompt_token_count",
+)
+
+
+@pytest.mark.parametrize("drift", _POST_EXECUTION_SOURCE_DRIFTS)
+def test_r2_finalizer_replays_and_rejects_post_execution_source_chain_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
     frozen = _complete_r2_run_fixture(tmp_path)
+    preflight = frozen["preflight"]
+    assert isinstance(preflight, dict)
+    _patch_verifier_dependencies(
+        monkeypatch,
+        contract=_load_minimally_authenticated_contract_source(
+            Path(str(preflight["contract_receipt"]["path"]))  # type: ignore[index]
+        ),
+    )
+    _install_post_execution_drift(frozen, monkeypatch, drift)
+
+    with pytest.raises((OSError, ValueError)):
+        finalize_r2_proposal_inventory(
+            preflight_dir=frozen["preflight_dir"],
+            approval_path=frozen["approval_path"],
+            ledger_dir=frozen["ledger_dir"],
+            output_dir=frozen["proposal_dir"],
+        )
+    assert not Path(frozen["proposal_dir"]).exists()
+
+
+@pytest.mark.parametrize("drift", _POST_EXECUTION_SOURCE_DRIFTS)
+def test_r2_loader_replays_and_rejects_post_execution_source_chain_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    frozen = _complete_r2_run_fixture(tmp_path)
+    preflight = frozen["preflight"]
+    assert isinstance(preflight, dict)
+    contract = _load_minimally_authenticated_contract_source(
+        Path(str(preflight["contract_receipt"]["path"]))  # type: ignore[index]
+    )
+    _patch_verifier_dependencies(monkeypatch, contract=contract)
+    finalize_r2_proposal_inventory(
+        preflight_dir=frozen["preflight_dir"],
+        approval_path=frozen["approval_path"],
+        ledger_dir=frozen["ledger_dir"],
+        output_dir=frozen["proposal_dir"],
+    )
+    _install_post_execution_drift(frozen, monkeypatch, drift)
+
+    with pytest.raises((OSError, ValueError)):
+        load_authenticated_r2_proposal_inventory(
+            output_dir=frozen["proposal_dir"],
+            preflight_dir=frozen["preflight_dir"],
+            ledger_dir=frozen["ledger_dir"],
+        )
+
+
+def test_finalizer_rejects_nonfrozen_proposal_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frozen = _complete_r2_run_fixture(tmp_path)
+    preflight = frozen["preflight"]
+    assert isinstance(preflight, dict)
+    _patch_verifier_dependencies(
+        monkeypatch,
+        contract=_load_minimally_authenticated_contract_source(
+            Path(str(preflight["contract_receipt"]["path"]))  # type: ignore[index]
+        ),
+    )
     with pytest.raises(ValueError, match="frozen proposal destination"):
         finalize_r2_proposal_inventory(
             preflight_dir=frozen["preflight_dir"],
@@ -994,9 +1218,17 @@ def test_finalizer_rejects_nonfrozen_proposal_destination(tmp_path: Path) -> Non
 
 
 def test_r2_finalizer_and_authenticated_loader_replay_sealed_results(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     frozen = _complete_r2_run_fixture(tmp_path)
+    preflight = frozen["preflight"]
+    assert isinstance(preflight, dict)
+    _patch_verifier_dependencies(
+        monkeypatch,
+        contract=_load_minimally_authenticated_contract_source(
+            Path(str(preflight["contract_receipt"]["path"]))  # type: ignore[index]
+        ),
+    )
     receipt = finalize_r2_proposal_inventory(
         preflight_dir=frozen["preflight_dir"],
         approval_path=frozen["approval_path"],

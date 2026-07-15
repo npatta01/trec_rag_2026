@@ -1018,6 +1018,151 @@ def _capture_static_r2_preflight(
     )
 
 
+def _capture_and_replay_authenticated_r2_source_chain(
+    path: Path,
+    *,
+    expected_receipt_sha256: str,
+) -> object:
+    """Authenticate captured R2 bytes and every frozen upstream dependency.
+
+    Unlike the inference-time verifier, this replay deliberately permits the
+    frozen ledger and proposal leaves to exist. It therefore starts from the
+    create-state-independent byte capture and then re-derives the complete
+    source chain without trusting receipt-only bindings.
+    """
+
+    captured = _capture_static_r2_preflight(
+        Path(path),
+        expected_receipt_sha256=expected_receipt_sha256,
+    )
+    receipt = captured.receipt
+    jobs = captured.jobs
+
+    source_binding = receipt.get("contract_receipt")
+    source_path = (
+        source_binding.get("path") if isinstance(source_binding, Mapping) else None
+    )
+    if not isinstance(source_path, str) or not source_path:
+        raise ValueError("authenticated R2 contract path is missing")
+    contract_root = Path(source_path)
+    try:
+        exact_source_path = (
+            contract_root.is_absolute()
+            and str(contract_root.resolve(strict=False)) == source_path
+        )
+    except (OSError, RuntimeError):
+        exact_source_path = False
+    if not exact_source_path:
+        raise ValueError("authenticated R2 contract path differs")
+
+    try:
+        contract_receipt_source = r1._capture_regular_file_no_symlinks(
+            contract_root / "receipt.json"
+        )
+        contract_receipt = json.loads(contract_receipt_source)
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("authenticated R2 contract receipt is unavailable") from exc
+    expected_source_binding = {
+        "path": source_path,
+        "sha256": r1._sha256(contract_receipt_source),
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+        "status": "complete",
+    }
+    if (
+        not isinstance(contract_receipt, dict)
+        or contract_receipt_source != r1._pretty_bytes(contract_receipt)
+        or contract_receipt.get("schema_version") != CONTRACT_SCHEMA_VERSION
+        or contract_receipt.get("status") != "complete"
+        or not _json_exact(source_binding, expected_source_binding)
+    ):
+        raise ValueError("authenticated R2 contract receipt identity differs")
+
+    contract = _load_verified_contract(contract_root)
+    if (
+        not isinstance(contract, Mapping)
+        or not _json_exact(contract.get("receipt"), contract_receipt)
+    ):
+        raise ValueError("authenticated R2 contract content differs from its receipt")
+    expected_jobs = build_r2_proposal_jobs(contract)
+    if len(expected_jobs) != len(jobs):
+        raise ValueError("authenticated R2 job reconstruction count differs")
+    for observed, expected in zip(jobs, expected_jobs, strict=True):
+        without_count = {
+            key: value
+            for key, value in observed.items()
+            if key != "prompt_token_count"
+        }
+        if not _json_exact(without_count, expected):
+            raise ValueError(
+                "authenticated R2 jobs differ from contract reconstruction"
+            )
+
+    observed_snapshot = _snapshot_inventory()
+    if (
+        not _json_exact(receipt.get("model_snapshot"), observed_snapshot)
+        or not _json_exact(
+            receipt.get("tokenizer_files"),
+            _tokenizer_file_inventory(observed_snapshot),
+        )
+    ):
+        raise ValueError("authenticated R2 model or tokenizer files differ")
+    observed_tokenizer_contract = _tokenizer_contract()
+    if (
+        not _json_exact(
+            receipt.get("tokenizer_contract"), observed_tokenizer_contract
+        )
+        or receipt.get("tokenizer_identity_sha256")
+        != canonical_sha256(observed_tokenizer_contract)
+    ):
+        raise ValueError("authenticated R2 tokenizer identity differs")
+    if not _json_exact(receipt.get("code_sha256"), _code_contract()):
+        raise ValueError("authenticated R2 frozen code identities differ")
+
+    counts = [int(job["prompt_token_count"]) for job in jobs]
+    prompt_counts = receipt.get("prompt_token_counts")
+    expected_prompt_counts = {
+        "count": len(counts),
+        "minimum": min(counts),
+        "maximum": max(counts),
+        "total": sum(counts),
+        "by_job": [
+            {
+                "job_id": job["job_id"],
+                "prompt_token_count": job["prompt_token_count"],
+            }
+            for job in jobs
+        ],
+    }
+    if not isinstance(prompt_counts, Mapping) or not _json_exact(
+        prompt_counts, expected_prompt_counts
+    ):
+        raise ValueError("authenticated R2 prompt token metadata differs")
+    tokenizer = _load_pinned_tokenizer_after_auth(snapshot_dir=r1.MODEL_SNAPSHOT)
+    recomputed: list[int] = []
+    for job in jobs:
+        token_ids = tokenizer.apply_chat_template(
+            job["messages"], tokenize=True, add_generation_prompt=True
+        )
+        if (
+            not isinstance(token_ids, Sequence)
+            or isinstance(token_ids, (str, bytes))
+            or not token_ids
+        ):
+            raise ValueError(
+                "pinned tokenizer returned an invalid authenticated R2 sequence"
+            )
+        recomputed.append(len(token_ids))
+    if recomputed != counts:
+        raise ValueError("authenticated R2 prompt token recount differs")
+    return captured
+
+
 def _load_r2_model_after_approval(
     *,
     approval: object,
@@ -1220,7 +1365,7 @@ def finalize_r2_proposal_inventory(
     """Publish R2 proposals only from the full sealed approved ledger."""
 
     captured_approval = _capture_r2_inference_approval(Path(approval_path))
-    captured_preflight = _capture_static_r2_preflight(
+    captured_preflight = _capture_and_replay_authenticated_r2_source_chain(
         Path(preflight_dir),
         expected_receipt_sha256=str(
             captured_approval.value["preflight_sha256"]
@@ -1299,7 +1444,7 @@ def load_authenticated_r2_proposal_inventory(
         or any(char not in "0123456789abcdef" for char in preflight_sha256)
     ):
         raise ValueError("R2 proposal inventory receipt differs")
-    captured_preflight = _capture_static_r2_preflight(
+    captured_preflight = _capture_and_replay_authenticated_r2_source_chain(
         Path(preflight_dir),
         expected_receipt_sha256=preflight_sha256,
     )
