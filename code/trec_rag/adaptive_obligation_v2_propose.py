@@ -25,12 +25,15 @@ from .adaptive_obligation_v2_ledger import (
 from .adaptive_obligation_v2_contract import (
     SCHEMA_VERSION as CONTRACT_SCHEMA_VERSION,
     canonical_sha256,
+    sha256_text,
     verify_v2_contract,
 )
 
 
 SCHEMA_VERSION = "adaptive-obligation-v2-proposal-preflight-v1"
 JOB_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-job-v1"
+PROPOSAL_INVENTORY_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-inventory-v1"
+PROPOSAL_RECEIPT_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-receipt-v1"
 MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
 MODEL_REVISION = "cdbee75f17c01a7cc42f958dc650907174af0554"
 PRIMARY_MAX_NEW_TOKENS = 256
@@ -46,6 +49,7 @@ MODEL_SNAPSHOT = (
 )
 
 _OUTPUT_NAMES = frozenset({"jobs.jsonl", "schema.json", "prompt.json", "receipt.json"})
+_PROPOSAL_INVENTORY_OUTPUT_NAMES = frozenset({"proposals.jsonl", "receipt.json"})
 _TOKENIZER_FILE_NAMES = frozenset(
     {"config.json", "merges.txt", "tokenizer.json", "tokenizer_config.json", "vocab.json"}
 )
@@ -1279,6 +1283,430 @@ def _build_run_anchor(
     }
 
 
+def _job_source_unit_bindings(
+    job: Mapping[str, object],
+) -> tuple[list[dict[str, object]], dict[str, dict[str, object]]]:
+    messages = job.get("messages")
+    input_unit_ids = job.get("input_unit_ids")
+    if (
+        not isinstance(messages, list)
+        or len(messages) != 2
+        or not isinstance(messages[1], Mapping)
+        or not isinstance(messages[1].get("content"), str)
+        or not isinstance(input_unit_ids, list)
+    ):
+        raise ValueError("proposal inventory frozen job messages differ")
+    try:
+        payload = json.loads(str(messages[1]["content"]))
+    except json.JSONDecodeError as exc:
+        raise ValueError("proposal inventory frozen job payload is invalid") from exc
+    evidence_units = payload.get("evidence_units") if isinstance(payload, dict) else None
+    if not isinstance(evidence_units, list) or any(
+        not isinstance(unit, Mapping) for unit in evidence_units
+    ):
+        raise ValueError("proposal inventory source units differ")
+    bindings: list[dict[str, object]] = []
+    by_id: dict[str, dict[str, object]] = {}
+    identity_names = (
+        "topic_id",
+        "parent_id",
+        "fold",
+        "document_id",
+        "window_id",
+        "start",
+        "end",
+        "text",
+    )
+    for source in evidence_units:
+        unit = dict(source)
+        if any(name not in unit for name in identity_names):
+            raise ValueError("proposal inventory source unit identity differs")
+        text = unit["text"]
+        identity = {name: unit[name] for name in identity_names}
+        unit_id = unit.get("unit_id")
+        if (
+            not isinstance(text, str)
+            or not isinstance(unit_id, str)
+            or unit_id != canonical_sha256(identity)
+            or unit.get("text_sha256") != sha256_text(text)
+            or unit.get("topic_id") != job.get("topic_id")
+            or unit.get("parent_id") != job.get("parent_id")
+            or unit.get("fold") != job.get("fold")
+            or unit_id in by_id
+        ):
+            raise ValueError("proposal inventory source unit identity or hash differs")
+        source_identity = {
+            "topic_id": unit["topic_id"],
+            "parent_id": unit["parent_id"],
+            "fold": unit["fold"],
+            "document_id": unit["document_id"],
+            "window_id": unit["window_id"],
+            "start": unit["start"],
+            "end": unit["end"],
+            "text_sha256": unit["text_sha256"],
+        }
+        binding = {
+            "unit_id": unit_id,
+            "document_id": unit["document_id"],
+            "window_id": unit["window_id"],
+            "text_sha256": unit["text_sha256"],
+            "source_identity_sha256": canonical_sha256(source_identity),
+        }
+        bindings.append(binding)
+        by_id[unit_id] = binding
+    if [binding["unit_id"] for binding in bindings] != input_unit_ids:
+        raise ValueError("proposal inventory source unit order differs")
+    return bindings, by_id
+
+
+def _proposal_inventory_record(
+    job: Mapping[str, object],
+    sealed_result: Mapping[str, object],
+    *,
+    source_contract_receipt_sha256: str,
+) -> dict[str, object]:
+    if sealed_result.get("job_id") != job.get("job_id"):
+        raise ValueError("proposal inventory sealed job identity differs")
+    value = sealed_result.get("value")
+    if not isinstance(value, Mapping):
+        raise ValueError("proposal inventory sealed value differs")
+    all_units, unit_by_id = _job_source_unit_bindings(job)
+    status = value.get("status")
+    reason_code = value.get("reason_code")
+    if status == "SUPPORTED":
+        o1 = value.get("o1")
+        if not isinstance(o1, Mapping):
+            raise ValueError("proposal inventory supported value differs")
+        label = o1.get("label")
+        rationale = o1.get("scope_rationale")
+        support_unit_ids = o1.get("support_unit_ids")
+        if (
+            not isinstance(label, str)
+            or not isinstance(rationale, str)
+            or not isinstance(support_unit_ids, list)
+            or any(unit_id not in unit_by_id for unit_id in support_unit_ids)
+        ):
+            raise ValueError("proposal inventory supported fields differ")
+        support_units = [unit_by_id[str(unit_id)] for unit_id in support_unit_ids]
+        rationale_sha256: str | None = sha256_text(rationale)
+    elif status == "UNSUPPORTED":
+        label = None
+        support_unit_ids = []
+        support_units = []
+        rationale_sha256 = None
+    else:
+        raise ValueError("proposal inventory status differs")
+    identity = {
+        "job_id": job.get("job_id"),
+        "topic_id": job.get("topic_id"),
+        "parent_id": job.get("parent_id"),
+        "proposal_fold": job.get("fold"),
+        "parent_manifest_order": job.get("parent_manifest_order"),
+        "source_reservoir_id": job.get("reservoir_id"),
+        "status": status,
+        "reason_code": reason_code,
+        "label": label,
+        "scope_rationale_sha256": rationale_sha256,
+        "support_unit_ids": support_unit_ids,
+        "support_units": support_units,
+        "source_unit_inventory_sha256": canonical_sha256(all_units),
+        "source_contract_receipt_sha256": source_contract_receipt_sha256,
+        "job_messages_sha256": job.get("messages_sha256"),
+        "proposal_schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+        "attempt_ordinal": sealed_result.get("attempt_ordinal"),
+        "output_token_count": sealed_result.get("output_token_count"),
+        "raw_completion_bytes": sealed_result.get("raw_bytes"),
+        "raw_completion_sha256": sealed_result.get("raw_sha256"),
+    }
+    if (
+        not isinstance(identity["topic_id"], str)
+        or identity["topic_id"] not in PILOT_TOPIC_IDS
+        or not isinstance(identity["parent_id"], str)
+        or identity["proposal_fold"] not in (0, 1)
+        or isinstance(identity["proposal_fold"], bool)
+        or not isinstance(identity["parent_manifest_order"], int)
+        or isinstance(identity["parent_manifest_order"], bool)
+        or not isinstance(identity["source_reservoir_id"], str)
+        or identity["job_messages_sha256"] != canonical_sha256(job.get("messages"))
+    ):
+        raise ValueError("proposal inventory frozen job metadata differs")
+    return {
+        "schema_version": PROPOSAL_INVENTORY_SCHEMA_VERSION,
+        "proposal_id": canonical_sha256(identity),
+        **identity,
+    }
+
+
+def _proposal_inventory_material(
+    captured_preflight: _CapturedPreflight,
+    *,
+    approval_sha256: str,
+    sealed: Mapping[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object], dict[str, bytes]]:
+    jobs = captured_preflight.jobs
+    expected_anchor = _build_run_anchor(
+        jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=approval_sha256,
+    )
+    if sealed.get("anchor") != expected_anchor:
+        raise ValueError("proposal inventory differs from the sealed ledger anchor")
+    results = sealed.get("results")
+    completion = sealed.get("completion")
+    if (
+        not isinstance(results, list)
+        or len(results) != len(jobs)
+        or not isinstance(completion, Mapping)
+        or completion.get("completed_job_count") != len(jobs)
+        or sealed.get("anchor_sha256") != completion.get("anchor_sha256")
+    ):
+        raise ValueError("proposal inventory sealed completion differs")
+    source_contract = captured_preflight.receipt.get("contract_receipt")
+    if not isinstance(source_contract, Mapping) or not isinstance(
+        source_contract.get("sha256"), str
+    ):
+        raise ValueError("proposal inventory source contract binding differs")
+    jobs_source = captured_preflight.contents.get("jobs.jsonl")
+    jobs_binding = captured_preflight.receipt.get("artifacts")
+    jobs_artifact = (
+        jobs_binding.get("jobs.jsonl") if isinstance(jobs_binding, Mapping) else None
+    )
+    if (
+        not isinstance(jobs_source, bytes)
+        or not isinstance(jobs_artifact, Mapping)
+        or jobs_artifact.get("sha256") != _sha256(jobs_source)
+        or jobs_artifact.get("bytes") != len(jobs_source)
+        or jobs_artifact.get("rows") != len(jobs)
+    ):
+        raise ValueError("proposal inventory preflight job artifact differs")
+    proposal_rows = [
+        _proposal_inventory_record(
+            job,
+            result,
+            source_contract_receipt_sha256=str(source_contract["sha256"]),
+        )
+        for job, result in zip(jobs, results, strict=True)
+    ]
+    if len({row["proposal_id"] for row in proposal_rows}) != len(proposal_rows):
+        raise ValueError("proposal inventory contains duplicate proposal identities")
+    proposals_source = b"".join(_compact_bytes(row) for row in proposal_rows)
+    supported_count = sum(row["status"] == "SUPPORTED" for row in proposal_rows)
+    receipt: dict[str, object] = {
+        "schema_version": PROPOSAL_RECEIPT_SCHEMA_VERSION,
+        "status": "complete",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "job_count": len(jobs),
+        "proposal_count": len(proposal_rows),
+        "supported_count": supported_count,
+        "unsupported_count": len(proposal_rows) - supported_count,
+        "proposals_sha256": _sha256(proposals_source),
+        "proposal_schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+        "proposal_preflight_receipt_sha256": captured_preflight.receipt_sha256,
+        "proposal_preflight_jobs_sha256": _sha256(jobs_source),
+        "source_contract_receipt_sha256": source_contract["sha256"],
+        "approval_sha256": approval_sha256,
+        "run_anchor_sha256": sealed.get("anchor_sha256"),
+        "completion_sha256": sealed.get("completion_sha256"),
+        "completion": dict(completion),
+        "primary_call_count": len(proposal_rows),
+        "retry_call_count": sum(
+            row.get("attempt_ordinal") == 2 for row in results if isinstance(row, Mapping)
+        ),
+        "artifacts": {
+            "proposals.jsonl": {
+                "path": "proposals.jsonl",
+                "rows": len(proposal_rows),
+                "bytes": len(proposals_source),
+                "sha256": _sha256(proposals_source),
+            }
+        },
+    }
+    contents = {
+        "proposals.jsonl": proposals_source,
+        "receipt.json": _pretty_bytes(receipt),
+    }
+    return proposal_rows, receipt, contents
+
+
+def _require_proposal_inventory(root: Path) -> None:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("proposal inventory root must be a regular directory")
+    entries = list(root.iterdir())
+    if {path.name for path in entries} != _PROPOSAL_INVENTORY_OUTPUT_NAMES or any(
+        path.is_symlink() or not path.is_file() for path in entries
+    ):
+        raise ValueError("proposal inventory is partial, unexpected, or unsafe")
+
+
+def _publish_proposal_inventory(
+    destination: Path, contents: Mapping[str, bytes]
+) -> None:
+    if _path_present(destination):
+        raise FileExistsError(f"create-only proposal inventory exists: {destination}")
+    try:
+        parent_descriptor = _open_directory_no_symlinks(destination.parent)
+    except OSError as exc:
+        raise ValueError("proposal inventory output parent is missing or unsafe") from exc
+    else:
+        os.close(parent_descriptor)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
+    )
+    published = False
+    try:
+        for name in ("proposals.jsonl", "receipt.json"):
+            _write_fsynced(staging / name, contents[name])
+        _require_proposal_inventory(staging)
+        if any((staging / name).read_bytes() != source for name, source in contents.items()):
+            raise ValueError("staged proposal inventory bytes differ")
+        _fsync_directory(staging)
+        _rename_noreplace(staging, destination)
+        published = True
+        _fsync_directory(destination.parent)
+    finally:
+        if not published and staging.exists():
+            shutil.rmtree(staging)
+
+
+def _capture_proposal_inventory_files(path: Path) -> dict[str, bytes]:
+    try:
+        directory_fd = _open_directory_no_symlinks(Path(path))
+        try:
+            before = os.fstat(directory_fd)
+            names_before = set(os.listdir(directory_fd))
+            if names_before != _PROPOSAL_INVENTORY_OUTPUT_NAMES:
+                raise OSError("proposal inventory differs")
+            contents = {
+                name: _read_stable_regular_at(
+                    directory_fd, name, require_single_link=True
+                )
+                for name in sorted(_PROPOSAL_INVENTORY_OUTPUT_NAMES)
+            }
+            names_after = set(os.listdir(directory_fd))
+            after = os.fstat(directory_fd)
+            if (
+                names_after != names_before
+                or before.st_dev != after.st_dev
+                or before.st_ino != after.st_ino
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise OSError("proposal inventory changed while being captured")
+            return contents
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise ValueError("proposal inventory is missing or unsafe") from exc
+
+
+def _read_proposal_rows(source: bytes) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        try:
+            row = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"proposals.jsonl:{line_number} is invalid JSON"
+            ) from exc
+        if not isinstance(row, dict) or line != _compact_bytes(row).rstrip(b"\n"):
+            raise ValueError(f"proposals.jsonl:{line_number} is not canonical")
+        rows.append(row)
+    return rows
+
+
+def finalize_proposal_inventory(
+    *,
+    preflight_dir: Path,
+    approval_path: Path,
+    ledger_dir: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    """Publish canonical proposals only by replaying a sealed approved run."""
+
+    captured_approval = _capture_inference_approval(Path(approval_path))
+    captured_preflight = _capture_and_verify_preflight(
+        Path(preflight_dir),
+        expected_receipt_sha256=str(captured_approval.value["preflight_sha256"]),
+    )
+    preflight = {
+        **captured_preflight.receipt,
+        "receipt_sha256": captured_preflight.receipt_sha256,
+    }
+    from .adaptive_obligation_v2_local_model import verify_inference_approval
+
+    verify_inference_approval(captured_approval.value, preflight)
+    expected_anchor = _build_run_anchor(
+        captured_preflight.jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=captured_approval.sha256,
+    )
+    ledger = AppendOnlyAttemptLedger(
+        Path(ledger_dir), expected_anchor=expected_anchor, create_only=False
+    )
+    sealed = ledger.read_sealed_results()
+    _rows, receipt, contents = _proposal_inventory_material(
+        captured_preflight,
+        approval_sha256=captured_approval.sha256,
+        sealed=sealed,
+    )
+    _publish_proposal_inventory(Path(output_dir), contents)
+    return receipt
+
+
+def load_authenticated_proposal_inventory(
+    *,
+    output_dir: Path,
+    preflight_dir: Path,
+    ledger_dir: Path,
+) -> dict[str, object]:
+    """Capture and replay-verify the durable proposal inventory for Task 4."""
+
+    contents = _capture_proposal_inventory_files(Path(output_dir))
+    try:
+        receipt = json.loads(contents["receipt.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("proposal inventory receipt is invalid JSON") from exc
+    if (
+        not isinstance(receipt, dict)
+        or contents["receipt.json"] != _pretty_bytes(receipt)
+        or receipt.get("schema_version") != PROPOSAL_RECEIPT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or not isinstance(receipt.get("proposal_preflight_receipt_sha256"), str)
+        or not isinstance(receipt.get("approval_sha256"), str)
+    ):
+        raise ValueError("proposal inventory receipt differs")
+    captured_preflight = _capture_and_verify_preflight(
+        Path(preflight_dir),
+        expected_receipt_sha256=str(receipt["proposal_preflight_receipt_sha256"]),
+    )
+    expected_anchor = _build_run_anchor(
+        captured_preflight.jobs,
+        preflight_sha256=captured_preflight.receipt_sha256,
+        approval_sha256=str(receipt["approval_sha256"]),
+    )
+    ledger = AppendOnlyAttemptLedger(
+        Path(ledger_dir), expected_anchor=expected_anchor, create_only=False
+    )
+    sealed = ledger.read_sealed_results()
+    expected_rows, expected_receipt, expected_contents = _proposal_inventory_material(
+        captured_preflight,
+        approval_sha256=str(receipt["approval_sha256"]),
+        sealed=sealed,
+    )
+    observed_rows = _read_proposal_rows(contents["proposals.jsonl"])
+    if (
+        contents != expected_contents
+        or receipt != expected_receipt
+        or observed_rows != expected_rows
+    ):
+        raise ValueError("proposal inventory differs from the sealed ledger replay")
+    return {
+        "proposals": observed_rows,
+        "receipt": receipt,
+        "receipt_sha256": _sha256(contents["receipt.json"]),
+    }
+
+
 def run_job_with_retry(
     job: Mapping[str, object],
     *,
@@ -1420,6 +1848,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     execute.add_argument("--preflight", type=Path, required=True)
     execute.add_argument("--approval", type=Path, required=True)
     execute.add_argument("--output", type=Path, required=True)
+    finalize = subparsers.add_parser(
+        "finalize", help="materialize canonical proposals from a sealed ledger"
+    )
+    finalize.add_argument("--preflight", type=Path, required=True)
+    finalize.add_argument("--approval", type=Path, required=True)
+    finalize.add_argument("--ledger", type=Path, required=True)
+    finalize.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "build-preflight":
         contract = _load_verified_contract(args.contract)
@@ -1438,13 +1873,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.command == "verify-preflight":
         receipt = verify_proposal_preflight(args.output)
-    else:
+    elif args.command == "execute":
         result = execute_proposals(
             preflight_dir=args.preflight,
             approval_path=args.approval,
             output_dir=args.output,
         )
         print(_compact(result))
+        return 0
+    else:
+        receipt = finalize_proposal_inventory(
+            preflight_dir=args.preflight,
+            approval_path=args.approval,
+            ledger_dir=args.ledger,
+            output_dir=args.output,
+        )
+        print(
+            _compact(
+                {
+                    "status": "complete",
+                    "proposals": receipt["proposal_count"],
+                    "supported": receipt["supported_count"],
+                }
+            )
+        )
         return 0
     print(
         _compact(

@@ -96,6 +96,48 @@ def test_attempt_start_precedes_model_call(tmp_path: Path) -> None:
     assert observed[-1]["state"] == "started"
 
 
+def test_sealed_result_snapshot_replays_exact_raw_values(tmp_path: Path) -> None:
+    root = tmp_path / "ledger"
+    ledger = _new_ledger(root)
+    ledger.run_attempt(
+        _attempt(),
+        lambda _messages, _schema, _ceiling: (_valid_unsupported_bytes(), 9),
+        schema=PROPOSAL_SCHEMA,
+        allowed_support_unit_ids=[],
+    )
+    ledger.seal_completion()
+
+    snapshot = ledger.read_sealed_results()
+    assert snapshot["anchor"] == _anchor()
+    assert snapshot["completion"]["completed_job_count"] == 1
+    assert snapshot["results"] == [
+        {
+            "job_id": "a" * 64,
+            "attempt_ordinal": 1,
+            "output_token_count": 9,
+            "raw_bytes": len(_valid_unsupported_bytes()),
+            "raw_sha256": ledger_module._sha256(_valid_unsupported_bytes()),
+            "value": {
+                "status": "UNSUPPORTED",
+                "reason_code": "NO_ABSTRACT_CHILD",
+                "o1": None,
+            },
+        }
+    ]
+
+
+def test_result_snapshot_rejects_nonsealed_ledger(tmp_path: Path) -> None:
+    ledger = _new_ledger(tmp_path / "ledger")
+    ledger.run_attempt(
+        _attempt(),
+        lambda _messages, _schema, _ceiling: (_valid_unsupported_bytes(), 9),
+        schema=PROPOSAL_SCHEMA,
+        allowed_support_unit_ids=[],
+    )
+    with pytest.raises(ValueError, match="sealed"):
+        ledger.read_sealed_results()
+
+
 def test_classify_completion_requires_exact_ceiling_for_truncation() -> None:
     at_ceiling = classify_completion(
         b'{"status":',

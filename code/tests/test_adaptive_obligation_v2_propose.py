@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 import trec_rag.adaptive_obligation_v2_propose as propose_module
+import trec_rag.adaptive_obligation_v2_local_model as local_model_module
 from trec_rag.adaptive_evidence_contract import PILOT_TOPIC_IDS
 from trec_rag.adaptive_obligation_v2_contract import (
     PARENT_SCHEMA_VERSION,
@@ -23,16 +25,20 @@ from trec_rag.adaptive_obligation_v2_contract import (
 from trec_rag.adaptive_obligation_v2_propose import (
     MODEL_ID,
     MODEL_REVISION,
+    PROPOSAL_INVENTORY_SCHEMA_VERSION,
+    PROPOSAL_RECEIPT_SCHEMA_VERSION,
     PROPOSAL_SCHEMA,
     _snapshot_inventory,
     _load_local_tokenizer,
     build_proposal_jobs,
     build_proposal_preflight,
     execute_proposals,
+    finalize_proposal_inventory,
     main,
     run_job_with_retry,
     verify_proposal_preflight,
 )
+from trec_rag.adaptive_obligation_v2_validate import build_validation_preflight
 
 
 def _contract_fixture() -> dict[str, object]:
@@ -638,6 +644,265 @@ def _execution_capture(tmp_path: Path) -> tuple[object, object]:
         contents={},
     )
     return approval, preflight
+
+
+def _sealed_proposal_handoff_fixture(
+    tmp_path: Path,
+) -> tuple[
+    dict[str, object],
+    object,
+    object,
+    Path,
+    list[dict[str, object]],
+]:
+    contract = _contract_fixture()
+    jobs = build_proposal_jobs(contract)
+    preflight_sha256 = "d" * 64
+    approval_value = _approval_record(preflight_sha256)
+    approval_source = _pretty(approval_value)
+    approval = propose_module._CapturedApproval(
+        value=approval_value,
+        source=approval_source,
+        sha256=hashlib.sha256(approval_source).hexdigest(),
+    )
+    jobs_source = b"".join(propose_module._compact_bytes(job) for job in jobs)
+    preflight_receipt = {
+        "schema_version": propose_module.SCHEMA_VERSION,
+        "status": "complete",
+        "job_count": 48,
+        "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+        "contract_receipt": {"sha256": "c" * 64},
+        "artifacts": {
+            "jobs.jsonl": {
+                "path": "jobs.jsonl",
+                "rows": 48,
+                "bytes": len(jobs_source),
+                "sha256": hashlib.sha256(jobs_source).hexdigest(),
+            }
+        },
+    }
+    preflight = propose_module._CapturedPreflight(
+        receipt=preflight_receipt,
+        receipt_sha256=preflight_sha256,
+        jobs=jobs,
+        contents={"jobs.jsonl": jobs_source},
+    )
+    anchor = propose_module._build_run_anchor(
+        jobs,
+        preflight_sha256=preflight_sha256,
+        approval_sha256=approval.sha256,
+    )
+    ledger_root = tmp_path / "proposal-ledger"
+    ledger = propose_module.AppendOnlyAttemptLedger(
+        ledger_root,
+        expected_anchor=anchor,
+        create_only=True,
+    )
+    first_support = str(jobs[0]["input_unit_ids"][0])  # type: ignore[index]
+    for index, job in enumerate(jobs):
+        value = (
+            {
+                "status": "SUPPORTED",
+                "reason_code": "SUPPORTED",
+                "o1": {
+                    "label": "demographic screening audit need",
+                    "scope_rationale": "Independent evidence names a reusable need.",
+                    "support_unit_ids": [first_support],
+                },
+            }
+            if index == 0
+            else {
+                "status": "UNSUPPORTED",
+                "reason_code": "NO_ABSTRACT_CHILD",
+                "o1": None,
+            }
+        )
+        raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+        run_job_with_retry(
+            job,
+            generate=lambda _ceiling, result=raw: (result, 20),
+            ledger=ledger,
+        )
+    ledger.seal_completion()
+    return contract, approval, preflight, ledger_root, jobs
+
+
+def test_sealed_ledger_finalizer_feeds_authenticated_task4_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, approval, preflight, ledger_root, jobs = (
+        _sealed_proposal_handoff_fixture(tmp_path)
+    )
+    monkeypatch.setattr(
+        propose_module, "_capture_inference_approval", lambda _path: approval
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_capture_and_verify_preflight",
+        lambda _path, **_kwargs: preflight,
+    )
+    monkeypatch.setattr(
+        local_model_module, "verify_inference_approval", lambda _approval, _preflight: None
+    )
+    inventory_root = tmp_path / "proposal-inventory"
+    receipt = finalize_proposal_inventory(
+        preflight_dir=tmp_path / "captured-preflight",
+        approval_path=tmp_path / "captured-approval",
+        ledger_dir=ledger_root,
+        output_dir=inventory_root,
+    )
+    proposals = [
+        json.loads(line)
+        for line in (inventory_root / "proposals.jsonl").read_bytes().splitlines()
+    ]
+    assert set(path.name for path in inventory_root.iterdir()) == {
+        "proposals.jsonl",
+        "receipt.json",
+    }
+    assert receipt["schema_version"] == PROPOSAL_RECEIPT_SCHEMA_VERSION
+    assert receipt["proposal_count"] == 48
+    assert receipt["supported_count"] == 1
+    assert receipt["run_anchor_sha256"] == json.loads(
+        (ledger_root / "completion.json").read_bytes()
+    )["anchor_sha256"]
+    assert proposals[0]["schema_version"] == PROPOSAL_INVENTORY_SCHEMA_VERSION
+    assert proposals[0]["job_id"] == jobs[0]["job_id"]
+    assert proposals[0]["topic_id"] == jobs[0]["topic_id"]
+    assert proposals[0]["parent_id"] == jobs[0]["parent_id"]
+    assert proposals[0]["proposal_fold"] == jobs[0]["fold"]
+    assert proposals[0]["parent_manifest_order"] == jobs[0]["parent_manifest_order"]
+    assert proposals[0]["label"] == "demographic screening audit need"
+    assert proposals[0]["support_unit_ids"] == [jobs[0]["input_unit_ids"][0]]
+    assert proposals[0]["support_units"][0]["text_sha256"]
+    assert proposals[0]["raw_completion_sha256"]
+
+    with pytest.raises(FileExistsError, match="create-only proposal inventory"):
+        finalize_proposal_inventory(
+            preflight_dir=tmp_path / "captured-preflight",
+            approval_path=tmp_path / "captured-approval",
+            ledger_dir=ledger_root,
+            output_dir=inventory_root,
+        )
+
+    real_parent = tmp_path / "real-inventory-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-inventory-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="parent.*unsafe"):
+        finalize_proposal_inventory(
+            preflight_dir=tmp_path / "captured-preflight",
+            approval_path=tmp_path / "captured-approval",
+            ledger_dir=ledger_root,
+            output_dir=linked_parent / "inventory",
+        )
+    assert not (real_parent / "inventory").exists()
+
+    validation = build_validation_preflight(
+        contract,
+        proposal_inventory_dir=inventory_root,
+        proposal_preflight_dir=tmp_path / "captured-preflight",
+        proposal_ledger_dir=ledger_root,
+    )
+    assert validation["job_count"] == 1
+    assert validation["proposal_receipt"]["sha256"] == hashlib.sha256(
+        (inventory_root / "receipt.json").read_bytes()
+    ).hexdigest()
+
+    linked_inventory = tmp_path / "linked-proposal-inventory"
+    linked_inventory.symlink_to(inventory_root, target_is_directory=True)
+    with pytest.raises(ValueError, match="inventory.*unsafe"):
+        build_validation_preflight(
+            contract,
+            proposal_inventory_dir=linked_inventory,
+            proposal_preflight_dir=tmp_path / "captured-preflight",
+            proposal_ledger_dir=ledger_root,
+        )
+
+    forged_root = tmp_path / "forged-inventory"
+    shutil.copytree(inventory_root, forged_root)
+    forged = [dict(row) for row in proposals]
+    forged[0]["label"] = "attacker changed label"
+    identity = {
+        key: value
+        for key, value in forged[0].items()
+        if key not in {"schema_version", "proposal_id"}
+    }
+    forged[0]["proposal_id"] = canonical_sha256(identity)
+    forged_source = b"".join(propose_module._compact_bytes(row) for row in forged)
+    (forged_root / "proposals.jsonl").write_bytes(forged_source)
+    forged_receipt = json.loads((forged_root / "receipt.json").read_bytes())
+    forged_receipt["proposals_sha256"] = hashlib.sha256(forged_source).hexdigest()
+    forged_receipt["artifacts"]["proposals.jsonl"] = {
+        "path": "proposals.jsonl",
+        "rows": len(forged),
+        "bytes": len(forged_source),
+        "sha256": hashlib.sha256(forged_source).hexdigest(),
+    }
+    (forged_root / "receipt.json").write_bytes(_pretty(forged_receipt))
+    with pytest.raises(ValueError, match="sealed ledger"):
+        build_validation_preflight(
+            contract,
+            proposal_inventory_dir=forged_root,
+            proposal_preflight_dir=tmp_path / "captured-preflight",
+            proposal_ledger_dir=ledger_root,
+        )
+
+    missing_job_preflight = propose_module._CapturedPreflight(
+        receipt=preflight.receipt,
+        receipt_sha256=preflight.receipt_sha256,
+        jobs=preflight.jobs[:-1],
+        contents=preflight.contents,
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_capture_and_verify_preflight",
+        lambda _path, **_kwargs: missing_job_preflight,
+    )
+    with pytest.raises(ValueError, match="exactly 48"):
+        finalize_proposal_inventory(
+            preflight_dir=tmp_path / "captured-preflight",
+            approval_path=tmp_path / "captured-approval",
+            ledger_dir=ledger_root,
+            output_dir=tmp_path / "missing-job-inventory",
+        )
+
+    reordered_preflight = propose_module._CapturedPreflight(
+        receipt=preflight.receipt,
+        receipt_sha256=preflight.receipt_sha256,
+        jobs=list(reversed(preflight.jobs)),
+        contents=preflight.contents,
+    )
+    monkeypatch.setattr(
+        propose_module,
+        "_capture_and_verify_preflight",
+        lambda _path, **_kwargs: reordered_preflight,
+    )
+    with pytest.raises(ValueError, match="anchor"):
+        finalize_proposal_inventory(
+            preflight_dir=tmp_path / "captured-preflight",
+            approval_path=tmp_path / "captured-approval",
+            ledger_dir=ledger_root,
+            output_dir=tmp_path / "reordered-job-inventory",
+        )
+
+
+def test_finalize_cli_requires_approval_before_output(tmp_path: Path) -> None:
+    output = tmp_path / "proposal-inventory"
+    with pytest.raises(PermissionError, match="proposal inference approval required"):
+        main(
+            [
+                "finalize",
+                "--preflight",
+                str(tmp_path / "missing-preflight"),
+                "--approval",
+                str(tmp_path / "missing-approval"),
+                "--ledger",
+                str(tmp_path / "missing-ledger"),
+                "--output",
+                str(output),
+            ]
+        )
+    assert not output.exists()
 
 
 def test_execute_atomically_claims_output_before_model_and_second_executor_loses(

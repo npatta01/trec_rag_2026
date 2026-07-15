@@ -9,6 +9,10 @@ from collections.abc import Mapping, Sequence
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .adaptive_obligation_v2_contract import canonical_sha256, sha256_text
 from .adaptive_obligation_v2_ledger import AttemptSpec
+from .adaptive_obligation_v2_propose import (
+    PROPOSAL_RECEIPT_SCHEMA_VERSION,
+    load_authenticated_proposal_inventory,
+)
 
 
 VALIDATION_DECISIONS = (
@@ -21,7 +25,6 @@ VALIDATION_DECISIONS = (
 )
 
 SCHEMA_VERSION = "adaptive-obligation-v2-validation-preflight-v1"
-PROPOSAL_RECEIPT_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-receipt-v1"
 JOB_SCHEMA_VERSION = "adaptive-obligation-v2-validation-job-v1"
 PRIMARY_MAX_NEW_TOKENS = 256
 RETRY_MAX_NEW_TOKENS = 512
@@ -233,9 +236,9 @@ def validate_proposal_record(
         "proposal_fold": int(proposal_fold),
         "label": label,
         "normalized_label": normalized,
-        "proposal_document_ids": [
-            str(unit["document_id"]) for unit in supporting_units
-        ],
+        "proposal_document_ids": list(
+            dict.fromkeys(str(unit["document_id"]) for unit in supporting_units)
+        ),
     }
 
 
@@ -403,10 +406,9 @@ def _proposal_documents(proposal: Mapping[str, object]) -> list[str]:
         not isinstance(values, list)
         or not values
         or any(not isinstance(value, str) or not value for value in values)
-        or len(set(values)) != len(values)
     ):
         return []
-    return list(values)
+    return list(dict.fromkeys(values))
 
 
 def validate_semantic_decision(
@@ -542,11 +544,18 @@ def accept_validated_o1(
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         raise ValueError("validated O1 rows must be an array")
     eligible: list[Mapping[str, object]] = []
+    seen_proposal_ids: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
             raise ValueError("validated O1 rows must contain objects")
         if row.get("accepted") is not True or row.get("decision") != "SUPPORTED":
             continue
+        proposal_id = row.get("proposal_id")
+        if not isinstance(proposal_id, str) or not proposal_id:
+            raise ValueError("validated O1 proposal identity differs")
+        if proposal_id in seen_proposal_ids:
+            raise ValueError("validated O1 contains a duplicate proposal ID")
+        seen_proposal_ids.add(proposal_id)
         topic_id = str(row.get("topic_id"))
         if topic_id in PROTECTED_TOPIC_IDS:
             raise ValueError(f"protected topic {topic_id} is forbidden")
@@ -578,33 +587,41 @@ def accept_validated_o1(
 
 
 def build_validation_preflight(
-    proposals: Sequence[Mapping[str, object]],
     contract: object,
     *,
-    proposal_receipt: Mapping[str, object],
-    proposal_receipt_sha256: str,
+    proposal_inventory_dir: object,
+    proposal_preflight_dir: object,
+    proposal_ledger_dir: object,
 ) -> dict[str, object]:
-    """Plan exact V/V/2V calls only after authenticating complete proposals."""
+    """Plan exact V/V/2V calls from a replay-authenticated proposal inventory."""
 
-    if not isinstance(proposal_receipt, Mapping) or (
-        not isinstance(proposal_receipt_sha256, str)
-        or not re.fullmatch(r"[0-9a-f]{64}", proposal_receipt_sha256)
-        or canonical_sha256(proposal_receipt) != proposal_receipt_sha256
-    ):
-        raise ValueError("validation requires an authenticated proposal receipt")
+    authenticated = load_authenticated_proposal_inventory(
+        output_dir=proposal_inventory_dir,  # type: ignore[arg-type]
+        preflight_dir=proposal_preflight_dir,  # type: ignore[arg-type]
+        ledger_dir=proposal_ledger_dir,  # type: ignore[arg-type]
+    )
+    proposals = authenticated.get("proposals")
+    proposal_receipt = authenticated.get("receipt")
+    proposal_receipt_sha256 = authenticated.get("receipt_sha256")
     if (
-        proposal_receipt.get("schema_version") != PROPOSAL_RECEIPT_SCHEMA_VERSION
+        not isinstance(proposals, list)
+        or any(not isinstance(row, Mapping) for row in proposals)
+        or not isinstance(proposal_receipt, Mapping)
+        or not isinstance(proposal_receipt_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", proposal_receipt_sha256)
+        or proposal_receipt.get("schema_version")
+        != PROPOSAL_RECEIPT_SCHEMA_VERSION
         or proposal_receipt.get("status") != "complete"
     ):
-        raise ValueError("validation proposal receipt must be complete")
-    if not isinstance(proposals, Sequence) or isinstance(proposals, (str, bytes)):
-        raise ValueError("validation proposals must be an array")
+        raise ValueError("validation requires an authenticated proposal receipt")
     completion = proposal_receipt.get("completion")
     if (
         proposal_receipt.get("proposal_count") != len(proposals)
-        or proposal_receipt.get("proposals_sha256") != canonical_sha256(proposals)
+        or proposal_receipt.get("job_count") != len(proposals)
         or not isinstance(completion, Mapping)
         or completion.get("completed_job_count") != len(proposals)
+        or proposal_receipt.get("run_anchor_sha256")
+        != completion.get("anchor_sha256")
     ):
         raise ValueError("validation proposal receipt binding differs")
 
@@ -629,6 +646,11 @@ def build_validation_preflight(
             "sha256": proposal_receipt_sha256,
             "proposal_count": proposal_receipt["proposal_count"],
             "proposals_sha256": proposal_receipt["proposals_sha256"],
+            "proposal_preflight_receipt_sha256": proposal_receipt[
+                "proposal_preflight_receipt_sha256"
+            ],
+            "run_anchor_sha256": proposal_receipt["run_anchor_sha256"],
+            "completion_sha256": proposal_receipt["completion_sha256"],
         },
         "expected_runtime": {
             "phase": "inference_free_preflight",

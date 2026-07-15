@@ -916,6 +916,63 @@ class AppendOnlyAttemptLedger:
     def read_events(self) -> list[dict[str, object]]:
         return [dict(row) for row in self._verify(allow_incomplete=True)]
 
+    def read_sealed_results(self) -> dict[str, object]:
+        """Replay one immutable parsed result per anchored job from a sealed run."""
+
+        with self._mutation_lock():
+            events = self._verify(allow_incomplete=False)
+            if not self.completion_path.is_file() or self.completion_path.is_symlink():
+                raise ValueError("proposal ledger must be sealed before results are read")
+            completion_source = self.completion_path.read_bytes()
+            completion = json.loads(completion_source)
+            terminal_by_job = {
+                str(event["job_id"]): event
+                for event in events
+                if event.get("state") == "terminal"
+                and event.get("classification") == "valid"
+            }
+            if len(terminal_by_job) != self.anchor["job_count"]:
+                raise ValueError("proposal ledger sealed result inventory differs")
+            results: list[dict[str, object]] = []
+            for anchored_job in self.anchor["jobs"]:  # type: ignore[index]
+                job_id = str(anchored_job["job_id"])
+                event = terminal_by_job.get(job_id)
+                if event is None:
+                    raise ValueError("proposal ledger sealed result is missing")
+                raw = (self.raw_dir / str(event["raw_path"])).read_bytes()
+                classified = classify_completion(
+                    raw,
+                    schema=self.anchor["schema"],  # type: ignore[arg-type]
+                    output_token_count=int(event["output_token_count"]),
+                    max_new_tokens=int(event["max_new_tokens"]),
+                    allowed_support_unit_ids=self._support_by_job[job_id],
+                )
+                if classified.get("classification") != "valid" or not isinstance(
+                    classified.get("value"), dict
+                ):
+                    raise ValueError("proposal ledger sealed result replay differs")
+                results.append(
+                    {
+                        "job_id": job_id,
+                        "attempt_ordinal": event["attempt_ordinal"],
+                        "output_token_count": event["output_token_count"],
+                        "raw_bytes": event["raw_bytes"],
+                        "raw_sha256": event["raw_sha256"],
+                        "value": classified["value"],
+                    }
+                )
+            if self._verify(allow_incomplete=False) != events:
+                raise ValueError("proposal ledger changed while results were read")
+            if self.completion_path.read_bytes() != completion_source:
+                raise ValueError("proposal ledger completion changed while results were read")
+            return {
+                "anchor": json.loads(_canonical_bytes(self.anchor)),
+                "anchor_sha256": self._anchor_sha256,
+                "completion": completion,
+                "completion_sha256": _sha256(completion_source),
+                "results": results,
+            }
+
     def _append(self, event: Mapping[str, object]) -> dict[str, object]:
         events = self._verify(allow_incomplete=True)
         previous = str(events[-1]["event_sha256"]) if events else "0" * 64

@@ -211,7 +211,9 @@ def test_protected_unsupported_proposal_rejects_before_contract_access() -> None
         build_validation_jobs([proposal], object())
 
 
-def test_preflight_rejects_protected_unsupported_before_contract_access() -> None:
+def test_preflight_rejects_protected_unsupported_before_contract_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proposal = _supported_proposal(
         topic_id="144",
         status="UNSUPPORTED",
@@ -219,13 +221,18 @@ def test_preflight_rejects_protected_unsupported_before_contract_access() -> Non
         support_unit_ids=[],
     )
     proposals = [proposal]
-    receipt = _proposal_receipt(proposals)
+    authenticated = _authenticated_proposal_inventory(proposals)
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: authenticated,
+    )
     with pytest.raises(ValueError, match="protected"):
         build_validation_preflight(
-            proposals,
             object(),
-            proposal_receipt=receipt,
-            proposal_receipt_sha256=canonical_sha256(receipt),
+            proposal_inventory_dir=object(),
+            proposal_preflight_dir=object(),
+            proposal_ledger_dir=object(),
         )
 
 
@@ -277,6 +284,22 @@ def test_semantic_decision_requires_known_opposite_fold_distinct_document() -> N
     )
     assert rejected["accepted"] is False
     assert "distinct_document" in rejected["reasons"]
+
+
+def test_two_proposing_units_from_one_document_are_deduplicated() -> None:
+    contract = _contract_fixture()
+    opposite = contract["units"][1]  # type: ignore[index]
+    proposal = {
+        **_supported_proposal(),
+        "proposal_document_ids": ["proposal-document", "proposal-document"],
+    }
+    result = validate_semantic_decision(
+        proposal,
+        _decision(str(opposite["unit_id"])),
+        units={str(opposite["unit_id"]): opposite},
+    )
+    assert result["accepted"] is True
+    assert result["proposal_document_ids"] == ["proposal-document"]
 
 
 @pytest.mark.parametrize(
@@ -376,24 +399,56 @@ def test_acceptance_caps_one_parent_and_four_topic_deterministically() -> None:
     assert len({row["parent_id"] for row in accepted}) == 4
 
 
-def _proposal_receipt(proposals: list[dict[str, object]]) -> dict[str, object]:
-    return {
+def test_acceptance_rejects_duplicate_proposal_ids_before_capping() -> None:
+    rows = [
+        _validated_row("duplicate", "parent-a", 0, "alpha", ["a", "b"]),
+        _validated_row("duplicate", "parent-b", 1, "beta", ["c", "d"]),
+    ]
+    with pytest.raises(ValueError, match="duplicate proposal"):
+        accept_validated_o1(rows)
+    with pytest.raises(ValueError, match="duplicate proposal"):
+        accept_validated_o1(list(reversed(rows)))
+
+
+def _authenticated_proposal_inventory(
+    proposals: list[dict[str, object]],
+) -> dict[str, object]:
+    receipt = {
         "schema_version": PROPOSAL_RECEIPT_SCHEMA_VERSION,
         "status": "complete",
+        "job_count": len(proposals),
         "proposal_count": len(proposals),
-        "proposals_sha256": canonical_sha256(proposals),
-        "completion": {"completed_job_count": len(proposals)},
+        "proposals_sha256": "a" * 64,
+        "proposal_preflight_receipt_sha256": "b" * 64,
+        "run_anchor_sha256": "c" * 64,
+        "completion_sha256": "d" * 64,
+        "completion": {
+            "completed_job_count": len(proposals),
+            "anchor_sha256": "c" * 64,
+        },
+    }
+    return {
+        "proposals": proposals,
+        "receipt": receipt,
+        "receipt_sha256": "e" * 64,
     }
 
 
-def test_validation_preflight_requires_authenticated_complete_proposals_and_v_caps() -> None:
+def test_validation_preflight_requires_authenticated_complete_proposals_and_v_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proposals = [_supported_proposal()]
-    receipt = _proposal_receipt(proposals)
+    authenticated = _authenticated_proposal_inventory(proposals)
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: authenticated,
+    )
     preflight = build_validation_preflight(
-        proposals,
         _contract_fixture(),
-        proposal_receipt=receipt,
-        proposal_receipt_sha256=canonical_sha256(receipt),
+        proposal_inventory_dir=object(),
+        proposal_preflight_dir=object(),
+        proposal_ledger_dir=object(),
     )
     assert preflight["job_count"] == 1
     assert preflight["primary_call_count"] == 1
@@ -412,20 +467,33 @@ def test_validation_preflight_requires_authenticated_complete_proposals_and_v_ca
         assert preflight[counter] == 0
     assert preflight["qrels_opened"] is False
 
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: {**authenticated, "receipt_sha256": "bad"},
+    )
     with pytest.raises(ValueError, match="authenticated"):
         build_validation_preflight(
-            proposals,
             _contract_fixture(),
-            proposal_receipt=receipt,
-            proposal_receipt_sha256="0" * 64,
+            proposal_inventory_dir=object(),
+            proposal_preflight_dir=object(),
+            proposal_ledger_dir=object(),
         )
-    incomplete = {**receipt, "status": "incomplete"}
-    with pytest.raises(ValueError, match="complete"):
+    incomplete = {
+        **authenticated,
+        "receipt": {**authenticated["receipt"], "status": "incomplete"},
+    }
+    monkeypatch.setattr(
+        validate_module,
+        "load_authenticated_proposal_inventory",
+        lambda **_kwargs: incomplete,
+    )
+    with pytest.raises(ValueError, match="authenticated"):
         build_validation_preflight(
-            proposals,
             _contract_fixture(),
-            proposal_receipt=incomplete,
-            proposal_receipt_sha256=canonical_sha256(incomplete),
+            proposal_inventory_dir=object(),
+            proposal_preflight_dir=object(),
+            proposal_ledger_dir=object(),
         )
 
 
