@@ -26,6 +26,13 @@ _COMPLETION_SCHEMA_VERSION = "adaptive-obligation-v2-run-completion-v1"
 _PROPOSAL_SCHEMA_SHA256 = (
     "dc09881657e08a49f98757505fb725534b13c579596f550056f1df889ac634dd"
 )
+_VALIDATION_SCHEMA_SHA256 = (
+    "04f53b814d826bedc30156956f4b6ca04e4b331da4a11a48413607163ceb972c"
+)
+_SCHEMA_SHA256_BY_STAGE = {
+    "proposal": _PROPOSAL_SCHEMA_SHA256,
+    "validation": _VALIDATION_SCHEMA_SHA256,
+}
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -107,8 +114,8 @@ class AttemptSpec:
     max_new_tokens: int
 
     def __post_init__(self) -> None:
-        if self.stage != "proposal":
-            raise ValueError("attempt stage must be proposal")
+        if not isinstance(self.stage, str) or self.stage not in _SCHEMA_SHA256_BY_STAGE:
+            raise ValueError("attempt stage must be proposal or validation")
         if not _SHA256.fullmatch(self.job_id):
             raise ValueError("attempt job_id must be a lowercase SHA-256")
         if self.attempt_ordinal not in (1, 2) or isinstance(self.attempt_ordinal, bool):
@@ -364,7 +371,7 @@ def _incomplete_json(source: bytes) -> bool:
     return _JSONPrefixParser(source).classify() is _JSONPrefixState.INCOMPLETE
 
 
-def _schema_error(value: object) -> str | None:
+def _proposal_schema_error(value: object) -> str | None:
     if not isinstance(value, dict):
         return "schema: proposal must be an object"
     if set(value) != {"status", "reason_code", "o1"}:
@@ -401,6 +408,56 @@ def _schema_error(value: object) -> str | None:
     return None
 
 
+def _validation_schema_error(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return "schema: validation decision must be an object"
+    if set(value) != {"decision", "support_unit_ids"}:
+        return "schema: validation decision fields differ"
+    decision = value.get("decision")
+    support = value.get("support_unit_ids")
+    if decision not in {
+        "SUPPORTED",
+        "NO_EVIDENCE",
+        "OUT_OF_SCOPE",
+        "ANSWER_FACT",
+        "DUPLICATE_O0",
+        "WRONG_DOMAIN",
+    }:
+        return "schema: validation decision code differs"
+    if (
+        not isinstance(support, list)
+        or any(not isinstance(item, str) or not _SHA256.fullmatch(item) for item in support)
+        or len(set(support)) != len(support)
+    ):
+        return "schema: validation support_unit_ids differ"
+    if decision == "SUPPORTED" and not 1 <= len(support) <= 2:
+        return "schema: supported validation support_unit_ids differ"
+    if decision != "SUPPORTED" and support:
+        return "schema: unsupported validation support_unit_ids differ"
+    return None
+
+
+def _schema_error(value: object, schema_sha256: str) -> str | None:
+    if schema_sha256 == _PROPOSAL_SCHEMA_SHA256:
+        return _proposal_schema_error(value)
+    if schema_sha256 == _VALIDATION_SCHEMA_SHA256:
+        return _validation_schema_error(value)
+    return "schema: supplied proposal schema differs"
+
+
+def _cited_support_unit_ids(value: object, schema_sha256: str) -> set[str]:
+    if not isinstance(value, dict):
+        return set()
+    if schema_sha256 == _PROPOSAL_SCHEMA_SHA256 and value.get("status") == "SUPPORTED":
+        return set(value["o1"]["support_unit_ids"])
+    if (
+        schema_sha256 == _VALIDATION_SCHEMA_SHA256
+        and value.get("decision") == "SUPPORTED"
+    ):
+        return set(value["support_unit_ids"])
+    return set()
+
+
 def classify_completion(
     raw_completion: bytes,
     *,
@@ -422,7 +479,8 @@ def classify_completion(
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    if _sha256(schema_bytes) != _PROPOSAL_SCHEMA_SHA256:
+    schema_sha256 = _sha256(schema_bytes)
+    if schema_sha256 not in _SCHEMA_SHA256_BY_STAGE.values():
         return {
             "classification": "schema_error",
             "error": "schema: supplied proposal schema differs",
@@ -451,22 +509,21 @@ def classify_completion(
             "error": f"parse: {exc}",
             "output_token_count": output_token_count,
         }
-    error = _schema_error(value)
+    error = _schema_error(value, schema_sha256)
     if error is not None:
         return {
             "classification": "schema_error",
             "error": error,
             "output_token_count": output_token_count,
         }
-    if isinstance(value, dict) and value.get("status") == "SUPPORTED":
-        allowed = set(allowed_support_unit_ids or ())
-        cited = set(value["o1"]["support_unit_ids"])
-        if not cited <= allowed:
-            return {
-                "classification": "semantic_error",
-                "error": "semantic: support unit escapes the proposal job",
-                "output_token_count": output_token_count,
-            }
+    allowed = set(allowed_support_unit_ids or ())
+    cited = _cited_support_unit_ids(value, schema_sha256)
+    if not cited <= allowed:
+        return {
+            "classification": "semantic_error",
+            "error": "semantic: support unit escapes the anchored job",
+            "output_token_count": output_token_count,
+        }
     return {
         "classification": "valid",
         "value": value,
@@ -557,10 +614,26 @@ class AppendOnlyAttemptLedger:
             "schema",
         }
         jobs = value.get("jobs")
+        stage = value.get("stage")
+        schema = value.get("schema")
+        schema_sha256 = (
+            _sha256(
+                json.dumps(
+                    schema,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+            if isinstance(schema, dict)
+            else None
+        )
         if (
             set(value) != required
             or value.get("schema_version") != _ANCHOR_SCHEMA_VERSION
-            or value.get("stage") != "proposal"
+            or not isinstance(stage, str)
+            or stage not in _SCHEMA_SHA256_BY_STAGE
             or not isinstance(value.get("preflight_sha256"), str)
             or not _SHA256.fullmatch(value["preflight_sha256"])
             or not isinstance(value.get("approval_sha256"), str)
@@ -578,17 +651,8 @@ class AppendOnlyAttemptLedger:
                     sort_keys=True,
                 ).encode("utf-8")
             )
-            or not isinstance(value.get("schema"), dict)
-            or _sha256(
-                json.dumps(
-                    value["schema"],
-                    ensure_ascii=False,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode("utf-8")
-            )
-            != _PROPOSAL_SCHEMA_SHA256
+            or schema_sha256
+            != _SCHEMA_SHA256_BY_STAGE.get(stage if isinstance(stage, str) else "")
         ):
             raise ValueError("proposal ledger anchor differs")
         seen: set[str] = set()
@@ -625,7 +689,7 @@ class AppendOnlyAttemptLedger:
                 }:
                     raise ValueError("proposal ledger anchor attempt differs")
                 AttemptSpec(
-                    stage="proposal",
+                    stage=str(stage),
                     job_id=job_id,
                     attempt_ordinal=attempt.get("attempt_ordinal"),
                     request_sha256=attempt.get("request_sha256"),
@@ -641,12 +705,13 @@ class AppendOnlyAttemptLedger:
     ) -> tuple[dict[tuple[str, int], AttemptSpec], dict[str, list[str]]]:
         specs: dict[tuple[str, int], AttemptSpec] = {}
         supports: dict[str, list[str]] = {}
+        stage = str(anchor["stage"])
         for job in anchor["jobs"]:  # type: ignore[index]
             job_id = str(job["job_id"])
             supports[job_id] = list(job["input_unit_ids"])
             for attempt in job["attempts"]:
                 spec = AttemptSpec(
-                    stage="proposal",
+                    stage=stage,
                     job_id=job_id,
                     attempt_ordinal=attempt["attempt_ordinal"],
                     request_sha256=attempt["request_sha256"],

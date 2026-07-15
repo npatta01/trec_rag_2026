@@ -14,6 +14,7 @@ from trec_rag.adaptive_obligation_v2_ledger import (
 )
 from trec_rag.adaptive_obligation_v2_propose import PROPOSAL_SCHEMA
 from trec_rag.adaptive_obligation_v2_contract import canonical_sha256
+from trec_rag.adaptive_obligation_v2_validate import VALIDATION_SCHEMA
 
 
 def _anchor() -> dict[str, object]:
@@ -239,6 +240,68 @@ def test_attempt_ordinal_and_ceiling_are_coupled() -> None:
             attempt_ordinal=1,
             request_sha256="b" * 64,
             max_new_tokens=512,
+        )
+
+
+def test_attempt_spec_accepts_only_proposal_or_validation_stage() -> None:
+    validation = AttemptSpec(
+        stage="validation",
+        job_id="a" * 64,
+        attempt_ordinal=1,
+        request_sha256="b" * 64,
+        max_new_tokens=256,
+    )
+    assert validation.stage == "validation"
+    with pytest.raises(ValueError, match="stage"):
+        AttemptSpec(
+            stage="retrieval",
+            job_id="a" * 64,
+            attempt_ordinal=1,
+            request_sha256="b" * 64,
+            max_new_tokens=256,
+        )
+
+
+def test_classifier_validates_validation_schema_and_cited_units() -> None:
+    unit_id = "f" * 64
+    raw = json.dumps(
+        {"decision": "SUPPORTED", "support_unit_ids": [unit_id]},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    valid = classify_completion(
+        raw,
+        schema=VALIDATION_SCHEMA,
+        output_token_count=12,
+        max_new_tokens=256,
+        allowed_support_unit_ids=[unit_id],
+    )
+    escaped = classify_completion(
+        raw,
+        schema=VALIDATION_SCHEMA,
+        output_token_count=12,
+        max_new_tokens=256,
+        allowed_support_unit_ids=[],
+    )
+    invalid_code = classify_completion(
+        b'{"decision":"MAYBE","support_unit_ids":[]}',
+        schema=VALIDATION_SCHEMA,
+        output_token_count=8,
+        max_new_tokens=256,
+        allowed_support_unit_ids=[],
+    )
+    assert valid["classification"] == "valid"
+    assert escaped["classification"] == "semantic_error"
+    assert invalid_code["classification"] == "schema_error"
+
+
+def test_anchor_stage_is_bound_to_its_exact_schema(tmp_path: Path) -> None:
+    proposal_schema_under_validation_stage = {**_anchor(), "stage": "validation"}
+    with pytest.raises(ValueError, match="anchor differs"):
+        AppendOnlyAttemptLedger(
+            tmp_path / "wrong-stage-schema",
+            expected_anchor=proposal_schema_under_validation_stage,
+            create_only=True,
         )
 
 
