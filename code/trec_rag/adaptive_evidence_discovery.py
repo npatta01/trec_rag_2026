@@ -1,4 +1,8 @@
-"""One-pass cross-fitted discovery of derived evidence obligations and nuggets."""
+"""Read-only verification and inspection for terminal discovery v1 history.
+
+Discovery v1 has no approved successful production path. Any future proposal or
+validation workflow must be introduced through a separately versioned v2 API.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from pathlib import Path
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
 from .adaptive_evidence_local_model import (
+    DISCOVERY_V1_TERMINAL_ONLY,
     DISCOVERY_SCHEMA,
     MODEL_ID,
     MODEL_REVISION,
@@ -29,6 +34,8 @@ DISCOVERY_PROPOSAL_SCHEMA_VERSION = "adaptive-evidence-discovery-proposal-v1"
 DISCOVERY_RECEIPT_SCHEMA_VERSION = "adaptive-evidence-discovery-v1"
 RESERVOIR_LIMIT = 10
 DISCOVERY_MAX_NEW_TOKENS = 700
+
+__all__ = ("inspect_discovery_terminal", "verify_discovery_terminal", "main")
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -360,7 +367,7 @@ def _stemmed_content_terms(value: object) -> set[str]:
     return output
 
 
-def attach_contract_folds(
+def _attach_contract_folds(
     passages: Sequence[Mapping[str, object]],
     documents: Sequence[Mapping[str, object]],
 ) -> list[dict[str, object]]:
@@ -391,7 +398,7 @@ def attach_contract_folds(
     return output
 
 
-def build_reservoirs(
+def _build_reservoirs(
     obligations: Sequence[Mapping[str, object]],
     passages: Sequence[Mapping[str, object]],
     *,
@@ -508,7 +515,7 @@ def _parent_scope_preserved(
     return True
 
 
-def validate_proposal(
+def _validate_proposal(
     proposal: Mapping[str, object],
     parent: Mapping[str, object],
     *,
@@ -574,7 +581,7 @@ def _without_one_trailing_terminator(value: str) -> str:
     return stripped
 
 
-def validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]:
+def _validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]:
     """Require one fully quoted, non-coordinated subject-relation-object fact."""
 
     reasons: list[str] = []
@@ -610,7 +617,7 @@ def validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]
     return {"accepted": not unique_reasons, "reasons": unique_reasons}
 
 
-def merge_nuggets(
+def _merge_nuggets(
     nuggets: Sequence[Mapping[str, object]],
 ) -> list[dict[str, object]]:
     """Merge exact triples, then lexical paraphrases at Jaccard >= 0.80."""
@@ -675,7 +682,7 @@ def merge_nuggets(
     )
 
 
-def validate_model_response(
+def _validate_model_response(
     response: Mapping[str, object],
     passages: Sequence[Mapping[str, object]],
 ) -> tuple[dict[str, list[dict[str, object]]], list[dict[str, object]]]:
@@ -706,7 +713,7 @@ def validate_model_response(
             elif not span or span not in passage:
                 rejected.append({**row, "kind": kind, "reason": "support_span"})
             elif kind == "n1" and not (
-                atomicity := validate_nugget_atomicity(row)
+                atomicity := _validate_nugget_atomicity(row)
             )["accepted"]:
                 rejected.append(
                     {
@@ -721,7 +728,7 @@ def validate_model_response(
     return accepted, rejected
 
 
-def extract_repeated_phrases(
+def _extract_repeated_phrases(
     passages: Sequence[Mapping[str, object]],
 ) -> list[dict[str, object]]:
     """Emit 2--5 analyzed-token phrases occurring in documents in both folds."""
@@ -814,7 +821,7 @@ def _phrase_control_scope_preserved(
     )
 
 
-def build_phrase_controls(
+def _build_phrase_controls(
     parents: Sequence[Mapping[str, object]],
     passages: Sequence[Mapping[str, object]],
 ) -> list[dict[str, object]]:
@@ -826,7 +833,7 @@ def build_phrase_controls(
         parent_passages = [
             row for row in passages if str(row.get("parent_id", "")) == parent_id
         ]
-        for row in extract_repeated_phrases(parent_passages):
+        for row in _extract_repeated_phrases(parent_passages):
             phrase = str(row["phrase"])
             hashes = row.get("content_sha256s", [])
             documents = row.get("document_ids", [])
@@ -865,7 +872,7 @@ def build_phrase_controls(
     )
 
 
-def build_derived_query(
+def _build_derived_query(
     broad: Mapping[str, object],
     parent: Mapping[str, object],
     label: str,
@@ -880,7 +887,7 @@ def build_derived_query(
     )
 
 
-def freeze_o1(
+def _freeze_o1(
     rows: Sequence[Mapping[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Freeze at most one accepted child per parent and four per topic."""
@@ -945,7 +952,7 @@ def _proposal_prompt_contract_sha256() -> str:
     )
 
 
-def build_discovery_messages(
+def _build_discovery_messages(
     parent: Mapping[str, object],
     passages: Sequence[Mapping[str, object]],
 ) -> list[dict[str, str]]:
@@ -1028,7 +1035,7 @@ def _sentence_spans(text: str) -> list[str]:
     ]
 
 
-def qualify_opposite_support(
+def _qualify_opposite_support(
     proposal: Mapping[str, object],
     parent: Mapping[str, object],
     score_rows: Sequence[Mapping[str, object]],
@@ -1141,6 +1148,19 @@ def finalize_discovery_records(
     broad_by_topic: Mapping[str, Mapping[str, object]],
     score_rows: Sequence[Mapping[str, object]],
 ) -> dict[str, list[dict[str, object]]]:
+    """Reject the retired public v1 finalization boundary."""
+
+    raise RuntimeError(DISCOVERY_V1_TERMINAL_ONLY)
+
+
+def _finalize_discovery_records(
+    *,
+    proposals: Sequence[Mapping[str, object]],
+    nuggets: Sequence[Mapping[str, object]],
+    parents: Sequence[Mapping[str, object]],
+    broad_by_topic: Mapping[str, Mapping[str, object]],
+    score_rows: Sequence[Mapping[str, object]],
+) -> dict[str, list[dict[str, object]]]:
     """Validate, cap, and freeze O1/N1 records without another model pass."""
 
     parent_by_id = {str(row["obligation_id"]): row for row in parents}
@@ -1161,8 +1181,8 @@ def finalize_discovery_records(
                 }
             )
             continue
-        support = qualify_opposite_support(proposal, parent, score_rows)
-        decision = validate_proposal(
+        support = _qualify_opposite_support(proposal, parent, score_rows)
+        decision = _validate_proposal(
             proposal,
             parent,
             opposite_fold_support=support,
@@ -1200,7 +1220,7 @@ def finalize_discovery_records(
         if not decision["accepted"]:
             initially_rejected.append(row)
 
-    accepted, freeze_rejected = freeze_o1(validated)
+    accepted, freeze_rejected = _freeze_o1(validated)
     frozen: list[dict[str, object]] = []
     for row in accepted:
         topic_id = str(row["topic_id"])
@@ -1213,7 +1233,7 @@ def finalize_discovery_records(
                 **row,
                 "kind": "o1",
                 "status": "accepted",
-                "query": build_derived_query(broad, parent, str(row["label"])),
+                "query": _build_derived_query(broad, parent, str(row["label"])),
             }
         )
     rejected = [
@@ -1224,7 +1244,7 @@ def finalize_discovery_records(
     rejected_n1: list[dict[str, object]] = []
     for raw in nuggets:
         nugget = dict(raw)
-        atomicity = validate_nugget_atomicity(nugget)
+        atomicity = _validate_nugget_atomicity(nugget)
         if atomicity["accepted"]:
             atomic_nuggets.append(nugget)
         else:
@@ -1238,7 +1258,7 @@ def finalize_discovery_records(
             )
     accepted_n1 = [
         {**row, "kind": "n1", "status": "accepted"}
-        for row in merge_nuggets(atomic_nuggets)
+        for row in _merge_nuggets(atomic_nuggets)
     ]
     return {
         "validated_o1": sorted(
@@ -1264,7 +1284,9 @@ def run_discovery_preflight(
     scores_dir: Path,
     output_dir: Path,
 ) -> dict[str, object]:
-    """Authenticate inputs, freeze reservoirs, and probe the pinned local model."""
+    """Reject the retired public v1 preflight boundary."""
+
+    raise RuntimeError(DISCOVERY_V1_TERMINAL_ONLY)
 
     destination = Path(output_dir)
     if destination.exists():
@@ -1311,11 +1333,11 @@ def run_discovery_preflight(
         base_rows.extend(
             _read_jsonl(Path(scores_dir) / relative, f"base scores {obligation_id}")
         )
-    base_rows = attach_contract_folds(
+    base_rows = _attach_contract_folds(
         base_rows,
         list(contract["documents"]),  # type: ignore[index]
     )
-    reservoirs = build_reservoirs(parents, base_rows, limit=RESERVOIR_LIMIT)
+    reservoirs = _build_reservoirs(parents, base_rows, limit=RESERVOIR_LIMIT)
     reservoir_rows: list[dict[str, object]] = []
     for (parent_id, fold), rows in sorted(reservoirs.items()):
         if len(rows) != RESERVOIR_LIMIT:
@@ -1341,7 +1363,7 @@ def run_discovery_preflight(
                 }
             )
 
-    repeated_rows = build_phrase_controls(parents, reservoir_rows)
+    repeated_rows = _build_phrase_controls(parents, reservoir_rows)
 
     snapshot = _snapshot_manifest()
     model = LocalJsonModel()
@@ -1508,7 +1530,9 @@ def _load_discovery_preflight(
 def run_proposal_pass(
     output_dir: Path,
 ) -> dict[str, object]:
-    """Run exactly one local Qwen proposal/atomization pass over all reservoirs."""
+    """Reject the retired public v1 proposal boundary."""
+
+    raise RuntimeError(DISCOVERY_V1_TERMINAL_ONLY)
 
     root = Path(output_dir)
     proposal_names = (
@@ -1613,7 +1637,7 @@ def run_proposal_pass(
         for fold in (0, 1):
             prompt_index += 1
             passages = groups[(parent_id, fold)]
-            messages = build_discovery_messages(parent, passages)
+            messages = _build_discovery_messages(parent, passages)
             response = model.generate(
                 messages,
                 DISCOVERY_SCHEMA,
@@ -1630,7 +1654,7 @@ def run_proposal_pass(
                 accepted = {"o1": [], "n1": []}
                 rejected: list[dict[str, object]] = []
             else:
-                accepted, rejected = validate_model_response(response, passages)
+                accepted, rejected = _validate_model_response(response, passages)
                 rejected_model.extend(rejected)
             passage_by_document = {
                 str(row["document_id"]): row for row in passages
@@ -1659,7 +1683,7 @@ def run_proposal_pass(
                         "domain": str(raw["domain"]),
                         "relation": str(raw["relation"]),
                         "support_span": str(raw["support_span"]),
-                        "query": build_derived_query(
+                        "query": _build_derived_query(
                             broad_row,
                             parent,
                             str(raw["label"]),
@@ -1960,7 +1984,9 @@ def _reject_terminal_extras(root: Path) -> None:
 
 
 def record_discovery_unavailable(output_dir: Path) -> dict[str, object]:
-    """Freeze a receipt derived only from the complete immutable failure history."""
+    """Reject terminal receipt creation; the canonical v1 history is immutable."""
+
+    raise RuntimeError(DISCOVERY_V1_TERMINAL_ONLY)
 
     root = Path(output_dir)
     if (root / "receipt.json").exists():
@@ -2129,6 +2155,12 @@ def verify_discovery_terminal(output_dir: Path) -> dict[str, object]:
     return receipt
 
 
+def inspect_discovery_terminal(output_dir: Path) -> dict[str, object]:
+    """Return the terminal receipt only after full canonical authentication."""
+
+    return verify_discovery_terminal(output_dir)
+
+
 def _load_proposal_artifacts(
     root: Path,
 ) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
@@ -2238,7 +2270,9 @@ def run_discovery_validation(
     output_dir: Path,
     opposite_fold_scores: Path,
 ) -> dict[str, object]:
-    """Deterministically corroborate proposals and freeze O1/N1 records."""
+    """Reject the retired public v1 validation/finalization boundary."""
+
+    raise RuntimeError(DISCOVERY_V1_TERMINAL_ONLY)
 
     root = Path(output_dir)
     final_names = (
@@ -2358,58 +2392,26 @@ def run_discovery_validation(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    preflight = subparsers.add_parser(
-        "preflight", help="authenticate sources and freeze fold reservoirs"
+    verify = subparsers.add_parser(
+        "verify", help="authenticate the immutable terminal v1 history"
     )
-    preflight.add_argument("--contract", type=Path, required=True)
-    preflight.add_argument("--scores", type=Path, required=True)
-    preflight.add_argument("--output", type=Path, required=True)
-    propose = subparsers.add_parser(
-        "propose", help="run the single local Qwen discovery pass"
+    verify.add_argument("--output", type=Path, required=True)
+    inspect = subparsers.add_parser(
+        "inspect", help="authenticate and print the immutable terminal v1 receipt"
     )
-    propose.add_argument("--output", type=Path, required=True)
-    validate = subparsers.add_parser(
-        "validate", help="deterministically validate opposite-fold support"
-    )
-    validate.add_argument("--output", type=Path, required=True)
-    validate.add_argument("--opposite-fold-scores", type=Path, required=True)
+    inspect.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    if args.command == "preflight":
-        receipt = run_discovery_preflight(
-            contract_dir=args.contract,
-            scores_dir=args.scores,
-            output_dir=args.output,
-        )
+    if args.command == "verify":
+        receipt = verify_discovery_terminal(args.output)
         print(
-            "status=complete "
-            f"reservoirs={receipt['reservoir_group_count']} "
-            f"documents={receipt['reservoir_count']} "
-            f"control_phrases={receipt['repeated_phrase_count']} "
-            "model_preflight=passed network=false qrels_opened=false external_cost=$0"
-        )
-    elif args.command == "propose":
-        receipt = run_proposal_pass(args.output)
-        print(
-            "status=complete proposal_passes=1 "
-            f"prompts={receipt['prompt_count']} "
-            f"o1={receipt['proposed_o1_count']} "
-            f"n1={receipt['proposed_n1_count']} "
-            f"invalid_spans={receipt['invalid_support_span_count']} "
+            f"status={receipt['status']} "
+            f"proposal_calls={receipt['total_qwen_proposal_generation_call_count']} "
+            f"completed_passes={receipt['completed_proposal_pass_count']} "
             "network=false qrels_opened=false external_cost=$0"
         )
     else:
-        receipt = run_discovery_validation(
-            output_dir=args.output,
-            opposite_fold_scores=args.opposite_fold_scores,
-        )
-        print(
-            "status=complete "
-            f"accepted_o1={receipt['accepted_o1_count']} "
-            f"rejected_o1={receipt['rejected_o1_count']} "
-            f"accepted_n1={receipt['accepted_n1_count']} "
-            f"validation_model_calls={receipt['validation_model_call_count']} "
-            "network=false qrels_opened=false external_cost=$0"
-        )
+        receipt = inspect_discovery_terminal(args.output)
+        print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 
