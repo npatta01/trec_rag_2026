@@ -143,7 +143,7 @@
         "type": "markdown"
       },
       {
-        "body": "## The only next action is exact R2 proposal approval\n\n**Approve only this exact R2 preflight** SHA-256 `4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4` for model `Qwen/Qwen3-4B-Instruct-2507`, revision `cdbee75f17c01a7cc42f958dc650907174af0554`, 48 primary calls, 48 possible truncation retries, a 96-call worst-case ceiling, and ledger destination `/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_ledger_r2`. Do not approve validation, BM25, MiniLM, or qrels.",
+        "body": "## The only next action is exact R2 proposal approval\n\n**Approve only this exact R2 preflight** SHA-256 `a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff` for model `Qwen/Qwen3-4B-Instruct-2507`, revision `cdbee75f17c01a7cc42f958dc650907174af0554`, 48 primary calls, 48 possible truncation retries, a 96-call worst-case ceiling, and ledger destination `/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_ledger_r2`. Do not approve validation, BM25, MiniLM, or qrels.",
         "id": "recommended_next_step",
         "layout": "full",
         "sourceId": "r2_preflight",
@@ -289,7 +289,7 @@
       }
     ],
     "description": "Technical incident/readiness report with one binary artifact chart. No chart compares heterogeneous counts or implies a relevance result.",
-    "generatedAt": "2026-07-15T21:48:47Z",
+    "generatedAt": "2026-07-15T22:20:51Z",
     "sources": [
       {
         "id": "contract",
@@ -309,7 +309,7 @@
       {
         "id": "r2_preflight",
         "label": "Verified inference-free proposal R2 preflight receipt",
-        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json"
+        "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2_replay_v2/receipt.json"
       },
       {
         "id": "r1_preflight",
@@ -625,7 +625,7 @@
         },
         {
           "path": "code/trec_rag/adaptive_obligation_v2_propose_r2.py",
-          "sha256": "0b2de34e988546f9314d999f1f2c24acb1e26740433f9c015fba7240e431243a",
+          "sha256": "10371963c2cfd6e6001ed7f7d17dadb8ad28007aa7879705b879c0d50f344d34",
           "source": "r2_implementation"
         },
         {
@@ -663,7 +663,7 @@
           "ledger_dir": "/home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_ledger_r2",
           "model": "Qwen/Qwen3-4B-Instruct-2507",
           "model_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
-          "preflight_sha256": "4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4",
+          "preflight_sha256": "a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff",
           "primary_call_count": 48,
           "prompt_tokens_maximum": 64264,
           "prompt_tokens_minimum": 33610,
@@ -731,7 +731,7 @@
       "r2_hashes": [
         {
           "artifact": "R2 preflight receipt",
-          "sha256": "4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4"
+          "sha256": "a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff"
         },
         {
           "artifact": "R2 prompt contract",
@@ -771,7 +771,7 @@
         },
         {
           "artifact": "Frozen code: adaptive_obligation_v2_propose_r2.py",
-          "sha256": "0b2de34e988546f9314d999f1f2c24acb1e26740433f9c015fba7240e431243a"
+          "sha256": "10371963c2cfd6e6001ed7f7d17dadb8ad28007aa7879705b879c0d50f344d34"
         }
       ],
       "r2_metrics": [
@@ -811,8 +811,8 @@
           "verification": "passed"
         },
         {
-          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json",
-          "sha256": "4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4",
+          "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2_replay_v2/receipt.json",
+          "sha256": "a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff",
           "source": "Verified inference-free proposal R2 preflight receipt",
           "verification": "passed"
         }
@@ -884,7 +884,7 @@
         }
       ]
     },
-    "generatedAt": "2026-07-15T21:48:47Z",
+    "generatedAt": "2026-07-15T22:20:51Z",
     "status": "partial",
     "version": 1
   },
@@ -961,7 +961,7 @@
     {
       "id": "r2_preflight",
       "label": "Verified inference-free proposal R2 preflight receipt",
-      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json",
+      "path": "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2_replay_v2/receipt.json",
       "query": {
         "description": "Reads the canonical receipt after its repository verifier authenticated the complete bound artifact.",
         "engine": "duckdb",
@@ -970,14 +970,14 @@
           "Protected topics 144, 213, 224, 407, and 515 excluded",
           "No qrels opened"
         ],
-        "id": "sha256:4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4",
+        "id": "sha256:a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff",
         "language": "sql",
         "metric_definitions": [
-          "Receipt identity is exact file SHA-256 4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4."
+          "Receipt identity is exact file SHA-256 a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff."
         ],
-        "sql": "SELECT status, topic_ids, job_count, primary_call_count, retry_call_ceiling, worst_case_call_ceiling, prompt_token_counts, model, model_revision, ledger_dir, model_load_count, inference_count, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json');",
+        "sql": "SELECT status, topic_ids, job_count, primary_call_count, retry_call_ceiling, worst_case_call_ceiling, prompt_token_counts, model, model_revision, ledger_dir, model_load_count, inference_count, qrels_opened FROM read_json_auto('outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2_replay_v2/receipt.json');",
         "tables_used": [
-          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json"
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2_replay_v2/receipt.json"
         ]
       }
     },
@@ -1014,12 +1014,12 @@
           "Runtime is an operator estimate, not a receipt metric",
           "Validation integration remains deferred"
         ],
-        "id": "sha256:2e29abaef12b402dd59887c63a9b9312ff416264dc2c2b8b8d5c98a07fd1196d",
+        "id": "sha256:ab393dfc100abc5bbc3e783b437f91190836ae01a3d24dd5a40864bcea40f2ca",
         "language": "sql",
         "metric_definitions": [
           "The 2–3 hour estimate is based on the observed approximately three-minute, 54,402-token R1 call."
         ],
-        "sql": "SELECT * FROM (VALUES ('recovery_plan', 'docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md', '09943785f2a43d363bdb5667edfab17d86145b36a7395b0fc9b0254f9e41cb06'), ('recovery_design', 'docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md', 'a94219922345dfbed925ac91a483726cbb1491913191a5ac17e96bec21835ef8'), ('incident_implementation', 'code/trec_rag/adaptive_obligation_v2_proposal_incident.py', 'e4d2f0ebff04325e7c5aded7a29c8119df4420b098091dc61ac03bf07e10728c'), ('r2_implementation', 'code/trec_rag/adaptive_obligation_v2_propose_r2.py', '0b2de34e988546f9314d999f1f2c24acb1e26740433f9c015fba7240e431243a'), ('r2_model_implementation', 'code/trec_rag/adaptive_obligation_v2_local_model_r2.py', 'b5ea8e3daa4e794608c43fce35b6a481b8b824d10fd08a46b1d1762cb4bebaea'), ('report_builder', 'code/trec_rag/build_adaptive_obligation_v2_r2_report.py', 'b0975c92134768b01684cd6ad662c148b59f65d1542d0fa4bc82e84fab869a85')) AS recovery_sources(name, path, sha256);",
+        "sql": "SELECT * FROM (VALUES ('recovery_plan', 'docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md', '09943785f2a43d363bdb5667edfab17d86145b36a7395b0fc9b0254f9e41cb06'), ('recovery_design', 'docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md', 'a94219922345dfbed925ac91a483726cbb1491913191a5ac17e96bec21835ef8'), ('incident_implementation', 'code/trec_rag/adaptive_obligation_v2_proposal_incident.py', 'e4d2f0ebff04325e7c5aded7a29c8119df4420b098091dc61ac03bf07e10728c'), ('r2_implementation', 'code/trec_rag/adaptive_obligation_v2_propose_r2.py', '10371963c2cfd6e6001ed7f7d17dadb8ad28007aa7879705b879c0d50f344d34'), ('r2_model_implementation', 'code/trec_rag/adaptive_obligation_v2_local_model_r2.py', 'b5ea8e3daa4e794608c43fce35b6a481b8b824d10fd08a46b1d1762cb4bebaea'), ('report_builder', 'code/trec_rag/build_adaptive_obligation_v2_r2_report.py', 'b0975c92134768b01684cd6ad662c148b59f65d1542d0fa4bc82e84fab869a85')) AS recovery_sources(name, path, sha256);",
         "tables_used": [
           "docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md",
           "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md",
@@ -1043,18 +1043,18 @@
           "R2 proposals absent",
           "No model inference, validation, BM25, MiniLM, or qrels"
         ],
-        "id": "sha256:78566b1d47815d8888599ab6dd0844abc0b8cd6bc7cb65ec369bd69c13ab521f",
+        "id": "sha256:e3e776d9f82401a8c3c3b1281818eb502b2cff7a28c83b57f7a6af6deec45672",
         "language": "sql",
         "metric_definitions": [
           "canonical_artifact_ready=1 only when the named frozen artifact exists and verifies.",
           "calls_completed counts observed calls; planned call ceilings are separate fields."
         ],
-        "sql": "SELECT * FROM (VALUES ('stage', 1, 'Sealed baselines', 'sealed', 'NARRATIVE and FIXED-O0; 8,114 rows each', 0, 1, NULL, NULL), ('stage', 2, 'R1 incident record', 'verified aborted run', 'Exactly one schema-invalid call; 47 jobs uncalled', 1, 1, NULL, NULL), ('stage', 3, 'R2 proposal preflight', 'ready', '48 jobs; tokenizer-only; exact approval boundary frozen', 0, 1, NULL, NULL), ('stage', 4, 'R2 proposal inference', 'not run', 'Approval, ledger, and proposals absent', 0, 0, NULL, NULL), ('stage', 5, 'R2 validation integration', 'unavailable and deferred', 'Separate end-to-end revision/provenance plan required', 0, 0, NULL, NULL), ('stage', 6, 'Focused BM25 retrieval', 'not run', 'No authenticated R2 proposal inventory can enter retrieval', 0, 0, NULL, NULL), ('stage', 7, 'MiniLM reranking', 'not run', 'No R2 retrieval candidates or scoring preflight', 0, 0, NULL, NULL), ('stage', 8, 'Qrels evaluation', 'unopened', 'No adaptive ranking; qrels remain unopened', 0, 0, NULL, NULL), ('proposal_run', NULL, 'R1', 'aborted after terminal schema error', 'One call attempted; rationale 245 characters versus accepted maximum 240', 1, NULL, '2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5', 0), ('proposal_run', NULL, 'R2', 'preflight ready; inference not run', 'Tokenizer-only preflight verified; approval, ledger, and proposals absent', 0, NULL, '4001041c22b42ba04c0a1b41908ccc2ef1d4a220a8f6c4eaf4d96473932b05a4', 0)) AS verified_status(record_type, \"order\", stage, status, evidence, calls_completed, canonical_artifact_ready, preflight_sha256, r2_calls_completed);",
+        "sql": "SELECT * FROM (VALUES ('stage', 1, 'Sealed baselines', 'sealed', 'NARRATIVE and FIXED-O0; 8,114 rows each', 0, 1, NULL, NULL), ('stage', 2, 'R1 incident record', 'verified aborted run', 'Exactly one schema-invalid call; 47 jobs uncalled', 1, 1, NULL, NULL), ('stage', 3, 'R2 proposal preflight', 'ready', '48 jobs; tokenizer-only; exact approval boundary frozen', 0, 1, NULL, NULL), ('stage', 4, 'R2 proposal inference', 'not run', 'Approval, ledger, and proposals absent', 0, 0, NULL, NULL), ('stage', 5, 'R2 validation integration', 'unavailable and deferred', 'Separate end-to-end revision/provenance plan required', 0, 0, NULL, NULL), ('stage', 6, 'Focused BM25 retrieval', 'not run', 'No authenticated R2 proposal inventory can enter retrieval', 0, 0, NULL, NULL), ('stage', 7, 'MiniLM reranking', 'not run', 'No R2 retrieval candidates or scoring preflight', 0, 0, NULL, NULL), ('stage', 8, 'Qrels evaluation', 'unopened', 'No adaptive ranking; qrels remain unopened', 0, 0, NULL, NULL), ('proposal_run', NULL, 'R1', 'aborted after terminal schema error', 'One call attempted; rationale 245 characters versus accepted maximum 240', 1, NULL, '2baae152a2df76b14ef4fc80608b09428e3703cb47367e574ed055303b6025f5', 0), ('proposal_run', NULL, 'R2', 'preflight ready; inference not run', 'Tokenizer-only preflight verified; approval, ledger, and proposals absent', 0, NULL, 'a1b2e8f7ac28a5a7945770cc92094ea61b888cb8579b87ddcd3158d0d8a723ff', 0)) AS verified_status(record_type, \"order\", stage, status, evidence, calls_completed, canonical_artifact_ready, preflight_sha256, r2_calls_completed);",
         "tables_used": [
           "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/contract/receipt.json",
           "outputs/rag25_deep_facet_candidates_v1/adaptive_evidence_ranker_v1/rankings/receipt.json",
           "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_run_r1_incident/receipt.json",
-          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2/receipt.json",
+          "outputs/rag25_deep_facet_candidates_v1/adaptive_obligation_search_v2/proposal_preflight_r2_replay_v2/receipt.json",
           "docs/superpowers/plans/2026-07-15-adaptive-obligation-proposal-r2-recovery.md",
           "docs/superpowers/specs/2026-07-15-adaptive-obligation-proposal-r2-recovery-design.md",
           "code/trec_rag/adaptive_obligation_v2_proposal_incident.py",
