@@ -1,0 +1,948 @@
+"""Freeze inference-free adaptive-obligation v2 proposal jobs."""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import errno
+import hashlib
+import json
+import os
+import shutil
+import stat
+import sys
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+
+from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
+from .adaptive_obligation_v2_contract import (
+    SCHEMA_VERSION as CONTRACT_SCHEMA_VERSION,
+    canonical_sha256,
+    verify_v2_contract,
+)
+
+
+SCHEMA_VERSION = "adaptive-obligation-v2-proposal-preflight-v1"
+JOB_SCHEMA_VERSION = "adaptive-obligation-v2-proposal-job-v1"
+MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
+MODEL_REVISION = "cdbee75f17c01a7cc42f958dc650907174af0554"
+PRIMARY_MAX_NEW_TOKENS = 256
+RETRY_MAX_NEW_TOKENS = 512
+PRIMARY_JOB_COUNT = 48
+MODEL_SNAPSHOT = (
+    Path.home()
+    / ".cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots"
+    / MODEL_REVISION
+)
+
+_OUTPUT_NAMES = frozenset({"jobs.jsonl", "schema.json", "prompt.json", "receipt.json"})
+_TOKENIZER_FILE_NAMES = frozenset(
+    {"config.json", "merges.txt", "tokenizer.json", "tokenizer_config.json", "vocab.json"}
+)
+_ZERO_COUNTERS = (
+    "network_call_count",
+    "retrieval_call_count",
+    "hosted_inference_call_count",
+    "paid_call_count",
+    "model_load_count",
+    "inference_count",
+)
+
+PROPOSAL_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "reason_code", "o1"],
+    "properties": {
+        "status": {"enum": ["SUPPORTED", "UNSUPPORTED"]},
+        "reason_code": {
+            "enum": [
+                "SUPPORTED",
+                "NO_ABSTRACT_CHILD",
+                "ONLY_ANSWER_FACTS",
+                "INSUFFICIENT_SCOPE",
+            ]
+        },
+        "o1": {
+            "oneOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["label", "scope_rationale", "support_unit_ids"],
+                    "properties": {
+                        "label": {"type": "string", "minLength": 3, "maxLength": 120},
+                        "scope_rationale": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 240,
+                        },
+                        "support_unit_ids": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 2,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        },
+                    },
+                },
+            ]
+        },
+    },
+    "allOf": [
+        {
+            "if": {"properties": {"status": {"const": "SUPPORTED"}}},
+            "then": {
+                "properties": {
+                    "reason_code": {"const": "SUPPORTED"},
+                    "o1": {"type": "object"},
+                }
+            },
+            "else": {
+                "properties": {
+                    "reason_code": {
+                        "enum": [
+                            "NO_ABSTRACT_CHILD",
+                            "ONLY_ANSWER_FACTS",
+                            "INSUFFICIENT_SCOPE",
+                        ]
+                    },
+                    "o1": {"type": "null"},
+                }
+            },
+        }
+    ],
+}
+
+_PROPOSAL_INSTRUCTIONS = """Return exactly one JSON object matching the supplied schema.
+Propose at most one abstract child information need of the complete O0 parent, or return UNSUPPORTED.
+Preserve the parent subject, population, domain, and requested relation. Use only the supplied exact evidence units; never use outside knowledge.
+Do not turn dates, numbers, named examples, causes, mechanisms, outcomes, or other answer facts into an O1 label.
+A supported proposal must cite one or two supplied support_unit_ids. Do not copy passages or add prose outside JSON."""
+
+
+def _compact(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _compact_bytes(value: object) -> bytes:
+    return (_compact(value) + "\n").encode("utf-8")
+
+
+def _pretty_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _path_present(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _reject_protected_contract(contract: object) -> None:
+    if not isinstance(contract, Mapping):
+        raise ValueError("proposal contract must be an object")
+    topic_ids: list[str] = []
+    receipt = contract.get("receipt")
+    if isinstance(receipt, Mapping):
+        raw_topics = receipt.get("topic_ids")
+        if isinstance(raw_topics, list):
+            topic_ids.extend(str(value) for value in raw_topics)
+    for name in ("parents", "reservoirs", "units"):
+        rows = contract.get(name)
+        if isinstance(rows, list):
+            topic_ids.extend(
+                str(row.get("topic_id")) for row in rows if isinstance(row, Mapping)
+            )
+    for topic_id in topic_ids:
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+
+
+def _snapshot_inventory(snapshot_dir: Path = MODEL_SNAPSHOT) -> dict[str, object]:
+    """Bind the local snapshot without reading model weight bodies."""
+
+    root = Path(snapshot_dir)
+    if root.is_symlink() or not root.is_dir() or root.name != MODEL_REVISION:
+        raise RuntimeError(f"pinned local model snapshot is missing or unsafe: {root}")
+    files: list[dict[str, object]] = []
+    for path in sorted(root.iterdir(), key=lambda value: value.name):
+        if not path.is_file():
+            raise RuntimeError(f"model snapshot contains a non-file entry: {path.name}")
+        target = path.resolve(strict=True)
+        observed = target.stat()
+        if not stat.S_ISREG(observed.st_mode):
+            raise RuntimeError(f"model snapshot target is not regular: {path.name}")
+        blob_id = target.name
+        # Hugging Face's 64-hex Xet blob names are their content SHA-256. Avoid
+        # streaming multi-gigabyte safetensor bodies merely to inventory them.
+        content_sha256 = (
+            blob_id
+            if len(blob_id) == 64 and all(char in "0123456789abcdef" for char in blob_id)
+            else _sha256_file(target)
+        )
+        files.append(
+            {
+                "name": path.name,
+                "bytes": observed.st_size,
+                "blob_id": blob_id,
+                "content_sha256": content_sha256,
+            }
+        )
+    names = {str(row["name"]) for row in files}
+    weight_names = {name for name in names if name.endswith(".safetensors")}
+    if (
+        not _TOKENIZER_FILE_NAMES <= names
+        or "model.safetensors.index.json" not in names
+        or len(weight_names) != 3
+    ):
+        raise RuntimeError("pinned local Qwen tokenizer/model snapshot is incomplete")
+    payload = {"model": MODEL_ID, "revision": MODEL_REVISION, "files": files}
+    return {**payload, "manifest_sha256": canonical_sha256(payload)}
+
+
+def _tokenizer_file_inventory(snapshot: Mapping[str, object]) -> list[dict[str, object]]:
+    files = snapshot.get("files")
+    if not isinstance(files, list):
+        raise ValueError("model snapshot file inventory is missing")
+    selected = [
+        dict(row)
+        for row in files
+        if isinstance(row, Mapping) and row.get("name") in _TOKENIZER_FILE_NAMES
+    ]
+    if {row.get("name") for row in selected} != _TOKENIZER_FILE_NAMES:
+        raise ValueError("tokenizer file inventory is incomplete")
+    return selected
+
+
+def _tokenizer_contract(snapshot_dir: Path = MODEL_SNAPSHOT) -> dict[str, object]:
+    root = Path(snapshot_dir)
+    tokenizer_path = root / "tokenizer.json"
+    config_path = root / "tokenizer_config.json"
+    try:
+        config_bytes = config_path.read_bytes()
+        config = json.loads(config_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("pinned tokenizer config is unreadable") from exc
+    chat_template = config.get("chat_template")
+    if not isinstance(chat_template, str) or not chat_template:
+        raise ValueError("pinned tokenizer chat template is missing")
+    return {
+        "loader": "tokenizers.Tokenizer.from_file",
+        "tokenizer_json_sha256": _sha256_file(tokenizer_path),
+        "tokenizer_config_sha256": _sha256(config_bytes),
+        "chat_template": chat_template,
+        "chat_template_sha256": _sha256(chat_template.encode("utf-8")),
+        "torch_imported": False,
+        "transformers_imported": False,
+    }
+
+
+def _prompt_contract() -> dict[str, object]:
+    return {
+        "schema_version": "adaptive-obligation-v2-proposal-prompt-v1",
+        "instructions": _PROPOSAL_INSTRUCTIONS,
+        "response_schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+        "decoding": {
+            "do_sample": False,
+            "temperature": 0,
+            "seed": 0,
+            "primary_max_new_tokens": PRIMARY_MAX_NEW_TOKENS,
+            "retry_max_new_tokens": RETRY_MAX_NEW_TOKENS,
+        },
+        "retry_policy": {
+            "maximum_retries_per_job": 1,
+            "only_if_primary_completion_reaches_ceiling_and_json_is_truncated": True,
+            "semantic_or_schema_retry_allowed": False,
+            "recursive_repair_allowed": False,
+        },
+    }
+
+
+def render_proposal_messages(
+    parent: Mapping[str, object],
+    reservoir: Mapping[str, object],
+    units: Sequence[Mapping[str, object]],
+) -> list[dict[str, str]]:
+    """Render one parent/fold proposal prompt without invoking a tokenizer or model."""
+
+    text = str(parent["text"])
+    query = str(parent["query"])
+    suffix = f"\n\nExplicit obligation:\n{text}"
+    if not query.endswith(suffix):
+        raise ValueError("parent query does not preserve the complete O0 suffix")
+    payload = {
+        "narrative": query[: -len(suffix)],
+        "parent_o0": dict(parent),
+        "source_fold": reservoir["fold"],
+        "reservoir_id": reservoir["reservoir_id"],
+        "evidence_units": [dict(row) for row in units],
+        "response_json_schema": PROPOSAL_SCHEMA,
+    }
+    return [
+        {"role": "system", "content": _PROPOSAL_INSTRUCTIONS},
+        {"role": "user", "content": _compact(payload)},
+    ]
+
+
+def build_proposal_jobs(contract: object) -> list[dict[str, object]]:
+    """Build exactly one deterministic job for each O0 parent/fold reservoir."""
+
+    _reject_protected_contract(contract)
+    if not isinstance(contract, Mapping):
+        raise ValueError("proposal contract must be an object")
+    parents = contract.get("parents")
+    reservoirs = contract.get("reservoirs")
+    units = contract.get("units")
+    if not isinstance(parents, list) or not isinstance(reservoirs, list) or not isinstance(units, list):
+        raise ValueError("proposal contract rows are missing")
+    receipt = contract.get("receipt")
+    if isinstance(receipt, Mapping) and (
+        receipt.get("schema_version") != CONTRACT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or receipt.get("topic_ids") != list(PILOT_TOPIC_IDS)
+        or receipt.get("parent_count") != 24
+        or receipt.get("reservoir_count") != PRIMARY_JOB_COUNT
+        or receipt.get("qrels_opened") is not False
+        or any(receipt.get(name) != 0 for name in _ZERO_COUNTERS)
+        or receipt.get("tokenizer_load_count") != 0
+        or receipt.get("external_cost_usd") != 0.0
+    ):
+        raise ValueError("proposal source contract receipt differs")
+    if len(parents) != 24 or len(reservoirs) != PRIMARY_JOB_COUNT:
+        raise ValueError("proposal contract must contain 24 parents and 48 reservoirs")
+    if any(not isinstance(row, Mapping) for row in [*parents, *reservoirs, *units]):
+        raise ValueError("proposal contract rows must be objects")
+    parent_by_id = {str(row["parent_id"]): row for row in parents}
+    unit_by_id = {str(row["unit_id"]): row for row in units}
+    if len(parent_by_id) != len(parents) or len(unit_by_id) != len(units):
+        raise ValueError("proposal contract contains duplicate parent or unit identities")
+    parent_order = [str(row["parent_id"]) for row in parents]
+    reservoir_by_pair: dict[tuple[str, int], Mapping[str, object]] = {}
+    for row in reservoirs:
+        fold = row.get("fold")
+        if isinstance(fold, bool) or fold not in (0, 1):
+            raise ValueError("proposal reservoir fold must be exactly 0 or 1")
+        key = (str(row.get("parent_id")), int(fold))
+        if key in reservoir_by_pair:
+            raise ValueError("proposal contract contains a duplicate parent/fold reservoir")
+        reservoir_by_pair[key] = row
+    expected_pairs = {(parent_id, fold) for parent_id in parent_order for fold in (0, 1)}
+    if set(reservoir_by_pair) != expected_pairs:
+        raise ValueError("proposal reservoirs do not cover every parent/fold exactly once")
+    jobs: list[dict[str, object]] = []
+    for parent_id in parent_order:
+        parent = parent_by_id[parent_id]
+        for fold in (0, 1):
+            reservoir = reservoir_by_pair[(parent_id, fold)]
+            if (
+                reservoir.get("topic_id") != parent.get("topic_id")
+                or reservoir.get("document_count") != 10
+                or not isinstance(reservoir.get("documents"), list)
+                or len(reservoir["documents"]) != 10
+            ):
+                raise ValueError("proposal reservoir identity or document count differs")
+            ordered_units: list[Mapping[str, object]] = []
+            seen_unit_ids: set[str] = set()
+            for document in reservoir["documents"]:
+                if not isinstance(document, Mapping) or not isinstance(
+                    document.get("unit_ids"), list
+                ):
+                    raise ValueError("proposal reservoir document unit inventory is invalid")
+                for raw_unit_id in document["unit_ids"]:
+                    unit_id = str(raw_unit_id)
+                    if unit_id in seen_unit_ids or unit_id not in unit_by_id:
+                        raise ValueError("proposal unit identity is duplicate or unknown")
+                    unit = unit_by_id[unit_id]
+                    if (
+                        unit.get("topic_id") != parent.get("topic_id")
+                        or unit.get("parent_id") != parent_id
+                        or unit.get("fold") != fold
+                        or unit.get("document_id") != document.get("document_id")
+                        or unit.get("window_id") != document.get("window_id")
+                    ):
+                        raise ValueError("proposal unit identity escapes its parent/fold reservoir")
+                    seen_unit_ids.add(unit_id)
+                    ordered_units.append(unit)
+            if not ordered_units:
+                raise ValueError("proposal reservoir must contain exact evidence units")
+            messages = render_proposal_messages(parent, reservoir, ordered_units)
+            identity = {
+                "topic_id": reservoir["topic_id"],
+                "parent_id": parent_id,
+                "fold": fold,
+                "reservoir_id": reservoir["reservoir_id"],
+                "messages_sha256": canonical_sha256(messages),
+                "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+            }
+            jobs.append(
+                {
+                    "schema_version": JOB_SCHEMA_VERSION,
+                    "job_id": canonical_sha256(identity),
+                    **identity,
+                    "parent_manifest_order": parent["manifest_order"],
+                    "input_unit_count": len(ordered_units),
+                    "input_unit_ids": [row["unit_id"] for row in ordered_units],
+                    "messages": messages,
+                    "primary_max_new_tokens": PRIMARY_MAX_NEW_TOKENS,
+                    "retry_max_new_tokens": RETRY_MAX_NEW_TOKENS,
+                    "retry_policy": _prompt_contract()["retry_policy"],
+                }
+            )
+    if len(jobs) != PRIMARY_JOB_COUNT or len({row["job_id"] for row in jobs}) != PRIMARY_JOB_COUNT:
+        raise ValueError("proposal jobs must contain exactly 48 unique parent/fold jobs")
+    return jobs
+
+
+def build_proposal_preflight(
+    contract: object,
+    *,
+    tokenizer: object,
+    model_factory: Callable[[], object] | None,
+    output_dir: Path,
+    contract_dir: Path | None = None,
+    contract_receipt_sha256: str | None = None,
+    model_snapshot: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Freeze tokenizer-counted jobs while deliberately ignoring model_factory."""
+
+    _reject_protected_contract(contract)
+    del model_factory
+    jobs = build_proposal_jobs(contract)
+    destination = Path(output_dir)
+    if _path_present(destination):
+        raise FileExistsError(f"create-only proposal preflight exists: {destination}")
+    snapshot = dict(model_snapshot) if model_snapshot is not None else _snapshot_inventory()
+    tokenizer_files = _tokenizer_file_inventory(snapshot)
+    tokenizer_contract = _tokenizer_contract()
+    counted: list[dict[str, object]] = []
+    for job in jobs:
+        token_ids = tokenizer.apply_chat_template(
+            job["messages"], tokenize=True, add_generation_prompt=True
+        )
+        if (
+            not isinstance(token_ids, Sequence)
+            or isinstance(token_ids, (str, bytes))
+            or not token_ids
+        ):
+            raise ValueError("tokenizer returned an invalid proposal prompt token sequence")
+        counted.append({**job, "prompt_token_count": len(token_ids)})
+    jobs_bytes = b"".join(_compact_bytes(row) for row in counted)
+    schema_bytes = _pretty_bytes(PROPOSAL_SCHEMA)
+    prompt = _prompt_contract()
+    prompt_bytes = _pretty_bytes(prompt)
+    contract_receipt: Mapping[str, object] = {}
+    if isinstance(contract, Mapping) and isinstance(contract.get("receipt"), Mapping):
+        contract_receipt = contract["receipt"]  # type: ignore[assignment]
+    source_receipt_hash = contract_receipt_sha256 or canonical_sha256(contract_receipt)
+    code_sha256 = {
+        "adaptive_obligation_v2_contract.py": _sha256_file(
+            Path(__file__).with_name("adaptive_obligation_v2_contract.py")
+        ),
+        "adaptive_obligation_v2_propose.py": _sha256_file(Path(__file__)),
+    }
+    token_counts = [int(row["prompt_token_count"]) for row in counted]
+    receipt: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "complete",
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "job_count": len(counted),
+        "primary_call_count": PRIMARY_JOB_COUNT,
+        "retry_call_ceiling": PRIMARY_JOB_COUNT,
+        "worst_case_call_ceiling": PRIMARY_JOB_COUNT * 2,
+        "primary_max_new_tokens": PRIMARY_MAX_NEW_TOKENS,
+        "retry_max_new_tokens": RETRY_MAX_NEW_TOKENS,
+        "prompt_token_counts": {
+            "count": len(token_counts),
+            "minimum": min(token_counts),
+            "maximum": max(token_counts),
+            "total": sum(token_counts),
+            "by_job": [
+                {"job_id": row["job_id"], "prompt_token_count": row["prompt_token_count"]}
+                for row in counted
+            ],
+        },
+        "tokenizer_load_count": 1,
+        "model_load_count": 0,
+        "inference_count": 0,
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "model_snapshot": snapshot,
+        "tokenizer_files": tokenizer_files,
+        "tokenizer_contract": tokenizer_contract,
+        "tokenizer_loading": {
+            "backend": "tokenizers",
+            "local_files_only": True,
+            "trust_remote_code": False,
+            "torch_required": False,
+            "transformers_required": False,
+        },
+        "model_construction_allowed": False,
+        "generation_allowed": False,
+        "prompt_sha256": canonical_sha256(prompt),
+        "schema_sha256": canonical_sha256(PROPOSAL_SCHEMA),
+        "contract_receipt": {
+            "path": str(Path(contract_dir).resolve()) if contract_dir is not None else None,
+            "sha256": source_receipt_hash,
+            "schema_version": contract_receipt.get("schema_version"),
+            "status": contract_receipt.get("status"),
+        },
+        "code_sha256": code_sha256,
+        "artifacts": {
+            "jobs.jsonl": {
+                "path": "jobs.jsonl",
+                "bytes": len(jobs_bytes),
+                "rows": len(counted),
+                "sha256": _sha256(jobs_bytes),
+            },
+            "schema.json": {
+                "path": "schema.json",
+                "bytes": len(schema_bytes),
+                "rows": 1,
+                "sha256": _sha256(schema_bytes),
+            },
+            "prompt.json": {
+                "path": "prompt.json",
+                "bytes": len(prompt_bytes),
+                "rows": 1,
+                "sha256": _sha256(prompt_bytes),
+            },
+        },
+        "expected_runtime": {
+            "phase": "inference_free_preflight",
+            "proposal_calls_executed": 0,
+            "validation_calls_executed": 0,
+        },
+        "planned_storage": {
+            "artifact_names": ["jobs.jsonl", "schema.json", "prompt.json", "receipt.json"],
+            "job_rows": PRIMARY_JOB_COUNT,
+        },
+        "qrels_opened": False,
+        "network_call_count": 0,
+        "retrieval_call_count": 0,
+        "hosted_inference_call_count": 0,
+        "paid_call_count": 0,
+        "external_cost_usd": 0.0,
+    }
+    _publish_preflight(
+        destination,
+        {
+            "jobs.jsonl": jobs_bytes,
+            "schema.json": schema_bytes,
+            "prompt.json": prompt_bytes,
+            "receipt.json": _pretty_bytes(receipt),
+        },
+    )
+    return receipt
+
+
+def _write_fsynced(path: Path, content: bytes) -> None:
+    with path.open("xb") as sink:
+        sink.write(content)
+        sink.flush()
+        os.fsync(sink.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("atomic create-only rename is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1)
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in (errno.EEXIST, errno.ENOTEMPTY):
+        raise FileExistsError(f"create-only proposal preflight exists: {destination}")
+    raise OSError(error, os.strerror(error), str(destination))
+
+
+def _require_output_inventory(root: Path) -> None:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("proposal preflight root must be a regular directory")
+    entries = list(root.iterdir())
+    if {path.name for path in entries} != _OUTPUT_NAMES or any(
+        path.is_symlink() or not path.is_file() for path in entries
+    ):
+        raise ValueError("proposal preflight inventory is partial, unexpected, or unsafe")
+
+
+def _publish_preflight(destination: Path, contents: Mapping[str, bytes]) -> None:
+    if _path_present(destination):
+        raise FileExistsError(f"create-only proposal preflight exists: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.parent.is_symlink():
+        raise ValueError("proposal preflight parent must not be a symlink")
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
+    )
+    published = False
+    try:
+        for name in ("jobs.jsonl", "schema.json", "prompt.json", "receipt.json"):
+            _write_fsynced(staging / name, contents[name])
+        _require_output_inventory(staging)
+        if any((staging / name).read_bytes() != content for name, content in contents.items()):
+            raise ValueError("staged proposal preflight bytes differ")
+        _fsync_directory(staging)
+        _rename_noreplace(staging, destination)
+        published = True
+        _fsync_directory(destination.parent)
+    finally:
+        if not published and staging.exists():
+            shutil.rmtree(staging)
+
+
+def _read_json(path: Path, label: str) -> dict[str, object]:
+    try:
+        source = path.read_bytes()
+        value = json.loads(source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable or invalid JSON") from exc
+    if not isinstance(value, dict) or source != _pretty_bytes(value):
+        raise ValueError(f"{label} must be one canonical JSON object")
+    return value
+
+
+def _read_jobs(path: Path) -> tuple[list[dict[str, object]], bytes]:
+    try:
+        source = path.read_bytes()
+    except OSError as exc:
+        raise ValueError("jobs.jsonl is unreadable") from exc
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        try:
+            row = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"jobs.jsonl:{line_number} is invalid JSON") from exc
+        if not isinstance(row, dict) or line != _compact_bytes(row).rstrip(b"\n"):
+            raise ValueError(f"jobs.jsonl:{line_number} is not canonical")
+        rows.append(row)
+    return rows, source
+
+
+def _artifact_matches(
+    name: str, content: bytes, rows: int, bindings: Mapping[str, object]
+) -> None:
+    binding = bindings.get(name)
+    if (
+        not isinstance(binding, Mapping)
+        or binding.get("path") != name
+        or binding.get("bytes") != len(content)
+        or binding.get("rows") != rows
+        or binding.get("sha256") != _sha256(content)
+    ):
+        raise ValueError(f"proposal preflight {name} binding differs")
+
+
+def verify_proposal_preflight(output_dir: Path) -> dict[str, object]:
+    """Authenticate the frozen 48-job proposal plan without loading a tokenizer/model."""
+
+    root = Path(output_dir)
+    _require_output_inventory(root)
+    receipt = _read_json(root / "receipt.json", "proposal preflight receipt")
+    if (
+        receipt.get("schema_version") != SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or receipt.get("topic_ids") != list(PILOT_TOPIC_IDS)
+        or receipt.get("job_count") != PRIMARY_JOB_COUNT
+        or receipt.get("primary_call_count") != PRIMARY_JOB_COUNT
+        or receipt.get("retry_call_ceiling") != PRIMARY_JOB_COUNT
+        or receipt.get("worst_case_call_ceiling") != PRIMARY_JOB_COUNT * 2
+        or receipt.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+        or receipt.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
+        or receipt.get("tokenizer_load_count") != 1
+        or any(receipt.get(name) != 0 for name in _ZERO_COUNTERS)
+        or receipt.get("qrels_opened") is not False
+        or receipt.get("external_cost_usd") != 0.0
+        or receipt.get("model") != MODEL_ID
+        or receipt.get("model_revision") != MODEL_REVISION
+        or receipt.get("model_construction_allowed") is not False
+        or receipt.get("generation_allowed") is not False
+    ):
+        raise ValueError("proposal preflight counts, model, or safety receipt differs")
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, Mapping) or set(artifacts) != {
+        "jobs.jsonl",
+        "schema.json",
+        "prompt.json",
+    }:
+        raise ValueError("proposal preflight artifact bindings differ")
+    jobs, jobs_bytes = _read_jobs(root / "jobs.jsonl")
+    schema_bytes = (root / "schema.json").read_bytes()
+    prompt_bytes = (root / "prompt.json").read_bytes()
+    _artifact_matches("jobs.jsonl", jobs_bytes, len(jobs), artifacts)
+    _artifact_matches("schema.json", schema_bytes, 1, artifacts)
+    _artifact_matches("prompt.json", prompt_bytes, 1, artifacts)
+    schema = _read_json(root / "schema.json", "proposal schema")
+    prompt = _read_json(root / "prompt.json", "proposal prompt")
+    if (
+        schema != PROPOSAL_SCHEMA
+        or prompt != _prompt_contract()
+        or receipt.get("schema_sha256") != canonical_sha256(schema)
+        or receipt.get("prompt_sha256") != canonical_sha256(prompt)
+    ):
+        raise ValueError("proposal schema or prompt contract differs")
+    if len(jobs) != PRIMARY_JOB_COUNT or len({row.get("job_id") for row in jobs}) != PRIMARY_JOB_COUNT:
+        raise ValueError("jobs.jsonl must contain exactly 48 unique jobs")
+    pairs: set[tuple[str, int]] = set()
+    for row in jobs:
+        fold = row.get("fold")
+        messages = row.get("messages")
+        if (
+            row.get("schema_version") != JOB_SCHEMA_VERSION
+            or fold not in (0, 1)
+            or isinstance(fold, bool)
+            or not isinstance(messages, list)
+            or row.get("messages_sha256") != canonical_sha256(messages)
+            or row.get("schema_sha256") != canonical_sha256(PROPOSAL_SCHEMA)
+            or row.get("primary_max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+            or row.get("retry_max_new_tokens") != RETRY_MAX_NEW_TOKENS
+            or not isinstance(row.get("prompt_token_count"), int)
+            or isinstance(row.get("prompt_token_count"), bool)
+            or int(row["prompt_token_count"]) < 1
+        ):
+            raise ValueError("jobs.jsonl contains an invalid frozen proposal job")
+        identity = {
+            "topic_id": row.get("topic_id"),
+            "parent_id": row.get("parent_id"),
+            "fold": fold,
+            "reservoir_id": row.get("reservoir_id"),
+            "messages_sha256": row.get("messages_sha256"),
+            "schema_sha256": row.get("schema_sha256"),
+        }
+        if row.get("job_id") != canonical_sha256(identity):
+            raise ValueError("jobs.jsonl job identity differs")
+        pairs.add((str(row.get("parent_id")), int(fold)))
+    if len(pairs) != PRIMARY_JOB_COUNT:
+        raise ValueError("jobs.jsonl parent/fold identities differ")
+    prompt_counts = receipt.get("prompt_token_counts")
+    counts = [int(row["prompt_token_count"]) for row in jobs]
+    if (
+        not isinstance(prompt_counts, Mapping)
+        or prompt_counts.get("count") != len(counts)
+        or prompt_counts.get("minimum") != min(counts)
+        or prompt_counts.get("maximum") != max(counts)
+        or prompt_counts.get("total") != sum(counts)
+        or prompt_counts.get("by_job")
+        != [
+            {"job_id": row["job_id"], "prompt_token_count": row["prompt_token_count"]}
+            for row in jobs
+        ]
+    ):
+        raise ValueError("proposal prompt token counts differ")
+    observed_snapshot = _snapshot_inventory()
+    if receipt.get("model_snapshot") != observed_snapshot or receipt.get(
+        "tokenizer_files"
+    ) != _tokenizer_file_inventory(observed_snapshot):
+        raise ValueError("proposal local model snapshot or tokenizer files differ")
+    if receipt.get("tokenizer_contract") != _tokenizer_contract():
+        raise ValueError("proposal pinned tokenizer or chat template binding differs")
+    tokenizer = _load_local_tokenizer()
+    recomputed_counts = [
+        len(
+            tokenizer.apply_chat_template(
+                row["messages"], tokenize=True, add_generation_prompt=True
+            )
+        )
+        for row in jobs
+    ]
+    if recomputed_counts != counts:
+        raise ValueError("proposal prompt token counts differ from recomputed pinned tokenizer counts")
+    expected_code = {
+        "adaptive_obligation_v2_contract.py": _sha256_file(
+            Path(__file__).with_name("adaptive_obligation_v2_contract.py")
+        ),
+        "adaptive_obligation_v2_propose.py": _sha256_file(Path(__file__)),
+    }
+    if receipt.get("code_sha256") != expected_code:
+        raise ValueError("proposal preflight code hashes differ")
+    source_binding = receipt.get("contract_receipt")
+    if not isinstance(source_binding, Mapping):
+        raise ValueError("proposal contract receipt binding is missing")
+    source_path = source_binding.get("path")
+    if source_path is not None:
+        contract_root = Path(str(source_path))
+        contract = _load_verified_contract(contract_root)
+        if source_binding.get("sha256") != _sha256_file(contract_root / "receipt.json"):
+            raise ValueError("proposal source contract receipt hash differs")
+        expected_jobs = build_proposal_jobs(contract)
+        for observed, expected in zip(jobs, expected_jobs, strict=True):
+            without_count = {key: value for key, value in observed.items() if key != "prompt_token_count"}
+            if without_count != expected:
+                raise ValueError("jobs.jsonl differs from the authenticated contract reconstruction")
+    return receipt
+
+
+def _load_verified_contract(contract_dir: Path) -> dict[str, object]:
+    root = Path(contract_dir)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("proposal source contract root must be a regular directory")
+    receipt = _read_json(root / "receipt.json", "proposal source contract receipt")
+    raw_topics = receipt.get("topic_ids")
+    if not isinstance(raw_topics, list):
+        raise ValueError("proposal source contract topic_ids are missing")
+    for topic_id in map(str, raw_topics):
+        if topic_id in PROTECTED_TOPIC_IDS:
+            raise ValueError(f"protected topic {topic_id} is forbidden")
+    verified = verify_v2_contract(root)
+    if receipt != verified:
+        raise ValueError("proposal source contract verifier receipt differs")
+
+    def load_jsonl(name: str) -> list[dict[str, object]]:
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"proposal source {name} must be a regular file")
+        rows: list[dict[str, object]] = []
+        for line_number, line in enumerate(path.read_bytes().splitlines(), start=1):
+            try:
+                row = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"proposal source {name}:{line_number} is invalid") from exc
+            if not isinstance(row, dict) or line != _compact_bytes(row).rstrip(b"\n"):
+                raise ValueError(f"proposal source {name}:{line_number} is not canonical")
+            rows.append(row)
+        return rows
+
+    return {
+        "parents": load_jsonl("parents.jsonl"),
+        "reservoirs": load_jsonl("reservoirs.jsonl"),
+        "units": load_jsonl("units.jsonl"),
+        "receipt": receipt,
+    }
+
+
+def _load_local_tokenizer(snapshot_dir: Path = MODEL_SNAPSHOT) -> object:
+    """Construct only the pinned tokenizer, never a model class."""
+
+    before = set(sys.modules)
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+    from tokenizers import Tokenizer
+
+    imported = set(sys.modules) - before
+    if any(
+        name == "torch"
+        or name.startswith("torch.")
+        or name == "transformers"
+        or name.startswith("transformers.")
+        for name in imported
+    ):
+        raise RuntimeError("tokenizer-only loader imported a forbidden model runtime")
+
+    root = Path(snapshot_dir)
+    config = json.loads((root / "tokenizer_config.json").read_bytes())
+    chat_template = config.get("chat_template")
+    if not isinstance(chat_template, str) or not chat_template:
+        raise ValueError("pinned tokenizer chat template is missing")
+    backend = Tokenizer.from_file(str(root / "tokenizer.json"))
+    template = ImmutableSandboxedEnvironment(
+        trim_blocks=True,
+        lstrip_blocks=True,
+    ).from_string(chat_template)
+
+    class LocalChatTokenizer:
+        def apply_chat_template(
+            self,
+            messages: object,
+            *,
+            tokenize: bool,
+            add_generation_prompt: bool,
+        ) -> list[int]:
+            if not tokenize or not isinstance(messages, Sequence) or isinstance(
+                messages, (str, bytes)
+            ):
+                raise ValueError("proposal preflight requires tokenized chat messages")
+            rendered = template.render(
+                messages=[dict(row) for row in messages],
+                tools=None,
+                add_generation_prompt=add_generation_prompt,
+            )
+            return backend.encode(rendered, add_special_tokens=False).ids
+
+    return LocalChatTokenizer()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    build = subparsers.add_parser("build-preflight", help="freeze 48 proposal jobs")
+    build.add_argument("--contract", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    verify = subparsers.add_parser("verify-preflight", help="verify frozen proposal jobs")
+    verify.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    if args.command == "build-preflight":
+        contract = _load_verified_contract(args.contract)
+        if _path_present(args.output):
+            raise FileExistsError(f"create-only proposal preflight exists: {args.output}")
+        snapshot = _snapshot_inventory()
+        tokenizer = _load_local_tokenizer()
+        receipt = build_proposal_preflight(
+            contract,
+            tokenizer=tokenizer,
+            model_factory=None,
+            output_dir=args.output,
+            contract_dir=args.contract,
+            contract_receipt_sha256=_sha256_file(args.contract / "receipt.json"),
+            model_snapshot=snapshot,
+        )
+    else:
+        receipt = verify_proposal_preflight(args.output)
+    print(
+        _compact(
+            {
+                "status": "verified" if args.command == "verify-preflight" else "complete",
+                "jobs": receipt["job_count"],
+                "primary_calls": receipt["primary_call_count"],
+                "retry_ceiling": receipt["retry_call_ceiling"],
+                "worst_case_calls": receipt["worst_case_call_ceiling"],
+                "model_loads": receipt["model_load_count"],
+                "inference_calls": receipt["inference_count"],
+            }
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
