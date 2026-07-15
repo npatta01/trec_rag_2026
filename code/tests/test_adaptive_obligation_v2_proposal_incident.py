@@ -184,6 +184,22 @@ class R1FailureFixture:
         else:
             raise AssertionError(f"unknown inventory mutation: {mutation}")
 
+    def rewrite_as_retry_attempt(self) -> None:
+        anchor = json.loads((self.ledger_dir / "anchor.json").read_bytes())
+        retry = anchor["jobs"][0]["attempts"][1]
+        assert isinstance(retry, dict)
+        rows = [
+            json.loads(line)
+            for line in (self.ledger_dir / "events.jsonl").read_bytes().splitlines()
+        ]
+        for row in rows:
+            row.update(retry)
+        retry_raw_name = f"{R1_JOB_ID}.2.completion"
+        rows[1]["raw_path"] = retry_raw_name
+        raw_path = next((self.ledger_dir / "raw").iterdir())
+        raw_path.rename(raw_path.with_name(retry_raw_name))
+        self._rewrite_events(rows)
+
 
 @pytest.fixture
 def r1_failure_fixture(
@@ -327,6 +343,15 @@ def test_incident_rejects_noncanonical_failed_ledger_inventory(
     r1_failure_fixture: R1FailureFixture, mutation: str
 ) -> None:
     r1_failure_fixture.mutate_ledger_inventory(mutation)
+    with pytest.raises(ValueError, match="R1 failed ledger"):
+        build_r1_incident_receipt(**r1_failure_fixture.paths)
+
+
+def test_incident_rejects_rewritten_retry_attempt(
+    r1_failure_fixture: R1FailureFixture,
+) -> None:
+    r1_failure_fixture.rewrite_as_retry_attempt()
+
     with pytest.raises(ValueError, match="R1 failed ledger"):
         build_r1_incident_receipt(**r1_failure_fixture.paths)
 

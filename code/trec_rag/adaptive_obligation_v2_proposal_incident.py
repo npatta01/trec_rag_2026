@@ -37,6 +37,10 @@ R1_FAILED_LEDGER_ROOT_NAMES = frozenset(
 )
 R1_RAW_BYTES = 546
 R1_RAW_SHA256 = "683174f0ca3353b8dc901ec889974d83b2c02bac9cc79d00db6a08f26e4bb667"
+R1_RAW_PATH = (
+    "87df2b737285e7243ba3726dc621bf207164cb614bf548f7b3bad2f9d661ba5b"
+    ".1.completion"
+)
 R1_OUTPUT_TOKENS = 186
 
 _STARTED_EVENT_KEYS = frozenset(
@@ -164,8 +168,13 @@ def _verify_failed_ledger_material(
 
         job_id = event.get("job_id")
         ordinal = event.get("attempt_ordinal")
-        if not isinstance(job_id, str) or type(ordinal) is not int:
-            raise ValueError("R1 failed ledger attempt differs")
+        if (
+            not isinstance(job_id, str)
+            or type(ordinal) is not int
+            or ordinal != 1
+            or event.get("max_new_tokens") != PRIMARY_MAX_NEW_TOKENS
+        ):
+            raise ValueError("R1 failed ledger observed primary attempt differs")
         key = (job_id, ordinal)
         anchored = attempts.get(key)
         if (
@@ -186,6 +195,7 @@ def _verify_failed_ledger_material(
         expected_raw_name = f"{job_id}.{ordinal}.completion"
         if (
             raw_path != expected_raw_name
+            or raw_path != R1_RAW_PATH
             or raw_path != raw_name
             or raw_path in raw_names
             or type(event.get("output_token_count")) is not int
