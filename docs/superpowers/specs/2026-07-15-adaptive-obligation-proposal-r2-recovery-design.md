@@ -51,7 +51,7 @@ seal, repair, delete, or append to the R1 ledger.
 ## Versioned R2 contract
 
 R2 uses distinct schema identities for its prompt, job, preflight, approval,
-and run outputs. It lives beside R1 under new create-only destinations:
+and proposal receipt. It lives beside R1 under new create-only destinations:
 
 - `proposal_preflight_r2/`
 - `proposal_approval_r2.json`
@@ -62,6 +62,14 @@ The R1 verifier and artifacts remain independently usable and unchanged. The
 R2 implementation is isolated behind versioned public entry points and may
 reuse only stable low-level hashing, snapshot, ledger, and local-runtime
 primitives.
+
+The append-only ledger remains a stable transport schema rather than gaining
+an R2-specific anchor, event, stage, or completion schema. R2 continues to use
+anchor schema `adaptive-obligation-v2-run-anchor-v1` and attempt stage
+`proposal`; its distinct job inventory, preflight hash, approval hash, frozen
+destinations, and versioned proposal receipt authenticate the R2 run without
+weakening or forking the ledger contract. The R2 proposal receipt is the
+versioned run-output identity.
 
 R2 preserves exactly:
 
