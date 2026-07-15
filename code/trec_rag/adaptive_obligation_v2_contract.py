@@ -16,8 +16,10 @@ import math
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -177,20 +179,19 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _read_json(path: Path, label: str) -> dict[str, object]:
     try:
         source = Path(path).read_bytes()
-        value = json.loads(source)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except OSError as exc:
         raise ValueError(f"{label} is unreadable: {path}") from exc
+    return _parse_json_bytes(source, label)
+
+
+def _parse_json_bytes(source: bytes, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(source)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is invalid JSON") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
     return value
@@ -201,6 +202,10 @@ def _read_jsonl(path: Path, label: str) -> list[dict[str, object]]:
         source = Path(path).read_bytes()
     except OSError as exc:
         raise ValueError(f"{label} is unreadable: {path}") from exc
+    return _parse_jsonl_bytes(source, label)
+
+
+def _parse_jsonl_bytes(source: bytes, label: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for line_number, line in enumerate(source.splitlines(), start=1):
         if not line:
@@ -215,6 +220,103 @@ def _read_jsonl(path: Path, label: str) -> list[dict[str, object]]:
             raise ValueError(f"{label}:{line_number} is not canonical JSON")
         rows.append(row)
     return rows
+
+
+@dataclass(frozen=True)
+class _FileSnapshot:
+    path: Path
+    label: str
+    content: bytes
+    device: int
+    inode: int
+    size: int
+    mode: int
+    mtime_ns: int
+    ctime_ns: int
+
+
+def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mode,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _snapshot_regular_file(path: Path, label: str) -> _FileSnapshot:
+    """Read one immutable no-follow snapshot and bind its descriptor identity."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise RuntimeError("source snapshot O_NOFOLLOW is unavailable")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} must be a readable non-symlink file") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        content = b"".join(chunks)
+        if _stat_identity(before) != _stat_identity(after) or len(content) != before.st_size:
+            raise ValueError(f"{label} changed while its snapshot was read")
+        return _FileSnapshot(
+            path=Path(path),
+            label=label,
+            content=content,
+            device=before.st_dev,
+            inode=before.st_ino,
+            size=before.st_size,
+            mode=before.st_mode,
+            mtime_ns=before.st_mtime_ns,
+            ctime_ns=before.st_ctime_ns,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _assert_snapshot_current(snapshot: _FileSnapshot) -> None:
+    """Detect path replacement or in-place rewrite after deep verification."""
+
+    try:
+        observed = os.lstat(snapshot.path)
+    except OSError as exc:
+        raise ValueError(f"{snapshot.label} changed after snapshot") from exc
+    expected = (
+        snapshot.device,
+        snapshot.inode,
+        snapshot.size,
+        snapshot.mode,
+        snapshot.mtime_ns,
+        snapshot.ctime_ns,
+    )
+    if _stat_identity(observed) != expected or not stat.S_ISREG(observed.st_mode):
+        raise ValueError(f"{snapshot.label} changed after snapshot")
+
+
+def _require_snapshot_binding(
+    snapshot: _FileSnapshot,
+    binding: Mapping[str, object],
+    *,
+    expected_rows: int | None = None,
+) -> None:
+    if binding.get("sha256") != _sha256_bytes(snapshot.content):
+        raise ValueError(f"{snapshot.label} hash differs from authenticated receipt")
+    if "bytes" in binding and binding.get("bytes") != len(snapshot.content):
+        raise ValueError(f"{snapshot.label} byte count differs from authenticated receipt")
+    if expected_rows is not None and binding.get("rows") != expected_rows:
+        raise ValueError(f"{snapshot.label} row count differs from authenticated receipt")
 
 
 def _mapping(data: object, name: str) -> dict[str, object]:
@@ -822,33 +924,26 @@ def _safe_source_receipt(receipt: Mapping[str, object], label: str) -> None:
         raise ValueError(f"{label} safety receipt differs")
 
 
-def _require_regular_source_file(path: Path, label: str) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{label} must be a regular non-symlink file")
-
-
 def load_authenticated_v2_sources(
     contract_dir: Path, scores_dir: Path
 ) -> dict[str, object]:
-    """Authenticate Task 1 and Task 3, preflighting small metadata first."""
+    """Authenticate and consume Task 1/3 from immutable byte snapshots."""
 
-    contract_root = Path(contract_dir)
-    scores_root = Path(scores_dir)
+    contract_root, scores_root = Path(contract_dir), Path(scores_dir)
     for root, label in ((contract_root, "contract"), (scores_root, "scores")):
-        if root.is_symlink():
-            raise ValueError(f"authenticated {label} root must not be a symlink")
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError(f"authenticated {label} root must be a regular directory")
 
-    contract_manifest_path = contract_root / "manifest.json"
-    contract_summary_path = contract_root / "summary.json"
-    score_receipt_path = scores_root / "receipt.json"
-    for path, label in (
-        (contract_manifest_path, "contract manifest"),
-        (contract_summary_path, "contract summary"),
-        (score_receipt_path, "base score receipt"),
-    ):
-        _require_regular_source_file(path, label)
-
-    manifest = _read_json(contract_manifest_path, "contract manifest")
+    manifest_snapshot = _snapshot_regular_file(
+        contract_root / "manifest.json", "contract manifest"
+    )
+    summary_snapshot = _snapshot_regular_file(
+        contract_root / "summary.json", "contract summary"
+    )
+    receipt_snapshot = _snapshot_regular_file(
+        scores_root / "receipt.json", "base score receipt"
+    )
+    manifest = _parse_json_bytes(manifest_snapshot.content, manifest_snapshot.label)
     raw_topics = manifest.get("topic_ids")
     if not isinstance(raw_topics, list):
         raise ValueError("contract manifest topic_ids must be an array")
@@ -862,7 +957,7 @@ def load_authenticated_v2_sources(
         or manifest.get("qrels_opened") is not False
     ):
         raise ValueError("contract manifest canonical counts or topics differ")
-    summary = _read_json(contract_summary_path, "contract summary")
+    summary = _parse_json_bytes(summary_snapshot.content, summary_snapshot.label)
     summary_topics = summary.get("topic_ids")
     if not isinstance(summary_topics, list):
         raise ValueError("contract summary topic_ids must be an array")
@@ -876,39 +971,155 @@ def load_authenticated_v2_sources(
         or summary.get("qrels_opened") is not False
     ):
         raise ValueError("contract summary canonical counts or safety differ")
-    summary_sha256 = _sha256_file(contract_summary_path)
+    summary_sha256 = _sha256_bytes(summary_snapshot.content)
 
-    score_receipt = _read_json(score_receipt_path, "base score receipt")
+    score_receipt = _parse_json_bytes(receipt_snapshot.content, receipt_snapshot.label)
     raw_shards = score_receipt.get("shards")
     if not isinstance(raw_shards, list):
         raise ValueError("base score shard metadata is missing")
     shard_topics: list[str] = []
     shard_rows = 0
+    shard_queues: set[tuple[str, str]] = set()
+    shard_paths: set[str] = set()
     for raw in raw_shards:
         if not isinstance(raw, Mapping):
             raise ValueError("base score shard metadata is invalid")
-        shard_topics.append(str(raw.get("topic_id")))
+        topic_id = raw.get("topic_id")
+        obligation_id = raw.get("obligation_id")
+        relative = raw.get("path")
+        if not isinstance(topic_id, str) or not topic_id:
+            raise ValueError("base score shard topic identity is invalid")
+        reject_protected_before_access([topic_id], lambda: None)
+        if topic_id not in PILOT_TOPIC_IDS:
+            raise ValueError("base score shard topic coverage differs")
+        if not isinstance(obligation_id, str) or not obligation_id:
+            raise ValueError("base score shard queue identity is invalid")
+        queue = (topic_id, obligation_id)
+        if queue in shard_queues:
+            raise ValueError("base score receipt has a duplicate shard queue identity")
+        shard_queues.add(queue)
+        if (
+            not isinstance(relative, str)
+            or not relative.startswith("shards/")
+            or Path(relative).parts[:1] != ("shards",)
+            or len(Path(relative).parts) != 2
+        ):
+            raise ValueError("base score shard path is invalid")
+        if relative in shard_paths:
+            raise ValueError("base score receipt has a duplicate shard path")
+        shard_paths.add(relative)
+        if not _is_sha256(raw.get("sha256")):
+            raise ValueError("base score shard hash binding is invalid")
+        byte_count = raw.get("bytes")
         rows = raw.get("rows")
-        if isinstance(rows, bool) or not isinstance(rows, int) or rows < 0:
-            raise ValueError("base score shard row count is invalid")
+        if (
+            isinstance(rows, bool)
+            or not isinstance(rows, int)
+            or rows < 0
+            or isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count < 0
+        ):
+            raise ValueError("base score shard row or byte count is invalid")
+        shard_topics.append(topic_id)
         shard_rows += rows
-    reject_protected_before_access(shard_topics, lambda: None)
-    if not set(shard_topics).issubset(PILOT_TOPIC_IDS):
-        raise ValueError("base score shards contain a non-pilot topic")
     _safe_source_receipt(score_receipt, "base score")
     if (
-        score_receipt.get("completed_window_count") != EXPECTED_WINDOW_COUNT
+        set(shard_topics) != set(PILOT_TOPIC_IDS)
+        or len(shard_queues) != EXPECTED_SHARD_COUNT
+        or score_receipt.get("completed_window_count") != EXPECTED_WINDOW_COUNT
         or score_receipt.get("unique_pair_count") != EXPECTED_PAIR_COUNT
         or score_receipt.get("shard_count") != EXPECTED_SHARD_COUNT
         or len(raw_shards) != EXPECTED_SHARD_COUNT
         or shard_rows != EXPECTED_WINDOW_COUNT
     ):
-        raise ValueError("base score canonical counts differ")
-    score_receipt_sha256 = _sha256_file(score_receipt_path)
+        raise ValueError("base score topic coverage or canonical counts differ")
+    score_receipt_sha256 = _sha256_bytes(receipt_snapshot.content)
 
-    # The calls below may read large bodies.  All protected-topic and canonical
-    # count checks above therefore precede document and score-shard body access.
-    contract = load_score_contract(contract_root)
+    # No large artifact or callback is reached until the complete small receipt
+    # inventory above has exact pilot topics and 28 distinct queue identities.
+    raw_artifacts = summary.get("artifact_sha256")
+    expected_contract_names = {
+        "manifest.json",
+        "obligations.jsonl",
+        "documents.jsonl",
+        "folds.jsonl",
+    }
+    if not isinstance(raw_artifacts, Mapping) or set(raw_artifacts) != expected_contract_names:
+        raise ValueError("contract summary artifact hash inventory differs")
+    contract_snapshots: dict[str, _FileSnapshot] = {"manifest.json": manifest_snapshot}
+    for name in ("obligations.jsonl", "documents.jsonl", "folds.jsonl"):
+        contract_snapshots[name] = _snapshot_regular_file(
+            contract_root / name, f"contract {name}"
+        )
+    for name, snapshot in contract_snapshots.items():
+        expected_hash = raw_artifacts.get(name)
+        if expected_hash != _sha256_bytes(snapshot.content):
+            raise ValueError(f"contract {name} hash differs from authenticated summary")
+
+    obligations = _parse_jsonl_bytes(
+        contract_snapshots["obligations.jsonl"].content, "contract obligations snapshot"
+    )
+    documents = _parse_jsonl_bytes(
+        contract_snapshots["documents.jsonl"].content, "contract documents snapshot"
+    )
+    _parse_jsonl_bytes(
+        contract_snapshots["folds.jsonl"].content, "contract folds snapshot"
+    )
+    reject_protected_before_access(
+        [row.get("topic_id") for row in obligations]
+        + [row.get("topic_id") for row in documents],
+        lambda: None,
+    )
+    if (
+        len(documents) != EXPECTED_DOCUMENT_COUNT
+        or sum(row.get("kind") == "broad" for row in obligations)
+        != EXPECTED_BROAD_COUNT
+        or sum(row.get("kind") == "o0" for row in obligations) != EXPECTED_O0_COUNT
+    ):
+        raise ValueError("captured contract row counts differ")
+
+    shards_root = scores_root / "shards"
+    if shards_root.is_symlink() or not shards_root.is_dir():
+        raise ValueError("base score shards root must be a regular directory")
+    shard_snapshots: list[_FileSnapshot] = []
+    score_rows: list[dict[str, object]] = []
+    for raw in raw_shards:
+        assert isinstance(raw, Mapping)
+        relative = str(raw["path"])
+        snapshot = _snapshot_regular_file(
+            scores_root / relative, f"base score shard {relative}"
+        )
+        parsed = _parse_jsonl_bytes(snapshot.content, snapshot.label)
+        _require_snapshot_binding(snapshot, raw, expected_rows=len(parsed))
+        topic_id, obligation_id = str(raw["topic_id"]), str(raw["obligation_id"])
+        if any(
+            row.get("topic_id") != topic_id
+            or row.get("variant", row.get("obligation_id")) != obligation_id
+            for row in parsed
+        ):
+            raise ValueError("captured score shard queue rows differ from receipt")
+        shard_snapshots.append(snapshot)
+        score_rows.extend(parsed)
+    if len(score_rows) != EXPECTED_WINDOW_COUNT:
+        raise ValueError("captured score shard population differs")
+    reject_protected_before_access(
+        [row.get("topic_id") for row in score_rows], lambda: None
+    )
+    pairs: set[tuple[str, str]] = set()
+    for row in score_rows:
+        query, window_text = row.get("query"), row.get("window_text")
+        if not isinstance(query, str) or not isinstance(window_text, str):
+            raise ValueError("captured score pair identity is invalid")
+        pairs.add((query, window_text))
+    if len(pairs) != EXPECTED_PAIR_COUNT:
+        raise ValueError("captured score unique pair count differs")
+
+    # Deep verifiers may reopen paths, but the returned rows are intentionally
+    # discarded.  V2 consumes only the independently bound snapshots above.
+    load_score_contract(contract_root)
+    for snapshot in (manifest_snapshot, summary_snapshot, *contract_snapshots.values()):
+        _assert_snapshot_current(snapshot)
     verified_scores = verify_local_scoring(scores_root)
     _safe_source_receipt(verified_scores, "verified base score")
     if (
@@ -917,35 +1128,21 @@ def load_authenticated_v2_sources(
         or verified_scores.get("shard_count") != EXPECTED_SHARD_COUNT
     ):
         raise ValueError("verified base score canonical counts differ")
-    if (
-        _sha256_file(contract_summary_path) != summary_sha256
-        or _sha256_file(score_receipt_path) != score_receipt_sha256
+    seen_snapshots: set[Path] = set()
+    for snapshot in (
+        manifest_snapshot,
+        summary_snapshot,
+        receipt_snapshot,
+        *contract_snapshots.values(),
+        *shard_snapshots,
     ):
-        raise ValueError("authenticated source receipt changed during loading")
-
-    score_rows: list[dict[str, object]] = []
-    for raw in raw_shards:
-        assert isinstance(raw, Mapping)
-        relative = raw.get("path")
-        if (
-            not isinstance(relative, str)
-            or not relative.startswith("shards/")
-            or Path(relative).parts[:1] != ("shards",)
-            or len(Path(relative).parts) != 2
-        ):
-            raise ValueError("base score shard path is invalid")
-        shard_path = scores_root / relative
-        _require_regular_source_file(shard_path, "base score shard")
-        score_rows.extend(_read_jsonl(shard_path, "authenticated base score shard"))
-    if len(score_rows) != EXPECTED_WINDOW_COUNT:
-        raise ValueError("authenticated score shard population differs")
-    reject_protected_before_access(
-        [row.get("topic_id") for row in score_rows], lambda: None
-    )
+        if snapshot.path not in seen_snapshots:
+            _assert_snapshot_current(snapshot)
+            seen_snapshots.add(snapshot.path)
     return {
         "topic_ids": list(PILOT_TOPIC_IDS),
-        "obligations": list(contract["obligations"]),  # type: ignore[index]
-        "documents": list(contract["documents"]),  # type: ignore[index]
+        "obligations": obligations,
+        "documents": documents,
         "score_rows": score_rows,
         "source_bindings": {
             "mode": "authenticated_paths",

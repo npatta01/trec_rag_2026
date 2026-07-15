@@ -441,6 +441,276 @@ def test_authenticated_preflight_fails_before_large_source_callbacks(
     assert touched == []
 
 
+def _preflight_receipt_shards(mode: str) -> list[dict[str, object]]:
+    topics = [PILOT_TOPIC_IDS[index % 4] for index in range(28)]
+    if mode == "missing_topic":
+        topics = ["219"] * 28
+    obligations = [f"{topic}-queue-{index}" for index, topic in enumerate(topics)]
+    if mode == "duplicate_queue":
+        obligations[1] = obligations[0]
+        topics[1] = topics[0]
+    base, remainder = divmod(98_053, 28)
+    return [
+        {
+            "topic_id": topic,
+            "obligation_id": obligations[index],
+            "path": f"shards/shard-{index}.jsonl",
+            "rows": base + (index < remainder),
+            "bytes": 1,
+            "sha256": "a" * 64,
+        }
+        for index, topic in enumerate(topics)
+    ]
+
+
+@pytest.mark.parametrize("mode", ["missing_topic", "duplicate_queue"])
+def test_score_receipt_preflight_requires_exact_topics_and_unique_queues_before_callbacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    contract = tmp_path / "source-contract"
+    scores = tmp_path / "source-scores"
+    contract.mkdir()
+    scores.mkdir()
+    (contract / "manifest.json").write_bytes(
+        _compact(
+            {
+                "topic_ids": list(PILOT_TOPIC_IDS),
+                "document_count": 8_114,
+                "broad_obligation_count": 4,
+                "o0_obligation_count": 24,
+                "qrels_opened": False,
+            }
+        )
+    )
+    (contract / "summary.json").write_bytes(
+        _compact(
+            {
+                "topic_ids": list(PILOT_TOPIC_IDS),
+                "document_count": 8_114,
+                "broad_obligation_count": 4,
+                "o0_obligation_count": 24,
+                "protected_topic_count": 0,
+                "qrels_opened": False,
+            }
+        )
+    )
+    shards = _preflight_receipt_shards(mode)
+    (scores / "receipt.json").write_bytes(
+        _compact(
+            {
+                "completed_window_count": 98_053,
+                "unique_pair_count": 96_911,
+                "shard_count": 28,
+                "shards": shards,
+                "qrels_opened": False,
+                "network_call_count": 0,
+                "retrieval_call_count": 0,
+                "hosted_inference_call_count": 0,
+                "paid_call_count": 0,
+                "external_cost_usd": 0.0,
+            }
+        )
+    )
+    touched: list[str] = []
+
+    def forbidden(_path: Path) -> object:
+        touched.append("large")
+        raise AssertionError("large callback touched")
+
+    monkeypatch.setattr(contract_module, "load_score_contract", forbidden)
+    monkeypatch.setattr(contract_module, "verify_local_scoring", forbidden)
+    with pytest.raises(ValueError, match="topic coverage|duplicate.*queue"):
+        contract_module.load_authenticated_v2_sources(contract, scores)
+    assert touched == []
+
+
+def _write_snapshot_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, dict[str, list[dict[str, object]]]]:
+    monkeypatch.setattr(contract_module, "EXPECTED_DOCUMENT_COUNT", 4)
+    monkeypatch.setattr(contract_module, "EXPECTED_O0_COUNT", 0)
+    monkeypatch.setattr(contract_module, "EXPECTED_WINDOW_COUNT", 4)
+    monkeypatch.setattr(contract_module, "EXPECTED_PAIR_COUNT", 4)
+    monkeypatch.setattr(contract_module, "EXPECTED_SHARD_COUNT", 4)
+    contract = tmp_path / "source-contract"
+    scores = tmp_path / "source-scores"
+    shards_root = scores / "shards"
+    contract.mkdir()
+    shards_root.mkdir(parents=True)
+    manifest = {
+        "topic_ids": list(PILOT_TOPIC_IDS),
+        "document_count": 4,
+        "broad_obligation_count": 4,
+        "o0_obligation_count": 0,
+        "qrels_opened": False,
+    }
+    obligations = [
+        {
+            "topic_id": topic_id,
+            "obligation_id": f"{topic_id}:broad",
+            "kind": "broad",
+            "manifest_order": -1,
+            "text": f"Broad {topic_id}",
+            "query": f"Query {topic_id}",
+        }
+        for topic_id in PILOT_TOPIC_IDS
+    ]
+    documents: list[dict[str, object]] = []
+    score_rows: list[dict[str, object]] = []
+    for topic_id in PILOT_TOPIC_IDS:
+        document_id = f"document-{topic_id}"
+        text = f"Original document {topic_id}."
+        documents.append(
+            {
+                "topic_id": topic_id,
+                "document_id": document_id,
+                "fold": document_fold(topic_id, document_id),
+                "union_order": 1,
+                "text": text,
+                "text_sha256": _sha(text),
+            }
+        )
+        window_text = f"Original window {topic_id}."
+        query = f"Query {topic_id}"
+        score_rows.append(
+            {
+                "topic_id": topic_id,
+                "variant": f"{topic_id}:broad",
+                "document_id": document_id,
+                "document_sha256": _sha(text),
+                "window_id": f"window-{topic_id}",
+                "window_text": window_text,
+                "window_sha256": _sha(window_text),
+                "query": query,
+                "query_sha256": _sha(query),
+                "document_start_token": 0,
+                "document_end_token": 4,
+                "score": 1.0,
+            }
+        )
+    artifact_rows = {
+        "manifest.json": (manifest, 1),
+        "obligations.jsonl": (obligations, len(obligations)),
+        "documents.jsonl": (documents, len(documents)),
+        "folds.jsonl": ([], 0),
+    }
+    artifact_hashes: dict[str, str] = {}
+    for name, (rows, _count) in artifact_rows.items():
+        content = _compact(rows) if name == "manifest.json" else b"".join(
+            _compact(row) for row in rows
+        )
+        (contract / name).write_bytes(content)
+        artifact_hashes[name] = hashlib.sha256(content).hexdigest()
+    (contract / "summary.json").write_bytes(
+        _compact(
+            {
+                "topic_ids": list(PILOT_TOPIC_IDS),
+                "document_count": 4,
+                "broad_obligation_count": 4,
+                "o0_obligation_count": 0,
+                "protected_topic_count": 0,
+                "qrels_opened": False,
+                "artifact_sha256": artifact_hashes,
+            }
+        )
+    )
+    shard_bindings: list[dict[str, object]] = []
+    for index, row in enumerate(score_rows):
+        name = f"shard-{index}.jsonl"
+        content = _compact(row)
+        (shards_root / name).write_bytes(content)
+        shard_bindings.append(
+            {
+                "topic_id": row["topic_id"],
+                "obligation_id": row["variant"],
+                "path": f"shards/{name}",
+                "rows": 1,
+                "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    receipt = {
+        "completed_window_count": 4,
+        "unique_pair_count": 4,
+        "shard_count": 4,
+        "shards": shard_bindings,
+        "qrels_opened": False,
+        "network_call_count": 0,
+        "retrieval_call_count": 0,
+        "hosted_inference_call_count": 0,
+        "paid_call_count": 0,
+        "external_cost_usd": 0.0,
+    }
+    (scores / "receipt.json").write_bytes(_compact(receipt))
+    return contract, scores, {
+        "obligations": obligations,
+        "documents": documents,
+        "score_rows": score_rows,
+        "receipt": [receipt],
+    }
+
+
+def test_contract_document_swap_after_deep_verifier_is_not_consumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, scores, expected = _write_snapshot_sources(tmp_path, monkeypatch)
+
+    def swap_contract(_root: Path) -> dict[str, object]:
+        forged = [dict(row) for row in expected["documents"]]
+        forged[0]["text"] = "Forged replacement."
+        forged[0]["text_sha256"] = _sha("Forged replacement.")
+        forged_bytes = b"".join(_compact(row) for row in forged)
+        (contract / "documents.jsonl").write_bytes(forged_bytes)
+        summary = json.loads((contract / "summary.json").read_bytes())
+        summary["artifact_sha256"]["documents.jsonl"] = hashlib.sha256(
+            forged_bytes
+        ).hexdigest()
+        (contract / "summary.json").write_bytes(_compact(summary))
+        return {
+            "obligations": expected["obligations"],
+            "documents": forged,
+        }
+
+    monkeypatch.setattr(contract_module, "load_score_contract", swap_contract)
+    monkeypatch.setattr(
+        contract_module,
+        "verify_local_scoring",
+        lambda _root: expected["receipt"][0],
+    )
+    with pytest.raises(ValueError, match="changed after snapshot"):
+        contract_module.load_authenticated_v2_sources(contract, scores)
+
+
+def test_score_shard_swap_after_deep_verifier_is_not_consumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, scores, expected = _write_snapshot_sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        contract_module,
+        "load_score_contract",
+        lambda _root: {
+            "obligations": expected["obligations"],
+            "documents": expected["documents"],
+        },
+    )
+
+    def swap_scores(_root: Path) -> dict[str, object]:
+        forged = dict(expected["score_rows"][0])
+        forged["window_text"] = "Forged replacement window."
+        forged["window_sha256"] = _sha(str(forged["window_text"]))
+        forged_bytes = _compact(forged)
+        (scores / "shards" / "shard-0.jsonl").write_bytes(forged_bytes)
+        receipt = copy.deepcopy(expected["receipt"][0])
+        receipt["shards"][0]["bytes"] = len(forged_bytes)
+        receipt["shards"][0]["sha256"] = hashlib.sha256(forged_bytes).hexdigest()
+        (scores / "receipt.json").write_bytes(_compact(receipt))
+        return receipt
+
+    monkeypatch.setattr(contract_module, "verify_local_scoring", swap_scores)
+    with pytest.raises(ValueError, match="changed after snapshot"):
+        contract_module.load_authenticated_v2_sources(contract, scores)
+
+
 @pytest.mark.parametrize(
     "kind",
     ["declared_count", "pair_count", "document_hash", "window_hash", "query_hash"],
