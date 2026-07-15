@@ -9,6 +9,7 @@ Analytics portable-artifact packager from the canonical ``artifact.json``.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -25,12 +26,19 @@ from .adaptive_obligation_v2_propose import verify_proposal_preflight
 
 TITLE = "Adaptive obligation search v2"
 STATUS = "proposal_preflight_ready"
-GENERATED_AT = "2026-07-15T00:00:00Z"
 PILOT_TOPIC_IDS = ("219", "72", "300", "84")
 RETRIEVAL_HITS = 1_000
 MAX_RETRIEVAL_REQUESTS = 16
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT_BUILDER_PATH = "code/trec_rag/build_adaptive_obligation_v2_report.py"
+CANONICAL_RENDERER_PATH = Path(
+    "/home/npatta01/.codex/plugins/cache/openai-curated-remote/data-analytics/"
+    "0.2.8-13ceeea1f599/skills/build-report/scripts/"
+    "deliver_portable_artifact.mjs"
+)
+CANONICAL_RENDERER_SHA256 = (
+    "09d7afe25f76429ba1e99d08a5793af44c27738482d91e9b0bd2351ffd516066"
+)
 SOURCE_NAMES = (
     "contract",
     "proposal_preflight",
@@ -42,6 +50,16 @@ SOURCE_LABELS = {
     "proposal_preflight": "Verified v2 proposal preflight receipt",
     "baseline_rankings": "Sealed NARRATIVE and FIXED-O0 ranking receipt",
     "v1_discovery": "Terminal discovery v1 receipt",
+}
+SUPPORTING_SOURCE_PATHS = {
+    "retrieval_implementation": "code/trec_rag/adaptive_obligation_v2_retrieve.py",
+    "adaptive_plan": (
+        "docs/superpowers/plans/2026-07-15-adaptive-obligation-search-v2.md"
+    ),
+    "adaptive_design": (
+        "docs/superpowers/specs/2026-07-15-adaptive-obligation-search-v2-design.md"
+    ),
+    "report_builder": REPORT_BUILDER_PATH,
 }
 EXPECTED_V2_ROOT_CHILDREN = frozenset({"contract", "proposal_preflight"})
 
@@ -110,7 +128,28 @@ def _present(path: Path) -> bool:
     return os.path.lexists(path)
 
 
-def _assert_inference_free_v2_root(v2_root: Path) -> None:
+def _utc_build_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _validated_build_timestamp(value: str) -> str:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError("report build timestamp must be a UTC instant ending in Z")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("report build timestamp is invalid") from exc
+    if parsed.utcoffset() != timezone.utc.utcoffset(None):
+        raise ValueError("report build timestamp must be UTC")
+    return value
+
+
+def _assert_inference_free_v2_root(v2_root: Path) -> set[str]:
     try:
         observed = {entry.name for entry in v2_root.iterdir()}
     except OSError as exc:
@@ -122,6 +161,7 @@ def _assert_inference_free_v2_root(v2_root: Path) -> None:
         raise ValueError(f"v2 later artifact boundary differs: {detail}")
     if any("approval" in entry.name.casefold() for entry in v2_root.rglob("*")):
         raise ValueError("v2 approval artifact exists")
+    return observed
 
 
 def load_verified_sources(
@@ -139,7 +179,7 @@ def load_verified_sources(
     v1_discovery_dir = Path(v1_discovery_dir)
     if contract_dir.parent != proposal_preflight_dir.parent:
         raise ValueError("v2 contract and proposal preflight roots differ")
-    _assert_inference_free_v2_root(contract_dir.parent)
+    observed_v2_children = _assert_inference_free_v2_root(contract_dir.parent)
 
     receipts = {
         "contract": verify_v2_contract(contract_dir),
@@ -160,6 +200,17 @@ def load_verified_sources(
         },
         "source_hashes": {
             name: _sha256_file(path) for name, path in receipt_paths.items()
+        },
+        "supporting_paths": dict(SUPPORTING_SOURCE_PATHS),
+        "supporting_hashes": {
+            name: _sha256_file(REPO_ROOT / path)
+            for name, path in SUPPORTING_SOURCE_PATHS.items()
+        },
+        "output_inventory": {
+            "v2_root": _repo_relative(contract_dir.parent),
+            "observed_children": sorted(observed_v2_children),
+            "later_artifacts_present": [],
+            "approval_present": False,
         },
         "later_artifacts_present": [],
         "approval_present": False,
@@ -189,6 +240,15 @@ def build_report_payload(sources: Mapping[str, object]) -> dict[str, object]:
     terminal_v1 = _object(sources.get("v1_discovery"), "terminal v1 receipt")
     source_paths = _object(sources.get("source_paths"), "report source paths")
     source_hashes = _object(sources.get("source_hashes"), "report source hashes")
+    supporting_paths = _object(
+        sources.get("supporting_paths"), "report supporting paths"
+    )
+    supporting_hashes = _object(
+        sources.get("supporting_hashes"), "report supporting hashes"
+    )
+    output_inventory = _object(
+        sources.get("output_inventory"), "v2 output inventory"
+    )
 
     if any(
         receipt.get("topic_ids") != list(PILOT_TOPIC_IDS)
@@ -255,6 +315,40 @@ def build_report_payload(sources: Mapping[str, object]) -> dict[str, object]:
         paths[name] = path
         hashes[name] = _sha256(source_hashes.get(name), f"{name} receipt SHA-256")
 
+    if set(supporting_paths) != set(SUPPORTING_SOURCE_PATHS):
+        raise ValueError("report supporting source inventory differs")
+    verified_supporting_paths: dict[str, str] = {}
+    verified_supporting_hashes: dict[str, str] = {}
+    for name in SUPPORTING_SOURCE_PATHS:
+        path = supporting_paths.get(name)
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or ".." in Path(path).parts
+        ):
+            raise ValueError(f"{name} supporting source path must be repo-relative")
+        verified_supporting_paths[name] = path
+        verified_supporting_hashes[name] = _sha256(
+            supporting_hashes.get(name), f"{name} supporting SHA-256"
+        )
+    if output_inventory.get("observed_children") != sorted(
+        EXPECTED_V2_ROOT_CHILDREN
+    ):
+        raise ValueError("v2 output child inventory differs")
+    if output_inventory.get("later_artifacts_present") != []:
+        raise ValueError("v2 output inventory contains later adaptive artifacts")
+    if output_inventory.get("approval_present") is not False:
+        raise ValueError("v2 output inventory contains approval")
+    v2_root = output_inventory.get("v2_root")
+    if (
+        not isinstance(v2_root, str)
+        or not v2_root
+        or v2_root.startswith("/")
+        or ".." in Path(v2_root).parts
+    ):
+        raise ValueError("v2 output inventory root must be repo-relative")
+
     return {
         "status": STATUS,
         "topic_ids": list(PILOT_TOPIC_IDS),
@@ -283,6 +377,9 @@ def build_report_payload(sources: Mapping[str, object]) -> dict[str, object]:
         "v1_reason": terminal_v1["reason"],
         "source_paths": paths,
         "source_hashes": hashes,
+        "supporting_paths": verified_supporting_paths,
+        "supporting_hashes": verified_supporting_hashes,
+        "output_inventory": dict(output_inventory),
         "contract_artifacts": dict(
             _object(contract.get("artifacts"), "contract artifact inventory")
         )
@@ -296,9 +393,54 @@ def build_report_payload(sources: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _source_specs(payload: Mapping[str, object]) -> list[dict[str, object]]:
+def _sql_literal(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if value is True:
+        return "TRUE"
+    if value is False:
+        return "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _source_specs(
+    payload: Mapping[str, object],
+    *,
+    stage_rows: Sequence[Mapping[str, object]],
+    readiness_rows: Sequence[Mapping[str, object]],
+    source_rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
     paths = _object(payload.get("source_paths"), "payload source paths")
     hashes = _object(payload.get("source_hashes"), "payload source hashes")
+    supporting_paths = _object(
+        payload.get("supporting_paths"), "payload supporting paths"
+    )
+    supporting_hashes = _object(
+        payload.get("supporting_hashes"), "payload supporting hashes"
+    )
+    output_inventory = _object(
+        payload.get("output_inventory"), "payload output inventory"
+    )
+    receipt_fields = {
+        "contract": (
+            "status, topic_ids, parent_count, reservoir_count, unit_count, "
+            "protected_topic_count, qrels_opened, model_load_count, "
+            "inference_count"
+        ),
+        "proposal_preflight": (
+            "status, topic_ids, job_count, primary_call_count, "
+            "retry_call_ceiling, worst_case_call_ceiling, model, "
+            "model_revision, tokenizer_load_count, model_load_count, "
+            "inference_count, qrels_opened"
+        ),
+        "baseline_rankings": (
+            "status, topic_ids, document_count, rankings, qrels_opened, "
+            "model_load_count, inference_count"
+        ),
+        "v1_discovery": "status, reason, qrels_opened",
+    }
     sources: list[dict[str, object]] = []
     for name in SOURCE_NAMES:
         path = str(paths[name])
@@ -317,7 +459,10 @@ def _source_specs(payload: Mapping[str, object]) -> list[dict[str, object]]:
                         "Reads the canonical receipt only after its repository verifier "
                         "has authenticated the complete bound artifact."
                     ),
-                    "sql": f"SELECT * FROM read_json_auto('{quoted_path}');",
+                    "sql": (
+                        f"SELECT {receipt_fields[name]} "
+                        f"FROM read_json_auto('{quoted_path}');"
+                    ),
                     "tables_used": [path],
                     "filters": [
                         "Pilot topics 219, 72, 300, and 84 only",
@@ -330,46 +475,129 @@ def _source_specs(payload: Mapping[str, object]) -> list[dict[str, object]]:
                 },
             }
         )
-    inventory_digest = _sha256_bytes(
-        "\n".join(str(hashes[name]) for name in SOURCE_NAMES).encode("ascii")
-    )
-    inventory_sql = (
-        "WITH contract AS (SELECT * FROM read_json_auto('"
-        + str(paths["contract"]).replace("'", "''")
-        + "')), proposal AS (SELECT * FROM read_json_auto('"
-        + str(paths["proposal_preflight"]).replace("'", "''")
-        + "')), baselines AS (SELECT * FROM read_json_auto('"
-        + str(paths["baseline_rankings"]).replace("'", "''")
-        + "')), terminal_v1 AS (SELECT * FROM read_json_auto('"
-        + str(paths["v1_discovery"]).replace("'", "''")
-        + "')) SELECT contract.parent_count, contract.reservoir_count, "
-        "contract.unit_count, proposal.primary_call_count, "
-        "proposal.retry_call_ceiling, proposal.worst_case_call_ceiling, "
-        "baselines.document_count, terminal_v1.status AS v1_status "
-        "FROM contract, proposal, baselines, terminal_v1;"
+    retrieval_tables = [
+        str(supporting_paths[name])
+        for name in ("retrieval_implementation", "adaptive_plan", "adaptive_design")
+    ]
+    retrieval_digest = _sha256_bytes(
+        "\n".join(
+            str(supporting_hashes[name])
+            for name in ("retrieval_implementation", "adaptive_plan", "adaptive_design")
+        ).encode("ascii")
     )
     sources.append(
         {
-            "id": "verified_inventory",
-            "label": "Verified four-receipt report inventory",
-            "path": REPORT_BUILDER_PATH,
+            "id": "retrieval_design",
+            "label": "Pinned adaptive retrieval implementation and design",
+            "path": str(supporting_paths["adaptive_design"]),
+            "query": {
+                "engine": "duckdb",
+                "id": f"sha256:{retrieval_digest}",
+                "language": "sql",
+                "description": (
+                    "Exact configuration transcribed from the hashed retrieval "
+                    "implementation, implementation plan, and design specification."
+                ),
+                "sql": (
+                    "SELECT * FROM (VALUES (16, 1000, 1, 4, "
+                    "'ordered parent anchors + complete O0 + accepted O1', "
+                    "'unchanged narrative + complete O0 + accepted O1', FALSE)) "
+                    "AS retrieval_design(maximum_requests, hits, max_per_parent, "
+                    "max_per_topic, bm25_query, minilm_query, recursive_search);"
+                ),
+                "tables_used": retrieval_tables,
+                "filters": [
+                    "Plain-text hosted retrieval only",
+                    "One frozen request per accepted O1",
+                    "No recursive query generation",
+                ],
+                "metric_definitions": [
+                    "hits=1000 is one response reused for top-100 and top-1,000 views.",
+                    "Maximum 16 requests follows four accepted O1 records per pilot topic.",
+                ],
+            },
+        }
+    )
+
+    readiness_by_order = {
+        row["order"]: row["canonical_artifact_ready"] for row in readiness_rows
+    }
+    inventory_values: list[str] = []
+    for row in stage_rows:
+        values = [
+            "stage",
+            row["order"],
+            row["stage"],
+            row["status"],
+            row["evidence"],
+            row["calls_completed"],
+            row["approval"],
+            readiness_by_order[row["order"]],
+            None,
+            None,
+            None,
+            None,
+        ]
+        inventory_values.append("(" + ", ".join(map(_sql_literal, values)) + ")")
+    for row in source_rows:
+        values = [
+            "source",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            row["source"],
+            row["path"],
+            row["sha256"],
+            row["verification"],
+        ]
+        inventory_values.append("(" + ", ".join(map(_sql_literal, values)) + ")")
+    inventory_sql = (
+        "SELECT * FROM (VALUES "
+        + ", ".join(inventory_values)
+        + ") AS verified_inventory(record_type, \"order\", stage, status, "
+        "evidence, calls_completed, approval, canonical_artifact_ready, source, "
+        "path, sha256, verification);"
+    )
+    inventory_material = {
+        "receipt_hashes": {name: hashes[name] for name in SOURCE_NAMES},
+        "supporting_hashes": dict(supporting_hashes),
+        "output_inventory": dict(output_inventory),
+        "stage_rows": list(stage_rows),
+        "readiness_rows": list(readiness_rows),
+        "source_rows": list(source_rows),
+    }
+    inventory_digest = _sha256_bytes(_canonical_bytes(inventory_material))
+    inventory_tables = [str(paths[name]) for name in SOURCE_NAMES] + [
+        str(supporting_paths[name]) for name in SUPPORTING_SOURCE_PATHS
+    ]
+    sources.append(
+        {
+            "id": "filesystem_inventory",
+            "label": "Verified output and report-source filesystem inventory",
+            "path": str(supporting_paths["report_builder"]),
             "query": {
                 "engine": "duckdb",
                 "id": f"sha256:{inventory_digest}",
                 "language": "sql",
                 "description": (
-                    "Combines only the four independently verified receipts into the "
-                    "bounded report snapshot."
+                    "Reproduces every stage/readiness and receipt-table field after "
+                    "the builder verified the four receipts and observed exactly the "
+                    "contract and proposal_preflight children under the v2 output root."
                 ),
                 "sql": inventory_sql,
-                "tables_used": [str(paths[name]) for name in SOURCE_NAMES],
+                "tables_used": inventory_tables,
                 "filters": [
+                    "Observed v2 children: contract and proposal_preflight only",
                     "All later adaptive artifacts and approval files absent",
                     "No model, endpoint, cache, qrels, or network access",
                 ],
                 "metric_definitions": [
-                    "Stage calls completed are zero when the prerequisite canonical "
-                    "output is absent and the authenticated preflight records zero execution."
+                    "canonical_artifact_ready=1 only for a sealed or verifier-passed artifact.",
+                    "calls_completed reports executed v2 work; planned ceilings remain in evidence text.",
                 ],
             },
         }
@@ -377,9 +605,14 @@ def _source_specs(payload: Mapping[str, object]) -> list[dict[str, object]]:
     return sources
 
 
-def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
+def build_report_artifact(
+    payload: Mapping[str, object], *, build_timestamp: str | None = None
+) -> dict[str, object]:
     """Build one deterministic canonical report artifact; no HTML is authored here."""
 
+    generated_at = _validated_build_timestamp(
+        build_timestamp if build_timestamp is not None else _utc_build_timestamp()
+    )
     if payload.get("status") != STATUS:
         raise ValueError("report payload status differs")
     source_paths = _object(payload.get("source_paths"), "payload source paths")
@@ -585,7 +818,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "title": "Exact adaptive v2 stage status",
             "subtitle": "Current canonical state; planned ceilings are not completed work.",
             "dataset": "stage_status",
-            "sourceId": "verified_inventory",
+            "sourceId": "filesystem_inventory",
             "density": "spacious",
             "layout": "full",
             "defaultSort": {"field": "order", "direction": "asc"},
@@ -607,7 +840,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "title": "Authenticated source receipts",
             "subtitle": "Exact repository-relative paths and file SHA-256 identities.",
             "dataset": "source_receipts",
-            "sourceId": "verified_inventory",
+            "sourceId": "filesystem_inventory",
             "density": "dense",
             "layout": "full",
             "defaultSort": {"field": "source", "direction": "asc"},
@@ -633,7 +866,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             ),
             "type": "horizontalBar",
             "dataset": "stage_readiness",
-            "sourceId": "verified_inventory",
+            "sourceId": "filesystem_inventory",
             "valueFormat": "number",
             "layout": "full",
             "encodings": {
@@ -686,22 +919,53 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "technical_summary",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "filesystem_inventory",
             "body": (
                 "## Technical summary\n\n"
                 "**Current result: the fixed baselines are sealed; adaptive v2 has not run.** "
                 "No adaptive relevance result exists yet. The current status is "
                 "`proposal_preflight_ready`, which proves execution readiness—not retrieval "
-                "or relevance quality.\n\n"
-                "**What is ready:** 48 exact proposal jobs and a worst-case 96-call "
-                "proposal ceiling. **What needs separate approval:** Qwen proposals, "
-                "opposite-fold validation, up to 16 `hits=1000` BM25 requests, O1 "
-                "MiniLM scoring, and qrels. All five remain at zero or unopened for v2."
+                "or relevance quality."
+            ),
+        },
+        {
+            "id": "technical_summary_proposal",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "proposal_preflight",
+            "body": (
+                "**What is ready:** the frozen proposal preflight contains 48 exact jobs, "
+                "48 primary calls, and at most 48 truncation retries—a 96-call worst-case "
+                "ceiling. These are planned limits, not completed inference."
+            ),
+        },
+        {
+            "id": "technical_summary_retrieval",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
+                "**What the retrieval design permits later:** at most 16 focused BM25 "
+                "requests, each with `hits=1000`, followed by query-local O1 MiniLM "
+                "scoring. The design does not permit a recursive search-generation loop."
+            ),
+        },
+        {
+            "id": "technical_summary_execution",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "filesystem_inventory",
+            "body": (
+                "**What still needs separate approval:** proposal generation, validation, "
+                "retrieval, semantic scoring, and qrels. No canonical output for any of "
+                "those stages exists in the verified v2 output root."
             ),
         },
         {
             "id": "key_evidence",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "filesystem_inventory",
             "body": (
                 "## The fixed evidence boundary verifies readiness, not effectiveness\n\n"
                 "The two metric strips summarize different units—documents, obligations, "
@@ -734,6 +998,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "stage_status_interpretation",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "filesystem_inventory",
             "body": (
                 "**Read the table as a state machine, not a performance funnel.** Only the "
                 "baselines, evidence contract, and tokenizer-only proposal preflight exist. "
@@ -758,6 +1023,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "source_receipt_interpretation",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "filesystem_inventory",
             "body": (
                 "**Every visible count above is anchored to one of four verifier-approved "
                 "receipts.** The exact paths and hashes below are the reproducibility "
@@ -774,6 +1040,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "scope_definitions",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "retrieval_design",
             "body": (
                 "## Scope and definitions keep facets tied to the user need\n\n"
                 "- **O0** is a fixed, explicit information obligation already frozen from "
@@ -795,49 +1062,122 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "methodology",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "baseline_rankings",
             "body": (
                 "## The bounded pipeline can add candidates without becoming a free-running agent\n\n"
-                "1. Start from the sealed NARRATIVE and FIXED-O0 baselines.\n"
-                "2. Use 24 O0 parents × two document folds to form 48 frozen evidence "
-                "reservoirs.\n"
-                "3. After separate approval, Qwen proposes at most one evidence-supported "
-                "O1 per parent/fold job.\n"
-                "4. Validate each surviving O1 only against opposite-fold evidence, then "
-                "cap acceptance at one O1 per parent and four per topic.\n"
-                "5. Render one focused BM25 query as ordered parent anchors + complete O0 "
-                "+ accepted O1. One `hits=1000` response supplies both top-100 and "
-                "top-1,000 diagnostics.\n"
-                "6. In a later approved stage, score each O1 queue with MiniLM using the "
-                "unchanged narrative + complete O0 + O1.\n"
-                "7. Preserve the complete baseline union, append genuinely new documents, "
-                "freeze all rankings, and only then open qrels.\n\n"
-                "The BM25 query is intentionally focused for lexical matching; the future "
-                "MiniLM query is broader so semantic filtering can judge each candidate "
-                "against the original user need and its local facet. There is no recursive "
-                "search-generation loop."
+                "Start from the sealed NARRATIVE and FIXED-O0 rankings. They remain the "
+                "complete protected baseline baskets."
+            ),
+        },
+        {
+            "id": "methodology_contract",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "contract",
+            "body": (
+                "The evidence contract binds 24 O0 parents to two deterministic document "
+                "folds, producing 48 frozen reservoirs and 8,247 exact evidence units."
+            ),
+        },
+        {
+            "id": "methodology_proposal",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "proposal_preflight",
+            "body": (
+                "After separate approval, each frozen parent/fold job may propose at most "
+                "one evidence-supported O1. The preflight binds the pinned Qwen model and "
+                "the finite primary/retry budgets before inference."
+            ),
+        },
+        {
+            "id": "methodology_retrieval",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
+                "Validate a surviving O1 only on opposite-fold evidence; accept at most one "
+                "O1 per parent and four per topic. Render its focused BM25 text as ordered "
+                "parent anchors + complete O0 + accepted O1. A single `hits=1000` response "
+                "supplies both top-100 and top-1,000 diagnostics."
+            ),
+        },
+        {
+            "id": "methodology_scoring",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
+                "In a later approved stage, score each O1 queue locally with MiniLM using "
+                "the unchanged narrative + complete O0 + accepted O1. The focused BM25 "
+                "query favors lexical matching; the broader semantic query judges each "
+                "candidate against the original user need and its local facet. Preserve the "
+                "complete baseline union, append new candidates, freeze all rankings, and "
+                "only then open qrels. There is no recursive search-generation loop."
             ),
         },
         {
             "id": "limitations",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "filesystem_inventory",
             "body": (
                 "## Limitations and robustness checks\n\n"
-                "- **There is no adaptive effectiveness evidence.** No accepted O1, BM25 "
+                "**There is no adaptive effectiveness evidence.** No accepted O1, BM25 "
                 "response, O1 MiniLM score, ADAPTIVE-V2 ranking, or qrels-backed metric "
-                "exists. Readiness must not be reported as improvement.\n"
-                "- **The pilot is bounded to four topics.** Even a later positive result "
-                "would be descriptive, not production generalization.\n"
-                "- **The hosted retriever is plain text plus `hits`.** Field selection, "
+                "exists. Readiness must not be reported as improvement."
+            ),
+        },
+        {
+            "id": "limitations_pilot",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "contract",
+            "body": (
+                "**The pilot is bounded to four topics.** Even a later positive result "
+                "would be descriptive, not production generalization."
+            ),
+        },
+        {
+            "id": "limitations_retriever",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
+                "**The hosted retriever is plain text plus `hits`.** Field selection, "
                 "required terms, boosts, phrase/slop, RM3, and BM25 parameter changes are "
-                "not assumed.\n"
-                "- **Discovery v1 remains terminal.** Its historical status is "
+                "not assumed."
+            ),
+        },
+        {
+            "id": "limitations_v1",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "v1_discovery",
+            "body": (
+                "**Discovery v1 remains terminal.** Its historical status is "
                 "`discovery_unavailable` after JSON truncation; it is provenance, not an "
-                "adaptive result or a mutable v2 input.\n"
-                "- **Cross-fold validation is not model independence.** The same pinned "
+                "adaptive result or a mutable v2 input."
+            ),
+        },
+        {
+            "id": "limitations_validation",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
+                "**Cross-fold validation is not model independence.** The same pinned "
                 "local model may propose and validate, but it sees disjoint evidence and "
-                "different prompts.\n"
-                "- **Robustness is enforced structurally so far.** Protected-topic checks, "
+                "different prompts."
+            ),
+        },
+        {
+            "id": "limitations_structural",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
+                "**Robustness is enforced structurally so far.** Protected-topic checks, "
                 "exact hashes, create-only ledgers, finite retries, query-local scoring, "
                 "and the qrels firewall are implemented; relevance robustness remains "
                 "untested."
@@ -847,6 +1187,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "recommended_next_step",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "proposal_preflight",
             "body": (
                 "## Recommended next approval step\n\n"
                 "Approve only the frozen proposal stage if you want empirical progress. "
@@ -854,7 +1195,15 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
                 + str(source_hashes["proposal_preflight"])
                 + "`, model `Qwen/Qwen3-4B-Instruct-2507`, revision "
                 "`cdbee75f17c01a7cc42f958dc650907174af0554`, 48 primary calls, and "
-                "a maximum 48 truncation retries.\n\n"
+                "a maximum 48 truncation retries."
+            ),
+        },
+        {
+            "id": "recommended_followup",
+            "type": "markdown",
+            "layout": "full",
+            "sourceId": "retrieval_design",
+            "body": (
                 "After that run seals, inspect supported/unsupported outcomes and freeze a "
                 "separate validation preflight. Do not authorize validation, BM25, MiniLM, "
                 "or qrels in the same approval."
@@ -864,12 +1213,13 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
             "id": "further_questions",
             "type": "markdown",
             "layout": "full",
+            "sourceId": "retrieval_design",
             "body": (
                 "## Further questions\n\n"
-                "- How many of the 48 proposal jobs yield a valid abstract O1 rather than "
+                "- How many proposal jobs yield a valid abstract O1 rather than "
                 "answer facts, duplicates, or unsupported needs?\n"
                 "- Do accepted O1 queries retrieve genuinely new documents, or mainly "
-                "rediscover the 8,114-document baseline union?\n"
+                "rediscover the sealed baseline union?\n"
                 "- Does query-local MiniLM keep facet-specific evidence that a single "
                 "global narrative score would miss?\n"
                 "- If qrels are sparse for newly retrieved documents, what blinded review "
@@ -878,7 +1228,12 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
         },
     ]
 
-    sources = _source_specs(payload)
+    sources = _source_specs(
+        payload,
+        stage_rows=stage_rows,
+        readiness_rows=readiness_rows,
+        source_rows=source_rows,
+    )
     return {
         "surface": "report",
         "manifest": {
@@ -890,7 +1245,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
                 "denominators, so no chart compares counts. Source-backed scorecards, a "
                 "binary readiness visual, and exact tables avoid a false comparison."
             ),
-            "generatedAt": GENERATED_AT,
+            "generatedAt": generated_at,
             "cards": cards,
             "charts": charts,
             "tables": tables,
@@ -906,7 +1261,7 @@ def build_report_artifact(payload: Mapping[str, object]) -> dict[str, object]:
         },
         "snapshot": {
             "version": 1,
-            "generatedAt": GENERATED_AT,
+            "generatedAt": generated_at,
             "status": "partial",
             "accessIssues": [
                 {
@@ -941,30 +1296,80 @@ def write_artifact_create_only(path: Path, artifact: Mapping[str, object]) -> No
         raise FileExistsError(f"create-only report artifact already exists: {path}") from exc
 
 
-def discover_portable_delivery_script() -> Path:
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    candidates = list(
-        (codex_home / "plugins/cache/openai-curated-remote/data-analytics").glob(
-            "*/skills/build-report/scripts/deliver_portable_artifact.mjs"
-        )
+def _verified_canonical_renderer() -> Path:
+    if not CANONICAL_RENDERER_PATH.is_file():
+        raise RuntimeError("canonical portable report packager is unavailable")
+    if _sha256_file(CANONICAL_RENDERER_PATH) != CANONICAL_RENDERER_SHA256:
+        raise RuntimeError("canonical portable report packager identity differs")
+    return CANONICAL_RENDERER_PATH
+
+
+def _run_canonical_delivery(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(command),
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "TMPDIR": "/var/tmp"},
     )
-    if not candidates:
-        raise ValueError("portable report packager was not found; pass --renderer")
-    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+
+def _expected_portable_counts(artifact: Mapping[str, object]) -> dict[str, int]:
+    manifest = _object(artifact.get("manifest"), "report manifest")
+    cards = {
+        card.get("id")
+        for card in manifest.get("cards", [])
+        if isinstance(card, Mapping) and card.get("id")
+    }
+    charts = {
+        chart.get("id")
+        for chart in manifest.get("charts", [])
+        if isinstance(chart, Mapping) and chart.get("id")
+    }
+    tables = {
+        table.get("id")
+        for table in manifest.get("tables", [])
+        if isinstance(table, Mapping) and table.get("id")
+    }
+    counts = {"blocks": 0, "charts": 0, "html": 0, "metrics": 0, "tables": 0}
+    for block in manifest.get("blocks", []):
+        if not isinstance(block, Mapping):
+            raise RuntimeError("report manifest contains a malformed block")
+        if block.get("type") == "metric-strip":
+            count = sum(card_id in cards for card_id in block.get("cardIds", []))
+            counts["metrics"] += count
+            counts["blocks"] += count
+            continue
+        counts["blocks"] += 1
+        if block.get("type") == "chart" and block.get("chartId") in charts:
+            counts["charts"] += 1
+        if block.get("type") == "table" and block.get("tableId") in tables:
+            counts["tables"] += 1
+        if block.get("type") == "html":
+            counts["html"] += 1
+    return counts
 
 
 def deliver_html_create_only(
-    *, artifact_path: Path, output_path: Path, renderer_path: Path
+    *, artifact_path: Path, output_path: Path
 ) -> dict[str, object]:
     """Invoke the canonical packager exactly once and publish its verified output."""
 
     artifact_path = Path(artifact_path)
     output_path = Path(output_path)
-    renderer_path = Path(renderer_path)
     if _present(output_path):
         raise FileExistsError(f"create-only HTML report already exists: {output_path}")
-    if not renderer_path.is_file():
-        raise ValueError("portable report packager does not exist")
+    try:
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("canonical report artifact is unreadable") from exc
+    if not isinstance(artifact, Mapping):
+        raise RuntimeError("canonical report artifact must be an object")
+    manifest = _object(artifact.get("manifest"), "report manifest")
+    if artifact.get("surface") != "report" or manifest.get("surface") != "report":
+        raise RuntimeError("canonical report artifact surface differs")
+    expected_counts = _expected_portable_counts(artifact)
+    renderer_path = _verified_canonical_renderer()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent
@@ -973,7 +1378,7 @@ def deliver_html_create_only(
     temporary_path = Path(temporary_name)
     temporary_path.unlink()
     try:
-        completed = subprocess.run(
+        completed = _run_canonical_delivery(
             [
                 "node",
                 str(renderer_path),
@@ -981,11 +1386,7 @@ def deliver_html_create_only(
                 str(artifact_path),
                 "--output",
                 str(temporary_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "TMPDIR": "/var/tmp"},
+            ]
         )
         if not temporary_path.is_file() or temporary_path.stat().st_size == 0:
             raise RuntimeError("portable packager did not produce a non-empty HTML file")
@@ -995,6 +1396,17 @@ def deliver_html_create_only(
             raise RuntimeError("portable packager receipt is invalid") from exc
         if not isinstance(receipt, dict):
             raise RuntimeError("portable packager receipt must be an object")
+        stages = receipt.get("stages")
+        if (
+            receipt.get("ok") is not True
+            or not isinstance(stages, Mapping)
+            or stages.get("validation") != "passed"
+            or stages.get("package") != "passed"
+            or stages.get("verification") != "passed"
+            or receipt.get("counts") != expected_counts
+            or receipt.get("html") != str(temporary_path.resolve())
+        ):
+            raise RuntimeError("portable packager receipt does not match verified report")
         os.link(temporary_path, output_path)
         return receipt
     finally:
@@ -1009,7 +1421,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--v1-discovery", type=Path, required=True)
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--renderer", type=Path)
     return parser
 
 
@@ -1031,11 +1442,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload = build_report_payload(verified)
     artifact = build_report_artifact(payload)
     write_artifact_create_only(artifact_path, artifact)
-    renderer = args.renderer or discover_portable_delivery_script()
     receipt = deliver_html_create_only(
         artifact_path=artifact_path,
         output_path=args.output,
-        renderer_path=renderer,
     )
     print(
         json.dumps(
