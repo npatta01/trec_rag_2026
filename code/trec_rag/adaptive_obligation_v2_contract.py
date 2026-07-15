@@ -31,6 +31,7 @@ SCHEMA_VERSION = "adaptive-obligation-v2-contract-v1"
 PARENT_SCHEMA_VERSION = "adaptive-obligation-v2-parent-v1"
 RESERVOIR_SCHEMA_VERSION = "adaptive-obligation-v2-reservoir-v1"
 UNIT_SCHEMA_VERSION = "adaptive-obligation-v2-unit-v1"
+SOURCE_CONTRACT_SCHEMA_VERSION = "adaptive-evidence-contract-v1"
 EXPECTED_DOCUMENT_COUNT = 8_114
 EXPECTED_BROAD_COUNT = 4
 EXPECTED_O0_COUNT = 24
@@ -951,6 +952,7 @@ def load_authenticated_v2_sources(
     reject_protected_before_access(topics, lambda: None)
     if (
         topics != list(PILOT_TOPIC_IDS)
+        or manifest.get("schema_version") != SOURCE_CONTRACT_SCHEMA_VERSION
         or manifest.get("document_count") != EXPECTED_DOCUMENT_COUNT
         or manifest.get("broad_obligation_count") != EXPECTED_BROAD_COUNT
         or manifest.get("o0_obligation_count") != EXPECTED_O0_COUNT
@@ -964,6 +966,8 @@ def load_authenticated_v2_sources(
     reject_protected_before_access(summary_topics, lambda: None)
     if (
         summary_topics != list(PILOT_TOPIC_IDS)
+        or summary.get("schema_version") != SOURCE_CONTRACT_SCHEMA_VERSION
+        or summary.get("status") != "complete"
         or summary.get("document_count") != EXPECTED_DOCUMENT_COUNT
         or summary.get("broad_obligation_count") != EXPECTED_BROAD_COUNT
         or summary.get("o0_obligation_count") != EXPECTED_O0_COUNT
@@ -1063,6 +1067,9 @@ def load_authenticated_v2_sources(
     documents = _parse_jsonl_bytes(
         contract_snapshots["documents.jsonl"].content, "contract documents snapshot"
     )
+    # folds.jsonl is not consumed by v2.  Its exact bytes are authenticated by
+    # the Task 1 summary above; the fold value v2 does consume comes from each
+    # captured document row and is independently recomputed in build_v2_contract.
     _parse_jsonl_bytes(
         contract_snapshots["folds.jsonl"].content, "contract folds snapshot"
     )
@@ -1115,12 +1122,32 @@ def load_authenticated_v2_sources(
     if len(pairs) != EXPECTED_PAIR_COUNT:
         raise ValueError("captured score unique pair count differs")
 
-    # Deep verifiers may reopen paths, but the returned rows are intentionally
-    # discarded.  V2 consumes only the independently bound snapshots above.
-    load_score_contract(contract_root)
+    # Deep verifiers may reopen paths, so their complete semantic returns must
+    # equal the captured snapshots.  For scores, that exact normalized receipt
+    # comparison combines with each captured shard's hash/bytes/rows/queue
+    # binding above to cover the score rows v2 consumes.
+    verified_contract = load_score_contract(contract_root)
+    expected_verified_contract = {
+        "schema_version": SOURCE_CONTRACT_SCHEMA_VERSION,
+        "obligations": obligations,
+        "documents": documents,
+    }
+    if (
+        not isinstance(verified_contract, Mapping)
+        or dict(verified_contract) != expected_verified_contract
+    ):
+        raise ValueError("deep-validated contract rows differ from captured snapshot")
     for snapshot in (manifest_snapshot, summary_snapshot, *contract_snapshots.values()):
         _assert_snapshot_current(snapshot)
     verified_scores = verify_local_scoring(scores_root)
+    expected_verified_scores = dict(score_receipt)
+    expected_verified_scores.pop("restored_cache_pair_count", None)
+    expected_verified_scores.pop("resumed_shard_count", None)
+    if (
+        not isinstance(verified_scores, Mapping)
+        or dict(verified_scores) != expected_verified_scores
+    ):
+        raise ValueError("deep-validated score receipt differs from captured snapshot")
     _safe_source_receipt(verified_scores, "verified base score")
     if (
         verified_scores.get("completed_window_count") != EXPECTED_WINDOW_COUNT

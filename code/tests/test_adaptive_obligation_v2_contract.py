@@ -415,6 +415,7 @@ def test_authenticated_preflight_fails_before_large_source_callbacks(
     (contract / "summary.json").write_bytes(
         _compact(
             {
+                "schema_version": "adaptive-evidence-contract-v1",
                 "topic_ids": list(PILOT_TOPIC_IDS),
                 "document_count": 8_114,
                 "broad_obligation_count": 4,
@@ -474,6 +475,8 @@ def test_score_receipt_preflight_requires_exact_topics_and_unique_queues_before_
     (contract / "manifest.json").write_bytes(
         _compact(
             {
+                "schema_version": "adaptive-evidence-contract-v1",
+                "status": "complete",
                 "topic_ids": list(PILOT_TOPIC_IDS),
                 "document_count": 8_114,
                 "broad_obligation_count": 4,
@@ -485,6 +488,8 @@ def test_score_receipt_preflight_requires_exact_topics_and_unique_queues_before_
     (contract / "summary.json").write_bytes(
         _compact(
             {
+                "schema_version": "adaptive-evidence-contract-v1",
+                "status": "complete",
                 "topic_ids": list(PILOT_TOPIC_IDS),
                 "document_count": 8_114,
                 "broad_obligation_count": 4,
@@ -538,6 +543,7 @@ def _write_snapshot_sources(
     contract.mkdir()
     shards_root.mkdir(parents=True)
     manifest = {
+        "schema_version": "adaptive-evidence-contract-v1",
         "topic_ids": list(PILOT_TOPIC_IDS),
         "document_count": 4,
         "broad_obligation_count": 4,
@@ -604,6 +610,8 @@ def _write_snapshot_sources(
     (contract / "summary.json").write_bytes(
         _compact(
             {
+                "schema_version": "adaptive-evidence-contract-v1",
+                "status": "complete",
                 "topic_ids": list(PILOT_TOPIC_IDS),
                 "document_count": 4,
                 "broad_obligation_count": 4,
@@ -667,6 +675,7 @@ def test_contract_document_swap_after_deep_verifier_is_not_consumed(
         ).hexdigest()
         (contract / "summary.json").write_bytes(_compact(summary))
         return {
+            "schema_version": "adaptive-evidence-contract-v1",
             "obligations": expected["obligations"],
             "documents": forged,
         }
@@ -677,7 +686,9 @@ def test_contract_document_swap_after_deep_verifier_is_not_consumed(
         "verify_local_scoring",
         lambda _root: expected["receipt"][0],
     )
-    with pytest.raises(ValueError, match="changed after snapshot"):
+    with pytest.raises(
+        ValueError, match="changed after snapshot|deep-validated.*snapshot"
+    ):
         contract_module.load_authenticated_v2_sources(contract, scores)
 
 
@@ -689,6 +700,7 @@ def test_score_shard_swap_after_deep_verifier_is_not_consumed(
         contract_module,
         "load_score_contract",
         lambda _root: {
+            "schema_version": "adaptive-evidence-contract-v1",
             "obligations": expected["obligations"],
             "documents": expected["documents"],
         },
@@ -707,7 +719,80 @@ def test_score_shard_swap_after_deep_verifier_is_not_consumed(
         return receipt
 
     monkeypatch.setattr(contract_module, "verify_local_scoring", swap_scores)
-    with pytest.raises(ValueError, match="changed after snapshot"):
+    with pytest.raises(
+        ValueError, match="changed after snapshot|deep-validated.*snapshot"
+    ):
+        contract_module.load_authenticated_v2_sources(contract, scores)
+
+
+def _return_while_original_directory_is_restored(
+    root: Path, value: object
+) -> object:
+    original = root.with_name(f"{root.name}-original")
+    root.rename(original)
+    root.mkdir()
+    try:
+        return value
+    finally:
+        root.rmdir()
+        original.rename(root)
+
+
+def test_contract_validator_b_cannot_authorize_restored_snapshot_a(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, scores, expected = _write_snapshot_sources(tmp_path, monkeypatch)
+    forged_documents = copy.deepcopy(expected["documents"])
+    forged_documents[0]["text"] = "Deep-validated B document."
+    forged_documents[0]["text_sha256"] = _sha("Deep-validated B document.")
+
+    def validate_b_then_restore_a(root: Path) -> object:
+        assert root == contract
+        return _return_while_original_directory_is_restored(
+            root,
+            {
+                "schema_version": "adaptive-evidence-contract-v1",
+                "obligations": expected["obligations"],
+                "documents": forged_documents,
+            },
+        )
+
+    monkeypatch.setattr(
+        contract_module, "load_score_contract", validate_b_then_restore_a
+    )
+    monkeypatch.setattr(
+        contract_module,
+        "verify_local_scoring",
+        lambda _root: expected["receipt"][0],
+    )
+    with pytest.raises(ValueError, match="deep-validated contract.*snapshot"):
+        contract_module.load_authenticated_v2_sources(contract, scores)
+
+
+def test_score_validator_b_cannot_authorize_restored_snapshot_a(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, scores, expected = _write_snapshot_sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        contract_module,
+        "load_score_contract",
+        lambda _root: {
+            "schema_version": "adaptive-evidence-contract-v1",
+            "obligations": expected["obligations"],
+            "documents": expected["documents"],
+        },
+    )
+    forged_receipt = copy.deepcopy(expected["receipt"][0])
+    forged_receipt["shards"][0]["sha256"] = "f" * 64
+
+    def validate_b_then_restore_a(root: Path) -> object:
+        assert root == scores
+        return _return_while_original_directory_is_restored(root, forged_receipt)
+
+    monkeypatch.setattr(
+        contract_module, "verify_local_scoring", validate_b_then_restore_a
+    )
+    with pytest.raises(ValueError, match="deep-validated score receipt.*snapshot"):
         contract_module.load_authenticated_v2_sources(contract, scores)
 
 
