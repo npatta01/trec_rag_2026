@@ -1026,3 +1026,64 @@ def test_r2_finalizer_requires_approval_before_any_output(tmp_path: Path) -> Non
             output_dir=output_dir,
         )
     assert not output_dir.exists()
+
+
+def test_r2_cli_has_no_approval_creation_or_implicit_execute_action() -> None:
+    actions = set(r2_module._parser()._subparsers._group_actions[0].choices)
+    assert actions == {
+        "build-preflight",
+        "verify-preflight",
+        "execute",
+        "finalize",
+    }
+    assert "approve" not in actions
+
+
+def test_r2_build_cli_resolves_relative_preflight_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Path] = {}
+
+    def fake_build(**arguments: Path) -> dict[str, object]:
+        observed.update(arguments)
+        return {
+            "status": "complete",
+            "job_count": 48,
+            "primary_call_count": 48,
+            "retry_call_ceiling": 48,
+            "worst_case_call_ceiling": 96,
+            "prompt_token_counts": {"minimum": 1, "maximum": 2, "total": 3},
+            "tokenizer_load_count": 1,
+            "model_load_count": 0,
+            "inference_count": 0,
+            "network_call_count": 0,
+            "retrieval_call_count": 0,
+            "qrels_opened": False,
+        }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(r2_module, "build_r2_proposal_preflight", fake_build)
+    ledger = tmp_path / "ledger-r2"
+    proposals = tmp_path / "proposals-r2"
+
+    assert r2_module.main(
+        [
+            "build-preflight",
+            "--contract",
+            "contract",
+            "--output",
+            "preflight-r2",
+            "--ledger-destination",
+            str(ledger),
+            "--proposal-destination",
+            str(proposals),
+        ]
+    ) == 0
+
+    assert observed == {
+        "contract_dir": Path("contract"),
+        "output_dir": tmp_path / "preflight-r2",
+        "ledger_dir": ledger,
+        "proposal_dir": proposals,
+    }

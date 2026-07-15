@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import errno
 import json
@@ -573,3 +574,46 @@ def verify_r1_incident(
     if _capture_published_receipt(Path(output_dir)) != _pretty_bytes(expected):
         raise ValueError("R1 incident receipt differs")
     return expected
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    actions = parser.add_subparsers(dest="command", required=True)
+    for name in ("build", "verify"):
+        action = actions.add_parser(name)
+        action.add_argument("--preflight", type=Path, required=True)
+        action.add_argument("--approval", type=Path, required=True)
+        action.add_argument("--ledger", type=Path, required=True)
+        action.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    arguments = {
+        "preflight_dir": args.preflight,
+        "approval_path": args.approval,
+        "ledger_dir": args.ledger,
+        "output_dir": args.output,
+    }
+    if args.command == "build":
+        receipt = publish_r1_incident(**arguments)
+    else:
+        receipt = verify_r1_incident(**arguments)
+    print(
+        json.dumps(
+            {
+                "status": "verified" if args.command == "verify" else receipt["status"],
+                "attempted_jobs": receipt["attempted_job_count"],
+                "terminal_schema_errors": receipt["terminal_schema_error_count"],
+                "uncalled_jobs": receipt["uncalled_job_count"],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

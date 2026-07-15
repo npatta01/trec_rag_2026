@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -1419,3 +1420,106 @@ def build_r2_proposal_preflight(
                 shutil.rmtree(staging)
 
     return publish_authenticated_material(capability=publication_capability)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    actions = parser.add_subparsers(dest="command", required=True)
+    build = actions.add_parser("build-preflight")
+    build.add_argument("--contract", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--ledger-destination", type=Path, required=True)
+    build.add_argument("--proposal-destination", type=Path, required=True)
+    verify = actions.add_parser("verify-preflight")
+    verify.add_argument("--output", type=Path, required=True)
+    execute = actions.add_parser("execute")
+    execute.add_argument("--preflight", type=Path, required=True)
+    execute.add_argument("--approval", type=Path, required=True)
+    execute.add_argument("--ledger", type=Path, required=True)
+    finalize = actions.add_parser("finalize")
+    finalize.add_argument("--preflight", type=Path, required=True)
+    finalize.add_argument("--approval", type=Path, required=True)
+    finalize.add_argument("--ledger", type=Path, required=True)
+    finalize.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "build-preflight":
+        receipt = build_r2_proposal_preflight(
+            contract_dir=args.contract,
+            output_dir=args.output.absolute(),
+            ledger_dir=args.ledger_destination,
+            proposal_dir=args.proposal_destination,
+        )
+    elif args.command == "verify-preflight":
+        receipt = verify_r2_proposal_preflight(args.output)
+    elif args.command == "execute":
+        result = execute_r2_proposals(
+            preflight_dir=args.preflight,
+            approval_path=args.approval,
+            ledger_dir=args.ledger,
+        )
+        print(
+            json.dumps(
+                {
+                    "status": result["status"],
+                    "jobs": result["job_count"],
+                    "events": result["event_count"],
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return 0
+    else:
+        receipt = finalize_r2_proposal_inventory(
+            preflight_dir=args.preflight,
+            approval_path=args.approval,
+            ledger_dir=args.ledger,
+            output_dir=args.output,
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "proposals": receipt["proposal_count"],
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return 0
+    token_counts = receipt["prompt_token_counts"]
+    print(
+        json.dumps(
+            {
+                "status": (
+                    "verified" if args.command == "verify-preflight" else "complete"
+                ),
+                "jobs": receipt["job_count"],
+                "primary_calls": receipt["primary_call_count"],
+                "retry_ceiling": receipt["retry_call_ceiling"],
+                "worst_case_calls": receipt["worst_case_call_ceiling"],
+                "prompt_tokens": {
+                    "minimum": token_counts["minimum"],
+                    "maximum": token_counts["maximum"],
+                    "total": token_counts["total"],
+                },
+                "tokenizer_loads": receipt["tokenizer_load_count"],
+                "model_loads": receipt["model_load_count"],
+                "inference_calls": receipt["inference_count"],
+                "network_calls": receipt["network_call_count"],
+                "retrieval_calls": receipt["retrieval_call_count"],
+                "qrels_opened": receipt["qrels_opened"],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

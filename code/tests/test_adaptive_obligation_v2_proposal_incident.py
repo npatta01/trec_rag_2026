@@ -416,3 +416,10 @@ def test_verify_incident_rejects_changed_receipt(
 
     with pytest.raises(ValueError, match="R1 incident receipt differs"):
         verify_r1_incident(**r1_failure_fixture.paths, output_dir=output_dir)
+
+
+def test_incident_cli_exposes_only_build_and_verify_actions() -> None:
+    actions = set(
+        incident_module._parser()._subparsers._group_actions[0].choices
+    )
+    assert actions == {"build", "verify"}
