@@ -61,13 +61,6 @@ _FACT_PATTERNS = (
     re.compile(r"\b\d+(?:[.,]\d+)?\b", re.IGNORECASE),
     re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|percent|per cent)\b", re.IGNORECASE),
     re.compile(
-        r"\b(?:causes?|caused|increases?|increased|decreases?|decreased|"
-        r"reduces?|reduced|results?|resulted|leads?|led to|improves?|improved|"
-        r"produces?|produced|prevents?|prevented|saves?|saved|costs?|cost)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\b(?:is|are|was|were|has|have|had|will)\b", re.IGNORECASE),
-    re.compile(
         r"\b(?:january|february|march|april|may|june|july|august|september|"
         r"october|november|december|monday|tuesday|wednesday|thursday|friday|"
         r"saturday|sunday)\b",
@@ -80,10 +73,162 @@ _FACT_PATTERNS = (
     ),
     re.compile(
         r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|hundred|"
-        r"thousand|million|billion|trillion)\b",
+        r"thousand|million|billion|trillion|dozens?|scores?)\b",
         re.IGNORECASE,
     ),
 )
+_ABSTRACT_CATEGORY_HEADS = frozenset(
+    {
+        "access",
+        "barriers",
+        "benefits",
+        "causes",
+        "challenges",
+        "concerns",
+        "consequences",
+        "effects",
+        "experiences",
+        "factors",
+        "impacts",
+        "issues",
+        "mechanisms",
+        "needs",
+        "opportunities",
+        "outcomes",
+        "patterns",
+        "practices",
+        "responses",
+        "risks",
+    }
+)
+_LABEL_FORBIDDEN_WORDS = frozenset(
+    {
+        "a",
+        "about",
+        "across",
+        "after",
+        "although",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "during",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "he",
+        "her",
+        "hers",
+        "him",
+        "his",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "may",
+        "might",
+        "must",
+        "of",
+        "on",
+        "once",
+        "or",
+        "our",
+        "shall",
+        "she",
+        "should",
+        "since",
+        "that",
+        "the",
+        "their",
+        "theirs",
+        "them",
+        "these",
+        "they",
+        "this",
+        "those",
+        "though",
+        "through",
+        "to",
+        "under",
+        "unless",
+        "until",
+        "upon",
+        "was",
+        "we",
+        "were",
+        "when",
+        "whereas",
+        "while",
+        "will",
+        "with",
+        "within",
+        "without",
+        "would",
+        "you",
+        "your",
+    }
+)
+_IRREGULAR_ASSERTION_VERBS = frozenset(
+    {
+        "became",
+        "began",
+        "brought",
+        "drove",
+        "fell",
+        "found",
+        "gave",
+        "got",
+        "grew",
+        "kept",
+        "led",
+        "left",
+        "made",
+        "rose",
+        "saw",
+        "took",
+        "went",
+    }
+)
+_ASSERTION_VERB_BASES = frozenset(
+    {
+        "adopt",
+        "boost",
+        "cause",
+        "cost",
+        "decrease",
+        "enable",
+        "improve",
+        "increase",
+        "lead",
+        "lower",
+        "prevent",
+        "produce",
+        "provide",
+        "raise",
+        "reduce",
+        "respond",
+        "result",
+        "save",
+    }
+)
+_LABEL_SENTENCE_PUNCTUATION_RE = re.compile(r"[.!?;,:/—–-]|--|[\r\n]")
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -300,6 +445,25 @@ def _looks_like_answer_fact(label: str) -> bool:
     return any(pattern.search(label) for pattern in _FACT_PATTERNS)
 
 
+def _is_abstract_o1_category(label: str) -> bool:
+    """Accept only short nominal labels ending in a frozen abstract head noun."""
+
+    if _LABEL_SENTENCE_PUNCTUATION_RE.search(label) or _looks_like_answer_fact(label):
+        return False
+    tokens = [token.casefold() for token in _TOKEN_RE.findall(label)]
+    if not 2 <= len(tokens) <= 8 or tokens[-1] not in _ABSTRACT_CATEGORY_HEADS:
+        return False
+    if any(token in _LABEL_FORBIDDEN_WORDS for token in tokens):
+        return False
+    modifiers = tokens[:-1]
+    return not any(
+        token in _IRREGULAR_ASSERTION_VERBS
+        or (len(token) > 4 and token.endswith(("ed", "ing")))
+        or (token.endswith("s") and token[:-1] in _ASSERTION_VERB_BASES)
+        for token in modifiers
+    )
+
+
 def _parent_scope_preserved(
     proposal: Mapping[str, object],
     parent: Mapping[str, object],
@@ -371,7 +535,7 @@ def validate_proposal(
         for name in required
     ):
         reasons.append("schema")
-    if _looks_like_answer_fact(str(proposal.get("label", ""))):
+    if not _is_abstract_o1_category(str(proposal.get("label", ""))):
         reasons.append("candidate_answer")
     distinct = {
         str(row["document_id"])
@@ -396,11 +560,18 @@ def _triple_key(row: Mapping[str, object]) -> tuple[str, str, str]:
     )  # type: ignore[return-value]
 
 
-_SRO_COORDINATION_RE = re.compile(
-    r"(?:[,;/]|\b(?:and|or|but|while|because|although|whereas|which|who)\b)",
+_SRO_NONATOMIC_RE = re.compile(
+    r"(?:[,;:/]|--|[—–]|[\r\n]|\b(?:and|or|but|when|if|after|before|while|"
+    r"because|although|though|whereas|unless|since|once|as|which|who|that)\b)",
     re.IGNORECASE,
 )
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+
+
+def _without_one_trailing_terminator(value: str) -> str:
+    stripped = value.strip()
+    if stripped.endswith((".", "!", "?")):
+        return stripped[:-1].rstrip()
+    return stripped
 
 
 def validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]:
@@ -414,7 +585,7 @@ def validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]
             reasons.append(f"{name}_missing")
             continue
         fields[name] = value.strip()
-        if _SRO_COORDINATION_RE.search(value):
+        if _SRO_NONATOMIC_RE.search(value) or re.search(r"[.!?]", value):
             reasons.append(f"{name}_coordination")
 
     support = nugget.get("support_span")
@@ -422,9 +593,10 @@ def validate_nugget_atomicity(nugget: Mapping[str, object]) -> dict[str, object]
         reasons.append("support_missing")
     else:
         support = support.strip()
-        if len(_SENTENCE_BOUNDARY_RE.split(support)) != 1:
+        support_body = _without_one_trailing_terminator(support)
+        if re.search(r"[.!?]", support_body):
             reasons.append("support_multiple_sentences")
-        if _SRO_COORDINATION_RE.search(support):
+        if _SRO_NONATOMIC_RE.search(support_body):
             reasons.append("support_multiple_clauses")
         if len(fields) == 3:
             support_terms = _stemmed_content_terms(support)
@@ -603,6 +775,94 @@ def extract_repeated_phrases(
                 }
             )
     return sorted(output, key=lambda row: (row["token_count"], row["phrase"]))
+
+
+def _phrase_control_scope_preserved(
+    phrase: str,
+    parent: Mapping[str, object],
+) -> bool:
+    """Check phrase scope without pretending the phrase is a structured O1."""
+
+    def content_terms(value: object) -> set[str]:
+        return _stemmed_content_terms(value) - _CONTENT_STOPWORDS
+
+    def listed_terms(name: str) -> set[str]:
+        raw = parent.get(name, [])
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            return set()
+        return set().union(*(content_terms(value) for value in raw))
+
+    phrase_terms = content_terms(phrase)
+    anchors = listed_terms("anchor_terms")
+    scope_terms = set().union(
+        content_terms(parent.get("text", "")),
+        anchors,
+        listed_terms("relation_terms"),
+        listed_terms("population_terms"),
+        listed_terms("domain_terms"),
+    )
+    if (
+        not phrase_terms
+        or not phrase_terms.issubset(scope_terms)
+        or (anchors and not phrase_terms.intersection(anchors))
+    ):
+        return False
+    return not any(
+        (pattern_terms := content_terms(pattern))
+        and pattern_terms.issubset(phrase_terms)
+        for pattern in parent.get("wrong_domain_patterns", [])
+    )
+
+
+def build_phrase_controls(
+    parents: Sequence[Mapping[str, object]],
+    passages: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Build deterministic no-LLM phrase controls for fresh preflight output."""
+
+    output: list[dict[str, object]] = []
+    for parent in sorted(parents, key=lambda row: str(row.get("obligation_id", ""))):
+        parent_id = str(parent.get("obligation_id", ""))
+        parent_passages = [
+            row for row in passages if str(row.get("parent_id", "")) == parent_id
+        ]
+        for row in extract_repeated_phrases(parent_passages):
+            phrase = str(row["phrase"])
+            hashes = row.get("content_sha256s", [])
+            documents = row.get("document_ids", [])
+            content_distinct = (
+                isinstance(hashes, list)
+                and len(set(map(str, hashes))) >= 2
+                and isinstance(documents, list)
+                and len(set(map(str, documents))) >= 2
+                and row.get("folds") == [0, 1]
+            )
+            scope_preserved = _phrase_control_scope_preserved(phrase, parent)
+            abstract_category = _is_abstract_o1_category(phrase)
+            output.append(
+                {
+                    "schema_version": "adaptive-evidence-repeated-phrase-v1",
+                    "topic_id": str(parent.get("topic_id", "")),
+                    "parent_id": parent_id,
+                    **row,
+                    "content_distinct": content_distinct,
+                    "scope_preserved": scope_preserved,
+                    "candidate_answer": not abstract_category,
+                    "abstract_category": abstract_category,
+                    "accepted_control": (
+                        content_distinct and scope_preserved and abstract_category
+                    ),
+                }
+            )
+    return sorted(
+        output,
+        key=lambda row: (
+            str(row["topic_id"]),
+            str(row["parent_id"]),
+            int(row["token_count"]),
+            str(row["phrase"]),
+        ),
+    )
 
 
 def build_derived_query(
@@ -1057,7 +1317,6 @@ def run_discovery_preflight(
     )
     reservoirs = build_reservoirs(parents, base_rows, limit=RESERVOIR_LIMIT)
     reservoir_rows: list[dict[str, object]] = []
-    parent_by_id = {str(row["obligation_id"]): row for row in parents}
     for (parent_id, fold), rows in sorted(reservoirs.items()):
         if len(rows) != RESERVOIR_LIMIT:
             raise ValueError(f"reservoir {parent_id} fold {fold} does not contain ten documents")
@@ -1082,26 +1341,7 @@ def run_discovery_preflight(
                 }
             )
 
-    repeated_rows: list[dict[str, object]] = []
-    for parent_id, parent in sorted(parent_by_id.items()):
-        passages = [row for row in reservoir_rows if row["parent_id"] == parent_id]
-        for row in extract_repeated_phrases(passages):
-            scope_preserved = _parent_scope_preserved(
-                {"label": row["phrase"]},
-                parent,
-            )
-            repeated_rows.append(
-                {
-                    "schema_version": "adaptive-evidence-repeated-phrase-v1",
-                    "topic_id": str(parent["topic_id"]),
-                    "parent_id": parent_id,
-                    **row,
-                    "scope_preserved": scope_preserved,
-                    "candidate_answer": _looks_like_answer_fact(str(row["phrase"])),
-                    "accepted_control": scope_preserved
-                    and not _looks_like_answer_fact(str(row["phrase"])),
-                }
-            )
+    repeated_rows = build_phrase_controls(parents, reservoir_rows)
 
     snapshot = _snapshot_manifest()
     model = LocalJsonModel()

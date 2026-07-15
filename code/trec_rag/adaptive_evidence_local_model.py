@@ -20,7 +20,14 @@ MODEL_SNAPSHOT = (
 
 
 _O1_PROPERTIES: dict[str, object] = {
-    "label": {"type": "string", "minLength": 1},
+    "label": {
+        "type": "string",
+        "minLength": 1,
+        "description": (
+            "Short nominal category ending in an abstract head noun; never a "
+            "sentence, assertion, number, date, currency, or quantity."
+        ),
+    },
     "scope_rationale": {"type": "string", "minLength": 1},
     "subject": {"type": "string", "minLength": 1},
     "population": {

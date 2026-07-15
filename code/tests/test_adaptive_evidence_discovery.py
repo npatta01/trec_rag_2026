@@ -10,6 +10,7 @@ import pytest
 
 from trec_rag.adaptive_evidence_discovery import (
     attach_contract_folds,
+    build_phrase_controls,
     build_discovery_messages,
     build_derived_query,
     extract_repeated_phrases,
@@ -80,7 +81,7 @@ def _proposal(**changes: object) -> dict[str, object]:
         "topic_id": "219",
         "parent_id": "219-positive",
         "kind": "o1",
-        "label": "accessibility benefits of technology",
+        "label": "technology accessibility benefits",
         "scope_rationale": "A category of positive effects within the parent scope.",
         "document_id": "source-doc",
         "fold": 0,
@@ -194,15 +195,116 @@ def test_fact_like_or_concrete_answer_labels_cannot_become_o1(label: str) -> Non
 @pytest.mark.parametrize(
     "label",
     [
+        "technology boosted access for dozens of users",
+        "technology brought access",
+        "technology enables access",
+        "technology improving access",
+        "technology responded with benefits",
+        "it provides access",
+    ],
+)
+def test_o1_positive_grammar_rejects_assertions_outside_verb_denylist(
+    label: str,
+) -> None:
+    decision = validate_proposal(
+        _proposal(label=label),
+        _parent(),
+        opposite_fold_support=_support(),
+    )
+
+    assert decision["accepted"] is False
+    assert "candidate_answer" in decision["reasons"]
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
         "information accessibility benefits",
         "social connection benefits",
-        "educational opportunity categories",
+        "educational access",
     ],
 )
 def test_short_abstract_in_scope_category_labels_remain_valid(label: str) -> None:
     decision = validate_proposal(
         _proposal(label=label),
         _parent(),
+        opposite_fold_support=_support(),
+    )
+
+    assert decision == {"accepted": True, "reasons": []}
+
+
+@pytest.mark.parametrize(
+    ("parent", "proposal"),
+    [
+        (
+            {
+                "topic_id": "219",
+                "obligation_id": "219-positive",
+                "text": "Technology accessibility benefits for society.",
+                "anchor_terms": ["technology"],
+                "relation_terms": ["accessibility", "benefits"],
+                "population_terms": ["society"],
+                "domain_terms": ["technology"],
+            },
+            {
+                "parent_id": "219-positive",
+                "label": "digital accessibility benefits",
+                "subject": "technology",
+                "population": "society",
+                "domain": "technology",
+                "relation": "accessibility benefits",
+            },
+        ),
+        (
+            {
+                "topic_id": "300",
+                "obligation_id": "300-safety",
+                "text": "Vaccine safety risks for public health.",
+                "anchor_terms": ["vaccine"],
+                "relation_terms": ["safety", "risks"],
+                "population_terms": ["public health"],
+                "domain_terms": ["vaccine"],
+            },
+            {
+                "topic_id": "300",
+                "parent_id": "300-safety",
+                "label": "vaccine safety risks",
+                "subject": "vaccine",
+                "population": "public health",
+                "domain": "vaccine",
+                "relation": "safety risks",
+            },
+        ),
+        (
+            {
+                "topic_id": "84",
+                "obligation_id": "84-allocation",
+                "text": "Device allocation mechanisms for limited supply.",
+                "anchor_terms": ["device"],
+                "relation_terms": ["allocation", "mechanisms"],
+                "population_terms": ["limited supply"],
+                "domain_terms": ["device"],
+            },
+            {
+                "topic_id": "84",
+                "parent_id": "84-allocation",
+                "label": "device allocation mechanisms",
+                "subject": "device",
+                "population": "limited supply",
+                "domain": "device",
+                "relation": "allocation mechanisms",
+            },
+        ),
+    ],
+)
+def test_positive_o1_abstract_categories_are_valid_across_parents(
+    parent: dict[str, object],
+    proposal: dict[str, object],
+) -> None:
+    decision = validate_proposal(
+        _proposal(**proposal),
+        parent,
         opposite_fold_support=_support(),
     )
 
@@ -459,6 +561,98 @@ def test_n1_atomicity_rejects_compound_or_unsupported_claims(
     assert reason in decision["reasons"]
 
 
+@pytest.mark.parametrize(
+    "support_span",
+    [
+        "Technology improves access. it lowers costs.",
+        "Technology improves access! it lowers costs.",
+        "Technology improves access? it lowers costs.",
+    ],
+)
+def test_n1_atomicity_rejects_internal_terminator_before_lowercase_sentence(
+    support_span: str,
+) -> None:
+    decision = validate_nugget_atomicity(
+        _atomic_nugget(object="access", support_span=support_span)
+    )
+
+    assert decision["accepted"] is False
+    assert "support_multiple_sentences" in decision["reasons"]
+
+
+@pytest.mark.parametrize(
+    "support_span",
+    [
+        "Technology improves information access: costs decline.",
+        "Technology improves information access — costs decline.",
+        "Technology improves information access – costs decline.",
+        "Technology improves information access -- costs decline.",
+        "Technology improves information access\ncosts decline.",
+        "Technology improves information access when networks expand.",
+        "Technology improves information access if networks expand.",
+        "Technology improves information access after networks expand.",
+        "Technology improves information access before networks expand.",
+    ],
+)
+def test_n1_atomicity_rejects_delimiters_and_subordinate_clauses(
+    support_span: str,
+) -> None:
+    decision = validate_nugget_atomicity(_atomic_nugget(support_span=support_span))
+
+    assert decision["accepted"] is False
+    assert "support_multiple_clauses" in decision["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"subject": "technology: education"}, "subject_coordination"),
+        ({"relation": "improves when available"}, "relation_coordination"),
+        (
+            {"object": "information access — lower costs"},
+            "object_coordination",
+        ),
+        ({"object": "information access\nlower costs"}, "object_coordination"),
+    ],
+)
+def test_n1_atomicity_applies_nonatomic_checks_to_each_sro_field(
+    changes: dict[str, object],
+    reason: str,
+) -> None:
+    decision = validate_nugget_atomicity(_atomic_nugget(**changes))
+
+    assert decision["accepted"] is False
+    assert reason in decision["reasons"]
+
+
+@pytest.mark.parametrize(
+    "support_span",
+    [
+        "Technology improves information access",
+        "Technology improves information access.",
+        "Technology improves information access!",
+        "Technology improves information access?",
+    ],
+)
+def test_n1_atomicity_allows_at_most_one_trailing_terminator(
+    support_span: str,
+) -> None:
+    decision = validate_nugget_atomicity(_atomic_nugget(support_span=support_span))
+
+    assert decision == {"accepted": True, "reasons": []}
+
+
+def test_n1_atomicity_allows_single_hyphen_inside_atomic_terms() -> None:
+    decision = validate_nugget_atomicity(
+        _atomic_nugget(
+            object="cost-effective access",
+            support_span="Technology improves cost-effective access.",
+        )
+    )
+
+    assert decision == {"accepted": True, "reasons": []}
+
+
 def test_model_response_rejects_non_atomic_n1_before_acceptance() -> None:
     passages = [
         {
@@ -533,6 +727,108 @@ def test_repeated_phrase_control_rejects_copied_content_with_distinct_ids() -> N
     )
 
     assert "technology improves" not in {row["phrase"] for row in rows}
+
+
+def _phrase_control_parent() -> dict[str, object]:
+    return {
+        "topic_id": "219",
+        "obligation_id": "219-accessibility",
+        "text": "Technology accessibility benefits for society.",
+        "anchor_terms": ["technology"],
+        "relation_terms": ["accessibility", "benefits", "society"],
+        "population_terms": ["society"],
+        "domain_terms": ["technology"],
+        "wrong_domain_patterns": ["stock price"],
+    }
+
+
+def test_fresh_phrase_control_preflight_has_an_accepted_control() -> None:
+    parent = _phrase_control_parent()
+    rows = build_phrase_controls(
+        [parent],
+        [
+            {
+                "parent_id": "219-accessibility",
+                "document_id": "doc-a",
+                "fold": 0,
+                "passage_text": (
+                    "Technology accessibility benefits improve society."
+                ),
+            },
+            {
+                "parent_id": "219-accessibility",
+                "document_id": "doc-b",
+                "fold": 1,
+                "passage_text": (
+                    "Research describes technology accessibility benefits broadly."
+                ),
+            },
+        ],
+    )
+
+    by_phrase = {row["phrase"]: row for row in rows}
+    control = by_phrase["technology accessibility benefits"]
+    assert control["content_distinct"] is True
+    assert control["scope_preserved"] is True
+    assert control["abstract_category"] is True
+    assert control["accepted_control"] is True
+    assert sum(row["accepted_control"] is True for row in rows) > 0
+
+
+def test_phrase_control_rejects_copied_content_before_scope_acceptance() -> None:
+    parent = _phrase_control_parent()
+    copied = "Technology accessibility benefits improve society."
+    rows = build_phrase_controls(
+        [parent],
+        [
+            {
+                "parent_id": "219-accessibility",
+                "document_id": "doc-a",
+                "fold": 0,
+                "passage_text": copied,
+            },
+            {
+                "parent_id": "219-accessibility",
+                "document_id": "doc-b",
+                "fold": 1,
+                "passage_text": copied,
+            },
+        ],
+    )
+
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "medical treatment risks",
+        "technology stock price risks",
+    ],
+)
+def test_phrase_control_rejects_wrong_scope_or_wrong_domain(phrase: str) -> None:
+    parent = _phrase_control_parent()
+    rows = build_phrase_controls(
+        [parent],
+        [
+            {
+                "parent_id": "219-accessibility",
+                "document_id": "doc-a",
+                "fold": 0,
+                "passage_text": f"{phrase} appear in one source.",
+            },
+            {
+                "parent_id": "219-accessibility",
+                "document_id": "doc-b",
+                "fold": 1,
+                "passage_text": f"Researchers discuss {phrase} broadly.",
+            },
+        ],
+    )
+
+    control = {row["phrase"]: row for row in rows}[phrase]
+    assert control["scope_preserved"] is False
+    assert control["accepted_control"] is False
 
 
 def test_freeze_o1_is_lexicographic_and_caps_parent_and_topic() -> None:
