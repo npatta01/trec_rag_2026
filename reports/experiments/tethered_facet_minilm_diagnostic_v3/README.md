@@ -2,8 +2,9 @@
 
 This source-bound, post-qrels report evaluates how six ranking arms reorder the
 same accepted candidate union across topics 219, 72, 300, and 84. It is a
-diagnostic of pooled document recall, macro ranking metrics, and a
-qrels-positive facet-attribution proxy. It is not answer-generation, nugget,
+diagnostic of pooled binary-relevant document recall (qrels grade >= 2), macro
+ranking metrics, and a binary-relevant facet-attribution proxy. The 1,456
+grade-1 judgments are excluded from the binary-relevant denominator. It is not answer-generation, nugget,
 faithfulness, or production evaluation.
 
 ## Canonical artifacts
@@ -26,6 +27,7 @@ From the repository root:
   --output reports/experiments/tethered_facet_minilm_diagnostic_v3
 ```
 
-The build verifies the approved artifact hashes, bound qrels projection and
-accepted union, and zero external-call receipts before writing output. No raw
+The build first runs the semantic soft-freeze verifier, then reconciles its
+ranking identity with the approved evaluation binding. It also verifies the
+bound qrels projection, accepted union, and zero external-call receipts before writing output. No raw
 document text or document identifiers are copied into the report artifacts.

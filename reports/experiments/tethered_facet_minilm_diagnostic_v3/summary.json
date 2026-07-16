@@ -8,6 +8,12 @@
     "paid": 0,
     "retrieval": 0
   },
+  "freeze_verification": {
+    "evaluation_ranking_sha256": "f7d57ed06975278fb270115ab7021325729160d000c464963463e0fbc6aea19f",
+    "ranking_row_count": 48684,
+    "seal_root_sha256": "deffdfd35852c6dfd8c533faed03c9982fb168cad95ae7d559382b73c591f935",
+    "status": "rankings_frozen_before_evaluation"
+  },
   "headline": {
     "full_union_recall": 0.3106141285055023,
     "full_union_relevant": 875,
@@ -22,6 +28,30 @@
     "rrf_relevant_at_1000": 712,
     "total_relevant": 2817
   },
+  "metric_definitions": {
+    "binary_recall": {
+      "aggregation": "pooled_micro",
+      "definition": "Unique binary-relevant documents (qrels grade >= 2) retrieved across four topics divided by all binary-relevant documents across those topics."
+    },
+    "facet_proxy": {
+      "aggregation": "binary_relevant_facet_attribution_count",
+      "definition": "A binary-relevant document (qrels grade >= 2) whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet."
+    },
+    "ndcg": {
+      "aggregation": "macro_topic_mean",
+      "definition": "Mean topic-level normalized discounted cumulative gain; it rewards graded relevance near the top."
+    },
+    "recall_auc": {
+      "aggregation": "macro_topic_mean",
+      "definition": "Mean topic-level area under the recall-depth curve over the evaluated depth range."
+    }
+  },
+  "qrels_grade_counts": {
+    "binary_relevant_grade_2_plus": 2817,
+    "grade_0": 360,
+    "grade_1_excluded": 1456
+  },
+  "relevance_threshold": 2,
   "report_boundaries": {
     "answer_generation_evaluation": false,
     "new_retrieval": false,

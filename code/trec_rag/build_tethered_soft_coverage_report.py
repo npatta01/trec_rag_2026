@@ -12,6 +12,8 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
+from . import tethered_facet_soft_coverage as soft_freeze
+
 
 SCHEMA_VERSION = "tethered-facet-soft-coverage-report-v3"
 TOPIC_IDS = ("219", "72", "300", "84")
@@ -103,7 +105,7 @@ def _bound_path(binding: Mapping[str, object], label: str) -> Path:
 
 def _overlap_decomposition(
     evaluation_bindings: Mapping[str, object], relevance_threshold: int
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], dict[str, int]]:
     qrels_binding = _mapping(
         evaluation_bindings.get("qrels_projection"), "qrels projection binding"
     )
@@ -114,6 +116,11 @@ def _overlap_decomposition(
     union_path = _bound_path(union_binding, "accepted union")
 
     relevant: dict[str, set[str]] = {topic: set() for topic in TOPIC_IDS}
+    grade_counts = {
+        "grade_0": 0,
+        "grade_1_excluded": 0,
+        "binary_relevant_grade_2_plus": 0,
+    }
     qrels_digest = hashlib.sha256()
     qrels_rows = 0
     with qrels_path.open("rb") as handle:
@@ -122,7 +129,16 @@ def _overlap_decomposition(
             qrels_rows += 1
             row = json.loads(raw_line)
             topic = str(row.get("topic_id"))
-            if topic in relevant and int(row.get("grade", 0)) >= relevance_threshold:
+            grade = int(row.get("grade", 0))
+            if grade == 0:
+                grade_counts["grade_0"] += 1
+            elif grade == 1:
+                grade_counts["grade_1_excluded"] += 1
+            elif grade >= relevance_threshold:
+                grade_counts["binary_relevant_grade_2_plus"] += 1
+            else:
+                raise ValueError("qrels grade is outside the report contract")
+            if topic in relevant and grade >= relevance_threshold:
                 relevant[topic].add(str(row.get("document_id")))
     if (
         qrels_binding.get("sha256") != qrels_digest.hexdigest()
@@ -189,7 +205,7 @@ def _overlap_decomposition(
                 "total_relevant": len(relevant[topic]),
             }
         )
-    return output
+    return output, grade_counts
 
 
 def build_report_payload(
@@ -200,9 +216,12 @@ def build_report_payload(
     freeze_dir = Path(freeze)
     evaluation_dir = Path(evaluation)
     prior_path = Path(prior_summary)
+    verified_freeze = soft_freeze.verify_soft_freeze(freeze_dir)
     freeze_summary, freeze_summary_bytes = _read_json(
         freeze_dir / "summary.json", "freeze summary"
     )
+    if verified_freeze != freeze_summary:
+        raise ValueError("verified freeze summary differs from the loaded summary")
     evaluation_summary, evaluation_summary_bytes = _read_json(
         evaluation_dir / "summary.json", "evaluation summary"
     )
@@ -230,6 +249,9 @@ def build_report_payload(
         raise ValueError("prior summary is not v2")
     if metrics.get("arms") is None or set(_mapping(metrics["arms"], "metric arms")) != set(ARMS):
         raise ValueError("evaluation arm set differs")
+    relevance_threshold = metrics.get("relevance_threshold")
+    if type(relevance_threshold) is not int or relevance_threshold != 2:
+        raise ValueError("binary relevance threshold differs from qrels grade >= 2")
 
     sources = {
         "freeze_summary_json": {
@@ -276,6 +298,20 @@ def build_report_payload(
         or seal.get("root_sha256") != freeze_binding.get("seal_root_sha256")
     ):
         raise ValueError("freeze seal does not match the approved evaluation binding")
+    verified_artifacts = _mapping(
+        verified_freeze.get("artifacts"), "verified freeze artifacts"
+    )
+    evaluation_rankings = _mapping(
+        evaluation_bindings.get("rankings"), "evaluation rankings binding"
+    )
+    verified_rankings = _mapping(
+        verified_artifacts.get("rankings.jsonl"), "verified rankings binding"
+    )
+    if (
+        evaluation_rankings.get("bytes") != verified_rankings.get("bytes")
+        or evaluation_rankings.get("sha256") != verified_rankings.get("sha256")
+    ):
+        raise ValueError("verified freeze rankings differ from the approved evaluation binding")
     if sources["evaluation_metrics_json"]["sha256"] != _sha256(metrics_bytes):
         raise ValueError("metrics source hash differs")
     if sources["evaluation_diagnostics_json"]["sha256"] != _sha256(diagnostics_bytes):
@@ -379,13 +415,19 @@ def build_report_payload(
             }
         )
 
-    overlap = _overlap_decomposition(
-        evaluation_bindings, int(metrics.get("relevance_threshold", 2))
+    overlap, qrels_grade_counts = _overlap_decomposition(
+        evaluation_bindings, relevance_threshold
     )
     if sum(int(row["union_relevant"]) for row in overlap) != 875:
         raise ValueError("overlap decomposition does not reconcile to full union")
     if sum(int(row["facet_only_relevant"]) for row in overlap) != 177:
         raise ValueError("overlap decomposition does not reconcile to facet-only total")
+    if qrels_grade_counts != {
+        "grade_0": 360,
+        "grade_1_excluded": 1456,
+        "binary_relevant_grade_2_plus": 2817,
+    }:
+        raise ValueError("qrels grade distribution differs from the approved evaluation")
     for source_id, binding_name, label in (
         ("accepted_union_jsonl", "accepted_union", "Authenticated accepted candidate union"),
         ("qrels_projection_jsonl", "qrels_projection", "Authenticated qrels projection"),
@@ -410,7 +452,7 @@ def build_report_payload(
         proxy_by_topic.append(
             {
                 "topic_id": topic,
-                "qrels_positive_attributions": sum(int(value) for value in facet_counts.values()),
+                "binary_relevant_attributions": sum(int(value) for value in facet_counts.values()),
                 "facets_with_positive_attribution": sum(
                     1 for value in facet_counts.values() if int(value) > 0
                 ),
@@ -422,6 +464,8 @@ def build_report_payload(
         "status": "complete",
         "title": "Protected RRF head improves deep soft coverage, not total candidate recall",
         "topic_ids": list(TOPIC_IDS),
+        "relevance_threshold": relevance_threshold,
+        "qrels_grade_counts": qrels_grade_counts,
         "findings": findings,
         "arm_metrics": arm_metrics,
         "topic_deltas": topic_deltas,
@@ -430,7 +474,7 @@ def build_report_payload(
         "metric_definitions": {
             "binary_recall": {
                 "aggregation": "pooled_micro",
-                "definition": "Unique qrels-positive documents retrieved across four topics divided by all qrels-positive documents across those topics.",
+                "definition": "Unique binary-relevant documents (qrels grade >= 2) retrieved across four topics divided by all binary-relevant documents across those topics.",
             },
             "ndcg": {
                 "aggregation": "macro_topic_mean",
@@ -441,12 +485,18 @@ def build_report_payload(
                 "definition": "Mean topic-level area under the recall-depth curve over the evaluated depth range.",
             },
             "facet_proxy": {
-                "aggregation": "qrels_positive_attribution_count",
-                "definition": "A qrels-positive document whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet.",
+                "aggregation": "binary_relevant_facet_attribution_count",
+                "definition": "A binary-relevant document (qrels grade >= 2) whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet.",
             },
         },
         "source_hashes": sources,
         "external_calls": freeze_calls,
+        "freeze_verification": {
+            "status": verified_freeze["status"],
+            "ranking_row_count": verified_freeze["ranking_row_count"],
+            "seal_root_sha256": seal["root_sha256"],
+            "evaluation_ranking_sha256": evaluation_rankings["sha256"],
+        },
         "prior_v2": {
             "schema_version": prior["schema_version"],
             "status": prior.get("status"),
@@ -547,7 +597,7 @@ def render_report(payload: Mapping[str, object]) -> str:
     proxy_rows = [
         [
             str(row["topic_id"]),
-            str(row["qrels_positive_attributions"]),
+            str(row["binary_relevant_attributions"]),
             str(row["facets_with_positive_attribution"]),
         ]
         for row in payload["facet_proxy_by_topic"]
@@ -561,7 +611,7 @@ def render_report(payload: Mapping[str, object]) -> str:
     recall_table = _table(
         ["Arm", "@100", "@250", "@500", "@1,000", "@1,500", "Full", "Full recall"],
         recall_rows,
-        "Pooled qrels-positive document counts by depth; full union is identical for every reordering arm.",
+        "Pooled binary-relevant document counts by depth (qrels grade >= 2); the full binary-relevant union is identical for every reordering arm.",
     )
     quality_table = _table(
         ["Arm", "nDCG@10", "nDCG@100", "nDCG@1,000", "Recall AUC"],
@@ -569,19 +619,19 @@ def render_report(payload: Mapping[str, object]) -> str:
         "Macro mean across four topics. nDCG and recall AUC are not pooled document recall.",
     )
     overlap_table = _table(
-        ["Topic", "Original relevant", "Facet relevant", "Overlap", "Original only", "Facet only / incremental", "Union", "Missed"],
+        ["Topic", "Original binary-relevant", "Facet binary-relevant", "Overlap", "Original only", "Facet only / incremental", "Binary-relevant union", "Missed binary-relevant"],
         overlap_rows,
         "Nonadditive overlap decomposition. Original relevant and facet relevant both include overlap; union equals original only + overlap + facet only.",
     )
     topic_table = _table(
         ["Topic", "Δ @100", "Δ @250", "Δ @500", "Δ @1,000", "Δ @1,500", "Δ nDCG@100", "Δ nDCG@1,000"],
         topic_rows,
-        "RRF100-TETHERED-DUAL minus RRF. Positive document deltas are gains; negative deltas are regressions.",
+        "RRF100-TETHERED-DUAL minus RRF. Positive binary-relevant document deltas are gains; negative deltas are regressions.",
     )
     proxy_table = _table(
-        ["Topic", "Positive attributions", "Facets represented"],
+        ["Topic", "Binary-relevant attributions", "Facets represented"],
         proxy_rows,
-        "TETHERED-DUAL marginal facet attribution among qrels-positive documents; this is a proxy, not semantic facet support.",
+        "TETHERED-DUAL marginal facet attribution among binary-relevant documents (qrels grade >= 2); this is a proxy, not semantic facet support.",
     )
     source_table = _table(["Source", "Bytes", "SHA-256"], source_rows, "Exact canonical source identities used to build this report.")
     call_table = _table(["External operation", "Count / cost"], call_rows, "Freeze and evaluation receipts agree that all external operations and cost were zero.")
@@ -610,7 +660,7 @@ section {{ margin:0 0 3.2rem; scroll-margin-top:1rem; }} h2 {{ margin:0 0 .8rem;
 .table-wrap {{ overflow-x:auto; margin:1rem 0; border:1px solid var(--line); border-radius:12px; background:var(--paper); }} table {{ border-collapse:collapse; width:100%; min-width:720px; }} caption {{ padding:1rem; text-align:left; color:var(--muted); font-size:.92rem; }} th,td {{ padding:.72rem .85rem; border-top:1px solid var(--line); text-align:right; white-space:nowrap; }} th:first-child,td:first-child {{ text-align:left; }} thead th {{ color:var(--navy); background:color-mix(in srgb,var(--paper) 86%,var(--blue)); border-top:0; }} tbody tr:hover {{ background:color-mix(in srgb,var(--paper) 94%,var(--cyan)); }}
 .hashes table {{ min-width:900px; }} .hashes td:last-child {{ font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }}
 .tag {{ display:inline-block; border:1px solid var(--line); border-radius:999px; padding:.22rem .65rem; margin:.2rem .3rem .2rem 0; color:var(--muted); font-size:.82rem; }}
-footer {{ border-top:1px solid var(--line); color:var(--muted); padding:1.5rem 0; }}
+footer {{ border-top:1px solid var(--line); color:var(--muted); }} .footer-inner {{ max-width:1120px; margin:auto; padding:1.5rem 1.25rem; }}
 @media (max-width:760px) {{ .hero {{ padding:3.2rem 1rem 2.8rem; }} main {{ padding:1.5rem 1rem 4rem; }} .summary {{ grid-template-columns:1fr; }} section {{ margin-bottom:2.5rem; }} .table-wrap {{ margin-inline:-1rem; border-radius:0; border-inline:0; }} th,td {{ padding:.65rem .7rem; }} }}
 @media (prefers-reduced-motion:reduce) {{ html {{ scroll-behavior:auto; }} *,*::before,*::after {{ animation-duration:.01ms!important; transition-duration:.01ms!important; }} }}
 @media print {{ body {{ background:#fff; color:#111; }} header {{ background:#fff; color:#111; }} .card,.table-wrap {{ box-shadow:none; break-inside:avoid; }} }}
@@ -618,29 +668,29 @@ footer {{ border-top:1px solid var(--line); color:var(--muted); padding:1.5rem 0
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to main content</a>
-<header><div class="hero"><div class="eyebrow">TREC RAG 2026 · post-qrels diagnostic · v3</div><h1>{title}</h1><p>Protecting RRF’s first 100 results and using tethered DUAL below that boundary moved more known-relevant documents into the first 1,000 without changing the candidate set.</p></div></header>
+<header><div class="hero"><div class="eyebrow">TREC RAG 2026 · post-qrels diagnostic · v3</div><h1>{title}</h1><p>Protecting RRF’s first 100 results and using tethered DUAL below that boundary moved more binary-relevant documents (qrels grade &gt;= 2) into the first 1,000 without changing the candidate set.</p></div></header>
 <main id="main" tabindex="-1">
 <section aria-labelledby="summary-title"><h2 id="summary-title">Technical summary</h2>
-<div class="summary"><div class="card"><span class="metric">712 → 764</span><span class="label">pooled relevant documents at 1,000 (+52)</span></div><div class="card"><span class="metric">95 → 160</span><span class="label">facet-only relevant documents retained at 1,000</span></div><div class="card"><span class="metric">31.0614%</span><span class="label">exhaustive full-union document recall</span></div></div>
-<p><strong>Finding.</strong> RRF100-TETHERED-DUAL is the best supported next ranking configuration for this fixed candidate union: its protected RRF head preserved both 299 relevant documents and macro nDCG 0.4048 at depth 100, while soft tethering increased the pooled relevant count at 1,000 by 52.</p>
-<p><strong>Next action.</strong> Improve candidate generation on fresh preregistered topics, then evaluate answer generation and nugget support in the separate answer-generation worktree. Reordering alone cannot add any of the 1,942 qrels-positive documents missing from this union.</p></section>
+<div class="summary"><div class="card"><span class="metric">712 → 764</span><span class="label">pooled binary-relevant documents at 1,000 (+52)</span></div><div class="card"><span class="metric">95 → 160</span><span class="label">facet-only binary-relevant documents retained at 1,000</span></div><div class="card"><span class="metric">31.0614%</span><span class="label">exhaustive binary-relevant full-union recall</span></div></div>
+<p><strong>Finding.</strong> RRF100-TETHERED-DUAL is the best supported next ranking configuration for this fixed candidate union: its protected RRF head preserved both 299 binary-relevant documents and macro nDCG 0.4048 at depth 100, while soft tethering increased the pooled binary-relevant count at 1,000 by 52.</p>
+<p><strong>Next action.</strong> Improve candidate generation on fresh preregistered topics, then evaluate answer generation and nugget support in the separate answer-generation worktree. Reordering alone cannot add any of the 1,942 binary-relevant documents missing from this union.</p></section>
 
-<section aria-labelledby="depth-title"><h2 id="depth-title">The protected head trades small mid-depth regressions for the best result at 1,000</h2><p>Read the table across each arm. Counts are pooled across four topics, so the values answer “how many distinct known-relevant documents were retrieved?” They are not topic averages.</p><div aria-label="Recall-depth comparison">{recall_table}</div><p>RRF100-TETHERED-DUAL exactly matches RRF at 100, trails by 9 at 250, leads by 10 at 500, leads by 52 at 1,000, and leads by 31 at 1,500. Every arm reaches the same 875 known-relevant documents at the full union because these arms only reorder the same candidates.</p></section>
+<section aria-labelledby="depth-title"><h2 id="depth-title">The protected head trades small mid-depth regressions for the best result at 1,000</h2><p>Read the table across each arm. Counts are pooled across four topics, so the values answer “how many distinct binary-relevant documents were retrieved?” They are not topic averages.</p><div aria-label="Recall-depth comparison">{recall_table}</div><p>RRF100-TETHERED-DUAL exactly matches RRF at 100, trails by 9 at 250, leads by 10 at 500, leads by 52 at 1,000, and leads by 31 at 1,500. Every arm reaches the same 875 binary-relevant documents at the full union because these arms only reorder the same candidates.</p></section>
 
 <section aria-labelledby="quality-title"><h2 id="quality-title">Ranking quality and pooled recall answer different questions</h2><p>nDCG is a macro mean: each topic contributes equally, and higher grades near the top matter more. Recall AUC is also a macro topic mean. Neither should be added to, averaged with, or described as pooled document recall.</p>{quality_table}<div class="callout"><strong>Interpretation boundary.</strong> The protected arm preserves RRF at @100 by construction. Its higher macro nDCG@1,000 (0.3103 versus 0.2908) and recall AUC (0.2398 versus 0.2310) support the deep-ranking result, but do not establish production generalization.</div></section>
 
-<section aria-labelledby="overlap-title"><h2 id="overlap-title">Facet retrieval adds 177 relevant candidates, but the union still misses 1,942</h2><p>The original and facet columns are nonadditive because documents found by both appear in the overlap. The exact decomposition is shown as a semantic table: original only + overlap + facet only equals union. “Incremental” and “facet only” are the same set here.</p>{overlap_table}<p>The four-topic union contains 875 / 2,817 qrels-positive documents. That is exhaustive document recall of 31.0614%, leaving 1,942 outside the candidate set. No scoring rule or reordering can raise this ceiling.</p></section>
+<section aria-labelledby="overlap-title"><h2 id="overlap-title">Facet retrieval adds 177 binary-relevant candidates, but the union still misses 1,942</h2><p>The original and facet columns are nonadditive because documents found by both appear in the overlap. The exact decomposition is shown as a semantic table: original only + overlap + facet only equals the binary-relevant union. “Incremental” and “facet only” are the same set here.</p>{overlap_table}<p>The four-topic union contains 875 / 2,817 binary-relevant documents (qrels grade &gt;= 2). That is exhaustive binary-relevant document recall of 31.0614%, leaving 1,942 outside the candidate set. The qrels projection also contains 1,456 grade-1 documents; they are excluded from this binary-relevance denominator. No scoring rule or reordering can raise the binary-relevant ceiling.</p></section>
 
 <section aria-labelledby="topics-title"><h2 id="topics-title">Deep gains are real but uneven by topic</h2><p>These deltas compare the protected arm directly with RRF. The preserved @100 values are all zero by construction; later gains and regressions reveal where the tethered tail helps or displaces relevant material.</p>{topic_table}</section>
 
-<section aria-labelledby="proxy-title"><h2 id="proxy-title">Facet exposure is diagnostic evidence, not nugget coverage</h2><p><strong>qrels-positive facet exposure is only a proxy.</strong> It counts a relevant document whose marginal admission is attributed to a facet stream. It does not inspect whether the document actually supports that facet, whether a passage contains the needed nugget, or whether a generated answer uses it correctly.</p>{proxy_table}<p>Topic 72 shows the strongest proxy behavior (32 positive attributions across seven represented facets); topic 300 is weakest (one attribution across one facet). Topics 219 and 84 are also sparse. This points to a remaining candidate-generation gap rather than a ranking-only problem.</p><div class="callout warning"><strong>This is not answer-generation evaluation.</strong> The 31.1% exhaustive document recall is low, but it is not equivalent to 31.1% answer coverage. One document may support multiple answer nuggets, several documents may repeat the same nugget, and qrels judge topical relevance rather than final answer completeness or faithfulness.</div></section>
+<section aria-labelledby="proxy-title"><h2 id="proxy-title">Facet exposure is diagnostic evidence, not nugget coverage</h2><p><strong>binary-relevant facet exposure is only a proxy.</strong> It counts a binary-relevant document (qrels grade &gt;= 2) whose marginal admission is attributed to a facet stream. It does not inspect whether the document actually supports that facet, whether a passage contains the needed nugget, or whether a generated answer uses it correctly.</p>{proxy_table}<p>Topic 72 shows the strongest proxy behavior (32 binary-relevant attributions across seven represented facets); topic 300 is weakest (one binary-relevant attribution across one facet). Topics 219 and 84 are also sparse. This points to a remaining candidate-generation gap rather than a ranking-only problem.</p><div class="callout warning"><strong>This is not answer-generation evaluation.</strong> The 31.1% exhaustive binary-relevant document recall is low, but it is not equivalent to 31.1% answer coverage. One document may support multiple answer nuggets, several documents may repeat the same nugget, and qrels judge topical relevance rather than final answer completeness or faithfulness.</div></section>
 
-<section aria-labelledby="scope-title"><h2 id="scope-title">Scope and metric definitions</h2><p><span class="tag">4 historical diagnostic topics</span><span class="tag">post-qrels</span><span class="tag">fixed 8,114-document union</span><span class="tag">no new retrieval</span><span class="tag">not production validation</span></p>
-<h3>Pooled binary recall</h3><p>Unique qrels-positive documents retrieved across all four topics divided by all 2,817 qrels-positive documents. Counts at a depth are pooled micro totals.</p><h3>Macro nDCG and recall AUC</h3><p>Each metric is calculated per topic and then averaged across four topics. nDCG rewards graded relevance near the top; recall AUC summarizes recall over depth.</p><h3>True RAG evaluation</h3><p>Answer completeness, supported nuggets, citation correctness, faithfulness, and end-to-end answer quality are out of scope here and belong to the separate answer-generation worktree.</p></section>
+<section aria-labelledby="scope-title"><h2 id="scope-title">Scope and metric definitions</h2><p><span class="tag">4 historical diagnostic topics</span><span class="tag">post-qrels</span><span class="tag">binary-relevant (qrels grade &gt;= 2)</span><span class="tag">fixed 8,114-document union</span><span class="tag">no new retrieval</span><span class="tag">not production validation</span></p>
+<h3>Pooled binary recall</h3><p>Unique binary-relevant documents retrieved across all four topics divided by all 2,817 binary-relevant documents. Binary-relevant means qrels grade &gt;= 2; the 1,456 grade-1 documents are excluded. Counts at a depth are pooled micro totals.</p><h3>Macro nDCG and recall AUC</h3><p>Each metric is calculated per topic and then averaged across four topics. nDCG rewards graded relevance near the top; recall AUC summarizes recall over depth.</p><h3>True RAG evaluation</h3><p>Answer completeness, supported nuggets, citation correctness, faithfulness, and end-to-end answer quality are out of scope here and belong to the separate answer-generation worktree.</p></section>
 
 <section class="hashes" aria-labelledby="sources-title"><h2 id="sources-title">Sources and reproducibility</h2><p>The report authenticates the independently approved freeze and evaluation, plus the prior v2 summary. Labels and hashes are included; machine-local paths, raw documents, document identifiers, credentials, and request material are excluded.</p>{source_table}{call_table}<p>The ranking freeze and evaluation receipts each record zero retrieval, inference, model loads, hosted inference, network, paid calls, and external cost. The report build itself is offline and deterministic apart from SQLite container bytes.</p></section>
 </main>
-<footer><main>Tethered facet soft-coverage proxy · canonical v3 report · source-bound and offline</main></footer>
+<footer><div class="footer-inner">Tethered facet soft-coverage proxy · canonical v3 report · source-bound and offline</div></footer>
 </body></html>"""
 
 
@@ -651,24 +701,30 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
         connection.executescript(
             """
             CREATE TABLE arm_metrics (
-              arm TEXT PRIMARY KEY, relevant_100 INTEGER, relevant_250 INTEGER,
-              relevant_500 INTEGER, relevant_1000 INTEGER, relevant_1500 INTEGER,
-              relevant_full INTEGER, ndcg_10 REAL, ndcg_100 REAL,
+              arm TEXT PRIMARY KEY, binary_relevant_100 INTEGER,
+              binary_relevant_250 INTEGER, binary_relevant_500 INTEGER,
+              binary_relevant_1000 INTEGER, binary_relevant_1500 INTEGER,
+              binary_relevant_full INTEGER, ndcg_10 REAL, ndcg_100 REAL,
               ndcg_1000 REAL, recall_auc REAL
             );
             CREATE TABLE topic_deltas (
-              topic_id TEXT PRIMARY KEY, relevant_delta_100 INTEGER,
-              relevant_delta_250 INTEGER, relevant_delta_500 INTEGER,
-              relevant_delta_1000 INTEGER, relevant_delta_1500 INTEGER,
+              topic_id TEXT PRIMARY KEY, binary_relevant_delta_100 INTEGER,
+              binary_relevant_delta_250 INTEGER, binary_relevant_delta_500 INTEGER,
+              binary_relevant_delta_1000 INTEGER, binary_relevant_delta_1500 INTEGER,
               ndcg_delta_100 REAL, ndcg_delta_1000 REAL, recall_auc_delta REAL
             );
             CREATE TABLE overlap_decomposition (
-              topic_id TEXT PRIMARY KEY, original_relevant INTEGER,
-              facet_relevant INTEGER, overlap_relevant INTEGER,
-              original_only_relevant INTEGER, facet_only_relevant INTEGER,
-              incremental_relevant INTEGER, union_relevant INTEGER,
-              missed_relevant INTEGER, total_relevant INTEGER
+              topic_id TEXT PRIMARY KEY, original_binary_relevant INTEGER,
+              facet_binary_relevant INTEGER, overlap_binary_relevant INTEGER,
+              original_only_binary_relevant INTEGER, facet_only_binary_relevant INTEGER,
+              incremental_binary_relevant INTEGER, binary_relevant_union INTEGER,
+              missed_binary_relevant INTEGER, total_binary_relevant INTEGER
             );
+            CREATE TABLE facet_proxy (
+              topic_id TEXT PRIMARY KEY, binary_relevant_attributions INTEGER,
+              facets_represented INTEGER
+            );
+            CREATE TABLE report_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE sources (source_id TEXT PRIMARY KEY, label TEXT, bytes INTEGER, sha256 TEXT);
             CREATE TABLE receipts (operation TEXT PRIMARY KEY, value REAL);
             """
@@ -720,6 +776,29 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
             ],
         )
         connection.executemany(
+            "INSERT INTO facet_proxy VALUES (?,?,?)",
+            [
+                (
+                    row["topic_id"],
+                    row["binary_relevant_attributions"],
+                    row["facets_with_positive_attribution"],
+                )
+                for row in payload["facet_proxy_by_topic"]
+            ],
+        )
+        metadata = {
+            "relevance_threshold": payload["relevance_threshold"],
+            **payload["qrels_grade_counts"],
+            **{
+                f"freeze_{key}": value
+                for key, value in payload["freeze_verification"].items()
+            },
+        }
+        connection.executemany(
+            "INSERT INTO report_metadata VALUES (?,?)",
+            [(key, str(value)) for key, value in metadata.items()],
+        )
+        connection.executemany(
             "INSERT INTO sources VALUES (?,?,?,?)",
             [
                 (source_id, source["label"], source["bytes"], source["sha256"])
@@ -757,9 +836,13 @@ def write_report(
         "schema_version": SCHEMA_VERSION,
         "status": "complete",
         "topic_ids": list(TOPIC_IDS),
+        "relevance_threshold": payload["relevance_threshold"],
+        "qrels_grade_counts": payload["qrels_grade_counts"],
         "headline": payload["findings"],
         "source_hashes": payload["source_hashes"],
         "external_calls": payload["external_calls"],
+        "freeze_verification": payload["freeze_verification"],
+        "metric_definitions": payload["metric_definitions"],
         "report_boundaries": payload["report_boundaries"],
     }
     html_bytes = render_report(payload).encode("utf-8")

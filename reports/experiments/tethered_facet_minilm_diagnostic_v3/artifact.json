@@ -163,23 +163,23 @@
   },
   "facet_proxy_by_topic": [
     {
+      "binary_relevant_attributions": 2,
       "facets_with_positive_attribution": 2,
-      "qrels_positive_attributions": 2,
       "topic_id": "219"
     },
     {
+      "binary_relevant_attributions": 32,
       "facets_with_positive_attribution": 7,
-      "qrels_positive_attributions": 32,
       "topic_id": "72"
     },
     {
+      "binary_relevant_attributions": 1,
       "facets_with_positive_attribution": 1,
-      "qrels_positive_attributions": 1,
       "topic_id": "300"
     },
     {
+      "binary_relevant_attributions": 7,
       "facets_with_positive_attribution": 5,
-      "qrels_positive_attributions": 7,
       "topic_id": "84"
     }
   ],
@@ -197,14 +197,20 @@
     "rrf_relevant_at_1000": 712,
     "total_relevant": 2817
   },
+  "freeze_verification": {
+    "evaluation_ranking_sha256": "f7d57ed06975278fb270115ab7021325729160d000c464963463e0fbc6aea19f",
+    "ranking_row_count": 48684,
+    "seal_root_sha256": "deffdfd35852c6dfd8c533faed03c9982fb168cad95ae7d559382b73c591f935",
+    "status": "rankings_frozen_before_evaluation"
+  },
   "metric_definitions": {
     "binary_recall": {
       "aggregation": "pooled_micro",
-      "definition": "Unique qrels-positive documents retrieved across four topics divided by all qrels-positive documents across those topics."
+      "definition": "Unique binary-relevant documents (qrels grade >= 2) retrieved across four topics divided by all binary-relevant documents across those topics."
     },
     "facet_proxy": {
-      "aggregation": "qrels_positive_attribution_count",
-      "definition": "A qrels-positive document whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet."
+      "aggregation": "binary_relevant_facet_attribution_count",
+      "definition": "A binary-relevant document (qrels grade >= 2) whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet."
     },
     "ndcg": {
       "aggregation": "macro_topic_mean",
@@ -270,6 +276,12 @@
     "schema_version": "tethered-facet-diagnostic-report-v2",
     "status": "complete"
   },
+  "qrels_grade_counts": {
+    "binary_relevant_grade_2_plus": 2817,
+    "grade_0": 360,
+    "grade_1_excluded": 1456
+  },
+  "relevance_threshold": 2,
   "report_boundaries": {
     "answer_generation_evaluation": false,
     "new_retrieval": false,

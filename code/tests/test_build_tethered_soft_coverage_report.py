@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 from trec_rag.build_tethered_soft_coverage_report import (
     build_report_payload,
@@ -32,7 +36,7 @@ def _payload() -> dict[str, object]:
 def test_report_separates_proxy_from_final_rag_quality() -> None:
     html = render_report(_payload())
     assert "This is not answer-generation evaluation" in html
-    assert "qrels-positive facet exposure is only a proxy" in html
+    assert "binary-relevant facet exposure is only a proxy" in html
     assert "31.1% answer coverage" in html
     assert "separate answer-generation worktree" in html
 
@@ -76,6 +80,20 @@ def test_payload_preserves_metric_semantics_and_exact_findings() -> None:
     assert payload["metric_definitions"]["binary_recall"]["aggregation"] == "pooled_micro"
     assert payload["metric_definitions"]["ndcg"]["aggregation"] == "macro_topic_mean"
     assert payload["metric_definitions"]["recall_auc"]["aggregation"] == "macro_topic_mean"
+
+
+def test_report_exposes_binary_relevance_threshold_and_excludes_grade_one() -> None:
+    payload = _payload()
+    assert payload["relevance_threshold"] == 2
+    assert payload["qrels_grade_counts"] == {
+        "grade_0": 360,
+        "grade_1_excluded": 1456,
+        "binary_relevant_grade_2_plus": 2817,
+    }
+    html = render_report(payload)
+    assert "binary-relevant (qrels grade &gt;= 2)" in html
+    assert "1,456 grade-1" in html
+    assert "qrels-positive" not in html
 
 
 def test_payload_names_every_direct_source_without_machine_paths() -> None:
@@ -137,6 +155,31 @@ def test_write_report_emits_four_canonical_artifacts(tmp_path: Path) -> None:
     with sqlite3.connect(tmp_path / "report_data.sqlite") as connection:
         assert connection.execute("SELECT COUNT(*) FROM arm_metrics").fetchone() == (6,)
         assert connection.execute("SELECT COUNT(*) FROM overlap_decomposition").fetchone() == (4,)
+        assert connection.execute(
+            "SELECT value FROM report_metadata WHERE key = 'relevance_threshold'"
+        ).fetchone() == ("2",)
+    assert artifact["relevance_threshold"] == summary["relevance_threshold"] == 2
+
+
+def test_builder_rejects_tampered_ranking_and_summary_under_old_seal(
+    tmp_path: Path,
+) -> None:
+    tampered = tmp_path / "freeze"
+    shutil.copytree(FREEZE, tampered)
+    rankings = tampered / "rankings.jsonl"
+    content = rankings.read_bytes() + b"{}\n"
+    rankings.write_bytes(content)
+    summary_path = tampered / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["ranking_row_count"] += 1
+    summary["artifacts"]["rankings.jsonl"] = {
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ValueError, match="artifact SHA-256 differs"):
+        build_report_payload(tampered, EVALUATION, PRIOR_SUMMARY)
 
 
 def test_rendered_report_has_accessible_document_structure() -> None:
@@ -148,3 +191,5 @@ def test_rendered_report_has_accessible_document_structure() -> None:
     assert 'aria-label="Recall-depth comparison"' in html
     assert ":focus-visible" in html
     assert "prefers-reduced-motion" in html
+    assert html.count("<main") == 1
+    assert "<footer><main" not in html
