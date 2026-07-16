@@ -298,10 +298,12 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
     ):
         raise ValueError("Task 1 receipt is not an offline completed preflight")
     if (
-        task2.get("schema_version") != "tethered-facet-minilm-scoring-v1"
+        task2.get("schema_version")
+        != "tethered-facet-minilm-scoring-receipt-v1"
         or task2.get("status") != "complete"
-        or task2.get("qrels_opened", task2.get("qrels_read")) is not False
-        or task2.get("network_access_supported", task2.get("network_accessed")) is not False
+        or task2.get("qrels_opened") is not False
+        or task2.get("network_access_supported") is not False
+        or task2.get("hosted_inference_supported") is not False
     ):
         raise ValueError("Task 2 receipt is not a completed local-only scoring receipt")
 

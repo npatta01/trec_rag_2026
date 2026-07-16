@@ -52,8 +52,8 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
         "schema_version": "tethered-facet-minilm-preflight-v1",
         "status": "tokenizer_only_preflight_complete",
         "topic_ids": TOPICS,
-        "qrels_read": False,
-        "retrieval_performed": False,
+        "qrels_opened": False,
+        "retrieval_path_supported": False,
         "model": "synthetic/minilm",
         "model_revision": "fixture-revision",
         "summary": {
@@ -65,12 +65,13 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     }
     preflight_bytes = _write(source / "preflight.json", preflight)
     scoring = {
-        "schema_version": "tethered-facet-minilm-scoring-v1",
+        "schema_version": "tethered-facet-minilm-scoring-receipt-v1",
         "status": "complete",
         "topic_ids": TOPICS,
         "preflight_sha256": _sha(preflight_bytes),
-        "qrels_read": False,
-        "network_accessed": False,
+        "qrels_opened": False,
+        "network_access_supported": False,
+        "hosted_inference_supported": False,
         "model": "synthetic/minilm",
         "model_revision": "fixture-revision",
         "planned_window_count": 5000,
@@ -498,6 +499,28 @@ def test_report_answers_the_three_user_questions(built) -> None:
     assert "did narrative tethering reduce facet noise?" in html
     assert "did two-basket fusion recover novel relevant documents?" in html
     assert "what should happen next?" in html
+
+
+def test_report_accepts_exact_production_task2_receipt_schema(
+    sources: ReportSources,
+) -> None:
+    receipt = json.loads(sources.task2_receipt.read_bytes())
+
+    artifact = build_artifact(sources)
+
+    assert receipt["schema_version"] == "tethered-facet-minilm-scoring-receipt-v1"
+    assert artifact["schema_version"] == "tethered-facet-diagnostic-report-v1"
+
+
+def test_report_rejects_synthetic_only_task2_receipt_schema(
+    sources: ReportSources,
+) -> None:
+    receipt = json.loads(sources.task2_receipt.read_bytes())
+    receipt["schema_version"] = "tethered-facet-minilm-scoring-v1"
+    sources.task2_receipt.write_bytes(_bytes(receipt))
+
+    with pytest.raises(ValueError, match="Task 2 receipt.*completed local-only"):
+        build_artifact(sources)
 
 
 def test_report_exposes_narrative_facet_and_document_evidence(built) -> None:
