@@ -1,0 +1,35 @@
+{
+  "answers": {
+    "narrative_tether_noise_answer": "Judged-relevant yield improved; net noise reduction not established.",
+    "narrative_tether_noise_conclusion": "not_established",
+    "narrative_tether_reduced_noise": false,
+    "next_step": "Run an offline full-union soft-coverage experiment using existing scores, without terminal truncation or equal hard quotas; measure recall at 100, 250, 500, 1000, 1500, and the full union plus area under the recall-depth curve, then validate on fresh preregistered topics.",
+    "noise_basis": {
+      "facet_only_relevant_contributions": 53,
+      "irrelevant_example_demoted": true,
+      "tethered_relevant_contributions": 91
+    },
+    "two_basket_recovered_novel_relevant": true
+  },
+  "mechanical_label": "mechanical_fail",
+  "new_retrieval": false,
+  "post_qrels_diagnostic": true,
+  "production_validation": false,
+  "schema_version": "tethered-facet-diagnostic-report-v2",
+  "source_hashes": {
+    "task1_receipt_sha256": "d32c4c91bc05c10785111b0ba5523a528c0be32658ac2d912f0673138c2e622b",
+    "task2_receipt_sha256": "67d1b5e4894d5efb9a86b1a0bf625eb6d60e797574020d45f75ed1cc161997db",
+    "task3_seal_sha256": "0cb8c3c8e2537a83df24adeb488e22d70301395133c8e669a28444cf1281db5d",
+    "task4_decision_sha256": "f1659fd7cb06f15e6104570ce9226b63b7576b54699a49d485c32cc745d3f9ec",
+    "task4_diagnostics_sha256": "7c500fe5b32e48b95896e3f946e72861edeaeeec342896bd1d31ce6e02cf8a0c",
+    "task4_metrics_sha256": "012ab767d7273d35ca9a1d8b9d7593a481688b89236eda9478a228b8921ceb16",
+    "task4_summary_sha256": "5dad0d8c5845b7828460615c67fdc065e5fb48aa62abf9740103ceb53664f5d8"
+  },
+  "status": "complete",
+  "topic_ids": [
+    "219",
+    "72",
+    "300",
+    "84"
+  ]
+}
