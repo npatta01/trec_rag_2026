@@ -1,0 +1,102 @@
+{
+  "external_calls": {
+    "cost_usd": 0.0,
+    "hosted_inference": 0,
+    "inference": 0,
+    "model_load": 0,
+    "network": 0,
+    "paid": 0,
+    "retrieval": 0
+  },
+  "headline": {
+    "full_union_recall": 0.3106141285055023,
+    "full_union_relevant": 875,
+    "protected_facet_only_at_1000": 160,
+    "protected_ndcg_at_100": 0.40476871895580796,
+    "protected_relevant_at_100": 299,
+    "protected_relevant_at_1000": 764,
+    "relevant_delta_at_1000": 52,
+    "rrf_facet_only_at_1000": 95,
+    "rrf_ndcg_at_100": 0.40476871895580796,
+    "rrf_relevant_at_100": 299,
+    "rrf_relevant_at_1000": 712,
+    "total_relevant": 2817
+  },
+  "report_boundaries": {
+    "answer_generation_evaluation": false,
+    "new_retrieval": false,
+    "post_qrels_diagnostic": true,
+    "production_validation": false,
+    "true_nugget_coverage": false
+  },
+  "schema_version": "tethered-facet-soft-coverage-report-v3",
+  "source_hashes": {
+    "accepted_union_jsonl": {
+      "bytes": 190255142,
+      "label": "Authenticated accepted candidate union",
+      "sha256": "1f4c732a8499fa4e6cef965837dc4e39959ba84a0b7199978b1f27fcf617784a"
+    },
+    "evaluation_diagnostics_json": {
+      "bytes": 86353,
+      "label": "Evaluation diagnostics.json",
+      "sha256": "6ae1afff2a1ee96ab5af10d42c63c4e1df22b1bc9549b865cac0fa9762bbc904"
+    },
+    "evaluation_input_bindings_json": {
+      "bytes": 1260,
+      "label": "Evaluation input_bindings.json",
+      "sha256": "3fda1b4087b170d883a913fceffe4d87967272195b62477e4e372574679a6eb5"
+    },
+    "evaluation_metrics_json": {
+      "bytes": 119885,
+      "label": "Evaluation metrics.json",
+      "sha256": "0a7a38fe41864b5988eb3a5936825743b526ac1f28f66bcfd3d2bf3077101c8f"
+    },
+    "evaluation_summary_json": {
+      "bytes": 1075,
+      "label": "Approved evaluation summary.json",
+      "sha256": "d1318c5598b87b4b57e9da4b659142d93f5f8a06c1691456677851e863c79fc0"
+    },
+    "freeze_input_bindings_json": {
+      "bytes": 3144,
+      "label": "Freeze input_bindings.json",
+      "sha256": "ee271de3ef650c5390a8c69179b3629d9a49f890ee45399ca15b546901773413"
+    },
+    "freeze_parameters_json": {
+      "bytes": 768,
+      "label": "Freeze parameters.json",
+      "sha256": "01105a6f676286375790260271a3930c1d32fe5a275bcb01d396f46f26bcfc61"
+    },
+    "freeze_rankings_jsonl": {
+      "bytes": 23099680,
+      "label": "Freeze rankings.jsonl",
+      "sha256": "f7d57ed06975278fb270115ab7021325729160d000c464963463e0fbc6aea19f"
+    },
+    "freeze_sealed_json": {
+      "bytes": 777,
+      "label": "Approved freeze SEALED.json",
+      "sha256": "aa1877ec16f61f375a552ab9eeefbe9a3ae1c431e05ae9dc0567f5002dc4a5ca"
+    },
+    "freeze_summary_json": {
+      "bytes": 2982,
+      "label": "Approved freeze summary.json",
+      "sha256": "00168ae37cf6c8a590df779bdeb8d598713cf11f78c2fd746480b7ba280ba182"
+    },
+    "prior_v2_summary_json": {
+      "bytes": 1718,
+      "label": "Prior v2 summary.json",
+      "sha256": "961a5414eb9778a78402daed1613b2d64677f7948c0072f481cba9e042d04aaa"
+    },
+    "qrels_projection_jsonl": {
+      "bytes": 289006,
+      "label": "Authenticated qrels projection",
+      "sha256": "03fc4bd18be36b7ea2d446975fec9fe17ac6698dcf068918c6bb228e9aab5e87"
+    }
+  },
+  "status": "complete",
+  "topic_ids": [
+    "219",
+    "72",
+    "300",
+    "84"
+  ]
+}

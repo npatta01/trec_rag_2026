@@ -1,0 +1,398 @@
+{
+  "arm_metrics": [
+    {
+      "arm": "RRF",
+      "binary_recall@100": 0.10614128505502307,
+      "binary_recall@1000": 0.25275115370962015,
+      "binary_recall@1500": 0.2903798367057153,
+      "binary_recall@250": 0.15335463258785942,
+      "binary_recall@500": 0.2012779552715655,
+      "binary_recall_full": 0.3106141285055023,
+      "facet_only_relevant_retained@100": 0,
+      "facet_only_relevant_retained@1000": 95,
+      "facet_only_relevant_retained@1500": 135,
+      "facet_only_relevant_retained@250": 9,
+      "facet_only_relevant_retained@500": 39,
+      "ndcg@10": 0.4325738541430897,
+      "ndcg@100": 0.40476871895580796,
+      "ndcg@1000": 0.29075519543028494,
+      "recall_auc": 0.23101801347535578,
+      "relevant_count@100": 299,
+      "relevant_count@1000": 712,
+      "relevant_count@1500": 818,
+      "relevant_count@250": 432,
+      "relevant_count@500": 567,
+      "relevant_count_full": 875
+    },
+    {
+      "arm": "NARRATIVE",
+      "binary_recall@100": 0.04437344692935747,
+      "binary_recall@1000": 0.24068157614483493,
+      "binary_recall@1500": 0.2914447994320199,
+      "binary_recall@250": 0.09229676961306355,
+      "binary_recall@500": 0.1590344337948172,
+      "binary_recall_full": 0.3106141285055023,
+      "facet_only_relevant_retained@100": 40,
+      "facet_only_relevant_retained@1000": 134,
+      "facet_only_relevant_retained@1500": 155,
+      "facet_only_relevant_retained@250": 64,
+      "facet_only_relevant_retained@500": 102,
+      "ndcg@10": 0.21186827684628629,
+      "ndcg@100": 0.18399771142224927,
+      "ndcg@1000": 0.24226535903371246,
+      "recall_auc": 0.21145831557684464,
+      "relevant_count@100": 125,
+      "relevant_count@1000": 678,
+      "relevant_count@1500": 821,
+      "relevant_count@250": 260,
+      "relevant_count@500": 448,
+      "relevant_count_full": 875
+    },
+    {
+      "arm": "FIXED-O0",
+      "binary_recall@100": 0.0362087326943557,
+      "binary_recall@1000": 0.16719914802981894,
+      "binary_recall@1500": 0.23074192403265886,
+      "binary_recall@250": 0.07561235356762513,
+      "binary_recall@500": 0.11785587504437345,
+      "binary_recall_full": 0.3106141285055023,
+      "facet_only_relevant_retained@100": 38,
+      "facet_only_relevant_retained@1000": 173,
+      "facet_only_relevant_retained@1500": 177,
+      "facet_only_relevant_retained@250": 95,
+      "facet_only_relevant_retained@500": 136,
+      "ndcg@10": 0.2387740437958208,
+      "ndcg@100": 0.1722734674365185,
+      "ndcg@1000": 0.17899205593809628,
+      "recall_auc": 0.16640478770794034,
+      "relevant_count@100": 102,
+      "relevant_count@1000": 471,
+      "relevant_count@1500": 650,
+      "relevant_count@250": 213,
+      "relevant_count@500": 332,
+      "relevant_count_full": 875
+    },
+    {
+      "arm": "TETHERED-DUAL",
+      "binary_recall@100": 0.04827831025914093,
+      "binary_recall@1000": 0.2598509052183174,
+      "binary_recall@1500": 0.30067447639332623,
+      "binary_recall@250": 0.09655662051828186,
+      "binary_recall@500": 0.16577919772807953,
+      "binary_recall_full": 0.3106141285055023,
+      "facet_only_relevant_retained@100": 45,
+      "facet_only_relevant_retained@1000": 160,
+      "facet_only_relevant_retained@1500": 173,
+      "facet_only_relevant_retained@250": 86,
+      "facet_only_relevant_retained@500": 124,
+      "ndcg@10": 0.39699393245380926,
+      "ndcg@100": 0.2381345902254289,
+      "ndcg@1000": 0.2756472171600109,
+      "recall_auc": 0.221211039178573,
+      "relevant_count@100": 136,
+      "relevant_count@1000": 732,
+      "relevant_count@1500": 847,
+      "relevant_count@250": 272,
+      "relevant_count@500": 467,
+      "relevant_count_full": 875
+    },
+    {
+      "arm": "TETHERED-DUAL-NR",
+      "binary_recall@100": 0.04969826056088037,
+      "binary_recall@1000": 0.2630457933972311,
+      "binary_recall@1500": 0.30102946396876107,
+      "binary_recall@250": 0.09655662051828186,
+      "binary_recall@500": 0.16542421015264466,
+      "binary_recall_full": 0.3106141285055023,
+      "facet_only_relevant_retained@100": 48,
+      "facet_only_relevant_retained@1000": 162,
+      "facet_only_relevant_retained@1500": 173,
+      "facet_only_relevant_retained@250": 90,
+      "facet_only_relevant_retained@500": 125,
+      "ndcg@10": 0.4246806920821613,
+      "ndcg@100": 0.24930852857203506,
+      "ndcg@1000": 0.27946813457714437,
+      "recall_auc": 0.2215403093148766,
+      "relevant_count@100": 140,
+      "relevant_count@1000": 741,
+      "relevant_count@1500": 848,
+      "relevant_count@250": 272,
+      "relevant_count@500": 466,
+      "relevant_count_full": 875
+    },
+    {
+      "arm": "RRF100-TETHERED-DUAL",
+      "binary_recall@100": 0.10614128505502307,
+      "binary_recall@1000": 0.27121050763223287,
+      "binary_recall@1500": 0.30138445154419596,
+      "binary_recall@250": 0.1501597444089457,
+      "binary_recall@500": 0.2048278310259141,
+      "binary_recall_full": 0.3106141285055023,
+      "facet_only_relevant_retained@100": 0,
+      "facet_only_relevant_retained@1000": 160,
+      "facet_only_relevant_retained@1500": 173,
+      "facet_only_relevant_retained@250": 66,
+      "facet_only_relevant_retained@500": 118,
+      "ndcg@10": 0.4325738541430897,
+      "ndcg@100": 0.40476871895580796,
+      "ndcg@1000": 0.3102901689202894,
+      "recall_auc": 0.2397575502395049,
+      "relevant_count@100": 299,
+      "relevant_count@1000": 764,
+      "relevant_count@1500": 849,
+      "relevant_count@250": 423,
+      "relevant_count@500": 577,
+      "relevant_count_full": 875
+    }
+  ],
+  "chart_omissions": [
+    {
+      "name": "four-topic overlap decomposition",
+      "reason": "Exact overlap counts are more audit-friendly; a stacked chart would imply false additivity between original and facet totals.",
+      "replacement": "semantic_table"
+    }
+  ],
+  "external_calls": {
+    "cost_usd": 0.0,
+    "hosted_inference": 0,
+    "inference": 0,
+    "model_load": 0,
+    "network": 0,
+    "paid": 0,
+    "retrieval": 0
+  },
+  "facet_proxy_by_topic": [
+    {
+      "facets_with_positive_attribution": 2,
+      "qrels_positive_attributions": 2,
+      "topic_id": "219"
+    },
+    {
+      "facets_with_positive_attribution": 7,
+      "qrels_positive_attributions": 32,
+      "topic_id": "72"
+    },
+    {
+      "facets_with_positive_attribution": 1,
+      "qrels_positive_attributions": 1,
+      "topic_id": "300"
+    },
+    {
+      "facets_with_positive_attribution": 5,
+      "qrels_positive_attributions": 7,
+      "topic_id": "84"
+    }
+  ],
+  "findings": {
+    "full_union_recall": 0.3106141285055023,
+    "full_union_relevant": 875,
+    "protected_facet_only_at_1000": 160,
+    "protected_ndcg_at_100": 0.40476871895580796,
+    "protected_relevant_at_100": 299,
+    "protected_relevant_at_1000": 764,
+    "relevant_delta_at_1000": 52,
+    "rrf_facet_only_at_1000": 95,
+    "rrf_ndcg_at_100": 0.40476871895580796,
+    "rrf_relevant_at_100": 299,
+    "rrf_relevant_at_1000": 712,
+    "total_relevant": 2817
+  },
+  "metric_definitions": {
+    "binary_recall": {
+      "aggregation": "pooled_micro",
+      "definition": "Unique qrels-positive documents retrieved across four topics divided by all qrels-positive documents across those topics."
+    },
+    "facet_proxy": {
+      "aggregation": "qrels_positive_attribution_count",
+      "definition": "A qrels-positive document whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet."
+    },
+    "ndcg": {
+      "aggregation": "macro_topic_mean",
+      "definition": "Mean topic-level normalized discounted cumulative gain; it rewards graded relevance near the top."
+    },
+    "recall_auc": {
+      "aggregation": "macro_topic_mean",
+      "definition": "Mean topic-level area under the recall-depth curve over the evaluated depth range."
+    }
+  },
+  "overlap_decomposition": [
+    {
+      "facet_only_relevant": 19,
+      "facet_relevant": 34,
+      "incremental_relevant": 19,
+      "missed_relevant": 463,
+      "original_only_relevant": 83,
+      "original_relevant": 98,
+      "overlap_relevant": 15,
+      "topic_id": "219",
+      "total_relevant": 580,
+      "union_relevant": 117
+    },
+    {
+      "facet_only_relevant": 77,
+      "facet_relevant": 133,
+      "incremental_relevant": 77,
+      "missed_relevant": 555,
+      "original_only_relevant": 213,
+      "original_relevant": 269,
+      "overlap_relevant": 56,
+      "topic_id": "72",
+      "total_relevant": 901,
+      "union_relevant": 346
+    },
+    {
+      "facet_only_relevant": 60,
+      "facet_relevant": 95,
+      "incremental_relevant": 60,
+      "missed_relevant": 438,
+      "original_only_relevant": 102,
+      "original_relevant": 137,
+      "overlap_relevant": 35,
+      "topic_id": "300",
+      "total_relevant": 635,
+      "union_relevant": 197
+    },
+    {
+      "facet_only_relevant": 21,
+      "facet_relevant": 62,
+      "incremental_relevant": 21,
+      "missed_relevant": 486,
+      "original_only_relevant": 153,
+      "original_relevant": 194,
+      "overlap_relevant": 41,
+      "topic_id": "84",
+      "total_relevant": 701,
+      "union_relevant": 215
+    }
+  ],
+  "prior_v2": {
+    "new_retrieval": false,
+    "schema_version": "tethered-facet-diagnostic-report-v2",
+    "status": "complete"
+  },
+  "report_boundaries": {
+    "answer_generation_evaluation": false,
+    "new_retrieval": false,
+    "post_qrels_diagnostic": true,
+    "production_validation": false,
+    "true_nugget_coverage": false
+  },
+  "schema_version": "tethered-facet-soft-coverage-report-v3",
+  "source_hashes": {
+    "accepted_union_jsonl": {
+      "bytes": 190255142,
+      "label": "Authenticated accepted candidate union",
+      "sha256": "1f4c732a8499fa4e6cef965837dc4e39959ba84a0b7199978b1f27fcf617784a"
+    },
+    "evaluation_diagnostics_json": {
+      "bytes": 86353,
+      "label": "Evaluation diagnostics.json",
+      "sha256": "6ae1afff2a1ee96ab5af10d42c63c4e1df22b1bc9549b865cac0fa9762bbc904"
+    },
+    "evaluation_input_bindings_json": {
+      "bytes": 1260,
+      "label": "Evaluation input_bindings.json",
+      "sha256": "3fda1b4087b170d883a913fceffe4d87967272195b62477e4e372574679a6eb5"
+    },
+    "evaluation_metrics_json": {
+      "bytes": 119885,
+      "label": "Evaluation metrics.json",
+      "sha256": "0a7a38fe41864b5988eb3a5936825743b526ac1f28f66bcfd3d2bf3077101c8f"
+    },
+    "evaluation_summary_json": {
+      "bytes": 1075,
+      "label": "Approved evaluation summary.json",
+      "sha256": "d1318c5598b87b4b57e9da4b659142d93f5f8a06c1691456677851e863c79fc0"
+    },
+    "freeze_input_bindings_json": {
+      "bytes": 3144,
+      "label": "Freeze input_bindings.json",
+      "sha256": "ee271de3ef650c5390a8c69179b3629d9a49f890ee45399ca15b546901773413"
+    },
+    "freeze_parameters_json": {
+      "bytes": 768,
+      "label": "Freeze parameters.json",
+      "sha256": "01105a6f676286375790260271a3930c1d32fe5a275bcb01d396f46f26bcfc61"
+    },
+    "freeze_rankings_jsonl": {
+      "bytes": 23099680,
+      "label": "Freeze rankings.jsonl",
+      "sha256": "f7d57ed06975278fb270115ab7021325729160d000c464963463e0fbc6aea19f"
+    },
+    "freeze_sealed_json": {
+      "bytes": 777,
+      "label": "Approved freeze SEALED.json",
+      "sha256": "aa1877ec16f61f375a552ab9eeefbe9a3ae1c431e05ae9dc0567f5002dc4a5ca"
+    },
+    "freeze_summary_json": {
+      "bytes": 2982,
+      "label": "Approved freeze summary.json",
+      "sha256": "00168ae37cf6c8a590df779bdeb8d598713cf11f78c2fd746480b7ba280ba182"
+    },
+    "prior_v2_summary_json": {
+      "bytes": 1718,
+      "label": "Prior v2 summary.json",
+      "sha256": "961a5414eb9778a78402daed1613b2d64677f7948c0072f481cba9e042d04aaa"
+    },
+    "qrels_projection_jsonl": {
+      "bytes": 289006,
+      "label": "Authenticated qrels projection",
+      "sha256": "03fc4bd18be36b7ea2d446975fec9fe17ac6698dcf068918c6bb228e9aab5e87"
+    }
+  },
+  "status": "complete",
+  "surface": "report",
+  "title": "Protected RRF head improves deep soft coverage, not total candidate recall",
+  "topic_deltas": [
+    {
+      "ndcg_delta@100": 0.0,
+      "ndcg_delta@1000": 0.008107762656391265,
+      "recall_auc_delta": 0.0038157021397606794,
+      "relevant_delta@100": 0,
+      "relevant_delta@1000": 6,
+      "relevant_delta@1500": 6,
+      "relevant_delta@250": -3,
+      "relevant_delta@500": -1,
+      "topic_id": "219"
+    },
+    {
+      "ndcg_delta@100": 0.0,
+      "ndcg_delta@1000": 0.029119477576991737,
+      "recall_auc_delta": 0.0009543802085896225,
+      "relevant_delta@100": 0,
+      "relevant_delta@1000": 8,
+      "relevant_delta@1500": 14,
+      "relevant_delta@250": -11,
+      "relevant_delta@500": -17,
+      "topic_id": "72"
+    },
+    {
+      "ndcg_delta@100": 0.0,
+      "ndcg_delta@1000": 0.031530744983215175,
+      "recall_auc_delta": 0.025973213628671554,
+      "relevant_delta@100": 0,
+      "relevant_delta@1000": 23,
+      "relevant_delta@1500": 6,
+      "relevant_delta@250": 17,
+      "relevant_delta@500": 30,
+      "topic_id": "300"
+    },
+    {
+      "ndcg_delta@100": 0.0,
+      "ndcg_delta@1000": 0.009381908743419654,
+      "recall_auc_delta": 0.004214851079574672,
+      "relevant_delta@100": 0,
+      "relevant_delta@1000": 15,
+      "relevant_delta@1500": 5,
+      "relevant_delta@250": -12,
+      "relevant_delta@500": -2,
+      "topic_id": "84"
+    }
+  ],
+  "topic_ids": [
+    "219",
+    "72",
+    "300",
+    "84"
+  ]
+}

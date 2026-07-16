@@ -1,0 +1,806 @@
+"""Build the v3 tethered soft-coverage proxy report from approved artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html
+import json
+import os
+import sqlite3
+import tempfile
+from collections.abc import Mapping
+from pathlib import Path
+
+
+SCHEMA_VERSION = "tethered-facet-soft-coverage-report-v3"
+TOPIC_IDS = ("219", "72", "300", "84")
+ARMS = (
+    "RRF",
+    "NARRATIVE",
+    "FIXED-O0",
+    "TETHERED-DUAL",
+    "TETHERED-DUAL-NR",
+    "RRF100-TETHERED-DUAL",
+)
+DEPTHS = (100, 250, 500, 1000, 1500)
+CALL_FIELDS = {
+    "retrieval": "retrieval_call_count",
+    "inference": "inference_count",
+    "model_load": "model_load_count",
+    "hosted_inference": "hosted_inference_call_count",
+    "network": "network_call_count",
+    "paid": "paid_call_count",
+    "cost_usd": "external_cost_usd",
+}
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+        + "\n"
+    ).encode("utf-8")
+
+
+def _read_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
+    try:
+        content = path.read_bytes()
+        value = json.loads(content)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value, content
+
+
+def _mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} is missing or invalid")
+    return value
+
+
+def _verify_artifacts(
+    directory: Path, summary: Mapping[str, object], names: tuple[str, ...], label: str
+) -> dict[str, dict[str, object]]:
+    declared = _mapping(summary.get("artifacts"), f"{label} artifacts")
+    sources: dict[str, dict[str, object]] = {}
+    for name in names:
+        path = directory / name
+        content = path.read_bytes()
+        binding = _mapping(declared.get(name), f"{label} {name} binding")
+        digest = _sha256(content)
+        if binding.get("sha256") != digest or binding.get("bytes") != len(content):
+            raise ValueError(f"{label} {name} differs from its approved hash")
+        sources[f"{label.lower()}_{name.replace('.', '_')}"] = {
+            "label": f"{label} {name}",
+            "bytes": len(content),
+            "sha256": digest,
+        }
+    return sources
+
+
+def _external_calls(summary: Mapping[str, object], label: str) -> dict[str, object]:
+    calls = {
+        output_name: summary.get(source_name)
+        for output_name, source_name in CALL_FIELDS.items()
+    }
+    expected = {name: (0.0 if name == "cost_usd" else 0) for name in CALL_FIELDS}
+    if calls != expected:
+        raise ValueError(f"{label} does not have a zero-call receipt")
+    return calls
+
+
+def _bound_path(binding: Mapping[str, object], label: str) -> Path:
+    path = Path(str(binding.get("path", "")))
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"{label} binding is unreadable or unsafe")
+    return path
+
+
+def _overlap_decomposition(
+    evaluation_bindings: Mapping[str, object], relevance_threshold: int
+) -> list[dict[str, object]]:
+    qrels_binding = _mapping(
+        evaluation_bindings.get("qrels_projection"), "qrels projection binding"
+    )
+    union_binding = _mapping(
+        evaluation_bindings.get("accepted_union"), "accepted union binding"
+    )
+    qrels_path = _bound_path(qrels_binding, "qrels projection")
+    union_path = _bound_path(union_binding, "accepted union")
+
+    relevant: dict[str, set[str]] = {topic: set() for topic in TOPIC_IDS}
+    qrels_digest = hashlib.sha256()
+    qrels_rows = 0
+    with qrels_path.open("rb") as handle:
+        for raw_line in handle:
+            qrels_digest.update(raw_line)
+            qrels_rows += 1
+            row = json.loads(raw_line)
+            topic = str(row.get("topic_id"))
+            if topic in relevant and int(row.get("grade", 0)) >= relevance_threshold:
+                relevant[topic].add(str(row.get("document_id")))
+    if (
+        qrels_binding.get("sha256") != qrels_digest.hexdigest()
+        or qrels_binding.get("rows") != qrels_rows
+    ):
+        raise ValueError("qrels projection differs from its approved binding")
+
+    counts = {
+        topic: {"original_only": 0, "facet_only": 0, "overlap": 0}
+        for topic in TOPIC_IDS
+    }
+    union_digest = hashlib.sha256()
+    union_rows = 0
+    with union_path.open("rb") as handle:
+        for raw_line in handle:
+            union_digest.update(raw_line)
+            union_rows += 1
+            row = json.loads(raw_line)
+            topic = str(row.get("topic_id"))
+            document = str(row.get("document_id"))
+            if topic not in relevant or document not in relevant[topic]:
+                continue
+            provenance = row.get("provenance")
+            if not isinstance(provenance, list):
+                raise ValueError("accepted union provenance is invalid")
+            families = {
+                str(item.get("family"))
+                for item in provenance
+                if isinstance(item, Mapping)
+            }
+            original = "original" in families
+            facet = "facet" in families
+            if original and facet:
+                counts[topic]["overlap"] += 1
+            elif original:
+                counts[topic]["original_only"] += 1
+            elif facet:
+                counts[topic]["facet_only"] += 1
+            else:
+                raise ValueError("relevant union row lacks original/facet provenance")
+    if (
+        union_binding.get("sha256") != union_digest.hexdigest()
+        or union_binding.get("rows") != union_rows
+    ):
+        raise ValueError("accepted union differs from its approved binding")
+
+    output: list[dict[str, object]] = []
+    for topic in TOPIC_IDS:
+        original_only = counts[topic]["original_only"]
+        facet_only = counts[topic]["facet_only"]
+        overlap = counts[topic]["overlap"]
+        union_relevant = original_only + facet_only + overlap
+        output.append(
+            {
+                "topic_id": topic,
+                "original_relevant": original_only + overlap,
+                "facet_relevant": facet_only + overlap,
+                "original_only_relevant": original_only,
+                "overlap_relevant": overlap,
+                "facet_only_relevant": facet_only,
+                "incremental_relevant": facet_only,
+                "union_relevant": union_relevant,
+                "missed_relevant": len(relevant[topic]) - union_relevant,
+                "total_relevant": len(relevant[topic]),
+            }
+        )
+    return output
+
+
+def build_report_payload(
+    freeze: Path | str, evaluation: Path | str, prior_summary: Path | str
+) -> dict[str, object]:
+    """Authenticate approved inputs and return a sanitized report payload."""
+
+    freeze_dir = Path(freeze)
+    evaluation_dir = Path(evaluation)
+    prior_path = Path(prior_summary)
+    freeze_summary, freeze_summary_bytes = _read_json(
+        freeze_dir / "summary.json", "freeze summary"
+    )
+    evaluation_summary, evaluation_summary_bytes = _read_json(
+        evaluation_dir / "summary.json", "evaluation summary"
+    )
+    metrics, metrics_bytes = _read_json(evaluation_dir / "metrics.json", "metrics")
+    diagnostics, diagnostics_bytes = _read_json(
+        evaluation_dir / "diagnostics.json", "diagnostics"
+    )
+    evaluation_bindings, evaluation_bindings_bytes = _read_json(
+        evaluation_dir / "input_bindings.json", "evaluation bindings"
+    )
+    prior, prior_bytes = _read_json(prior_path, "prior v2 summary")
+
+    if freeze_summary.get("status") != "rankings_frozen_before_evaluation":
+        raise ValueError("freeze is not the approved pre-evaluation snapshot")
+    if evaluation_summary.get("status") != "complete":
+        raise ValueError("evaluation is incomplete")
+    for label, value in (
+        ("freeze", freeze_summary),
+        ("evaluation", evaluation_summary),
+        ("metrics", metrics),
+    ):
+        if value.get("topic_ids") != list(TOPIC_IDS):
+            raise ValueError(f"{label} topic set differs")
+    if prior.get("schema_version") != "tethered-facet-diagnostic-report-v2":
+        raise ValueError("prior summary is not v2")
+    if metrics.get("arms") is None or set(_mapping(metrics["arms"], "metric arms")) != set(ARMS):
+        raise ValueError("evaluation arm set differs")
+
+    sources = {
+        "freeze_summary_json": {
+            "label": "Approved freeze summary.json",
+            "bytes": len(freeze_summary_bytes),
+            "sha256": _sha256(freeze_summary_bytes),
+        },
+        "evaluation_summary_json": {
+            "label": "Approved evaluation summary.json",
+            "bytes": len(evaluation_summary_bytes),
+            "sha256": _sha256(evaluation_summary_bytes),
+        },
+        "prior_v2_summary_json": {
+            "label": "Prior v2 summary.json",
+            "bytes": len(prior_bytes),
+            "sha256": _sha256(prior_bytes),
+        },
+    }
+    sources.update(
+        _verify_artifacts(
+            freeze_dir,
+            freeze_summary,
+            ("input_bindings.json", "parameters.json", "rankings.jsonl"),
+            "Freeze",
+        )
+    )
+    sources.update(
+        _verify_artifacts(
+            evaluation_dir,
+            evaluation_summary,
+            ("input_bindings.json", "metrics.json", "diagnostics.json"),
+            "Evaluation",
+        )
+    )
+    seal, seal_content = _read_json(freeze_dir / "SEALED.json", "freeze seal")
+    sources["freeze_sealed_json"] = {
+        "label": "Approved freeze SEALED.json",
+        "bytes": len(seal_content),
+        "sha256": _sha256(seal_content),
+    }
+    freeze_binding = _mapping(evaluation_bindings.get("freeze"), "evaluation freeze binding")
+    if (
+        seal.get("status") != "sealed_before_evaluation"
+        or seal.get("root_sha256") != freeze_binding.get("seal_root_sha256")
+    ):
+        raise ValueError("freeze seal does not match the approved evaluation binding")
+    if sources["evaluation_metrics_json"]["sha256"] != _sha256(metrics_bytes):
+        raise ValueError("metrics source hash differs")
+    if sources["evaluation_diagnostics_json"]["sha256"] != _sha256(diagnostics_bytes):
+        raise ValueError("diagnostics source hash differs")
+    if sources["evaluation_input_bindings_json"]["sha256"] != _sha256(
+        evaluation_bindings_bytes
+    ):
+        raise ValueError("evaluation bindings source hash differs")
+
+    freeze_calls = _external_calls(freeze_summary, "freeze")
+    evaluation_calls = _external_calls(evaluation_summary, "evaluation")
+    if freeze_calls != evaluation_calls:
+        raise ValueError("freeze and evaluation zero-call receipts differ")
+
+    arm_metrics: list[dict[str, object]] = []
+    arms = _mapping(metrics["arms"], "metric arms")
+    for arm in ARMS:
+        aggregate = _mapping(
+            _mapping(arms.get(arm), f"{arm} metrics").get("aggregate"),
+            f"{arm} aggregate metrics",
+        )
+        record: dict[str, object] = {
+            "arm": arm,
+            "ndcg@10": aggregate["ndcg@10"],
+            "ndcg@100": aggregate["ndcg@100"],
+            "ndcg@1000": aggregate["ndcg@1000"],
+            "recall_auc": aggregate["recall_auc"],
+            "relevant_count_full": aggregate["relevant_count_full"],
+            "binary_recall_full": aggregate["binary_recall_full"],
+        }
+        for depth in DEPTHS:
+            record[f"relevant_count@{depth}"] = aggregate[f"relevant_count@{depth}"]
+            record[f"binary_recall@{depth}"] = aggregate[f"binary_recall@{depth}"]
+            record[f"facet_only_relevant_retained@{depth}"] = aggregate[
+                f"facet_only_relevant_retained@{depth}"
+            ]
+        arm_metrics.append(record)
+
+    by_arm = {str(row["arm"]): row for row in arm_metrics}
+    rrf = by_arm["RRF"]
+    protected = by_arm["RRF100-TETHERED-DUAL"]
+    total_relevant = int(
+        _mapping(
+            _mapping(arms["RRF"], "RRF metrics")["aggregate"], "RRF aggregate"
+        )["total_relevant"]
+    )
+    findings = {
+        "rrf_relevant_at_1000": rrf["relevant_count@1000"],
+        "protected_relevant_at_1000": protected["relevant_count@1000"],
+        "relevant_delta_at_1000": int(protected["relevant_count@1000"])
+        - int(rrf["relevant_count@1000"]),
+        "rrf_facet_only_at_1000": rrf["facet_only_relevant_retained@1000"],
+        "protected_facet_only_at_1000": protected[
+            "facet_only_relevant_retained@1000"
+        ],
+        "rrf_relevant_at_100": rrf["relevant_count@100"],
+        "protected_relevant_at_100": protected["relevant_count@100"],
+        "rrf_ndcg_at_100": rrf["ndcg@100"],
+        "protected_ndcg_at_100": protected["ndcg@100"],
+        "full_union_relevant": protected["relevant_count_full"],
+        "total_relevant": total_relevant,
+        "full_union_recall": protected["binary_recall_full"],
+    }
+    if findings != {
+        **findings,
+        "rrf_relevant_at_1000": 712,
+        "protected_relevant_at_1000": 764,
+        "relevant_delta_at_1000": 52,
+        "rrf_facet_only_at_1000": 95,
+        "protected_facet_only_at_1000": 160,
+        "rrf_relevant_at_100": 299,
+        "protected_relevant_at_100": 299,
+        "rrf_ndcg_at_100": findings["protected_ndcg_at_100"],
+        "full_union_relevant": 875,
+        "total_relevant": 2817,
+        "full_union_recall": 875 / 2817,
+    }:
+        raise ValueError("approved headline findings differ")
+
+    topic_deltas: list[dict[str, object]] = []
+    protected_topics = _mapping(arms["RRF100-TETHERED-DUAL"], "protected metrics")
+    protected_topics = _mapping(protected_topics.get("per_topic"), "protected topics")
+    rrf_topics = _mapping(_mapping(arms["RRF"], "RRF metrics").get("per_topic"), "RRF topics")
+    for topic in TOPIC_IDS:
+        candidate = _mapping(protected_topics[topic], f"protected topic {topic}")
+        baseline = _mapping(rrf_topics[topic], f"RRF topic {topic}")
+        topic_deltas.append(
+            {
+                "topic_id": topic,
+                **{
+                    f"relevant_delta@{depth}": int(candidate[f"relevant_count@{depth}"])
+                    - int(baseline[f"relevant_count@{depth}"])
+                    for depth in DEPTHS
+                },
+                "ndcg_delta@100": float(candidate["ndcg@100"])
+                - float(baseline["ndcg@100"]),
+                "ndcg_delta@1000": float(candidate["ndcg@1000"])
+                - float(baseline["ndcg@1000"]),
+                "recall_auc_delta": float(candidate["recall_auc"])
+                - float(baseline["recall_auc"]),
+            }
+        )
+
+    overlap = _overlap_decomposition(
+        evaluation_bindings, int(metrics.get("relevance_threshold", 2))
+    )
+    if sum(int(row["union_relevant"]) for row in overlap) != 875:
+        raise ValueError("overlap decomposition does not reconcile to full union")
+    if sum(int(row["facet_only_relevant"]) for row in overlap) != 177:
+        raise ValueError("overlap decomposition does not reconcile to facet-only total")
+    for source_id, binding_name, label in (
+        ("accepted_union_jsonl", "accepted_union", "Authenticated accepted candidate union"),
+        ("qrels_projection_jsonl", "qrels_projection", "Authenticated qrels projection"),
+    ):
+        binding = _mapping(evaluation_bindings.get(binding_name), f"{label} binding")
+        sources[source_id] = {
+            "label": label,
+            "bytes": int(binding["bytes"]),
+            "sha256": str(binding["sha256"]),
+        }
+
+    proxy_root = _mapping(diagnostics.get("coverage_proxy"), "coverage proxy")
+    attribution = _mapping(
+        proxy_root.get("qrels_positive_facet_attribution"), "facet attribution"
+    )
+    tethered_attribution = _mapping(
+        attribution.get("TETHERED-DUAL"), "TETHERED-DUAL facet attribution"
+    )
+    proxy_by_topic = []
+    for topic in TOPIC_IDS:
+        facet_counts = _mapping(tethered_attribution.get(topic), f"topic {topic} facets")
+        proxy_by_topic.append(
+            {
+                "topic_id": topic,
+                "qrels_positive_attributions": sum(int(value) for value in facet_counts.values()),
+                "facets_with_positive_attribution": sum(
+                    1 for value in facet_counts.values() if int(value) > 0
+                ),
+            }
+        )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "complete",
+        "title": "Protected RRF head improves deep soft coverage, not total candidate recall",
+        "topic_ids": list(TOPIC_IDS),
+        "findings": findings,
+        "arm_metrics": arm_metrics,
+        "topic_deltas": topic_deltas,
+        "overlap_decomposition": overlap,
+        "facet_proxy_by_topic": proxy_by_topic,
+        "metric_definitions": {
+            "binary_recall": {
+                "aggregation": "pooled_micro",
+                "definition": "Unique qrels-positive documents retrieved across four topics divided by all qrels-positive documents across those topics.",
+            },
+            "ndcg": {
+                "aggregation": "macro_topic_mean",
+                "definition": "Mean topic-level normalized discounted cumulative gain; it rewards graded relevance near the top.",
+            },
+            "recall_auc": {
+                "aggregation": "macro_topic_mean",
+                "definition": "Mean topic-level area under the recall-depth curve over the evaluated depth range.",
+            },
+            "facet_proxy": {
+                "aggregation": "qrels_positive_attribution_count",
+                "definition": "A qrels-positive document whose marginal admission is attributed to a facet stream; it does not prove passage support for that facet.",
+            },
+        },
+        "source_hashes": sources,
+        "external_calls": freeze_calls,
+        "prior_v2": {
+            "schema_version": prior["schema_version"],
+            "status": prior.get("status"),
+            "new_retrieval": prior.get("new_retrieval"),
+        },
+        "report_boundaries": {
+            "post_qrels_diagnostic": True,
+            "new_retrieval": False,
+            "answer_generation_evaluation": False,
+            "true_nugget_coverage": False,
+            "production_validation": False,
+        },
+    }
+
+
+def _pct(value: object, digits: int = 1) -> str:
+    return f"{float(value) * 100:.{digits}f}%"
+
+
+def _signed(value: object, digits: int = 0) -> str:
+    number = float(value)
+    if digits == 0:
+        return f"{int(number):+d}"
+    return f"{number:+.{digits}f}"
+
+
+def _table(headers: list[str], rows: list[list[str]], caption: str) -> str:
+    head = "".join(f'<th scope="col">{html.escape(value)}</th>' for value in headers)
+    body = "".join(
+        "<tr>"
+        + "".join(
+            (
+                f'<th scope="row">{html.escape(cell)}</th>'
+                if index == 0
+                else f"<td>{html.escape(cell)}</td>"
+            )
+            for index, cell in enumerate(row)
+        )
+        + "</tr>"
+        for row in rows
+    )
+    return (
+        '<div class="table-wrap" tabindex="0">'
+        f"<table><caption>{html.escape(caption)}</caption><thead><tr>{head}</tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
+def render_report(payload: Mapping[str, object]) -> str:
+    """Render a self-contained, responsive, accessible HTML report."""
+
+    findings = _mapping(payload["findings"], "findings")
+    arm_metrics = list(payload["arm_metrics"])
+    by_arm = {str(row["arm"]): row for row in arm_metrics}
+    recall_rows = []
+    for arm in ARMS:
+        row = by_arm[arm]
+        recall_rows.append(
+            [
+                arm,
+                *[str(row[f"relevant_count@{depth}"]) for depth in DEPTHS],
+                str(row["relevant_count_full"]),
+                _pct(row["binary_recall_full"], 4),
+            ]
+        )
+    quality_rows = [
+        [
+            arm,
+            f'{float(by_arm[arm]["ndcg@10"]):.4f}',
+            f'{float(by_arm[arm]["ndcg@100"]):.4f}',
+            f'{float(by_arm[arm]["ndcg@1000"]):.4f}',
+            f'{float(by_arm[arm]["recall_auc"]):.4f}',
+        ]
+        for arm in ARMS
+    ]
+    overlap_rows = [
+        [
+            str(row["topic_id"]),
+            str(row["original_relevant"]),
+            str(row["facet_relevant"]),
+            str(row["overlap_relevant"]),
+            str(row["original_only_relevant"]),
+            str(row["facet_only_relevant"]),
+            str(row["union_relevant"]),
+            str(row["missed_relevant"]),
+        ]
+        for row in payload["overlap_decomposition"]
+    ]
+    topic_rows = [
+        [
+            str(row["topic_id"]),
+            *[_signed(row[f"relevant_delta@{depth}"]) for depth in DEPTHS],
+            _signed(float(row["ndcg_delta@100"]) * 100, 2) + " pp",
+            _signed(float(row["ndcg_delta@1000"]) * 100, 2) + " pp",
+        ]
+        for row in payload["topic_deltas"]
+    ]
+    proxy_rows = [
+        [
+            str(row["topic_id"]),
+            str(row["qrels_positive_attributions"]),
+            str(row["facets_with_positive_attribution"]),
+        ]
+        for row in payload["facet_proxy_by_topic"]
+    ]
+    source_rows = [
+        [str(source["label"]), str(source["bytes"]), str(source["sha256"])]
+        for source in payload["source_hashes"].values()
+    ]
+    call_rows = [[name.replace("_", " ").title(), str(value)] for name, value in payload["external_calls"].items()]
+
+    recall_table = _table(
+        ["Arm", "@100", "@250", "@500", "@1,000", "@1,500", "Full", "Full recall"],
+        recall_rows,
+        "Pooled qrels-positive document counts by depth; full union is identical for every reordering arm.",
+    )
+    quality_table = _table(
+        ["Arm", "nDCG@10", "nDCG@100", "nDCG@1,000", "Recall AUC"],
+        quality_rows,
+        "Macro mean across four topics. nDCG and recall AUC are not pooled document recall.",
+    )
+    overlap_table = _table(
+        ["Topic", "Original relevant", "Facet relevant", "Overlap", "Original only", "Facet only / incremental", "Union", "Missed"],
+        overlap_rows,
+        "Nonadditive overlap decomposition. Original relevant and facet relevant both include overlap; union equals original only + overlap + facet only.",
+    )
+    topic_table = _table(
+        ["Topic", "Δ @100", "Δ @250", "Δ @500", "Δ @1,000", "Δ @1,500", "Δ nDCG@100", "Δ nDCG@1,000"],
+        topic_rows,
+        "RRF100-TETHERED-DUAL minus RRF. Positive document deltas are gains; negative deltas are regressions.",
+    )
+    proxy_table = _table(
+        ["Topic", "Positive attributions", "Facets represented"],
+        proxy_rows,
+        "TETHERED-DUAL marginal facet attribution among qrels-positive documents; this is a proxy, not semantic facet support.",
+    )
+    source_table = _table(["Source", "Bytes", "SHA-256"], source_rows, "Exact canonical source identities used to build this report.")
+    call_table = _table(["External operation", "Count / cost"], call_rows, "Freeze and evaluation receipts agree that all external operations and cost were zero.")
+
+    title = html.escape(str(payload["title"]))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{title}</title>
+<style>
+:root {{ --bg:#f4f7fb; --paper:#fff; --ink:#172033; --muted:#526176; --line:#c8d2df; --navy:#123b66; --blue:#1769aa; --cyan:#0b7285; --good:#146c43; --warn:#8a4b08; --focus:#ffbf47; }}
+@media (prefers-color-scheme:dark) {{ :root {{ --bg:#0e1621; --paper:#162231; --ink:#edf4fb; --muted:#b7c5d3; --line:#415367; --navy:#8fc5f2; --blue:#69b7ef; --cyan:#6bd5e1; --good:#72d59e; --warn:#ffc078; --focus:#ffd166; }} }}
+* {{ box-sizing:border-box; }} html {{ scroll-behavior:smooth; }} body {{ margin:0; background:var(--bg); color:var(--ink); font:16px/1.58 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+a {{ color:var(--blue); }} a:focus-visible, [tabindex]:focus-visible {{ outline:3px solid var(--focus); outline-offset:3px; }}
+.skip-link {{ position:absolute; left:1rem; top:-5rem; padding:.7rem 1rem; background:var(--paper); color:var(--ink); z-index:10; }} .skip-link:focus {{ top:1rem; }}
+header {{ background:linear-gradient(125deg,#102f52,#0b6979); color:#fff; }} .hero {{ max-width:1120px; margin:auto; padding:4.5rem 1.25rem 4rem; }}
+.eyebrow {{ font-size:.78rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; opacity:.82; }} h1 {{ max-width:900px; margin:.35rem 0 1rem; font-size:clamp(2rem,5vw,4rem); line-height:1.05; letter-spacing:-.035em; }}
+.hero p {{ max-width:780px; margin:0; font-size:1.18rem; }} main {{ max-width:1120px; margin:auto; padding:2rem 1.25rem 5rem; }}
+section {{ margin:0 0 3.2rem; scroll-margin-top:1rem; }} h2 {{ margin:0 0 .8rem; color:var(--navy); font-size:clamp(1.55rem,3vw,2.25rem); line-height:1.15; }} h3 {{ margin-top:1.7rem; }}
+.summary {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; margin:1.2rem 0; }} .card {{ background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:1.15rem; box-shadow:0 8px 24px rgb(15 40 65 / .07); }}
+.metric {{ display:block; color:var(--navy); font-size:2rem; font-weight:850; line-height:1.05; }} .label {{ color:var(--muted); font-size:.9rem; }}
+.callout {{ border-left:5px solid var(--cyan); background:var(--paper); padding:1rem 1.2rem; border-radius:0 12px 12px 0; }} .warning {{ border-left-color:var(--warn); }}
+.table-wrap {{ overflow-x:auto; margin:1rem 0; border:1px solid var(--line); border-radius:12px; background:var(--paper); }} table {{ border-collapse:collapse; width:100%; min-width:720px; }} caption {{ padding:1rem; text-align:left; color:var(--muted); font-size:.92rem; }} th,td {{ padding:.72rem .85rem; border-top:1px solid var(--line); text-align:right; white-space:nowrap; }} th:first-child,td:first-child {{ text-align:left; }} thead th {{ color:var(--navy); background:color-mix(in srgb,var(--paper) 86%,var(--blue)); border-top:0; }} tbody tr:hover {{ background:color-mix(in srgb,var(--paper) 94%,var(--cyan)); }}
+.hashes table {{ min-width:900px; }} .hashes td:last-child {{ font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }}
+.tag {{ display:inline-block; border:1px solid var(--line); border-radius:999px; padding:.22rem .65rem; margin:.2rem .3rem .2rem 0; color:var(--muted); font-size:.82rem; }}
+footer {{ border-top:1px solid var(--line); color:var(--muted); padding:1.5rem 0; }}
+@media (max-width:760px) {{ .hero {{ padding:3.2rem 1rem 2.8rem; }} main {{ padding:1.5rem 1rem 4rem; }} .summary {{ grid-template-columns:1fr; }} section {{ margin-bottom:2.5rem; }} .table-wrap {{ margin-inline:-1rem; border-radius:0; border-inline:0; }} th,td {{ padding:.65rem .7rem; }} }}
+@media (prefers-reduced-motion:reduce) {{ html {{ scroll-behavior:auto; }} *,*::before,*::after {{ animation-duration:.01ms!important; transition-duration:.01ms!important; }} }}
+@media print {{ body {{ background:#fff; color:#111; }} header {{ background:#fff; color:#111; }} .card,.table-wrap {{ box-shadow:none; break-inside:avoid; }} }}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+<header><div class="hero"><div class="eyebrow">TREC RAG 2026 · post-qrels diagnostic · v3</div><h1>{title}</h1><p>Protecting RRF’s first 100 results and using tethered DUAL below that boundary moved more known-relevant documents into the first 1,000 without changing the candidate set.</p></div></header>
+<main id="main" tabindex="-1">
+<section aria-labelledby="summary-title"><h2 id="summary-title">Technical summary</h2>
+<div class="summary"><div class="card"><span class="metric">712 → 764</span><span class="label">pooled relevant documents at 1,000 (+52)</span></div><div class="card"><span class="metric">95 → 160</span><span class="label">facet-only relevant documents retained at 1,000</span></div><div class="card"><span class="metric">31.0614%</span><span class="label">exhaustive full-union document recall</span></div></div>
+<p><strong>Finding.</strong> RRF100-TETHERED-DUAL is the best supported next ranking configuration for this fixed candidate union: its protected RRF head preserved both 299 relevant documents and macro nDCG 0.4048 at depth 100, while soft tethering increased the pooled relevant count at 1,000 by 52.</p>
+<p><strong>Next action.</strong> Improve candidate generation on fresh preregistered topics, then evaluate answer generation and nugget support in the separate answer-generation worktree. Reordering alone cannot add any of the 1,942 qrels-positive documents missing from this union.</p></section>
+
+<section aria-labelledby="depth-title"><h2 id="depth-title">The protected head trades small mid-depth regressions for the best result at 1,000</h2><p>Read the table across each arm. Counts are pooled across four topics, so the values answer “how many distinct known-relevant documents were retrieved?” They are not topic averages.</p><div aria-label="Recall-depth comparison">{recall_table}</div><p>RRF100-TETHERED-DUAL exactly matches RRF at 100, trails by 9 at 250, leads by 10 at 500, leads by 52 at 1,000, and leads by 31 at 1,500. Every arm reaches the same 875 known-relevant documents at the full union because these arms only reorder the same candidates.</p></section>
+
+<section aria-labelledby="quality-title"><h2 id="quality-title">Ranking quality and pooled recall answer different questions</h2><p>nDCG is a macro mean: each topic contributes equally, and higher grades near the top matter more. Recall AUC is also a macro topic mean. Neither should be added to, averaged with, or described as pooled document recall.</p>{quality_table}<div class="callout"><strong>Interpretation boundary.</strong> The protected arm preserves RRF at @100 by construction. Its higher macro nDCG@1,000 (0.3103 versus 0.2908) and recall AUC (0.2398 versus 0.2310) support the deep-ranking result, but do not establish production generalization.</div></section>
+
+<section aria-labelledby="overlap-title"><h2 id="overlap-title">Facet retrieval adds 177 relevant candidates, but the union still misses 1,942</h2><p>The original and facet columns are nonadditive because documents found by both appear in the overlap. The exact decomposition is shown as a semantic table: original only + overlap + facet only equals union. “Incremental” and “facet only” are the same set here.</p>{overlap_table}<p>The four-topic union contains 875 / 2,817 qrels-positive documents. That is exhaustive document recall of 31.0614%, leaving 1,942 outside the candidate set. No scoring rule or reordering can raise this ceiling.</p></section>
+
+<section aria-labelledby="topics-title"><h2 id="topics-title">Deep gains are real but uneven by topic</h2><p>These deltas compare the protected arm directly with RRF. The preserved @100 values are all zero by construction; later gains and regressions reveal where the tethered tail helps or displaces relevant material.</p>{topic_table}</section>
+
+<section aria-labelledby="proxy-title"><h2 id="proxy-title">Facet exposure is diagnostic evidence, not nugget coverage</h2><p><strong>qrels-positive facet exposure is only a proxy.</strong> It counts a relevant document whose marginal admission is attributed to a facet stream. It does not inspect whether the document actually supports that facet, whether a passage contains the needed nugget, or whether a generated answer uses it correctly.</p>{proxy_table}<p>Topic 72 shows the strongest proxy behavior (32 positive attributions across seven represented facets); topic 300 is weakest (one attribution across one facet). Topics 219 and 84 are also sparse. This points to a remaining candidate-generation gap rather than a ranking-only problem.</p><div class="callout warning"><strong>This is not answer-generation evaluation.</strong> The 31.1% exhaustive document recall is low, but it is not equivalent to 31.1% answer coverage. One document may support multiple answer nuggets, several documents may repeat the same nugget, and qrels judge topical relevance rather than final answer completeness or faithfulness.</div></section>
+
+<section aria-labelledby="scope-title"><h2 id="scope-title">Scope and metric definitions</h2><p><span class="tag">4 historical diagnostic topics</span><span class="tag">post-qrels</span><span class="tag">fixed 8,114-document union</span><span class="tag">no new retrieval</span><span class="tag">not production validation</span></p>
+<h3>Pooled binary recall</h3><p>Unique qrels-positive documents retrieved across all four topics divided by all 2,817 qrels-positive documents. Counts at a depth are pooled micro totals.</p><h3>Macro nDCG and recall AUC</h3><p>Each metric is calculated per topic and then averaged across four topics. nDCG rewards graded relevance near the top; recall AUC summarizes recall over depth.</p><h3>True RAG evaluation</h3><p>Answer completeness, supported nuggets, citation correctness, faithfulness, and end-to-end answer quality are out of scope here and belong to the separate answer-generation worktree.</p></section>
+
+<section class="hashes" aria-labelledby="sources-title"><h2 id="sources-title">Sources and reproducibility</h2><p>The report authenticates the independently approved freeze and evaluation, plus the prior v2 summary. Labels and hashes are included; machine-local paths, raw documents, document identifiers, credentials, and request material are excluded.</p>{source_table}{call_table}<p>The ranking freeze and evaluation receipts each record zero retrieval, inference, model loads, hosted inference, network, paid calls, and external cost. The report build itself is offline and deterministic apart from SQLite container bytes.</p></section>
+</main>
+<footer><main>Tethered facet soft-coverage proxy · canonical v3 report · source-bound and offline</main></footer>
+</body></html>"""
+
+
+def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
+    if path.exists():
+        path.unlink()
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE arm_metrics (
+              arm TEXT PRIMARY KEY, relevant_100 INTEGER, relevant_250 INTEGER,
+              relevant_500 INTEGER, relevant_1000 INTEGER, relevant_1500 INTEGER,
+              relevant_full INTEGER, ndcg_10 REAL, ndcg_100 REAL,
+              ndcg_1000 REAL, recall_auc REAL
+            );
+            CREATE TABLE topic_deltas (
+              topic_id TEXT PRIMARY KEY, relevant_delta_100 INTEGER,
+              relevant_delta_250 INTEGER, relevant_delta_500 INTEGER,
+              relevant_delta_1000 INTEGER, relevant_delta_1500 INTEGER,
+              ndcg_delta_100 REAL, ndcg_delta_1000 REAL, recall_auc_delta REAL
+            );
+            CREATE TABLE overlap_decomposition (
+              topic_id TEXT PRIMARY KEY, original_relevant INTEGER,
+              facet_relevant INTEGER, overlap_relevant INTEGER,
+              original_only_relevant INTEGER, facet_only_relevant INTEGER,
+              incremental_relevant INTEGER, union_relevant INTEGER,
+              missed_relevant INTEGER, total_relevant INTEGER
+            );
+            CREATE TABLE sources (source_id TEXT PRIMARY KEY, label TEXT, bytes INTEGER, sha256 TEXT);
+            CREATE TABLE receipts (operation TEXT PRIMARY KEY, value REAL);
+            """
+        )
+        connection.executemany(
+            "INSERT INTO arm_metrics VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    row["arm"],
+                    *[row[f"relevant_count@{depth}"] for depth in DEPTHS],
+                    row["relevant_count_full"],
+                    row["ndcg@10"],
+                    row["ndcg@100"],
+                    row["ndcg@1000"],
+                    row["recall_auc"],
+                )
+                for row in payload["arm_metrics"]
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO topic_deltas VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    row["topic_id"],
+                    *[row[f"relevant_delta@{depth}"] for depth in DEPTHS],
+                    row["ndcg_delta@100"],
+                    row["ndcg_delta@1000"],
+                    row["recall_auc_delta"],
+                )
+                for row in payload["topic_deltas"]
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO overlap_decomposition VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    row["topic_id"],
+                    row["original_relevant"],
+                    row["facet_relevant"],
+                    row["overlap_relevant"],
+                    row["original_only_relevant"],
+                    row["facet_only_relevant"],
+                    row["incremental_relevant"],
+                    row["union_relevant"],
+                    row["missed_relevant"],
+                    row["total_relevant"],
+                )
+                for row in payload["overlap_decomposition"]
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO sources VALUES (?,?,?,?)",
+            [
+                (source_id, source["label"], source["bytes"], source["sha256"])
+                for source_id, source in payload["source_hashes"].items()
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO receipts VALUES (?,?)", payload["external_calls"].items()
+        )
+
+
+def write_report(
+    freeze: Path | str,
+    evaluation: Path | str,
+    prior_summary: Path | str,
+    output: Path | str,
+) -> dict[str, object]:
+    """Build and atomically write the four canonical report artifacts."""
+
+    payload = build_report_payload(freeze, evaluation, prior_summary)
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    artifact = {
+        **payload,
+        "surface": "report",
+        "chart_omissions": [
+            {
+                "name": "four-topic overlap decomposition",
+                "replacement": "semantic_table",
+                "reason": "Exact overlap counts are more audit-friendly; a stacked chart would imply false additivity between original and facet totals.",
+            }
+        ],
+    }
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "complete",
+        "topic_ids": list(TOPIC_IDS),
+        "headline": payload["findings"],
+        "source_hashes": payload["source_hashes"],
+        "external_calls": payload["external_calls"],
+        "report_boundaries": payload["report_boundaries"],
+    }
+    html_bytes = render_report(payload).encode("utf-8")
+    writes = {
+        "artifact.json": _json_bytes(artifact),
+        "summary.json": _json_bytes(summary),
+        "report.html": html_bytes,
+    }
+    for name, content in writes.items():
+        temporary = output_dir / f".{name}.tmp"
+        temporary.write_bytes(content)
+        os.replace(temporary, output_dir / name)
+    with tempfile.NamedTemporaryFile(dir=output_dir, delete=False) as handle:
+        sqlite_tmp = Path(handle.name)
+    try:
+        _write_sqlite(sqlite_tmp, payload)
+        os.replace(sqlite_tmp, output_dir / "report_data.sqlite")
+    finally:
+        sqlite_tmp.unlink(missing_ok=True)
+    files = {}
+    for name in ("artifact.json", "summary.json", "report_data.sqlite", "report.html"):
+        content = (output_dir / name).read_bytes()
+        files[name] = {"bytes": len(content), "sha256": _sha256(content)}
+    return {"status": "complete", "schema_version": SCHEMA_VERSION, "files": files}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--freeze", required=True, type=Path)
+    parser.add_argument("--evaluation", required=True, type=Path)
+    parser.add_argument("--prior-summary", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    receipt = write_report(args.freeze, args.evaluation, args.prior_summary, args.output)
+    print(json.dumps(receipt, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
