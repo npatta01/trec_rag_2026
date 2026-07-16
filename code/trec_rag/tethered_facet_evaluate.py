@@ -45,6 +45,30 @@ PRIOR_RECEIPT_FIELDS = frozenset(
         "evaluator_code_sha256",
     }
 )
+# This is a post-qrels historical-integrity anchor for one already-exposed
+# evaluation. It is not evidence of qrels blindness or fresh generalization.
+HISTORICAL_PRIOR_EVALUATION_IDENTITY: Mapping[str, object] = {
+    "schema_version": PRIOR_SCHEMA_VERSION,
+    "topic_ids": list(TOPIC_IDS),
+    "qrels_projection_rows": 4633,
+    "files": {
+        "qrels_access_receipt.json": (
+            "eaa4cdbe63f9a5ef8d93c8ddd16f8dc2f361867986310d8dfab78e3a005c1cca"
+        ),
+        "qrels_projection.jsonl": (
+            "03fc4bd18be36b7ea2d446975fec9fe17ac6698dcf068918c6bb228e9aab5e87"
+        ),
+        "metrics.json": (
+            "9a5ca726c9e99bab634997ccf0cf632ea096f696f17631a477c505f004a19196"
+        ),
+        "decision.json": (
+            "f7ebefa9bc9564e6f264f519fc46734f4583a05e7883a76c29af60dbb2f0ee3c"
+        ),
+        "summary.json": (
+            "4a1e0bdfc6fa0221431397bc3114ac0d0359d2c375288dd5e2df032d0c6dd61f"
+        ),
+    },
+}
 
 
 def _sha256(content: bytes) -> str:
@@ -549,6 +573,38 @@ def _require_prior_metrics_equal_recomputation(
             raise ValueError("prior metrics differ from recomputed RRF per-topic evidence")
 
 
+def _require_historical_identity(contents: Mapping[str, bytes]) -> None:
+    """Require the committed identity of the one historical evaluation leaf."""
+
+    anchor = HISTORICAL_PRIOR_EVALUATION_IDENTITY
+    expected_files = anchor.get("files")
+    if (
+        anchor.get("schema_version") != PRIOR_SCHEMA_VERSION
+        or anchor.get("topic_ids") != list(TOPIC_IDS)
+        or not isinstance(anchor.get("qrels_projection_rows"), int)
+        or isinstance(anchor.get("qrels_projection_rows"), bool)
+        or int(anchor.get("qrels_projection_rows", 0)) <= 0
+        or not isinstance(expected_files, Mapping)
+        or set(expected_files) != PRIOR_EVALUATION_FILES
+        or set(contents) != PRIOR_EVALUATION_FILES
+    ):
+        raise ValueError("committed historical identity contract is invalid")
+    if len(contents["qrels_projection.jsonl"].splitlines()) != int(
+        anchor["qrels_projection_rows"]
+    ):
+        raise ValueError("prior evaluation differs from committed historical identity")
+    for name in sorted(PRIOR_EVALUATION_FILES):
+        expected = expected_files.get(name)
+        if (
+            not isinstance(expected, str)
+            or len(expected) != 64
+            or _sha256(contents[name]) != expected
+        ):
+            raise ValueError(
+                f"prior evaluation differs from committed historical identity: {name}"
+            )
+
+
 def _per_topic_deltas(
     arms: Mapping[str, Mapping[str, object]],
 ) -> dict[str, dict[str, dict[str, float | None]]]:
@@ -700,6 +756,15 @@ def evaluate(
     _require_prior_metrics_equal_recomputation(
         prior_metrics, recomputed_rrf, novel
     )
+    _require_historical_identity(
+        {
+            "qrels_access_receipt.json": receipt_bytes,
+            "qrels_projection.jsonl": projection_bytes,
+            "metrics.json": prior_metrics_bytes,
+            "decision.json": prior_decision_bytes,
+            "summary.json": prior_summary_bytes,
+        }
+    )
 
     rankings, ranking_rows, _freeze_bindings, freeze_binding_bytes = _load_frozen_rankings(
         freeze_dir
@@ -795,6 +860,9 @@ def evaluate(
         "prior_metrics": _binding(prior_metrics_path, prior_metrics_bytes),
         "prior_decision": _binding(prior_decision_path, prior_decision_bytes),
         "prior_summary": _binding(prior_summary_path, prior_summary_bytes),
+        "historical_integrity_anchor": HISTORICAL_PRIOR_EVALUATION_IDENTITY,
+        "historical_integrity_only": True,
+        "blind_generalization_evidence": False,
         "original_qrels_opened": False,
     }
     payloads = {
@@ -809,6 +877,8 @@ def evaluate(
         "label": decision["label"],
         "topic_ids": list(TOPIC_IDS),
         "post_qrels_diagnostic": True,
+        "historical_integrity_only": True,
+        "blind_generalization_evidence": False,
         "production_validation": False,
         "no_new_retrieval": True,
         "original_qrels_opened": False,

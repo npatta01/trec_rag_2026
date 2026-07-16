@@ -231,7 +231,9 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _synthetic_evaluation_inputs(tmp_path: Path) -> tuple[Path, Path]:
+def _synthetic_evaluation_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
     freeze = tmp_path / "freeze"
     freeze.mkdir()
     head = {topic: [f"{topic}-head-{index:03d}" for index in range(100)] for topic in TOPIC_IDS}
@@ -357,13 +359,33 @@ def _synthetic_evaluation_inputs(tmp_path: Path) -> tuple[Path, Path]:
             "decision_sha256": hashlib.sha256(decision_bytes).hexdigest(),
         },
     )
+    monkeypatch.setattr(
+        module,
+        "HISTORICAL_PRIOR_EVALUATION_IDENTITY",
+        {
+            "schema_version": "deep-facet-candidate-evaluation-v1",
+            "topic_ids": list(TOPIC_IDS),
+            "qrels_projection_rows": 4,
+            "files": {
+                name: hashlib.sha256((prior / name).read_bytes()).hexdigest()
+                for name in (
+                    "qrels_access_receipt.json",
+                    "qrels_projection.jsonl",
+                    "metrics.json",
+                    "decision.json",
+                    "summary.json",
+                )
+            },
+        },
+        raising=False,
+    )
     return freeze, prior
 
 
 def test_evaluate_authenticates_projection_and_writes_create_only_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     monkeypatch.setattr(module, "NOVEL_RELEVANT_TOTAL", 4)
     monkeypatch.setattr(module, "verify_freeze", lambda _path: {"status": "verified"})
     monkeypatch.setattr(
@@ -404,7 +426,7 @@ def test_evaluate_authenticates_projection_and_writes_create_only_artifacts(
 def test_evaluate_rejects_projection_hash_mismatch_before_parsing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     projection = prior / "qrels_projection.jsonl"
     receipt = json.loads((prior / "qrels_access_receipt.json").read_text())
     receipt["qrels_projection_sha256"] = "0" * 64
@@ -419,7 +441,7 @@ def test_evaluate_rejects_projection_hash_mismatch_before_parsing(
 def test_evaluate_rejects_prior_metrics_hash_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     summary = json.loads((prior / "summary.json").read_text())
     summary["metrics_sha256"] = "0" * 64
     _write_json(prior / "summary.json", summary)
@@ -437,7 +459,7 @@ def test_evaluate_rejects_prior_metrics_hash_mismatch(
 def test_prior_seal_is_verified_before_projection_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     projection = prior / "qrels_projection.jsonl"
     real_read = Path.read_bytes
 
@@ -462,7 +484,7 @@ def test_prior_seal_is_verified_before_projection_bytes(
 def test_restamped_projection_receipt_cannot_replace_prior_seal_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     projection = prior / "qrels_projection.jsonl"
     changed = projection.read_bytes().replace(b'"grade":2', b'"grade":3')
     projection.write_bytes(changed)
@@ -495,7 +517,7 @@ def test_receipt_requires_exact_evaluation_boundary_semantics(
     field: str,
     value: object,
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     receipt_path = prior / "qrels_access_receipt.json"
     receipt = json.loads(receipt_path.read_text())
     receipt[field] = value
@@ -510,7 +532,7 @@ def test_receipt_requires_exact_evaluation_boundary_semantics(
 def test_restamped_prior_metrics_must_equal_recomputed_verified_rrf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     metrics_path = prior / "metrics.json"
     metrics = json.loads(metrics_path.read_text())
     metrics["aggregate"]["RRF"]["recall@500"] = 0.0
@@ -530,12 +552,59 @@ def test_restamped_prior_metrics_must_equal_recomputed_verified_rrf(
 def test_prior_evaluation_directory_is_a_closed_artifact_leaf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    freeze, prior = _synthetic_evaluation_inputs(tmp_path)
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
     (prior / "qrels_projection-copy.jsonl").write_bytes(b"lookalike\n")
     monkeypatch.setattr(module, "verify_freeze", lambda _path: {"status": "verified"})
 
     with pytest.raises(ValueError, match="missing or extra files"):
         evaluate(freeze, prior, tmp_path / "out")
+
+
+def test_fully_restamped_consistent_evaluation_fails_historical_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    freeze, prior = _synthetic_evaluation_inputs(tmp_path, monkeypatch)
+    projection_path = prior / "qrels_projection.jsonl"
+    projection = projection_path.read_bytes().replace(b'"grade":2', b'"grade":3')
+    projection_path.write_bytes(projection)
+    receipt_path = prior / "qrels_access_receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["qrels_projection_sha256"] = hashlib.sha256(projection).hexdigest()
+    _write_json(receipt_path, receipt)
+    metrics_path = prior / "metrics.json"
+    metrics = json.loads(metrics_path.read_text())
+    metrics["restamped_but_numerically_consistent"] = True
+    _write_json(metrics_path, metrics)
+    decision_path = prior / "decision.json"
+    _write_json(decision_path, {"restamped_but_numerically_consistent": True})
+    summary_path = prior / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["metrics_sha256"] = hashlib.sha256(metrics_path.read_bytes()).hexdigest()
+    summary["decision_sha256"] = hashlib.sha256(decision_path.read_bytes()).hexdigest()
+    summary["restamped_but_numerically_consistent"] = True
+    _write_json(summary_path, summary)
+    monkeypatch.setattr(module, "NOVEL_RELEVANT_TOTAL", 4)
+    monkeypatch.setattr(module, "verify_freeze", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(
+        module, "verify_prior_seal", lambda _path: {"root_sha256": "b" * 64}
+    )
+
+    with pytest.raises(ValueError, match="historical identity"):
+        evaluate(freeze, prior, tmp_path / "out")
+
+
+def test_production_historical_identity_is_exact_and_committed() -> None:
+    identity = module.HISTORICAL_PRIOR_EVALUATION_IDENTITY
+    assert identity["schema_version"] == "deep-facet-candidate-evaluation-v1"
+    assert identity["topic_ids"] == list(TOPIC_IDS)
+    assert identity["qrels_projection_rows"] == 4633
+    assert identity["files"] == {
+        "qrels_access_receipt.json": "eaa4cdbe63f9a5ef8d93c8ddd16f8dc2f361867986310d8dfab78e3a005c1cca",
+        "qrels_projection.jsonl": "03fc4bd18be36b7ea2d446975fec9fe17ac6698dcf068918c6bb228e9aab5e87",
+        "metrics.json": "9a5ca726c9e99bab634997ccf0cf632ea096f696f17631a477c505f004a19196",
+        "decision.json": "f7ebefa9bc9564e6f264f519fc46734f4583a05e7883a76c29af60dbb2f0ee3c",
+        "summary.json": "4a1e0bdfc6fa0221431397bc3114ac0d0359d2c375288dd5e2df032d0c6dd61f",
+    }
 
 
 def test_cli_and_evaluate_api_have_no_original_qrels_path() -> None:
