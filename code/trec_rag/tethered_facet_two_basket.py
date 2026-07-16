@@ -58,7 +58,7 @@ class BasketSelection:
     prior_bm25_rank: int
     nominal_quota: int
     shortage: int
-    duplicate_skips: int
+    duplicate_skip_delta: int
     query_sha256: str
     text_sha256: str
     model: str
@@ -69,6 +69,7 @@ class BasketSelection:
 @dataclass(frozen=True)
 class FacetBasket:
     selections: tuple[BasketSelection, ...]
+    duplicate_skip_totals: tuple[tuple[str, int], ...]
 
     @property
     def document_ids(self) -> tuple[str, ...]:
@@ -87,6 +88,7 @@ class RankingEntry:
 @dataclass(frozen=True)
 class TwoBasketPermutation:
     entries: tuple[RankingEntry, ...]
+    duplicate_skip_totals: tuple[tuple[str, int], ...]
 
     @property
     def document_ids(self) -> tuple[str, ...]:
@@ -269,20 +271,28 @@ def build_facet_basket(topic: TopicInput) -> FacetBasket:
     quota_by_id = {facet.facet_id: quotas[index] for index, facet in enumerate(facets)}
     excluded = set(topic.rrf[: HEAD_SIZE + BASKET_SIZE])
     selected_ids: set[str] = set()
-    selected_edges: list[tuple[float, int, int, str, FacetScores, int]] = []
+    selected_edges: list[
+        tuple[tuple[float, int, int, str, FacetScores, int], int]
+    ] = []
     counts = {facet.facet_id: 0 for facet in facets}
     duplicate_skips = {facet.facet_id: 0 for facet in facets}
+    pending_duplicate_skips = {facet.facet_id: 0 for facet in facets}
+    processed = {facet.facet_id: set() for facet in facets}
 
     for edge in edges:
         document_id, facet = edge[3], edge[4]
         if document_id in excluded:
+            processed[facet.facet_id].add(document_id)
             continue
         if counts[facet.facet_id] >= quota_by_id[facet.facet_id]:
             continue
+        processed[facet.facet_id].add(document_id)
         if document_id in selected_ids:
             duplicate_skips[facet.facet_id] += 1
+            pending_duplicate_skips[facet.facet_id] += 1
             continue
-        selected_edges.append(edge)
+        selected_edges.append((edge, pending_duplicate_skips[facet.facet_id]))
+        pending_duplicate_skips[facet.facet_id] = 0
         selected_ids.add(document_id)
         counts[facet.facet_id] += 1
 
@@ -297,19 +307,30 @@ def build_facet_basket(topic: TopicInput) -> FacetBasket:
         facet.facet_id: [edge for edge in edges if edge[4].facet_id == facet.facet_id]
         for facet in facets
     }
+    cursors = {facet.facet_id: 0 for facet in facets}
     while len(selected_edges) < BASKET_SIZE:
         progress = False
         for facet in facets:
             if len(selected_edges) == BASKET_SIZE:
                 break
-            for edge in by_facet[facet.facet_id]:
+            facet_edges = by_facet[facet.facet_id]
+            while cursors[facet.facet_id] < len(facet_edges):
+                edge = facet_edges[cursors[facet.facet_id]]
+                cursors[facet.facet_id] += 1
                 document_id = edge[3]
+                if document_id in processed[facet.facet_id]:
+                    continue
+                processed[facet.facet_id].add(document_id)
                 if document_id in excluded:
                     continue
                 if document_id in selected_ids:
                     duplicate_skips[facet.facet_id] += 1
+                    pending_duplicate_skips[facet.facet_id] += 1
                     continue
-                selected_edges.append(edge)
+                selected_edges.append(
+                    (edge, pending_duplicate_skips[facet.facet_id])
+                )
+                pending_duplicate_skips[facet.facet_id] = 0
                 selected_ids.add(document_id)
                 counts[facet.facet_id] += 1
                 progress = True
@@ -326,16 +347,21 @@ def build_facet_basket(topic: TopicInput) -> FacetBasket:
             prior_bm25_rank=edge[2],
             nominal_quota=quota_by_id[edge[4].facet_id],
             shortage=shortages[edge[4].facet_id],
-            duplicate_skips=duplicate_skips[edge[4].facet_id],
+            duplicate_skip_delta=duplicate_skip_delta,
             query_sha256=edge[4].query_sha256,
             text_sha256=edge[4].text_sha256[edge[3]],
             model=edge[4].model,
             model_revision=edge[4].model_revision,
             score_schema_version=edge[4].score_schema_version,
         )
-        for edge in selected_edges
+        for edge, duplicate_skip_delta in selected_edges
     )
-    return FacetBasket(selections)
+    return FacetBasket(
+        selections,
+        tuple(
+            (facet.facet_id, duplicate_skips[facet.facet_id]) for facet in facets
+        ),
+    )
 
 
 def build_two_basket_permutation(topic: TopicInput) -> TwoBasketPermutation:
@@ -377,7 +403,7 @@ def build_two_basket_permutation(topic: TopicInput) -> TwoBasketPermutation:
         for document_id in topic.dual
         if document_id not in selected
     )
-    result = TwoBasketPermutation(tuple(entries))
+    result = TwoBasketPermutation(tuple(entries), facet_basket.duplicate_skip_totals)
     if (
         len(result.document_ids) != len(set(result.document_ids))
         or set(result.document_ids) != set(topic.accepted_union)
@@ -401,7 +427,7 @@ def _entry_row(topic_id: str, arm: str, rank: int, entry: RankingEntry) -> dict[
         "prior_bm25_rank": facet.prior_bm25_rank if facet else None,
         "nominal_quota": facet.nominal_quota if facet else None,
         "shortage": facet.shortage if facet else None,
-        "duplicate_skips": facet.duplicate_skips if facet else None,
+        "duplicate_skip_delta": facet.duplicate_skip_delta if facet else None,
         "rrf_rank": entry.rrf_rank,
         "dual_rank": entry.dual_rank,
         "query_sha256": facet.query_sha256 if facet else None,
@@ -428,7 +454,7 @@ def _binding(path: Path) -> dict[str, object]:
 def _topic_payload(topic: TopicInput) -> dict[str, object]:
     return {
         "topic_id": topic.topic_id,
-        "accepted_union": list(topic.accepted_union),
+        "accepted_union": list(topic.rrf),
         "rrf": list(topic.rrf),
         "dual": list(topic.dual),
         "facets": [
@@ -492,7 +518,7 @@ def _validate_arm_contract(by_arm: Mapping[str, Mapping[str, TopicInput]]) -> No
         baseline = by_arm["FACET-2B"][topic_id]
         tethered = by_arm["TETHERED-2B"][topic_id]
         if (
-            baseline.accepted_union != tethered.accepted_union
+            set(baseline.accepted_union) != set(tethered.accepted_union)
             or baseline.rrf != tethered.rrf
             or baseline.dual != tethered.dual
         ):
@@ -547,6 +573,14 @@ def _topic_summary(
             "accepted_union_count": len(by_arm["FACET-2B"][topic_id].accepted_union),
             "facet_counts": {
                 arm: len(by_arm[arm][topic_id].facets) for arm in ARMS
+            },
+            "duplicate_skip_totals": {
+                arm: dict(
+                    build_two_basket_permutation(
+                        by_arm[arm][topic_id]
+                    ).duplicate_skip_totals
+                )
+                for arm in ARMS
             },
         }
         for topic_id in PILOT_TOPIC_IDS

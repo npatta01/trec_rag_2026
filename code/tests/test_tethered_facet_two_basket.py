@@ -126,7 +126,7 @@ def test_facet_basket_redistributes_shortages_one_slot_per_manifest_round() -> N
     assert len(scarce_rows) == 10
     assert all(row.nominal_quota == 50 and row.shortage == 40 for row in scarce_rows)
     assert any(row.nominal_quota == 50 and row.shortage == 0 for row in result.selections)
-    assert sum(row.duplicate_skips for row in result.selections) > 0
+    assert sum(row.duplicate_skip_delta for row in result.selections) > 0
 
 
 def test_shortage_records_global_duplicate_attribution_not_candidate_count() -> None:
@@ -142,7 +142,31 @@ def test_shortage_records_global_duplicate_attribution_not_candidate_count() -> 
 
     assert len(scarce_rows) == 1
     assert scarce_rows[0].shortage == 49
-    assert scarce_rows[0].duplicate_skips > 0
+    assert dict(result.duplicate_skip_totals)[scarce.facet_id] > 0
+
+
+def test_redistribution_counts_each_duplicate_edge_once_and_totals_reconcile() -> None:
+    topic = fixture_topic()
+    scarce = _facet(0, list(topic.accepted_union[300:310]))
+    plentiful = tuple(
+        _facet(number, list(topic.accepted_union[310:610]), score_offset=number * 1000)
+        for number in range(1, 4)
+    )
+
+    result = build_facet_basket(replace(topic, facets=(scarce, *plentiful)))
+    totals = dict(result.duplicate_skip_totals)
+
+    assert totals == {
+        scarce.facet_id: 0,
+        plentiful[0].facet_id: 126,
+        plentiful[1].facet_id: 125,
+        plentiful[2].facet_id: 126,
+    }
+    for facet in (scarce, *plentiful):
+        rows = [row for row in result.selections if row.facet_id == facet.facet_id]
+        assert sum(row.duplicate_skip_delta for row in rows) == totals[facet.facet_id]
+        assert totals[facet.facet_id] <= len(facet.scores)
+    assert sum(totals.values()) > 0
 
 
 def test_two_basket_ranking_protects_head_and_is_complete() -> None:
@@ -185,6 +209,21 @@ def test_freeze_is_create_only_and_verifier_rejects_mutation(tmp_path: Path) -> 
     )
 
     assert summary["arms"] == ["FACET-2B", "TETHERED-2B"]
+    assert summary["topic_summary"]["219"]["duplicate_skip_totals"]["FACET-2B"] == {
+        "219-facet-0": 0,
+        "219-facet-1": 50,
+        "219-facet-2": 100,
+        "219-facet-3": 150,
+    }
+    ranking_rows = [
+        json.loads(line)
+        for line in (output / "rankings.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    facet_rows = [row for row in ranking_rows if row["source"] == "facet_basket"]
+    assert facet_rows
+    assert all("duplicate_skip_delta" in row for row in facet_rows)
+    assert all("duplicate_skips" not in row for row in ranking_rows)
+    assert all("duplicate_skip_totals" not in row for row in ranking_rows)
     assert verify_freeze(output)["ranking_row_count"] == 5200
     with pytest.raises(FileExistsError, match="create-only"):
         freeze_rankings(
@@ -302,6 +341,41 @@ def test_freeze_requires_identical_arm_pair_coverage_and_task2_schema(
             input_paths={"source": binding},
             output=tmp_path / "schema-freeze",
         )
+
+
+def test_freeze_bytes_are_invariant_to_all_input_row_orders(tmp_path: Path) -> None:
+    binding = tmp_path / "source.jsonl"
+    binding.write_text("{}\n", encoding="utf-8")
+    canonical = fixture_topics()
+    shuffled = [
+        replace(shuffled_fixture_topic(), topic_id=topic_id)
+        for topic_id in ("84", "300", "72", "219")
+    ]
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    freeze_rankings(
+        facet_topics=canonical,
+        tethered_topics=canonical,
+        input_paths={"source": binding},
+        output=first,
+    )
+    freeze_rankings(
+        facet_topics=shuffled,
+        tethered_topics=list(reversed(shuffled)),
+        input_paths={"source": binding},
+        output=second,
+    )
+
+    for name in (
+        "parameters.json",
+        "input_bindings.json",
+        "rankings.jsonl",
+        "prefixes.json",
+        "summary.json",
+        "SEALED.json",
+    ):
+        assert (first / name).read_bytes() == (second / name).read_bytes()
 
 
 def test_verifier_rejects_restamped_false_parameters_and_summary(tmp_path: Path) -> None:
