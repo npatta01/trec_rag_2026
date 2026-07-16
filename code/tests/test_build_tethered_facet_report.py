@@ -61,7 +61,7 @@ def sources(tmp_path: Path) -> ReportSources:
     }
     scoring_bytes = _write(source / "scoring_receipt.json", scoring)
 
-    rankings = b"".join(
+    ranking_rows = [
         json.dumps(
             {
                 "topic_id": topic,
@@ -72,17 +72,30 @@ def sources(tmp_path: Path) -> ReportSources:
             },
             sort_keys=True,
             separators=(",", ":"),
-        ).encode()
-        + b"\n"
+        )
         for topic in TOPICS
         for arm in ("FACET-2B", "TETHERED-2B")
-    )
+    ]
+    ranking_rows.extend([
+        json.dumps({"topic_id": "219", "arm": "FACET-2B", "rank": 611, "document_id": "doc-promoted", "source": "dual_tail", "prior_bm25_rank": None}),
+        json.dumps({"topic_id": "219", "arm": "TETHERED-2B", "rank": 202, "document_id": "doc-promoted", "source": "facet_basket", "prior_bm25_rank": 7}),
+        json.dumps({"topic_id": "84", "arm": "FACET-2B", "rank": 204, "document_id": "doc-demoted", "source": "facet_basket", "prior_bm25_rank": 11}),
+        json.dumps({"topic_id": "84", "arm": "TETHERED-2B", "rank": 612, "document_id": "doc-demoted", "source": "dual_tail", "prior_bm25_rank": None}),
+    ])
+    rankings = "".join(row + "\n" for row in ranking_rows).encode()
     (task3 / "rankings.jsonl").write_bytes(rankings)
     bindings_bytes = _write(
         task3 / "input_bindings.json",
         {
             "task1_preflight_sha256": _sha(preflight_bytes),
             "task2_scoring_receipt_sha256": _sha(scoring_bytes),
+            "inputs": {
+                "facet_candidates": {"sha256": "8" * 64},
+                "facet_window_scores": {"sha256": "9" * 64},
+                "tethered_candidates": {"sha256": "1" * 64},
+                "tethered_window_scores": {"sha256": "2" * 64},
+                "tethered_document_scores": {"sha256": "3" * 64},
+            },
         },
     )
     task3_summary_bytes = _write(
@@ -139,7 +152,7 @@ def sources(tmp_path: Path) -> ReportSources:
     }
     metrics_bytes = _write(
         task4 / "metrics.json",
-        {"topic_ids": TOPICS, "aggregate": aggregate, "novel_relevant_total": 177},
+        {"topic_ids": TOPICS, "aggregate": aggregate, "novel_relevant_total": 203},
     )
     representatives = [
         {
@@ -153,6 +166,31 @@ def sources(tmp_path: Path) -> ReportSources:
             "facet_only_percentile": 0.73,
             "tethered_percentile": 0.94,
             "qrels_grade": 2,
+            "facet_only_final_rank": 611,
+            "tethered_final_rank": 202,
+            "prior_bm25_rank": 7,
+            "passage_provenance": {
+                "candidate_source_sha256": "1" * 64,
+                "window_score_source_sha256": "2" * 64,
+                "document_score_source_sha256": "3" * 64,
+                "query_sha256": "4" * 64,
+                "text_sha256": "5" * 64,
+                "window_sha256": "6" * 64,
+                "window_id": "w-promoted",
+                "model": "synthetic/minilm",
+                "model_revision": "fixture-revision",
+                "document_start_token": 0,
+                "document_end_token": 12,
+                "rank_source": "prior_bm25_rank",
+            },
+            "ranking_provenance": {
+                "task3_rankings_sha256": _sha(rankings),
+                "facet_only_source": "dual_tail",
+                "tethered_source": "facet_basket",
+                "generating_facet": "219-positive",
+                "percentile_method": "query_local_average_rank",
+                "rank_source": "Task 3 sealed rankings.jsonl",
+            },
         },
         {
             "topic_id": "84",
@@ -165,6 +203,31 @@ def sources(tmp_path: Path) -> ReportSources:
             "facet_only_percentile": 0.96,
             "tethered_percentile": 0.31,
             "qrels_grade": 0,
+            "facet_only_final_rank": 204,
+            "tethered_final_rank": 612,
+            "prior_bm25_rank": 11,
+            "passage_provenance": {
+                "candidate_source_sha256": "8" * 64,
+                "window_score_source_sha256": "9" * 64,
+                "document_score_source_sha256": None,
+                "query_sha256": "a" * 64,
+                "text_sha256": "b" * 64,
+                "window_sha256": "c" * 64,
+                "window_id": "w-demoted",
+                "model": "synthetic/minilm",
+                "model_revision": "fixture-revision",
+                "document_start_token": 3,
+                "document_end_token": 15,
+                "rank_source": "prior_bm25_rank",
+            },
+            "ranking_provenance": {
+                "task3_rankings_sha256": _sha(rankings),
+                "facet_only_source": "facet_basket",
+                "tethered_source": "dual_tail",
+                "generating_facet": "84-safety",
+                "percentile_method": "query_local_average_rank",
+                "rank_source": "Task 3 sealed rankings.jsonl",
+            },
         },
     ]
     diagnostics_bytes = _write(
@@ -254,6 +317,11 @@ def test_report_exposes_narrative_facet_and_document_evidence(built) -> None:
     assert row["tethered_percentile"] is not None
     assert row["selected_passage"]
     assert row["qrels_grade"] >= 0
+    assert row["facet_only_final_rank"] > 0
+    assert row["tethered_final_rank"] > 0
+    assert row["prior_bm25_rank"] > 0
+    assert row["passage_provenance"]["window_sha256"]
+    assert row["ranking_provenance"]["task3_rankings_sha256"]
     assert {row["movement"] for row in built.artifact["representatives"]} == {
         "promoted",
         "demoted",
@@ -285,6 +353,37 @@ def test_source_hashes_fail_closed(tmp_path: Path, sources: ReportSources) -> No
         build_report(sources, tmp_path / "report")
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda row: row.__setitem__("facet_only_final_rank", 999), "rank provenance"),
+        (
+            lambda row: row["ranking_provenance"].__setitem__("task3_rankings_sha256", "0" * 64),
+            "ranking provenance",
+        ),
+        (
+            lambda row: row["passage_provenance"].__setitem__("candidate_source_sha256", "0" * 64),
+            "passage provenance",
+        ),
+    ],
+)
+def test_restamped_representative_provenance_tamper_fails_closed(
+    sources: ReportSources, mutate, message: str
+) -> None:
+    diagnostics_path = sources.task4_evaluation / "diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    mutate(diagnostics["representatives"][0])
+    diagnostics_bytes = _bytes(diagnostics)
+    diagnostics_path.write_bytes(diagnostics_bytes)
+    summary_path = sources.task4_evaluation / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["diagnostics_sha256"] = _sha(diagnostics_bytes)
+    summary_path.write_bytes(_bytes(summary))
+
+    with pytest.raises(ValueError, match=message):
+        build_artifact(sources)
+
+
 def test_report_is_standalone_accessible_and_explicitly_bounded(built) -> None:
     html = built.html.lower()
     for phrase in ("post-qrels diagnostic", "no new retrieval", "not production validation"):
@@ -295,6 +394,30 @@ def test_report_is_standalone_accessible_and_explicitly_bounded(built) -> None:
     assert "rrf" in html and "facet-2b" in html and "tethered-2b" in html
     assert "recall@500" in html and "recall@1000" in html
     assert built.artifact["decision"]["label"] == "mechanical_pass"
+    assert "/203" in html or "/ 203" in html
+    assert "/177" not in html and "/ 177" not in html
+    assert "facet-only final rank" in html and "tethered final rank" in html
+    assert "prior facet bm25 rank" in html
+    assert "passage provenance" in html and "ranking provenance" in html
+
+
+def test_report_title_never_asserts_improvement_for_false_or_inconclusive_result(
+    sources: ReportSources,
+) -> None:
+    decision_path = sources.task4_evaluation / "decision.json"
+    decision = json.loads(decision_path.read_text())
+    decision["label"] = "inconclusive"
+    decision_bytes = _bytes(decision)
+    decision_path.write_bytes(decision_bytes)
+    summary_path = sources.task4_evaluation / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["decision_sha256"] = _sha(decision_bytes)
+    summary_path.write_bytes(_bytes(summary))
+
+    artifact = build_artifact(sources)
+
+    assert "improve" not in artifact["title"].lower()
+    assert "inconclusive" in artifact["title"].lower()
 
 
 def test_sqlite_companion_contains_exact_bounded_datasets(built) -> None:
@@ -339,8 +462,9 @@ def test_readme_reproduces_offline_stages_without_server_or_publish_commands() -
         / "reports/experiments/tethered_facet_minilm_diagnostic_v1/README.md"
     ).read_text(encoding="utf-8")
     assert ".venv/bin/python-rocm -m trec_rag.tethered_facet_minilm_score score" in readme
-    assert ".venv/bin/python -c" in readme
-    assert "trec_rag.tethered_facet_two_basket import verify_freeze" in readme
+    assert ".venv/bin/python -m trec_rag.tethered_facet_two_basket freeze" in readme
+    assert ".venv/bin/python -m trec_rag.tethered_facet_two_basket verify" in readme
+    assert "--deep-root outputs/rag25_deep_facet_candidates_v1" in readme
     assert ".venv/bin/python -m trec_rag.tethered_facet_evaluate" in readme
     assert ".venv/bin/python -m trec_rag.build_tethered_facet_report" in readme
     lowered = readme.lower()

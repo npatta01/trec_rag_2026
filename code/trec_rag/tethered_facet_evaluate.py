@@ -13,7 +13,12 @@ from pathlib import Path
 
 from .deep_facet_candidate_evaluate import evaluate_ranking
 from .deep_facet_candidate_rank import verify_seal as verify_prior_seal
-from .tethered_facet_two_basket import PILOT_TOPIC_IDS, verify_freeze
+from .tethered_facet_two_basket import (
+    PILOT_TOPIC_IDS,
+    average_rank_percentiles,
+    verify_freeze,
+)
+from .tethered_facet_minilm_score import _selected_top4
 
 
 TOPIC_IDS = PILOT_TOPIC_IDS
@@ -106,6 +111,247 @@ def _binding(path: Path, content: bytes) -> dict[str, object]:
         "bytes": len(content),
         "sha256": _sha256(content),
     }
+
+
+def _read_jsonl_bytes(path: Path, label: str) -> tuple[list[dict[str, object]], bytes]:
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(content.splitlines(), 1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{label} line {line_number} is invalid") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"{label} rows must be objects")
+        rows.append(row)
+    return rows, content
+
+
+def _bound_path(inputs: Mapping[str, object], name: str) -> tuple[Path, str]:
+    raw = inputs.get(name)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"Task 3 lacks required representative source: {name}")
+    path = Path(str(raw.get("path")))
+    content = path.read_bytes()
+    digest = _sha256(content)
+    if raw != {"path": str(path), "bytes": len(content), "sha256": digest}:
+        raise ValueError(f"Task 3 representative source hash drifted: {name}")
+    return path, digest
+
+
+def _representative_candidate_maps(
+    bindings: Mapping[str, object],
+) -> tuple[
+    dict[tuple[str, str, str], dict[str, object]],
+    dict[tuple[str, str, str], dict[str, object]],
+    dict[str, str],
+]:
+    inputs = bindings.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise ValueError("Task 3 input bindings are missing")
+    paths = {}
+    hashes = {}
+    for name in (
+        "facet_candidates",
+        "facet_window_scores",
+        "tethered_candidates",
+        "tethered_window_scores",
+        "tethered_document_scores",
+    ):
+        paths[name], hashes[name] = _bound_path(inputs, name)
+    facet_rows, _ = _read_jsonl_bytes(paths["facet_candidates"], "facet candidates")
+    tethered_rows, _ = _read_jsonl_bytes(paths["tethered_candidates"], "tethered candidates")
+    facet = {
+        (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
+        for row in facet_rows
+    }
+    tethered = {
+        (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
+        for row in tethered_rows
+    }
+    if len(facet) != len(facet_rows) or set(facet) != set(tethered):
+        raise ValueError("Task 3 representative candidate coverage drifted")
+    return facet, tethered, hashes
+
+
+def _window_maps(
+    bindings: Mapping[str, object],
+) -> tuple[
+    dict[tuple[str, str, str], list[dict[str, object]]],
+    dict[tuple[str, str, str], list[dict[str, object]]],
+    dict[tuple[str, str, str], dict[str, object]],
+]:
+    inputs = bindings["inputs"]
+    assert isinstance(inputs, Mapping)
+    facet_path, _ = _bound_path(inputs, "facet_window_scores")
+    tethered_path, _ = _bound_path(inputs, "tethered_window_scores")
+    documents_path, _ = _bound_path(inputs, "tethered_document_scores")
+    facet_rows, _ = _read_jsonl_bytes(facet_path, "facet window scores")
+    tethered_rows, _ = _read_jsonl_bytes(tethered_path, "tethered window scores")
+    document_rows, _ = _read_jsonl_bytes(documents_path, "tethered document scores")
+    facet: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+    tethered: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+    for target, rows in ((facet, facet_rows), (tethered, tethered_rows)):
+        for row in rows:
+            target[(str(row.get("topic_id")), str(row.get("facet_id", row.get("variant"))), str(row.get("document_id")))].append(row)
+    documents = {
+        (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
+        for row in document_rows
+    }
+    if len(documents) != len(document_rows):
+        raise ValueError("Task 2 document score identity is duplicated")
+    return facet, tethered, documents
+
+
+def _passage_evidence(
+    *,
+    identity: tuple[str, str, str],
+    arm: str,
+    candidate: Mapping[str, object],
+    windows: Mapping[tuple[str, str, str], list[dict[str, object]]],
+    tethered_documents: Mapping[tuple[str, str, str], Mapping[str, object]],
+    hashes: Mapping[str, str],
+) -> tuple[str, dict[str, object]]:
+    raw = windows.get(identity, [])
+    if not raw:
+        raise ValueError("representative lacks authenticated scored windows")
+    selected = _selected_top4(raw)
+    if arm == "TETHERED-2B":
+        document = tethered_documents.get(identity)
+        expected = document.get("window_hashes") if isinstance(document, Mapping) else None
+        if not isinstance(expected, list) or [row.get("window_sha256") for row in selected] != expected:
+            raise ValueError("Task 2 selected passage provenance drifted")
+    chosen = min(
+        selected,
+        key=lambda row: (-float(row["score"]), int(row["document_start_token"]), str(row["window_id"])),
+    )
+    passage = chosen.get("window_text")
+    if (
+        not isinstance(passage, str)
+        or not passage
+        or chosen.get("window_sha256") != _sha256(passage.encode("utf-8"))
+        or chosen.get("query_sha256") != candidate.get("query_sha256")
+        or chosen.get("document_sha256", chosen.get("text_sha256")) != candidate.get("text_sha256")
+    ):
+        raise ValueError("representative passage query/text/window provenance drifted")
+    prefix = "tethered" if arm == "TETHERED-2B" else "facet"
+    return passage, {
+        "candidate_source_sha256": hashes[f"{prefix}_candidates"],
+        "window_score_source_sha256": hashes[f"{prefix}_window_scores"],
+        "document_score_source_sha256": hashes.get("tethered_document_scores") if arm == "TETHERED-2B" else None,
+        "query_sha256": chosen["query_sha256"],
+        "text_sha256": candidate["text_sha256"],
+        "window_sha256": chosen["window_sha256"],
+        "window_id": chosen["window_id"],
+        "model": chosen["model"],
+        "model_revision": chosen["model_revision"],
+        "document_start_token": chosen["document_start_token"],
+        "document_end_token": chosen["document_end_token"],
+        "rank_source": "prior_bm25_rank",
+    }
+
+
+def build_representatives(
+    freeze_dir: Path,
+    qrels: Mapping[str, Mapping[str, int]],
+    *,
+    max_per_class: int = 4,
+) -> list[dict[str, object]]:
+    """Build bounded movement evidence from Task 3-bound raw score sources."""
+
+    if type(max_per_class) is not int or max_per_class <= 0 or max_per_class > 8:
+        raise ValueError("representative bound must be between 1 and 8")
+    verify_freeze(freeze_dir)
+    bindings, _ = _read_object_bytes(Path(freeze_dir) / "input_bindings.json", "Task 3 bindings")
+    raw_inputs = bindings.get("topic_inputs")
+    if not isinstance(raw_inputs, Mapping):
+        raise ValueError("Task 3 semantic score maps are missing")
+    facet_candidates, tethered_candidates, hashes = _representative_candidate_maps(bindings)
+    facet_windows, tethered_windows, tethered_documents = _window_maps(bindings)
+    rankings, ranking_bytes = _read_jsonl_bytes(Path(freeze_dir) / "rankings.jsonl", "Task 3 rankings")
+    ranking_hash = _sha256(ranking_bytes)
+    by_identity: dict[tuple[str, str], dict[str, dict[str, object]]] = defaultdict(dict)
+    for row in rankings:
+        by_identity[(str(row["topic_id"]), str(row["document_id"]))][str(row["arm"])] = row
+    percentile_maps: dict[tuple[str, str, str], dict[str, float]] = {}
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        arm_inputs = raw_inputs.get(arm)
+        if not isinstance(arm_inputs, Mapping):
+            raise ValueError("Task 3 semantic arm score maps are missing")
+        for topic in PILOT_TOPIC_IDS:
+            topic_input = arm_inputs.get(topic)
+            facets = topic_input.get("facets") if isinstance(topic_input, Mapping) else None
+            if not isinstance(facets, list):
+                raise ValueError("Task 3 semantic facet scores are missing")
+            for facet in facets:
+                if not isinstance(facet, Mapping) or not isinstance(facet.get("scores"), Mapping):
+                    raise ValueError("Task 3 semantic facet score map is invalid")
+                percentile_maps[(arm, topic, str(facet.get("facet_id")))] = average_rank_percentiles(facet["scores"])  # type: ignore[arg-type]
+    movement: dict[str, list[tuple[str, str, str]]] = {"promoted": [], "demoted": []}
+    for (topic, document), arms in by_identity.items():
+        left, right = arms.get("FACET-2B"), arms.get("TETHERED-2B")
+        if not left or not right:
+            raise ValueError("Task 3 ranking arm coverage drifted")
+        if left.get("source") == "facet_basket" and right.get("source") != "facet_basket":
+            movement["demoted"].append((topic, str(left["generating_facet"]), document))
+        if right.get("source") == "facet_basket" and left.get("source") != "facet_basket":
+            movement["promoted"].append((topic, str(right["generating_facet"]), document))
+    output: list[dict[str, object]] = []
+    for movement_class, passage_arm in (("promoted", "TETHERED-2B"), ("demoted", "FACET-2B")):
+        identities = sorted(movement[movement_class], key=lambda value: (PILOT_TOPIC_IDS.index(value[0]), value[1], value[2]))[:max_per_class]
+        if not identities:
+            raise ValueError(f"Task 4 diagnostics lack {movement_class} movement evidence")
+        for identity in identities:
+            topic, facet, document = identity
+            key = (topic, facet, document)
+            facet_candidate, tethered_candidate = facet_candidates[key], tethered_candidates[key]
+            query, facet_query = tethered_candidate.get("query"), tethered_candidate.get("facet_query")
+            suffix = "\n\nFocus: " + str(facet_query)
+            if not isinstance(query, str) or not isinstance(facet_query, str) or not query.endswith(suffix):
+                raise ValueError("representative query lacks exact narrative + Focus structure")
+            narrative = query[:-len(suffix)]
+            if not narrative or query != narrative + suffix:
+                raise ValueError("representative query lacks exact narrative + Focus structure")
+            windows = tethered_windows if passage_arm == "TETHERED-2B" else facet_windows
+            candidate = tethered_candidate if passage_arm == "TETHERED-2B" else facet_candidate
+            passage, passage_provenance = _passage_evidence(
+                identity=key, arm=passage_arm, candidate=candidate, windows=windows,
+                tethered_documents=tethered_documents, hashes=hashes,
+            )
+            rows = by_identity[(topic, document)]
+            left, right = rows["FACET-2B"], rows["TETHERED-2B"]
+            facet_percentile = percentile_maps[("FACET-2B", topic, facet)].get(document)
+            tethered_percentile = percentile_maps[("TETHERED-2B", topic, facet)].get(document)
+            if facet_percentile is None or tethered_percentile is None:
+                raise ValueError("representative lacks same-facet query-local percentiles")
+            output.append({
+                "topic_id": topic,
+                "facet_id": facet,
+                "movement": movement_class,
+                "document_id": document,
+                "narrative": narrative,
+                "facet_query": facet_query,
+                "selected_passage": passage,
+                "facet_only_percentile": facet_percentile,
+                "tethered_percentile": tethered_percentile,
+                "qrels_grade": int(qrels.get(topic, {}).get(document, 0)),
+                "facet_only_final_rank": int(left["rank"]),
+                "tethered_final_rank": int(right["rank"]),
+                "prior_bm25_rank": int(tethered_candidate["prior_bm25_rank"]),
+                "passage_provenance": passage_provenance,
+                "ranking_provenance": {
+                    "task3_rankings_sha256": ranking_hash,
+                    "facet_only_source": left["source"],
+                    "tethered_source": right["source"],
+                    "generating_facet": facet,
+                    "percentile_method": "query_local_average_rank",
+                    "rank_source": "Task 3 sealed rankings.jsonl",
+                },
+            })
+    return output
 
 
 def validate_protected_head(*, rrf: Sequence[object], arm: Sequence[object]) -> None:
@@ -820,6 +1066,7 @@ def evaluate(
     }
     diagnostics = {
         "schema_version": SCHEMA_VERSION,
+        "topic_ids": list(TOPIC_IDS),
         "per_topic_deltas": _per_topic_deltas(arms),
         "basket_contributions": {
             arm: arms[arm]["basket_contributions"] for arm in ("FACET-2B", "TETHERED-2B")
@@ -829,6 +1076,7 @@ def evaluate(
         },
         "novel_relevant_ids": {topic: sorted(novel[topic]) for topic in TOPIC_IDS},
         "documented_basket_shortage": documented_shortage,
+        "representatives": build_representatives(freeze_dir, qrels),
     }
     seal_path = freeze_dir / "SEALED.json"
     try:

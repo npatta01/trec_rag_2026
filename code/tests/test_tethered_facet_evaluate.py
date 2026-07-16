@@ -16,6 +16,7 @@ from trec_rag.tethered_facet_evaluate import (
     evaluate_arm,
     load_projection,
     validate_protected_head,
+    build_representatives,
 )
 
 
@@ -394,6 +395,11 @@ def test_evaluate_authenticates_projection_and_writes_create_only_artifacts(
         lambda _path: {"root_sha256": "b" * 64},
         raising=False,
     )
+    monkeypatch.setattr(
+        module,
+        "build_representatives",
+        lambda _freeze, _qrels: [{"movement": "promoted"}, {"movement": "demoted"}],
+    )
     output = tmp_path / "evaluation"
 
     summary = evaluate(freeze, prior, output)
@@ -418,6 +424,7 @@ def test_evaluate_authenticates_projection_and_writes_create_only_artifacts(
     diagnostics = json.loads((output / "diagnostics.json").read_text())
     assert set(diagnostics["per_topic_deltas"]) == set(TOPIC_IDS)
     assert "facet_yield" in diagnostics
+    assert {row["movement"] for row in diagnostics["representatives"]} == {"promoted", "demoted"}
 
     with pytest.raises(FileExistsError, match="create-only"):
         evaluate(freeze, prior, output)
@@ -614,3 +621,44 @@ def test_cli_and_evaluate_api_have_no_original_qrels_path() -> None:
     assert "--prior-evaluation" in options
     assert "--projection" not in options
     assert "--qrels" not in options
+
+
+def test_task4_builds_bounded_authenticated_promoted_and_demoted_representatives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_tethered_facet_two_basket import _loader_sources
+    import trec_rag.tethered_facet_two_basket as rank_module
+
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
+    freeze = tmp_path / "task3"
+    rank_module.freeze_rankings(
+        facet_topics=facet_topics,
+        tethered_topics=tethered_topics,
+        input_paths=paths,
+        output=freeze,
+    )
+    qrels = {
+        topic: {f"{topic}-d{index:03d}": (2 if index % 2 else 0) for index in range(650)}
+        for topic in TOPIC_IDS
+    }
+
+    rows = build_representatives(freeze, qrels, max_per_class=2)
+
+    assert len(rows) == 4
+    assert {row["movement"] for row in rows} == {"promoted", "demoted"}
+    required = {
+        "topic_id", "facet_id", "movement", "document_id", "narrative",
+        "facet_query", "selected_passage", "facet_only_percentile",
+        "tethered_percentile", "qrels_grade", "facet_only_final_rank",
+        "tethered_final_rank", "prior_bm25_rank", "passage_provenance",
+        "ranking_provenance",
+    }
+    assert all(set(row) == required for row in rows)
+    assert all(row["narrative"] + "\n\nFocus: " + row["facet_query"] for row in rows)
+    assert all(row["passage_provenance"]["window_sha256"] for row in rows)
+    assert all(row["ranking_provenance"]["task3_rankings_sha256"] for row in rows)
+    assert all(0 < row["facet_only_percentile"] <= 1 for row in rows)
+    assert all(0 < row["tethered_percentile"] <= 1 for row in rows)

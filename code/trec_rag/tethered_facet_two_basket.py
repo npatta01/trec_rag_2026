@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
@@ -10,6 +11,10 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from .deep_facet_candidate_rank import verify_seal as verify_prior_seal
+from .deep_facet_candidate_score import aggregate_top4
+from .tethered_facet_minilm_score import verify_scoring
 
 
 SCHEMA_VERSION = "tethered-facet-two-basket-freeze-v1"
@@ -451,6 +456,285 @@ def _binding(path: Path) -> dict[str, object]:
     return {"path": str(resolved), "bytes": len(content), "sha256": _sha256(content)}
 
 
+def _read_jsonl(path: Path, label: str) -> list[dict[str, object]]:
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(content.splitlines(), 1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{label} line {line_number} is invalid") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"{label} rows must be objects")
+        rows.append(row)
+    return rows
+
+
+def _candidate_identity(row: Mapping[str, object], label: str) -> tuple[str, str, str]:
+    topic = str(row.get("topic_id"))
+    facet = str(row.get("facet_id", row.get("variant")))
+    document = str(row.get("document_id"))
+    if topic not in PILOT_TOPIC_IDS or not facet or not document:
+        raise ValueError(f"{label} identity is invalid")
+    if row.get("docid", document) != document:
+        raise ValueError(f"{label} document identity drifted")
+    return topic, facet, document
+
+
+def _load_rank_orders(path: Path) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    grouped: dict[tuple[str, str], list[tuple[int, str]]] = defaultdict(list)
+    for row in _read_jsonl(path, "verified prior rankings"):
+        topic, arm = str(row.get("topic_id")), str(row.get("arm"))
+        if topic not in PILOT_TOPIC_IDS:
+            raise ValueError("verified prior rankings contain a protected or unexpected topic")
+        if arm in {"RRF", "DUAL"}:
+            grouped[(topic, arm)].append((int(row["rank"]), str(row["document_id"])))
+    output: dict[str, dict[str, tuple[str, ...]]] = {"RRF": {}, "DUAL": {}}
+    for topic in PILOT_TOPIC_IDS:
+        for arm in ("RRF", "DUAL"):
+            ordered = sorted(grouped[(topic, arm)])
+            documents = tuple(document for _rank, document in ordered)
+            if (
+                [rank for rank, _document in ordered] != list(range(1, len(ordered) + 1))
+                or len(documents) < INTERLEAVED_END
+                or len(documents) != len(set(documents))
+            ):
+                raise ValueError(f"verified prior {arm} is not a complete contiguous permutation")
+            output[arm][topic] = documents
+    return output["RRF"], output["DUAL"]
+
+
+def _load_accepted_union(path: Path) -> dict[str, set[str]]:
+    result = {topic: set() for topic in PILOT_TOPIC_IDS}
+    for row in _read_jsonl(path, "accepted union"):
+        topic = str(row.get("topic_id"))
+        document = str(row.get("document_id"))
+        if topic not in result or not document or document in result[topic]:
+            raise ValueError("accepted union population or document identity drifted")
+        result[topic].add(document)
+    return result
+
+
+def _accepted_facets(path: Path) -> dict[tuple[str, str], int]:
+    receipt = _read_object(path, "accepted gates")
+    raw = receipt.get("gates")
+    if not isinstance(raw, list):
+        raise ValueError("accepted gates are missing")
+    result: dict[tuple[str, str], int] = {}
+    for row in raw:
+        if not isinstance(row, Mapping) or row.get("status") != "accepted":
+            continue
+        topic, facet = str(row.get("topic_id")), str(row.get("facet_id"))
+        order = row.get("manifest_order")
+        if topic not in PILOT_TOPIC_IDS or not facet or type(order) is not int or order < 0:
+            raise ValueError("accepted gate identity drifted")
+        identity = (topic, facet)
+        if identity in result:
+            raise ValueError("accepted gate identity is duplicated")
+        result[identity] = order
+    if not result or set(topic for topic, _facet in result) != set(PILOT_TOPIC_IDS):
+        raise ValueError("accepted gates do not cover the protected pilot")
+    return result
+
+
+def _load_candidates(
+    path: Path, accepted: Mapping[tuple[str, str], int], *, tethered: bool
+) -> dict[tuple[str, str, str], dict[str, object]]:
+    result: dict[tuple[str, str, str], dict[str, object]] = {}
+    for row in _read_jsonl(path, "tethered candidates" if tethered else "facet candidates"):
+        identity = _candidate_identity(row, "candidate")
+        topic, facet, _document = identity
+        if (topic, facet) not in accepted:
+            continue
+        order = accepted[(topic, facet)]
+        rank = row.get("prior_bm25_rank" if tethered else "rank")
+        query = row.get("query")
+        text = row.get("text")
+        if (
+            row.get("manifest_order") != order
+            or type(rank) is not int
+            or rank <= 0
+            or not isinstance(query, str)
+            or not query
+            or not isinstance(text, str)
+            or not text
+            or row.get("query_sha256") != _sha256(query.encode("utf-8"))
+            or row.get("text_sha256") != _sha256(text.encode("utf-8"))
+        ):
+            raise ValueError("candidate rank, text, or query drifted")
+        if tethered:
+            facet_query = row.get("facet_query")
+            marker = "\n\nFocus: "
+            if (
+                not isinstance(facet_query, str)
+                or not facet_query
+                or marker not in query
+                or query != query[: -len(marker + facet_query)] + marker + facet_query
+                or not query[: -len(marker + facet_query)]
+            ):
+                raise ValueError("tethered candidate lacks the exact narrative + Focus structure")
+        if identity in result:
+            raise ValueError("candidate identity is duplicated")
+        result[identity] = {**row, "prior_bm25_rank": rank}
+    return result
+
+
+def _aggregate_facet_windows(
+    path: Path, candidates: Mapping[tuple[str, str, str], Mapping[str, object]]
+) -> dict[tuple[str, str, str], tuple[float, str, str]]:
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+    models: dict[tuple[str, str, str], tuple[str, str]] = {}
+    for row in _read_jsonl(path, "facet window scores"):
+        identity = _candidate_identity(row, "facet window score")
+        if identity not in candidates:
+            continue
+        candidate = candidates[identity]
+        if (
+            row.get("query_sha256") != candidate.get("query_sha256")
+            or row.get("document_sha256", row.get("text_sha256")) != candidate.get("text_sha256")
+            or not isinstance(row.get("score"), (int, float))
+            or isinstance(row.get("score"), bool)
+        ):
+            raise ValueError("facet score query/text provenance drifted")
+        model, revision = str(row.get("model")), str(row.get("model_revision"))
+        if not model or model == "None" or not revision or revision == "None":
+            raise ValueError("facet score model provenance is missing")
+        if identity in models and models[identity] != (model, revision):
+            raise ValueError("facet score model provenance drifted")
+        models[identity] = (model, revision)
+        grouped[identity].append(row)
+    if set(grouped) != set(candidates):
+        raise ValueError("facet score coverage differs from accepted candidates")
+    return {
+        identity: (float(aggregate_top4(rows)), *models[identity])
+        for identity, rows in grouped.items()
+    }
+
+
+def _load_tethered_documents(
+    path: Path, candidates: Mapping[tuple[str, str, str], Mapping[str, object]]
+) -> dict[tuple[str, str, str], tuple[float, str, str]]:
+    result: dict[tuple[str, str, str], tuple[float, str, str]] = {}
+    for row in _read_jsonl(path, "Task 2 document scores"):
+        identity = _candidate_identity(row, "Task 2 document score")
+        if identity not in candidates:
+            raise ValueError("Task 2 document score has unexpected pair identity")
+        candidate = candidates[identity]
+        score = row.get("score")
+        if (
+            row.get("schema_version") != TASK2_SCORE_SCHEMA_VERSION
+            or row.get("query_sha256") != candidate.get("query_sha256")
+            or row.get("text_sha256") != candidate.get("text_sha256")
+            or not isinstance(score, (int, float))
+            or isinstance(score, bool)
+        ):
+            raise ValueError("Task 2 document score query/text/schema drifted")
+        result[identity] = (float(score), str(row.get("model")), str(row.get("model_revision")))
+    if set(result) != set(candidates):
+        raise ValueError("Task 2 document score coverage differs from candidates")
+    return result
+
+
+def _topics_from_rows(
+    *,
+    rrf: Mapping[str, tuple[str, ...]],
+    dual: Mapping[str, tuple[str, ...]],
+    accepted_union: Mapping[str, set[str]],
+    gates: Mapping[tuple[str, str], int],
+    candidates: Mapping[tuple[str, str, str], Mapping[str, object]],
+    scores: Mapping[tuple[str, str, str], tuple[float, str, str]],
+    score_schema: str,
+) -> list[TopicInput]:
+    topics: list[TopicInput] = []
+    for topic in PILOT_TOPIC_IDS:
+        if accepted_union[topic] != set(rrf[topic]) or set(dual[topic]) != set(rrf[topic]):
+            raise ValueError("accepted union and verified prior rankings drifted")
+        facets: list[FacetScores] = []
+        for (facet_topic, facet), order in sorted(gates.items(), key=lambda item: item[1]):
+            if facet_topic != topic:
+                continue
+            rows = {identity: row for identity, row in candidates.items() if identity[:2] == (topic, facet)}
+            if not rows:
+                raise ValueError("accepted facet lacks candidate scores")
+            model_values = {scores[identity][1:] for identity in rows}
+            if len(model_values) != 1:
+                raise ValueError("facet model/revision provenance drifted")
+            model, revision = next(iter(model_values))
+            query_hashes = {str(row["query_sha256"]) for row in rows.values()}
+            if len(query_hashes) != 1:
+                raise ValueError("facet query provenance drifted")
+            facets.append(FacetScores(
+                facet_id=facet,
+                manifest_order=order,
+                scores={identity[2]: scores[identity][0] for identity in rows},
+                bm25_ranks={identity[2]: int(row["prior_bm25_rank"]) for identity, row in rows.items()},
+                query_sha256=next(iter(query_hashes)),
+                text_sha256={identity[2]: str(row["text_sha256"]) for identity, row in rows.items()},
+                model=model,
+                model_revision=revision,
+                score_schema_version=score_schema,
+            ))
+        topics.append(TopicInput(topic, rrf[topic], rrf[topic], dual[topic], tuple(facets)))
+    return topics
+
+
+def load_frozen_inputs(
+    deep_root: Path, tethered: Path
+) -> tuple[list[TopicInput], list[TopicInput], dict[str, Path]]:
+    """Load exact Task 3 arms from verified prior and Task 2 artifacts."""
+
+    deep_root, tethered = Path(deep_root), Path(tethered)
+    prior_freeze = deep_root / "freeze_v1"
+    verify_prior_seal(prior_freeze)
+    verify_scoring(tethered / "preflight.json")
+    paths = {
+        "prior_seal": prior_freeze / "SEALED.json",
+        "prior_rankings": prior_freeze / "rankings.jsonl",
+        "accepted_union": deep_root / "gate_v1" / "u_accepted.jsonl",
+        "accepted_gates": deep_root / "gate_v1" / "gates.json",
+        "facet_candidates": deep_root / "phase1_v1" / "candidates.jsonl",
+        "facet_window_scores": deep_root / "phase1_v1" / "scores.jsonl",
+        "tethered_preflight": tethered / "preflight.json",
+        "tethered_scoring_receipt": tethered / "scoring_receipt.json",
+        "tethered_candidates": tethered / "candidates.jsonl",
+        "tethered_window_scores": tethered / "scores.jsonl",
+        "tethered_document_scores": tethered / "document_scores.jsonl",
+    }
+    for name, path in paths.items():
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"required authenticated source is missing or unsafe: {name}")
+    rrf, dual = _load_rank_orders(paths["prior_rankings"])
+    union = _load_accepted_union(paths["accepted_union"])
+    gates = _accepted_facets(paths["accepted_gates"])
+    facet_candidates = _load_candidates(paths["facet_candidates"], gates, tethered=False)
+    facet_scores = _aggregate_facet_windows(paths["facet_window_scores"], facet_candidates)
+    tethered_candidates = _load_candidates(paths["tethered_candidates"], gates, tethered=True)
+    tethered_scores = _load_tethered_documents(paths["tethered_document_scores"], tethered_candidates)
+    if set(facet_candidates) != set(tethered_candidates):
+        raise ValueError("facet-only and tethered pair coverage drifted")
+    for identity in facet_candidates:
+        left, right = facet_candidates[identity], tethered_candidates[identity]
+        if (
+            left.get("text_sha256") != right.get("text_sha256")
+            or int(left["prior_bm25_rank"]) != int(right["prior_bm25_rank"])
+        ):
+            raise ValueError("facet-only and tethered text/rank provenance drifted")
+    facet_topics = _topics_from_rows(
+        rrf=rrf, dual=dual, accepted_union=union, gates=gates,
+        candidates=facet_candidates, scores=facet_scores,
+        score_schema="deep-facet-candidate-minilm-score-v1",
+    )
+    tethered_topics = _topics_from_rows(
+        rrf=rrf, dual=dual, accepted_union=union, gates=gates,
+        candidates=tethered_candidates, scores=tethered_scores,
+        score_schema=TASK2_SCORE_SCHEMA_VERSION,
+    )
+    return facet_topics, tethered_topics, paths
+
+
 def _topic_payload(topic: TopicInput) -> dict[str, object]:
     return {
         "topic_id": topic.topic_id,
@@ -688,6 +972,36 @@ def freeze_rankings(
     return summary
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    freeze = commands.add_parser("freeze")
+    freeze.add_argument("--deep-root", required=True, type=Path)
+    freeze.add_argument("--tethered", required=True, type=Path)
+    freeze.add_argument("--output", required=True, type=Path)
+    verify = commands.add_parser("verify")
+    verify.add_argument("--freeze", required=True, type=Path)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.command == "verify":
+        result = verify_freeze(args.freeze)
+    else:
+        facet_topics, tethered_topics, paths = load_frozen_inputs(
+            args.deep_root, args.tethered
+        )
+        result = freeze_rankings(
+            facet_topics=facet_topics,
+            tethered_topics=tethered_topics,
+            input_paths=paths,
+            output=args.output,
+        )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def _read_object(path: Path, label: str) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -889,3 +1203,7 @@ def verify_freeze(output: Path) -> dict[str, object]:
         if arm_rrf[ARMS[0]] != arm_rrf[ARMS[1]] or arm_dual[ARMS[0]] != arm_dual[ARMS[1]]:
             raise ValueError("arms do not reuse identical RRF and DUAL rankings")
     return summary
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

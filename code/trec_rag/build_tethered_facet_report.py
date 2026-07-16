@@ -210,6 +210,29 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
     if "topic_ids" in evaluation_payloads["diagnostics"]:
         _validate_topics(evaluation_payloads["diagnostics"].get("topic_ids"), "Task 4 diagnostics")
 
+    raw_inputs = task3_bindings.get("inputs")
+    if not isinstance(raw_inputs, Mapping):
+        raise ValueError("Task 3 authenticated raw input bindings are missing")
+    representative_source_hashes: dict[str, str] = {}
+    for name in (
+        "facet_candidates", "facet_window_scores", "tethered_candidates",
+        "tethered_window_scores", "tethered_document_scores",
+    ):
+        raw = raw_inputs.get(name)
+        digest = raw.get("sha256") if isinstance(raw, Mapping) else None
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError(f"Task 3 representative input binding is invalid: {name}")
+        representative_source_hashes[name] = digest
+    ranking_rows: dict[tuple[str, str, str], Mapping[str, object]] = {}
+    for line in freeze_bytes["rankings.jsonl"].splitlines():
+        row = json.loads(line)
+        if not isinstance(row, Mapping):
+            raise ValueError("Task 3 ranking row is invalid")
+        key = (str(row.get("topic_id")), str(row.get("document_id")), str(row.get("arm")))
+        if key in ranking_rows:
+            raise ValueError("Task 3 ranking identity is duplicated")
+        ranking_rows[key] = row
+
     return {
         "task1": task1,
         "task2": task2,
@@ -217,6 +240,9 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
         "metrics": evaluation_payloads["metrics"],
         "diagnostics": evaluation_payloads["diagnostics"],
         "decision": evaluation_payloads["decision"],
+        "task3_rankings_sha256": _sha256(freeze_bytes["rankings.jsonl"]),
+        "task3_ranking_rows": ranking_rows,
+        "representative_source_hashes": representative_source_hashes,
         "source_hashes": {
             "task1_receipt_sha256": _sha256(task1_bytes),
             "task2_receipt_sha256": _sha256(task2_bytes),
@@ -312,7 +338,13 @@ def _contribution_rows(diagnostics: Mapping[str, object]) -> tuple[list[dict[str
     return topic_rows, facet_rows
 
 
-def _representatives(diagnostics: Mapping[str, object]) -> list[dict[str, object]]:
+def _representatives(
+    diagnostics: Mapping[str, object],
+    *,
+    task3_rankings_sha256: str,
+    task3_ranking_rows: Mapping[tuple[str, str, str], Mapping[str, object]],
+    source_hashes: Mapping[str, str],
+) -> list[dict[str, object]]:
     raw = diagnostics.get("representatives")
     if not isinstance(raw, list) or not raw:
         raise ValueError("bounded representative evidence is missing")
@@ -327,6 +359,11 @@ def _representatives(diagnostics: Mapping[str, object]) -> list[dict[str, object
         "facet_only_percentile",
         "tethered_percentile",
         "qrels_grade",
+        "facet_only_final_rank",
+        "tethered_final_rank",
+        "prior_bm25_rank",
+        "passage_provenance",
+        "ranking_provenance",
     }
     rows: list[dict[str, object]] = []
     movements: set[str] = set()
@@ -353,6 +390,65 @@ def _representatives(diagnostics: Mapping[str, object]) -> list[dict[str, object
             row["tethered_percentile"], "tethered percentile"
         )
         normalized["qrels_grade"] = int(_number(row["qrels_grade"], "qrels grade"))
+        for field in ("facet_only_final_rank", "tethered_final_rank", "prior_bm25_rank"):
+            normalized[field] = int(_number(row[field], field.replace("_", " ")))
+            if normalized[field] <= 0:
+                raise ValueError(f"representative {field} must be positive")
+        passage = _mapping(row["passage_provenance"], "passage provenance")
+        ranking = _mapping(row["ranking_provenance"], "ranking provenance")
+        passage_required = {
+            "candidate_source_sha256", "window_score_source_sha256",
+            "document_score_source_sha256", "query_sha256", "text_sha256",
+            "window_sha256", "window_id", "model", "model_revision",
+            "document_start_token", "document_end_token", "rank_source",
+        }
+        ranking_required = {
+            "task3_rankings_sha256", "facet_only_source", "tethered_source",
+            "generating_facet", "percentile_method", "rank_source",
+        }
+        if set(passage) != passage_required or set(ranking) != ranking_required:
+            raise ValueError("representative passage/ranking provenance schema differs")
+        for field in ("candidate_source_sha256", "window_score_source_sha256", "query_sha256", "text_sha256", "window_sha256"):
+            value = passage[field]
+            if not isinstance(value, str) or len(value) != 64:
+                raise ValueError(f"representative passage provenance {field} is invalid")
+        if passage["document_score_source_sha256"] is not None and (
+            not isinstance(passage["document_score_source_sha256"], str)
+            or len(passage["document_score_source_sha256"]) != 64
+        ):
+            raise ValueError("representative document score source SHA-256 is invalid")
+        if not isinstance(ranking["task3_rankings_sha256"], str) or len(ranking["task3_rankings_sha256"]) != 64:
+            raise ValueError("representative ranking provenance SHA-256 is invalid")
+        if ranking["task3_rankings_sha256"] != task3_rankings_sha256:
+            raise ValueError("representative ranking provenance does not match Task 3 rankings")
+        facet_row = task3_ranking_rows.get((topic, str(row["document_id"]), "FACET-2B"))
+        tethered_row = task3_ranking_rows.get((topic, str(row["document_id"]), "TETHERED-2B"))
+        generating_row = tethered_row if movement == "promoted" else facet_row
+        if (
+            not isinstance(facet_row, Mapping)
+            or not isinstance(tethered_row, Mapping)
+            or not isinstance(generating_row, Mapping)
+            or normalized["facet_only_final_rank"] != facet_row.get("rank")
+            or normalized["tethered_final_rank"] != tethered_row.get("rank")
+            or normalized["prior_bm25_rank"] != generating_row.get("prior_bm25_rank")
+            or ranking["facet_only_source"] != facet_row.get("source")
+            or ranking["tethered_source"] != tethered_row.get("source")
+            or ranking["generating_facet"] != row["facet_id"]
+        ):
+            raise ValueError("representative rank provenance does not match Task 3 rankings")
+        prefix = "tethered" if movement == "promoted" else "facet"
+        if (
+            passage["candidate_source_sha256"] != source_hashes[f"{prefix}_candidates"]
+            or passage["window_score_source_sha256"] != source_hashes[f"{prefix}_window_scores"]
+            or (
+                passage["document_score_source_sha256"] != source_hashes["tethered_document_scores"]
+                if movement == "promoted"
+                else passage["document_score_source_sha256"] is not None
+            )
+        ):
+            raise ValueError("representative passage provenance does not match Task 3 inputs")
+        normalized["passage_provenance"] = dict(passage)
+        normalized["ranking_provenance"] = dict(ranking)
         rows.append(normalized)
         movements.add(movement)
     if movements != {"promoted", "demoted"}:
@@ -376,7 +472,12 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
     metric_rows = _metric_rows(aggregate)
     diagnostics = _mapping(verified["diagnostics"], "diagnostics")
     topic_rows, facet_rows = _contribution_rows(diagnostics)
-    representatives = _representatives(diagnostics)
+    representatives = _representatives(
+        diagnostics,
+        task3_rankings_sha256=str(verified["task3_rankings_sha256"]),
+        task3_ranking_rows=verified["task3_ranking_rows"],  # type: ignore[arg-type]
+        source_hashes=verified["representative_source_hashes"],  # type: ignore[arg-type]
+    )
     decision = dict(_mapping(verified["decision"], "decision"))
     if decision.get("production_promotion_authorized") is True:
         raise ValueError("Task 4 decision does not forbid production promotion")
@@ -408,18 +509,21 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         decision.get("next_step")
         or "Run a preregistered evaluation on fresh topics and untouched qrels."
     )
+    label = str(decision.get("label", "unknown"))
+    title_label = label.replace("_", " ").title()
+    novel_total_raw = metrics.get("novel_relevant_total", metrics.get("novel_relevant_count"))
+    if type(novel_total_raw) is not int or novel_total_raw <= 0:
+        raise ValueError("Task 4 metrics lack authenticated novel relevant total")
     return {
         "schema_version": SCHEMA_VERSION,
-        "title": "Narrative tether improves the protected two-basket diagnostic",
-        "mechanical_label": str(decision.get("label", "unknown")),
+        "title": f"Narrative-tethered facet diagnostic — {title_label}",
+        "mechanical_label": label,
         "scope": {
             "topic_ids": list(TOPIC_IDS),
             "post_qrels_diagnostic": True,
             "new_retrieval": False,
             "production_validation": False,
-            "novel_relevant_total": int(
-                metrics.get("novel_relevant_total", metrics.get("novel_relevant_count", 177))
-            ),
+            "novel_relevant_total": novel_total_raw,
         },
         "answers": {
             "narrative_tether_reduced_noise": reduced_noise,
@@ -467,12 +571,14 @@ def _render_html(artifact: Mapping[str, object]) -> str:
     topic_rows = artifact["topic_contributions"]
     facet_rows = artifact["facet_contributions"]
     assert isinstance(representatives, list) and isinstance(topic_rows, list) and isinstance(facet_rows, list)
+    scope = _mapping(artifact["scope"], "scope")
+    novel_total = int(scope["novel_relevant_total"])
 
     metric_body = "".join(
         "<tr>"
         f"<th scope='row'>{esc(row['arm'])}</th><td>{int(row['depth']):,}</td>"
         f"<td>{_pct(row['binary_recall'])}</td><td>{_pct(row['graded_recall'])}</td>"
-        f"<td>{int(row['novel_retained'])} / 177</td>"
+        f"<td>{int(row['novel_retained'])} / {novel_total}</td>"
         "</tr>"
         for row in metrics
     )
@@ -501,12 +607,26 @@ def _render_html(artifact: Mapping[str, object]) -> str:
         f"<dt>Facet query</dt><dd>{esc(row['facet_query'])}</dd>"
         f"<dt>Selected passage</dt><dd>{esc(row['selected_passage'])}</dd>"
         f"<dt>Facet-only percentile</dt><dd>{_pct(row['facet_only_percentile'])}</dd>"
-        f"<dt>Tethered percentile</dt><dd>{_pct(row['tethered_percentile'])}</dd></dl>"
+        f"<dt>Tethered percentile</dt><dd>{_pct(row['tethered_percentile'])}</dd>"
+        f"<dt>Facet-only final rank</dt><dd>{int(row['facet_only_final_rank']):,}</dd>"
+        f"<dt>Tethered final rank</dt><dd>{int(row['tethered_final_rank']):,}</dd>"
+        f"<dt>Prior facet BM25 rank</dt><dd>{int(row['prior_bm25_rank']):,}</dd>"
+        f"<dt>Passage provenance</dt><dd>window {esc(row['passage_provenance']['window_id'])}; "
+        f"SHA-256 {esc(row['passage_provenance']['window_sha256'])}; model {esc(row['passage_provenance']['model'])} "
+        f"revision {esc(row['passage_provenance']['model_revision'])}; tokens "
+        f"{int(row['passage_provenance']['document_start_token'])}–{int(row['passage_provenance']['document_end_token'])}</dd>"
+        f"<dt>Ranking provenance</dt><dd>Task 3 SHA-256 {esc(row['ranking_provenance']['task3_rankings_sha256'])}; "
+        f"{esc(row['ranking_provenance']['percentile_method'])}</dd></dl>"
         "</article>"
         for row in representatives
     )
     yes_noise = "Yes, within this diagnostic" if answers["narrative_tether_reduced_noise"] else "No clear reduction"
     yes_novel = "Yes, within this diagnostic" if answers["two_basket_recovered_novel_relevant"] else "No"
+    noise_basis = (
+        "Relevant facet-basket contributions increased and a judged-irrelevant high facet-only match was demoted when narrative context was restored."
+        if answers["narrative_tether_reduced_noise"]
+        else "The saved contribution counts and representative movements do not establish a clear reduction in facet noise."
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(artifact['title'])}</title>
@@ -530,8 +650,8 @@ dl{{display:grid;grid-template-columns:minmax(9rem,1fr) 3fr;gap:.5rem 1rem}}dt{{
 <p class="lede">The fixed comparison preserved the RRF head, then compared RRF, FACET-2B, and TETHERED-2B. Tethering changed Recall@500 by {_signed(deltas['binary_recall@500_tethered_vs_facet'], percentage=True)} and novel retention@500 by {_signed(deltas['novel_retained@500_tethered_vs_facet'])} documents versus FACET-2B.</p>
 <p class="boundary"><strong>Interpretation boundary:</strong> post-qrels diagnostic · no new retrieval · not production validation.</p></header>
 <main id="main"><section aria-labelledby="questions"><h2 id="questions">Three decisions this report answers</h2><div class="grid">
-<article class="card"><h3>Did narrative tethering reduce facet noise?</h3><p class="answer">{yes_noise}.</p><p>Relevant facet-basket contributions increased and a judged-irrelevant high facet-only match was demoted when narrative context was restored.</p></article>
-<article class="card"><h3>Did two-basket fusion recover novel relevant documents?</h3><p class="answer">{yes_novel}.</p><p>TETHERED-2B retained {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==500))}/177 at 500 and {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==1000))}/177 at 1,000.</p></article>
+<article class="card"><h3>Did narrative tethering reduce facet noise?</h3><p class="answer">{yes_noise}.</p><p>{noise_basis}</p></article>
+<article class="card"><h3>Did two-basket fusion recover novel relevant documents?</h3><p class="answer">{yes_novel}.</p><p>TETHERED-2B retained {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==500))}/{novel_total} at 500 and {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==1000))}/{novel_total} at 1,000.</p></article>
 <article class="card"><h3>What should happen next?</h3><p class="answer">Fresh validation.</p><p>{esc(answers['next_step'])}</p></article></div></section>
 <section aria-labelledby="pipeline"><h2 id="pipeline">Fixed pipeline</h2><ol class="pipeline"><li>Sealed candidates</li><li>Facet + narrative MiniLM</li><li>Query-local percentiles</li><li>Protected two-basket fusion</li><li>Projection-only evaluation</li></ol></section>
 <section aria-labelledby="metrics"><h2 id="metrics">Metric comparison</h2><p>Rows report Recall@500 and Recall@1000 alongside the corresponding graded recall and novel-document counts.</p><div class="table-wrap"><table><caption>RRF, FACET-2B, and TETHERED-2B at 500 and 1,000</caption><thead><tr><th scope="col">Arm</th><th scope="col">Depth</th><th scope="col">Recall</th><th scope="col">Graded recall</th><th scope="col">Novel relevant retained</th></tr></thead><tbody>{metric_body}</tbody></table></div></section>

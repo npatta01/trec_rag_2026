@@ -36,11 +36,21 @@ Task 2 is the only stage that uses the ROCm Python helper:
   --preflight "$TASK1/preflight.json"
 ```
 
-Task 3 is a library-stage freeze. This command verifies an existing sealed
-freeze without changing it:
+Task 3 loads the exact verified prior RRF/DUAL rankings, accepted facet
+candidates and scores, and Task 2 scores, then creates the two-basket freeze:
 
 ```bash
-.venv/bin/python -c 'from pathlib import Path; from trec_rag.tethered_facet_two_basket import verify_freeze; verify_freeze(Path("outputs/rag25_tethered_facet_minilm_v1/freeze_v1"))'
+.venv/bin/python -m trec_rag.tethered_facet_two_basket freeze \
+  --deep-root outputs/rag25_deep_facet_candidates_v1 \
+  --tethered "$TASK1" \
+  --output "$TASK3"
+```
+
+Verify the new sealed freeze without changing it:
+
+```bash
+.venv/bin/python -m trec_rag.tethered_facet_two_basket verify \
+  --freeze "$TASK3"
 ```
 
 Task 4 replays the projection-only evaluation after the Task 3 verifier passes:

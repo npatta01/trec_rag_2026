@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import trec_rag.tethered_facet_two_basket as module
+
 from trec_rag.tethered_facet_two_basket import (
     FacetScores,
     TopicInput,
@@ -14,6 +16,8 @@ from trec_rag.tethered_facet_two_basket import (
     build_facet_basket,
     build_two_basket_permutation,
     freeze_rankings,
+    load_frozen_inputs,
+    main,
     topic_quotas,
     verify_freeze,
 )
@@ -419,3 +423,129 @@ def test_verifier_rejects_restamped_false_parameters_and_summary(tmp_path: Path)
 
     with pytest.raises(ValueError, match="semantic contract"):
         verify_freeze(output)
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _loader_sources(tmp_path: Path) -> tuple[Path, Path]:
+    deep = tmp_path / "deep"
+    tethered = tmp_path / "tethered"
+    for path in (deep / "freeze_v1", deep / "gate_v1", deep / "phase1_v1", tethered):
+        path.mkdir(parents=True, exist_ok=True)
+    rankings: list[dict[str, object]] = []
+    accepted: list[dict[str, object]] = []
+    gates: list[dict[str, object]] = []
+    facet_candidates: list[dict[str, object]] = []
+    facet_scores: list[dict[str, object]] = []
+    tethered_candidates: list[dict[str, object]] = []
+    tethered_scores: list[dict[str, object]] = []
+    tethered_documents: list[dict[str, object]] = []
+    for topic_index, topic in enumerate(("219", "72", "300", "84")):
+        documents = [f"{topic}-d{index:03d}" for index in range(650)]
+        facet_id = f"{topic}-facet"
+        facet_query = f"facet query {topic}"
+        narrative = f"full narrative {topic}"
+        gates.append({"topic_id": topic, "facet_id": facet_id, "manifest_order": topic_index, "status": "accepted"})
+        accepted.extend({"topic_id": topic, "document_id": docid} for docid in documents)
+        for arm, ordered in (("RRF", documents), ("DUAL", list(reversed(documents)))):
+            rankings.extend(
+                {"topic_id": topic, "arm": arm, "rank": rank, "document_id": docid}
+                for rank, docid in enumerate(ordered, 1)
+            )
+        for local_rank, docid in enumerate(documents[300:550], 1):
+            text = f"authenticated text for {docid}"
+            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            facet_candidates.append({
+                "topic_id": topic, "facet_id": facet_id, "manifest_order": topic_index,
+                "document_id": docid, "docid": docid, "query": facet_query,
+                "query_sha256": hashlib.sha256(facet_query.encode()).hexdigest(),
+                "text": text, "text_sha256": text_hash, "rank": local_rank,
+            })
+            window = {
+                "topic_id": topic, "facet_id": facet_id, "document_id": docid,
+                "window_id": f"facet-{topic}-{local_rank}", "window_text": text,
+                "window_sha256": text_hash, "document_sha256": text_hash,
+                "document_start_token": 0, "document_end_token": 8,
+                "query_sha256": hashlib.sha256(facet_query.encode()).hexdigest(),
+                "score": float(251 - local_rank), "model": "synthetic/minilm",
+                "model_revision": "fixture-revision",
+            }
+            facet_scores.append(window)
+            full_query = narrative + "\n\nFocus: " + facet_query
+            query_hash = hashlib.sha256(full_query.encode()).hexdigest()
+            tethered_candidates.append({
+                "schema_version": "tethered-facet-minilm-candidate-v1",
+                "topic_id": topic, "facet_id": facet_id, "manifest_order": topic_index,
+                "document_id": docid, "docid": docid, "facet_query": facet_query,
+                "query": full_query, "query_sha256": query_hash, "text": text,
+                "text_sha256": text_hash, "prior_bm25_rank": local_rank,
+            })
+            tethered_scores.append({
+                **window, "schema_version": "tethered-facet-minilm-score-v1",
+                "window_id": f"tethered-{topic}-{local_rank}",
+                "query_sha256": query_hash, "score": float(local_rank),
+            })
+            tethered_documents.append({
+                "schema_version": "tethered-facet-minilm-document-score-v1",
+                "topic_id": topic, "facet_id": facet_id, "document_id": docid,
+                "score": float(local_rank), "selected_window_count": 1,
+                "query_sha256": query_hash, "text_sha256": text_hash,
+                "model": "synthetic/minilm", "model_revision": "fixture-revision",
+                "window_hashes": [text_hash],
+            })
+    _write_jsonl(deep / "freeze_v1" / "rankings.jsonl", rankings)
+    _write_jsonl(deep / "gate_v1" / "u_accepted.jsonl", accepted)
+    (deep / "gate_v1" / "gates.json").write_text(json.dumps({"gates": gates}), encoding="utf-8")
+    _write_jsonl(deep / "phase1_v1" / "candidates.jsonl", facet_candidates)
+    _write_jsonl(deep / "phase1_v1" / "scores.jsonl", facet_scores)
+    _write_jsonl(tethered / "candidates.jsonl", tethered_candidates)
+    _write_jsonl(tethered / "scores.jsonl", tethered_scores)
+    _write_jsonl(tethered / "document_scores.jsonl", tethered_documents)
+    (tethered / "preflight.json").write_text("{}\n", encoding="utf-8")
+    (tethered / "scoring_receipt.json").write_text("{}\n", encoding="utf-8")
+    (deep / "freeze_v1" / "SEALED.json").write_text("{}\n", encoding="utf-8")
+    return deep, tethered
+
+
+def test_real_freeze_cli_loads_authenticated_task2_and_prior_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    output = tmp_path / "freeze"
+
+    assert main(["freeze", "--deep-root", str(deep), "--tethered", str(tethered), "--output", str(output)]) == 0
+    assert main(["verify", "--freeze", str(output)]) == 0
+    bindings = json.loads((output / "input_bindings.json").read_text())
+    assert {"prior_rankings", "accepted_union", "facet_candidates", "facet_window_scores", "tethered_candidates", "tethered_window_scores", "tethered_document_scores"} <= set(bindings["inputs"])
+    rows = [json.loads(line) for line in (output / "rankings.jsonl").read_text().splitlines()]
+    assert any(row["arm"] == "FACET-2B" and row["source"] == "facet_basket" for row in rows)
+    assert any(row["arm"] == "TETHERED-2B" and row["source"] == "facet_basket" for row in rows)
+
+    with (tethered / "scores.jsonl").open("a", encoding="utf-8") as sink:
+        sink.write("{}\n")
+    with pytest.raises(ValueError, match="input SHA-256"):
+        verify_freeze(output)
+
+
+def test_loader_rejects_tethered_query_and_rank_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    candidates = (tethered / "candidates.jsonl").read_text().splitlines()
+    first = json.loads(candidates[0])
+    first["query"] = "invented narrative\n\nFocus: " + first["facet_query"] + "\nextra"
+    first["query_sha256"] = hashlib.sha256(first["query"].encode()).hexdigest()
+    candidates[0] = json.dumps(first, sort_keys=True, separators=(",", ":"))
+    (tethered / "candidates.jsonl").write_text("\n".join(candidates) + "\n")
+
+    with pytest.raises(ValueError, match="exact narrative"):
+        load_frozen_inputs(deep, tethered)
