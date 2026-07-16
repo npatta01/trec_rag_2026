@@ -7,6 +7,7 @@ experiment artifacts.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -536,6 +537,46 @@ def build_request_plan(
     )
 
 
+def discover_original_caches(
+    approved_cache_root: Path,
+    narratives: Mapping[str, str],
+) -> dict[str, dict[str, str]]:
+    """Return one authenticated original-cache binding per authorized topic.
+
+    Discovery is deliberately local and byte-authenticated.  It neither follows
+    directory entries that are symlinks nor accepts a merely plausible filename
+    as proof of identity.
+    """
+
+    validate_authorized_scope(tuple(map(str, narratives)))
+    root = Path(approved_cache_root).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("approved cache root must be a directory")
+    bindings: dict[str, dict[str, str]] = {}
+    for topic_id in ALL_TOPIC_IDS:
+        narrative = narratives.get(topic_id)
+        if not isinstance(narrative, str) or not narrative:
+            raise ValueError(f"missing narrative for authorized topic {topic_id}")
+        matches: list[dict[str, str]] = []
+        pattern = f"{topic_id}__original__{ORIGINAL_RETRIEVER_NAME}__*.json"
+        for path in sorted(root.glob(pattern)):
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"cache discovery found unsafe path for {topic_id}")
+            raw = path.read_bytes()
+            binding = {"path": str(path), "sha256": _sha256_bytes(raw)}
+            try:
+                _authenticate_original_cache(topic_id, narrative, binding, root)
+            except ValueError:
+                continue
+            matches.append(binding)
+        if not matches:
+            raise ValueError(f"missing exact top-1,000 original cache for {topic_id}")
+        if len(matches) != 1:
+            raise ValueError(f"duplicate authenticated original caches for {topic_id}")
+        bindings[topic_id] = matches[0]
+    return bindings
+
+
 def _authorization() -> dict[str, object]:
     return {
         "schema_version": AUTHORIZATION_SCHEMA_VERSION,
@@ -764,3 +805,55 @@ def verify_planning(
         "original_request_count": 0,
         "root_sha256": seal["root_sha256"],
     }
+
+
+def _manifest_narratives(payload: Mapping[str, object]) -> dict[str, str]:
+    topics = payload.get("topics")
+    if not isinstance(topics, list):
+        raise ValueError("manifest topics must be an array")
+    result: dict[str, str] = {}
+    for row in topics:
+        if not isinstance(row, Mapping):
+            raise ValueError("manifest topic record must be an object")
+        topic_id = str(row.get("topic_id"))
+        narrative = row.get("narrative")
+        if not isinstance(narrative, str):
+            raise ValueError(f"manifest narrative is invalid for {topic_id}")
+        result[topic_id] = narrative
+    validate_authorized_scope(tuple(result))
+    return result
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Freeze or verify planning using only local manifest/cache bytes."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    freeze_parser = subparsers.add_parser("freeze")
+    freeze_parser.add_argument("--manifest", type=Path, required=True)
+    freeze_parser.add_argument("--cache-root", type=Path, required=True)
+    freeze_parser.add_argument("--output", type=Path, required=True)
+    verify_parser = subparsers.add_parser("verify")
+    verify_parser.add_argument("--cache-root", type=Path, required=True)
+    verify_parser.add_argument("--planning", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    if args.command == "freeze":
+        manifest = _load_json(args.manifest, "facet manifest")
+        validate_facet_manifest(manifest)
+        bindings = discover_original_caches(
+            args.cache_root, _manifest_narratives(manifest)
+        )
+        freeze_planning(
+            args.output,
+            source_loader=lambda: manifest,
+            original_cache=bindings,
+            approved_cache_root=args.cache_root,
+        )
+    else:
+        verify_planning(args.planning, approved_cache_root=args.cache_root)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
+    raise SystemExit(main())

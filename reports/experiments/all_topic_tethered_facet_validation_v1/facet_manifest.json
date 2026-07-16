@@ -1,0 +1,4348 @@
+{
+  "analyzer": {
+    "contract": "lowercase-alphanumeric-v1"
+  },
+  "experiment_id": "all_topic_tethered_facet_validation_v1",
+  "facets": [
+    {
+      "analyzer_terms": [
+        "sports",
+        "societal",
+        "impact",
+        "athlete",
+        "compensation"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "athlete"
+      ],
+      "facet_id": "14-athlete-compensation",
+      "manifest_order": 0,
+      "obligation": "The societal impact of athlete compensation.",
+      "obligation_id": "14:o1",
+      "query": "sports societal impact athlete compensation",
+      "query_sha256": "fc593e43f52a116fcd1037fd797f197877d11fdf96899c754ed0c2d4d2b72b2f",
+      "relation_terms": [
+        "societal",
+        "impact"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "sports",
+        "societal",
+        "impact",
+        "inclusion"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "sports"
+      ],
+      "facet_id": "14-inclusion",
+      "manifest_order": 1,
+      "obligation": "The societal impact of inclusion in sports.",
+      "obligation_id": "14:o2",
+      "query": "sports societal impact inclusion",
+      "query_sha256": "7c22d0269a21b4bbc416f6f27638a7b6412bcc7db677ab4587addd7f0bbb9021",
+      "relation_terms": [
+        "societal",
+        "impact"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "sports",
+        "societal",
+        "impact",
+        "cultural",
+        "influence"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "societal"
+      ],
+      "facet_id": "14-cultural-influence",
+      "manifest_order": 2,
+      "obligation": "Sports societal and cultural influence.",
+      "obligation_id": "14:o3",
+      "query": "sports societal impact cultural influence",
+      "query_sha256": "bebfa27d7a8598bc9ba7ce4ae001e45328fca373e65f24dea57313a5b9133351",
+      "relation_terms": [
+        "cultural",
+        "influence"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "sports",
+        "societal",
+        "impact",
+        "business",
+        "side"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "business"
+      ],
+      "facet_id": "14-business",
+      "manifest_order": 3,
+      "obligation": "The societal impact of the business side of sports.",
+      "obligation_id": "14:o4",
+      "query": "sports societal impact business side",
+      "query_sha256": "8a2ee4bb9e6a2d63dd72378016dd823a722647697fc7f4b234e8041ebde7ba2a",
+      "relation_terms": [
+        "societal",
+        "impact"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "evolving",
+        "sports",
+        "equipment",
+        "shapes",
+        "athletes",
+        "sport",
+        "popularity"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "athletes"
+      ],
+      "facet_id": "14-equipment",
+      "manifest_order": 4,
+      "obligation": "How evolving equipment shapes athletes and sport popularity.",
+      "obligation_id": "14:o5",
+      "query": "evolving sports equipment shapes athletes sport popularity",
+      "query_sha256": "84860809138878480a85446e789d4bfb1b2d17451b9a1629ca7a61ff8ca4ba6e",
+      "relation_terms": [
+        "equipment",
+        "shapes",
+        "popularity"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "evolving",
+        "sports",
+        "training",
+        "shapes",
+        "athletes",
+        "sport",
+        "popularity"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "athletes"
+      ],
+      "facet_id": "14-training",
+      "manifest_order": 5,
+      "obligation": "How evolving training shapes athletes and sport popularity.",
+      "obligation_id": "14:o6",
+      "query": "evolving sports training shapes athletes sport popularity",
+      "query_sha256": "339882b1e171fe5ac855de92dfeed4b7bdeaf42e4be872c34448c77e8e532e09",
+      "relation_terms": [
+        "training",
+        "shapes",
+        "popularity"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "evolving",
+        "sports",
+        "mindset",
+        "shapes",
+        "athletes",
+        "sport",
+        "popularity"
+      ],
+      "anchor_terms": [
+        "sports"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "athletes"
+      ],
+      "facet_id": "14-mindset",
+      "manifest_order": 6,
+      "obligation": "How evolving mindset shapes athletes and sport popularity.",
+      "obligation_id": "14:o7",
+      "query": "evolving sports mindset shapes athletes sport popularity",
+      "query_sha256": "8e05ede5d5937f2f7fccaa8ddc57d7c4ceb7725a2199d192ebb722df6a941654",
+      "relation_terms": [
+        "mindset",
+        "shapes",
+        "popularity"
+      ],
+      "topic_id": "14"
+    },
+    {
+      "analyzer_terms": [
+        "e",
+        "waste",
+        "other",
+        "waste",
+        "environmental",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "waste"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "environmental"
+      ],
+      "facet_id": "31-environment",
+      "manifest_order": 0,
+      "obligation": "Environmental impacts of e-waste and other waste.",
+      "obligation_id": "31:o1",
+      "query": "e-waste other waste environmental impacts",
+      "query_sha256": "a60d6a85332f44d6ed9c166d9a7b4dff0e84f3f52453cf87771ae32d084d75b2",
+      "relation_terms": [
+        "impacts"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "e",
+        "waste",
+        "other",
+        "waste",
+        "health",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "waste"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "health"
+      ],
+      "facet_id": "31-health",
+      "manifest_order": 1,
+      "obligation": "Health impacts of e-waste and other waste.",
+      "obligation_id": "31:o2",
+      "query": "e-waste other waste health impacts",
+      "query_sha256": "41a970dbc32d612cc9bc70441a01239e5fa5c6855a6ef636334731598dfacd55",
+      "relation_terms": [
+        "impacts"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "proper",
+        "waste",
+        "recycling",
+        "benefits",
+        "sustainability"
+      ],
+      "anchor_terms": [
+        "recycling"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "sustainability"
+      ],
+      "facet_id": "31-sustainability",
+      "manifest_order": 2,
+      "obligation": "How proper recycling benefits sustainability.",
+      "obligation_id": "31:o3",
+      "query": "proper waste recycling benefits sustainability",
+      "query_sha256": "e91ce4030c5e00334453a791f7bfed38aa89b521cd2a1c6b281996eb2134c12d",
+      "relation_terms": [
+        "benefits"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "proper",
+        "waste",
+        "recycling",
+        "benefits",
+        "local",
+        "economies"
+      ],
+      "anchor_terms": [
+        "recycling"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "local",
+        "economies"
+      ],
+      "facet_id": "31-economies",
+      "manifest_order": 3,
+      "obligation": "How proper recycling benefits local economies.",
+      "obligation_id": "31:o4",
+      "query": "proper waste recycling benefits local economies",
+      "query_sha256": "c8f0a8f994f2a174c81033a5674144c7d3ff9ed03adbc409be2c0d305ab92dab",
+      "relation_terms": [
+        "benefits"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "improper",
+        "waste",
+        "management",
+        "risks",
+        "environmental",
+        "health"
+      ],
+      "anchor_terms": [
+        "waste"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "environmental",
+        "health"
+      ],
+      "facet_id": "31-improper-management",
+      "manifest_order": 4,
+      "obligation": "Risks of improper waste management.",
+      "obligation_id": "31:o5",
+      "query": "improper waste management risks environmental health",
+      "query_sha256": "c6d7b99b6d04ffcd4973ded2dff9018aba3bfe4bd7d6d43b29244f38bbae56b7",
+      "relation_terms": [
+        "risks"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "waste",
+        "recycling",
+        "recent",
+        "innovations"
+      ],
+      "anchor_terms": [
+        "recycling"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "waste"
+      ],
+      "facet_id": "31-innovations",
+      "manifest_order": 5,
+      "obligation": "Recent recycling innovations for waste.",
+      "obligation_id": "31:o6",
+      "query": "waste recycling recent innovations",
+      "query_sha256": "fa1647d023227e0665e56df1a003ab0671b84c2f17afb9a6aaf6a2f65776ca84",
+      "relation_terms": [
+        "recent",
+        "innovations"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "individuals",
+        "practical",
+        "steps",
+        "responsible",
+        "waste",
+        "handling"
+      ],
+      "anchor_terms": [
+        "waste"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "individuals"
+      ],
+      "facet_id": "31-individual-actions",
+      "manifest_order": 6,
+      "obligation": "Practical steps individuals can take for responsible waste handling.",
+      "obligation_id": "31:o7",
+      "query": "individuals practical steps responsible waste handling",
+      "query_sha256": "ea99c95fc3030562a6c71c82ffa196bed06e69b8f6bb60471d0416f6619ec09b",
+      "relation_terms": [
+        "practical",
+        "steps"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "businesses",
+        "practical",
+        "steps",
+        "responsible",
+        "waste",
+        "handling"
+      ],
+      "anchor_terms": [
+        "waste"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "businesses"
+      ],
+      "facet_id": "31-business-actions",
+      "manifest_order": 7,
+      "obligation": "Practical steps businesses can take for responsible waste handling.",
+      "obligation_id": "31:o8",
+      "query": "businesses practical steps responsible waste handling",
+      "query_sha256": "fa57ea1a07d82475dde357ac2be84236e91c16dddbf2fc668a11f931a5d30e99",
+      "relation_terms": [
+        "practical",
+        "steps"
+      ],
+      "topic_id": "31"
+    },
+    {
+      "analyzer_terms": [
+        "family",
+        "structures",
+        "influence",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "family",
+        "structures"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-family-structures",
+      "manifest_order": 0,
+      "obligation": "How family structures influence children development and well-being.",
+      "obligation_id": "37:o1",
+      "query": "family structures influence children development well-being",
+      "query_sha256": "4583698ae34e2d81657f338669b27ad2f81d9e2767e7af2f724e50e0c35b6ba6",
+      "relation_terms": [
+        "influence",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "childhood",
+        "experiences",
+        "influence",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "childhood",
+        "experiences"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-childhood-experiences",
+      "manifest_order": 1,
+      "obligation": "How childhood experiences influence children development and well-being.",
+      "obligation_id": "37:o2",
+      "query": "childhood experiences influence children development well-being",
+      "query_sha256": "dc273b2f632f78ae6610923f75b841dc30de06510c746c93cbc17a24e9f21b82",
+      "relation_terms": [
+        "influence",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "parenting",
+        "styles",
+        "influence",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "parenting",
+        "styles"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-parenting-styles",
+      "manifest_order": 2,
+      "obligation": "How parenting styles influence children development and well-being.",
+      "obligation_id": "37:o3",
+      "query": "parenting styles influence children development well-being",
+      "query_sha256": "661c4586f80518ba9812d58fde0fabc4c3c27c399e0928ea88730e600db82e86",
+      "relation_terms": [
+        "influence",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "divorce",
+        "effects",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "divorce"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-divorce",
+      "manifest_order": 3,
+      "obligation": "Effects of divorce on children development and well-being.",
+      "obligation_id": "37:o4",
+      "query": "divorce effects children development well-being",
+      "query_sha256": "b08a14aefc71472608db8e58665f0df62d53248c52c895c98acec86349110e6a",
+      "relation_terms": [
+        "effects",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "trauma",
+        "effects",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "trauma"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-trauma",
+      "manifest_order": 4,
+      "obligation": "Effects of trauma on children development and well-being.",
+      "obligation_id": "37:o5",
+      "query": "trauma effects children development well-being",
+      "query_sha256": "ec7ad05ba0a7b8d12699c218aa1e3b89584a10ac539c96bf8d58f5b704be48c3",
+      "relation_terms": [
+        "effects",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "adoption",
+        "effects",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "adoption"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-adoption",
+      "manifest_order": 5,
+      "obligation": "Effects of adoption on children development and well-being.",
+      "obligation_id": "37:o6",
+      "query": "adoption effects children development well-being",
+      "query_sha256": "10c27de417e994a104d93e7f4e5392d94dd14d03d016856496fc93d099202fd6",
+      "relation_terms": [
+        "effects",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "single",
+        "parents",
+        "effects",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "single",
+        "parents"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-single-parents",
+      "manifest_order": 6,
+      "obligation": "Effects of having single parents on children development and well-being.",
+      "obligation_id": "37:o7",
+      "query": "single parents effects children development well-being",
+      "query_sha256": "6c758320dda8c357e23c28f8ace0af7c33a70bd7df164786c7d6e9bfc13cd2a1",
+      "relation_terms": [
+        "effects",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "working",
+        "parents",
+        "effects",
+        "children",
+        "development",
+        "well",
+        "being"
+      ],
+      "anchor_terms": [
+        "working",
+        "parents"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "37-working-parents",
+      "manifest_order": 7,
+      "obligation": "Effects of having working parents on children development and well-being.",
+      "obligation_id": "37:o8",
+      "query": "working parents effects children development well-being",
+      "query_sha256": "562a7b734c2c9a093d178cb0b4142d78d26e3bbfd46b7ae24a8a17abf996e12e",
+      "relation_terms": [
+        "effects",
+        "development",
+        "well-being"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "family",
+        "strategies",
+        "building",
+        "strong",
+        "foundations",
+        "overcoming",
+        "common",
+        "challenges"
+      ],
+      "anchor_terms": [
+        "family"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "family"
+      ],
+      "facet_id": "37-strategies",
+      "manifest_order": 8,
+      "obligation": "Strategies for building strong family foundations and overcoming common challenges.",
+      "obligation_id": "37:o9",
+      "query": "family strategies building strong foundations overcoming common challenges",
+      "query_sha256": "7a827e5f1f88b010589aa947420e1f1e5b49df3c749e0e01af6fef95183d802d",
+      "relation_terms": [
+        "strategies",
+        "building",
+        "overcoming"
+      ],
+      "topic_id": "37"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
+        "pros"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "energy"
+      ],
+      "facet_id": "58-pros",
+      "manifest_order": 0,
+      "obligation": "Pros of nuclear energy.",
+      "obligation_id": "58:o1",
+      "query": "nuclear energy pros",
+      "query_sha256": "895913b54d00dcf7ab7bf9559b3b307d7a699de8556ff6737c44c34e6597efd1",
+      "relation_terms": [
+        "pros"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
+        "cons"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "energy"
+      ],
+      "facet_id": "58-cons",
+      "manifest_order": 1,
+      "obligation": "Cons of nuclear energy.",
+      "obligation_id": "58:o2",
+      "query": "nuclear energy cons",
+      "query_sha256": "a4de481c639da9b69fc785840d0fec8352ec4794dafa1afbabfa0adbe5925ee9",
+      "relation_terms": [
+        "cons"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
+        "safety",
+        "accident",
+        "risks",
+        "chernobyl"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Chernobyl"
+      ],
+      "facet_id": "58-safety-risks",
+      "manifest_order": 2,
+      "obligation": "Nuclear energy safety and accident risks such as Chernobyl.",
+      "obligation_id": "58:o3",
+      "query": "nuclear energy safety accident risks Chernobyl",
+      "query_sha256": "94db2e77c6cc5e9b0fd5907aace6bc17f711aefee066ab472fbd5234113f264b",
+      "relation_terms": [
+        "safety",
+        "risks"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
+        "uses"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "energy"
+      ],
+      "facet_id": "58-uses",
+      "manifest_order": 3,
+      "obligation": "Uses of nuclear energy.",
+      "obligation_id": "58:o4",
+      "query": "nuclear energy uses",
+      "query_sha256": "2b007cbcdba2b642f0c7fd833af15a7e096c91946d4b219ef9b1b4b0867ed6b0",
+      "relation_terms": [
+        "uses"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
+        "climate",
+        "change",
+        "impact"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "climate",
+        "change"
+      ],
+      "facet_id": "58-climate",
+      "manifest_order": 4,
+      "obligation": "Nuclear energy impact on climate change.",
+      "obligation_id": "58:o5",
+      "query": "nuclear energy climate change impact",
+      "query_sha256": "f7f999d8b28ab43abca5d75b59009cc4380a038b4e8302a9896b820109dbd03c",
+      "relation_terms": [
+        "impact"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
+        "comparison",
+        "fusion",
+        "other",
+        "energy",
+        "forms"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["comparison"],
+          "not_candidate_answer_rationale": "A relation label, not an energy form or comparison result.",
+          "purpose": "relation_paraphrasing",
+          "scope_rationale": "Nominalizes the narrative request to compare nuclear energy with other energy forms.",
+          "source": "Ordinary relation paraphrase of the narrative verb 'compare'.",
+          "surface": "comparison"
+        }
+      ],
+      "domain_terms": [
+        "energy",
+        "forms"
+      ],
+      "facet_id": "58-fusion",
+      "manifest_order": 5,
+      "obligation": "Comparison of nuclear energy with fusion and other energy forms.",
+      "obligation_id": "58:o6",
+      "query": "nuclear energy comparison fusion other energy forms",
+      "query_sha256": "2f347ea7d3e7e3223cdb148cb9cc1dba2ca5d13dad51caed8fe55755bf38ce5a",
+      "relation_terms": [
+        "comparison",
+        "fusion"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "bison",
+        "energy",
+        "source"
+      ],
+      "anchor_terms": [
+        "bison",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "energy"
+      ],
+      "facet_id": "58-bison-energy",
+      "manifest_order": 6,
+      "obligation": "Information about the energy source called bison energy.",
+      "obligation_id": "58:o7",
+      "query": "bison energy source",
+      "query_sha256": "e92fcb671d06a01e3a78db8a61e97dc47936ea92046ba76625e5665d7966332e",
+      "relation_terms": [
+        "source"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "peninsula",
+        "clean",
+        "energy",
+        "source"
+      ],
+      "anchor_terms": [
+        "Peninsula",
+        "Clean",
+        "Energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "energy"
+      ],
+      "facet_id": "58-peninsula-clean-energy",
+      "manifest_order": 7,
+      "obligation": "Information about the energy source called Peninsula Clean Energy.",
+      "obligation_id": "58:o8",
+      "query": "Peninsula Clean Energy source",
+      "query_sha256": "af682f45b73ececff73d7210b5f8ba03b1579efacad97d6efe171268137cb041",
+      "relation_terms": [
+        "source"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "environmental",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["environmental"],
+          "not_candidate_answer_rationale": "A domain adjective, not an environmental effect.",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Converts the narrative noun 'environment' into its conventional adjective without narrowing scope.",
+          "source": "Ordinary domain paraphrase of the narrative term 'environment'.",
+          "surface": "environmental"
+        }
+      ],
+      "domain_terms": [
+        "environmental"
+      ],
+      "facet_id": "72-environment",
+      "manifest_order": 0,
+      "obligation": "Environmental impacts of deforestation.",
+      "obligation_id": "72:o1",
+      "query": "deforestation environmental impacts",
+      "query_sha256": "e64c15705bf4c2c2f66b6a25de10288476959f108cc66ba9dc2e1c9b865e3d7f",
+      "relation_terms": [
+        "impacts"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "climate",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "climate"
+      ],
+      "facet_id": "72-climate",
+      "manifest_order": 1,
+      "obligation": "Climate impacts of deforestation.",
+      "obligation_id": "72:o2",
+      "query": "deforestation climate impacts",
+      "query_sha256": "1da2dbb941cba751a6958763c675ff8f6d849bfa8875e4b97d88e16b7f046255",
+      "relation_terms": [
+        "impacts"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "effects",
+        "animals"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "animals"
+      ],
+      "facet_id": "72-animals",
+      "manifest_order": 2,
+      "obligation": "Effects of deforestation on animals.",
+      "obligation_id": "72:o3",
+      "query": "deforestation effects animals",
+      "query_sha256": "a1029fae1233e551d8ea6dc7617a0de6ecbc8e3957b7b5219aee9b4a0204857c",
+      "relation_terms": [
+        "effects"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "effects",
+        "humans"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "humans"
+      ],
+      "facet_id": "72-humans",
+      "manifest_order": 3,
+      "obligation": "Effects of deforestation on humans.",
+      "obligation_id": "72:o4",
+      "query": "deforestation effects humans",
+      "query_sha256": "2c5c2b71590e811e7a5901eaffa3a5388085f6aa42b095b204de22f281d6b2cc",
+      "relation_terms": [
+        "effects"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "main",
+        "causes"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "deforestation"
+      ],
+      "facet_id": "72-causes",
+      "manifest_order": 4,
+      "obligation": "Main causes of deforestation.",
+      "obligation_id": "72:o5",
+      "query": "deforestation main causes",
+      "query_sha256": "c433f422caff9a9ee56bfa44e2373a0ce4cc2a484667a374543832cdec170380",
+      "relation_terms": [
+        "causes"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "effects",
+        "amazon",
+        "rainforest"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Amazon",
+        "rainforest"
+      ],
+      "facet_id": "72-amazon",
+      "manifest_order": 5,
+      "obligation": "Effects of deforestation on the Amazon rainforest.",
+      "obligation_id": "72:o6",
+      "query": "deforestation effects Amazon rainforest",
+      "query_sha256": "918af87511ccd1dcccc76f53febe3f63fc7a6ff97b1fa9d91bcb135c1039e182",
+      "relation_terms": [
+        "effects"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "deforestation",
+        "prevent",
+        "actions"
+      ],
+      "anchor_terms": [
+        "deforestation"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "deforestation"
+      ],
+      "facet_id": "72-prevention",
+      "manifest_order": 6,
+      "obligation": "Actions that can prevent deforestation.",
+      "obligation_id": "72:o7",
+      "query": "deforestation prevent actions",
+      "query_sha256": "1557c1c4469f28aee126e033bfe3d9d1f246d471ad22f46eb0a460a521d06921",
+      "relation_terms": [
+        "prevent",
+        "actions"
+      ],
+      "topic_id": "72"
+    },
+    {
+      "analyzer_terms": [
+        "human",
+        "vaccines",
+        "safety"
+      ],
+      "anchor_terms": [
+        "vaccines"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "human"
+      ],
+      "facet_id": "84-safety",
+      "manifest_order": 0,
+      "obligation": "Safety of human vaccines.",
+      "obligation_id": "84:o1",
+      "query": "human vaccines safety",
+      "query_sha256": "fd5d58cb4ce07ce2d8f297ccdb257446b4d769ff6e6e3c576effd8b336d150b6",
+      "relation_terms": [
+        "safety"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "public",
+        "vaccine",
+        "hesitancy",
+        "causes",
+        "covid",
+        "19"
+      ],
+      "anchor_terms": [
+        "vaccine"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "public",
+        "COVID-19"
+      ],
+      "facet_id": "84-hesitancy",
+      "manifest_order": 1,
+      "obligation": "Causes of public vaccine hesitancy especially around COVID-19.",
+      "obligation_id": "84:o2",
+      "query": "public vaccine hesitancy causes COVID-19",
+      "query_sha256": "ec2778be10bf8273cf3b7dfbfab52957a467df8cbd814a78d1a2f35d60ec47f6",
+      "relation_terms": [
+        "hesitancy",
+        "causes"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "human",
+        "vaccines",
+        "different",
+        "types"
+      ],
+      "anchor_terms": [
+        "vaccines"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "human"
+      ],
+      "facet_id": "84-types",
+      "manifest_order": 2,
+      "obligation": "Different types of human vaccines.",
+      "obligation_id": "84:o3",
+      "query": "human vaccines different types",
+      "query_sha256": "4515b44aa84bd7e6bcb2852a6445f8f6539ec8ebc44eb2bf7ac410d812659f4d",
+      "relation_terms": [
+        "types"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "human",
+        "vaccination",
+        "recommended",
+        "schedules"
+      ],
+      "anchor_terms": [
+        "vaccination"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "human"
+      ],
+      "facet_id": "84-schedules",
+      "manifest_order": 3,
+      "obligation": "Recommended schedules for human vaccination.",
+      "obligation_id": "84:o4",
+      "query": "human vaccination recommended schedules",
+      "query_sha256": "1bbcbc184b3ac9a762c715aeb8978ff4477dc419a873cd8c517af6b04aeee84a",
+      "relation_terms": [
+        "recommended",
+        "schedules"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "vaccination",
+        "affects",
+        "global",
+        "health"
+      ],
+      "anchor_terms": [
+        "vaccination"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "global",
+        "health"
+      ],
+      "facet_id": "84-global-health",
+      "manifest_order": 4,
+      "obligation": "How vaccination affects global health.",
+      "obligation_id": "84:o5",
+      "query": "vaccination affects global health",
+      "query_sha256": "644bc5f23b5e6dc7c205e3ad11abe04dc6b364705e87baa8ac2b6dd96e6c1f6d",
+      "relation_terms": [
+        "affects"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "vaccination",
+        "historical",
+        "public",
+        "health",
+        "challenges"
+      ],
+      "anchor_terms": [
+        "vaccination"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "public",
+        "health"
+      ],
+      "facet_id": "84-history",
+      "manifest_order": 5,
+      "obligation": "Historical public health challenges involving vaccination.",
+      "obligation_id": "84:o6",
+      "query": "vaccination historical public health challenges",
+      "query_sha256": "851d5e2d830a4b671dfe7d451af407f93b5fd669f1628e2482696b0308e8d775",
+      "relation_terms": [
+        "historical",
+        "challenges"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "animal",
+        "vaccinations",
+        "recommendations"
+      ],
+      "anchor_terms": [
+        "vaccinations"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "animal"
+      ],
+      "facet_id": "84-animals",
+      "manifest_order": 6,
+      "obligation": "Recommendations for animal vaccinations.",
+      "obligation_id": "84:o7",
+      "query": "animal vaccinations recommendations",
+      "query_sha256": "f9fc3b211077ebf028dd46297e652f94f0af9fba7b49b0614f4ed9427827dbf5",
+      "relation_terms": [
+        "recommendations"
+      ],
+      "topic_id": "84"
+    },
+    {
+      "analyzer_terms": [
+        "banks",
+        "silicon",
+        "valley",
+        "bank",
+        "why",
+        "fail"
+      ],
+      "anchor_terms": [
+        "banks"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Silicon",
+        "Valley",
+        "Bank"
+      ],
+      "facet_id": "144-bank-failure",
+      "manifest_order": 0,
+      "obligation": "Why banks such as Silicon Valley Bank fail.",
+      "obligation_id": "144:o1",
+      "query": "banks Silicon Valley Bank why fail",
+      "query_sha256": "4fbdf5143f6f8abd10fd25f6a4f59a6b6076943aa5f99cd4e4af2abda4979567",
+      "relation_terms": [
+        "why",
+        "fail"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "financial",
+        "institutions",
+        "hidden",
+        "investor",
+        "risks"
+      ],
+      "anchor_terms": [
+        "financial",
+        "institutions"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "investors"
+      ],
+      "facet_id": "144-investor-risks",
+      "manifest_order": 1,
+      "obligation": "Hidden risks investors face in financial institutions.",
+      "obligation_id": "144:o2",
+      "query": "financial institutions hidden investor risks",
+      "query_sha256": "85ac6ee0a2589029a6d073291a5980658c260ab106983d99b81b3b759f0be4f6",
+      "relation_terms": [
+        "hidden",
+        "risks"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "banks",
+        "credit",
+        "unions",
+        "compare",
+        "safety",
+        "trust"
+      ],
+      "anchor_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "facet_id": "144-safety-trust",
+      "manifest_order": 2,
+      "obligation": "How banks and credit unions compare in safety and trust.",
+      "obligation_id": "144:o3",
+      "query": "banks credit unions compare safety trust",
+      "query_sha256": "9c891947a955f57a66d8d3ed75116f6550edde42ebf3a54eda327ffb7c5fcd40",
+      "relation_terms": [
+        "compare",
+        "safety",
+        "trust"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "banks",
+        "credit",
+        "unions",
+        "compare",
+        "services"
+      ],
+      "anchor_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "facet_id": "144-services",
+      "manifest_order": 3,
+      "obligation": "How banks and credit unions compare in services.",
+      "obligation_id": "144:o4",
+      "query": "banks credit unions compare services",
+      "query_sha256": "a38dff75aa2b4b1c6732a31a940a4b7047e6b2c6bb5e84b3531d82364bcf4c11",
+      "relation_terms": [
+        "compare",
+        "services"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "banks",
+        "credit",
+        "unions",
+        "compare",
+        "regulation"
+      ],
+      "anchor_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "facet_id": "144-regulation",
+      "manifest_order": 4,
+      "obligation": "How banks and credit unions compare in regulation.",
+      "obligation_id": "144:o5",
+      "query": "banks credit unions compare regulation",
+      "query_sha256": "e8703dad461dabb0795be06dec8f38c25963c93a5432567412f9e5dabad7ad08",
+      "relation_terms": [
+        "compare",
+        "regulation"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "banks",
+        "credit",
+        "unions",
+        "roles",
+        "economic",
+        "development"
+      ],
+      "anchor_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "economic",
+        "development"
+      ],
+      "facet_id": "144-economic-development",
+      "manifest_order": 5,
+      "obligation": "Roles of banks and credit unions in economic development.",
+      "obligation_id": "144:o6",
+      "query": "banks credit unions roles economic development",
+      "query_sha256": "496b567f618bee6d21333a9fa4ccdc5cc9a5a28c83bf9a681b2cbd21ef43a7d7",
+      "relation_terms": [
+        "roles"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "abortion",
+        "main",
+        "arguments",
+        "why",
+        "people",
+        "different",
+        "views"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "people"
+      ],
+      "facet_id": "161-arguments-views",
+      "manifest_order": 0,
+      "obligation": "Main abortion arguments and why people hold different views.",
+      "obligation_id": "161:o1",
+      "query": "abortion main arguments why people different views",
+      "query_sha256": "c290732f0d2a7ef2bf05c7aa25e267fc02c93f8df169c698d12979d2e431ef32",
+      "relation_terms": [
+        "arguments",
+        "views"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "abortion",
+        "laws",
+        "shaped",
+        "rights"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "rights"
+      ],
+      "facet_id": "161-laws-rights",
+      "manifest_order": 1,
+      "obligation": "How laws have shaped abortion rights.",
+      "obligation_id": "161:o2",
+      "query": "abortion laws shaped rights",
+      "query_sha256": "d5f0356f06e46ab4271735a8606f74f53a6585b90f3abb9bac121e8b1744653a",
+      "relation_terms": [
+        "laws",
+        "shaped"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "abortion",
+        "rapture",
+        "beliefs",
+        "shaped",
+        "rights"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "rights"
+      ],
+      "facet_id": "161-rapture-beliefs",
+      "manifest_order": 2,
+      "obligation": "How beliefs such as the Rapture have shaped abortion rights.",
+      "obligation_id": "161:o3",
+      "query": "abortion Rapture beliefs shaped rights",
+      "query_sha256": "8e239475fdd73a2913f64665fb85679474e7da7b5efe3d4066f2ec106e21ddf1",
+      "relation_terms": [
+        "Rapture",
+        "beliefs",
+        "shaped"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "abortion",
+        "political",
+        "ideologies",
+        "shaped",
+        "rights"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "rights"
+      ],
+      "facet_id": "161-political-ideologies",
+      "manifest_order": 3,
+      "obligation": "How political ideologies have shaped abortion rights.",
+      "obligation_id": "161:o4",
+      "query": "abortion political ideologies shaped rights",
+      "query_sha256": "eae43b2023498d2c714b1b8d5672176732c4dec4843c40d6fc0bcf9f84aaef96",
+      "relation_terms": [
+        "political",
+        "ideologies",
+        "shaped"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "abortion",
+        "historical",
+        "changes",
+        "shaped",
+        "rights"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "rights"
+      ],
+      "facet_id": "161-historical-changes",
+      "manifest_order": 4,
+      "obligation": "How historical changes have shaped abortion rights.",
+      "obligation_id": "161:o5",
+      "query": "abortion historical changes shaped rights",
+      "query_sha256": "c50bf6016c4696defd2daf090e4d6933fbc90cd195382198663a5ee9b3401384",
+      "relation_terms": [
+        "historical",
+        "changes",
+        "shaped"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "women",
+        "current",
+        "abortion",
+        "options",
+        "pill"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "women"
+      ],
+      "facet_id": "161-current-options",
+      "manifest_order": 5,
+      "obligation": "Current abortion options for women, including the abortion pill.",
+      "obligation_id": "161:o6",
+      "query": "women current abortion options pill",
+      "query_sha256": "7fa2c69f69cfb23d1418917492cba3404876277cd680efea5de3180a3499e345",
+      "relation_terms": [
+        "current",
+        "options",
+        "pill"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "abortion",
+        "women",
+        "rights",
+        "groups",
+        "prioritize",
+        "today"
+      ],
+      "anchor_terms": [
+        "abortion"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["prioritize"],
+          "not_candidate_answer_rationale": "A requested relation, not a rights-group priority.",
+          "purpose": "relation_paraphrasing",
+          "scope_rationale": "Uses the base form of the narrative verb 'prioritizing' without changing the request.",
+          "source": "Conservative relation paraphrase of the narrative verb 'prioritizing'.",
+          "surface": "prioritize"
+        }
+      ],
+      "domain_terms": [
+        "women",
+        "rights",
+        "groups"
+      ],
+      "facet_id": "161-rights-groups",
+      "manifest_order": 6,
+      "obligation": "What women rights groups prioritize today regarding abortion.",
+      "obligation_id": "161:o7",
+      "query": "abortion women rights groups prioritize today",
+      "query_sha256": "9cc86657a2c505520ec237f98aa910712288e85484e5a3372cf38999f9b601f0",
+      "relation_terms": [
+        "prioritize",
+        "today"
+      ],
+      "topic_id": "161"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "what",
+        "it",
+        "was",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-definition",
+      "manifest_order": 0,
+      "obligation": "What the Holocaust was, particularly for European Jewry.",
+      "obligation_id": "200:o1",
+      "query": "Holocaust what it was European Jewry",
+      "query_sha256": "08d3bb7e566d8d4811715e5973a8544c7821b3adcd5e81b7f36481c797ddff29",
+      "relation_terms": [
+        "what",
+        "was"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "why",
+        "transpired",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-why",
+      "manifest_order": 1,
+      "obligation": "Why the Holocaust transpired.",
+      "obligation_id": "200:o2",
+      "query": "Holocaust why transpired European Jewry",
+      "query_sha256": "ad6c5b763c43366ec57feae71b1e5f4cdd731dc93857680f699a145770c10c04",
+      "relation_terms": [
+        "why",
+        "transpired"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "how",
+        "transpired",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-how",
+      "manifest_order": 2,
+      "obligation": "How the Holocaust transpired.",
+      "obligation_id": "200:o3",
+      "query": "Holocaust how transpired European Jewry",
+      "query_sha256": "6324260019c9ec8fbdc58f5a819cd911eab2e957864f8db83ee53dd0e5b33b08",
+      "relation_terms": [
+        "how",
+        "transpired"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "who",
+        "was",
+        "responsible",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-responsibility",
+      "manifest_order": 3,
+      "obligation": "Who was responsible for the Holocaust.",
+      "obligation_id": "200:o4",
+      "query": "Holocaust who was responsible European Jewry",
+      "query_sha256": "b4b182b58cc5f51902f28648ee72469b43ad2f7f45e1c59d80e5bb6f6cceac20",
+      "relation_terms": [
+        "responsible"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "historical",
+        "societal",
+        "impact",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-impact",
+      "manifest_order": 4,
+      "obligation": "Historical and societal impact of the Holocaust on European Jewry.",
+      "obligation_id": "200:o5",
+      "query": "Holocaust historical societal impact European Jewry",
+      "query_sha256": "685b3219e7e8113447c34646595470d09057288f531a94d5c9524b8151bd7413",
+      "relation_terms": [
+        "historical",
+        "societal",
+        "impact"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "conclusion",
+        "how",
+        "concluded",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["concluded"],
+          "not_candidate_answer_rationale": "A relation verb, not an account of how the Holocaust ended.",
+          "purpose": "relation_paraphrasing",
+          "scope_rationale": "Verbalizes the narrative noun 'conclusion' while preserving the requested ending relation.",
+          "source": "Ordinary relation paraphrase of the narrative term 'conclusion'.",
+          "surface": "concluded"
+        }
+      ],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-conclusion",
+      "manifest_order": 5,
+      "obligation": "How the Holocaust concluded.",
+      "obligation_id": "200:o6",
+      "query": "Holocaust conclusion how concluded European Jewry",
+      "query_sha256": "940116a7c9836f0616e1dab5c5d53e055487e03c692375f916d1c3e5e61017aa",
+      "relation_terms": [
+        "conclusion",
+        "concluded"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "lasting",
+        "effects",
+        "european",
+        "jewry"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "European",
+        "Jewry"
+      ],
+      "facet_id": "200-lasting-effects",
+      "manifest_order": 6,
+      "obligation": "Lasting effects of the Holocaust on European Jewry.",
+      "obligation_id": "200:o7",
+      "query": "Holocaust lasting effects European Jewry",
+      "query_sha256": "824ebac23ac4c9aa443b8c658e4cbb31faa33d6aa5e4e5d81126f57177e90107",
+      "relation_terms": [
+        "lasting",
+        "effects"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "aligns",
+        "destructive",
+        "historical",
+        "events",
+        "sodom",
+        "gomorrah"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "historical",
+        "events"
+      ],
+      "facet_id": "200-historical-comparison",
+      "manifest_order": 7,
+      "obligation": "How the Holocaust aligns with destructive historical events such as Sodom and Gomorrah.",
+      "obligation_id": "200:o8",
+      "query": "Holocaust aligns destructive historical events Sodom Gomorrah",
+      "query_sha256": "9c03ffaec50cbe1662a26d02910d070c714ab999964b0a06991aa543a1335e78",
+      "relation_terms": [
+        "aligns",
+        "Sodom",
+        "Gomorrah"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "origins"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Korean",
+        "War"
+      ],
+      "facet_id": "213-origins",
+      "manifest_order": 0,
+      "obligation": "Origins of the Korean War.",
+      "obligation_id": "213:o1",
+      "query": "Korean War origins",
+      "query_sha256": "9b2918048991302557fbdd5363ed02beaf90acc606cfb689a8249588353ba010",
+      "relation_terms": [
+        "origins"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "how",
+        "ended"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Korean",
+        "War"
+      ],
+      "facet_id": "213-ending",
+      "manifest_order": 1,
+      "obligation": "How the Korean War ended.",
+      "obligation_id": "213:o2",
+      "query": "Korean War how ended",
+      "query_sha256": "1de77371152c2c05f08db10365d7ac144739902b3b7983b19b793aa652e2d5bc",
+      "relation_terms": [
+        "ended"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "why",
+        "us",
+        "involved"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "US"
+      ],
+      "facet_id": "213-us-involvement",
+      "manifest_order": 2,
+      "obligation": "Why the US got involved in the Korean War.",
+      "obligation_id": "213:o3",
+      "query": "Korean War why US involved",
+      "query_sha256": "4139e5193f150cbb863cc40637af16952bfc51658a99a414743892040e16c7f9",
+      "relation_terms": [
+        "why",
+        "involved"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "us",
+        "involvement",
+        "cold",
+        "war",
+        "strategy"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["involvement"],
+          "not_candidate_answer_rationale": "A relation noun, not a reason for US participation.",
+          "purpose": "relation_paraphrasing",
+          "scope_rationale": "Nominalizes the narrative phrase 'got involved' without adding a cause or outcome.",
+          "source": "Ordinary relation paraphrase of the narrative phrase 'got involved'.",
+          "surface": "involvement"
+        }
+      ],
+      "domain_terms": [
+        "US",
+        "Cold",
+        "War"
+      ],
+      "facet_id": "213-cold-war",
+      "manifest_order": 3,
+      "obligation": "US involvement in the Korean War in the context of Cold War strategy.",
+      "obligation_id": "213:o4",
+      "query": "Korean War US involvement Cold War strategy",
+      "query_sha256": "c0a41b118a215e730590f4c802b1f3c198b27e19abd62071938b0682a6e28f44",
+      "relation_terms": [
+        "involvement",
+        "strategy"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "effects",
+        "us",
+        "politics"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "US",
+        "politics"
+      ],
+      "facet_id": "213-us-politics",
+      "manifest_order": 4,
+      "obligation": "Effects of the Korean War on US politics.",
+      "obligation_id": "213:o5",
+      "query": "Korean War effects US politics",
+      "query_sha256": "996d3bc5298b253cff35e6f5966b2e1797157a621d1f66b1fabad2c56c78c853",
+      "relation_terms": [
+        "effects"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "major",
+        "errors"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Korean",
+        "War"
+      ],
+      "facet_id": "213-errors",
+      "manifest_order": 5,
+      "obligation": "Major errors that occurred during the Korean War.",
+      "obligation_id": "213:o6",
+      "query": "Korean War major errors",
+      "query_sha256": "ebf6b2fce58a8c3e1aba20c453f7aa91d445bd026da25ef29478a97e5820be89",
+      "relation_terms": [
+        "errors"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "korean",
+        "war",
+        "different",
+        "us",
+        "presidents",
+        "perceived",
+        "conflict"
+      ],
+      "anchor_terms": [
+        "Korean",
+        "War"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "US",
+        "presidents"
+      ],
+      "facet_id": "213-presidents",
+      "manifest_order": 6,
+      "obligation": "How different US presidents perceived the Korean War.",
+      "obligation_id": "213:o7",
+      "query": "Korean War different US presidents perceived conflict",
+      "query_sha256": "c5e0827cc157a426f6451d1f9d567164ae03165e46a45e441c266cc33f8d570d",
+      "relation_terms": [
+        "perceived",
+        "conflict"
+      ],
+      "topic_id": "213"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "positive",
+        "effects",
+        "society",
+        "daily",
+        "life"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "society",
+        "daily",
+        "life"
+      ],
+      "facet_id": "219-positive",
+      "manifest_order": 0,
+      "obligation": "Positive effects of technology on society and daily life.",
+      "obligation_id": "219:o1",
+      "query": "technology positive effects society daily life",
+      "query_sha256": "294f7ab2b5669ed1dd27eea1e4cd399d5bef8c951558ae7f47390c233a094e18",
+      "relation_terms": [
+        "positive",
+        "effects"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "negative",
+        "effects",
+        "society",
+        "daily",
+        "life"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "society",
+        "daily",
+        "life"
+      ],
+      "facet_id": "219-negative",
+      "manifest_order": 1,
+      "obligation": "Negative effects of technology on society and daily life.",
+      "obligation_id": "219:o2",
+      "query": "technology negative effects society daily life",
+      "query_sha256": "28888e851f5e7d22974056a91f26b1f9861a3b9218ba00e165d908989ef983e1",
+      "relation_terms": [
+        "negative",
+        "effects"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "societal",
+        "impact",
+        "government"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "government"
+      ],
+      "facet_id": "219-government",
+      "manifest_order": 2,
+      "obligation": "Technology societal impact on government.",
+      "obligation_id": "219:o3",
+      "query": "technology societal impact government",
+      "query_sha256": "7069d6ffb6602894875f01e4f79d87934de851da9c8c3797c5eb9fbd630f17f0",
+      "relation_terms": [
+        "societal",
+        "impact"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "societal",
+        "impact",
+        "business"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "business"
+      ],
+      "facet_id": "219-business",
+      "manifest_order": 3,
+      "obligation": "Technology societal impact on business.",
+      "obligation_id": "219:o4",
+      "query": "technology societal impact business",
+      "query_sha256": "436db311e2bd67495fb44d8ffdf7535ba382bfc50e95b3a669e2a5c0d8162929",
+      "relation_terms": [
+        "societal",
+        "impact"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "impact",
+        "telehealth",
+        "business"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "telehealth",
+        "business"
+      ],
+      "facet_id": "219-telehealth",
+      "manifest_order": 4,
+      "obligation": "Technology impact on telehealth business.",
+      "obligation_id": "219:o5",
+      "query": "technology impact telehealth business",
+      "query_sha256": "c512e826e9e9276eb72682ba0578b9db0636f5c55cc8d501847d24a7606eedd3",
+      "relation_terms": [
+        "impact"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "role",
+        "technical",
+        "societies"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "technical",
+        "societies"
+      ],
+      "facet_id": "219-societies",
+      "manifest_order": 5,
+      "obligation": "Role of technical societies in technology.",
+      "obligation_id": "219:o6",
+      "query": "technology role technical societies",
+      "query_sha256": "d7b2387721adfcf20c0143ba01e144a48407e55656d7a91b0b51c26abb6c4d05",
+      "relation_terms": [
+        "role"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technological",
+        "advancements",
+        "why",
+        "rationing",
+        "devices",
+        "needed"
+      ],
+      "anchor_terms": [
+        "technological"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "devices"
+      ],
+      "facet_id": "219-rationing",
+      "manifest_order": 6,
+      "obligation": "Why rationing devices may be needed with technological advancements.",
+      "obligation_id": "219:o7",
+      "query": "technological advancements why rationing devices needed",
+      "query_sha256": "9e86a727c096c75dd6ee2b5905b4d0b8ee2168b388e123e935cb000bc4e5cb70",
+      "relation_terms": [
+        "advancements",
+        "rationing",
+        "needed"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "people",
+        "why",
+        "immigrate",
+        "become",
+        "refugees"
+      ],
+      "anchor_terms": [
+        "immigrate",
+        "refugees"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "people"
+      ],
+      "facet_id": "224-reasons",
+      "manifest_order": 0,
+      "obligation": "Why people immigrate or become refugees.",
+      "obligation_id": "224:o1",
+      "query": "people why immigrate become refugees",
+      "query_sha256": "a0f34e333a78fa0e0e03d3aeb2450d6d54b30955e98a5b6593d63dd30db7d96c",
+      "relation_terms": [
+        "why"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "immigrants",
+        "refugees",
+        "challenges",
+        "face"
+      ],
+      "anchor_terms": [
+        "immigrants",
+        "refugees"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "immigrants",
+        "refugees"
+      ],
+      "facet_id": "224-challenges",
+      "manifest_order": 1,
+      "obligation": "Challenges immigrants and refugees face.",
+      "obligation_id": "224:o2",
+      "query": "immigrants refugees challenges face",
+      "query_sha256": "c342f0b6335bb7909490540079a49dc94bd5c4454d94ed1cfbdaf0f21f73cc0b",
+      "relation_terms": [
+        "challenges",
+        "face"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "immigration",
+        "laws",
+        "shape",
+        "policies"
+      ],
+      "anchor_terms": [
+        "immigration"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "policies"
+      ],
+      "facet_id": "224-laws",
+      "manifest_order": 2,
+      "obligation": "How laws shape immigration policies.",
+      "obligation_id": "224:o3",
+      "query": "immigration laws shape policies",
+      "query_sha256": "cb8252820cfd85066e74f6a4c89b27c6fee2bac473f53f211b38d715163e8ef5",
+      "relation_terms": [
+        "laws",
+        "shape"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "immigration",
+        "different",
+        "groups",
+        "shape",
+        "policies"
+      ],
+      "anchor_terms": [
+        "immigration"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "groups"
+      ],
+      "facet_id": "224-groups",
+      "manifest_order": 3,
+      "obligation": "How different groups shape immigration policies.",
+      "obligation_id": "224:o4",
+      "query": "immigration different groups shape policies",
+      "query_sha256": "55a50735273dae66725ef7beab429f2daaa10b6a5994b6be42fb37aa1bcca5b8",
+      "relation_terms": [
+        "shape",
+        "policies"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "immigrants",
+        "various",
+        "countries",
+        "views"
+      ],
+      "anchor_terms": [
+        "immigrants"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "countries"
+      ],
+      "facet_id": "224-countries",
+      "manifest_order": 4,
+      "obligation": "How various countries view immigrants.",
+      "obligation_id": "224:o5",
+      "query": "immigrants various countries views",
+      "query_sha256": "78de47e8ff73fa7d4f8400ff38bfc71cd7dcf1b2bdc71288c4b16ca8093f97fb",
+      "relation_terms": [
+        "views"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "immigrants",
+        "various",
+        "religions",
+        "views"
+      ],
+      "anchor_terms": [
+        "immigrants"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "religions"
+      ],
+      "facet_id": "224-religions",
+      "manifest_order": 5,
+      "obligation": "How various religions view immigrants.",
+      "obligation_id": "224:o6",
+      "query": "immigrants various religions views",
+      "query_sha256": "03a3de4c292a503ee5ba7678ac3f1e23dcd2c407b7154abe478b3997b0785b6a",
+      "relation_terms": [
+        "views"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "migrant",
+        "workers",
+        "options",
+        "improve",
+        "lives"
+      ],
+      "anchor_terms": [
+        "migrant",
+        "workers"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "migrant",
+        "workers"
+      ],
+      "facet_id": "224-migrant-workers",
+      "manifest_order": 6,
+      "obligation": "Options migrant workers have to improve their lives.",
+      "obligation_id": "224:o7",
+      "query": "migrant workers options improve lives",
+      "query_sha256": "2e086016f220a43018e6bc8473ab3d5f4c687f23f6cd15c89ec0ddd1ca6037af",
+      "relation_terms": [
+        "options",
+        "improve"
+      ],
+      "topic_id": "224"
+    },
+    {
+      "analyzer_terms": [
+        "violent",
+        "video",
+        "games",
+        "gory",
+        "content",
+        "affect",
+        "human",
+        "aggression"
+      ],
+      "anchor_terms": [
+        "violent",
+        "video",
+        "games"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "human"
+      ],
+      "facet_id": "225-aggression",
+      "manifest_order": 0,
+      "obligation": "How violent video games and gory content affect human aggression.",
+      "obligation_id": "225:o1",
+      "query": "violent video games gory content affect human aggression",
+      "query_sha256": "03948ae383b0aab08bf95810f5467a31a3e647d564a5982578c39e674ed32939",
+      "relation_terms": [
+        "aggression",
+        "affect"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "violent",
+        "video",
+        "games",
+        "gory",
+        "content",
+        "affect",
+        "human",
+        "desensitization"
+      ],
+      "anchor_terms": [
+        "violent",
+        "video",
+        "games"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "human"
+      ],
+      "facet_id": "225-desensitization",
+      "manifest_order": 1,
+      "obligation": "How violent video games and gory content affect human desensitization.",
+      "obligation_id": "225:o2",
+      "query": "violent video games gory content affect human desensitization",
+      "query_sha256": "978121717bddcd36717affcb21b16b8e41b23a1351dfd0ad76e4d9306e12c2a3",
+      "relation_terms": [
+        "desensitization",
+        "affect"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "violent",
+        "video",
+        "games",
+        "gory",
+        "content",
+        "affect",
+        "human",
+        "addiction"
+      ],
+      "anchor_terms": [
+        "violent",
+        "video",
+        "games"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "human"
+      ],
+      "facet_id": "225-addiction",
+      "manifest_order": 2,
+      "obligation": "How violent video games and gory content affect human addiction.",
+      "obligation_id": "225:o3",
+      "query": "violent video games gory content affect human addiction",
+      "query_sha256": "30c3098458ed641eba799ccdbc5aa2ca00f58b61cb1bf2b0ff398bbeb1544b1c",
+      "relation_terms": [
+        "addiction",
+        "affect"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "human",
+        "aggression",
+        "children",
+        "broader",
+        "causes"
+      ],
+      "anchor_terms": [
+        "aggression"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "children"
+      ],
+      "facet_id": "225-children-causes",
+      "manifest_order": 3,
+      "obligation": "Broader causes of aggression in children.",
+      "obligation_id": "225:o4",
+      "query": "human aggression children broader causes",
+      "query_sha256": "ac1e3570da7148db8336f070a7963bfbfc19c6aaf3f81843162ac6199a9d2418",
+      "relation_terms": [
+        "causes"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "human",
+        "aggression",
+        "adults",
+        "broader",
+        "causes"
+      ],
+      "anchor_terms": [
+        "aggression"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "adults"
+      ],
+      "facet_id": "225-adult-causes",
+      "manifest_order": 4,
+      "obligation": "Broader causes of aggression in adults.",
+      "obligation_id": "225:o5",
+      "query": "human aggression adults broader causes",
+      "query_sha256": "a7dfa06e25f47f6a14fefddb3850f92dc8bfbd170821272ee8dfee54269f2500",
+      "relation_terms": [
+        "causes"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "gaming",
+        "positive",
+        "sides",
+        "humans"
+      ],
+      "anchor_terms": [
+        "gaming"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "humans"
+      ],
+      "facet_id": "225-positive-gaming",
+      "manifest_order": 5,
+      "obligation": "Positive sides of gaming for humans.",
+      "obligation_id": "225:o6",
+      "query": "gaming positive sides humans",
+      "query_sha256": "11b3abc76ad201902c9f5da79219db927c7632a4af0de3e2d726e1cb428ea91a",
+      "relation_terms": [
+        "positive",
+        "sides"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "violent",
+        "video",
+        "games",
+        "gory",
+        "content",
+        "historical",
+        "background",
+        "trends"
+      ],
+      "anchor_terms": [
+        "violent",
+        "video",
+        "games"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "gory",
+        "content"
+      ],
+      "facet_id": "225-history",
+      "manifest_order": 6,
+      "obligation": "Historical background of violent video games and gory content trends.",
+      "obligation_id": "225:o7",
+      "query": "violent video games gory content historical background trends",
+      "query_sha256": "fc70137007292bfc66149f64e8a75fac4e034e2dbb90690092fca32dcb29a2dc",
+      "relation_terms": [
+        "historical",
+        "background",
+        "trends"
+      ],
+      "topic_id": "225"
+    },
+    {
+      "analyzer_terms": [
+        "teenagers",
+        "social",
+        "media",
+        "positive",
+        "mental",
+        "health",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "social",
+        "media"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "teenagers",
+        "mental",
+        "health"
+      ],
+      "facet_id": "233-positive",
+      "manifest_order": 0,
+      "obligation": "Positive impacts of social media on teenagers mental health.",
+      "obligation_id": "233:o1",
+      "query": "teenagers social media positive mental health impacts",
+      "query_sha256": "b0e07161f10d74877a1ab47f85bc8297dacdeb3a2c9ae60cc27fd9151aa06ce9",
+      "relation_terms": [
+        "positive",
+        "impacts"
+      ],
+      "topic_id": "233"
+    },
+    {
+      "analyzer_terms": [
+        "teenagers",
+        "social",
+        "media",
+        "negative",
+        "mental",
+        "health",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "social",
+        "media"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "teenagers",
+        "mental",
+        "health"
+      ],
+      "facet_id": "233-negative",
+      "manifest_order": 1,
+      "obligation": "Negative impacts of social media on teenagers mental health.",
+      "obligation_id": "233:o2",
+      "query": "teenagers social media negative mental health impacts",
+      "query_sha256": "01772bd253c6a07654a2833a156023ce4d178be8dce986ef554f1c63bce7aa79",
+      "relation_terms": [
+        "negative",
+        "impacts"
+      ],
+      "topic_id": "233"
+    },
+    {
+      "analyzer_terms": [
+        "teenagers",
+        "social",
+        "media",
+        "why",
+        "contribute",
+        "depression"
+      ],
+      "anchor_terms": [
+        "social",
+        "media"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "teenagers"
+      ],
+      "facet_id": "233-depression",
+      "manifest_order": 2,
+      "obligation": "Why social media might contribute to depression among teenagers.",
+      "obligation_id": "233:o3",
+      "query": "teenagers social media why contribute depression",
+      "query_sha256": "41358966d97fc00009495913de2bd6f97ded9e49295b6f87d129b30d47dfcf9e",
+      "relation_terms": [
+        "contribute",
+        "depression"
+      ],
+      "topic_id": "233"
+    },
+    {
+      "analyzer_terms": [
+        "africa",
+        "rich",
+        "resources",
+        "why",
+        "underdeveloped",
+        "poor"
+      ],
+      "anchor_terms": [
+        "Africa"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Africa"
+      ],
+      "facet_id": "273-poverty-perception",
+      "manifest_order": 0,
+      "obligation": "Why resource-rich Africa is often seen as underdeveloped or poor.",
+      "obligation_id": "273:o1",
+      "query": "Africa rich resources why underdeveloped poor",
+      "query_sha256": "7d8b4c9708c82b86416fed3a6aea366811fd51b08040a74149961b5573265cd7",
+      "relation_terms": [
+        "resources",
+        "underdeveloped",
+        "poor"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "africa",
+        "resource",
+        "distribution",
+        "underdeveloped",
+        "perception"
+      ],
+      "anchor_terms": [
+        "Africa"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Africa"
+      ],
+      "facet_id": "273-resource-distribution",
+      "manifest_order": 1,
+      "obligation": "How resource distribution contributes to the perception of African underdevelopment.",
+      "obligation_id": "273:o2",
+      "query": "Africa resource distribution underdeveloped perception",
+      "query_sha256": "81d252650270366a608904e9269d1299857662c6a09feccfdd95b5c5d10cada4",
+      "relation_terms": [
+        "resource",
+        "distribution",
+        "underdeveloped",
+        "perception"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "africa",
+        "historical",
+        "events",
+        "underdeveloped",
+        "perception"
+      ],
+      "anchor_terms": [
+        "Africa"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Africa"
+      ],
+      "facet_id": "273-history",
+      "manifest_order": 2,
+      "obligation": "How historical events contribute to perceptions of African underdevelopment.",
+      "obligation_id": "273:o3",
+      "query": "Africa historical events underdeveloped perception",
+      "query_sha256": "66a545883fdd6d5425d459f96aa2f307d75ba27e4990989404caab014e54cf4c",
+      "relation_terms": [
+        "historical",
+        "events",
+        "underdeveloped",
+        "perception"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "africa",
+        "economic",
+        "changes",
+        "countries",
+        "underdeveloped",
+        "perception"
+      ],
+      "anchor_terms": [
+        "Africa"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "countries"
+      ],
+      "facet_id": "273-economic-changes",
+      "manifest_order": 3,
+      "obligation": "How economic changes in specific African countries contribute to this perception.",
+      "obligation_id": "273:o4",
+      "query": "Africa economic changes countries underdeveloped perception",
+      "query_sha256": "3f42124eed9bc69fb68ce630951898078c62b399e921a7692fd0448eb644e018",
+      "relation_terms": [
+        "economic",
+        "changes",
+        "underdeveloped",
+        "perception"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "morocco",
+        "location",
+        "africa"
+      ],
+      "anchor_terms": [
+        "Morocco"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Africa"
+      ],
+      "facet_id": "273-morocco",
+      "manifest_order": 4,
+      "obligation": "Morocco location in Africa.",
+      "obligation_id": "273:o5",
+      "query": "Morocco location Africa",
+      "query_sha256": "94e4f651ddb1177a4ca60725d46d6a542252065ddf0620ce096f3d5f8512de67",
+      "relation_terms": [
+        "location"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "cameroon",
+        "most",
+        "important",
+        "resource"
+      ],
+      "anchor_terms": [
+        "Cameroon"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Cameroon"
+      ],
+      "facet_id": "273-cameroon",
+      "manifest_order": 5,
+      "obligation": "Cameroon most important resource.",
+      "obligation_id": "273:o6",
+      "query": "Cameroon most important resource",
+      "query_sha256": "6f75b2f4f4164daa3477e802641245021b174eefc57964176e3535d114f4347a",
+      "relation_terms": [
+        "important",
+        "resource"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "africa",
+        "how",
+        "many",
+        "continents",
+        "fit",
+        "inside"
+      ],
+      "anchor_terms": [
+        "Africa"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "continents"
+      ],
+      "facet_id": "273-continents",
+      "manifest_order": 6,
+      "obligation": "How many continents could fit inside Africa.",
+      "obligation_id": "273:o7",
+      "query": "Africa how many continents fit inside",
+      "query_sha256": "9e1507b6cda0cf7a731218492919ded2bbf266bcdcaecae30c6b1a5603633a02",
+      "relation_terms": [
+        "how",
+        "many",
+        "fit"
+      ],
+      "topic_id": "273"
+    },
+    {
+      "analyzer_terms": [
+        "global",
+        "warming",
+        "climate",
+        "change",
+        "effective",
+        "strategies",
+        "prevent",
+        "reduce"
+      ],
+      "anchor_terms": [
+        "global",
+        "warming",
+        "climate",
+        "change"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "global"
+      ],
+      "facet_id": "300-strategies",
+      "manifest_order": 0,
+      "obligation": "Effective strategies to prevent and reduce global warming and climate change.",
+      "obligation_id": "300:o1",
+      "query": "global warming climate change effective strategies prevent reduce",
+      "query_sha256": "fffe3fc9b8d4ebb99733db39e6d25b018a8f16229ec638b69063ce56c486a5aa",
+      "relation_terms": [
+        "strategies",
+        "prevent",
+        "reduce"
+      ],
+      "topic_id": "300"
+    },
+    {
+      "analyzer_terms": [
+        "climate",
+        "change",
+        "actions",
+        "help",
+        "antarctica"
+      ],
+      "anchor_terms": [
+        "climate",
+        "change"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Antarctica"
+      ],
+      "facet_id": "300-antarctica",
+      "manifest_order": 1,
+      "obligation": "Specific climate change actions that can help Antarctica.",
+      "obligation_id": "300:o2",
+      "query": "climate change actions help Antarctica",
+      "query_sha256": "d23c6f7867229debb7676802a42bfa573c9bc629d854dd9c8cebc8316b465960",
+      "relation_terms": [
+        "actions",
+        "help"
+      ],
+      "topic_id": "300"
+    },
+    {
+      "analyzer_terms": [
+        "global",
+        "measures",
+        "address",
+        "global",
+        "warming",
+        "climate",
+        "change"
+      ],
+      "anchor_terms": [
+        "global",
+        "warming",
+        "climate",
+        "change"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "global"
+      ],
+      "facet_id": "300-global-measures",
+      "manifest_order": 2,
+      "obligation": "Global measures to address global warming and climate change.",
+      "obligation_id": "300:o3",
+      "query": "global measures address global warming climate change",
+      "query_sha256": "d227bf2dde8bc465a84dd3339c7eafcd030ba88f8cd2b16134f3000cd953c829",
+      "relation_terms": [
+        "measures",
+        "address"
+      ],
+      "topic_id": "300"
+    },
+    {
+      "analyzer_terms": [
+        "global",
+        "warming",
+        "economic",
+        "costs",
+        "addressing",
+        "compared",
+        "dealing",
+        "impacts"
+      ],
+      "anchor_terms": [
+        "global",
+        "warming"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["compared"],
+          "not_candidate_answer_rationale": "A comparison relation, not an economic cost or outcome.",
+          "purpose": "relation_paraphrasing",
+          "scope_rationale": "Inflects the narrative verb 'compare' to express the same requested cost comparison.",
+          "source": "Conservative relation paraphrase of the narrative verb 'compare'.",
+          "surface": "compared"
+        }
+      ],
+      "domain_terms": [
+        "economic"
+      ],
+      "facet_id": "300-economic-costs",
+      "manifest_order": 3,
+      "obligation": "Economic costs of addressing global warming compared with dealing with its impacts.",
+      "obligation_id": "300:o4",
+      "query": "global warming economic costs addressing compared dealing impacts",
+      "query_sha256": "2d78b4c4c778a0d508f8dc766b1d4a5be0675a425be2e1120e8d0c77214d35fe",
+      "relation_terms": [
+        "costs",
+        "addressing",
+        "compared",
+        "impacts"
+      ],
+      "topic_id": "300"
+    },
+    {
+      "analyzer_terms": [
+        "housing",
+        "rent",
+        "prices",
+        "why",
+        "soared",
+        "dubai"
+      ],
+      "anchor_terms": [
+        "housing",
+        "rent"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Dubai"
+      ],
+      "facet_id": "407-prices",
+      "manifest_order": 0,
+      "obligation": "Why housing and rent prices have soared particularly in Dubai.",
+      "obligation_id": "407:o1",
+      "query": "housing rent prices why soared Dubai",
+      "query_sha256": "d2a15fa9d7c59cca60d07d0270c40b2094a9e695a3e5d220849201304697b059",
+      "relation_terms": [
+        "prices",
+        "soared",
+        "why"
+      ],
+      "topic_id": "407"
+    },
+    {
+      "analyzer_terms": [
+        "housing",
+        "broader",
+        "factors",
+        "high",
+        "cost",
+        "of",
+        "living"
+      ],
+      "anchor_terms": [
+        "housing"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "cost",
+        "of",
+        "living"
+      ],
+      "facet_id": "407-cost-of-living",
+      "manifest_order": 1,
+      "obligation": "Broader factors contributing to the high cost of living.",
+      "obligation_id": "407:o2",
+      "query": "housing broader factors high cost of living",
+      "query_sha256": "5ded394d9f7d3a8ecea7d9dca9ab8e4558bbd26259c6448681b76032cf568a93",
+      "relation_terms": [
+        "factors",
+        "high"
+      ],
+      "topic_id": "407"
+    },
+    {
+      "analyzer_terms": [
+        "housing",
+        "market",
+        "reits",
+        "buy",
+        "single",
+        "family",
+        "homes",
+        "affected"
+      ],
+      "anchor_terms": [
+        "housing",
+        "market"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "single-family",
+        "homes"
+      ],
+      "facet_id": "407-reits",
+      "manifest_order": 2,
+      "obligation": "How allowing REITs to buy single-family homes affected the housing market.",
+      "obligation_id": "407:o3",
+      "query": "housing market REITs buy single-family homes affected",
+      "query_sha256": "440094b4347d7935c9028c59ad70e742c4c2ce99c22c8ed56b659e2b7cc2e190",
+      "relation_terms": [
+        "REITs",
+        "affected"
+      ],
+      "topic_id": "407"
+    },
+    {
+      "analyzer_terms": [
+        "housing",
+        "market",
+        "public",
+        "housing",
+        "demolition",
+        "affected"
+      ],
+      "anchor_terms": [
+        "housing",
+        "market"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "public",
+        "housing"
+      ],
+      "facet_id": "407-public-housing",
+      "manifest_order": 3,
+      "obligation": "How public housing demolition affected the housing market.",
+      "obligation_id": "407:o4",
+      "query": "housing market public housing demolition affected",
+      "query_sha256": "126810706e861c674818142df10fa3d82e51b33d1d55c76935e458a898efa234",
+      "relation_terms": [
+        "demolition",
+        "affected"
+      ],
+      "topic_id": "407"
+    },
+    {
+      "analyzer_terms": [
+        "housing",
+        "prices",
+        "policies",
+        "affect",
+        "people",
+        "renting",
+        "buying",
+        "choices"
+      ],
+      "anchor_terms": [
+        "housing"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "people"
+      ],
+      "facet_id": "407-choices",
+      "manifest_order": 4,
+      "obligation": "How housing policies and prices affect peoples renting or buying choices.",
+      "obligation_id": "407:o5",
+      "query": "housing prices policies affect people renting buying choices",
+      "query_sha256": "9bdf7d6bd0d9cbb26b9011dea21aba50bad9a1b5d180f97ef536e4696114180f",
+      "relation_terms": [
+        "prices",
+        "policies",
+        "affect",
+        "choices"
+      ],
+      "topic_id": "407"
+    },
+    {
+      "analyzer_terms": [
+        "race",
+        "how",
+        "defined"
+      ],
+      "anchor_terms": [
+        "race"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "race"
+      ],
+      "facet_id": "477-definition",
+      "manifest_order": 0,
+      "obligation": "How race is defined.",
+      "obligation_id": "477:o1",
+      "query": "race how defined",
+      "query_sha256": "7efd617a7d64cc790e65247c2b2d1d9583c4001c708fc09c5afa5ac60ccf6195",
+      "relation_terms": [
+        "defined"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "race",
+        "debated",
+        "social",
+        "construct"
+      ],
+      "anchor_terms": [
+        "race"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "social",
+        "construct"
+      ],
+      "facet_id": "477-social-construct",
+      "manifest_order": 1,
+      "obligation": "How race is debated as a social construct.",
+      "obligation_id": "477:o2",
+      "query": "race debated social construct",
+      "query_sha256": "513a83936f2bebebb7379ba1a63f53fef1f4ee2fb3aafb69f78605382e880e0a",
+      "relation_terms": [
+        "debated"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "race",
+        "views",
+        "us",
+        "versus",
+        "brazil"
+      ],
+      "anchor_terms": [
+        "race"
+      ],
+      "bridge_terms": [
+        {
+          "analyzer_output": ["us"],
+          "not_candidate_answer_rationale": "A location label, not a claim about racial views.",
+          "purpose": "domain_disambiguation",
+          "scope_rationale": "Normalizes the narrative abbreviation 'U.S.' without changing the country requested.",
+          "source": "Punctuation-normalized form of the narrative abbreviation 'U.S.'.",
+          "surface": "US"
+        }
+      ],
+      "domain_terms": [
+        "US",
+        "Brazil"
+      ],
+      "facet_id": "477-us-brazil",
+      "manifest_order": 2,
+      "obligation": "How race is viewed differently in the US versus Brazil.",
+      "obligation_id": "477:o3",
+      "query": "race views US versus Brazil",
+      "query_sha256": "42475b6f9f9935476be85e52e12d4473bbcf41e6db0332e60d3bc4ff2e375d8f",
+      "relation_terms": [
+        "views",
+        "versus"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "race",
+        "modern",
+        "science",
+        "views"
+      ],
+      "anchor_terms": [
+        "race"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "science"
+      ],
+      "facet_id": "477-science",
+      "manifest_order": 3,
+      "obligation": "What modern science says about race.",
+      "obligation_id": "477:o4",
+      "query": "race modern science views",
+      "query_sha256": "c46aae59580d7c001c63bf523cf64f9e8884ea0b627e7ac41c4a45b3244bdd4e",
+      "relation_terms": [
+        "modern",
+        "views"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "critical",
+        "race",
+        "theory",
+        "why",
+        "objections"
+      ],
+      "anchor_terms": [
+        "race"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Critical",
+        "Race",
+        "Theory"
+      ],
+      "facet_id": "477-crt",
+      "manifest_order": 4,
+      "obligation": "Why Critical Race Theory faces objections.",
+      "obligation_id": "477:o5",
+      "query": "Critical Race Theory why objections",
+      "query_sha256": "fc5337cb378c60a51811b88ae7e54c270c0ac3d7af499da62e041791759456b1",
+      "relation_terms": [
+        "objections",
+        "why"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "racial",
+        "ideas",
+        "affect",
+        "college",
+        "admissions"
+      ],
+      "anchor_terms": [
+        "racial",
+        "ideas"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "college",
+        "admissions"
+      ],
+      "facet_id": "477-admissions",
+      "manifest_order": 5,
+      "obligation": "How racial ideas affect college admissions.",
+      "obligation_id": "477:o6",
+      "query": "racial ideas affect college admissions",
+      "query_sha256": "d7b812c929a72a2509ba1212def0102e72bf98fbb0c3f0dd3ffe0c2f5c4f7390",
+      "relation_terms": [
+        "affect"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "racial",
+        "ideas",
+        "affect",
+        "social",
+        "outcomes"
+      ],
+      "anchor_terms": [
+        "racial",
+        "ideas"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "social"
+      ],
+      "facet_id": "477-social-outcomes",
+      "manifest_order": 6,
+      "obligation": "How racial ideas affect social outcomes.",
+      "obligation_id": "477:o7",
+      "query": "racial ideas affect social outcomes",
+      "query_sha256": "fd370d77811ee1c61a2995f1807a6ef86bf0014f9ccd89dbd77df6c704d0178d",
+      "relation_terms": [
+        "affect",
+        "outcomes"
+      ],
+      "topic_id": "477"
+    },
+    {
+      "analyzer_terms": [
+        "euthanasia",
+        "legalizing",
+        "arguments",
+        "for"
+      ],
+      "anchor_terms": [
+        "euthanasia"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "legalizing"
+      ],
+      "facet_id": "499-for",
+      "manifest_order": 0,
+      "obligation": "Arguments for legalizing euthanasia.",
+      "obligation_id": "499:o1",
+      "query": "euthanasia legalizing arguments for",
+      "query_sha256": "1088ab07b6b8cd7d1942f44e9a5ee5a4fde07c630d0aeb4ac1f039149eb78c1e",
+      "relation_terms": [
+        "arguments",
+        "for"
+      ],
+      "topic_id": "499"
+    },
+    {
+      "analyzer_terms": [
+        "euthanasia",
+        "legalizing",
+        "arguments",
+        "against"
+      ],
+      "anchor_terms": [
+        "euthanasia"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "legalizing"
+      ],
+      "facet_id": "499-against",
+      "manifest_order": 1,
+      "obligation": "Arguments against legalizing euthanasia.",
+      "obligation_id": "499:o2",
+      "query": "euthanasia legalizing arguments against",
+      "query_sha256": "3e66714620c552c5a0ac1b01641db08dbdbccb58997b00af7cbd8d10d6ad35bc",
+      "relation_terms": [
+        "arguments",
+        "against"
+      ],
+      "topic_id": "499"
+    },
+    {
+      "analyzer_terms": [
+        "euthanasia",
+        "differs",
+        "physician",
+        "assisted",
+        "suicide"
+      ],
+      "anchor_terms": [
+        "euthanasia"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "physician-assisted",
+        "suicide"
+      ],
+      "facet_id": "499-difference",
+      "manifest_order": 2,
+      "obligation": "How euthanasia differs from physician-assisted suicide.",
+      "obligation_id": "499:o3",
+      "query": "euthanasia differs physician-assisted suicide",
+      "query_sha256": "a37171b79cd34bf2e54b374587b3f398269879b9a71f6f8c4f8d155e5ba46ece",
+      "relation_terms": [
+        "differs"
+      ],
+      "topic_id": "499"
+    },
+    {
+      "analyzer_terms": [
+        "euthanasia",
+        "cultural",
+        "values",
+        "influence",
+        "debates"
+      ],
+      "anchor_terms": [
+        "euthanasia"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "cultural",
+        "values"
+      ],
+      "facet_id": "499-cultural-values",
+      "manifest_order": 3,
+      "obligation": "How cultural values influence euthanasia debates.",
+      "obligation_id": "499:o4",
+      "query": "euthanasia cultural values influence debates",
+      "query_sha256": "b4dc9365ff1e4fb239092c843c1905584d572e7e6dbf57c574de49c2badec364",
+      "relation_terms": [
+        "influence",
+        "debates"
+      ],
+      "topic_id": "499"
+    },
+    {
+      "analyzer_terms": [
+        "euthanasia",
+        "western",
+        "countries",
+        "perspectives",
+        "debates"
+      ],
+      "anchor_terms": [
+        "euthanasia"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Western",
+        "countries"
+      ],
+      "facet_id": "499-western-countries",
+      "manifest_order": 4,
+      "obligation": "How Western countries perspectives influence euthanasia debates.",
+      "obligation_id": "499:o5",
+      "query": "euthanasia Western countries perspectives debates",
+      "query_sha256": "4aaaa8cc85fd5f1a02d579f3b8709bee8769b2033ae301cef56d11ca83c398c3",
+      "relation_terms": [
+        "perspectives",
+        "debates"
+      ],
+      "topic_id": "499"
+    },
+    {
+      "analyzer_terms": [
+        "euthanasia",
+        "moral",
+        "justifications",
+        "both",
+        "sides"
+      ],
+      "anchor_terms": [
+        "euthanasia"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "both",
+        "sides"
+      ],
+      "facet_id": "499-moral-justifications",
+      "manifest_order": 5,
+      "obligation": "Moral justifications from both sides of euthanasia debates.",
+      "obligation_id": "499:o6",
+      "query": "euthanasia moral justifications both sides",
+      "query_sha256": "fe56e7b3ab0fefa41c91057a14921a893fe7800f011181687c25d2dac8a73a8f",
+      "relation_terms": [
+        "moral",
+        "justifications"
+      ],
+      "topic_id": "499"
+    },
+    {
+      "analyzer_terms": [
+        "cancer",
+        "rates",
+        "why",
+        "rising"
+      ],
+      "anchor_terms": [
+        "cancer"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "cancer"
+      ],
+      "facet_id": "515-rising-rates",
+      "manifest_order": 0,
+      "obligation": "Why cancer rates are rising.",
+      "obligation_id": "515:o1",
+      "query": "cancer rates why rising",
+      "query_sha256": "5665db1a8e4c297b320e94445bc0f8490d0413bd4cdbfd86aba4640aa0bf13cb",
+      "relation_terms": [
+        "rates",
+        "rising",
+        "why"
+      ],
+      "topic_id": "515"
+    },
+    {
+      "analyzer_terms": [
+        "cancer",
+        "rates",
+        "why",
+        "rising",
+        "young",
+        "people"
+      ],
+      "anchor_terms": [
+        "cancer"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "young",
+        "people"
+      ],
+      "facet_id": "515-young-people",
+      "manifest_order": 1,
+      "obligation": "Why cancer rates are rising among young people.",
+      "obligation_id": "515:o2",
+      "query": "cancer rates why rising young people",
+      "query_sha256": "396c51e1b2bb82f49f627006d2d4ebcfc97ea0ac92ef80749a880848b7302da2",
+      "relation_terms": [
+        "rates",
+        "rising",
+        "why"
+      ],
+      "topic_id": "515"
+    },
+    {
+      "analyzer_terms": [
+        "cancer",
+        "cell",
+        "phone",
+        "use",
+        "connected"
+      ],
+      "anchor_terms": [
+        "cancer"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "cell",
+        "phone",
+        "use"
+      ],
+      "facet_id": "515-cell-phones",
+      "manifest_order": 2,
+      "obligation": "Whether cell phone use is connected to cancer.",
+      "obligation_id": "515:o3",
+      "query": "cancer cell phone use connected",
+      "query_sha256": "dc70294151c9d99b950ac88f9e62de0cda0e6e2b095e608f418d0725a2f99352",
+      "relation_terms": [
+        "connected"
+      ],
+      "topic_id": "515"
+    },
+    {
+      "analyzer_terms": [
+        "cancer",
+        "current",
+        "mortality",
+        "rates"
+      ],
+      "anchor_terms": [
+        "cancer"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "cancer"
+      ],
+      "facet_id": "515-mortality",
+      "manifest_order": 3,
+      "obligation": "Current cancer mortality rates.",
+      "obligation_id": "515:o4",
+      "query": "cancer current mortality rates",
+      "query_sha256": "13389129fc9a7ee7274ca0881e7cbdcee6ff9a690bcf4324a85d17cd31e7026c",
+      "relation_terms": [
+        "current",
+        "mortality",
+        "rates"
+      ],
+      "topic_id": "515"
+    },
+    {
+      "analyzer_terms": [
+        "breast",
+        "cancer",
+        "annual",
+        "deaths",
+        "uk"
+      ],
+      "anchor_terms": [
+        "breast",
+        "cancer"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "UK"
+      ],
+      "facet_id": "515-breast-uk",
+      "manifest_order": 4,
+      "obligation": "Annual breast cancer deaths in the UK.",
+      "obligation_id": "515:o5",
+      "query": "breast cancer annual deaths UK",
+      "query_sha256": "7c34ab4ac97e642fbe7eab078fa82384dc74427f3d30400f0c1d3a6c87a034b2",
+      "relation_terms": [
+        "annual",
+        "deaths"
+      ],
+      "topic_id": "515"
+    },
+    {
+      "analyzer_terms": [
+        "lung",
+        "cancer",
+        "current",
+        "life",
+        "expectancy"
+      ],
+      "anchor_terms": [
+        "lung",
+        "cancer"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "lung",
+        "cancer"
+      ],
+      "facet_id": "515-lung-life-expectancy",
+      "manifest_order": 5,
+      "obligation": "Current life expectancy for lung cancer.",
+      "obligation_id": "515:o6",
+      "query": "lung cancer current life expectancy",
+      "query_sha256": "2c66d8e16b216e95cec83c479d69b6bbe89a617ec6c37d13fe212c44aa716764",
+      "relation_terms": [
+        "current",
+        "life",
+        "expectancy"
+      ],
+      "topic_id": "515"
+    },
+    {
+      "analyzer_terms": [
+        "chemicals",
+        "substances",
+        "health",
+        "risks",
+        "potential",
+        "dangers"
+      ],
+      "anchor_terms": [
+        "chemicals",
+        "substances"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "health"
+      ],
+      "facet_id": "707-chemicals",
+      "manifest_order": 0,
+      "obligation": "Health risks and potential dangers of chemicals and substances.",
+      "obligation_id": "707:o1",
+      "query": "chemicals substances health risks potential dangers",
+      "query_sha256": "8c4548b9e819c30d8f4032ce5b50e656540ab3cc5e14680ce08b25944ef85ddf",
+      "relation_terms": [
+        "risks",
+        "dangers"
+      ],
+      "topic_id": "707"
+    },
+    {
+      "analyzer_terms": [
+        "antiperspirants",
+        "substances",
+        "health",
+        "risks",
+        "dangers"
+      ],
+      "anchor_terms": [
+        "antiperspirants"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "health"
+      ],
+      "facet_id": "707-antiperspirants",
+      "manifest_order": 1,
+      "obligation": "Health risks of substances found in antiperspirants.",
+      "obligation_id": "707:o2",
+      "query": "antiperspirants substances health risks dangers",
+      "query_sha256": "c67a77fd331e4f097996b99420163f87a42e362d7ac6ab5bd412fbb4db2e5ebe",
+      "relation_terms": [
+        "risks",
+        "dangers"
+      ],
+      "topic_id": "707"
+    },
+    {
+      "analyzer_terms": [
+        "sorbitol",
+        "health",
+        "risks",
+        "potential",
+        "dangers"
+      ],
+      "anchor_terms": [
+        "sorbitol"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "health"
+      ],
+      "facet_id": "707-sorbitol",
+      "manifest_order": 2,
+      "obligation": "Health risks and potential dangers of sorbitol.",
+      "obligation_id": "707:o3",
+      "query": "sorbitol health risks potential dangers",
+      "query_sha256": "b6de848efb53873ff985b2b6b8ce970422d313689f95ba3637264db298039dc3",
+      "relation_terms": [
+        "risks",
+        "dangers"
+      ],
+      "topic_id": "707"
+    },
+    {
+      "analyzer_terms": [
+        "organophosphate",
+        "poisoning",
+        "health",
+        "risks",
+        "dangers"
+      ],
+      "anchor_terms": [
+        "organophosphate",
+        "poisoning"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "health"
+      ],
+      "facet_id": "707-organophosphate",
+      "manifest_order": 3,
+      "obligation": "Health risks and potential dangers of organophosphate poisoning.",
+      "obligation_id": "707:o4",
+      "query": "organophosphate poisoning health risks dangers",
+      "query_sha256": "2a96c6c49d4340b9dd2df9d73f5c00e5a2f9d06f2271753a3512afc2edf9b56e",
+      "relation_terms": [
+        "risks",
+        "dangers"
+      ],
+      "topic_id": "707"
+    },
+    {
+      "analyzer_terms": [
+        "operational",
+        "level",
+        "integrating",
+        "actions",
+        "impact",
+        "health",
+        "outcomes"
+      ],
+      "anchor_terms": [
+        "operational",
+        "level"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "health",
+        "outcomes"
+      ],
+      "facet_id": "707-operations",
+      "manifest_order": 4,
+      "obligation": "How integrating different actions at the operational level might impact health outcomes.",
+      "obligation_id": "707:o5",
+      "query": "operational level integrating actions impact health outcomes",
+      "query_sha256": "e0ecaf440acf3c4082b86b82efcba3d3f6a26bbbc5023f504bb7c269abacd573",
+      "relation_terms": [
+        "integrating",
+        "actions",
+        "impact"
+      ],
+      "topic_id": "707"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "use",
+        "affects",
+        "neighborhood",
+        "quality",
+        "of",
+        "life"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "use"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "neighborhood"
+      ],
+      "facet_id": "897-neighborhood",
+      "manifest_order": 0,
+      "obligation": "How alcohol use affects neighborhood quality of life.",
+      "obligation_id": "897:o1",
+      "query": "alcohol use affects neighborhood quality of life",
+      "query_sha256": "fea84b9f6bb0f32d9330af49b1db12335fa5e083c6904c81487200c6a5edc9c4",
+      "relation_terms": [
+        "affects",
+        "quality",
+        "life"
+      ],
+      "topic_id": "897"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "dependency",
+        "genetic",
+        "factors"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "dependency"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "dependency"
+      ],
+      "facet_id": "897-genetic",
+      "manifest_order": 1,
+      "obligation": "Genetic factors in alcohol dependency.",
+      "obligation_id": "897:o2",
+      "query": "alcohol dependency genetic factors",
+      "query_sha256": "ce081f0d13dd0a70196c460dc00fd82630855f7ef7265daf8c467e1ac223839f",
+      "relation_terms": [
+        "genetic",
+        "factors"
+      ],
+      "topic_id": "897"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "dependency",
+        "gender",
+        "factors"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "dependency"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "dependency"
+      ],
+      "facet_id": "897-gender",
+      "manifest_order": 2,
+      "obligation": "Gender factors in alcohol dependency.",
+      "obligation_id": "897:o3",
+      "query": "alcohol dependency gender factors",
+      "query_sha256": "c17fd9ad722e443136914013e671822d5f984b493b61e4a0d91636e52a0aeec3",
+      "relation_terms": [
+        "gender",
+        "factors"
+      ],
+      "topic_id": "897"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "drug",
+        "use",
+        "main",
+        "causes"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "drug",
+        "use"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "alcohol",
+        "drug"
+      ],
+      "facet_id": "897-causes",
+      "manifest_order": 3,
+      "obligation": "Main causes of alcohol and drug use.",
+      "obligation_id": "897:o4",
+      "query": "alcohol drug use main causes",
+      "query_sha256": "2ca7f716b35cd5ef615faf0150bbfae7aec7c80b334a788323b59128f01b76bd",
+      "relation_terms": [
+        "causes"
+      ],
+      "topic_id": "897"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "drug",
+        "use",
+        "main",
+        "risks"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "drug",
+        "use"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "alcohol",
+        "drug"
+      ],
+      "facet_id": "897-risks",
+      "manifest_order": 4,
+      "obligation": "Main risks of alcohol and drug use.",
+      "obligation_id": "897:o5",
+      "query": "alcohol drug use main risks",
+      "query_sha256": "0403bd665386dbabcb075a2ea9569c140a95d9f9be489d1e7d6cad5074987733",
+      "relation_terms": [
+        "risks"
+      ],
+      "topic_id": "897"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "drug",
+        "use",
+        "fatal",
+        "consequences"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "drug",
+        "use"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "alcohol",
+        "drug"
+      ],
+      "facet_id": "897-fatal",
+      "manifest_order": 5,
+      "obligation": "Fatal consequences of alcohol and drug use.",
+      "obligation_id": "897:o6",
+      "query": "alcohol drug use fatal consequences",
+      "query_sha256": "7c627682ae168d55183ed2d2a5ff1c27f787a68827ee69fc340a59789a5dd648",
+      "relation_terms": [
+        "fatal",
+        "consequences"
+      ],
+      "topic_id": "897"
+    },
+    {
+      "analyzer_terms": [
+        "alcohol",
+        "drug",
+        "use",
+        "connection",
+        "broader",
+        "community",
+        "health",
+        "issues"
+      ],
+      "anchor_terms": [
+        "alcohol",
+        "drug",
+        "use"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "community",
+        "health"
+      ],
+      "facet_id": "897-community",
+      "manifest_order": 6,
+      "obligation": "Connection between alcohol and drug use and broader community health issues.",
+      "obligation_id": "897:o7",
+      "query": "alcohol drug use connection broader community health issues",
+      "query_sha256": "9b8e540aeb6c9000b150b99d7235884417a2aae7a8dfda554d78a3d5e7d2a2f9",
+      "relation_terms": [
+        "connection",
+        "issues"
+      ],
+      "topic_id": "897"
+    }
+  ],
+  "schema_version": "all-topic-tethered-facet-manifest-v1",
+  "topic_ids": [
+    "14",
+    "31",
+    "37",
+    "58",
+    "72",
+    "84",
+    "144",
+    "161",
+    "200",
+    "213",
+    "219",
+    "224",
+    "225",
+    "233",
+    "273",
+    "300",
+    "407",
+    "477",
+    "499",
+    "515",
+    "707",
+    "897"
+  ],
+  "topics": [
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 0,
+      "narrative": "I'm interested in sports' societal impact, particularly concerning athlete compensation, inclusion, cultural influence, and the business side. I also want to understand how evolving equipment, training, and mindset shape both athletes and the popularity of different sports.",
+      "narrative_sha256": "2c53e37c85bad1d2e2f7bb4287037fc0c931e49bbc75eaf8c766da805be8ac08",
+      "topic_id": "14"
+    },
+    {
+      "explicit_obligation_count": 8,
+      "manifest_order": 1,
+      "narrative": "I'm seeking to understand the environmental and health impacts of e-waste and other waste, along with how proper recycling benefits sustainability and local economies. Could you explain the risks of improper waste management, recent recycling innovations, and practical steps individuals and businesses can take for responsible waste handling?",
+      "narrative_sha256": "2425f79bcd53be2169e4da9b4c90bf7915189f20e845cd025e0086cc490e2f16",
+      "topic_id": "31"
+    },
+    {
+      "explicit_obligation_count": 9,
+      "manifest_order": 2,
+      "narrative": "I'm hoping to gain a deeper understanding of how family structures, childhood experiences, and parenting styles influence children's development and well-being. Could you explain the effects of divorce, trauma, adoption, and having single or working parents, along with strategies for building strong family foundations and overcoming common challenges?",
+      "narrative_sha256": "c245fb4fb69eeb7d4f4cc45f75398a9b0997795d4802e335d8095e4081435463",
+      "topic_id": "37"
+    },
+    {
+      "explicit_obligation_count": 8,
+      "manifest_order": 3,
+      "narrative": "I'm interested in nuclear energy's pros, cons, safety, and accident risks, like Chernobyl, plus its uses and climate change impact. I also want to compare it to other energy forms like fusion and learn about sources such as bison energy and Peninsula Clean Energy.",
+      "narrative_sha256": "0d9d11e9d50f4ed394a4e207d0d18801f4ca69d00d9c60c4efb6597b13352b6a",
+      "topic_id": "58"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 4,
+      "narrative": "I want to understand why deforestation is such a major problem. Specifically, how does it impact the environment, climate, animals, and humans? Could you also explain its main causes, effects on rainforests like the Amazon, and what actions can prevent it?",
+      "narrative_sha256": "08bea6ed2febc84d9e9e785c4d4233f0a7f074631d6574e225b084fb8251b0fc",
+      "topic_id": "72"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 5,
+      "narrative": "I'm looking for detailed information about vaccines, including their safety, the causes of public hesitancy—especially around COVID-19—and the different types of human vaccines and their recommended schedules. I'm also interested in how vaccination affects global health, historical public health challenges, and recommendations for animal vaccinations.",
+      "narrative_sha256": "452012f57010388c9a3defbfe1594dccc3ade658effda5063b45483f9f63180f",
+      "topic_id": "84"
+    },
+    {
+      "explicit_obligation_count": 6,
+      "manifest_order": 6,
+      "narrative": "I'm seeking a comprehensive understanding of financial institutions, specifically why banks like Silicon Valley Bank fail and the hidden risks investors face. Could you detail how banks and credit unions compare in terms of safety, trust, services, and regulation, while also outlining their roles in economic development?",
+      "narrative_sha256": "b78a23bf9b58574839bb45916367df99f8405b1135f8304ad440d6a169188186",
+      "topic_id": "144"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 7,
+      "narrative": "I want to understand the main arguments surrounding abortion and why people hold such different views on it. I'm also curious how laws, beliefs like the Rapture or political ideologies, and historical changes have shaped abortion rights. Finally, I'd like to learn about current options, such as the abortion pill, and what women's rights groups are prioritizing today.",
+      "narrative_sha256": "fcf9f24b5f29951237bfed1a5503060215e42a67d80b389df249acb3cec65df1",
+      "topic_id": "161"
+    },
+    {
+      "explicit_obligation_count": 8,
+      "manifest_order": 8,
+      "narrative": "I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah.",
+      "narrative_sha256": "2375e7c8ddf0b7f36dbc525b1344489725c4e0da4e05ac03da03ba1b44119723",
+      "topic_id": "200"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 9,
+      "narrative": "I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.",
+      "narrative_sha256": "f499a0b22af55afdc71d4a4265681a9ccc2845d4c44ce9e4e927f881a912f4db",
+      "topic_id": "213"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 10,
+      "narrative": "I'm interested in understanding technology's societal impact, exploring its positive and negative effects on daily life, government, and business sectors like telehealth. Could you also explain the role of technical societies and why rationing devices might be needed with technological advancements?",
+      "narrative_sha256": "52a3c2cf4d03fd2cf5d50a69bacd5028e67f645f53b854675056cafae7a9f319",
+      "topic_id": "219"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 11,
+      "narrative": "I want to understand why people immigrate or become refugees, the challenges they face, and how laws and different groups shape immigration policies. Additionally, I'm interested in how various countries and religions view immigrants, and what options migrant workers have to improve their lives.",
+      "narrative_sha256": "baa5af90ea013149e709c19ba123a207e54202fff2944cdb065909b8c4a2d9d8",
+      "topic_id": "224"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 12,
+      "narrative": "I'm exploring how exposure to violent video games and gory content affects human aggression, desensitization, and addiction. I'm also interested in the broader causes of aggression in both children and adults, the positive sides of gaming, and the historical background of these media trends.",
+      "narrative_sha256": "0a9f8ac28b2a95616e97c0d45e96de04fd0b81e13903161379aa2fffb9422ff6",
+      "topic_id": "225"
+    },
+    {
+      "explicit_obligation_count": 3,
+      "manifest_order": 13,
+      "narrative": "I'm interested in learning how social media affects mental health, particularly among teenagers. I want to know about both its positive and negative impacts, and understand why it might contribute to depression.",
+      "narrative_sha256": "82b17d300437707082d385d74cc77d18195c50552246720bee6946f5e3011dc1",
+      "topic_id": "233"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 14,
+      "narrative": "I want to understand why Africa, despite its rich resources, is often seen as underdeveloped or poor. I'm particularly interested in how factors like resource distribution, historical events, and economic changes in specific countries contribute to this perception. Additionally, I'd like basic facts such as Morocco's location, Cameroon's most important resource, and how many continents could fit inside Africa.",
+      "narrative_sha256": "e4df72a97b51d122641f9be52de73d783fbc5983968269c035beb0edcb9eb6c9",
+      "topic_id": "273"
+    },
+    {
+      "explicit_obligation_count": 4,
+      "manifest_order": 15,
+      "narrative": "I'm interested in learning about effective strategies to prevent and reduce global warming and climate change, including specific actions that can help regions like Antarctica. I’d also like to know what global measures can be taken and how the economic costs of addressing global warming compare to just dealing with its impacts.",
+      "narrative_sha256": "3938b5dbd622a510b1d249362f31500c139eabd979af6d8a16f93e75ba8b8839",
+      "topic_id": "300"
+    },
+    {
+      "explicit_obligation_count": 5,
+      "manifest_order": 16,
+      "narrative": "I'm curious why housing and rent prices have soared, particularly in places like Dubai, and what broader factors contribute to the high cost of living. Furthermore, how have policies like allowing REITs to buy single-family homes and public housing demolition affected the housing market and people's renting or buying choices?",
+      "narrative_sha256": "7af4ef7cbfc1c0c1bbb5e5f80a287ed9324919ad0f4ef6d277417851ea723367",
+      "topic_id": "407"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 17,
+      "narrative": "I'm trying to understand the concept of race: how it's defined, debated as a social construct, and viewed differently in the U.S. versus Brazil. I also want to learn what modern science says, why Critical Race Theory faces objections, and how racial ideas affect college admissions and social outcomes.",
+      "narrative_sha256": "1e2370f4daeb53571e0543007a86b449c4bae3815cc30cd3b5f1ba3d0fbc06ab",
+      "topic_id": "477"
+    },
+    {
+      "explicit_obligation_count": 6,
+      "manifest_order": 18,
+      "narrative": "I'm hoping to understand the arguments for and against legalizing euthanasia, including how it differs from physician-assisted suicide. I'm also interested in how cultural values and Western countries' perspectives influence these debates, and the moral justifications from both sides.",
+      "narrative_sha256": "4086f06ec26813fd5ccad1e18f420b6a25f978c9216673ee8b650768bcd75798",
+      "topic_id": "499"
+    },
+    {
+      "explicit_obligation_count": 6,
+      "manifest_order": 19,
+      "narrative": "I'm interested in learning why cancer rates are rising, particularly among young people, and whether factors like cell phone use are connected. I’d also like up-to-date information on cancer mortality rates, including annual breast cancer deaths in the UK and the current life expectancy for lung cancer.",
+      "narrative_sha256": "21390506e45953972239c363b3f98939e752f536a17a8f4e596c47382ae044bd",
+      "topic_id": "515"
+    },
+    {
+      "explicit_obligation_count": 5,
+      "manifest_order": 20,
+      "narrative": "I'm trying to understand the health risks and potential dangers of various chemicals and substances, such as those found in antiperspirants, sorbitol, and organophosphate poisoning. I'd also like to know how integrating different actions at the operational level might impact health outcomes.",
+      "narrative_sha256": "eb10d9785b06047e2204dcb625e955f1ce70eb69ac6dff61e3e07fcc036a0e86",
+      "topic_id": "707"
+    },
+    {
+      "explicit_obligation_count": 7,
+      "manifest_order": 21,
+      "narrative": "I'm trying to understand how alcohol use affects neighborhood quality of life, including genetic and gender factors in dependency. I also need to grasp the main causes, risks, and fatal consequences of alcohol and drug use, and their connection to broader community health issues.",
+      "narrative_sha256": "c18ebfef01b7d717a69f605f90b1c725545be26532409723c160b112ecefce0c",
+      "topic_id": "897"
+    }
+  ]
+}

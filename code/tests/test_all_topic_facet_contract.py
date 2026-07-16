@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import json
+import socket
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,19 @@ from trec_rag.all_topic_facet_contract import (
     _build_request_plan,
     _validate_facet_manifest,
     build_request_plan,
+    discover_original_caches,
     freeze_planning,
+    main,
     validate_authorized_scope,
     validate_facet_manifest,
     verify_planning,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PRODUCTION_MANIFEST = (
+    REPO_ROOT
+    / "reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json"
 )
 
 
@@ -146,6 +156,65 @@ def _caches(root: Path, manifest: dict[str, object]) -> dict[str, dict[str, obje
         )
         for row in rows
     }
+
+
+def _write_exact_cache_files(
+    root: Path, topic_ids: tuple[str, ...]
+) -> dict[str, str]:
+    narratives = {topic_id: f"Narrative for topic {topic_id}." for topic_id in topic_ids}
+    for topic_id, narrative in narratives.items():
+        _write_cache(root, topic_id=topic_id, narrative=narrative)
+    return narratives
+
+
+def _forbidden(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("network access is forbidden during planning")
+
+
+def test_production_manifest_is_exact_and_valid() -> None:
+    payload = json.loads(PRODUCTION_MANIFEST.read_text())
+    validated = validate_facet_manifest(payload)
+    assert tuple(validated["topic_ids"]) == ALL_TOPIC_IDS
+    assert 3 * len(ALL_TOPIC_IDS) <= len(validated["facets"]) <= 9 * len(ALL_TOPIC_IDS)
+
+
+def test_cache_discovery_binds_each_topic_once(tmp_path: Path) -> None:
+    narratives = _write_exact_cache_files(tmp_path, ALL_TOPIC_IDS)
+    bindings = discover_original_caches(tmp_path, narratives)
+    assert tuple(bindings) == ALL_TOPIC_IDS
+    assert len({row["path"] for row in bindings.values()}) == len(ALL_TOPIC_IDS)
+
+
+def test_cache_discovery_rejects_duplicate_binding(tmp_path: Path) -> None:
+    narratives = _write_exact_cache_files(tmp_path, ALL_TOPIC_IDS)
+    original = next(tmp_path.glob("14__original__*.json"))
+    duplicate = tmp_path / original.name.replace(".json", "__duplicate.json")
+    duplicate.write_bytes(original.read_bytes())
+    with pytest.raises(ValueError, match="duplicate"):
+        discover_original_caches(tmp_path, narratives)
+
+
+def test_cli_freeze_and_verify_never_open_network(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    narratives = _write_exact_cache_files(tmp_path, ALL_TOPIC_IDS)
+    payload = json.loads(PRODUCTION_MANIFEST.read_text())
+    for topic in payload["topics"]:
+        narratives[str(topic["topic_id"])] = str(topic["narrative"])
+    # Rebuild with the exact production narratives expected by authentication.
+    for path in tmp_path.glob("*.json"):
+        path.unlink()
+    for topic_id, narrative in narratives.items():
+        _write_cache(tmp_path, topic_id=topic_id, narrative=narrative)
+    monkeypatch.setattr(socket, "create_connection", _forbidden)
+    planning = tmp_path / "planning"
+    assert main([
+        "freeze", "--manifest", str(PRODUCTION_MANIFEST),
+        "--cache-root", str(tmp_path), "--output", str(planning),
+    ]) == 0
+    assert main([
+        "verify", "--cache-root", str(tmp_path), "--planning", str(planning),
+    ]) == 0
 
 
 def test_scope_is_exactly_the_authorized_22() -> None:
