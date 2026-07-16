@@ -93,6 +93,85 @@ def accepted_gates() -> list[dict[str, object]]:
     ]
 
 
+def production_manifest() -> dict[str, object]:
+    topics = [dict(row) for row in manifest()["topics"]]
+    facets: list[dict[str, object]] = []
+    order = 0
+    for topic_id in module.TOPIC_IDS:
+        for number in range(6):
+            facets.append(
+                {
+                    "topic_id": topic_id,
+                    "facet_id": f"{topic_id}-facet-{number}",
+                    "manifest_order": order,
+                    "query": f"facet query {topic_id} {number}",
+                }
+            )
+            order += 1
+    facets.append(
+        {
+            "topic_id": "84",
+            "facet_id": "84-rejected",
+            "manifest_order": order,
+            "query": "rejected facet query",
+        }
+    )
+    payload: dict[str, object] = {
+        "schema_version": "rag25_deep_facet_candidate_manifest_v1",
+        "experiment_id": "rag25_deep_facet_candidates_v1",
+        "topic_ids": list(module.TOPIC_IDS),
+        "topics": topics,
+        "facets": facets,
+        "qrels_opened": False,
+    }
+    unhashed = dict(payload)
+    payload["hashes"] = {
+        "topics_sha256": _sha256(_compact(topics) + b"\n"),
+        "facets_sha256": _sha256(_compact(facets) + b"\n"),
+        "freeze_sha256": _sha256(_compact(unhashed) + b"\n"),
+    }
+    return payload
+
+
+def production_gates() -> list[dict[str, object]]:
+    return [
+        {
+            "topic_id": facet["topic_id"],
+            "facet_id": facet["facet_id"],
+            "manifest_order": facet["manifest_order"],
+            "accepted": facet["facet_id"] != "84-rejected",
+            "status": (
+                "rejected" if facet["facet_id"] == "84-rejected" else "accepted"
+            ),
+        }
+        for facet in production_manifest()["facets"]
+    ]
+
+
+def production_phase1_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for facet in production_manifest()["facets"]:
+        for rank in range(1, 201):
+            document_id = f"{facet['facet_id']}-d{rank}"
+            query = str(facet["query"])
+            text = f"text {document_id}"
+            rows.append(
+                {
+                    "topic_id": facet["topic_id"],
+                    "facet_id": facet["facet_id"],
+                    "manifest_order": facet["manifest_order"],
+                    "document_id": document_id,
+                    "docid": document_id,
+                    "rank": rank,
+                    "query": query,
+                    "query_sha256": _sha256(query.encode()),
+                    "text": text,
+                    "text_sha256": _sha256(text.encode()),
+                }
+            )
+    return rows
+
+
 def _compact(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -143,6 +222,23 @@ class FakeCache:
         return self.scores.get(self.cache_key(query_text=query_text, text=text))
 
 
+def working_rocm_probe() -> dict[str, object]:
+    return {
+        "available": True,
+        "execution_backend": "rocm",
+        "device": "cuda",
+        "device_count": 1,
+        "device_name": "test AMD GPU",
+        "hip_version": "test-rocm",
+        "probe_allocation_bytes": 4,
+        "peak_device_memory_bytes": 4,
+    }
+
+
+def output_path(tmp_path: Path) -> Path:
+    return tmp_path / "post_qrels_tethered_facet_minilm_v1" / "scoring"
+
+
 def fixture_sources(tmp_path: Path) -> dict[str, Path]:
     manifest_path = tmp_path / "manifest.json"
     phase1 = tmp_path / "phase1_v1"
@@ -150,9 +246,11 @@ def fixture_sources(tmp_path: Path) -> dict[str, Path]:
     phase1.mkdir()
     gate.mkdir()
 
-    manifest_bytes = _pretty(manifest())
+    manifest_bytes = _pretty(production_manifest())
     manifest_path.write_bytes(manifest_bytes)
-    candidate_bytes = b"".join(_compact(row) + b"\n" for row in phase1_rows())
+    candidate_bytes = b"".join(
+        _compact(row) + b"\n" for row in production_phase1_rows()
+    )
     (phase1 / "candidates.jsonl").write_bytes(candidate_bytes)
     approval = tmp_path / "approval.json"
     approval.write_bytes(
@@ -188,16 +286,42 @@ def fixture_sources(tmp_path: Path) -> dict[str, Path]:
     model_receipt_sha256 = _sha256(model_receipt.read_bytes())
     phase1_preflight_bytes = _pretty(
         {
+            "schema_version": "deep-facet-candidate-minilm-preflight-v1",
             "status": "tokenizer_only_preflight_complete",
+            "phase": "phase1_facet_local",
             "qrels_opened": False,
+            "network_access_supported": False,
+            "hosted_inference_supported": False,
+            "model_constructed": False,
             "candidates_sha256": _sha256(candidate_bytes),
             "model_materialization_receipt": str(model_receipt),
             "model_materialization_receipt_sha256": model_receipt_sha256,
+            "model": module.MODEL_ID,
+            "model_revision": module.MODEL_REVISION,
+            "pairs_per_second": 100.0,
+            "fixed_seconds": 30.0,
+            "projected_runtime_seconds": 40.0,
+            "runtime_ceiling_seconds": 600.0,
+            "summary": {
+                "document_count": 5000,
+                "window_count": 5000,
+                "unique_pair_count": 5000,
+                "unique_uncached_pair_count": 1000,
+                "cache_hit_window_count": 4000,
+            },
         }
     )
     (phase1 / "preflight.json").write_bytes(phase1_preflight_bytes)
-    phase1_windows = b'{"window":1}\n'
-    phase1_scores = b'{"score":1}\n'
+    phase1_windows = b"".join(
+        _compact({"window": number}) + b"\n" for number in range(5000)
+    )
+    phase1_scores = b"".join(
+        _compact({"score": number}) + b"\n" for number in range(5000)
+    )
+    phase1_preflight = json.loads(phase1_preflight_bytes)
+    phase1_preflight["windows_sha256"] = _sha256(phase1_windows)
+    phase1_preflight_bytes = _pretty(phase1_preflight)
+    (phase1 / "preflight.json").write_bytes(phase1_preflight_bytes)
     (phase1 / "windows.jsonl").write_bytes(phase1_windows)
     (phase1 / "scores.jsonl").write_bytes(phase1_scores)
     (phase1 / "scoring_receipt.json").write_bytes(
@@ -209,20 +333,29 @@ def fixture_sources(tmp_path: Path) -> dict[str, Path]:
                 "qrels_opened": False,
                 "network_access_supported": False,
                 "hosted_inference_supported": False,
-                "candidate_rows": 4,
-                "candidates_sha256": _sha256(candidate_bytes),
-                "manifest_sha256": _sha256(manifest_bytes),
                 "preflight_sha256": _sha256(phase1_preflight_bytes),
                 "windows_sha256": _sha256(phase1_windows),
                 "scores_sha256": _sha256(phase1_scores),
-                "model_materialization_receipt": str(model_receipt),
-                "model_materialization_receipt_sha256": model_receipt_sha256,
                 "model": module.MODEL_ID,
                 "model_revision": module.MODEL_REVISION,
+                "planned_window_count": 5000,
+                "completed_window_count": 5000,
+                "unique_forward_pair_count": 1000,
+                "cache_reuse_pair_count": 4000,
+                "elapsed_seconds": 10.0,
+                "peak_device_memory_bytes": 123456,
+                "peak_host_memory_bytes": 654321,
+                "device": "cuda",
+                "execution_backend": "rocm",
             }
         )
     )
-    gates_bytes = _pretty({"gates": accepted_gates()})
+    gates_bytes = _pretty(
+        {
+            "schema_version": "deep-facet-candidate-gate-v1",
+            "gates": production_gates(),
+        }
+    )
     (gate / "gates.json").write_bytes(gates_bytes)
     (gate / "summary.json").write_bytes(
         _pretty(
@@ -230,7 +363,9 @@ def fixture_sources(tmp_path: Path) -> dict[str, Path]:
                 "schema_version": "deep-facet-candidate-gate-v1",
                 "status": "complete",
                 "qrels_opened": False,
-                "accepted_facet_count": 2,
+                "facet_count": 25,
+                "accepted_facet_count": 24,
+                "rejected_facet_count": 1,
                 "artifacts": {
                     "gates.json": {
                         "bytes": len(gates_bytes),
@@ -282,21 +417,30 @@ def test_candidates_cover_only_accepted_facets_and_preserve_identity():
 
 def test_preflight_is_tokenizer_only_and_freezes_exact_cache_state(tmp_path):
     cache = FakeCache(tmp_path / "cache.jsonl")
+    output = output_path(tmp_path)
     result = create_preflight(
         fixture_sources(tmp_path),
-        tmp_path / "out",
+        output,
         tokenizer=WordTokenizer(),
         cache=cache,
+        device_probe=working_rocm_probe,
     )
     assert result["status"] == "tokenizer_only_preflight_complete"
     assert result["model_constructed"] is False
     assert result["network_access_supported"] is False
-    assert result["summary"]["query_document_pair_count"] == 4
+    assert result["summary"]["query_document_pair_count"] == 4800
+    assert result["summary"]["accepted_facet_count"] == 24
     assert result["summary"]["cache_hit_window_count"] == 0
-    assert result["summary"]["cache_miss_window_count"] == 4
-    assert (tmp_path / "out" / "candidates.jsonl").exists()
-    assert (tmp_path / "out" / "windows.jsonl").exists()
-    assert (tmp_path / "out" / "preflight.json").read_bytes() == _pretty(result)
+    assert result["summary"]["cache_miss_window_count"] == 4800
+    assert result["runtime_evidence"]["prior_pairs_per_second"] == 100.0
+    assert result["runtime_evidence"]["fixed_seconds"] == 30.0
+    assert result["runtime_evidence"]["projected_inference_seconds"] == 78.0
+    assert result["device_probe"] == working_rocm_probe()
+    assert result["runtime_evidence"]["prior_peak_device_memory_bytes"] == 123456
+    assert result["runtime_evidence"]["prior_peak_host_memory_bytes"] == 654321
+    assert (output / "candidates.jsonl").exists()
+    assert (output / "windows.jsonl").exists()
+    assert (output / "preflight.json").read_bytes() == _pretty(result)
 
 
 @pytest.mark.parametrize(
@@ -322,7 +466,7 @@ def test_preflight_cli_has_only_local_authenticated_inputs():
             "--gate",
             "gate_v1",
             "--output",
-            "out",
+            "post_qrels_tethered_facet_minilm_v1/scoring",
         ]
     )
     assert args.command == "preflight"
@@ -343,9 +487,10 @@ def test_preflight_authenticates_phase1_receipt_hashes_before_candidates(tmp_pat
     with pytest.raises(ValueError, match="phase-1 preflight receipt hash"):
         create_preflight(
             sources,
-            tmp_path / "out",
+            output_path(tmp_path),
             tokenizer=WordTokenizer(),
             cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
         )
 
 
@@ -373,8 +518,138 @@ def test_default_loader_uses_explicit_tokenizer_only_backend(tmp_path, monkeypat
     monkeypatch.setattr(module, "load_verified_tokenizer", load_tokenizer)
     create_preflight(
         sources,
-        tmp_path / "out",
+        output_path(tmp_path),
         cache=FakeCache(tmp_path / "cache.jsonl"),
+        device_probe=working_rocm_probe,
     )
 
     assert captured["auto_tokenizer_cls"] is module.TokenizerOnlyAuto
+
+
+def test_preflight_invokes_frozen_ceiling_gate(tmp_path, monkeypatch):
+    calls: list[tuple[int, int, float]] = []
+    original = module.enforce_preflight_ceiling
+
+    def enforce(pairs, windows, seconds):
+        calls.append((pairs, windows, seconds))
+        original(pairs, windows, seconds)
+
+    monkeypatch.setattr(module, "enforce_preflight_ceiling", enforce)
+    create_preflight(
+        fixture_sources(tmp_path),
+        output_path(tmp_path),
+        tokenizer=WordTokenizer(),
+        cache=FakeCache(tmp_path / "cache.jsonl"),
+        device_probe=working_rocm_probe,
+    )
+
+    assert calls == [(4800, 4800, 78.0)]
+
+
+def test_preflight_rejects_slow_prior_rocm_projection(tmp_path):
+    sources = fixture_sources(tmp_path)
+    receipt_path = sources["phase1"] / "scoring_receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    preflight_path = sources["phase1"] / "preflight.json"
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["pairs_per_second"] = 1.0
+    preflight["projected_runtime_seconds"] = 1030.0
+    preflight_path.write_bytes(_pretty(preflight))
+    receipt["preflight_sha256"] = _sha256(preflight_path.read_bytes())
+    receipt_path.write_bytes(_pretty(receipt))
+
+    with pytest.raises(ValueError, match="preflight ceiling"):
+        create_preflight(
+            sources,
+            output_path(tmp_path),
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_preflight_requires_working_rocm_without_constructing_model(tmp_path):
+    with pytest.raises(ValueError, match="working ROCm device"):
+        create_preflight(
+            fixture_sources(tmp_path),
+            output_path(tmp_path),
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=lambda: {
+                **working_rocm_probe(),
+                "available": False,
+                "device_count": 0,
+            },
+        )
+    assert not output_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    ("artifact", "field"),
+    [
+        ("manifest", "hashes"),
+        ("phase1_preflight", "candidates_sha256"),
+        ("phase1_preflight", "pairs_per_second"),
+        ("phase1_preflight", "fixed_seconds"),
+        ("phase1_preflight", "runtime_ceiling_seconds"),
+        ("phase1_scoring", "preflight_sha256"),
+        ("gate_summary", "accepted_facet_count"),
+    ],
+)
+def test_preflight_rejects_missing_controlling_bindings_before_candidates(
+    tmp_path, artifact, field
+):
+    sources = fixture_sources(tmp_path)
+    paths = {
+        "manifest": sources["manifest"],
+        "phase1_preflight": sources["phase1"] / "preflight.json",
+        "phase1_scoring": sources["phase1"] / "scoring_receipt.json",
+        "gate_summary": sources["gate"] / "summary.json",
+    }
+    path = paths[artifact]
+    payload = json.loads(path.read_bytes())
+    payload.pop(field)
+    path.write_bytes(_pretty(payload))
+    if artifact == "phase1_preflight":
+        scoring_path = sources["phase1"] / "scoring_receipt.json"
+        scoring = json.loads(scoring_path.read_bytes())
+        scoring["preflight_sha256"] = _sha256(path.read_bytes())
+        scoring_path.write_bytes(_pretty(scoring))
+
+    with pytest.raises(ValueError, match="required"):
+        create_preflight(
+            sources,
+            output_path(tmp_path),
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_preflight_rejects_noncanonical_publication_path(tmp_path):
+    with pytest.raises(ValueError, match="post_qrels_tethered_facet_minilm_v1/scoring"):
+        create_preflight(
+            fixture_sources(tmp_path),
+            tmp_path / "scoring",
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_rocm_probe_uses_disk_backed_temp_without_model_construction(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class Completed:
+        stdout = json.dumps(working_rocm_probe())
+
+    def run(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return Completed()
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+    assert module.probe_working_rocm_device() == working_rocm_probe()
+    assert calls[0]["kwargs"]["env"]["TMPDIR"] == "/var/tmp"
+    assert "torch.zeros" in calls[0]["args"][0][2]
+    assert "AutoModel" not in calls[0]["args"][0][2]
