@@ -1257,6 +1257,181 @@ def aggregate_document_scores(
     return output
 
 
+def _validate_preflight_evidence(preflight: Mapping[str, object]) -> None:
+    tokenizer = preflight.get("tokenizer")
+    if (
+        not isinstance(tokenizer, Mapping)
+        or tokenizer.get("local_files_only") is not True
+        or not isinstance(tokenizer.get("class"), str)
+        or not str(tokenizer["class"]).strip()
+    ):
+        raise ValueError("tethered preflight tokenizer locality evidence is invalid")
+
+    score_cache = preflight.get("score_cache")
+    if not isinstance(score_cache, Mapping):
+        raise ValueError("tethered preflight score-cache evidence is invalid")
+    if score_cache.get("context") != score_cache_context().artifact_metadata:
+        raise ValueError("tethered preflight score-cache context differs")
+    cache_binding = score_cache.get("binding")
+    if not isinstance(cache_binding, Mapping):
+        raise ValueError("tethered preflight score-cache binding is invalid")
+    state = cache_binding.get("state")
+    cache_path = cache_binding.get("path")
+    cache_bytes = cache_binding.get("bytes")
+    cache_sha = cache_binding.get("sha256")
+    if (
+        state not in {"absent", "present"}
+        or not isinstance(cache_path, str)
+        or not Path(cache_path).is_absolute()
+        or type(cache_bytes) is not int
+        or cache_bytes < 0
+        or (state == "absent" and (cache_bytes != 0 or cache_sha is not None))
+        or (state == "present" and not isinstance(cache_sha, str))
+    ):
+        raise ValueError("tethered preflight score-cache binding is invalid")
+    if state == "present":
+        _required_sha256(cache_sha, "tethered score cache")
+
+    sources = preflight.get("sources")
+    source_names = {
+        "manifest",
+        "phase1_scoring_receipt",
+        "phase1_preflight_receipt",
+        "phase1_candidates",
+        "phase1_windows",
+        "phase1_scores",
+        "gate_summary",
+        "gates",
+        "accepted_union",
+        "model_materialization_receipt",
+    }
+    if not isinstance(sources, Mapping) or set(sources) != source_names:
+        raise ValueError("tethered preflight source evidence is invalid")
+    for name in source_names - {"accepted_union"}:
+        binding = sources.get(name)
+        if (
+            not isinstance(binding, Mapping)
+            or not isinstance(binding.get("path"), str)
+            or not str(binding["path"]).strip()
+        ):
+            raise ValueError(f"tethered preflight source {name} is invalid")
+        _required_sha256(binding.get("sha256"), f"tethered source {name}")
+    model_source = sources["model_materialization_receipt"]
+    if (
+        model_source.get("sha256")
+        != preflight.get("model_materialization_receipt_sha256")
+        or model_source.get("path") != preflight.get("model_materialization_receipt")
+    ):
+        raise ValueError("tethered preflight model receipt evidence differs")
+    accepted = sources.get("accepted_union")
+    if not isinstance(accepted, Mapping):
+        raise ValueError("tethered preflight accepted-union source evidence is invalid")
+    if (
+        not isinstance(accepted.get("path"), str)
+        or type(accepted.get("bytes")) is not int
+        or int(accepted["bytes"]) <= 0
+        or accepted.get("rows") != ACCEPTED_UNION_COUNT
+        or accepted.get("topic_counts") != ACCEPTED_UNION_COUNTS
+    ):
+        raise ValueError("tethered preflight accepted-union source evidence is invalid")
+    _required_sha256(accepted.get("sha256"), "tethered accepted union")
+
+    device = preflight.get("device_probe")
+    if not isinstance(device, Mapping):
+        raise ValueError("tethered preflight ROCm device evidence is invalid")
+    _validate_device_probe(device)
+
+
+def _validate_runtime_evidence(
+    preflight: Mapping[str, object], summary: Mapping[str, object]
+) -> None:
+    runtime = preflight.get("runtime_evidence")
+    required = frozenset(
+        {
+            "policy",
+            "prior_scoring_receipt_sha256",
+            "prior_unique_forward_pair_count",
+            "prior_elapsed_seconds",
+            "policy_pairs_per_second",
+            "prior_pairs_per_second",
+            "prior_observed_pairs_per_second",
+            "fixed_seconds",
+            "projected_unique_cache_miss_count",
+            "projected_inference_seconds",
+            "runtime_ceiling_seconds",
+            "prior_peak_device_memory_bytes",
+            "prior_peak_host_memory_bytes",
+            "tokenizer_planning_elapsed_seconds",
+        }
+    )
+    if not isinstance(runtime, Mapping):
+        raise ValueError("tethered preflight runtime evidence is invalid")
+    _require_fields(runtime, required, "tethered preflight runtime evidence")
+    if runtime.get("policy") != "prior_compatible_rocm_rate_plus_fixed_seconds_v1":
+        raise ValueError("tethered preflight runtime policy differs")
+    _required_sha256(
+        runtime.get("prior_scoring_receipt_sha256"), "prior scoring receipt"
+    )
+    sources = preflight.get("sources")
+    prior_source = (
+        sources.get("phase1_scoring_receipt")
+        if isinstance(sources, Mapping)
+        else None
+    )
+    if (
+        not isinstance(prior_source, Mapping)
+        or runtime.get("prior_scoring_receipt_sha256")
+        != prior_source.get("sha256")
+    ):
+        raise ValueError("tethered runtime evidence differs from prior scoring source")
+    forward = _required_positive_int(
+        runtime.get("prior_unique_forward_pair_count"), "prior forward pairs"
+    )
+    prior_elapsed = _required_positive_float(
+        runtime.get("prior_elapsed_seconds"), "prior elapsed seconds"
+    )
+    policy_rate = _required_positive_float(
+        runtime.get("policy_pairs_per_second"), "policy pairs per second"
+    )
+    observed_rate = _required_positive_float(
+        runtime.get("prior_observed_pairs_per_second"),
+        "prior observed pairs per second",
+    )
+    effective_rate = _required_positive_float(
+        runtime.get("prior_pairs_per_second"), "prior pairs per second"
+    )
+    fixed = _required_positive_float(runtime.get("fixed_seconds"), "fixed seconds")
+    projected = _required_positive_float(
+        runtime.get("projected_inference_seconds"), "projected inference seconds"
+    )
+    planning = runtime.get("tokenizer_planning_elapsed_seconds")
+    if (
+        fixed != REFERENCE_FIXED_SECONDS
+        or runtime.get("runtime_ceiling_seconds") != RUNTIME_CEILING_SECONDS
+        or runtime.get("projected_unique_cache_miss_count")
+        != summary.get("unique_cache_miss_count")
+        or not math.isclose(observed_rate, forward / prior_elapsed, rel_tol=1e-12)
+        or not math.isclose(effective_rate, min(policy_rate, observed_rate), rel_tol=1e-12)
+        or not math.isclose(
+            projected,
+            fixed + int(summary["unique_cache_miss_count"]) / effective_rate,
+            rel_tol=1e-12,
+        )
+        or projected > RUNTIME_CEILING_SECONDS
+        or isinstance(planning, bool)
+        or not isinstance(planning, (int, float))
+        or not math.isfinite(float(planning))
+        or float(planning) < 0
+    ):
+        raise ValueError("tethered preflight runtime evidence differs")
+    _required_positive_int(
+        runtime.get("prior_peak_device_memory_bytes"), "prior peak device memory"
+    )
+    _required_positive_int(
+        runtime.get("prior_peak_host_memory_bytes"), "prior peak host memory"
+    )
+
+
 def verify_preflight(
     preflight_source: Path | Mapping[str, object],
 ) -> dict[str, object]:
@@ -1284,8 +1459,10 @@ def verify_preflight(
         preflight.get("schema_version") != PREFLIGHT_SCHEMA_VERSION
         or preflight.get("status") != "tokenizer_only_preflight_complete"
         or preflight.get("qrels_opened") is not False
+        or preflight.get("retrieval_path_supported") is not False
         or preflight.get("network_access_supported") is not False
         or preflight.get("hosted_inference_supported") is not False
+        or preflight.get("model_constructed") is not False
         or preflight.get("model") != MODEL_ID
         or preflight.get("model_revision") != MODEL_REVISION
     ):
@@ -1305,6 +1482,26 @@ def verify_preflight(
         raise ValueError("model materialization receipt path is required")
     if not isinstance(summary, Mapping):
         raise ValueError("tethered MiniLM preflight summary is required")
+    _require_fields(
+        summary,
+        frozenset(
+            {
+                "query_document_pair_count",
+                "accepted_facet_count",
+                "window_count",
+                "cache_hit_window_count",
+                "cache_miss_window_count",
+                "unique_pair_count",
+                "unique_cache_miss_count",
+                "topic_pair_counts",
+                "facet_pair_counts",
+                "topic_window_counts",
+                "facet_window_counts",
+                "document_window_coverage",
+            }
+        ),
+        "tethered preflight summary",
+    )
     if (
         summary.get("query_document_pair_count") != PAIR_COUNT
         or type(summary.get("window_count")) is not int
@@ -1316,6 +1513,12 @@ def verify_preflight(
         raise ValueError("tethered MiniLM preflight counts differ from the frozen contract")
     topic_counts = summary.get("topic_pair_counts")
     facet_counts = summary.get("facet_pair_counts")
+    topic_windows = summary.get("topic_window_counts")
+    facet_windows = summary.get("facet_window_counts")
+    coverage = summary.get("document_window_coverage")
+    window_count = int(summary["window_count"])
+    hit_windows = summary.get("cache_hit_window_count")
+    miss_windows = summary.get("cache_miss_window_count")
     if (
         not isinstance(topic_counts, Mapping)
         or set(topic_counts) != set(TOPIC_IDS)
@@ -1323,11 +1526,60 @@ def verify_preflight(
         or not isinstance(facet_counts, Mapping)
         or len(facet_counts) != ACCEPTED_FACET_COUNT
         or set(facet_counts.values()) != {200}
-        or int(summary["window_count"]) < PAIR_COUNT
+        or not isinstance(topic_windows, Mapping)
+        or set(topic_windows) != set(TOPIC_IDS)
+        or any(type(value) is not int or value < 0 for value in topic_windows.values())
+        or sum(topic_windows.values()) != window_count
+        or not isinstance(facet_windows, Mapping)
+        or set(facet_windows) != set(facet_counts)
+        or any(type(value) is not int or value < 1 for value in facet_windows.values())
+        or sum(facet_windows.values()) != window_count
+        or type(hit_windows) is not int
+        or type(miss_windows) is not int
+        or hit_windows < 0
+        or miss_windows < 0
+        or hit_windows + miss_windows != window_count
+        or window_count < PAIR_COUNT
         or not 0 <= int(summary["unique_cache_miss_count"]) <= int(summary["unique_pair_count"])
-        or int(summary["unique_pair_count"]) > int(summary["window_count"])
+        or int(summary["unique_pair_count"]) > window_count
+        or not isinstance(coverage, Mapping)
+        or len(coverage) != PAIR_COUNT
     ):
         raise ValueError("tethered MiniLM preflight population differs from the frozen contract")
+    for values in coverage.values():
+        if (
+            not isinstance(values, Sequence)
+            or isinstance(values, (str, bytes))
+            or not values
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0.0 <= float(value) <= 1.0
+                for value in values
+            )
+        ):
+            raise ValueError("tethered preflight document coverage is invalid")
+    coverage_documents: Counter[str] = Counter()
+    coverage_windows: Counter[str] = Counter()
+    for identity, values in coverage.items():
+        matches = [
+            str(facet_id)
+            for facet_id in facet_counts
+            if isinstance(identity, str)
+            and identity.startswith(f"{facet_id}:")
+            and len(identity) > len(str(facet_id)) + 1
+        ]
+        if len(matches) != 1:
+            raise ValueError("tethered preflight document coverage identity is invalid")
+        coverage_documents[matches[0]] += 1
+        coverage_windows[matches[0]] += len(values)
+    if (
+        dict(coverage_documents) != dict(facet_counts)
+        or dict(coverage_windows) != dict(facet_windows)
+        or sum(coverage_windows.values()) != window_count
+    ):
+        raise ValueError("tethered preflight coverage population differs")
     ceilings = preflight.get("ceilings")
     if (
         not isinstance(ceilings, Mapping)
@@ -1336,6 +1588,8 @@ def verify_preflight(
         or ceilings.get("maximum_runtime_seconds") != RUNTIME_CEILING_SECONDS
     ):
         raise ValueError("tethered MiniLM preflight ceilings differ from the frozen contract")
+    _validate_preflight_evidence(preflight)
+    _validate_runtime_evidence(preflight, summary)
     return preflight
 
 
@@ -1444,11 +1698,13 @@ def run_local_scoring(
     if candidate_identities != window_identities:
         raise ValueError("tethered candidate and window identities differ")
 
+    cache = GlobalScoreCache(Path(cache_root), score_cache_context())
+    if _cache_binding(cache) != preflight["score_cache"]["binding"]:  # type: ignore[index]
+        raise ValueError("score-cache binding changed after tethered MiniLM preflight")
     model_receipt = Path(str(preflight.get("model_materialization_receipt")))
     verified = load_verified_materialization(model_receipt)
     if verified.sha256 != preflight.get("model_materialization_receipt_sha256"):
         raise ValueError("model receipt differs from tethered MiniLM preflight")
-    cache = GlobalScoreCache(Path(cache_root), score_cache_context())
     by_key: dict[str, Mapping[str, object]] = {}
     planned_miss_keys: set[str] = set()
     for row in windows:
@@ -1577,16 +1833,91 @@ def verify_scoring(preflight_path: Path) -> dict[str, object]:
     reservation, reservation_bytes = _read_object(
         output / "scoring_reservation.json", "scoring reservation"
     )
+    candidate_bytes = (output / "candidates.jsonl").read_bytes()
     window_bytes = (output / "windows.jsonl").read_bytes()
     score_bytes = (output / "scores.jsonl").read_bytes()
     document_bytes = (output / "document_scores.jsonl").read_bytes()
+    candidates = _read_jsonl_source(candidate_bytes, "tethered MiniLM candidates")
     windows = _read_jsonl_source(window_bytes, "tethered MiniLM windows")
     score_rows = _read_jsonl_source(score_bytes, "tethered MiniLM scores")
     document_rows = _read_jsonl_source(
         document_bytes, "tethered MiniLM document scores"
     )
+    if _sha256_bytes(candidate_bytes) != preflight.get("candidates_sha256"):
+        raise ValueError("current candidates differ from the tethered preflight")
     if _sha256_bytes(window_bytes) != preflight.get("windows_sha256"):
         raise ValueError("current planned windows differ from the tethered preflight")
+    candidate_identities: set[tuple[str, str, str]] = set()
+    candidate_topics: Counter[str] = Counter()
+    candidate_facets: Counter[str] = Counter()
+    windows_by_identity: dict[
+        tuple[str, str, str], list[Mapping[str, object]]
+    ] = defaultdict(list)
+    for window in windows:
+        windows_by_identity[
+            (
+                str(window.get("topic_id")),
+                str(window.get("facet_id")),
+                str(window.get("document_id")),
+            )
+        ].append(window)
+    for candidate in candidates:
+        topic_id = reject_topic(candidate.get("topic_id"))
+        facet_id = _required_text(candidate, "facet_id", "tethered candidate")
+        document_id = _required_text(
+            candidate, "document_id", "tethered candidate"
+        )
+        if candidate.get("schema_version") != CANDIDATE_SCHEMA_VERSION:
+            raise ValueError("tethered candidate schema differs")
+        identity = (topic_id, facet_id, document_id)
+        query = _required_text(candidate, "query", "tethered candidate")
+        text = _required_text(candidate, "text", "tethered candidate")
+        rank = candidate.get("rank")
+        candidate_windows = windows_by_identity.get(identity, [])
+        if (
+            candidate.get("query_sha256") != _sha256_text(query)
+            or candidate.get("text_sha256") != _sha256_text(text)
+            or type(rank) is not int
+            or rank < 1
+            or not candidate_windows
+            or any(
+                window.get("query") != query
+                or window.get("query_sha256") != candidate.get("query_sha256")
+                or window.get("document_sha256") != candidate.get("text_sha256")
+                or window.get("rank") != rank
+                for window in candidate_windows
+            )
+        ):
+            raise ValueError("tethered candidate query/text lineage differs from windows")
+        candidate_identities.add(identity)
+        candidate_topics[topic_id] += 1
+        candidate_facets[facet_id] += 1
+    window_identities = {
+        (
+            str(window.get("topic_id")),
+            str(window.get("facet_id")),
+            str(window.get("document_id")),
+        )
+        for window in windows
+    }
+    document_identities = {
+        (
+            str(document.get("topic_id")),
+            str(document.get("facet_id")),
+            str(document.get("document_id")),
+        )
+        for document in document_rows
+    }
+    summary = preflight["summary"]
+    if (
+        len(candidates) != PAIR_COUNT
+        or len(candidate_identities) != PAIR_COUNT
+        or candidate_identities != window_identities
+        or candidate_identities != document_identities
+        or dict(candidate_topics) != summary["topic_pair_counts"]  # type: ignore[index]
+        or dict(candidate_facets) != summary["facet_pair_counts"]  # type: ignore[index]
+    ):
+        raise ValueError("tethered candidate and window identities differ")
     if len(windows) != len(score_rows):
         raise ValueError("scoring rows do not exactly cover planned windows")
     lineage_fields = (
@@ -1639,7 +1970,6 @@ def verify_scoring(preflight_path: Path) -> dict[str, object]:
     if _jsonl_bytes(recomputed) != document_bytes or len(document_rows) != PAIR_COUNT:
         raise ValueError("document aggregation differs from scored windows")
     preflight_sha = _sha256_bytes(path.read_bytes())
-    summary = preflight["summary"]
     planned_misses = summary["unique_cache_miss_count"]  # type: ignore[index]
     unique_pairs = summary["unique_pair_count"]  # type: ignore[index]
     elapsed = receipt.get("elapsed_seconds")

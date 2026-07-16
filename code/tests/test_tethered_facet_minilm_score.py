@@ -274,16 +274,23 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
     cache = FakeCache(tmp_path / "score-cache.jsonl")
     rows = []
     candidates = []
+    coverage = {}
     for number in range(1, module.PAIR_COUNT + 1):
+        topic_index, topic_offset = divmod(number - 1, 1200)
+        topic_id = module.TOPIC_IDS[topic_index]
+        facet_number = topic_offset // 200
+        facet_id = f"{topic_id}-facet-{facet_number}"
+        rank = topic_offset % 200 + 1
         key_number = 1 if number % 2 else 2
         query, text = f"q{key_number}", f"t{key_number}"
         cache_key = f"k{key_number}"
         cache.aliases[(query, text)] = cache_key
         rows.append(
             {
-                "topic_id": "219",
-                "facet_id": "219-positive",
+                "topic_id": topic_id,
+                "facet_id": facet_id,
                 "document_id": f"d{number}",
+                "rank": rank,
                 "query": query,
                 "query_sha256": _sha256(query.encode()),
                 "document_sha256": _sha256(text.encode()),
@@ -296,12 +303,18 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
                 "cache_hit": key_number == 1,
             }
         )
+        coverage[f"{facet_id}:d{number}"] = [1.0]
         candidates.append(
             {
                 "schema_version": module.CANDIDATE_SCHEMA_VERSION,
-                "topic_id": "219",
-                "facet_id": "219-positive",
+                "topic_id": topic_id,
+                "facet_id": facet_id,
                 "document_id": f"d{number}",
+                "rank": rank,
+                "query": query,
+                "query_sha256": _sha256(query.encode()),
+                "text": text,
+                "text_sha256": _sha256(text.encode()),
             }
         )
     window_bytes = b"".join(_compact(row) + b"\n" for row in rows)
@@ -312,8 +325,10 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
         "schema_version": module.PREFLIGHT_SCHEMA_VERSION,
         "status": "tokenizer_only_preflight_complete",
         "qrels_opened": False,
+        "retrieval_path_supported": False,
         "network_access_supported": False,
         "hosted_inference_supported": False,
+        "model_constructed": False,
         "model": module.MODEL_ID,
         "model_revision": module.MODEL_REVISION,
         "model_materialization_receipt": str(tmp_path / "materialization.json"),
@@ -322,18 +337,68 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
         "windows_file": "windows.jsonl",
         "windows_sha256": _sha256(window_bytes),
         "candidates_sha256": _sha256(candidate_bytes),
+        "device_probe": working_rocm_probe(),
+        "runtime_evidence": {
+            "policy": "prior_compatible_rocm_rate_plus_fixed_seconds_v1",
+            "prior_scoring_receipt_sha256": "b" * 64,
+            "prior_unique_forward_pair_count": 100,
+            "prior_elapsed_seconds": 1.0,
+            "policy_pairs_per_second": 100.0,
+            "prior_pairs_per_second": 100.0,
+            "prior_observed_pairs_per_second": 100.0,
+            "fixed_seconds": module.REFERENCE_FIXED_SECONDS,
+            "projected_unique_cache_miss_count": 1,
+            "projected_inference_seconds": 30.01,
+            "runtime_ceiling_seconds": module.RUNTIME_CEILING_SECONDS,
+            "prior_peak_device_memory_bytes": 1,
+            "prior_peak_host_memory_bytes": 1,
+            "tokenizer_planning_elapsed_seconds": 0.1,
+        },
+        "tokenizer": {"class": "FakeTokenizer", "local_files_only": True},
+        "score_cache": {
+            "context": module.score_cache_context().artifact_metadata,
+            "binding": {
+                "state": "absent",
+                "path": str(cache.path.resolve()),
+                "bytes": 0,
+                "sha256": None,
+            },
+        },
+        "sources": {
+            name: {"path": str(tmp_path / name), "sha256": "c" * 64}
+            for name in (
+                "manifest",
+                "phase1_scoring_receipt",
+                "phase1_preflight_receipt",
+                "phase1_candidates",
+                "phase1_windows",
+                "phase1_scores",
+                "gate_summary",
+                "gates",
+                "model_materialization_receipt",
+            )
+        },
         "summary": {
             "query_document_pair_count": module.PAIR_COUNT,
             "window_count": module.PAIR_COUNT,
             "unique_pair_count": 2,
             "unique_cache_miss_count": 1,
             "accepted_facet_count": module.ACCEPTED_FACET_COUNT,
+            "cache_hit_window_count": module.PAIR_COUNT // 2,
+            "cache_miss_window_count": module.PAIR_COUNT // 2,
             "topic_pair_counts": {topic: 1200 for topic in module.TOPIC_IDS},
             "facet_pair_counts": {
                 f"{topic}-facet-{number}": 200
                 for topic in module.TOPIC_IDS
                 for number in range(6)
             },
+            "topic_window_counts": {topic: 1200 for topic in module.TOPIC_IDS},
+            "facet_window_counts": {
+                f"{topic}-facet-{number}": 200
+                for topic in module.TOPIC_IDS
+                for number in range(6)
+            },
+            "document_window_coverage": coverage,
         },
         "ceilings": {
             "exact_query_document_pair_count": module.PAIR_COUNT,
@@ -341,6 +406,20 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
             "maximum_runtime_seconds": module.RUNTIME_CEILING_SECONDS,
         },
     }
+    preflight["sources"]["accepted_union"] = {
+        "path": str(tmp_path / "accepted_union.jsonl"),
+        "bytes": 1,
+        "sha256": "d" * 64,
+        "rows": module.ACCEPTED_UNION_COUNT,
+        "topic_counts": module.ACCEPTED_UNION_COUNTS,
+    }
+    preflight["sources"]["model_materialization_receipt"] = {
+        "path": preflight["model_materialization_receipt"],
+        "sha256": preflight["model_materialization_receipt_sha256"],
+    }
+    preflight["sources"]["phase1_scoring_receipt"]["sha256"] = (
+        preflight["runtime_evidence"]["prior_scoring_receipt_sha256"]
+    )
     (output / "preflight.json").write_bytes(_pretty(preflight))
     cache.scores["k1"] = 1.0
     return output / "preflight.json", cache
@@ -1129,3 +1208,159 @@ def test_scoring_requires_candidate_and_window_identity_sets_to_match(
 
     with pytest.raises(ValueError, match="candidate.*window identities"):
         run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("retrieval_path_supported", True),
+        ("retrieval_path_supported", None),
+        ("network_access_supported", True),
+        ("hosted_inference_supported", True),
+        ("model_constructed", True),
+        ("model_constructed", None),
+    ],
+)
+def test_verify_preflight_rejects_restamped_safety_flag_tamper(
+    tmp_path, field, replacement
+):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+    preflight = json.loads(preflight_path.read_bytes())
+    if replacement is None:
+        preflight.pop(field)
+    else:
+        preflight[field] = replacement
+
+    with pytest.raises(ValueError, match="preflight|safety"):
+        module.verify_preflight(preflight)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("tokenizer", None),
+        ("score_cache", "remove"),
+        ("sources", {}),
+        ("runtime_evidence", "remove"),
+        ("device_probe", None),
+    ],
+)
+def test_verify_preflight_rejects_missing_critical_evidence_mapping(
+    tmp_path, field, replacement
+):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+    preflight = json.loads(preflight_path.read_bytes())
+    if replacement == "remove":
+        preflight.pop(field)
+    else:
+        preflight[field] = replacement
+
+    with pytest.raises(ValueError, match="evidence|preflight|tokenizer|cache|source|runtime|ROCm"):
+        module.verify_preflight(preflight)
+
+
+def test_scoring_rejects_cache_binding_drift_before_model(tmp_path, monkeypatch):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    cache.path.write_text("changed after preflight\n", encoding="utf-8")
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+
+    with pytest.raises(ValueError, match="score-cache binding"):
+        run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+
+
+def test_verify_preflight_binds_runtime_to_prior_scoring_source(tmp_path):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["runtime_evidence"]["prior_scoring_receipt_sha256"] = "e" * 64
+
+    with pytest.raises(ValueError, match="runtime.*source|prior scoring"):
+        module.verify_preflight(preflight)
+
+
+def test_verify_scoring_rejects_restamped_candidate_identity_tamper(
+    tmp_path, monkeypatch
+):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+    run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+    output = preflight_path.parent
+    candidate_path = output / "candidates.jsonl"
+    candidates = [json.loads(line) for line in candidate_path.read_bytes().splitlines()]
+    candidates[0]["document_id"] = "restamped-different-document"
+    candidate_bytes = b"".join(_compact(row) + b"\n" for row in candidates)
+    candidate_path.write_bytes(candidate_bytes)
+
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["candidates_sha256"] = _sha256(candidate_bytes)
+    preflight_path.write_bytes(_pretty(preflight))
+    preflight_sha = _sha256(preflight_path.read_bytes())
+
+    reservation_path = output / "scoring_reservation.json"
+    reservation = json.loads(reservation_path.read_bytes())
+    reservation["preflight_sha256"] = preflight_sha
+    reservation_path.write_bytes(_pretty(reservation))
+
+    receipt_path = output / "scoring_receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["preflight_sha256"] = preflight_sha
+    receipt["scoring_reservation_sha256"] = _sha256(reservation_path.read_bytes())
+    receipt_path.write_bytes(_pretty(receipt))
+
+    with pytest.raises(ValueError, match="candidate.*(window identities|lineage)"):
+        module.verify_scoring(preflight_path)
+
+
+def test_verify_scoring_rejects_restamped_candidate_query_semantics(
+    tmp_path, monkeypatch
+):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+    run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+    output = preflight_path.parent
+    candidate_path = output / "candidates.jsonl"
+    candidates = [json.loads(line) for line in candidate_path.read_bytes().splitlines()]
+    candidates[0]["query"] = "restamped query"
+    candidates[0]["query_sha256"] = _sha256(b"restamped query")
+    candidate_bytes = b"".join(_compact(row) + b"\n" for row in candidates)
+    candidate_path.write_bytes(candidate_bytes)
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["candidates_sha256"] = _sha256(candidate_bytes)
+    preflight_path.write_bytes(_pretty(preflight))
+    preflight_sha = _sha256(preflight_path.read_bytes())
+    reservation_path = output / "scoring_reservation.json"
+    reservation = json.loads(reservation_path.read_bytes())
+    reservation["preflight_sha256"] = preflight_sha
+    reservation_path.write_bytes(_pretty(reservation))
+    receipt_path = output / "scoring_receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["preflight_sha256"] = preflight_sha
+    receipt["scoring_reservation_sha256"] = _sha256(reservation_path.read_bytes())
+    receipt_path.write_bytes(_pretty(receipt))
+
+    with pytest.raises(ValueError, match="candidate.*lineage|query"):
+        module.verify_scoring(preflight_path)
+
+
+def test_verify_preflight_rejects_inconsistent_coverage_cardinality(tmp_path):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+    preflight = json.loads(preflight_path.read_bytes())
+    first_key = next(iter(preflight["summary"]["document_window_coverage"]))
+    preflight["summary"]["document_window_coverage"][first_key].append(0.5)
+
+    with pytest.raises(ValueError, match="coverage|population"):
+        module.verify_preflight(preflight)
