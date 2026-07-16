@@ -284,16 +284,22 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
     number = 0
     for topic_id, facet_number in accepted_facets:
         facet_id = f"{topic_id}-facet-{facet_number}"
+        manifest_order = accepted_facets.index((topic_id, facet_number))
+        facet_query = f"facet query {topic_id} {facet_number}"
+        tethered_query = module.render_tethered_query(
+            f"Full narrative {topic_id}", facet_query
+        )
         for rank in range(1, 201):
             number += 1
             key_number = 1 if number % 2 else 2
-            query, text = f"q{key_number}", f"t{key_number}"
+            query, text = tethered_query, f"t{key_number}"
             cache_key = f"k{key_number}"
             cache.aliases[(query, text)] = cache_key
             rows.append(
                 {
                     "topic_id": topic_id,
                     "facet_id": facet_id,
+                    "manifest_order": manifest_order,
                     "document_id": f"d{number}",
                     "rank": rank,
                     "query": query,
@@ -314,6 +320,9 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
                     "schema_version": module.CANDIDATE_SCHEMA_VERSION,
                     "topic_id": topic_id,
                     "facet_id": facet_id,
+                    "manifest_order": manifest_order,
+                    "facet_query": facet_query,
+                    "facet_query_sha256": _sha256(facet_query.encode()),
                     "document_id": f"d{number}",
                     "rank": rank,
                     "query": query,
@@ -512,6 +521,54 @@ def test_verify_derives_uneven_topic_pairs_from_authenticated_facets(tmp_path):
         "300": 800,
         "84": 1200,
     }
+
+
+def test_verify_rejects_consistently_restamped_lineage_without_candidate_rebuild(
+    tmp_path,
+):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+    preflight = json.loads(preflight_path.read_bytes())
+    manifest_path = Path(preflight["sources"]["manifest"]["path"])
+    manifest_payload = json.loads(manifest_path.read_bytes())
+    moved_facet = next(
+        facet
+        for facet in manifest_payload["facets"]
+        if facet["facet_id"] == "219-facet-0"
+    )
+    moved_facet["topic_id"] = "72"
+    unhashed_manifest = {
+        key: value for key, value in manifest_payload.items() if key != "hashes"
+    }
+    manifest_payload["hashes"] = {
+        "topics_sha256": _sha256(_compact(manifest_payload["topics"]) + b"\n"),
+        "facets_sha256": _sha256(_compact(manifest_payload["facets"]) + b"\n"),
+        "freeze_sha256": _sha256(_compact(unhashed_manifest) + b"\n"),
+    }
+    manifest_source = _pretty(manifest_payload)
+    manifest_path.write_bytes(manifest_source)
+    preflight["sources"]["manifest"]["sha256"] = _sha256(manifest_source)
+
+    gates_path = Path(preflight["sources"]["gates"]["path"])
+    gates_payload = json.loads(gates_path.read_bytes())
+    moved_gate = next(
+        gate
+        for gate in gates_payload["gates"]
+        if gate["facet_id"] == "219-facet-0"
+    )
+    moved_gate["topic_id"] = "72"
+    gates_source = _pretty(gates_payload)
+    gates_path.write_bytes(gates_source)
+    preflight["sources"]["gates"]["sha256"] = _sha256(gates_source)
+    preflight["summary"]["topic_pair_counts"] = {
+        "219": 1200,
+        "72": 1600,
+        "300": 800,
+        "84": 1200,
+    }
+    preflight_path.write_bytes(_pretty(preflight))
+
+    with pytest.raises(ValueError, match="candidate.*lineage"):
+        module.verify_preflight(preflight_path)
 
 
 def working_rocm_probe() -> dict[str, object]:

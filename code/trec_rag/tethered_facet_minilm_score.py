@@ -1434,7 +1434,7 @@ def _validate_runtime_evidence(
 
 def _expected_topic_pairs_from_lineage(
     preflight: Mapping[str, object], facet_counts: Mapping[object, object]
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, tuple[str, int, str, str]]]:
     """Recompute frozen topic counts from hash-bound manifest and gate sources."""
 
     sources = preflight.get("sources")
@@ -1460,23 +1460,39 @@ def _expected_topic_pairs_from_lineage(
     _validate_manifest_hashes(manifest)
     if manifest.get("topic_ids") != list(TOPIC_IDS):
         raise ValueError("deep-facet manifest topic order differs")
-    manifest_facets: dict[str, tuple[str, int]] = {}
+    narratives: dict[str, str] = {}
+    for row in _rows(manifest.get("topics"), "manifest topics"):
+        topic_id = reject_topic(row.get("topic_id"))
+        narrative = _required_text(row, "query", "manifest topic")
+        if topic_id in narratives:
+            raise ValueError("duplicate manifest topic")
+        narratives[topic_id] = narrative
+    if set(narratives) != set(TOPIC_IDS):
+        raise ValueError("deep-facet manifest topics differ")
+
+    manifest_facets: dict[str, tuple[str, int, str, str]] = {}
     for row in _rows(manifest.get("facets"), "manifest facets"):
         topic_id = reject_topic(row.get("topic_id"))
         facet_id = _required_text(row, "facet_id", "manifest facet")
+        facet_query = _required_text(row, "query", "manifest facet")
         order = row.get("manifest_order")
         if type(order) is not int or order < 0:
             raise ValueError("manifest facet order must be a nonnegative integer")
         if facet_id in manifest_facets:
             raise ValueError("duplicate manifest facet")
-        manifest_facets[facet_id] = (topic_id, order)
+        manifest_facets[facet_id] = (
+            topic_id,
+            order,
+            facet_query,
+            render_tethered_query(narratives[topic_id], facet_query),
+        )
 
     gates = loaded["gates"]
     _require_fields(gates, frozenset({"schema_version", "gates"}), "gates receipt")
     if gates.get("schema_version") != "deep-facet-candidate-gate-v1":
         raise ValueError("gates receipt identity differs")
     gate_rows = _rows(gates.get("gates"), "gates")
-    accepted: dict[str, str] = {}
+    accepted: dict[str, tuple[str, int, str, str]] = {}
     seen: set[str] = set()
     for row in gate_rows:
         topic_id = reject_topic(row.get("topic_id"))
@@ -1485,16 +1501,16 @@ def _expected_topic_pairs_from_lineage(
         if status not in {"accepted", "rejected"}:
             raise ValueError("gate status differs from frozen values")
         manifest_identity = manifest_facets.get(facet_id)
-        if (
-            manifest_identity is None
-            or manifest_identity != (topic_id, row.get("manifest_order"))
+        if manifest_identity is None or manifest_identity[:2] != (
+            topic_id,
+            row.get("manifest_order"),
         ):
             raise ValueError("gate facet lineage differs from manifest")
         if facet_id in seen:
             raise ValueError("duplicate gate facet")
         seen.add(facet_id)
         if status == "accepted":
-            accepted[facet_id] = topic_id
+            accepted[facet_id] = manifest_identity
     if (
         len(gate_rows) != 25
         or seen != set(manifest_facets)
@@ -1506,12 +1522,104 @@ def _expected_topic_pairs_from_lineage(
         raise ValueError("preflight facet counts differ from accepted gate lineage")
 
     expected: Counter[str] = Counter()
-    for facet_id, topic_id in accepted.items():
+    for facet_id, (topic_id, _order, _facet_query, _query) in accepted.items():
         pair_count = facet_counts.get(facet_id)
         if type(pair_count) is not int or pair_count != 200:
             raise ValueError("accepted facets require exactly 200 candidate pairs")
         expected[topic_id] += pair_count
-    return {topic_id: expected[topic_id] for topic_id in TOPIC_IDS}
+    return (
+        {topic_id: expected[topic_id] for topic_id in TOPIC_IDS},
+        accepted,
+    )
+
+
+def _validate_generated_lineage(
+    output: Path,
+    preflight: Mapping[str, object],
+    summary: Mapping[str, object],
+    accepted: Mapping[str, tuple[str, int, str, str]],
+    expected_topic_counts: Mapping[str, int],
+) -> None:
+    candidate_path = output / str(preflight["candidates_file"])
+    window_path = output / str(preflight["windows_file"])
+    candidate_source = candidate_path.read_bytes()
+    window_source = window_path.read_bytes()
+    if _sha256_bytes(candidate_source) != preflight.get("candidates_sha256"):
+        raise ValueError("generated candidate ledger hash differs")
+    if _sha256_bytes(window_source) != preflight.get("windows_sha256"):
+        raise ValueError("planned window ledger hash differs")
+
+    candidates = _read_jsonl_source(candidate_source, "tethered MiniLM candidates")
+    windows = _read_jsonl_source(window_source, "tethered MiniLM windows")
+    if len(candidates) != PAIR_COUNT or len(windows) != summary.get("window_count"):
+        raise ValueError("generated candidate or window ledger count differs")
+
+    candidate_by_identity: dict[
+        tuple[str, str, str], Mapping[str, object]
+    ] = {}
+    candidate_topics: Counter[str] = Counter()
+    candidate_facets: Counter[str] = Counter()
+    for candidate in candidates:
+        topic_id = reject_topic(candidate.get("topic_id"))
+        facet_id = _required_text(candidate, "facet_id", "tethered candidate")
+        document_id = _required_text(
+            candidate, "document_id", "tethered candidate"
+        )
+        facet = accepted.get(facet_id)
+        query = _required_text(candidate, "query", "tethered candidate")
+        facet_query = _required_text(
+            candidate, "facet_query", "tethered candidate"
+        )
+        text = _required_text(candidate, "text", "tethered candidate")
+        manifest_order = candidate.get("manifest_order")
+        if (
+            candidate.get("schema_version") != CANDIDATE_SCHEMA_VERSION
+            or facet is None
+            or type(manifest_order) is not int
+            or (topic_id, manifest_order, facet_query, query) != facet
+            or candidate.get("facet_query_sha256") != _sha256_text(facet_query)
+            or candidate.get("query_sha256") != _sha256_text(query)
+            or candidate.get("text_sha256") != _sha256_text(text)
+        ):
+            raise ValueError("tethered candidate lineage differs from accepted facets")
+        identity = (topic_id, facet_id, document_id)
+        if identity in candidate_by_identity:
+            raise ValueError("duplicate tethered candidate lineage identity")
+        candidate_by_identity[identity] = candidate
+        candidate_topics[topic_id] += 1
+        candidate_facets[facet_id] += 1
+    if (
+        dict(candidate_topics) != dict(expected_topic_counts)
+        or dict(candidate_topics) != summary.get("topic_pair_counts")
+        or dict(candidate_facets) != summary.get("facet_pair_counts")
+    ):
+        raise ValueError("tethered candidate lineage population differs")
+
+    window_identities: set[tuple[str, str, str]] = set()
+    window_topics: Counter[str] = Counter()
+    window_facets: Counter[str] = Counter()
+    for window in windows:
+        topic_id = reject_topic(window.get("topic_id"))
+        facet_id = _required_text(window, "facet_id", "planned window")
+        document_id = _required_text(window, "document_id", "planned window")
+        identity = (topic_id, facet_id, document_id)
+        candidate = candidate_by_identity.get(identity)
+        if (
+            candidate is None
+            or window.get("query") != candidate.get("query")
+            or window.get("query_sha256") != candidate.get("query_sha256")
+            or window.get("document_sha256") != candidate.get("text_sha256")
+        ):
+            raise ValueError("tethered candidate and window identities differ")
+        window_identities.add(identity)
+        window_topics[topic_id] += 1
+        window_facets[facet_id] += 1
+    if (
+        window_identities != set(candidate_by_identity)
+        or dict(window_topics) != summary.get("topic_window_counts")
+        or dict(window_facets) != summary.get("facet_window_counts")
+    ):
+        raise ValueError("tethered candidate and window identities differ")
 
 
 def verify_preflight(
@@ -1521,8 +1629,11 @@ def verify_preflight(
 
     if isinstance(preflight_source, Mapping):
         preflight = dict(preflight_source)
+        output = None
     else:
-        preflight, _ = _read_object(Path(preflight_source), "tethered MiniLM preflight")
+        preflight_path = Path(preflight_source)
+        preflight, _ = _read_object(preflight_path, "tethered MiniLM preflight")
+        output = preflight_path.parent
 
     # The topic firewall deliberately precedes all other dependency access.
     topic_values: list[object] = []
@@ -1601,11 +1712,12 @@ def verify_preflight(
     window_count = int(summary["window_count"])
     hit_windows = summary.get("cache_hit_window_count")
     miss_windows = summary.get("cache_miss_window_count")
-    expected_topic_counts = (
+    lineage = (
         _expected_topic_pairs_from_lineage(preflight, facet_counts)
         if isinstance(facet_counts, Mapping)
         else None
     )
+    expected_topic_counts = lineage[0] if lineage is not None else None
     if (
         not isinstance(topic_counts, Mapping)
         or set(topic_counts) != set(TOPIC_IDS)
@@ -1677,6 +1789,10 @@ def verify_preflight(
         raise ValueError("tethered MiniLM preflight ceilings differ from the frozen contract")
     _validate_preflight_evidence(preflight)
     _validate_runtime_evidence(preflight, summary)
+    if output is not None and lineage is not None:
+        _validate_generated_lineage(
+            output, preflight, summary, lineage[1], lineage[0]
+        )
     return preflight
 
 
