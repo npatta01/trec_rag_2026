@@ -706,6 +706,234 @@ def test_task4_builds_bounded_authenticated_promoted_and_demoted_representatives
     assert all(0 < row["tethered_percentile"] <= 1 for row in rows)
 
 
+def test_representatives_project_authenticated_rejected_historical_facet_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
+    import trec_rag.tethered_facet_two_basket as rank_module
+
+    deep, tethered = _loader_sources(tmp_path)
+    gates_path = deep / "gate_v1" / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["gates"].append(
+        {
+            "topic_id": "84",
+            "facet_id": "84-rejected",
+            "manifest_order": 24,
+            "status": "rejected",
+        }
+    )
+    gates_path.write_text(json.dumps(gates), encoding="utf-8")
+    candidate_path = deep / "phase1_v1" / "candidates.jsonl"
+    score_path = deep / "phase1_v1" / "scores.jsonl"
+    with candidate_path.open("a", encoding="utf-8") as candidates, score_path.open(
+        "a", encoding="utf-8"
+    ) as scores:
+        for rank in (1, 2):
+            document_id = f"84-rejected-d{rank}"
+            query = "rejected historical facet"
+            text = f"rejected historical text {rank}"
+            query_hash = hashlib.sha256(query.encode()).hexdigest()
+            text_hash = hashlib.sha256(text.encode()).hexdigest()
+            candidates.write(
+                json.dumps(
+                    {
+                        "topic_id": "84",
+                        "facet_id": "84-rejected",
+                        "manifest_order": 24,
+                        "document_id": document_id,
+                        "docid": document_id,
+                        "query": query,
+                        "query_sha256": query_hash,
+                        "text": text,
+                        "text_sha256": text_hash,
+                        "rank": rank,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            scores.write(
+                json.dumps(
+                    {
+                        "schema_version": "deep-facet-candidate-minilm-score-v1",
+                        "topic_id": "84",
+                        "facet_id": "84-rejected",
+                        "document_id": document_id,
+                        "window_id": f"rejected-{rank}",
+                        "window_text": text,
+                        "window_sha256": text_hash,
+                        "document_sha256": text_hash,
+                        "document_start_token": 0,
+                        "document_end_token": 4,
+                        "query_sha256": query_hash,
+                        "score": float(rank),
+                        "model": "synthetic/minilm",
+                        "model_revision": "fixture-revision",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+
+    monkeypatch.setattr(
+        rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep)
+    )
+    monkeypatch.setattr(
+        rank_module, "verify_scoring", lambda _path: {"status": "complete"}
+    )
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(
+        deep, tethered
+    )
+    freeze = tmp_path / "task3"
+    rank_module.freeze_rankings(
+        facet_topics=facet_topics,
+        tethered_topics=tethered_topics,
+        input_paths=paths,
+        output=freeze,
+    )
+    qrels = {
+        topic: {
+            f"{topic}-d{index:03d}": (2 if index % 2 else 0)
+            for index in range(650)
+        }
+        for topic in TOPIC_IDS
+    }
+
+    rows = build_representatives(freeze, qrels, max_per_class=1)
+
+    assert len(rows) == 2
+    assert all(row["facet_id"] != "84-rejected" for row in rows)
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ["rogue_historical_extra", "rogue_tethered_extra", "missing_tethered"],
+)
+def test_representative_candidate_projection_requires_frozen_semantic_coverage(
+    attack: str,
+) -> None:
+    gates = {
+        "gates": [
+            {
+                "topic_id": topic,
+                "facet_id": f"{topic}-facet",
+                "manifest_order": order,
+                "status": "accepted",
+            }
+            for order, topic in enumerate(TOPIC_IDS)
+        ]
+    }
+    expected = {
+        (topic, f"{topic}-facet", f"{topic}-d1") for topic in TOPIC_IDS
+    }
+    facet_rows = [
+        {"topic_id": topic, "facet_id": facet, "document_id": document}
+        for topic, facet, document in sorted(expected)
+    ]
+    tethered_rows = list(facet_rows)
+    if attack == "rogue_historical_extra":
+        facet_rows.append(
+            {
+                "topic_id": "219",
+                "facet_id": "219-facet",
+                "document_id": "219-rogue",
+            }
+        )
+    elif attack == "rogue_tethered_extra":
+        tethered_rows.append(
+            {
+                "topic_id": "219",
+                "facet_id": "219-facet",
+                "document_id": "219-rogue",
+            }
+        )
+    else:
+        tethered_rows.pop()
+    contents = {
+        "accepted_gates": json.dumps(gates).encode(),
+        "facet_candidates": b"".join(
+            json.dumps(row).encode() + b"\n" for row in facet_rows
+        ),
+        "tethered_candidates": b"".join(
+            json.dumps(row).encode() + b"\n" for row in tethered_rows
+        ),
+    }
+
+    with pytest.raises(ValueError, match="candidate coverage drifted"):
+        module._representative_candidate_maps(contents, expected)
+
+
+@pytest.mark.parametrize(
+    ("attack", "message"),
+    [
+        ("unknown_historical", "no authenticated gate"),
+        ("tethered_rejected", "outside authenticated accepted"),
+        ("duplicate_rejected", "duplicated"),
+        ("bad_status", "identity or status drifted"),
+    ],
+)
+def test_representative_candidate_projection_rejects_unprojectable_raw_rows(
+    attack: str, message: str
+) -> None:
+    gates = {
+        "gates": [
+            {
+                "topic_id": topic,
+                "facet_id": f"{topic}-facet",
+                "manifest_order": order,
+                "status": "accepted",
+            }
+            for order, topic in enumerate(TOPIC_IDS)
+        ]
+        + [
+            {
+                "topic_id": "84",
+                "facet_id": "84-rejected",
+                "manifest_order": 24,
+                "status": "rejected",
+            }
+        ]
+    }
+    expected = {
+        (topic, f"{topic}-facet", f"{topic}-d1") for topic in TOPIC_IDS
+    }
+    facet_rows = [
+        {"topic_id": topic, "facet_id": facet, "document_id": document}
+        for topic, facet, document in sorted(expected)
+    ]
+    tethered_rows = list(facet_rows)
+    rejected = {
+        "topic_id": "84",
+        "facet_id": "84-rejected",
+        "document_id": "84-rejected-d1",
+    }
+    if attack == "unknown_historical":
+        facet_rows.append(
+            {"topic_id": "84", "facet_id": "84-unknown", "document_id": "d"}
+        )
+    elif attack == "tethered_rejected":
+        tethered_rows.append(rejected)
+    elif attack == "duplicate_rejected":
+        facet_rows.extend((rejected, dict(rejected)))
+    else:
+        gates["gates"][-1]["status"] = "skipped"
+    contents = {
+        "accepted_gates": json.dumps(gates).encode(),
+        "facet_candidates": b"".join(
+            json.dumps(row).encode() + b"\n" for row in facet_rows
+        ),
+        "tethered_candidates": b"".join(
+            json.dumps(row).encode() + b"\n" for row in tethered_rows
+        ),
+    }
+
+    with pytest.raises(ValueError, match=message):
+        module._representative_candidate_maps(contents, expected)
+
+
 @pytest.mark.parametrize("bad_qrels", [
     {**{topic: {} for topic in TOPIC_IDS}, "144": {}},
     {topic: {} for topic in TOPIC_IDS[:-1]},
@@ -816,7 +1044,21 @@ def test_diagnostics_reject_scoring_pair_accounting_mismatch(
         "cache_hit_count": 400,
         "unique_forward_pair_count": 599,
     }).encode()
+    accepted_gates = json.dumps(
+        {
+            "gates": [
+                {
+                    "topic_id": topic,
+                    "facet_id": f"{topic}-facet",
+                    "manifest_order": order,
+                    "status": "accepted",
+                }
+                for order, topic in enumerate(TOPIC_IDS)
+            ]
+        }
+    ).encode()
     contents = {
+        "accepted_gates": accepted_gates,
         "facet_candidates": b"",
         "facet_window_scores": b"",
         "tethered_candidates": b"",
@@ -830,7 +1072,12 @@ def test_diagnostics_reject_scoring_pair_accounting_mismatch(
         freeze_dir=freeze,
         seal={},
         seal_bytes=b"",
-        bindings={},
+        bindings={
+            "topic_inputs": {
+                arm: {topic: {"facets": []} for topic in TOPIC_IDS}
+                for arm in ("FACET-2B", "TETHERED-2B")
+            }
+        },
         summary=summary,
         artifact_buffers={},
         producer_buffers=contents,

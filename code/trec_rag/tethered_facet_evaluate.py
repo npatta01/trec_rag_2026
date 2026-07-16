@@ -170,23 +170,110 @@ def _bound_source(inputs: Mapping[str, object], name: str) -> tuple[bytes, str]:
 
 def _representative_candidate_maps(
     contents: Mapping[str, bytes],
+    expected_identities: set[tuple[str, str, str]],
 ) -> tuple[
     dict[tuple[str, str, str], dict[str, object]],
     dict[tuple[str, str, str], dict[str, object]],
 ]:
+    accepted, rejected = _representative_gate_facets(contents)
     facet_rows = _parse_jsonl(contents["facet_candidates"], "facet candidates")
     tethered_rows = _parse_jsonl(contents["tethered_candidates"], "tethered candidates")
+
+    def identity(row: Mapping[str, object]) -> tuple[str, str, str]:
+        return (
+            str(row.get("topic_id")),
+            str(row.get("facet_id")),
+            str(row.get("document_id")),
+        )
+
+    facet_raw = {identity(row): row for row in facet_rows}
+    tethered = {identity(row): row for row in tethered_rows}
+    if len(facet_raw) != len(facet_rows) or len(tethered) != len(tethered_rows):
+        raise ValueError("Task 3 representative candidate identity is duplicated")
+    for topic_id, facet_id, _document_id in facet_raw:
+        if (topic_id, facet_id) not in accepted | rejected:
+            raise ValueError("historical candidate has no authenticated gate identity")
+    for topic_id, facet_id, _document_id in tethered:
+        if (topic_id, facet_id) not in accepted:
+            raise ValueError("tethered candidate is outside authenticated accepted gates")
     facet = {
-        (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
-        for row in facet_rows
+        key: row
+        for key, row in facet_raw.items()
+        if key[:2] in accepted
     }
-    tethered = {
-        (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
-        for row in tethered_rows
-    }
-    if len(facet) != len(facet_rows) or set(facet) != set(tethered):
+    if (
+        set(facet) != set(tethered)
+        or set(facet) != expected_identities
+    ):
         raise ValueError("Task 3 representative candidate coverage drifted")
     return facet, tethered
+
+
+def _representative_gate_facets(
+    contents: Mapping[str, bytes],
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    try:
+        payload = json.loads(contents["accepted_gates"])
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Task 3 accepted gates are invalid") from exc
+    rows = payload.get("gates") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, list):
+        raise ValueError("Task 3 accepted gates are invalid")
+    accepted: set[tuple[str, str]] = set()
+    rejected: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("Task 3 accepted gate row is invalid")
+        topic_id = row.get("topic_id")
+        facet_id = row.get("facet_id")
+        order = row.get("manifest_order")
+        status = row.get("status")
+        if (
+            not isinstance(topic_id, str)
+            or topic_id not in PILOT_TOPIC_IDS
+            or not isinstance(facet_id, str)
+            or not facet_id
+            or type(order) is not int
+            or order < 0
+            or status not in {"accepted", "rejected"}
+        ):
+            raise ValueError("Task 3 accepted gate identity or status drifted")
+        identity = (topic_id, facet_id)
+        if identity in accepted or identity in rejected:
+            raise ValueError("Task 3 accepted gate identity or status drifted")
+        (accepted if status == "accepted" else rejected).add(identity)
+    if not accepted or {topic for topic, _facet in accepted} != set(PILOT_TOPIC_IDS):
+        raise ValueError("Task 3 accepted gates do not cover the pilot topics")
+    return accepted, rejected
+
+
+def _semantic_candidate_identities(
+    raw_inputs: Mapping[str, object],
+) -> set[tuple[str, str, str]]:
+    by_arm: dict[str, set[tuple[str, str, str]]] = {}
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        raw_arm = raw_inputs.get(arm)
+        if not isinstance(raw_arm, Mapping):
+            raise ValueError("Task 3 semantic candidate inputs are missing")
+        identities: set[tuple[str, str, str]] = set()
+        for topic_id in PILOT_TOPIC_IDS:
+            topic = raw_arm.get(topic_id)
+            facets = topic.get("facets") if isinstance(topic, Mapping) else None
+            if not isinstance(facets, list):
+                raise ValueError("Task 3 semantic candidate inputs are invalid")
+            for facet in facets:
+                facet_id = facet.get("facet_id") if isinstance(facet, Mapping) else None
+                scores = facet.get("scores") if isinstance(facet, Mapping) else None
+                if not isinstance(facet_id, str) or not isinstance(scores, Mapping):
+                    raise ValueError("Task 3 semantic candidate inputs are invalid")
+                identities.update(
+                    (topic_id, facet_id, str(document_id))
+                    for document_id in scores
+                )
+        by_arm[arm] = identities
+    if by_arm["FACET-2B"] != by_arm["TETHERED-2B"]:
+        raise ValueError("Task 3 semantic candidate arm coverage drifted")
+    return by_arm["FACET-2B"]
 
 
 def _task3_snapshot(freeze_dir: Path) -> Task3Snapshot:
@@ -276,6 +363,7 @@ def _representative_sources(
     if not isinstance(inputs, Mapping):
         raise ValueError("Task 3 input bindings are missing")
     names = [
+        "accepted_gates",
         "facet_candidates",
         "facet_window_scores",
         "tethered_candidates",
@@ -305,6 +393,7 @@ def _representative_sources(
 
 def _window_maps(
     contents: Mapping[str, bytes],
+    expected_identities: set[tuple[str, str, str]],
 ) -> tuple[
     dict[tuple[str, str, str], list[dict[str, object]]],
     dict[tuple[str, str, str], list[dict[str, object]]],
@@ -313,17 +402,49 @@ def _window_maps(
     facet_rows = _parse_jsonl(contents["facet_window_scores"], "facet window scores")
     tethered_rows = _parse_jsonl(contents["tethered_window_scores"], "tethered window scores")
     document_rows = _parse_jsonl(contents["tethered_document_scores"], "tethered document scores")
+    accepted, rejected = _representative_gate_facets(contents)
     facet: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     tethered: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
-    for target, rows in ((facet, facet_rows), (tethered, tethered_rows)):
+    seen_windows: set[tuple[str, str, str, str, str]] = set()
+    for source_name, target, rows in (
+        ("historical", facet, facet_rows),
+        ("tethered", tethered, tethered_rows),
+    ):
         for row in rows:
-            target[(str(row.get("topic_id")), str(row.get("facet_id", row.get("variant"))), str(row.get("document_id")))].append(row)
+            identity = (
+                str(row.get("topic_id")),
+                str(row.get("facet_id", row.get("variant"))),
+                str(row.get("document_id")),
+            )
+            facet_identity = identity[:2]
+            window_identity = (
+                source_name,
+                *identity,
+                str(row.get("window_id")),
+            )
+            if window_identity in seen_windows:
+                raise ValueError("Task 3 representative window identity is duplicated")
+            seen_windows.add(window_identity)
+            if source_name == "historical":
+                if facet_identity not in accepted | rejected:
+                    raise ValueError("historical window has no authenticated gate identity")
+                if facet_identity in rejected:
+                    continue
+            elif facet_identity not in accepted:
+                raise ValueError("tethered window is outside authenticated accepted gates")
+            target[identity].append(row)
     documents = {
         (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
         for row in document_rows
     }
     if len(documents) != len(document_rows):
         raise ValueError("Task 2 document score identity is duplicated")
+    if (
+        set(facet) != expected_identities
+        or set(tethered) != expected_identities
+        or set(documents) != expected_identities
+    ):
+        raise ValueError("Task 3 representative window coverage drifted")
     return facet, tethered, documents
 
 
@@ -406,8 +527,13 @@ def build_representatives(
     contents, hashes = _representative_sources(
         bindings, snapshot_buffers=snapshot.producer_buffers
     )
-    facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
-    facet_windows, tethered_windows, tethered_documents = _window_maps(contents)
+    expected_identities = _semantic_candidate_identities(raw_inputs)
+    facet_candidates, tethered_candidates = _representative_candidate_maps(
+        contents, expected_identities
+    )
+    facet_windows, tethered_windows, tethered_documents = _window_maps(
+        contents, expected_identities
+    )
     rankings = _parse_jsonl(ranking_bytes, "Task 3 rankings")
     ranking_hash = _sha256(ranking_bytes)
     by_identity: dict[tuple[str, str], dict[str, dict[str, object]]] = defaultdict(dict)
@@ -1039,7 +1165,13 @@ def _extended_diagnostics(
         bindings, include_telemetry=True,
         snapshot_buffers=snapshot.producer_buffers,
     )
-    facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
+    raw_inputs = bindings.get("topic_inputs")
+    if not isinstance(raw_inputs, Mapping):
+        raise ValueError("Task 3 semantic score maps are missing")
+    expected_identities = _semantic_candidate_identities(raw_inputs)
+    facet_candidates, tethered_candidates = _representative_candidate_maps(
+        contents, expected_identities
+    )
     texts = {
         identity: str(row.get("text")) for identity, row in tethered_candidates.items()
     }
