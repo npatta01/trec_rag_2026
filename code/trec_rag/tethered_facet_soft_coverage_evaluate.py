@@ -16,6 +16,7 @@ from .tethered_facet_soft_coverage import ARMS, verify_soft_freeze
 
 
 SCHEMA_VERSION = "tethered-facet-soft-coverage-evaluation-v1"
+SEAL_SCHEMA_VERSION = "tethered-facet-soft-coverage-evaluation-seal-v1"
 DEFAULT_DEPTHS = (100, 250, 500, 1000, 1500)
 PINNED_QRELS_SHA256 = "03fc4bd18be36b7ea2d446975fec9fe17ac6698dcf068918c6bb228e9aab5e87"
 _COUNTERS = (
@@ -385,6 +386,76 @@ def _binding(path: Path, content: bytes, *, rows: int | None = None) -> dict[str
     return value
 
 
+def _sealed_binding(content: bytes) -> dict[str, object]:
+    return {"bytes": len(content), "sha256": _sha256(content)}
+
+
+def verify_evaluation(evaluation: Path) -> dict[str, object]:
+    """Authenticate and semantically validate a complete evaluation directory."""
+
+    evaluation = Path(evaluation)
+    expected = {"metrics.json", "diagnostics.json", "input_bindings.json", "summary.json", "SEALED.json"}
+    if not evaluation.is_dir() or {path.name for path in evaluation.iterdir()} != expected:
+        raise ValueError("evaluation directory contents differ from the sealed contract")
+    buffers: dict[str, bytes] = {}
+    for name in expected:
+        path = evaluation / name
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"evaluation {name} is unreadable or unsafe")
+        buffers[name] = path.read_bytes()
+    try:
+        seal = json.loads(buffers["SEALED.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("evaluation seal is invalid JSON") from exc
+    if not isinstance(seal, Mapping) or seal.get("schema_version") != SEAL_SCHEMA_VERSION or seal.get("status") != "sealed_evaluation":
+        raise ValueError("evaluation seal contract differs")
+    files = seal.get("files")
+    artifact_names = expected - {"SEALED.json"}
+    if not isinstance(files, Mapping) or set(files) != artifact_names:
+        raise ValueError("evaluation seal file set differs")
+    for name in artifact_names:
+        if files.get(name) != _sealed_binding(buffers[name]):
+            raise ValueError(f"evaluation {name} differs from sealed artifact")
+    material = {"schema_version": SEAL_SCHEMA_VERSION, "status": "sealed_evaluation", "files": files}
+    if seal.get("root_sha256") != _sha256(_canonical_bytes(material)):
+        raise ValueError("evaluation seal root SHA-256 differs")
+    parsed: dict[str, dict[str, object]] = {}
+    for name in artifact_names:
+        try:
+            value = json.loads(buffers[name])
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"evaluation {name} is invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"evaluation {name} must be an object")
+        parsed[name] = value
+    summary = parsed["summary.json"]
+    metrics = parsed["metrics.json"]
+    diagnostics = parsed["diagnostics.json"]
+    bindings = parsed["input_bindings.json"]
+    if summary.get("schema_version") != SCHEMA_VERSION or summary.get("status") != "complete":
+        raise ValueError("evaluation summary contract differs")
+    if summary.get("topic_ids") != list(PILOT_TOPIC_IDS) or summary.get("arms") != list(ARMS):
+        raise ValueError("evaluation summary scope differs")
+    for name in ("metrics.json", "diagnostics.json", "input_bindings.json"):
+        if not isinstance(summary.get("artifacts"), Mapping) or summary["artifacts"].get(name) != _sealed_binding(buffers[name]):
+            raise ValueError(f"evaluation summary {name} binding differs")
+    if metrics.get("schema_version") != SCHEMA_VERSION or metrics.get("topic_ids") != list(PILOT_TOPIC_IDS):
+        raise ValueError("evaluation metrics contract differs")
+    metric_arms = metrics.get("arms")
+    if not isinstance(metric_arms, Mapping) or set(metric_arms) != set(ARMS) or metrics.get("relevance_threshold") != 2:
+        raise ValueError("evaluation metrics scope differs")
+    depths = summary.get("depths")
+    if not isinstance(depths, list) or depths[-1:] != ["full"] or metrics.get("depths") != depths:
+        raise ValueError("evaluation depth contract differs")
+    if diagnostics.get("schema_version") != SCHEMA_VERSION or diagnostics.get("coverage_proxy", {}).get("is_true_nugget_coverage") is not False:
+        raise ValueError("evaluation diagnostics contract differs")
+    if bindings.get("schema_version") != SCHEMA_VERSION or bindings.get("ranking_hashes_verified_before_qrels_open") is not True:
+        raise ValueError("evaluation input-binding contract differs")
+    if any(summary.get(name) != 0 for name in _COUNTERS) or summary.get("external_cost_usd") != 0.0:
+        raise ValueError("evaluation zero-call receipt differs")
+    return summary
+
+
 def evaluate_frozen_proxy(
     freeze: Path,
     qrels: Path,
@@ -420,7 +491,22 @@ def evaluate_frozen_proxy(
         "bytes": len(ranking_content), "sha256": _sha256(ranking_content)
     }:
         raise ValueError("ranking buffer differs from sealed artifact")
+    freeze_bindings_content = read(freeze / "input_bindings.json")
+    if seal_files.get("input_bindings.json") != _sealed_binding(freeze_bindings_content):
+        raise ValueError("freeze input-bindings buffer differs from sealed artifact")
+    try:
+        freeze_bindings = json.loads(freeze_bindings_content)
+        accepted_union_binding = freeze_bindings["inputs"]["accepted_union"]
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError("frozen accepted-union binding is missing or invalid") from exc
+    if not isinstance(accepted_union_binding, Mapping):
+        raise ValueError("frozen accepted-union binding is missing or invalid")
     union_content = read(union)
+    union_rows = len(_read_jsonl_bytes(union_content, "accepted union"))
+    if {
+        "bytes": len(union_content), "rows": union_rows, "sha256": _sha256(union_content)
+    } != {key: accepted_union_binding.get(key) for key in ("bytes", "rows", "sha256")}:
+        raise ValueError("accepted-union buffer differs from frozen binding")
     provenance = _load_union(union_content)
     # This is the qrels access boundary: every ranking was sealed, hashed, and
     # checked as a complete permutation above.
@@ -444,7 +530,7 @@ def evaluate_frozen_proxy(
         "freeze": {"path": str(freeze.resolve()), "seal_root_sha256": seal_root},
         "rankings": _binding(freeze / "rankings.jsonl", ranking_content, rows=len(_read_jsonl_bytes(ranking_content, "rankings"))),
         "qrels_projection": _binding(qrels, qrels_content, rows=len(_read_jsonl_bytes(qrels_content, "qrels projection"))),
-        "accepted_union": _binding(union, union_content, rows=len(_read_jsonl_bytes(union_content, "accepted union"))),
+        "accepted_union": _binding(union, union_content, rows=union_rows),
     }
     artifacts = {"metrics.json": _pretty_bytes(metrics), "diagnostics.json": _pretty_bytes(diagnostics), "input_bindings.json": _pretty_bytes(bindings)}
     summary: dict[str, object] = {
@@ -455,6 +541,14 @@ def evaluate_frozen_proxy(
         "artifacts": {name: {"bytes": len(content), "sha256": _sha256(content)} for name, content in artifacts.items()},
     }
     artifacts["summary.json"] = _pretty_bytes(summary)
+    seal_material = {
+        "schema_version": SEAL_SCHEMA_VERSION,
+        "status": "sealed_evaluation",
+        "files": {name: _sealed_binding(content) for name, content in artifacts.items()},
+    }
+    artifacts["SEALED.json"] = _pretty_bytes({
+        **seal_material, "root_sha256": _sha256(_canonical_bytes(seal_material))
+    })
     output.mkdir(parents=True)
     for name, content in artifacts.items():
         path = output / name
@@ -471,12 +565,18 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--qrels", required=True, type=Path)
     evaluate.add_argument("--union", required=True, type=Path)
     evaluate.add_argument("--output", required=True, type=Path)
+    verify = commands.add_parser("verify")
+    verify.add_argument("--evaluation", required=True, type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    result = evaluate_frozen_proxy(args.freeze, args.qrels, args.union, args.output)
+    result = (
+        evaluate_frozen_proxy(args.freeze, args.qrels, args.union, args.output)
+        if args.command == "evaluate"
+        else verify_evaluation(args.evaluation)
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

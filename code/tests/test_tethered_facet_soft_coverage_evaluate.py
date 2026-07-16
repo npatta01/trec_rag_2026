@@ -10,6 +10,7 @@ from trec_rag.tethered_facet_soft_coverage_evaluate import (
     evaluate_frozen_proxy,
     evaluate_proxy,
     normalized_recall_auc,
+    verify_evaluation,
 )
 
 
@@ -138,6 +139,21 @@ def _jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows), encoding="utf-8")
 
 
+def _bind_union(freeze: Path, union: Path) -> None:
+    content = union.read_bytes()
+    binding_content = (json.dumps({"inputs": {"accepted_union": {
+        "bytes": len(content), "rows": len(content.splitlines()),
+        "sha256": hashlib.sha256(content).hexdigest(), "path": str(union),
+    }}}, sort_keys=True) + "\n").encode()
+    (freeze / "input_bindings.json").write_bytes(binding_content)
+    seal_path = freeze / "SEALED.json"
+    seal = json.loads(seal_path.read_text())
+    seal["files"]["input_bindings.json"] = {
+        "bytes": len(binding_content), "sha256": hashlib.sha256(binding_content).hexdigest()
+    }
+    seal_path.write_text(json.dumps(seal), encoding="utf-8")
+
+
 def test_frozen_evaluation_verifies_freeze_before_opening_qrels_and_writes_create_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     freeze, qrels_path, union_path, output = tmp_path / "freeze", tmp_path / "qrels.jsonl", tmp_path / "union.jsonl", tmp_path / "evaluation"
     freeze.mkdir()
@@ -150,6 +166,7 @@ def test_frozen_evaluation_verifies_freeze_before_opening_qrels_and_writes_creat
     }), encoding="utf-8")
     _jsonl(qrels_path, [{"topic_id": topic, "document_id": document, "grade": grade} for topic, rows in _qrels().items() for document, grade in rows.items()])
     _jsonl(union_path, [{"topic_id": topic, "document_id": document, "union_order": rank, "provenance": provenance} for topic, rows in _provenance().items() for rank, (document, provenance) in enumerate(rows.items(), 1)])
+    _bind_union(freeze, union_path)
     qrels_hash = hashlib.sha256(qrels_path.read_bytes()).hexdigest()
     events: list[str] = []
 
@@ -177,7 +194,8 @@ def test_frozen_evaluation_verifies_freeze_before_opening_qrels_and_writes_creat
     assert summary["status"] == "complete"
     assert events == ["verified", "qrels-opened"]
     assert ranking_reads == 1
-    assert set(path.name for path in output.iterdir()) == {"metrics.json", "diagnostics.json", "summary.json", "input_bindings.json"}
+    assert set(path.name for path in output.iterdir()) == {"metrics.json", "diagnostics.json", "summary.json", "input_bindings.json", "SEALED.json"}
+    assert verify_evaluation(output) == summary
     bindings = json.loads((output / "input_bindings.json").read_text(encoding="utf-8"))
     assert bindings["freeze"]["seal_root_sha256"] == "a" * 64
     with pytest.raises(FileExistsError):
@@ -192,11 +210,63 @@ def test_frozen_evaluation_authenticates_projection_before_parsing(tmp_path: Pat
         "root_sha256": "a" * 64,
         "files": {"rankings.jsonl": {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()}},
     }), encoding="utf-8")
+    _bind_union(freeze, union_path)
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", lambda _path: {})
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate._load_verified_rankings", lambda *_args: (_rankings(), {"all": "verified"}))
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate._load_union", lambda _content: _provenance())
     with pytest.raises(ValueError, match="qrels projection SHA-256"):
         evaluate_frozen_proxy(freeze, qrels_path, union_path, tmp_path / "out", expected_qrels_sha256="0" * 64, depths=(1,))
+
+
+def test_frozen_evaluation_authenticates_union_provenance_before_opening_qrels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze, qrels_path, union_path = tmp_path / "freeze", tmp_path / "qrels.jsonl", tmp_path / "union.jsonl"
+    freeze.mkdir(); qrels_path.write_bytes(b"must not open")
+    (freeze / "rankings.jsonl").write_bytes(b"")
+    (freeze / "SEALED.json").write_text(json.dumps({
+        "root_sha256": "a" * 64,
+        "files": {"rankings.jsonl": {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()}},
+    }), encoding="utf-8")
+    _jsonl(union_path, [{"topic_id": topic, "document_id": document, "union_order": rank, "provenance": provenance} for topic, rows in _provenance().items() for rank, (document, provenance) in enumerate(rows.items(), 1)])
+    _bind_union(freeze, union_path)
+    original = union_path.read_bytes()
+    mutated = original.replace(b'"family":"facet"', b'"family":"other"', 1)
+    monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", lambda _path: {})
+    monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate._load_verified_rankings", lambda *_args: (_rankings(), {"all": "verified"}))
+
+    def reader(path: Path) -> bytes:
+        if path == union_path:
+            return mutated
+        if path == qrels_path:
+            raise AssertionError("qrels opened before accepted-union authentication")
+        return path.read_bytes()
+
+    with pytest.raises(ValueError, match="accepted-union buffer differs from frozen binding"):
+        evaluate_frozen_proxy(freeze, qrels_path, union_path, tmp_path / "out", reader=reader)
+
+
+def test_verify_evaluation_rejects_coordinated_summary_and_metric_tamper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Exercise the create-only writer above, then alter an artifact and its summary
+    # binding without changing the independently sealed directory identity.
+    freeze, qrels_path, union_path, output = tmp_path / "freeze", tmp_path / "qrels.jsonl", tmp_path / "union.jsonl", tmp_path / "evaluation"
+    freeze.mkdir()
+    ranking_rows = [{"topic_id": topic, "arm": arm, "rank": rank, **row} for topic, arms in _rankings().items() for arm, rows in arms.items() for rank, row in enumerate(rows, 1)]
+    _jsonl(freeze / "rankings.jsonl", ranking_rows)
+    ranking_bytes = (freeze / "rankings.jsonl").read_bytes()
+    (freeze / "SEALED.json").write_text(json.dumps({"root_sha256": "a" * 64, "files": {"rankings.jsonl": {"bytes": len(ranking_bytes), "sha256": hashlib.sha256(ranking_bytes).hexdigest()}}}), encoding="utf-8")
+    _jsonl(qrels_path, [{"topic_id": topic, "document_id": document, "grade": grade} for topic, rows in _qrels().items() for document, grade in rows.items()])
+    _jsonl(union_path, [{"topic_id": topic, "document_id": document, "union_order": rank, "provenance": provenance} for topic, rows in _provenance().items() for rank, (document, provenance) in enumerate(rows.items(), 1)])
+    _bind_union(freeze, union_path)
+    monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", lambda _path: {"topic_summary": {topic: {"complete_permutations": {arm: True for arm in ARMS}} for topic in TOPICS}})
+    evaluate_frozen_proxy(freeze, qrels_path, union_path, output, expected_qrels_sha256=hashlib.sha256(qrels_path.read_bytes()).hexdigest(), depths=(1, 2, 4))
+    metrics_path = output / "metrics.json"
+    metrics = json.loads(metrics_path.read_text()); metrics["relevance_threshold"] = 3
+    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    summary_path = output / "summary.json"
+    summary = json.loads(summary_path.read_text()); content = metrics_path.read_bytes()
+    summary["artifacts"]["metrics.json"] = {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    with pytest.raises(ValueError, match="differs from sealed artifact"):
+        verify_evaluation(output)
 
 
 def test_frozen_evaluation_rejects_post_verify_ranking_mutation_before_qrels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

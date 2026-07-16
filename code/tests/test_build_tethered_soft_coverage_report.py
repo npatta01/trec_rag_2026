@@ -80,6 +80,20 @@ def test_payload_preserves_metric_semantics_and_exact_findings() -> None:
     assert payload["metric_definitions"]["binary_recall"]["aggregation"] == "pooled_micro"
     assert payload["metric_definitions"]["ndcg"]["aggregation"] == "macro_topic_mean"
     assert payload["metric_definitions"]["recall_auc"]["aggregation"] == "macro_topic_mean"
+    assert "every rank from 1 through that topic's full candidate depth" in payload["metric_definitions"]["recall_auc"]["definition"]
+
+
+def test_payload_has_complete_arm_depth_quality_and_sensitivity_metrics() -> None:
+    payload = _payload()
+    assert len(payload["arm_metrics"]) == 6
+    for row in payload["arm_metrics"]:
+        for depth in (100, 250, 500, 1000, 1500):
+            for metric in ("binary_recall", "graded_recall", "facet_only_relevant_retention"):
+                assert f"{metric}@{depth}" in row
+        for metric in ("binary_recall_full", "graded_recall_full", "facet_only_relevant_retention_full", "ndcg@500", "ndcg@1500"):
+            assert metric in row
+    assert len(payload["facet_proxy_sensitivity"]) == 4
+    assert all("tethered_dual_nr_attributions" in row for row in payload["facet_proxy_sensitivity"])
 
 
 def test_report_exposes_binary_relevance_threshold_and_excludes_grade_one() -> None:
@@ -156,6 +170,9 @@ def test_write_report_emits_four_canonical_artifacts(tmp_path: Path) -> None:
     assert receipt["files"]["report.html"]["sha256"]
     with sqlite3.connect(tmp_path / "report_data.sqlite") as connection:
         assert connection.execute("SELECT COUNT(*) FROM arm_metrics").fetchone() == (6,)
+        assert connection.execute("SELECT COUNT(*) FROM arm_depth_metrics").fetchone() == (36,)
+        assert connection.execute("SELECT COUNT(*) FROM arm_quality_metrics").fetchone() == (6,)
+        assert connection.execute("SELECT COUNT(*) FROM facet_proxy_sensitivity").fetchone() == (4,)
         assert connection.execute("SELECT COUNT(*) FROM overlap_decomposition").fetchone() == (4,)
         assert connection.execute(
             "SELECT value FROM report_metadata WHERE key = 'relevance_threshold'"
@@ -182,6 +199,22 @@ def test_builder_rejects_tampered_ranking_and_summary_under_old_seal(
 
     with pytest.raises(ValueError, match="artifact SHA-256 differs"):
         build_report_payload(tampered, EVALUATION, PRIOR_SUMMARY)
+
+
+def test_builder_rejects_coordinated_evaluation_summary_and_metric_tamper(tmp_path: Path) -> None:
+    tampered = tmp_path / "evaluation"
+    shutil.copytree(EVALUATION, tampered)
+    metrics_path = tampered / "metrics.json"
+    metrics = json.loads(metrics_path.read_text())
+    metrics["relevance_threshold"] = 3
+    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    summary_path = tampered / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    content = metrics_path.read_bytes()
+    summary["artifacts"]["metrics.json"] = {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    with pytest.raises(ValueError, match="differs from sealed artifact"):
+        build_report_payload(FREEZE, tampered, PRIOR_SUMMARY)
 
 
 def test_rendered_report_has_accessible_document_structure() -> None:

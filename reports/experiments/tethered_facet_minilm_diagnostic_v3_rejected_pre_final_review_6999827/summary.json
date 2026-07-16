@@ -1,8 +1,4 @@
 {
-  "evaluation_verification": {
-    "seal_root_sha256": "ab46cfdd79cbdd9fb7e67848c99059e8594c3c0c2eeaf820741d9303b443b8f0",
-    "status": "complete"
-  },
   "external_calls": {
     "cost_usd": 0.0,
     "hosted_inference": 0,
@@ -47,7 +43,7 @@
     },
     "recall_auc": {
       "aggregation": "macro_topic_mean",
-      "definition": "For each topic, the mean binary recall at every rank from 1 through that topic's full candidate depth; then the arithmetic mean of those topic values."
+      "definition": "Mean topic-level area under the recall-depth curve over the evaluated depth range."
     }
   },
   "qrels_grade_counts": {
@@ -84,11 +80,6 @@
       "bytes": 119885,
       "label": "Evaluation metrics.json",
       "sha256": "0a7a38fe41864b5988eb3a5936825743b526ac1f28f66bcfd3d2bf3077101c8f"
-    },
-    "evaluation_sealed_json": {
-      "bytes": 755,
-      "label": "Approved evaluation SEALED.json",
-      "sha256": "f45254a058e7cfeddb5c8c9a332717549be7b152479deba3021f68ee948569de"
     },
     "evaluation_summary_json": {
       "bytes": 1075,

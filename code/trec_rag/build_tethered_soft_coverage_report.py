@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from . import tethered_facet_soft_coverage as soft_freeze
+from . import tethered_facet_soft_coverage_evaluate as soft_evaluate
 
 
 SCHEMA_VERSION = "tethered-facet-soft-coverage-report-v3"
@@ -217,6 +218,7 @@ def build_report_payload(
     evaluation_dir = Path(evaluation)
     prior_path = Path(prior_summary)
     verified_freeze = soft_freeze.verify_soft_freeze(freeze_dir)
+    verified_evaluation = soft_evaluate.verify_evaluation(evaluation_dir)
     freeze_summary, freeze_summary_bytes = _read_json(
         freeze_dir / "summary.json", "freeze summary"
     )
@@ -225,6 +227,8 @@ def build_report_payload(
     evaluation_summary, evaluation_summary_bytes = _read_json(
         evaluation_dir / "summary.json", "evaluation summary"
     )
+    if verified_evaluation != evaluation_summary:
+        raise ValueError("verified evaluation summary differs from the loaded summary")
     metrics, metrics_bytes = _read_json(evaluation_dir / "metrics.json", "metrics")
     diagnostics, diagnostics_bytes = _read_json(
         evaluation_dir / "diagnostics.json", "diagnostics"
@@ -278,6 +282,14 @@ def build_report_payload(
             "Freeze",
         )
     )
+    evaluation_seal, evaluation_seal_content = _read_json(
+        evaluation_dir / "SEALED.json", "evaluation seal"
+    )
+    sources["evaluation_sealed_json"] = {
+        "label": "Approved evaluation SEALED.json",
+        "bytes": len(evaluation_seal_content),
+        "sha256": _sha256(evaluation_seal_content),
+    }
     sources.update(
         _verify_artifacts(
             evaluation_dir,
@@ -338,15 +350,24 @@ def build_report_payload(
             "ndcg@10": aggregate["ndcg@10"],
             "ndcg@100": aggregate["ndcg@100"],
             "ndcg@1000": aggregate["ndcg@1000"],
+            "ndcg@500": aggregate["ndcg@500"],
+            "ndcg@1500": aggregate["ndcg@1500"],
             "recall_auc": aggregate["recall_auc"],
             "relevant_count_full": aggregate["relevant_count_full"],
             "binary_recall_full": aggregate["binary_recall_full"],
+            "graded_recall_full": aggregate["graded_recall_full"],
+            "facet_only_relevant_retained_full": aggregate["facet_only_relevant_retained_full"],
+            "facet_only_relevant_retention_full": aggregate["facet_only_relevant_retention_full"],
         }
         for depth in DEPTHS:
             record[f"relevant_count@{depth}"] = aggregate[f"relevant_count@{depth}"]
             record[f"binary_recall@{depth}"] = aggregate[f"binary_recall@{depth}"]
+            record[f"graded_recall@{depth}"] = aggregate[f"graded_recall@{depth}"]
             record[f"facet_only_relevant_retained@{depth}"] = aggregate[
                 f"facet_only_relevant_retained@{depth}"
+            ]
+            record[f"facet_only_relevant_retention@{depth}"] = aggregate[
+                f"facet_only_relevant_retention@{depth}"
             ]
         arm_metrics.append(record)
 
@@ -443,21 +464,32 @@ def build_report_payload(
     attribution = _mapping(
         proxy_root.get("qrels_positive_facet_attribution"), "facet attribution"
     )
-    tethered_attribution = _mapping(
-        attribution.get("TETHERED-DUAL"), "TETHERED-DUAL facet attribution"
-    )
     proxy_by_topic = []
+    proxy_sensitivity = []
+    attribution_by_arm = {
+        arm: _mapping(attribution.get(arm), f"{arm} facet attribution")
+        for arm in ("TETHERED-DUAL", "TETHERED-DUAL-NR")
+    }
     for topic in TOPIC_IDS:
-        facet_counts = _mapping(tethered_attribution.get(topic), f"topic {topic} facets")
+        facet_counts = _mapping(attribution_by_arm["TETHERED-DUAL"].get(topic), f"topic {topic} facets")
+        dual_count = sum(int(value) for value in facet_counts.values())
+        nr_counts = _mapping(attribution_by_arm["TETHERED-DUAL-NR"].get(topic), f"topic {topic} NR facets")
+        nr_count = sum(int(value) for value in nr_counts.values())
         proxy_by_topic.append(
             {
                 "topic_id": topic,
-                "binary_relevant_attributions": sum(int(value) for value in facet_counts.values()),
+                "binary_relevant_attributions": dual_count,
                 "facets_with_positive_attribution": sum(
                     1 for value in facet_counts.values() if int(value) > 0
                 ),
             }
         )
+        proxy_sensitivity.append({
+            "topic_id": topic,
+            "tethered_dual_attributions": dual_count,
+            "tethered_dual_nr_attributions": nr_count,
+            "delta_without_redundancy": nr_count - dual_count,
+        })
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -471,6 +503,7 @@ def build_report_payload(
         "topic_deltas": topic_deltas,
         "overlap_decomposition": overlap,
         "facet_proxy_by_topic": proxy_by_topic,
+        "facet_proxy_sensitivity": proxy_sensitivity,
         "metric_definitions": {
             "binary_recall": {
                 "aggregation": "pooled_micro",
@@ -482,7 +515,7 @@ def build_report_payload(
             },
             "recall_auc": {
                 "aggregation": "macro_topic_mean",
-                "definition": "Mean topic-level area under the recall-depth curve over the evaluated depth range.",
+                "definition": "For each topic, the mean binary recall at every rank from 1 through that topic's full candidate depth; then the arithmetic mean of those topic values.",
             },
             "facet_proxy": {
                 "aggregation": "binary_relevant_facet_attribution_count",
@@ -496,6 +529,10 @@ def build_report_payload(
             "ranking_row_count": verified_freeze["ranking_row_count"],
             "seal_root_sha256": seal["root_sha256"],
             "evaluation_ranking_sha256": evaluation_rankings["sha256"],
+        },
+        "evaluation_verification": {
+            "status": verified_evaluation["status"],
+            "seal_root_sha256": evaluation_seal["root_sha256"],
         },
         "prior_v2": {
             "schema_version": prior["schema_version"],
@@ -557,17 +594,20 @@ def render_report(payload: Mapping[str, object]) -> str:
         recall_rows.append(
             [
                 arm,
-                *[str(row[f"relevant_count@{depth}"]) for depth in DEPTHS],
-                str(row["relevant_count_full"]),
-                _pct(row["binary_recall_full"], 4),
+                *[f'{row[f"relevant_count@{depth}"]} ({_pct(row[f"binary_recall@{depth}"], 2)})' for depth in DEPTHS],
+                f'{row["relevant_count_full"]} ({_pct(row["binary_recall_full"], 4)})',
             ]
         )
+    graded_rows = [[arm, *[_pct(by_arm[arm][f"graded_recall@{depth}"], 2) for depth in DEPTHS], _pct(by_arm[arm]["graded_recall_full"], 4)] for arm in ARMS]
+    retention_rows = [[arm, *[f'{by_arm[arm][f"facet_only_relevant_retained@{depth}"]} ({_pct(by_arm[arm][f"facet_only_relevant_retention@{depth}"], 1)})' for depth in DEPTHS], f'{by_arm[arm]["facet_only_relevant_retained_full"]} ({_pct(by_arm[arm]["facet_only_relevant_retention_full"], 1)})'] for arm in ARMS]
     quality_rows = [
         [
             arm,
             f'{float(by_arm[arm]["ndcg@10"]):.4f}',
             f'{float(by_arm[arm]["ndcg@100"]):.4f}',
+            f'{float(by_arm[arm]["ndcg@500"]):.4f}',
             f'{float(by_arm[arm]["ndcg@1000"]):.4f}',
+            f'{float(by_arm[arm]["ndcg@1500"]):.4f}',
             f'{float(by_arm[arm]["recall_auc"]):.4f}',
         ]
         for arm in ARMS
@@ -602,6 +642,7 @@ def render_report(payload: Mapping[str, object]) -> str:
         ]
         for row in payload["facet_proxy_by_topic"]
     ]
+    sensitivity_rows = [[str(row["topic_id"]), str(row["tethered_dual_attributions"]), str(row["tethered_dual_nr_attributions"]), _signed(row["delta_without_redundancy"])] for row in payload["facet_proxy_sensitivity"]]
     source_rows = [
         [str(source["label"]), str(source["bytes"]), str(source["sha256"])]
         for source in payload["source_hashes"].values()
@@ -609,12 +650,14 @@ def render_report(payload: Mapping[str, object]) -> str:
     call_rows = [[name.replace("_", " ").title(), str(value)] for name, value in payload["external_calls"].items()]
 
     recall_table = _table(
-        ["Arm", "@100", "@250", "@500", "@1,000", "@1,500", "Full", "Full recall"],
+        ["Arm", "@100", "@250", "@500", "@1,000", "@1,500", "Full"],
         recall_rows,
         "Pooled binary-relevant document counts by depth (qrels grade >= 2); the full binary-relevant union is identical for every reordering arm.",
     )
+    graded_table = _table(["Arm", "@100", "@250", "@500", "@1,000", "@1,500", "Full"], graded_rows, "Pooled graded-gain recall by depth for every arm.")
+    retention_table = _table(["Arm", "@100", "@250", "@500", "@1,000", "@1,500", "Full"], retention_rows, "Facet-only binary-relevant documents retained (count and percent of the 177 facet-only total).")
     quality_table = _table(
-        ["Arm", "nDCG@10", "nDCG@100", "nDCG@1,000", "Recall AUC"],
+        ["Arm", "nDCG@10", "nDCG@100", "nDCG@500", "nDCG@1,000", "nDCG@1,500", "Recall AUC"],
         quality_rows,
         "Macro mean across four topics. nDCG and recall AUC are not pooled document recall.",
     )
@@ -633,6 +676,7 @@ def render_report(payload: Mapping[str, object]) -> str:
         proxy_rows,
         "TETHERED-DUAL marginal facet attribution among binary-relevant documents (qrels grade >= 2); this is a proxy, not semantic facet support.",
     )
+    sensitivity_table = _table(["Topic", "TETHERED-DUAL", "TETHERED-DUAL-NR", "Δ without redundancy"], sensitivity_rows, "Sensitivity of binary-relevant facet attribution to the DUAL no-redundancy variant.")
     source_table = _table(["Source", "Bytes", "SHA-256"], source_rows, "Exact canonical source identities used to build this report.")
     call_table = _table(["External operation", "Count / cost"], call_rows, "Freeze and evaluation receipts agree that all external operations and cost were zero.")
 
@@ -675,7 +719,7 @@ footer {{ border-top:1px solid var(--line); color:var(--muted); }} .footer-inner
 <p><strong>Finding.</strong> RRF100-TETHERED-DUAL is the best supported next ranking configuration for this fixed candidate union: its protected RRF head preserved both 299 binary-relevant documents and macro nDCG 0.4048 at depth 100, while soft tethering increased the pooled binary-relevant count at 1,000 by 52.</p>
 <p><strong>Next action.</strong> Improve candidate generation on fresh preregistered topics, then evaluate answer generation and nugget support in the separate answer-generation worktree. Reordering alone cannot add any of the 1,942 binary-relevant documents missing from this union.</p></section>
 
-<section aria-labelledby="depth-title"><h2 id="depth-title">The protected head trades small mid-depth regressions for the best result at 1,000</h2><p>Read the table across each arm. Counts are pooled across four topics, so the values answer “how many distinct binary-relevant documents were retrieved?” They are not topic averages.</p><div aria-label="Recall-depth comparison">{recall_table}</div><p>RRF100-TETHERED-DUAL exactly matches RRF at 100, trails by 9 at 250, leads by 10 at 500, leads by 52 at 1,000, and leads by 31 at 1,500. Every arm reaches the same 875 binary-relevant documents at the full union because these arms only reorder the same candidates.</p></section>
+<section aria-labelledby="depth-title"><h2 id="depth-title">The protected head trades small mid-depth regressions for the best result at 1,000</h2><p>Read the tables across each arm. Counts are pooled across four topics; percentages use the matching pooled denominator.</p><div aria-label="Recall-depth comparison">{recall_table}</div>{graded_table}{retention_table}<p>RRF100-TETHERED-DUAL exactly matches RRF at 100, trails by 9 at 250, leads by 10 at 500, leads by 52 at 1,000, and leads by 31 at 1,500. Every arm reaches the same 875 binary-relevant documents at the full union because these arms only reorder the same candidates.</p></section>
 
 <section aria-labelledby="quality-title"><h2 id="quality-title">Ranking quality and pooled recall answer different questions</h2><p>nDCG is a macro mean: each topic contributes equally, and higher grades near the top matter more. Recall AUC is also a macro topic mean. Neither should be added to, averaged with, or described as pooled document recall.</p>{quality_table}<div class="callout"><strong>Interpretation boundary.</strong> The protected arm preserves RRF at @100 by construction. Its higher macro nDCG@1,000 (0.3103 versus 0.2908) and recall AUC (0.2398 versus 0.2310) support the deep-ranking result, but do not establish production generalization.</div></section>
 
@@ -683,10 +727,10 @@ footer {{ border-top:1px solid var(--line); color:var(--muted); }} .footer-inner
 
 <section aria-labelledby="topics-title"><h2 id="topics-title">Deep gains are real but uneven by topic</h2><p>These deltas compare the protected arm directly with RRF. The preserved @100 values are all zero by construction; later gains and regressions reveal where the tethered tail helps or displaces relevant material.</p>{topic_table}</section>
 
-<section aria-labelledby="proxy-title"><h2 id="proxy-title">Facet exposure is diagnostic evidence, not nugget coverage</h2><p><strong>binary-relevant facet exposure is only a proxy.</strong> It counts a binary-relevant document (qrels grade &gt;= 2) whose marginal admission is attributed to a facet stream. It does not inspect whether the document actually supports that facet, whether a passage contains the needed nugget, or whether a generated answer uses it correctly.</p>{proxy_table}<p>Topic 72 shows the strongest proxy behavior (32 binary-relevant attributions across seven represented facets); topic 300 is weakest (one binary-relevant attribution across one facet). Topics 219 and 84 are also sparse. This points to a remaining candidate-generation gap rather than a ranking-only problem.</p><div class="callout warning"><strong>This is not answer-generation evaluation.</strong> The 31.1% exhaustive binary-relevant document recall is low, but it is not equivalent to 31.1% answer coverage. One document may support multiple answer nuggets, several documents may repeat the same nugget, and qrels judge topical relevance rather than final answer completeness or faithfulness.</div></section>
+<section aria-labelledby="proxy-title"><h2 id="proxy-title">Facet exposure is diagnostic evidence, not nugget coverage</h2><p><strong>binary-relevant facet exposure is only a proxy.</strong> It counts a binary-relevant document (qrels grade &gt;= 2) whose marginal admission is attributed to a facet stream. It does not inspect whether the document actually supports that facet, whether a passage contains the needed nugget, or whether a generated answer uses it correctly.</p>{proxy_table}{sensitivity_table}<p>Topic 72 shows the strongest proxy behavior (32 binary-relevant attributions across seven represented facets); topic 300 is weakest (one binary-relevant attribution across one facet). The no-redundancy comparison shows whether that attribution is sensitive to DUAL's redundancy term. This points to a remaining candidate-generation gap rather than a ranking-only problem.</p><div class="callout warning"><strong>This is not answer-generation evaluation.</strong> The 31.1% exhaustive binary-relevant document recall is low, but it is not equivalent to 31.1% answer coverage. One document may support multiple answer nuggets, several documents may repeat the same nugget, and qrels judge topical relevance rather than final answer completeness or faithfulness.</div></section>
 
 <section aria-labelledby="scope-title"><h2 id="scope-title">Scope and metric definitions</h2><p><span class="tag">4 historical diagnostic topics</span><span class="tag">post-qrels</span><span class="tag">binary-relevant (qrels grade &gt;= 2)</span><span class="tag">fixed 8,114-document union</span><span class="tag">no new retrieval</span><span class="tag">not production validation</span></p>
-<h3>Pooled binary recall</h3><p>Unique binary-relevant documents retrieved across all four topics divided by all 2,817 binary-relevant documents. Binary-relevant means qrels grade &gt;= 2. The complete qrels distribution is 360 grade-0, 1,456 grade-1 excluded, and 2,817 grade &gt;= 2 binary-relevant documents. Counts at a depth are pooled micro totals.</p><h3>Macro nDCG and recall AUC</h3><p>Each metric is calculated per topic and then averaged across four topics. nDCG rewards graded relevance near the top; recall AUC summarizes recall over depth.</p><h3>True RAG evaluation</h3><p>Answer completeness, supported nuggets, citation correctness, faithfulness, and end-to-end answer quality are out of scope here and belong to the separate answer-generation worktree.</p></section>
+<h3>Pooled binary recall</h3><p>Unique binary-relevant documents retrieved across all four topics divided by all 2,817 binary-relevant documents. Binary-relevant means qrels grade &gt;= 2. The complete qrels distribution is 360 grade-0, 1,456 grade-1 excluded, and 2,817 grade &gt;= 2 binary-relevant documents. Counts at a depth are pooled micro totals.</p><h3>Macro nDCG and recall AUC</h3><p>nDCG is calculated per topic and then averaged across four topics. Recall AUC is calculated for each topic as the mean binary recall at every rank from 1 through that topic's full candidate depth, then those four topic values are averaged. nDCG rewards graded relevance near the top.</p><h3>True RAG evaluation</h3><p>Answer completeness, supported nuggets, citation correctness, faithfulness, and end-to-end answer quality are out of scope here and belong to the separate answer-generation worktree.</p></section>
 
 <section class="hashes" aria-labelledby="sources-title"><h2 id="sources-title">Sources and reproducibility</h2><p>The report authenticates the independently approved freeze and evaluation, plus the prior v2 summary. Labels and hashes are included; machine-local paths, raw documents, document identifiers, credentials, and request material are excluded.</p>{source_table}{call_table}<p>The ranking freeze and evaluation receipts each record zero retrieval, inference, model loads, hosted inference, network, paid calls, and external cost. The report build itself is offline and deterministic apart from SQLite container bytes.</p></section>
 </main>
@@ -707,6 +751,16 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
               binary_relevant_full INTEGER, ndcg_10 REAL, ndcg_100 REAL,
               ndcg_1000 REAL, recall_auc REAL
             );
+            CREATE TABLE arm_depth_metrics (
+              arm TEXT, depth TEXT, binary_relevant_count INTEGER,
+              binary_recall REAL, graded_recall REAL,
+              facet_only_relevant_retained INTEGER, facet_only_retention REAL,
+              PRIMARY KEY (arm, depth)
+            );
+            CREATE TABLE arm_quality_metrics (
+              arm TEXT PRIMARY KEY, ndcg_10 REAL, ndcg_100 REAL,
+              ndcg_500 REAL, ndcg_1000 REAL, ndcg_1500 REAL, recall_auc REAL
+            );
             CREATE TABLE topic_deltas (
               topic_id TEXT PRIMARY KEY, binary_relevant_delta_100 INTEGER,
               binary_relevant_delta_250 INTEGER, binary_relevant_delta_500 INTEGER,
@@ -723,6 +777,10 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
             CREATE TABLE facet_proxy (
               topic_id TEXT PRIMARY KEY, binary_relevant_attributions INTEGER,
               facets_represented INTEGER
+            );
+            CREATE TABLE facet_proxy_sensitivity (
+              topic_id TEXT PRIMARY KEY, tethered_dual_attributions INTEGER,
+              tethered_dual_nr_attributions INTEGER, delta_without_redundancy INTEGER
             );
             CREATE TABLE report_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE sources (source_id TEXT PRIMARY KEY, label TEXT, bytes INTEGER, sha256 TEXT);
@@ -743,6 +801,24 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
                 )
                 for row in payload["arm_metrics"]
             ],
+        )
+        depth_labels: tuple[int | str, ...] = (*DEPTHS, "full")
+        connection.executemany(
+            "INSERT INTO arm_depth_metrics VALUES (?,?,?,?,?,?,?)",
+            [
+                (
+                    row["arm"], str(depth), row[f"relevant_count{'_' if depth == 'full' else '@'}{depth}"],
+                    row[f"binary_recall{'_' if depth == 'full' else '@'}{depth}"],
+                    row[f"graded_recall{'_' if depth == 'full' else '@'}{depth}"],
+                    row[f"facet_only_relevant_retained{'_' if depth == 'full' else '@'}{depth}"],
+                    row[f"facet_only_relevant_retention{'_' if depth == 'full' else '@'}{depth}"],
+                )
+                for row in payload["arm_metrics"] for depth in depth_labels
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO arm_quality_metrics VALUES (?,?,?,?,?,?,?)",
+            [(row["arm"], row["ndcg@10"], row["ndcg@100"], row["ndcg@500"], row["ndcg@1000"], row["ndcg@1500"], row["recall_auc"]) for row in payload["arm_metrics"]],
         )
         connection.executemany(
             "INSERT INTO topic_deltas VALUES (?,?,?,?,?,?,?,?,?)",
@@ -786,6 +862,10 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
                 for row in payload["facet_proxy_by_topic"]
             ],
         )
+        connection.executemany(
+            "INSERT INTO facet_proxy_sensitivity VALUES (?,?,?,?)",
+            [(row["topic_id"], row["tethered_dual_attributions"], row["tethered_dual_nr_attributions"], row["delta_without_redundancy"]) for row in payload["facet_proxy_sensitivity"]],
+        )
         metadata = {
             "relevance_threshold": payload["relevance_threshold"],
             **payload["qrels_grade_counts"],
@@ -793,6 +873,7 @@ def _write_sqlite(path: Path, payload: Mapping[str, object]) -> None:
                 f"freeze_{key}": value
                 for key, value in payload["freeze_verification"].items()
             },
+            **{f"evaluation_{key}": value for key, value in payload["evaluation_verification"].items()},
         }
         connection.executemany(
             "INSERT INTO report_metadata VALUES (?,?)",
@@ -842,6 +923,7 @@ def write_report(
         "source_hashes": payload["source_hashes"],
         "external_calls": payload["external_calls"],
         "freeze_verification": payload["freeze_verification"],
+        "evaluation_verification": payload["evaluation_verification"],
         "metric_definitions": payload["metric_definitions"],
         "report_boundaries": payload["report_boundaries"],
     }

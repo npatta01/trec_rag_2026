@@ -352,4 +352,3 @@ git add code/trec_rag/build_tethered_soft_coverage_report.py \
   reports/experiments/tethered_facet_minilm_diagnostic_v3
 git commit -m "Report tethered soft coverage findings"
 ```
-
