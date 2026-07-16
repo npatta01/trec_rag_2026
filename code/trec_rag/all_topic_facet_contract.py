@@ -24,6 +24,11 @@ ALL_TOPIC_IDS = (
 ORIGINAL_DEPTH = 1000
 FACET_DEPTH = 200
 REQUEST_INTERVAL_SECONDS = 3.0
+ORIGINAL_RETRIEVER_NAME = "climbmix_bm25"
+ORIGINAL_RETRIEVER_TYPE = "pyserini_remote"
+ORIGINAL_INDEX = "climbmix-400b"
+ORIGINAL_INDEX_URL = "http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search"
+ORIGINAL_RESPONSE_API = "v1"
 SCHEMA_VERSION = "all-topic-tethered-facet-manifest-v1"
 EXPERIMENT_ID = "all_topic_tethered_facet_validation_v1"
 ANALYZER_CONTRACT = "lowercase-alphanumeric-v1"
@@ -401,17 +406,21 @@ def _authenticate_original_cache(
         or payload.get("cache_key") != _request_cache_key(payload)
     ):
         raise ValueError(f"cache request identity mismatch for {topic_id}")
-    for key in ("retriever_name", "retriever_type", "index", "index_url"):
-        if not isinstance(payload.get(key), str) or not payload.get(key):
-            raise ValueError(f"cache request identity lacks {key} for {topic_id}")
+    approved_identity = {
+        "retriever_name": ORIGINAL_RETRIEVER_NAME,
+        "retriever_type": ORIGINAL_RETRIEVER_TYPE,
+        "index": ORIGINAL_INDEX,
+        "index_url": ORIGINAL_INDEX_URL,
+    }
+    if any(payload.get(key) != expected for key, expected in approved_identity.items()):
+        raise ValueError(f"approved cache identity mismatch for {topic_id}")
     response = payload.get("response")
     if not isinstance(response, Mapping):
         raise ValueError(f"cache raw response provenance is missing for {topic_id}")
     response_query = response.get("query")
     candidates = response.get("candidates")
     if (
-        not isinstance(response.get("api"), str)
-        or not response.get("api")
+        response.get("api") != ORIGINAL_RESPONSE_API
         or response.get("index") != payload.get("index")
         or not isinstance(response_query, Mapping)
         or response_query.get("text") != narrative

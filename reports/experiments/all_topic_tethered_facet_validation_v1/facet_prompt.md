@@ -92,6 +92,10 @@ created.
   file under it from actual bytes: validate its 64-hex SHA-256, recomputed
   request key, topic/query/variant/depth identity, raw-response provenance, and
   exact 1,000-candidate schema. Reject missing, tampered, or escaping paths.
+- Require the original cache identity exactly: retriever name
+  `climbmix_bm25`, retriever type `pyserini_remote`, index `climbmix-400b`,
+  index URL `http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search`, and raw
+  response API `v1`. Self-consistent identities for any other backend fail.
 - Schedule zero original-narrative requests.
 - Schedule each accepted facet exactly once at depth 200.
 - Freeze the exact facet request count before retrieval.

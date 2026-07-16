@@ -350,6 +350,56 @@ def test_cache_identity_and_raw_provenance_come_from_payload(tmp_path: Path) -> 
             _build_request_plan(payload, cache, root, ("14",))
 
 
+def test_cache_rejects_self_consistent_but_unapproved_backend(tmp_path: Path) -> None:
+    payload = _manifest()
+    narrative = str(payload["topics"][0]["narrative"])
+    binding = _write_cache(
+        tmp_path, topic_id="14", narrative=narrative
+    )
+    path = Path(str(binding["path"]))
+    cache_payload = json.loads(path.read_text())
+    cache_payload.update(
+        {
+            "retriever_name": "unapproved",
+            "index": "unapproved",
+            "index_url": "https://example.invalid/search",
+        }
+    )
+    cache_payload["response"]["index"] = "unapproved"
+    request_identity = {
+        "retriever_name": cache_payload["retriever_name"],
+        "retriever_type": cache_payload["retriever_type"],
+        "index": cache_payload["index"],
+        "index_url": cache_payload["index_url"],
+        "hits": cache_payload["hits"],
+        "query_text": cache_payload["query"],
+    }
+    cache_payload["cache_key"] = _sha256(
+        json.dumps(request_identity, sort_keys=True, separators=(",", ":")).encode()
+    )[:16]
+    raw = json.dumps(cache_payload, sort_keys=True).encode()
+    path.write_bytes(raw)
+    binding["sha256"] = _sha256(raw)
+
+    with pytest.raises(ValueError, match="approved cache identity"):
+        _build_request_plan(payload, {"14": binding}, tmp_path, ("14",))
+
+
+def test_cache_rejects_unapproved_raw_response_api(tmp_path: Path) -> None:
+    payload = _manifest()
+    narrative = str(payload["topics"][0]["narrative"])
+    binding = _write_cache(tmp_path, topic_id="14", narrative=narrative)
+    path = Path(str(binding["path"]))
+    cache_payload = json.loads(path.read_text())
+    cache_payload["response"]["api"] = "v2"
+    raw = json.dumps(cache_payload, sort_keys=True).encode()
+    path.write_bytes(raw)
+    binding["sha256"] = _sha256(raw)
+
+    with pytest.raises(ValueError, match="raw response provenance"):
+        _build_request_plan(payload, {"14": binding}, tmp_path, ("14",))
+
+
 def test_public_request_plan_requires_exact_22(tmp_path: Path) -> None:
     payload = _manifest(ALL_TOPIC_IDS)
     cache = _caches(tmp_path, payload)
