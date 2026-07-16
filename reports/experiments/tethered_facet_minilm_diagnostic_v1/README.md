@@ -4,9 +4,11 @@ This directory is the create-only destination for the accessible diagnostic
 report. The experiment is a **post-qrels diagnostic** over four fixed topics. It
 performs **no new retrieval** and is **not production validation**.
 
-The report consumes only authenticated Task 1/2 receipts, the sealed Task 3
-two-basket freeze, and bounded Task 4 metrics and diagnostic examples. It does
-not read the canonical qrels projection.
+The report consumes authenticated Task 1/2 receipts, the sealed Task 3
+two-basket freeze, and bounded Task 4 metrics and diagnostic examples. To
+authenticate qrels-derived grades and novel-document diagnostics, it also reads
+only the exact historically anchored qrels projection already bound by Task 4.
+It does not read original qrels or perform a new evaluation.
 
 ## Reproduce
 

@@ -609,6 +609,8 @@ def test_report_is_standalone_accessible_and_explicitly_bounded(built) -> None:
     assert "facet-only final rank" in html and "tethered final rank" in html
     assert "prior facet bm25 rank" in html
     assert "passage provenance" in html and "ranking provenance" in html
+    assert "exact historically anchored qrels projection already bound by task 4" in html
+    assert "does not read original qrels or perform a new evaluation" in html
     for phrase in ("noise patterns", "facet yield changes", "relevant below rank 500", "duplicate and quota pressure", "scoring telemetry"):
         assert phrase in html
 

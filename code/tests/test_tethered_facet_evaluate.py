@@ -30,10 +30,9 @@ def test_evaluation_accepts_projection_only_after_verified_freeze(
 ) -> None:
     monkeypatch.setattr(
         module,
-        "verify_freeze",
+        "_task3_snapshot",
         lambda _: (_ for _ in ()).throw(ValueError("bad seal")),
     )
-    monkeypatch.setattr(Path, "read_bytes", ExplodingRead())
 
     with pytest.raises(ValueError, match="bad seal"):
         evaluate(tmp_path / "freeze", tmp_path / "projection.jsonl", tmp_path / "out")
@@ -291,6 +290,20 @@ def _synthetic_evaluation_inputs(
             for name in ("input_bindings.json", "rankings.jsonl", "summary.json")
         },
     })
+    synthetic_snapshot = module.Task3Snapshot(
+        freeze_dir=freeze,
+        seal={"root_sha256": "a" * 64},
+        seal_bytes=(freeze / "SEALED.json").read_bytes(),
+        bindings=json.loads((freeze / "input_bindings.json").read_text()),
+        summary=json.loads((freeze / "summary.json").read_text()),
+        artifact_buffers={
+            name: (freeze / name).read_bytes()
+            for name in ("SEALED.json", "input_bindings.json", "rankings.jsonl", "summary.json")
+        },
+        producer_buffers={},
+        producer_hashes={},
+    )
+    monkeypatch.setattr(module, "_task3_snapshot", lambda _path: synthetic_snapshot)
 
     prior_root = tmp_path / "prior"
     prior = prior_root / "evaluation_v1"
@@ -418,7 +431,7 @@ def test_evaluate_authenticates_projection_and_writes_create_only_artifacts(
     monkeypatch.setattr(
         module,
         "build_representatives",
-        lambda _freeze, _qrels: [{"movement": "promoted"}, {"movement": "demoted"}],
+        lambda _freeze, _qrels, **_kwargs: [{"movement": "promoted"}, {"movement": "demoted"}],
     )
     monkeypatch.setattr(module, "_extended_diagnostics", lambda *_args: {})
     output = tmp_path / "evaluation"
@@ -726,7 +739,6 @@ def test_representatives_consume_each_authenticated_source_buffer_once(
     facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
     freeze = tmp_path / "task3"
     rank_module.freeze_rankings(facet_topics=facet_topics, tethered_topics=tethered_topics, input_paths=paths, output=freeze)
-    monkeypatch.setattr(module, "verify_freeze", lambda _path: {"status": "verified"})
     watched = (deep / "phase1_v1" / "candidates.jsonl").resolve()
     original_read = Path.read_bytes
     reads = 0
@@ -814,8 +826,18 @@ def test_diagnostics_reject_scoring_pair_accounting_mismatch(
         "tethered_scoring_receipt": receipt,
     }
     summary = json.loads((freeze / "summary.json").read_text())
+    snapshot = module.Task3Snapshot(
+        freeze_dir=freeze,
+        seal={},
+        seal_bytes=b"",
+        bindings={},
+        summary=summary,
+        artifact_buffers={},
+        producer_buffers=contents,
+        producer_hashes={name: hashlib.sha256(value).hexdigest() for name, value in contents.items()},
+    )
     monkeypatch.setattr(
-        module, "_sealed_task3_buffers", lambda _path: ({}, summary, b"", b"")
+        module, "_task3_snapshot", lambda _path: snapshot
     )
     monkeypatch.setattr(
         module,
@@ -834,3 +856,27 @@ def test_diagnostics_reject_scoring_pair_accounting_mismatch(
         module._extended_diagnostics(
             freeze, {topic: {} for topic in TOPIC_IDS}, arms, ranking_rows
         )
+
+
+def test_task3_snapshot_rejects_invalid_seal_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
+    import trec_rag.tethered_facet_two_basket as rank_module
+
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
+    freeze = tmp_path / "task3"
+    rank_module.freeze_rankings(
+        facet_topics=facet_topics, tethered_topics=tethered_topics,
+        input_paths=paths, output=freeze,
+    )
+    seal_path = freeze / "SEALED.json"
+    seal = json.loads(seal_path.read_text())
+    seal["root_sha256"] = "0" * 64
+    seal_path.write_text(json.dumps(seal))
+
+    with pytest.raises(ValueError, match="snapshot seal root"):
+        module._task3_snapshot(freeze)

@@ -10,6 +10,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from .deep_facet_candidate_evaluate import evaluate_ranking
@@ -83,6 +84,18 @@ NOISE_PATTERN_REGEX: Mapping[str, str] = {
     "essay_or_homework": r"\b(?:essay|homework|assignment|term paper)\b",
     "pet_health": r"\b(?:pet health|veterinar(?:y|ian)|dog health|cat health)\b",
 }
+
+
+@dataclass(frozen=True)
+class Task3Snapshot:
+    freeze_dir: Path
+    seal: Mapping[str, object]
+    seal_bytes: bytes
+    bindings: Mapping[str, object]
+    summary: Mapping[str, object]
+    artifact_buffers: Mapping[str, bytes]
+    producer_buffers: Mapping[str, bytes]
+    producer_hashes: Mapping[str, str]
 
 
 def _sha256(content: bytes) -> str:
@@ -176,35 +189,88 @@ def _representative_candidate_maps(
     return facet, tethered
 
 
-def _sealed_task3_buffers(
-    freeze_dir: Path,
-) -> tuple[dict[str, object], dict[str, object], bytes, bytes]:
-    seal, _seal_bytes = _read_object_bytes(freeze_dir / "SEALED.json", "Task 3 seal")
-    bindings, binding_bytes = _read_object_bytes(
-        freeze_dir / "input_bindings.json", "Task 3 bindings"
+def _task3_snapshot(freeze_dir: Path) -> Task3Snapshot:
+    """Capture and verify one immutable Task 3 filesystem view."""
+
+    freeze_dir = Path(freeze_dir)
+    names = (
+        "SEALED.json", "parameters.json", "input_bindings.json",
+        "rankings.jsonl", "prefixes.json", "summary.json",
     )
-    summary, summary_bytes = _read_object_bytes(
-        freeze_dir / "summary.json", "Task 3 summary"
-    )
-    try:
-        ranking_bytes = (freeze_dir / "rankings.jsonl").read_bytes()
-    except OSError as exc:
-        raise ValueError("Task 3 rankings are unreadable") from exc
-    files = seal.get("files")
-    if not isinstance(files, Mapping):
-        raise ValueError("Task 3 seal file bindings are missing")
-    for name, content in (
-        ("input_bindings.json", binding_bytes),
-        ("rankings.jsonl", ranking_bytes),
-        ("summary.json", summary_bytes),
+    entries = list(freeze_dir.iterdir())
+    if {path.name for path in entries} != set(names) or not all(
+        path.is_file() and not path.is_symlink() for path in entries
     ):
-        if files.get(name) != {"bytes": len(content), "sha256": _sha256(content)}:
-            raise ValueError(f"Task 3 exact buffer differs from seal: {name}")
-    return bindings, summary, binding_bytes, ranking_bytes
+        raise ValueError("Task 3 snapshot has missing or extra artifacts")
+    artifact_buffers: dict[str, bytes] = {}
+    for name in names:
+        path = freeze_dir / name
+        if path.is_symlink():
+            raise ValueError(f"Task 3 snapshot source is unsafe: {name}")
+        try:
+            artifact_buffers[name] = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Task 3 snapshot source is unreadable: {name}") from exc
+    try:
+        seal = json.loads(artifact_buffers["SEALED.json"])
+        bindings = json.loads(artifact_buffers["input_bindings.json"])
+        summary = json.loads(artifact_buffers["summary.json"])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Task 3 snapshot metadata is invalid") from exc
+    if not all(isinstance(value, Mapping) for value in (seal, bindings, summary)):
+        raise ValueError("Task 3 snapshot metadata must be objects")
+    seal_material = {
+        key: seal.get(key)
+        for key in ("schema_version", "status", "qrels_opened", "files")
+    }
+    if (
+        seal.get("schema_version") != "tethered-facet-two-basket-seal-v1"
+        or seal.get("status") != "sealed_before_qrels"
+        or seal.get("qrels_opened") is not False
+        or seal.get("root_sha256") != _sha256(
+            json.dumps(
+                seal_material, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")
+        )
+    ):
+        raise ValueError("Task 3 snapshot seal root or contract differs")
+    inputs = bindings.get("inputs")
+    if not isinstance(inputs, Mapping) or not inputs:
+        raise ValueError("Task 3 snapshot input bindings are missing")
+    producer_buffers: dict[str, bytes] = {}
+    for name, raw in inputs.items():
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"Task 3 snapshot input binding is invalid: {name}")
+        path = Path(str(raw.get("path")))
+        if path.is_symlink():
+            raise ValueError(f"Task 3 snapshot producer is unsafe: {name}")
+        try:
+            producer_buffers[str(name)] = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Task 3 snapshot producer is unreadable: {name}") from exc
+    verify_freeze(
+        freeze_dir,
+        artifact_buffers=artifact_buffers,
+        input_buffers=producer_buffers,
+    )
+    return Task3Snapshot(
+        freeze_dir=freeze_dir,
+        seal=seal,
+        seal_bytes=artifact_buffers["SEALED.json"],
+        bindings=bindings,
+        summary=summary,
+        artifact_buffers=artifact_buffers,
+        producer_buffers=producer_buffers,
+        producer_hashes={
+            name: _sha256(content) for name, content in producer_buffers.items()
+        },
+    )
 
 
 def _representative_sources(
-    bindings: Mapping[str, object], *, include_telemetry: bool = False
+    bindings: Mapping[str, object], *, include_telemetry: bool = False,
+    snapshot_buffers: Mapping[str, bytes] | None = None,
 ) -> tuple[dict[str, bytes], dict[str, str]]:
     inputs = bindings.get("inputs")
     if not isinstance(inputs, Mapping):
@@ -221,7 +287,19 @@ def _representative_sources(
     contents: dict[str, bytes] = {}
     hashes: dict[str, str] = {}
     for name in names:
-        contents[name], hashes[name] = _bound_source(inputs, name)
+        if snapshot_buffers is None:
+            contents[name], hashes[name] = _bound_source(inputs, name)
+        else:
+            raw = inputs.get(name)
+            content = snapshot_buffers.get(name)
+            if not isinstance(raw, Mapping) or not isinstance(content, bytes):
+                raise ValueError(f"Task 3 snapshot lacks required source: {name}")
+            digest = _sha256(content)
+            if raw != {
+                "path": str(raw.get("path")), "bytes": len(content), "sha256": digest,
+            }:
+                raise ValueError(f"Task 3 snapshot source hash drifted: {name}")
+            contents[name], hashes[name] = content, digest
     return contents, hashes
 
 
@@ -311,6 +389,7 @@ def build_representatives(
     qrels: Mapping[str, Mapping[str, int]],
     *,
     max_per_class: int = 4,
+    snapshot: Task3Snapshot | None = None,
 ) -> list[dict[str, object]]:
     """Build bounded movement evidence from Task 3-bound raw score sources."""
 
@@ -318,12 +397,15 @@ def build_representatives(
         raise ValueError("qrels must contain the exact protected pilot topics")
     if type(max_per_class) is not int or max_per_class <= 0 or max_per_class > 8:
         raise ValueError("representative bound must be between 1 and 8")
-    verify_freeze(freeze_dir)
-    bindings, _summary, _binding_bytes, ranking_bytes = _sealed_task3_buffers(Path(freeze_dir))
+    snapshot = snapshot or _task3_snapshot(freeze_dir)
+    bindings = snapshot.bindings
+    ranking_bytes = snapshot.artifact_buffers["rankings.jsonl"]
     raw_inputs = bindings.get("topic_inputs")
     if not isinstance(raw_inputs, Mapping):
         raise ValueError("Task 3 semantic score maps are missing")
-    contents, hashes = _representative_sources(bindings)
+    contents, hashes = _representative_sources(
+        bindings, snapshot_buffers=snapshot.producer_buffers
+    )
     facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
     facet_windows, tethered_windows, tethered_documents = _window_maps(contents)
     rankings = _parse_jsonl(ranking_bytes, "Task 3 rankings")
@@ -688,7 +770,7 @@ def decide(evidence: Mapping[str, object]) -> dict[str, object]:
 
 
 def _load_frozen_rankings(
-    freeze_dir: Path,
+    snapshot: Task3Snapshot,
 ) -> tuple[
     dict[str, dict[str, list[str]]],
     dict[str, dict[str, list[dict[str, object]]]],
@@ -697,7 +779,10 @@ def _load_frozen_rankings(
     bytes,
     bytes,
 ]:
-    bindings, summary, binding_bytes, ranking_bytes = _sealed_task3_buffers(freeze_dir)
+    bindings = dict(snapshot.bindings)
+    summary = dict(snapshot.summary)
+    binding_bytes = snapshot.artifact_buffers["input_bindings.json"]
+    ranking_bytes = snapshot.artifact_buffers["rankings.jsonl"]
     raw_topic_inputs = bindings.get("topic_inputs")
     if not isinstance(raw_topic_inputs, Mapping) or set(raw_topic_inputs) != {
         "FACET-2B",
@@ -943,13 +1028,17 @@ def _per_topic_deltas(
 
 
 def _extended_diagnostics(
-    freeze_dir: Path,
+    task3: Path | Task3Snapshot,
     qrels: Mapping[str, Mapping[str, int]],
     arms: Mapping[str, Mapping[str, object]],
     ranking_rows: Mapping[str, Mapping[str, list[dict[str, object]]]],
 ) -> dict[str, object]:
-    bindings, summary, _binding_bytes, _ranking_bytes = _sealed_task3_buffers(freeze_dir)
-    contents, hashes = _representative_sources(bindings, include_telemetry=True)
+    snapshot = task3 if isinstance(task3, Task3Snapshot) else _task3_snapshot(task3)
+    bindings, summary = snapshot.bindings, snapshot.summary
+    contents, hashes = _representative_sources(
+        bindings, include_telemetry=True,
+        snapshot_buffers=snapshot.producer_buffers,
+    )
     facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
     texts = {
         identity: str(row.get("text")) for identity, row in tethered_candidates.items()
@@ -1122,7 +1211,7 @@ def evaluate(
     freeze_dir, prior_evaluation, output = map(
         Path, (freeze_dir, prior_evaluation, output)
     )
-    verify_freeze(freeze_dir)
+    task3 = _task3_snapshot(freeze_dir)
     if output.exists():
         raise FileExistsError(f"create-only evaluation output already exists: {output}")
     if (
@@ -1242,7 +1331,7 @@ def evaluate(
     )
 
     rankings, ranking_rows, freeze_bindings, task3_summary, freeze_binding_bytes, freeze_ranking_bytes = _load_frozen_rankings(
-        freeze_dir
+        task3
     )
     for topic in TOPIC_IDS:
         for arm in ("FACET-2B", "TETHERED-2B"):
@@ -1305,7 +1394,7 @@ def evaluate(
         "novel_relevant_count": novel_relevant_count,
         "arms": arms,
     }
-    extended = _extended_diagnostics(freeze_dir, qrels, arms, ranking_rows)
+    extended = _extended_diagnostics(task3, qrels, arms, ranking_rows)
     diagnostics = {
         "schema_version": SCHEMA_VERSION,
         "topic_ids": list(TOPIC_IDS),
@@ -1318,24 +1407,11 @@ def evaluate(
         },
         "novel_relevant_ids": {topic: sorted(novel[topic]) for topic in TOPIC_IDS},
         "documented_basket_shortage": documented_shortage,
-        "representatives": build_representatives(freeze_dir, qrels),
+        "representatives": build_representatives(freeze_dir, qrels, snapshot=task3),
         **extended,
     }
     seal_path = freeze_dir / "SEALED.json"
-    try:
-        seal_bytes = seal_path.read_bytes()
-    except OSError as exc:
-        raise ValueError("Task 3 seal is unreadable after verification") from exc
-    try:
-        seal = json.loads(seal_bytes)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Task 3 seal is invalid after verification") from exc
-    if (
-        not isinstance(seal, Mapping)
-        or not isinstance(seal.get("root_sha256"), str)
-        or len(seal["root_sha256"]) != 64
-    ):
-        raise ValueError("Task 3 seal root SHA-256 is invalid")
+    seal_bytes, seal = task3.seal_bytes, task3.seal
     input_bindings = {
         "schema_version": SCHEMA_VERSION,
         "task3_root_sha256": seal["root_sha256"],

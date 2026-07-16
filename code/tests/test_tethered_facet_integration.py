@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -228,3 +229,70 @@ def test_task2_compatible_fixture_chain_without_inference_and_provenance_tamper_
             task2_receipt=tethered / "scoring_receipt.json", task3_freeze=task3,
             task4_evaluation=task4,
         ))
+
+
+def test_evaluation_uses_initial_snapshot_during_coherent_task3_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    preflight_bytes = _write(tethered / "preflight.json", {
+        "summary": {"query_document_pair_count": 1000, "unique_pair_count": 1000},
+        "runtime_evidence": {"projected_inference_seconds": 12.5},
+    })
+    _write(tethered / "scoring_receipt.json", {
+        "model": "synthetic/minilm", "model_revision": "fixture-revision",
+        "preflight_sha256": _sha(preflight_bytes),
+        "planned_window_count": 1000, "completed_window_count": 1200,
+        "document_score_count": 1000, "cache_hit_count": 400,
+        "unique_forward_pair_count": 600, "elapsed_seconds": 9.5,
+        "peak_device_memory_bytes": 1234, "peak_host_memory_bytes": 5678,
+    })
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
+    initial = tmp_path / "task3-initial"
+    alternate = tmp_path / "task3-alternate"
+    rank_module.freeze_rankings(
+        facet_topics=facet_topics, tethered_topics=tethered_topics,
+        input_paths=paths, output=initial,
+    )
+    changed_topics = []
+    for topic in tethered_topics:
+        facet = topic.facets[0]
+        scores = dict(facet.scores)
+        first = next(iter(scores))
+        scores[first] = min(scores.values()) - 1.0
+        changed_topics.append(replace(topic, facets=(replace(facet, scores=scores),)))
+    rank_module.freeze_rankings(
+        facet_topics=facet_topics, tethered_topics=changed_topics,
+        input_paths=paths, output=alternate,
+    )
+    initial_seal = (initial / "SEALED.json").read_bytes()
+    assert initial_seal != (alternate / "SEALED.json").read_bytes()
+
+    prior = _prior_evaluation(tmp_path, monkeypatch)
+    verified_prior = evaluate_module.verify_prior_seal
+    replaced = False
+
+    def replace_after_snapshot(path: Path):
+        nonlocal replaced
+        if not replaced:
+            for name in (
+                "SEALED.json", "parameters.json", "input_bindings.json",
+                "rankings.jsonl", "prefixes.json", "summary.json",
+            ):
+                (initial / name).write_bytes((alternate / name).read_bytes())
+            replaced = True
+        return verified_prior(path)
+
+    monkeypatch.setattr(evaluate_module, "verify_prior_seal", replace_after_snapshot)
+    output = tmp_path / "task4"
+    evaluate(initial, prior, output)
+
+    bindings = json.loads((output / "input_bindings.json").read_text())
+    assert replaced is True
+    assert bindings["task3_seal"] == {
+        "path": str((initial / "SEALED.json").resolve()),
+        "bytes": len(initial_seal),
+        "sha256": _sha(initial_seal),
+    }

@@ -1153,7 +1153,12 @@ def _read_object(path: Path, label: str) -> dict[str, object]:
     return value
 
 
-def verify_freeze(output: Path) -> dict[str, object]:
+def verify_freeze(
+    output: Path,
+    *,
+    artifact_buffers: Mapping[str, bytes] | None = None,
+    input_buffers: Mapping[str, bytes] | None = None,
+) -> dict[str, object]:
     """Recompute every file/input hash and enforce two-basket semantics."""
 
     output = Path(output)
@@ -1165,11 +1170,33 @@ def verify_freeze(output: Path) -> dict[str, object]:
         "summary.json",
         "SEALED.json",
     }
-    entries = list(output.iterdir())
-    actual_names = {path.name for path in entries}
-    if actual_names != expected_names or not all(path.is_file() for path in entries):
-        raise ValueError("freeze has missing or extra files")
-    seal = _read_object(output / "SEALED.json", "seal")
+    if artifact_buffers is None:
+        entries = list(output.iterdir())
+        actual_names = {path.name for path in entries}
+        if actual_names != expected_names or not all(path.is_file() for path in entries):
+            raise ValueError("freeze has missing or extra files")
+    elif set(artifact_buffers) != expected_names or any(
+        not isinstance(content, bytes) for content in artifact_buffers.values()
+    ):
+        raise ValueError("freeze snapshot has missing or extra buffers")
+
+    def content(name: str) -> bytes:
+        return (
+            artifact_buffers[name]
+            if artifact_buffers is not None
+            else (output / name).read_bytes()
+        )
+
+    def object_value(name: str, label: str) -> dict[str, object]:
+        try:
+            value = json.loads(content(name))
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
+            raise ValueError(f"{label} is unreadable") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"{label} must be an object")
+        return value
+
+    seal = object_value("SEALED.json", "seal")
     seal_material = {key: seal.get(key) for key in ("schema_version", "status", "qrels_opened", "files")}
     if (
         seal_material["schema_version"] != SEAL_SCHEMA_VERSION
@@ -1180,16 +1207,16 @@ def verify_freeze(output: Path) -> dict[str, object]:
     ):
         raise ValueError("seal SHA-256 or contract differs")
     for name in sorted(expected_names - {"SEALED.json"}):
-        content = (output / name).read_bytes()
+        artifact_content = content(name)
         if seal_material["files"].get(name) != {  # type: ignore[union-attr]
-            "bytes": len(content),
-            "sha256": _sha256(content),
+            "bytes": len(artifact_content),
+            "sha256": _sha256(artifact_content),
         }:
             raise ValueError(f"artifact SHA-256 differs: {name}")
-    summary = _read_object(output / "summary.json", "summary")
-    parameters = _read_object(output / "parameters.json", "parameters")
-    bindings = _read_object(output / "input_bindings.json", "input bindings")
-    prefixes = _read_object(output / "prefixes.json", "prefixes")
+    summary = object_value("summary.json", "summary")
+    parameters = object_value("parameters.json", "parameters")
+    bindings = object_value("input_bindings.json", "input bindings")
+    prefixes = object_value("prefixes.json", "prefixes")
     if (
         summary.get("schema_version") != SCHEMA_VERSION
         or summary.get("status") != "rankings_frozen_before_qrels"
@@ -1205,18 +1232,22 @@ def verify_freeze(output: Path) -> dict[str, object]:
     if not isinstance(artifacts, Mapping):
         raise ValueError("summary artifact records are missing")
     for name in ("parameters.json", "input_bindings.json", "rankings.jsonl", "prefixes.json"):
-        content = (output / name).read_bytes()
-        if artifacts.get(name) != {"bytes": len(content), "sha256": _sha256(content)}:
+        artifact_content = content(name)
+        if artifacts.get(name) != {"bytes": len(artifact_content), "sha256": _sha256(artifact_content)}:
             raise ValueError(f"summary SHA-256 differs: {name}")
     input_rows = bindings.get("inputs")
     if not isinstance(input_rows, Mapping) or not input_rows:
         raise ValueError("input binding records are missing")
+    if input_buffers is not None and set(input_buffers) != set(input_rows):
+        raise ValueError("input snapshot population differs from bindings")
     for name, raw in input_rows.items():
         if not isinstance(raw, Mapping):
             raise ValueError(f"input binding is invalid: {name}")
         path = Path(str(raw.get("path")))
-        content = path.read_bytes()
-        if raw != {"path": str(path), "bytes": len(content), "sha256": _sha256(content)}:
+        source_content = (
+            input_buffers[name] if input_buffers is not None else path.read_bytes()
+        )
+        if raw != {"path": str(path), "bytes": len(source_content), "sha256": _sha256(source_content)}:
             raise ValueError(f"input SHA-256 differs: {name}")
 
     raw_topic_inputs = bindings.get("topic_inputs")
@@ -1247,12 +1278,12 @@ def verify_freeze(output: Path) -> dict[str, object]:
             expected_prefixes[topic_id][arm] = {
                 str(depth): list(result.document_ids[:depth]) for depth in PREFIX_DEPTHS
             }
-    if _jsonl_bytes(expected_rows) != (output / "rankings.jsonl").read_bytes():
+    if _jsonl_bytes(expected_rows) != content("rankings.jsonl"):
         raise ValueError("rankings differ from frozen semantic inputs")
     if prefixes != expected_prefixes:
         raise ValueError("prefixes differ from frozen semantic inputs")
 
-    ranking_bytes = (output / "rankings.jsonl").read_bytes()
+    ranking_bytes = content("rankings.jsonl")
     rows: list[dict[str, object]] = []
     for line_number, line in enumerate(ranking_bytes.splitlines(), 1):
         try:
