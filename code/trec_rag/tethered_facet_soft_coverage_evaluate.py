@@ -401,10 +401,13 @@ def evaluate_frozen_proxy(
     if output.exists():
         raise FileExistsError(f"evaluation output already exists: {output}")
     read = reader or (lambda path: path.read_bytes())
+    seal_path = freeze / "SEALED.json"
+    seal_content = read(seal_path)
     freeze_summary = verify_soft_freeze(freeze)
+    if read(seal_path) != seal_content:
+        raise ValueError("seal changed during authenticated snapshot")
     ranking_content = read(freeze / "rankings.jsonl")
     rankings, ranking_hashes = _load_verified_rankings(freeze_summary, ranking_content)
-    seal_content = read(freeze / "SEALED.json")
     try:
         seal = json.loads(seal_content)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -421,6 +424,8 @@ def evaluate_frozen_proxy(
     provenance = _load_union(union_content)
     # This is the qrels access boundary: every ranking was sealed, hashed, and
     # checked as a complete permutation above.
+    if read(seal_path) != seal_content:
+        raise ValueError("seal changed during authenticated snapshot")
     qrels_content = read(qrels)
     if _sha256(qrels_content) != expected_qrels_sha256:
         raise ValueError("qrels projection SHA-256 differs from the pinned projection")

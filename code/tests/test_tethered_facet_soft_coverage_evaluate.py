@@ -227,3 +227,45 @@ def test_frozen_evaluation_rejects_post_verify_ranking_mutation_before_qrels(tmp
 
     with pytest.raises(ValueError, match="ranking buffer differs from sealed artifact"):
         evaluate_frozen_proxy(freeze, qrels_path, union_path, tmp_path / "out", reader=reader)
+
+
+def test_frozen_evaluation_rejects_coordinated_post_verify_seal_and_ranking_replacement_before_qrels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze, qrels_path, union_path = tmp_path / "freeze", tmp_path / "qrels.jsonl", tmp_path / "union.jsonl"
+    freeze.mkdir(); qrels_path.write_bytes(b"must not open"); union_path.write_bytes(b"")
+    rows = [{"topic_id": topic, "arm": arm, "rank": rank, **row} for topic, arms in _rankings().items() for arm, arm_rows in arms.items() for rank, row in enumerate(arm_rows, 1)]
+    original = b"".join((json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode() for row in rows)
+    mutated_rows = list(rows)
+    first, second = mutated_rows[0].copy(), mutated_rows[1].copy()
+    first["document_id"], second["document_id"] = second["document_id"], first["document_id"]
+    mutated_rows[0], mutated_rows[1] = first, second
+    mutated = b"".join((json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode() for row in mutated_rows)
+
+    def seal_bytes(root: str, ranking_bytes: bytes) -> bytes:
+        return json.dumps({
+            "root_sha256": root,
+            "files": {"rankings.jsonl": {"bytes": len(ranking_bytes), "sha256": hashlib.sha256(ranking_bytes).hexdigest()}},
+        }, sort_keys=True).encode()
+
+    original_seal = seal_bytes("a" * 64, original)
+    mutated_seal = seal_bytes("b" * 64, mutated)
+    (freeze / "rankings.jsonl").write_bytes(original)
+    (freeze / "SEALED.json").write_bytes(original_seal)
+    verified = False
+
+    def verify(_path: Path) -> dict[str, object]:
+        nonlocal verified
+        verified = True
+        return {"topic_summary": {topic: {"complete_permutations": {arm: True for arm in ARMS}} for topic in TOPICS}}
+
+    def reader(path: Path) -> bytes:
+        if path == freeze / "SEALED.json":
+            return mutated_seal if verified else original_seal
+        if path == freeze / "rankings.jsonl":
+            return mutated if verified else original
+        if path == qrels_path:
+            raise AssertionError("qrels opened after coordinated freeze replacement")
+        return path.read_bytes()
+
+    monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", verify)
+    with pytest.raises(ValueError, match="seal changed during authenticated snapshot"):
+        evaluate_frozen_proxy(freeze, qrels_path, union_path, tmp_path / "out", reader=reader)
