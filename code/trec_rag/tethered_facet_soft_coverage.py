@@ -75,6 +75,7 @@ def build_soft_permutations(
 ) -> tuple[dict[str, list[str]], dict[str, object]]:
     """Reuse DUAL unchanged after callers substitute tethered facet score maps."""
 
+    _reject_topics([topic_input.get("topic_id")])
     raw_docids = topic_input.get("docids")
     if not isinstance(raw_docids, Sequence) or isinstance(raw_docids, (str, bytes)):
         raise ValueError("docids must be a sequence")
@@ -103,7 +104,9 @@ def build_soft_permutations(
         },
         "TETHERED-DUAL": established_audit["DUAL"],
         "TETHERED-DUAL-NR": established_audit["DUAL-NR"],
-        "RRF100-TETHERED-DUAL": established_audit["DUAL"],
+        # The protected prefix changes selection order, so DUAL's marginal
+        # coverage attribution is not valid for this sensitivity arm.
+        "RRF100-TETHERED-DUAL": {},
     }
     return rankings, audit
 
@@ -286,6 +289,7 @@ def load_authenticated_inputs(
         "prior_seal": prior / "SEALED.json",
         "prior_rankings": prior / "rankings.jsonl",
         "accepted_union": gate / "u_accepted.jsonl",
+        "accepted_streams": gate / "streams.jsonl",
         "gate_summary": gate / "summary.json",
         "phase2_scores": phase2 / "scores.jsonl",
         "phase2_receipt": phase2 / "scoring_receipt.json",
@@ -555,21 +559,60 @@ def verify_soft_freeze(path: Path) -> dict[str, object]:
         if arm not in ARMS:
             raise ValueError("ranking arm is invalid")
         by_topic_arm.setdefault((topic_id, arm), []).append(row)
-    populations: dict[str, set[str]] = {}
+    expected_keys = {
+        (topic_id, arm) for topic_id in PILOT_TOPIC_IDS for arm in ARMS
+    }
+    if set(by_topic_arm) != expected_keys:
+        raise ValueError("every arm/topic must be a nonempty complete permutation")
+    topic_summary = summary.get("topic_summary")
+    if not isinstance(topic_summary, Mapping) or set(topic_summary) != set(PILOT_TOPIC_IDS):
+        raise ValueError("topic summary scope differs")
     for topic_id in PILOT_TOPIC_IDS:
+        population: set[str] | None = None
+        orders: dict[str, list[str]] = {}
         for arm in ARMS:
-            arm_rows = by_topic_arm.get((topic_id, arm), [])
+            arm_rows = by_topic_arm[(topic_id, arm)]
             ranks = [row.get("rank") for row in arm_rows]
-            if ranks != list(range(1, len(arm_rows) + 1)):
-                raise ValueError("ranking positions are not contiguous")
-            population = {str(row.get("document_id")) for row in arm_rows}
-            if len(population) != len(arm_rows):
-                raise ValueError("ranking contains duplicate documents")
-            if topic_id in populations and population != populations[topic_id]:
-                raise ValueError("ranking populations differ across arms")
-            populations[topic_id] = population
+            arm_order = [str(row.get("document_id")) for row in arm_rows]
+            arm_population = set(arm_order)
+            if (
+                not arm_rows
+                or ranks != list(range(1, len(arm_rows) + 1))
+                or len(arm_population) != len(arm_rows)
+                or (population is not None and arm_population != population)
+            ):
+                raise ValueError("every arm/topic must be a nonempty complete permutation")
+            population = arm_population
+            orders[arm] = arm_order
+            if arm == "RRF100-TETHERED-DUAL" and any(
+                row.get("coverage_facet") is not None
+                or row.get("coverage_bonus") != 0.0
+                or row.get("objective") is not None
+                or row.get("redundancy_penalty") != 0.0
+                for row in arm_rows
+            ):
+                raise ValueError("protected arm must not carry reordered DUAL attribution")
+        if orders["RRF100-TETHERED-DUAL"][:HEAD_SIZE] != orders["RRF"][:HEAD_SIZE]:
+            raise ValueError("protected head differs from RRF")
+        topic_value = topic_summary.get(topic_id)
+        expected_count = len(orders["RRF"])
+        if not isinstance(topic_value, Mapping) or dict(topic_value) != {
+            "accepted_union_count": expected_count,
+            "ranking_counts": {arm: expected_count for arm in ARMS},
+            "complete_permutations": {arm: True for arm in ARMS},
+        }:
+            raise ValueError("topic summary counts or complete flags differ")
     if len(rows) != summary.get("ranking_row_count"):
         raise ValueError("ranking row count differs")
+    artifact_records = summary.get("artifacts")
+    if not isinstance(artifact_records, Mapping):
+        raise ValueError("summary artifact bindings are missing")
+    for name in ("parameters.json", "input_bindings.json", "rankings.jsonl"):
+        content = (root / name).read_bytes()
+        if artifact_records.get(name) != {
+            "bytes": len(content), "sha256": _sha256(content)
+        }:
+            raise ValueError("summary artifact bindings differ")
     return summary
 
 
