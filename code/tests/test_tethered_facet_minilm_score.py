@@ -172,6 +172,32 @@ def production_phase1_rows() -> list[dict[str, object]]:
     return rows
 
 
+ACCEPTED_UNION_COUNTS = {"219": 2182, "72": 2127, "300": 1712, "84": 2093}
+
+
+def production_accepted_union_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    by_topic: dict[str, list[str]] = {topic_id: [] for topic_id in module.TOPIC_IDS}
+    for candidate in production_phase1_rows():
+        if candidate["facet_id"] != "84-rejected":
+            by_topic[str(candidate["topic_id"])].append(str(candidate["document_id"]))
+    for topic_id in module.TOPIC_IDS:
+        docids = by_topic[topic_id]
+        for number in range(ACCEPTED_UNION_COUNTS[topic_id] - len(docids)):
+            docids.append(f"{topic_id}-union-extra-{number}")
+        for order, document_id in enumerate(docids, start=1):
+            rows.append(
+                {
+                    "schema_version": "deep-facet-candidate-union-v1",
+                    "union": "accepted",
+                    "topic_id": topic_id,
+                    "document_id": document_id,
+                    "union_order": order,
+                }
+            )
+    return rows
+
+
 def _compact(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -237,6 +263,18 @@ def working_rocm_probe() -> dict[str, object]:
 
 def output_path(tmp_path: Path) -> Path:
     return tmp_path / "post_qrels_tethered_facet_minilm_v1" / "scoring"
+
+
+def restamp_accepted_union(sources: dict[str, Path]) -> None:
+    union_path = sources["gate"] / "u_accepted.jsonl"
+    summary_path = sources["gate"] / "summary.json"
+    source = union_path.read_bytes()
+    summary = json.loads(summary_path.read_bytes())
+    summary["artifacts"]["u_accepted.jsonl"] = {
+        "bytes": len(source),
+        "sha256": _sha256(source),
+    }
+    summary_path.write_bytes(_pretty(summary))
 
 
 def fixture_sources(tmp_path: Path) -> dict[str, Path]:
@@ -357,6 +395,10 @@ def fixture_sources(tmp_path: Path) -> dict[str, Path]:
         }
     )
     (gate / "gates.json").write_bytes(gates_bytes)
+    accepted_union_bytes = b"".join(
+        _compact(row) + b"\n" for row in production_accepted_union_rows()
+    )
+    (gate / "u_accepted.jsonl").write_bytes(accepted_union_bytes)
     (gate / "summary.json").write_bytes(
         _pretty(
             {
@@ -366,11 +408,23 @@ def fixture_sources(tmp_path: Path) -> dict[str, Path]:
                 "facet_count": 25,
                 "accepted_facet_count": 24,
                 "rejected_facet_count": 1,
+                "topic_counts": {
+                    topic_id: {
+                        "accepted_facets": 6,
+                        "accepted_union": ACCEPTED_UNION_COUNTS[topic_id],
+                        "raw_union": ACCEPTED_UNION_COUNTS[topic_id],
+                    }
+                    for topic_id in module.TOPIC_IDS
+                },
                 "artifacts": {
                     "gates.json": {
                         "bytes": len(gates_bytes),
                         "sha256": _sha256(gates_bytes),
-                    }
+                    },
+                    "u_accepted.jsonl": {
+                        "bytes": len(accepted_union_bytes),
+                        "sha256": _sha256(accepted_union_bytes),
+                    },
                 },
             }
         )
@@ -568,6 +622,32 @@ def test_preflight_rejects_slow_prior_rocm_projection(tmp_path):
         )
 
 
+def test_preflight_uses_slower_authenticated_observed_rate(tmp_path):
+    sources = fixture_sources(tmp_path)
+    preflight_path = sources["phase1"] / "preflight.json"
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["pairs_per_second"] = 300.0
+    preflight["projected_runtime_seconds"] = 30.0 + 1000 / 300.0
+    preflight_path.write_bytes(_pretty(preflight))
+    scoring_path = sources["phase1"] / "scoring_receipt.json"
+    scoring = json.loads(scoring_path.read_bytes())
+    scoring["preflight_sha256"] = _sha256(preflight_path.read_bytes())
+    scoring_path.write_bytes(_pretty(scoring))
+
+    result = create_preflight(
+        sources,
+        output_path(tmp_path),
+        tokenizer=WordTokenizer(),
+        cache=FakeCache(tmp_path / "cache.jsonl"),
+        device_probe=working_rocm_probe,
+    )
+
+    assert result["runtime_evidence"]["policy_pairs_per_second"] == 300.0
+    assert result["runtime_evidence"]["prior_observed_pairs_per_second"] == 100.0
+    assert result["runtime_evidence"]["prior_pairs_per_second"] == 100.0
+    assert result["runtime_evidence"]["projected_inference_seconds"] == 78.0
+
+
 def test_preflight_requires_working_rocm_without_constructing_model(tmp_path):
     with pytest.raises(ValueError, match="working ROCm device"):
         create_preflight(
@@ -594,6 +674,7 @@ def test_preflight_requires_working_rocm_without_constructing_model(tmp_path):
         ("phase1_preflight", "runtime_ceiling_seconds"),
         ("phase1_scoring", "preflight_sha256"),
         ("gate_summary", "accepted_facet_count"),
+        ("gate_summary", "topic_counts"),
     ],
 )
 def test_preflight_rejects_missing_controlling_bindings_before_candidates(
@@ -631,6 +712,77 @@ def test_preflight_rejects_noncanonical_publication_path(tmp_path):
         create_preflight(
             fixture_sources(tmp_path),
             tmp_path / "scoring",
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_preflight_rejects_accepted_union_hash_mismatch(tmp_path):
+    sources = fixture_sources(tmp_path)
+    with (sources["gate"] / "u_accepted.jsonl").open("ab") as sink:
+        sink.write(b'{}\n')
+    with pytest.raises(ValueError, match="accepted union.*hash"):
+        create_preflight(
+            sources,
+            output_path(tmp_path),
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_preflight_rejects_mismatched_accepted_union_topic_count(tmp_path):
+    sources = fixture_sources(tmp_path)
+    summary_path = sources["gate"] / "summary.json"
+    summary = json.loads(summary_path.read_bytes())
+    summary["topic_counts"]["219"]["accepted_union"] = 2181
+    summary_path.write_bytes(_pretty(summary))
+
+    with pytest.raises(ValueError, match="accepted union.*counts"):
+        create_preflight(
+            sources,
+            output_path(tmp_path),
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_preflight_rejects_facet_candidate_absent_from_accepted_union(tmp_path):
+    sources = fixture_sources(tmp_path)
+    union_path = sources["gate"] / "u_accepted.jsonl"
+    rows = union_path.read_text(encoding="utf-8").splitlines()
+    first = json.loads(rows[0])
+    first["document_id"] = "219-replacement-not-a-facet-candidate"
+    rows[0] = _compact(first).decode()
+    union_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    restamp_accepted_union(sources)
+
+    with pytest.raises(ValueError, match="absent from accepted union"):
+        create_preflight(
+            sources,
+            output_path(tmp_path),
+            tokenizer=WordTokenizer(),
+            cache=FakeCache(tmp_path / "cache.jsonl"),
+            device_probe=working_rocm_probe,
+        )
+
+
+def test_preflight_rejects_protected_accepted_union_topic_before_indexing(tmp_path):
+    sources = fixture_sources(tmp_path)
+    union_path = sources["gate"] / "u_accepted.jsonl"
+    rows = union_path.read_text(encoding="utf-8").splitlines()
+    first = json.loads(rows[0])
+    first["topic_id"] = "144"
+    rows[0] = _compact(first).decode()
+    union_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    restamp_accepted_union(sources)
+
+    with pytest.raises(ValueError, match="protected topic 144"):
+        create_preflight(
+            sources,
+            output_path(tmp_path),
             tokenizer=WordTokenizer(),
             cache=FakeCache(tmp_path / "cache.jsonl"),
             device_probe=working_rocm_probe,

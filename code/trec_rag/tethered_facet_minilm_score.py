@@ -30,6 +30,8 @@ PROTECTED_TOPIC_IDS = frozenset({"144", "213", "224", "407", "515"})
 PAIR_COUNT = 4_800
 PHASE1_PAIR_COUNT = 5_000
 ACCEPTED_FACET_COUNT = 24
+ACCEPTED_UNION_COUNTS = {"219": 2_182, "72": 2_127, "300": 1_712, "84": 2_093}
+ACCEPTED_UNION_COUNT = 8_114
 WINDOW_CEILING = 25_000
 RUNTIME_CEILING_SECONDS = 600.0
 REFERENCE_FIXED_SECONDS = 30.0
@@ -598,6 +600,92 @@ def _cache_binding(cache: object) -> dict[str, object]:
     }
 
 
+def _load_authenticated_accepted_union(
+    gate_dir: Path,
+    gate_summary: Mapping[str, object],
+) -> tuple[set[tuple[str, str]], dict[str, object]]:
+    """Authenticate, then stream the accepted union without materializing rows."""
+
+    topic_counts = gate_summary.get("topic_counts")
+    if not isinstance(topic_counts, Mapping):
+        raise ValueError("gate summary required topic_counts is invalid")
+    if set(map(str, topic_counts)) != set(TOPIC_IDS):
+        raise ValueError("accepted union topic counts differ from frozen topics")
+    for topic_id in TOPIC_IDS:
+        raw = topic_counts.get(topic_id)
+        if not isinstance(raw, Mapping) or raw.get("accepted_union") != ACCEPTED_UNION_COUNTS[topic_id]:
+            raise ValueError("accepted union topic counts differ from frozen values")
+    if sum(ACCEPTED_UNION_COUNTS.values()) != ACCEPTED_UNION_COUNT:
+        raise AssertionError("accepted union constants do not reconcile")
+
+    artifacts = gate_summary.get("artifacts")
+    binding = artifacts.get("u_accepted.jsonl") if isinstance(artifacts, Mapping) else None
+    if not isinstance(binding, Mapping):
+        raise ValueError("gate summary required accepted union binding is missing")
+    _require_fields(
+        binding,
+        frozenset({"bytes", "sha256"}),
+        "gate summary accepted union binding",
+    )
+    expected_bytes = _required_positive_int(
+        binding.get("bytes"), "accepted union bytes"
+    )
+    expected_sha = _required_sha256(
+        binding.get("sha256"), "accepted union"
+    )
+    path = Path(gate_dir) / "u_accepted.jsonl"
+    digest = hashlib.sha256()
+    actual_bytes = 0
+    try:
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                actual_bytes += len(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        raise ValueError("accepted union is unreadable") from exc
+    if actual_bytes != expected_bytes or digest.hexdigest() != expected_sha:
+        raise ValueError("accepted union bytes/hash differ from gate summary")
+
+    identities: set[tuple[str, str]] = set()
+    observed: Counter[str] = Counter()
+    try:
+        with path.open("rb") as source:
+            for line_number, line in enumerate(source, start=1):
+                try:
+                    row = json.loads(line)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"accepted union:{line_number} is invalid JSON"
+                    ) from exc
+                if not isinstance(row, Mapping):
+                    raise ValueError(f"accepted union:{line_number} must be an object")
+                topic_id = reject_topic(row.get("topic_id"))
+                document_id = row.get("document_id")
+                if (
+                    row.get("schema_version") != "deep-facet-candidate-union-v1"
+                    or row.get("union") != "accepted"
+                    or not isinstance(document_id, str)
+                    or not document_id
+                ):
+                    raise ValueError(f"accepted union:{line_number} identity is invalid")
+                identity = (topic_id, document_id)
+                if identity in identities:
+                    raise ValueError("accepted union contains a duplicate identity")
+                identities.add(identity)
+                observed[topic_id] += 1
+    except OSError as exc:
+        raise ValueError("accepted union changed while streaming") from exc
+    if len(identities) != ACCEPTED_UNION_COUNT or dict(observed) != ACCEPTED_UNION_COUNTS:
+        raise ValueError("accepted union actual topic counts differ")
+    return identities, {
+        "path": str(path.resolve()),
+        "bytes": actual_bytes,
+        "sha256": expected_sha,
+        "rows": len(identities),
+        "topic_counts": dict(observed),
+    }
+
+
 def _materialization_path(
     sources: Mapping[str, object],
     phase1_preflight: Mapping[str, object],
@@ -804,6 +892,7 @@ def create_preflight(
                 "facet_count",
                 "accepted_facet_count",
                 "rejected_facet_count",
+                "topic_counts",
                 "artifacts",
             }
         ),
@@ -843,6 +932,9 @@ def create_preflight(
         or gate_summary.get("rejected_facet_count") != 1
     ):
         raise ValueError("gate required exact facet counts differ")
+    accepted_union, accepted_union_binding = _load_authenticated_accepted_union(
+        gate_dir, gate_summary
+    )
 
     model_receipt_path, expected_model_sha = _materialization_path(
         sources, phase1_preflight
@@ -892,6 +984,20 @@ def create_preflight(
             "tethered preflight requires exactly 4,800 pairs in 24 accepted "
             "facet streams of 200"
         )
+    missing_from_union = next(
+        (
+            (str(row["topic_id"]), str(row["document_id"]))
+            for row in candidates
+            if (str(row["topic_id"]), str(row["document_id"]))
+            not in accepted_union
+        ),
+        None,
+    )
+    if missing_from_union is not None:
+        raise ValueError(
+            "accepted facet candidate is absent from accepted union: "
+            f"{missing_from_union[0]}/{missing_from_union[1]}"
+        )
 
     if tokenizer is None:
         tokenizer = load_verified_tokenizer(
@@ -929,7 +1035,9 @@ def create_preflight(
         coverage[f"{candidate['facet_id']}:{candidate['document_id']}"] = local_coverage
     elapsed = time.perf_counter() - started
     prior_observed_pairs_per_second = prior_forward_pairs / prior_elapsed
-    prior_pairs_per_second = prior_policy_rate
+    prior_pairs_per_second = min(
+        prior_policy_rate, prior_observed_pairs_per_second
+    )
     projected_inference_seconds = (
         prior_fixed_seconds + len(unique_miss_keys) / prior_pairs_per_second
     )
@@ -964,6 +1072,7 @@ def create_preflight(
         "prior_scoring_receipt_sha256": _sha256_bytes(scoring_source),
         "prior_unique_forward_pair_count": prior_forward_pairs,
         "prior_elapsed_seconds": prior_elapsed,
+        "policy_pairs_per_second": prior_policy_rate,
         "prior_pairs_per_second": prior_pairs_per_second,
         "prior_observed_pairs_per_second": prior_observed_pairs_per_second,
         "fixed_seconds": prior_fixed_seconds,
@@ -983,6 +1092,7 @@ def create_preflight(
         "phase1_scores": {"path": str((phase1_dir / "scores.jsonl").resolve()), "sha256": expected_scores_sha},
         "gate_summary": {"path": str(gate_summary_path.resolve()), "sha256": _sha256_bytes(gate_summary_source)},
         "gates": {"path": str(gates_path.resolve()), "sha256": _sha256_bytes(gates_source)},
+        "accepted_union": accepted_union_binding,
         "model_materialization_receipt": {"path": str(materialization.receipt_path), "sha256": materialization.sha256},
     }
     payload: dict[str, object] = {
