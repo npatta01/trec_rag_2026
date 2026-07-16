@@ -14,7 +14,9 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import tempfile
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
@@ -40,6 +42,7 @@ from .all_topic_facet_contract import (
 from .deep_facet_candidate_run import (
     ENDPOINT,
     INDEX_ID,
+    LIMITER_STATE_PATH,
     SHARED_CACHE_DIR,
     _load_verified_cache,
     _normalize_response,
@@ -61,7 +64,12 @@ EXPECTED_FACET_REQUEST_COUNT = 148
 APPROVED_ORIGINAL_CACHE_ROOT = Path(
     "/home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote"
 )
+LIMITER_GRANT_LEDGER_PATH = LIMITER_STATE_PATH.with_name(
+    "all-topic-limiter-grants-v1.jsonl"
+)
 _TIMEOUT_SECONDS = 60.0
+_GRANT_LEDGER_SCHEMA_VERSION = "all-topic-limiter-grant-v1"
+_REQUEST_KEY_HEADER = "X-TREC-RAG-Request-Key"
 
 
 class Clock(Protocol):
@@ -142,6 +150,98 @@ def _require_sha(value: object, label: str) -> str:
     ):
         raise ValueError(f"{label} must be a lowercase SHA-256")
     return value
+
+
+def _limiter_config_fingerprint(config: RemotePyseriniConfig) -> str:
+    return _sha256_bytes(
+        _canonical_bytes(
+            {
+                "burst": config.burst,
+                "hits": config.hits,
+                "index_url": config.index_url,
+                "limiter_state_path": str(config.limiter_state_path.resolve()),
+                "minimum_interval_seconds": config.min_interval_seconds,
+                "session_version": "post-sqlite-grant-ledger-v1",
+            }
+        )
+    )
+
+
+def _read_limiter_grant_ledger(path: Path) -> list[dict[str, object]]:
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError("shared limiter-grant ledger is unreadable") from exc
+    events: list[dict[str, object]] = []
+    previous = "0" * 64
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError("shared limiter-grant ledger contains invalid JSON") from exc
+        if not isinstance(event, dict):
+            raise ValueError("shared limiter-grant ledger event must be an object")
+        event_hash = event.get("event_sha256")
+        body = {key: value for key, value in event.items() if key != "event_sha256"}
+        if (
+            event.get("schema_version") != _GRANT_LEDGER_SCHEMA_VERSION
+            or event.get("previous_event_sha256") != previous
+            or event_hash != _sha256_bytes(_canonical_bytes(body))
+        ):
+            raise ValueError("shared limiter-grant ledger hash chain is invalid")
+        _require_sha(event.get("event_id"), "limiter grant event ID")
+        _require_sha(event.get("request_key"), "limiter grant request key")
+        _require_sha(event.get("config_fingerprint"), "limiter config fingerprint")
+        previous = str(event_hash)
+        events.append(event)
+    return events
+
+
+def _append_limiter_grant_event(
+    path: Path,
+    *,
+    request_key: str,
+    config_fingerprint: str,
+) -> dict[str, object]:
+    _require_sha(request_key, "limiter grant request key")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            raw = handle.read()
+            previous = "0" * 64
+            if raw:
+                try:
+                    last = json.loads(raw.splitlines()[-1])
+                except json.JSONDecodeError as exc:
+                    raise ValueError("shared limiter-grant ledger tail is invalid") from exc
+                if not isinstance(last, Mapping):
+                    raise ValueError("shared limiter-grant ledger tail is invalid")
+                previous = _require_sha(
+                    last.get("event_sha256"), "previous limiter event hash"
+                )
+            epoch = time.time()
+            body: dict[str, object] = {
+                "schema_version": _GRANT_LEDGER_SCHEMA_VERSION,
+                "event_id": _sha256_bytes(secrets.token_bytes(32)),
+                "request_key": request_key,
+                "started_at_epoch": epoch,
+                "started_at_utc": datetime.fromtimestamp(
+                    epoch, timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
+                "config_fingerprint": config_fingerprint,
+                "previous_event_sha256": previous,
+                "nonce": secrets.token_hex(16),
+            }
+            event = {**body, "event_sha256": _sha256_bytes(_canonical_bytes(body))}
+            handle.seek(0, os.SEEK_END)
+            handle.write(_canonical_bytes(event) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            return event
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _validate_original_binding(row: object, topic_id: str) -> Mapping[str, object]:
@@ -350,6 +450,7 @@ class RateLimitedFacetTransport:
                 params={"query": request.query_text, "hits": str(FACET_DEPTH)},
                 headers={
                     "Accept": "application/json",
+                    _REQUEST_KEY_HEADER: request.identity.request_key,
                     **(
                         {"Authorization": f"Bearer {self.config.api_token}"}
                         if self.config.api_token is not None
@@ -379,30 +480,74 @@ class RateLimitedFacetTransport:
             elapsed_seconds=elapsed_seconds,
         )
 
+    def consume_authenticated_start_event(
+        self, request: RetrievalRequest
+    ) -> dict[str, object]:
+        if type(self.session) is not _GrantTimestampLimiterSession:
+            raise ValueError("transport session is not the post-grant ledger session")
+        event = self.session.consume_grant_event(request.identity.request_key)
+        ledger_events = _read_limiter_grant_ledger(self.session.grant_ledger_path)
+        matches = [row for row in ledger_events if row.get("event_id") == event.get("event_id")]
+        if (
+            len(matches) != 1
+            or matches[0] != event
+            or event.get("request_key") != request.identity.request_key
+            or event.get("config_fingerprint")
+            != _limiter_config_fingerprint(self.config)
+        ):
+            raise ValueError("limiter-grant event is not authenticated by the shared ledger")
+        return dict(event)
+
 
 class _GrantTimestampLimiterSession(LimiterSession):
     """LimiterSession that records wall time only after the SQLite grant."""
 
-    last_grant_event: dict[str, object] | None = None
+    def __init__(
+        self,
+        *args,
+        grant_ledger_path: Path,
+        config_fingerprint: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.grant_ledger_path = Path(grant_ledger_path)
+        self.config_fingerprint = config_fingerprint
+        self.last_grant_event: dict[str, object] | None = None
+        self._grant_events: dict[str, dict[str, object]] = {}
+        self._grant_events_lock = threading.Lock()
+
+    def consume_grant_event(self, request_key: str) -> dict[str, object]:
+        with self._grant_events_lock:
+            try:
+                return self._grant_events.pop(request_key)
+            except KeyError as exc:
+                raise ValueError("post-grant session has no event for request identity") from exc
 
     def send(self, request, **kwargs):  # type: ignore[no-untyped-def,override]
+        request_key = request.headers.pop(_REQUEST_KEY_HEADER, None)
+        _require_sha(request_key, "transport request key header")
         with self.limiter.ratelimit(
             self._bucket_name(request), delay=True, max_delay=self.max_delay
         ):
-            epoch = time.time()
-            self.last_grant_event = {
-                "started_at_epoch": epoch,
-                "started_at_utc": datetime.fromtimestamp(
-                    epoch, timezone.utc
-                ).isoformat().replace("+00:00", "Z"),
-            }
+            event = _append_limiter_grant_event(
+                self.grant_ledger_path,
+                request_key=str(request_key),
+                config_fingerprint=self.config_fingerprint,
+            )
+            self.last_grant_event = event
+            with self._grant_events_lock:
+                self._grant_events[str(request_key)] = event
             response = requests.Session.send(self, request, **kwargs)
             if response.status_code in self.limit_statuses:
                 self._fill_bucket(request)
             return response
 
 
-def _grant_timestamp_session(config: RemotePyseriniConfig) -> requests.Session:
+def _grant_timestamp_session(
+    config: RemotePyseriniConfig,
+    *,
+    grant_ledger_path: Path = LIMITER_GRANT_LEDGER_PATH,
+) -> requests.Session:
     config.limiter_state_path.parent.mkdir(parents=True, exist_ok=True)
     limiter = Limiter(
         RequestRate(1, math.ceil(config.min_interval_seconds)),
@@ -411,7 +556,11 @@ def _grant_timestamp_session(config: RemotePyseriniConfig) -> requests.Session:
         time_function=time.time,
     )
     session = _GrantTimestampLimiterSession(
-        limiter=limiter, per_host=True, max_delay=None
+        limiter=limiter,
+        per_host=True,
+        max_delay=None,
+        grant_ledger_path=grant_ledger_path,
+        config_fingerprint=_limiter_config_fingerprint(config),
     )
     adapter = requests.adapters.HTTPAdapter(max_retries=0)
     session.mount("http://", adapter)
@@ -721,7 +870,11 @@ def _replace_json(path: Path, value: Mapping[str, object]) -> None:
 def _transport_start_event(
     transport: RetrievalTransport, request: RetrievalRequest
 ) -> dict[str, object]:
-    event = getattr(transport, "last_start_event", None)
+    event = (
+        transport.consume_authenticated_start_event(request)
+        if type(transport) is RateLimitedFacetTransport
+        else getattr(transport, "last_start_event", None)
+    )
     if (
         not isinstance(event, Mapping)
         or event.get("request_key") != request.identity.request_key
@@ -798,6 +951,8 @@ def _attempt_request(
                     "raw_sha256": raw_sha,
                     "cache_hit": True,
                     "limiter_granted_request_key": event.get("request_key"),
+                    "limiter_grant_event_id": event.get("event_id"),
+                    "limiter_config_fingerprint": event.get("config_fingerprint"),
                     "limiter_granted_start_epoch": event.get("started_at_epoch"),
                     "limiter_granted_start_utc": event.get("started_at_utc"),
                 },
@@ -876,6 +1031,8 @@ def _attempt_request(
                 "raw_sha256": raw_sha,
                 "cache_hit": False,
                 "limiter_granted_request_key": event["request_key"],
+                "limiter_grant_event_id": event.get("event_id"),
+                "limiter_config_fingerprint": event.get("config_fingerprint"),
                 "limiter_granted_start_epoch": event["started_at_epoch"],
                 "limiter_granted_start_utc": event["started_at_utc"],
             },
@@ -1002,7 +1159,7 @@ def _create_seal(output: Path) -> dict[str, object]:
     return seal
 
 
-def run_retrieval(
+def _execute_retrieval(
     planning_dir: Path | Mapping[str, object],
     output_dir: Path,
     transport: RetrievalTransport,
@@ -1011,6 +1168,7 @@ def run_retrieval(
     cache_root: Path = SHARED_CACHE_DIR,
     original_cache: Mapping[str, Mapping[str, object]] | None = None,
     approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
+    execution_mode: str,
 ) -> dict[str, object]:
     """Run or resume the exact facet allowlist; original network calls are impossible."""
 
@@ -1032,6 +1190,22 @@ def run_retrieval(
         )
     )
     plan = build_retrieval_plan(raw_plan, cache_values)
+    plan["execution"] = {
+        "mode": execution_mode,
+        "transport_version": (
+            transport.transport_version
+            if type(transport) is RateLimitedFacetTransport
+            else "synthetic-injected-transport"
+        ),
+        "limiter_state_path": (
+            str(LIMITER_STATE_PATH.resolve()) if execution_mode == "production" else None
+        ),
+        "limiter_grant_ledger_path": (
+            str(LIMITER_GRANT_LEDGER_PATH.resolve())
+            if execution_mode == "production"
+            else None
+        ),
+    }
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     if (output / "RETRIEVAL_SEALED.json").exists():
@@ -1098,8 +1272,13 @@ def run_retrieval(
     _write_exclusive(output / "original_candidates.jsonl", _jsonl_bytes(original_rows))
     _write_exclusive(output / "facet_candidates.jsonl", _jsonl_bytes(facet_rows))
     _write_exclusive(output / "accepted_union.jsonl", _jsonl_bytes(union_rows))
-    start_count, minimum_start_delta, actual_start_deltas = _verify_request_start_events(
-        output, requests_to_run
+    (
+        start_count,
+        minimum_start_delta,
+        actual_start_deltas,
+        grant_event_ids,
+    ) = _verify_request_start_events(
+        output, requests_to_run, production=execution_mode == "production"
     )
     summary: dict[str, object] = {
         "schema_version": SUMMARY_SCHEMA_VERSION,
@@ -1115,6 +1294,7 @@ def run_retrieval(
         "request_start_count": start_count,
         "minimum_request_start_delta_seconds": minimum_start_delta,
         "request_start_deltas": actual_start_deltas,
+        "limiter_grant_event_ids": grant_event_ids,
         "original_candidate_rows": len(original_rows),
         "facet_candidate_rows": len(facet_rows),
         "accepted_union_rows": len(union_rows),
@@ -1123,6 +1303,63 @@ def run_retrieval(
     _write_json(output / "retrieval_summary.json", summary)
     _create_seal(output)
     return summary
+
+
+def _run_synthetic_retrieval(
+    planning: Mapping[str, object],
+    output_dir: Path,
+    transport: RetrievalTransport,
+    *,
+    clock: Clock | None = None,
+    cache_root: Path,
+    original_cache: Mapping[str, Mapping[str, object]],
+) -> dict[str, object]:
+    """Private test-only executor; its artifacts are never production-verifiable."""
+
+    return _execute_retrieval(
+        planning,
+        output_dir,
+        transport,
+        clock=clock,
+        cache_root=cache_root,
+        original_cache=original_cache,
+        execution_mode="synthetic",
+    )
+
+
+def run_retrieval(
+    planning_dir: Path,
+    output_dir: Path,
+    transport: RateLimitedFacetTransport,
+    *,
+    cache_root: Path = SHARED_CACHE_DIR,
+    approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
+) -> dict[str, object]:
+    """Production executor bound to the exact persistent-limiter transport."""
+
+    if type(transport) is not RateLimitedFacetTransport:
+        raise TypeError("production run requires the exact RateLimitedFacetTransport")
+    if type(transport.session) is not _GrantTimestampLimiterSession:
+        raise TypeError("production run requires the exact post-grant limiter session")
+    if transport.config != build_live_config(api_token=transport.config.api_token):
+        raise ValueError("production transport config differs from the fixed limiter config")
+    if transport.transport_version != "all_topic_rate_limited_requests_v1":
+        raise ValueError("production transport version mismatch")
+    if (
+        transport.session.grant_ledger_path.resolve()
+        != LIMITER_GRANT_LEDGER_PATH.resolve()
+        or transport.session.config_fingerprint
+        != _limiter_config_fingerprint(transport.config)
+    ):
+        raise ValueError("production transport is not bound to the fixed grant ledger")
+    return _execute_retrieval(
+        Path(planning_dir),
+        output_dir,
+        transport,
+        cache_root=cache_root,
+        approved_original_cache_root=approved_original_cache_root,
+        execution_mode="production",
+    )
 
 
 def _verify_stream_provenance(
@@ -1246,9 +1483,20 @@ def _verify_stream_provenance(
 
 
 def _verify_request_start_events(
-    output: Path, requests_to_run: Sequence[RetrievalRequest]
-) -> tuple[int, float | None, list[float]]:
+    output: Path,
+    requests_to_run: Sequence[RetrievalRequest],
+    *,
+    production: bool = False,
+) -> tuple[int, float | None, list[float], list[str]]:
     events: dict[str, tuple[float, str]] = {}
+    grant_event_ids: list[str] = []
+    shared_events: dict[str, Mapping[str, object]] = {}
+    if production:
+        ledger_rows = _read_limiter_grant_ledger(LIMITER_GRANT_LEDGER_PATH)
+        shared_events = {str(row["event_id"]): row for row in ledger_rows}
+        if len(shared_events) != len(ledger_rows):
+            raise ValueError("shared limiter-grant ledger has duplicate event IDs")
+    expected_fingerprint = _limiter_config_fingerprint(build_live_config(api_token=None))
     for request in requests_to_run:
         metadata = _read_json(
             _ledger_paths(output, request.identity.request_key)["metadata"],
@@ -1257,6 +1505,7 @@ def _verify_request_start_events(
         request_key = metadata.get("limiter_granted_request_key")
         epoch = metadata.get("limiter_granted_start_epoch")
         utc = metadata.get("limiter_granted_start_utc")
+        event_id = metadata.get("limiter_grant_event_id")
         if (
             request_key != request.identity.request_key
             or isinstance(epoch, bool)
@@ -1265,6 +1514,21 @@ def _verify_request_start_events(
             or not utc.endswith("Z")
         ):
             raise ValueError("limiter-granted request-start evidence is invalid")
+        if production:
+            shared = shared_events.get(str(event_id))
+            if (
+                not isinstance(event_id, str)
+                or shared is None
+                or shared.get("request_key") != request.identity.request_key
+                or shared.get("started_at_epoch") != epoch
+                or shared.get("started_at_utc") != utc
+                or shared.get("config_fingerprint") != expected_fingerprint
+                or metadata.get("limiter_config_fingerprint") != expected_fingerprint
+            ):
+                raise ValueError(
+                    "production request start is not authenticated by the shared limiter ledger"
+                )
+            grant_event_ids.append(event_id)
         try:
             parsed = datetime.fromisoformat(utc.removesuffix("Z") + "+00:00").timestamp()
         except ValueError as exc:
@@ -1282,14 +1546,15 @@ def _verify_request_start_events(
     deltas = [right - left for left, right in zip(chronological, chronological[1:])]
     if any(delta < REQUEST_INTERVAL_SECONDS for delta in deltas):
         raise ValueError("shared request starts violate the 3-second limiter interval")
-    return len(events), min(deltas) if deltas else None, deltas
+    return len(events), min(deltas) if deltas else None, deltas, grant_event_ids
 
 
-def verify_retrieval(
+def _verify_retrieval(
     output_dir: Path,
     planning_dir: Path,
     *,
     approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
+    execution_mode: str,
 ) -> dict[str, object]:
     """Authenticate every sealed byte and recompute the accepted union."""
 
@@ -1302,6 +1567,22 @@ def verify_retrieval(
         trusted_raw_plan, approved_root=approved_original_cache_root
     )
     trusted_plan = build_retrieval_plan(trusted_raw_plan, source_original_cache)
+    trusted_plan["execution"] = {
+        "mode": execution_mode,
+        "transport_version": (
+            "all_topic_rate_limited_requests_v1"
+            if execution_mode == "production"
+            else "synthetic-injected-transport"
+        ),
+        "limiter_state_path": (
+            str(LIMITER_STATE_PATH.resolve()) if execution_mode == "production" else None
+        ),
+        "limiter_grant_ledger_path": (
+            str(LIMITER_GRANT_LEDGER_PATH.resolve())
+            if execution_mode == "production"
+            else None
+        ),
+    }
     seal = _read_json(output / "RETRIEVAL_SEALED.json", "retrieval seal")
     if (
         seal.get("schema_version") != SEAL_SCHEMA_VERSION
@@ -1339,6 +1620,10 @@ def verify_retrieval(
     facet_rows = _read_jsonl(output / "facet_candidates.jsonl", "facet candidates")
     accepted = _read_jsonl(output / "accepted_union.jsonl", "accepted union")
     plan = _read_json(output / "retrieval_plan.json", "persisted retrieval plan")
+    if plan.get("execution") != trusted_plan.get("execution"):
+        raise ValueError(
+            f"retrieval lacks the authenticated {execution_mode} execution binding"
+        )
     if plan != trusted_plan:
         raise ValueError("retrieval does not match the external sealed planning binding")
     requests_to_run = _build_facet_requests(trusted_plan)
@@ -1360,13 +1645,16 @@ def verify_retrieval(
     _verify_stream_provenance(
         output, plan, original_rows, facet_rows, source_original_cache
     )
-    start_count, minimum_delta, start_deltas = _verify_request_start_events(
-        output, requests_to_run
+    start_count, minimum_delta, start_deltas, grant_event_ids = (
+        _verify_request_start_events(
+            output, requests_to_run, production=execution_mode == "production"
+        )
     )
     if (
         summary.get("request_start_count") != start_count
         or summary.get("minimum_request_start_delta_seconds") != minimum_delta
         or summary.get("request_start_deltas") != start_deltas
+        or summary.get("limiter_grant_event_ids") != grant_event_ids
     ):
         raise ValueError("retrieval summary request-start evidence is invalid")
     if accepted != build_union(original_rows, facet_rows):
@@ -1384,6 +1672,38 @@ def verify_retrieval(
         "request_start_count": start_count,
         "minimum_request_start_delta_seconds": minimum_delta,
     }
+
+
+def _verify_synthetic_retrieval(
+    output_dir: Path,
+    planning_dir: Path,
+    *,
+    approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
+) -> dict[str, object]:
+    """Private verifier for explicitly synthetic test artifacts."""
+
+    return _verify_retrieval(
+        output_dir,
+        planning_dir,
+        approved_original_cache_root=approved_original_cache_root,
+        execution_mode="synthetic",
+    )
+
+
+def verify_retrieval(
+    output_dir: Path,
+    planning_dir: Path,
+    *,
+    approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
+) -> dict[str, object]:
+    """Verify only production artifacts bound to the fixed limiter infrastructure."""
+
+    return _verify_retrieval(
+        output_dir,
+        planning_dir,
+        approved_original_cache_root=approved_original_cache_root,
+        execution_mode="production",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1430,11 +1750,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             requests_to_run,
         )
         payload = run_retrieval(
-            raw_plan,
+            args.planning,
             args.output,
             transport,
             cache_root=args.cache_root,
-            original_cache=original_cache,
             approved_original_cache_root=args.original_cache_root,
         )
     print(json.dumps(payload, indent=2, sort_keys=True))

@@ -3,15 +3,20 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import multiprocessing
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import requests
 
 import trec_rag.all_topic_facet_retrieve as module
 from trec_rag.all_topic_facet_retrieve import (
+    _run_synthetic_retrieval,
+    _verify_synthetic_retrieval,
     build_retrieval_plan,
     build_union,
     run_retrieval,
@@ -176,6 +181,94 @@ class _Clock:
         self.value += seconds
 
 
+class _ProcessTransport:
+    one_shot_no_retry = True
+
+    def __init__(self, calls, event_counter, *, die: bool = False) -> None:
+        self.calls = calls
+        self.event_counter = event_counter
+        self.die = die
+        self.last_start_event = None
+
+    def __call__(self, request):
+        with self.calls.get_lock():
+            self.calls.value += 1
+        if self.die:
+            os._exit(17)
+        with self.event_counter.get_lock():
+            index = self.event_counter.value
+            self.event_counter.value += 1
+        epoch = 1_700_000_000.0 + index * 3.0
+        self.last_start_event = {
+            "request_key": request.identity.request_key,
+            "started_at_epoch": epoch,
+            "started_at_utc": f"2023-11-14T22:13:{20 + index * 3:02d}Z",
+        }
+        variant = request.identity.variant_name.rsplit(":", 1)[-1]
+        return RawTransportResponse(
+            status=200,
+            headers={"Content-Type": "application/json"},
+            body=_body(variant),
+            elapsed_seconds=0.01,
+        )
+
+
+def _process_synthetic_run(
+    planning, original, cache_root, output, calls, events, start, queue, die=False
+):
+    start.wait()
+    try:
+        result = module._run_synthetic_retrieval(
+            planning,
+            Path(output),
+            _ProcessTransport(calls, events, die=die),
+            clock=_Clock(),
+            cache_root=Path(cache_root),
+            original_cache=original,
+        )
+        queue.put(("ok", result["complete"]))
+    except BaseException as exc:
+        queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
+class _NoNetworkAdapter(requests.adapters.BaseAdapter):
+    def send(self, request, **kwargs):
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b"{}"
+        response.headers = {"Content-Type": "application/json"}
+        response.request = request
+        return response
+
+    def close(self) -> None:
+        return None
+
+
+def _process_limiter_grant(state_path, ledger_path, request_key, start, queue):
+    config = module.RemotePyseriniConfig(
+        index_url=module.ENDPOINT,
+        api_token=None,
+        hits=200,
+        queries=(),
+        min_interval_seconds=3.0,
+        burst=1,
+        limiter_state_path=Path(state_path),
+    )
+    session = module._grant_timestamp_session(
+        config, grant_ledger_path=Path(ledger_path)
+    )
+    session.mount("http://", _NoNetworkAdapter())
+    prepared = requests.Request(
+        "GET",
+        module.ENDPOINT,
+        headers={module._REQUEST_KEY_HEADER: request_key},
+    ).prepare()
+    start.wait()
+    session.send(prepared)
+    event = session.consume_grant_event(request_key)
+    queue.put(event)
+
+
 @pytest.fixture(autouse=True)
 def _authorized_synthetic_topics(monkeypatch):
     monkeypatch.setattr(module, "ALL_TOPIC_IDS", TOPICS)
@@ -241,7 +334,7 @@ def test_union_deduplicates_by_topic_and_document_with_provenance() -> None:
 
 def test_limiter_spaces_attempts_and_failed_identity_is_never_retried(tmp_path: Path) -> None:
     transport = _Transport(fail_variant="facet-b")
-    result = run_retrieval(
+    result = _run_synthetic_retrieval(
         _planning(),
         tmp_path / "retrieval",
         transport,
@@ -258,7 +351,7 @@ def test_limiter_spaces_attempts_and_failed_identity_is_never_retried(tmp_path: 
 
     resumed = _Transport()
     with pytest.raises(ValueError, match="immutable shared failure attempt"):
-        run_retrieval(
+        _run_synthetic_retrieval(
             _planning(),
             tmp_path / "different-output-after-failure",
             resumed,
@@ -273,7 +366,7 @@ def test_crash_resume_reuses_successes_and_refuses_pending_attempt(tmp_path: Pat
     output = tmp_path / "retrieval"
     crashing = _Transport(crash_variant="facet-b")
     with pytest.raises(KeyboardInterrupt, match="synthetic crash"):
-        run_retrieval(
+        _run_synthetic_retrieval(
             _planning(),
             output,
             crashing,
@@ -285,7 +378,7 @@ def test_crash_resume_reuses_successes_and_refuses_pending_attempt(tmp_path: Pat
 
     resumed = _Transport()
     with pytest.raises(ValueError, match="pending attempt"):
-        run_retrieval(
+        _run_synthetic_retrieval(
             _planning(),
             tmp_path / "different-output-after-crash",
             resumed,
@@ -299,7 +392,7 @@ def test_crash_resume_reuses_successes_and_refuses_pending_attempt(tmp_path: Pat
 def test_successful_cache_only_resume_seals_and_verifies_union(monkeypatch, tmp_path: Path) -> None:
     output = tmp_path / "retrieval"
     cache_root = tmp_path / "cache"
-    first = run_retrieval(
+    first = _run_synthetic_retrieval(
         _planning(),
         output,
         _Transport(),
@@ -314,7 +407,7 @@ def test_successful_cache_only_resume_seals_and_verifies_union(monkeypatch, tmp_
     # A fresh output consumes only authenticated exact cache entries.
     cache_transport = _Transport()
     second_output = tmp_path / "cache-only"
-    second = run_retrieval(
+    second = _run_synthetic_retrieval(
         _planning(),
         second_output,
         cache_transport,
@@ -382,7 +475,7 @@ def test_verify_rejects_semantic_provenance_drift_even_with_fresh_self_seal(
     monkeypatch, tmp_path: Path,
 ) -> None:
     output = tmp_path / "retrieval"
-    run_retrieval(
+    _run_synthetic_retrieval(
         _planning(),
         output,
         _Transport(),
@@ -417,7 +510,7 @@ def _verify_against_synthetic_planning(
         lambda planning_dir, *, approved_original_cache_root: expected,
     )
     monkeypatch.setattr(module, "_load_original_caches", lambda plan, *, approved_root: _original_cache())
-    return verify_retrieval(
+    return _verify_synthetic_retrieval(
         output,
         Path("/synthetic/planning"),
         approved_original_cache_root=Path(
@@ -428,7 +521,7 @@ def _verify_against_synthetic_planning(
 
 def test_verify_authenticates_external_planning_root(monkeypatch, tmp_path: Path) -> None:
     output = tmp_path / "retrieval"
-    run_retrieval(
+    _run_synthetic_retrieval(
         _planning(),
         output,
         _Transport(),
@@ -445,7 +538,7 @@ def test_verify_authenticates_external_planning_root(monkeypatch, tmp_path: Path
 
 def test_verify_rejects_resealed_zero_facet_artifact(monkeypatch, tmp_path: Path) -> None:
     output = tmp_path / "retrieval"
-    run_retrieval(
+    _run_synthetic_retrieval(
         _planning(),
         output,
         _Transport(),
@@ -504,7 +597,7 @@ def test_verify_reopens_original_cache_and_rejects_forged_rows(
     monkeypatch.setattr(module, "APPROVED_ORIGINAL_CACHE_ROOT", root)
     source_cache = module._load_original_caches(planning, approved_root=root)
     output = tmp_path / "retrieval"
-    run_retrieval(
+    _run_synthetic_retrieval(
         planning,
         output,
         _Transport(),
@@ -529,7 +622,7 @@ def test_verify_reopens_original_cache_and_rejects_forged_rows(
         lambda planning_dir, *, approved_original_cache_root: planning,
     )
     with pytest.raises(ValueError, match="original cache candidate"):
-        verify_retrieval(
+        _verify_synthetic_retrieval(
             output,
             Path("/synthetic/planning"),
             approved_original_cache_root=root,
@@ -539,12 +632,12 @@ def test_verify_reopens_original_cache_and_rejects_forged_rows(
 def test_request_start_events_survive_cache_only_restart(monkeypatch, tmp_path: Path) -> None:
     cache_root = tmp_path / "cache"
     first = tmp_path / "first"
-    run_retrieval(
+    _run_synthetic_retrieval(
         _planning(), first, _Transport(), clock=_Clock(), cache_root=cache_root,
         original_cache=_original_cache(),
     )
     second = tmp_path / "second"
-    run_retrieval(
+    _run_synthetic_retrieval(
         _planning(), second, _Transport(), clock=_Clock(), cache_root=cache_root,
         original_cache=_original_cache(),
     )
@@ -564,7 +657,7 @@ def test_shared_cache_claim_allows_only_one_call_per_identity(tmp_path: Path) ->
 
     def execute(name: str):
         barrier.wait()
-        return run_retrieval(
+        return _run_synthetic_retrieval(
             _planning(),
             tmp_path / name,
             transport,
@@ -578,3 +671,138 @@ def test_shared_cache_claim_allows_only_one_call_per_identity(tmp_path: Path) ->
 
     assert all(result["complete"] is True for result in results)
     assert sorted(transport.identities) == ["facet-a", "facet-b", "facet-c"]
+
+
+def test_public_run_rejects_injected_nonproduction_transport(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="exact RateLimitedFacetTransport"):
+        run_retrieval(tmp_path / "planning", tmp_path / "output", _Transport())
+
+
+def test_production_verify_rejects_synthetic_fake_timestamp_artifact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "synthetic"
+    _run_synthetic_retrieval(
+        _planning(), output, _Transport(), clock=_Clock(),
+        cache_root=tmp_path / "cache", original_cache=_original_cache(),
+    )
+    monkeypatch.setattr(
+        module,
+        "_load_sealed_planning",
+        lambda planning_dir, *, approved_original_cache_root: _planning(),
+    )
+    monkeypatch.setattr(
+        module,
+        "_load_original_caches",
+        lambda plan, *, approved_root: _original_cache(),
+    )
+
+    with pytest.raises(ValueError, match="production execution binding"):
+        verify_retrieval(
+            output,
+            tmp_path / "planning",
+            approved_original_cache_root=module.APPROVED_ORIGINAL_CACHE_ROOT,
+        )
+
+
+def test_separate_processes_deduplicate_each_request_identity(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("fork")
+    calls = context.Value("i", 0)
+    events = context.Value("i", 0)
+    start = context.Event()
+    queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_process_synthetic_run,
+            args=(
+                _planning(),
+                _original_cache(),
+                str(tmp_path / "cache"),
+                str(tmp_path / f"process-{index}"),
+                calls,
+                events,
+                start,
+                queue,
+            ),
+        )
+        for index in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(15)
+        assert process.exitcode == 0
+
+    assert [queue.get(timeout=1) for _ in processes] == [("ok", True), ("ok", True)]
+    assert calls.value == 3
+
+
+def test_process_death_leaves_shared_pending_claim_nonretryable(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("fork")
+    calls = context.Value("i", 0)
+    events = context.Value("i", 0)
+    start = context.Event()
+    queue = context.Queue()
+    process = context.Process(
+        target=_process_synthetic_run,
+        args=(
+            _planning(),
+            _original_cache(),
+            str(tmp_path / "cache"),
+            str(tmp_path / "dead-process"),
+            calls,
+            events,
+            start,
+            queue,
+            True,
+        ),
+    )
+    process.start()
+    start.set()
+    process.join(10)
+    assert process.exitcode == 17
+    assert calls.value == 1
+
+    replacement = _Transport()
+    with pytest.raises(ValueError, match="immutable shared pending attempt"):
+        _run_synthetic_retrieval(
+            _planning(),
+            tmp_path / "replacement",
+            replacement,
+            clock=_Clock(),
+            cache_root=tmp_path / "cache",
+            original_cache=_original_cache(),
+        )
+    assert replacement.identities == []
+
+
+def test_fresh_process_limiter_sessions_share_sqlite_and_grant_ledger(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("fork")
+    start = context.Event()
+    queue = context.Queue()
+    state = tmp_path / "rate-limit.sqlite"
+    ledger = tmp_path / "grants.jsonl"
+    request_keys = ("a" * 64, "b" * 64)
+    processes = [
+        context.Process(
+            target=_process_limiter_grant,
+            args=(str(state), str(ledger), request_key, start, queue),
+        )
+        for request_key in request_keys
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(15)
+        assert process.exitcode == 0
+    events = [queue.get(timeout=1) for _ in processes]
+    assert {event["request_key"] for event in events} == set(request_keys)
+    chronological = sorted(float(event["started_at_epoch"]) for event in events)
+    assert chronological[1] - chronological[0] >= 3.0
+    assert module._read_limiter_grant_ledger(ledger) == sorted(
+        events, key=lambda event: int(event["previous_event_sha256"] != "0" * 64)
+    )
