@@ -1432,6 +1432,88 @@ def _validate_runtime_evidence(
     )
 
 
+def _expected_topic_pairs_from_lineage(
+    preflight: Mapping[str, object], facet_counts: Mapping[object, object]
+) -> dict[str, int]:
+    """Recompute frozen topic counts from hash-bound manifest and gate sources."""
+
+    sources = preflight.get("sources")
+    if not isinstance(sources, Mapping):
+        raise ValueError("tethered preflight source evidence is invalid")
+
+    loaded: dict[str, Mapping[str, object]] = {}
+    for name, description in (("manifest", "deep-facet manifest"), ("gates", "gates")):
+        binding = sources.get(name)
+        if not isinstance(binding, Mapping):
+            raise ValueError(f"tethered preflight source {name} is invalid")
+        path = binding.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"tethered preflight source {name} is invalid")
+        payload, source = _read_object(Path(path), description)
+        if _sha256_bytes(source) != _required_sha256(
+            binding.get("sha256"), f"tethered source {name}"
+        ):
+            raise ValueError(f"tethered preflight source {name} hash differs")
+        loaded[name] = payload
+
+    manifest = loaded["manifest"]
+    _validate_manifest_hashes(manifest)
+    if manifest.get("topic_ids") != list(TOPIC_IDS):
+        raise ValueError("deep-facet manifest topic order differs")
+    manifest_facets: dict[str, tuple[str, int]] = {}
+    for row in _rows(manifest.get("facets"), "manifest facets"):
+        topic_id = reject_topic(row.get("topic_id"))
+        facet_id = _required_text(row, "facet_id", "manifest facet")
+        order = row.get("manifest_order")
+        if type(order) is not int or order < 0:
+            raise ValueError("manifest facet order must be a nonnegative integer")
+        if facet_id in manifest_facets:
+            raise ValueError("duplicate manifest facet")
+        manifest_facets[facet_id] = (topic_id, order)
+
+    gates = loaded["gates"]
+    _require_fields(gates, frozenset({"schema_version", "gates"}), "gates receipt")
+    if gates.get("schema_version") != "deep-facet-candidate-gate-v1":
+        raise ValueError("gates receipt identity differs")
+    gate_rows = _rows(gates.get("gates"), "gates")
+    accepted: dict[str, str] = {}
+    seen: set[str] = set()
+    for row in gate_rows:
+        topic_id = reject_topic(row.get("topic_id"))
+        facet_id = _required_text(row, "facet_id", "gate")
+        status = row.get("status")
+        if status not in {"accepted", "rejected"}:
+            raise ValueError("gate status differs from frozen values")
+        manifest_identity = manifest_facets.get(facet_id)
+        if (
+            manifest_identity is None
+            or manifest_identity != (topic_id, row.get("manifest_order"))
+        ):
+            raise ValueError("gate facet lineage differs from manifest")
+        if facet_id in seen:
+            raise ValueError("duplicate gate facet")
+        seen.add(facet_id)
+        if status == "accepted":
+            accepted[facet_id] = topic_id
+    if (
+        len(gate_rows) != 25
+        or seen != set(manifest_facets)
+        or len(accepted) != ACCEPTED_FACET_COUNT
+        or len(gate_rows) - len(accepted) != 1
+    ):
+        raise ValueError("gate required exact facet counts differ")
+    if set(map(str, facet_counts)) != set(accepted):
+        raise ValueError("preflight facet counts differ from accepted gate lineage")
+
+    expected: Counter[str] = Counter()
+    for facet_id, topic_id in accepted.items():
+        pair_count = facet_counts.get(facet_id)
+        if type(pair_count) is not int or pair_count != 200:
+            raise ValueError("accepted facets require exactly 200 candidate pairs")
+        expected[topic_id] += pair_count
+    return {topic_id: expected[topic_id] for topic_id in TOPIC_IDS}
+
+
 def verify_preflight(
     preflight_source: Path | Mapping[str, object],
 ) -> dict[str, object]:
@@ -1519,10 +1601,15 @@ def verify_preflight(
     window_count = int(summary["window_count"])
     hit_windows = summary.get("cache_hit_window_count")
     miss_windows = summary.get("cache_miss_window_count")
+    expected_topic_counts = (
+        _expected_topic_pairs_from_lineage(preflight, facet_counts)
+        if isinstance(facet_counts, Mapping)
+        else None
+    )
     if (
         not isinstance(topic_counts, Mapping)
         or set(topic_counts) != set(TOPIC_IDS)
-        or any(topic_counts.get(topic) != 1200 for topic in TOPIC_IDS)
+        or dict(topic_counts) != expected_topic_counts
         or not isinstance(facet_counts, Mapping)
         or len(facet_counts) != ACCEPTED_FACET_COUNT
         or set(facet_counts.values()) != {200}

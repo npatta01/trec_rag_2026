@@ -275,48 +275,53 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
     rows = []
     candidates = []
     coverage = {}
-    for number in range(1, module.PAIR_COUNT + 1):
-        topic_index, topic_offset = divmod(number - 1, 1200)
-        topic_id = module.TOPIC_IDS[topic_index]
-        facet_number = topic_offset // 200
+    accepted_facets_by_topic = {"219": 7, "72": 7, "300": 4, "84": 6}
+    accepted_facets = [
+        (topic_id, facet_number)
+        for topic_id in module.TOPIC_IDS
+        for facet_number in range(accepted_facets_by_topic[topic_id])
+    ]
+    number = 0
+    for topic_id, facet_number in accepted_facets:
         facet_id = f"{topic_id}-facet-{facet_number}"
-        rank = topic_offset % 200 + 1
-        key_number = 1 if number % 2 else 2
-        query, text = f"q{key_number}", f"t{key_number}"
-        cache_key = f"k{key_number}"
-        cache.aliases[(query, text)] = cache_key
-        rows.append(
-            {
-                "topic_id": topic_id,
-                "facet_id": facet_id,
-                "document_id": f"d{number}",
-                "rank": rank,
-                "query": query,
-                "query_sha256": _sha256(query.encode()),
-                "document_sha256": _sha256(text.encode()),
-                "window_id": f"w{number}",
-                "window_text": text,
-                "window_sha256": _sha256(text.encode()),
-                "cache_key": cache_key,
-                "document_start_token": 0,
-                "document_end_token": 256,
-                "cache_hit": key_number == 1,
-            }
-        )
-        coverage[f"{facet_id}:d{number}"] = [1.0]
-        candidates.append(
-            {
-                "schema_version": module.CANDIDATE_SCHEMA_VERSION,
-                "topic_id": topic_id,
-                "facet_id": facet_id,
-                "document_id": f"d{number}",
-                "rank": rank,
-                "query": query,
-                "query_sha256": _sha256(query.encode()),
-                "text": text,
-                "text_sha256": _sha256(text.encode()),
-            }
-        )
+        for rank in range(1, 201):
+            number += 1
+            key_number = 1 if number % 2 else 2
+            query, text = f"q{key_number}", f"t{key_number}"
+            cache_key = f"k{key_number}"
+            cache.aliases[(query, text)] = cache_key
+            rows.append(
+                {
+                    "topic_id": topic_id,
+                    "facet_id": facet_id,
+                    "document_id": f"d{number}",
+                    "rank": rank,
+                    "query": query,
+                    "query_sha256": _sha256(query.encode()),
+                    "document_sha256": _sha256(text.encode()),
+                    "window_id": f"w{number}",
+                    "window_text": text,
+                    "window_sha256": _sha256(text.encode()),
+                    "cache_key": cache_key,
+                    "document_start_token": 0,
+                    "document_end_token": 256,
+                    "cache_hit": key_number == 1,
+                }
+            )
+            coverage[f"{facet_id}:d{number}"] = [1.0]
+            candidates.append(
+                {
+                    "schema_version": module.CANDIDATE_SCHEMA_VERSION,
+                    "topic_id": topic_id,
+                    "facet_id": facet_id,
+                    "document_id": f"d{number}",
+                    "rank": rank,
+                    "query": query,
+                    "query_sha256": _sha256(query.encode()),
+                    "text": text,
+                    "text_sha256": _sha256(text.encode()),
+                }
+            )
     window_bytes = b"".join(_compact(row) + b"\n" for row in rows)
     candidate_bytes = b"".join(_compact(row) + b"\n" for row in candidates)
     (output / "windows.jsonl").write_bytes(window_bytes)
@@ -386,17 +391,23 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
             "accepted_facet_count": module.ACCEPTED_FACET_COUNT,
             "cache_hit_window_count": module.PAIR_COUNT // 2,
             "cache_miss_window_count": module.PAIR_COUNT // 2,
-            "topic_pair_counts": {topic: 1200 for topic in module.TOPIC_IDS},
+            "topic_pair_counts": {
+                topic: accepted_facets_by_topic[topic] * 200
+                for topic in module.TOPIC_IDS
+            },
             "facet_pair_counts": {
                 f"{topic}-facet-{number}": 200
                 for topic in module.TOPIC_IDS
-                for number in range(6)
+                for number in range(accepted_facets_by_topic[topic])
             },
-            "topic_window_counts": {topic: 1200 for topic in module.TOPIC_IDS},
+            "topic_window_counts": {
+                topic: accepted_facets_by_topic[topic] * 200
+                for topic in module.TOPIC_IDS
+            },
             "facet_window_counts": {
                 f"{topic}-facet-{number}": 200
                 for topic in module.TOPIC_IDS
-                for number in range(6)
+                for number in range(accepted_facets_by_topic[topic])
             },
             "document_window_coverage": coverage,
         },
@@ -420,9 +431,87 @@ def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
     preflight["sources"]["phase1_scoring_receipt"]["sha256"] = (
         preflight["runtime_evidence"]["prior_scoring_receipt_sha256"]
     )
+    manifest_facets = [
+        {
+            "topic_id": topic_id,
+            "facet_id": f"{topic_id}-facet-{facet_number}",
+            "manifest_order": order,
+            "query": f"facet query {topic_id} {facet_number}",
+        }
+        for order, (topic_id, facet_number) in enumerate(accepted_facets)
+    ]
+    manifest_facets.append(
+        {
+            "topic_id": "84",
+            "facet_id": "84-rejected",
+            "manifest_order": len(manifest_facets),
+            "query": "rejected facet query",
+        }
+    )
+    manifest_payload = {
+        "schema_version": "rag25_deep_facet_candidate_manifest_v1",
+        "experiment_id": "rag25_deep_facet_candidates_v1",
+        "topic_ids": list(module.TOPIC_IDS),
+        "topics": [
+            {"topic_id": topic_id, "query": f"Full narrative {topic_id}"}
+            for topic_id in module.TOPIC_IDS
+        ],
+        "facets": manifest_facets,
+        "qrels_opened": False,
+    }
+    unhashed_manifest = dict(manifest_payload)
+    manifest_payload["hashes"] = {
+        "topics_sha256": _sha256(_compact(manifest_payload["topics"]) + b"\n"),
+        "facets_sha256": _sha256(_compact(manifest_facets) + b"\n"),
+        "freeze_sha256": _sha256(_compact(unhashed_manifest) + b"\n"),
+    }
+    manifest_source = _pretty(manifest_payload)
+    manifest_path = tmp_path / "manifest"
+    manifest_path.write_bytes(manifest_source)
+    gates_source = _pretty(
+        {
+            "schema_version": "deep-facet-candidate-gate-v1",
+            "gates": [
+                {
+                    "topic_id": facet["topic_id"],
+                    "facet_id": facet["facet_id"],
+                    "manifest_order": facet["manifest_order"],
+                    "status": (
+                        "rejected"
+                        if facet["facet_id"] == "84-rejected"
+                        else "accepted"
+                    ),
+                }
+                for facet in manifest_facets
+            ],
+        }
+    )
+    gates_path = tmp_path / "gates"
+    gates_path.write_bytes(gates_source)
+    preflight["sources"]["manifest"] = {
+        "path": str(manifest_path),
+        "sha256": _sha256(manifest_source),
+    }
+    preflight["sources"]["gates"] = {
+        "path": str(gates_path),
+        "sha256": _sha256(gates_source),
+    }
     (output / "preflight.json").write_bytes(_pretty(preflight))
     cache.scores["k1"] = 1.0
     return output / "preflight.json", cache
+
+
+def test_verify_derives_uneven_topic_pairs_from_authenticated_facets(tmp_path):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+
+    verified = module.verify_preflight(preflight_path)
+
+    assert verified["summary"]["topic_pair_counts"] == {
+        "219": 1400,
+        "72": 1400,
+        "300": 800,
+        "84": 1200,
+    }
 
 
 def working_rocm_probe() -> dict[str, object]:
