@@ -92,7 +92,9 @@ def test_report_exposes_binary_relevance_threshold_and_excludes_grade_one() -> N
     }
     html = render_report(payload)
     assert "binary-relevant (qrels grade &gt;= 2)" in html
+    assert "360 grade-0" in html
     assert "1,456 grade-1" in html
+    assert "2,817 grade &gt;= 2 binary-relevant" in html
     assert "qrels-positive" not in html
 
 
