@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .deep_facet_candidate_evaluate import evaluate_ranking
+from .deep_facet_candidate_rank import verify_seal as verify_prior_seal
 from .tethered_facet_two_basket import PILOT_TOPIC_IDS, verify_freeze
 
 
@@ -19,6 +20,31 @@ TOPIC_IDS = PILOT_TOPIC_IDS
 PROTECTED_TOPIC_IDS = frozenset({"144", "213", "224", "407", "515"})
 NOVEL_RELEVANT_TOTAL = 177
 SCHEMA_VERSION = "tethered-facet-evaluation-v1"
+PRIOR_SCHEMA_VERSION = "deep-facet-candidate-evaluation-v1"
+PRIOR_EVALUATION_FILES = frozenset(
+    {
+        "qrels_projection.jsonl",
+        "qrels_access_receipt.json",
+        "metrics.json",
+        "decision.json",
+        "summary.json",
+    }
+)
+PRIOR_RECEIPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "qrels_opened",
+        "seal_sha256",
+        "topic_ids",
+        "upstream_mutation_forbidden",
+        "seal_root_sha256",
+        "qrels_source_name",
+        "qrels_projection_rows",
+        "qrels_projection_sha256",
+        "evaluator_code_sha256",
+    }
+)
 
 
 def _sha256(content: bytes) -> str:
@@ -350,12 +376,10 @@ def _load_frozen_rankings(
     facet_inputs = raw_topic_inputs["FACET-2B"]
     if not isinstance(facet_inputs, Mapping) or set(facet_inputs) != set(TOPIC_IDS):
         raise ValueError("freeze semantic inputs lack exact topics in order")
-    rrf: dict[str, list[str]] = {}
     for topic in TOPIC_IDS:
         raw = facet_inputs[topic]
         if not isinstance(raw, Mapping) or not isinstance(raw.get("rrf"), list):
             raise ValueError("freeze semantic topic input is invalid")
-        rrf[topic] = list(map(str, raw["rrf"]))
 
     try:
         ranking_bytes = (freeze_dir / "rankings.jsonl").read_bytes()
@@ -393,36 +417,6 @@ def _load_frozen_rankings(
     return rankings, collected, bindings, binding_bytes
 
 
-def _novel_inputs(
-    bindings: Mapping[str, object], qrels: Mapping[str, Mapping[str, int]]
-) -> tuple[dict[str, set[str]], dict[str, list[str]]]:
-    raw_arms = bindings["topic_inputs"]
-    if not isinstance(raw_arms, Mapping):
-        raise ValueError("freeze semantic arm inputs are invalid")
-    raw_topics = raw_arms["FACET-2B"]
-    if not isinstance(raw_topics, Mapping):
-        raise ValueError("freeze semantic topic inputs are invalid")
-    facets: dict[str, set[str]] = {}
-    original: dict[str, list[str]] = {}
-    for topic in TOPIC_IDS:
-        raw = raw_topics[topic]
-        if not isinstance(raw, Mapping) or not isinstance(raw.get("facets"), list):
-            raise ValueError("freeze semantic facets are invalid")
-        candidates: set[str] = set()
-        for facet in raw["facets"]:
-            if not isinstance(facet, Mapping) or not isinstance(facet.get("scores"), Mapping):
-                raise ValueError("freeze semantic facet scores are invalid")
-            candidates.update(map(str, facet["scores"]))
-        facets[topic] = candidates
-        rrf = raw.get("rrf")
-        if not isinstance(rrf, list):
-            raise ValueError("freeze semantic RRF ranking is invalid")
-        original[topic] = list(map(str, rrf[:1000]))
-    return derive_novel_set(
-        qrels, facets, original, expected_total=NOVEL_RELEVANT_TOTAL
-    ), original
-
-
 def _validate_prior_novel_set(
     metrics: Mapping[str, object], novel: Mapping[str, set[str]]
 ) -> None:
@@ -437,6 +431,122 @@ def _validate_prior_novel_set(
             raise ValueError("prior metrics lack frozen novel-set evidence")
         if set(map(str, row["novel_relevant_ids"])) != novel[topic]:
             raise ValueError("derived novel set differs from prior frozen metrics")
+
+
+def _load_prior_rrf(
+    prior_freeze: Path,
+) -> tuple[dict[str, list[str]], dict[str, set[str]], dict[str, list[str]], bytes]:
+    """Load RRF and novel-set evidence only after its containing seal verifies."""
+
+    rankings_path = prior_freeze / "rankings.jsonl"
+    try:
+        content = rankings_path.read_bytes()
+    except OSError as exc:
+        raise ValueError("verified prior rankings are unreadable") from exc
+    rows: dict[str, list[dict[str, object]]] = {topic: [] for topic in TOPIC_IDS}
+    for line_number, line in enumerate(content.splitlines(), 1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"verified prior rankings line {line_number} is invalid") from exc
+        if not isinstance(row, dict):
+            raise ValueError("verified prior ranking rows must be objects")
+        topic, arm = str(row.get("topic_id")), str(row.get("arm"))
+        if topic in PROTECTED_TOPIC_IDS:
+            raise ValueError("verified prior rankings contain a protected topic")
+        if topic not in rows:
+            raise ValueError("verified prior rankings contain an unexpected topic")
+        if arm == "RRF":
+            rows[topic].append(row)
+    rankings: dict[str, list[str]] = {}
+    accepted_facets: dict[str, set[str]] = {}
+    original_at_1000: dict[str, list[str]] = {}
+    for topic in TOPIC_IDS:
+        ordered = sorted(rows[topic], key=lambda row: int(row["rank"]))
+        if [int(row["rank"]) for row in ordered] != list(range(1, len(ordered) + 1)):
+            raise ValueError("verified prior RRF ranking is not contiguous")
+        document_ids = [str(row["document_id"]) for row in ordered]
+        if not document_ids or len(document_ids) != len(set(document_ids)):
+            raise ValueError("verified prior RRF ranking is empty or contains duplicates")
+        rankings[topic] = document_ids
+        accepted_facets[topic] = set()
+        original_rows: list[tuple[int, str]] = []
+        for row in ordered:
+            document_id = str(row["document_id"])
+            original_rank = row.get("original_rank")
+            if original_rank is not None:
+                rank = int(original_rank)
+                if rank <= 0:
+                    raise ValueError("verified prior original rank is invalid")
+                if rank <= 1000:
+                    original_rows.append((rank, document_id))
+            best_facet_rank = row.get("best_facet_rank")
+            percentiles = row.get("facet_percentiles")
+            has_facet_percentile = isinstance(percentiles, Mapping) and any(
+                float(value) > 0.0 for value in percentiles.values()
+            )
+            if (
+                original_rank is None
+                and isinstance(best_facet_rank, int)
+                and not isinstance(best_facet_rank, bool)
+                and 0 < best_facet_rank < 10**9
+                and has_facet_percentile
+            ):
+                accepted_facets[topic].add(document_id)
+        original_at_1000[topic] = [document_id for _rank, document_id in sorted(original_rows)]
+    return rankings, accepted_facets, original_at_1000, content
+
+
+def _require_prior_metrics_equal_recomputation(
+    metrics: Mapping[str, object],
+    recomputed: Mapping[str, object],
+    novel: Mapping[str, set[str]],
+) -> None:
+    """Reject even self-consistently restamped prior metric claims."""
+
+    _validate_prior_novel_set(metrics, novel)
+    if (
+        metrics.get("schema_version") != PRIOR_SCHEMA_VERSION
+        or metrics.get("novel_relevant_count") != sum(map(len, novel.values()))
+    ):
+        raise ValueError("prior metrics differ from recomputed RRF evidence")
+    prior_aggregate = metrics.get("aggregate")
+    prior_per_topic = metrics.get("per_topic")
+    aggregate = recomputed.get("aggregate")
+    per_topic = recomputed.get("per_topic")
+    if not (
+        isinstance(prior_aggregate, Mapping)
+        and isinstance(prior_per_topic, Mapping)
+        and isinstance(aggregate, Mapping)
+        and isinstance(per_topic, Mapping)
+    ):
+        raise ValueError("prior metrics lack recomputable RRF evidence")
+    claimed_aggregate = prior_aggregate.get("RRF")
+    if not isinstance(claimed_aggregate, Mapping):
+        raise ValueError("prior metrics lack recomputable RRF aggregate")
+    fields = ("ndcg@10", "ndcg@100") + tuple(
+        f"{field}@{depth}"
+        for depth in (100, 500, 1000)
+        for field in (
+            "recall",
+            "graded_recall",
+            "judged_rate",
+            "novel_retained",
+            "novel_retention",
+        )
+    )
+    if any(claimed_aggregate.get(field) != aggregate.get(field) for field in fields):
+        raise ValueError("prior metrics differ from recomputed RRF aggregate")
+    for topic in TOPIC_IDS:
+        claimed_topic = prior_per_topic.get(topic)
+        recomputed_topic = per_topic.get(topic)
+        if not isinstance(claimed_topic, Mapping) or not isinstance(recomputed_topic, Mapping):
+            raise ValueError("prior metrics lack recomputable RRF per-topic evidence")
+        claimed_rrf = claimed_topic.get("RRF")
+        if not isinstance(claimed_rrf, Mapping) or any(
+            claimed_rrf.get(field) != recomputed_topic.get(field) for field in fields
+        ):
+            raise ValueError("prior metrics differ from recomputed RRF per-topic evidence")
 
 
 def _per_topic_deltas(
@@ -473,26 +583,95 @@ def _per_topic_deltas(
     return result
 
 
-def evaluate(freeze_dir: Path, projection: Path, output: Path) -> dict[str, object]:
-    """Evaluate only the authenticated prior projection after Task 3 verification."""
+def evaluate(
+    freeze_dir: Path, prior_evaluation: Path, output: Path
+) -> dict[str, object]:
+    """Evaluate from the exact authenticated prior evaluation directory."""
 
-    freeze_dir, projection, output = map(Path, (freeze_dir, projection, output))
+    freeze_dir, prior_evaluation, output = map(
+        Path, (freeze_dir, prior_evaluation, output)
+    )
     verify_freeze(freeze_dir)
     if output.exists():
         raise FileExistsError(f"create-only evaluation output already exists: {output}")
-    if projection.name != "qrels_projection.jsonl" or projection.is_symlink():
-        raise ValueError("only the sealed prior qrels projection is accepted")
+    if (
+        prior_evaluation.name != "evaluation_v1"
+        or prior_evaluation.is_symlink()
+        or not prior_evaluation.is_dir()
+    ):
+        raise ValueError("prior evaluation must be the exact evaluation_v1 directory")
+    entries = list(prior_evaluation.iterdir())
+    if (
+        {path.name for path in entries} != PRIOR_EVALUATION_FILES
+        or not all(path.is_file() and not path.is_symlink() for path in entries)
+    ):
+        raise ValueError("prior evaluation has missing or extra files")
 
-    receipt_path = projection.parent / "qrels_access_receipt.json"
-    prior_metrics_path = projection.parent / "metrics.json"
-    prior_summary_path = projection.parent / "summary.json"
+    prior_freeze = prior_evaluation.parent / "freeze_v1"
+    if prior_freeze.is_symlink() or not prior_freeze.is_dir():
+        raise ValueError("prior evaluation requires sibling freeze_v1")
+    prior_seal = verify_prior_seal(prior_freeze)
+    if not isinstance(prior_seal, Mapping):
+        raise ValueError("verified prior seal is invalid")
+    prior_seal_path = prior_freeze / "SEALED.json"
+    try:
+        prior_seal_bytes = prior_seal_path.read_bytes()
+    except OSError as exc:
+        raise ValueError("verified prior seal bytes are unreadable") from exc
+    prior_root = prior_seal.get("root_sha256")
+    try:
+        reread_prior_seal = json.loads(prior_seal_bytes)
+    except json.JSONDecodeError as exc:
+        raise ValueError("verified prior seal bytes are invalid") from exc
+    if (
+        reread_prior_seal != prior_seal
+        or not isinstance(prior_root, str)
+        or len(prior_root) != 64
+    ):
+        raise ValueError("verified prior seal root is invalid")
+
+    projection = prior_evaluation / "qrels_projection.jsonl"
+    receipt_path = prior_evaluation / "qrels_access_receipt.json"
+    prior_metrics_path = prior_evaluation / "metrics.json"
+    prior_decision_path = prior_evaluation / "decision.json"
+    prior_summary_path = prior_evaluation / "summary.json"
     receipt, receipt_bytes = _read_object_bytes(receipt_path, "qrels access receipt")
     prior_metrics, prior_metrics_bytes = _read_object_bytes(prior_metrics_path, "prior metrics")
+    _prior_decision, prior_decision_bytes = _read_object_bytes(
+        prior_decision_path, "prior decision"
+    )
     prior_summary, prior_summary_bytes = _read_object_bytes(prior_summary_path, "prior summary")
-    if prior_summary.get("metrics_sha256") != _sha256(prior_metrics_bytes):
+    if (
+        prior_summary.get("schema_version") != PRIOR_SCHEMA_VERSION
+        or prior_summary.get("status") != "complete"
+        or prior_summary.get("qrels_opened") is not True
+        or prior_summary.get("topic_ids") != list(TOPIC_IDS)
+        or prior_summary.get("metrics_sha256") != _sha256(prior_metrics_bytes)
+    ):
         raise ValueError("prior metrics SHA-256 differs from prior summary")
-    if receipt.get("topic_ids") != list(TOPIC_IDS):
-        raise ValueError("qrels access receipt lacks exact topics in order")
+    if prior_summary.get("decision_sha256") != _sha256(prior_decision_bytes):
+        raise ValueError("prior decision SHA-256 differs from prior summary")
+    if (
+        set(receipt) != PRIOR_RECEIPT_FIELDS
+        or receipt.get("schema_version") != PRIOR_SCHEMA_VERSION
+        or receipt.get("status") != "qrels_access_boundary_crossed"
+        or receipt.get("qrels_opened") is not True
+        or receipt.get("upstream_mutation_forbidden") is not True
+        or receipt.get("topic_ids") != list(TOPIC_IDS)
+        or not isinstance(receipt.get("qrels_source_name"), str)
+        or not receipt.get("qrels_source_name")
+        or not isinstance(receipt.get("qrels_projection_rows"), int)
+        or isinstance(receipt.get("qrels_projection_rows"), bool)
+        or int(receipt.get("qrels_projection_rows", 0)) <= 0
+        or not isinstance(receipt.get("evaluator_code_sha256"), str)
+        or len(str(receipt.get("evaluator_code_sha256"))) != 64
+    ):
+        raise ValueError("qrels access receipt contract differs")
+    if (
+        receipt.get("seal_sha256") != _sha256(prior_seal_bytes)
+        or receipt.get("seal_root_sha256") != prior_root
+    ):
+        raise ValueError("qrels access receipt differs from verified prior seal")
     try:
         projection_bytes = projection.read_bytes()
     except OSError as exc:
@@ -504,21 +683,39 @@ def evaluate(freeze_dir: Path, projection: Path, output: Path) -> dict[str, obje
         raise ValueError("qrels projection row count differs from sealed receipt")
     qrels = _parse_projection(projection_bytes)
 
-    rankings, ranking_rows, freeze_bindings, freeze_binding_bytes = _load_frozen_rankings(
+    prior_rrf, prior_facet_candidates, original_at_1000, prior_ranking_bytes = (
+        _load_prior_rrf(prior_freeze)
+    )
+    novel = derive_novel_set(
+        qrels,
+        prior_facet_candidates,
+        original_at_1000,
+        expected_total=NOVEL_RELEVANT_TOTAL,
+    )
+    recomputed_rrf = evaluate_arm(
+        prior_rrf, qrels, novel, depths=(100, 500, 1000)
+    )
+    if prior_summary.get("novel_relevant_count") != sum(map(len, novel.values())):
+        raise ValueError("prior summary differs from recomputed novel set")
+    _require_prior_metrics_equal_recomputation(
+        prior_metrics, recomputed_rrf, novel
+    )
+
+    rankings, ranking_rows, _freeze_bindings, freeze_binding_bytes = _load_frozen_rankings(
         freeze_dir
     )
-    novel, original = _novel_inputs(freeze_bindings, qrels)
-    _validate_prior_novel_set(prior_metrics, novel)
     for topic in TOPIC_IDS:
-        validate_protected_head(rrf=original[topic], arm=rankings["FACET-2B"][topic])
-        validate_protected_head(rrf=original[topic], arm=rankings["TETHERED-2B"][topic])
+        for arm in ("FACET-2B", "TETHERED-2B"):
+            if set(rankings[arm][topic]) != set(prior_rrf[topic]):
+                raise ValueError("Task 3 arm population differs from verified prior RRF")
+            validate_protected_head(rrf=prior_rrf[topic], arm=rankings[arm][topic])
 
     row_views = {
         arm: {topic: ranking_rows[topic][arm] for topic in TOPIC_IDS}
         for arm in ("FACET-2B", "TETHERED-2B")
     }
     arms = {
-        "RRF": evaluate_arm(original, qrels, novel, depths=(100, 500, 1000)),
+        "RRF": recomputed_rrf,
         "FACET-2B": evaluate_arm(
             rankings["FACET-2B"], qrels, novel,
             ranking_rows=row_views["FACET-2B"], depths=(100, 500, 1000),
@@ -588,9 +785,15 @@ def evaluate(freeze_dir: Path, projection: Path, output: Path) -> dict[str, obje
         "task3_root_sha256": seal["root_sha256"],
         "task3_seal": _binding(seal_path, seal_bytes),
         "task3_input_bindings": _binding(freeze_dir / "input_bindings.json", freeze_binding_bytes),
+        "prior_freeze_root_sha256": prior_root,
+        "prior_freeze_seal": _binding(prior_seal_path, prior_seal_bytes),
+        "prior_freeze_rankings": _binding(
+            prior_freeze / "rankings.jsonl", prior_ranking_bytes
+        ),
         "qrels_projection": _binding(projection, projection_bytes),
         "qrels_access_receipt": _binding(receipt_path, receipt_bytes),
         "prior_metrics": _binding(prior_metrics_path, prior_metrics_bytes),
+        "prior_decision": _binding(prior_decision_path, prior_decision_bytes),
         "prior_summary": _binding(prior_summary_path, prior_summary_bytes),
         "original_qrels_opened": False,
     }
@@ -625,14 +828,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("evaluate", nargs="?")
     parser.add_argument("--freeze", type=Path, required=True)
-    parser.add_argument("--projection", type=Path, required=True)
+    parser.add_argument("--prior-evaluation", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    result = evaluate(args.freeze, args.projection, args.output)
+    result = evaluate(args.freeze, args.prior_evaluation, args.output)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
