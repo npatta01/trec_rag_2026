@@ -518,26 +518,33 @@ def _load_accepted_union(path: Path) -> dict[str, set[str]]:
     return result
 
 
-def _accepted_facets(path: Path) -> dict[tuple[str, str], int]:
+def _accepted_facets(path: Path) -> tuple[dict[tuple[str, str], int], set[tuple[str, str]]]:
     receipt = _read_object(path, "accepted gates")
     raw = receipt.get("gates")
     if not isinstance(raw, list):
         raise ValueError("accepted gates are missing")
     result: dict[tuple[str, str], int] = {}
+    rejected: set[tuple[str, str]] = set()
     for row in raw:
-        if not isinstance(row, Mapping) or row.get("status") != "accepted":
-            continue
+        if not isinstance(row, Mapping):
+            raise ValueError("gate row is invalid")
         topic, facet = str(row.get("topic_id")), str(row.get("facet_id"))
         order = row.get("manifest_order")
         if topic not in PILOT_TOPIC_IDS or not facet or type(order) is not int or order < 0:
-            raise ValueError("accepted gate identity drifted")
+            raise ValueError("gate contains a protected or unexpected topic or invalid identity")
         identity = (topic, facet)
-        if identity in result:
-            raise ValueError("accepted gate identity is duplicated")
-        result[identity] = order
+        status = row.get("status")
+        if status == "accepted":
+            if identity in result or identity in rejected:
+                raise ValueError("accepted gate identity is duplicated")
+            result[identity] = order
+        else:
+            if identity in result or identity in rejected:
+                raise ValueError("rejected gate identity is duplicated")
+            rejected.add(identity)
     if not result or set(topic for topic, _facet in result) != set(PILOT_TOPIC_IDS):
         raise ValueError("accepted gates do not cover the protected pilot")
-    return result
+    return result, rejected
 
 
 def _load_candidates(
@@ -583,14 +590,23 @@ def _load_candidates(
 
 
 def _aggregate_facet_windows(
-    path: Path, candidates: Mapping[tuple[str, str, str], Mapping[str, object]]
+    path: Path,
+    candidates: Mapping[tuple[str, str, str], Mapping[str, object]],
+    *,
+    accepted_facets: set[tuple[str, str]],
+    rejected_facets: set[tuple[str, str]],
 ) -> dict[tuple[str, str, str], tuple[float, str, str]]:
     grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     models: dict[tuple[str, str, str], tuple[str, str]] = {}
     for row in _read_jsonl(path, "facet window scores"):
         identity = _candidate_identity(row, "facet window score")
-        if identity not in candidates:
+        facet_identity = identity[:2]
+        if row.get("schema_version") != "deep-facet-candidate-minilm-score-v1":
+            raise ValueError("facet window score schema differs")
+        if facet_identity in rejected_facets:
             continue
+        if facet_identity not in accepted_facets or identity not in candidates:
+            raise ValueError("facet window score has an unexpected pair")
         candidate = candidates[identity]
         if (
             row.get("query_sha256") != candidate.get("query_sha256")
@@ -681,6 +697,53 @@ def _topics_from_rows(
     return topics
 
 
+def _validate_prior_seal_scope(
+    seal: Mapping[str, object], deep_root: Path, paths: Mapping[str, Path]
+) -> None:
+    """Bind the verified historical seal to the exact supplied deep root."""
+
+    roots = seal.get("roots")
+    artifacts = seal.get("artifacts")
+    if not isinstance(roots, list) or not isinstance(artifacts, list):
+        raise ValueError("verified prior seal lacks deep root path bindings")
+    root_rows = {
+        str(Path(str(row.get("path"))).resolve()): row
+        for row in roots
+        if isinstance(row, Mapping)
+    }
+    expected_roots = {
+        str((Path(deep_root) / name).resolve())
+        for name in ("freeze_v1", "gate_v1", "phase1_v1")
+    }
+    if not expected_roots <= set(root_rows):
+        raise ValueError("verified prior seal does not bind the supplied deep root")
+    artifact_paths = {
+        str(Path(str(row.get("path"))).resolve())
+        for row in artifacts
+        if isinstance(row, Mapping)
+    }
+    sealed_source_names = {
+        "prior_rankings",
+        "accepted_union",
+        "accepted_gates",
+        "facet_candidates",
+        "facet_window_scores",
+    }
+    expected_paths = {str(paths[name].resolve()) for name in sealed_source_names}
+    if not expected_paths <= artifact_paths:
+        raise ValueError("verified prior seal artifact paths differ from supplied deep root")
+    for name in sealed_source_names:
+        path = paths[name].resolve()
+        root = next(
+            (Path(value) for value in expected_roots if path.is_relative_to(Path(value))),
+            None,
+        )
+        row = root_rows.get(str(root)) if root is not None else None
+        files = row.get("files") if isinstance(row, Mapping) else None
+        if not isinstance(files, list) or str(path.relative_to(root)) not in files:
+            raise ValueError("verified prior seal root file list differs from supplied deep root")
+
+
 def load_frozen_inputs(
     deep_root: Path, tethered: Path
 ) -> tuple[list[TopicInput], list[TopicInput], dict[str, Path]]:
@@ -688,8 +751,6 @@ def load_frozen_inputs(
 
     deep_root, tethered = Path(deep_root), Path(tethered)
     prior_freeze = deep_root / "freeze_v1"
-    verify_prior_seal(prior_freeze)
-    verify_scoring(tethered / "preflight.json")
     paths = {
         "prior_seal": prior_freeze / "SEALED.json",
         "prior_rankings": prior_freeze / "rankings.jsonl",
@@ -703,14 +764,22 @@ def load_frozen_inputs(
         "tethered_window_scores": tethered / "scores.jsonl",
         "tethered_document_scores": tethered / "document_scores.jsonl",
     }
+    prior_seal = verify_prior_seal(prior_freeze)
+    _validate_prior_seal_scope(prior_seal, deep_root, paths)
+    verify_scoring(tethered / "preflight.json")
     for name, path in paths.items():
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"required authenticated source is missing or unsafe: {name}")
     rrf, dual = _load_rank_orders(paths["prior_rankings"])
     union = _load_accepted_union(paths["accepted_union"])
-    gates = _accepted_facets(paths["accepted_gates"])
+    gates, rejected_gates = _accepted_facets(paths["accepted_gates"])
     facet_candidates = _load_candidates(paths["facet_candidates"], gates, tethered=False)
-    facet_scores = _aggregate_facet_windows(paths["facet_window_scores"], facet_candidates)
+    facet_scores = _aggregate_facet_windows(
+        paths["facet_window_scores"],
+        facet_candidates,
+        accepted_facets=set(gates),
+        rejected_facets=rejected_gates,
+    )
     tethered_candidates = _load_candidates(paths["tethered_candidates"], gates, tethered=True)
     tethered_scores = _load_tethered_documents(paths["tethered_document_scores"], tethered_candidates)
     if set(facet_candidates) != set(tethered_candidates):
@@ -720,8 +789,10 @@ def load_frozen_inputs(
         if (
             left.get("text_sha256") != right.get("text_sha256")
             or int(left["prior_bm25_rank"]) != int(right["prior_bm25_rank"])
+            or right.get("facet_query") != left.get("query")
+            or right.get("facet_query_sha256") != left.get("query_sha256")
         ):
-            raise ValueError("facet-only and tethered text/rank provenance drifted")
+            raise ValueError("facet-only and tethered text/rank/facet query lineage drifted")
     facet_topics = _topics_from_rows(
         rrf=rrf, dual=dual, accepted_union=union, gates=gates,
         candidates=facet_candidates, scores=facet_scores,

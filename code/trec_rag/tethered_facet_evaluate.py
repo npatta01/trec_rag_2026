@@ -7,7 +7,8 @@ import hashlib
 import json
 import math
 import os
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -75,6 +76,14 @@ HISTORICAL_PRIOR_EVALUATION_IDENTITY: Mapping[str, object] = {
     },
 }
 
+NOISE_PATTERN_REGEX: Mapping[str, str] = {
+    "wrong_domain": r"\b(?:wrong domain|another domain|unrelated field|different industry)\b",
+    "generic_process": r"\b(?:step[- ]by[- ]step|general process|how to|best practices)\b",
+    "dictionary_or_scrabble": r"\b(?:dictionary|scrabble|word finder|anagram)\b",
+    "essay_or_homework": r"\b(?:essay|homework|assignment|term paper)\b",
+    "pet_health": r"\b(?:pet health|veterinar(?:y|ian)|dog health|cat health)\b",
+}
+
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
@@ -113,11 +122,7 @@ def _binding(path: Path, content: bytes) -> dict[str, object]:
     }
 
 
-def _read_jsonl_bytes(path: Path, label: str) -> tuple[list[dict[str, object]], bytes]:
-    try:
-        content = path.read_bytes()
-    except OSError as exc:
-        raise ValueError(f"{label} is unreadable") from exc
+def _parse_jsonl(content: bytes, label: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for line_number, line in enumerate(content.splitlines(), 1):
         try:
@@ -127,10 +132,18 @@ def _read_jsonl_bytes(path: Path, label: str) -> tuple[list[dict[str, object]], 
         if not isinstance(row, dict):
             raise ValueError(f"{label} rows must be objects")
         rows.append(row)
-    return rows, content
+    return rows
 
 
-def _bound_path(inputs: Mapping[str, object], name: str) -> tuple[Path, str]:
+def _read_jsonl_bytes(path: Path, label: str) -> tuple[list[dict[str, object]], bytes]:
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    return _parse_jsonl(content, label), content
+
+
+def _bound_source(inputs: Mapping[str, object], name: str) -> tuple[bytes, str]:
     raw = inputs.get(name)
     if not isinstance(raw, Mapping):
         raise ValueError(f"Task 3 lacks required representative source: {name}")
@@ -139,31 +152,17 @@ def _bound_path(inputs: Mapping[str, object], name: str) -> tuple[Path, str]:
     digest = _sha256(content)
     if raw != {"path": str(path), "bytes": len(content), "sha256": digest}:
         raise ValueError(f"Task 3 representative source hash drifted: {name}")
-    return path, digest
+    return content, digest
 
 
 def _representative_candidate_maps(
-    bindings: Mapping[str, object],
+    contents: Mapping[str, bytes],
 ) -> tuple[
     dict[tuple[str, str, str], dict[str, object]],
     dict[tuple[str, str, str], dict[str, object]],
-    dict[str, str],
 ]:
-    inputs = bindings.get("inputs")
-    if not isinstance(inputs, Mapping):
-        raise ValueError("Task 3 input bindings are missing")
-    paths = {}
-    hashes = {}
-    for name in (
-        "facet_candidates",
-        "facet_window_scores",
-        "tethered_candidates",
-        "tethered_window_scores",
-        "tethered_document_scores",
-    ):
-        paths[name], hashes[name] = _bound_path(inputs, name)
-    facet_rows, _ = _read_jsonl_bytes(paths["facet_candidates"], "facet candidates")
-    tethered_rows, _ = _read_jsonl_bytes(paths["tethered_candidates"], "tethered candidates")
+    facet_rows = _parse_jsonl(contents["facet_candidates"], "facet candidates")
+    tethered_rows = _parse_jsonl(contents["tethered_candidates"], "tethered candidates")
     facet = {
         (str(row.get("topic_id")), str(row.get("facet_id")), str(row.get("document_id"))): row
         for row in facet_rows
@@ -174,24 +173,64 @@ def _representative_candidate_maps(
     }
     if len(facet) != len(facet_rows) or set(facet) != set(tethered):
         raise ValueError("Task 3 representative candidate coverage drifted")
-    return facet, tethered, hashes
+    return facet, tethered
+
+
+def _sealed_task3_buffers(
+    freeze_dir: Path,
+) -> tuple[dict[str, object], bytes, bytes]:
+    seal, _seal_bytes = _read_object_bytes(freeze_dir / "SEALED.json", "Task 3 seal")
+    bindings, binding_bytes = _read_object_bytes(
+        freeze_dir / "input_bindings.json", "Task 3 bindings"
+    )
+    try:
+        ranking_bytes = (freeze_dir / "rankings.jsonl").read_bytes()
+    except OSError as exc:
+        raise ValueError("Task 3 rankings are unreadable") from exc
+    files = seal.get("files")
+    if not isinstance(files, Mapping):
+        raise ValueError("Task 3 seal file bindings are missing")
+    for name, content in (
+        ("input_bindings.json", binding_bytes),
+        ("rankings.jsonl", ranking_bytes),
+    ):
+        if files.get(name) != {"bytes": len(content), "sha256": _sha256(content)}:
+            raise ValueError(f"Task 3 exact buffer differs from seal: {name}")
+    return bindings, binding_bytes, ranking_bytes
+
+
+def _representative_sources(
+    bindings: Mapping[str, object], *, include_telemetry: bool = False
+) -> tuple[dict[str, bytes], dict[str, str]]:
+    inputs = bindings.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise ValueError("Task 3 input bindings are missing")
+    names = [
+        "facet_candidates",
+        "facet_window_scores",
+        "tethered_candidates",
+        "tethered_window_scores",
+        "tethered_document_scores",
+    ]
+    if include_telemetry:
+        names.extend(("tethered_preflight", "tethered_scoring_receipt"))
+    contents: dict[str, bytes] = {}
+    hashes: dict[str, str] = {}
+    for name in names:
+        contents[name], hashes[name] = _bound_source(inputs, name)
+    return contents, hashes
 
 
 def _window_maps(
-    bindings: Mapping[str, object],
+    contents: Mapping[str, bytes],
 ) -> tuple[
     dict[tuple[str, str, str], list[dict[str, object]]],
     dict[tuple[str, str, str], list[dict[str, object]]],
     dict[tuple[str, str, str], dict[str, object]],
 ]:
-    inputs = bindings["inputs"]
-    assert isinstance(inputs, Mapping)
-    facet_path, _ = _bound_path(inputs, "facet_window_scores")
-    tethered_path, _ = _bound_path(inputs, "tethered_window_scores")
-    documents_path, _ = _bound_path(inputs, "tethered_document_scores")
-    facet_rows, _ = _read_jsonl_bytes(facet_path, "facet window scores")
-    tethered_rows, _ = _read_jsonl_bytes(tethered_path, "tethered window scores")
-    document_rows, _ = _read_jsonl_bytes(documents_path, "tethered document scores")
+    facet_rows = _parse_jsonl(contents["facet_window_scores"], "facet window scores")
+    tethered_rows = _parse_jsonl(contents["tethered_window_scores"], "tethered window scores")
+    document_rows = _parse_jsonl(contents["tethered_document_scores"], "tethered document scores")
     facet: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     tethered: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     for target, rows in ((facet, facet_rows), (tethered, tethered_rows)):
@@ -214,6 +253,8 @@ def _passage_evidence(
     windows: Mapping[tuple[str, str, str], list[dict[str, object]]],
     tethered_documents: Mapping[tuple[str, str, str], Mapping[str, object]],
     hashes: Mapping[str, str],
+    expected_model: str,
+    expected_model_revision: str,
 ) -> tuple[str, dict[str, object]]:
     raw = windows.get(identity, [])
     if not raw:
@@ -222,7 +263,12 @@ def _passage_evidence(
     if arm == "TETHERED-2B":
         document = tethered_documents.get(identity)
         expected = document.get("window_hashes") if isinstance(document, Mapping) else None
-        if not isinstance(expected, list) or [row.get("window_sha256") for row in selected] != expected:
+        if (
+            not isinstance(expected, list)
+            or [row.get("window_sha256") for row in selected] != expected
+            or document.get("model") != expected_model
+            or document.get("model_revision") != expected_model_revision
+        ):
             raise ValueError("Task 2 selected passage provenance drifted")
     chosen = min(
         selected,
@@ -235,6 +281,8 @@ def _passage_evidence(
         or chosen.get("window_sha256") != _sha256(passage.encode("utf-8"))
         or chosen.get("query_sha256") != candidate.get("query_sha256")
         or chosen.get("document_sha256", chosen.get("text_sha256")) != candidate.get("text_sha256")
+        or chosen.get("model") != expected_model
+        or chosen.get("model_revision") != expected_model_revision
     ):
         raise ValueError("representative passage query/text/window provenance drifted")
     prefix = "tethered" if arm == "TETHERED-2B" else "facet"
@@ -262,21 +310,25 @@ def build_representatives(
 ) -> list[dict[str, object]]:
     """Build bounded movement evidence from Task 3-bound raw score sources."""
 
+    if set(qrels) != set(PILOT_TOPIC_IDS) or any(topic in PROTECTED_TOPIC_IDS for topic in qrels):
+        raise ValueError("qrels must contain the exact protected pilot topics")
     if type(max_per_class) is not int or max_per_class <= 0 or max_per_class > 8:
         raise ValueError("representative bound must be between 1 and 8")
     verify_freeze(freeze_dir)
-    bindings, _ = _read_object_bytes(Path(freeze_dir) / "input_bindings.json", "Task 3 bindings")
+    bindings, _binding_bytes, ranking_bytes = _sealed_task3_buffers(Path(freeze_dir))
     raw_inputs = bindings.get("topic_inputs")
     if not isinstance(raw_inputs, Mapping):
         raise ValueError("Task 3 semantic score maps are missing")
-    facet_candidates, tethered_candidates, hashes = _representative_candidate_maps(bindings)
-    facet_windows, tethered_windows, tethered_documents = _window_maps(bindings)
-    rankings, ranking_bytes = _read_jsonl_bytes(Path(freeze_dir) / "rankings.jsonl", "Task 3 rankings")
+    contents, hashes = _representative_sources(bindings)
+    facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
+    facet_windows, tethered_windows, tethered_documents = _window_maps(contents)
+    rankings = _parse_jsonl(ranking_bytes, "Task 3 rankings")
     ranking_hash = _sha256(ranking_bytes)
     by_identity: dict[tuple[str, str], dict[str, dict[str, object]]] = defaultdict(dict)
     for row in rankings:
         by_identity[(str(row["topic_id"]), str(row["document_id"]))][str(row["arm"])] = row
     percentile_maps: dict[tuple[str, str, str], dict[str, float]] = {}
+    facet_provenance: dict[tuple[str, str, str], tuple[str, str]] = {}
     for arm in ("FACET-2B", "TETHERED-2B"):
         arm_inputs = raw_inputs.get(arm)
         if not isinstance(arm_inputs, Mapping):
@@ -290,6 +342,9 @@ def build_representatives(
                 if not isinstance(facet, Mapping) or not isinstance(facet.get("scores"), Mapping):
                     raise ValueError("Task 3 semantic facet score map is invalid")
                 percentile_maps[(arm, topic, str(facet.get("facet_id")))] = average_rank_percentiles(facet["scores"])  # type: ignore[arg-type]
+                facet_provenance[(arm, topic, str(facet.get("facet_id")))] = (
+                    str(facet.get("model")), str(facet.get("model_revision"))
+                )
     movement: dict[str, list[tuple[str, str, str]]] = {"promoted": [], "demoted": []}
     for (topic, document), arms in by_identity.items():
         left, right = arms.get("FACET-2B"), arms.get("TETHERED-2B")
@@ -320,6 +375,8 @@ def build_representatives(
             passage, passage_provenance = _passage_evidence(
                 identity=key, arm=passage_arm, candidate=candidate, windows=windows,
                 tethered_documents=tethered_documents, hashes=hashes,
+                expected_model=facet_provenance[(passage_arm, topic, facet)][0],
+                expected_model_revision=facet_provenance[(passage_arm, topic, facet)][1],
             )
             rows = by_identity[(topic, document)]
             left, right = rows["FACET-2B"], rows["TETHERED-2B"]
@@ -633,6 +690,7 @@ def _load_frozen_rankings(
     dict[str, dict[str, list[dict[str, object]]]],
     dict[str, object],
     bytes,
+    bytes,
 ]:
     bindings, binding_bytes = _read_object_bytes(
         freeze_dir / "input_bindings.json", "freeze input bindings"
@@ -684,7 +742,7 @@ def _load_frozen_rankings(
                 raise ValueError("frozen ranking is empty or contains duplicates")
             collected[topic][arm] = rows
             rankings[arm][topic] = ids
-    return rankings, collected, bindings, binding_bytes
+    return rankings, collected, bindings, binding_bytes, ranking_bytes
 
 
 def _validate_prior_novel_set(
@@ -885,6 +943,187 @@ def _per_topic_deltas(
     return result
 
 
+def _extended_diagnostics(
+    freeze_dir: Path,
+    qrels: Mapping[str, Mapping[str, int]],
+    arms: Mapping[str, Mapping[str, object]],
+    ranking_rows: Mapping[str, Mapping[str, list[dict[str, object]]]],
+) -> dict[str, object]:
+    bindings, _binding_bytes, _ranking_bytes = _sealed_task3_buffers(freeze_dir)
+    contents, hashes = _representative_sources(bindings, include_telemetry=True)
+    facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
+    texts = {
+        identity: str(row.get("text")) for identity, row in tethered_candidates.items()
+    }
+    compiled = {
+        name: re.compile(pattern, flags=re.IGNORECASE)
+        for name, pattern in NOISE_PATTERN_REGEX.items()
+    }
+    noise_rows: list[dict[str, object]] = []
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        selected: dict[str, list[str]] = defaultdict(list)
+        for topic in TOPIC_IDS:
+            for row in ranking_rows[topic][arm]:
+                if row.get("source") == "facet_basket":
+                    selected[str(row.get("generating_facet"))].append(str(row["document_id"]))
+        for facet in sorted(selected):
+            topic = next(topic for topic in TOPIC_IDS if facet.startswith(f"{topic}-"))
+            values = {name: 0 for name in compiled}
+            for document in selected[facet]:
+                text = texts.get((topic, facet, document), "")
+                for name, pattern in compiled.items():
+                    values[name] += int(bool(pattern.search(text)))
+            noise_rows.append({
+                "arm": arm,
+                "facet_id": facet,
+                "selected_count": len(selected[facet]),
+                **values,
+            })
+
+    facet_yield = {
+        arm: arms[arm].get("facet_yield", {}) for arm in ("FACET-2B", "TETHERED-2B")
+    }
+    facet_changes: list[dict[str, object]] = []
+    facets = sorted(set(facet_yield["FACET-2B"]) | set(facet_yield["TETHERED-2B"]))  # type: ignore[arg-type]
+    for facet in facets:
+        left = facet_yield["FACET-2B"].get(facet, {})  # type: ignore[union-attr]
+        right = facet_yield["TETHERED-2B"].get(facet, {})  # type: ignore[union-attr]
+        left_count = int(left.get("relevant_count", 0)) if isinstance(left, Mapping) else 0
+        right_count = int(right.get("relevant_count", 0)) if isinstance(right, Mapping) else 0
+        classification = (
+            "zero" if left_count == right_count == 0
+            else "rose" if right_count > left_count
+            else "fell" if right_count < left_count
+            else "unchanged"
+        )
+        facet_changes.append({
+            "facet_id": facet,
+            "facet_only_relevant_count": left_count,
+            "tethered_relevant_count": right_count,
+            "delta": right_count - left_count,
+            "classification": classification,
+        })
+
+    raw_topic_inputs = bindings.get("topic_inputs")
+    if not isinstance(raw_topic_inputs, Mapping):
+        raise ValueError("Task 3 semantic inputs are missing from diagnostics")
+    below: list[dict[str, object]] = []
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        arm_inputs = raw_topic_inputs.get(arm)
+        if not isinstance(arm_inputs, Mapping):
+            raise ValueError("Task 3 arm semantic inputs are missing from diagnostics")
+        for topic in TOPIC_IDS:
+            topic_input = arm_inputs.get(topic)
+            facets_input = topic_input.get("facets") if isinstance(topic_input, Mapping) else None
+            if not isinstance(facets_input, list):
+                raise ValueError("Task 3 facet semantic inputs are missing from diagnostics")
+            memberships: dict[str, list[tuple[str, float, int]]] = defaultdict(list)
+            for facet in facets_input:
+                if not isinstance(facet, Mapping):
+                    raise ValueError("Task 3 facet semantic input is invalid")
+                scores = facet.get("scores")
+                ranks = facet.get("bm25_ranks")
+                if not isinstance(scores, Mapping) or not isinstance(ranks, Mapping):
+                    raise ValueError("Task 3 diagnostic score/rank maps are invalid")
+                percentiles = average_rank_percentiles(scores)  # type: ignore[arg-type]
+                facet_id = str(facet.get("facet_id"))
+                for document, percentile in percentiles.items():
+                    memberships[document].append((facet_id, percentile, int(ranks[document])))
+            for row in ranking_rows[topic][arm]:
+                document = str(row["document_id"])
+                grade = int(qrels[topic].get(document, 0))
+                final_rank = int(row["rank"])
+                if grade < 2 or final_rank <= 500:
+                    continue
+                candidates = sorted(
+                    memberships.get(document, []),
+                    key=lambda value: (-value[1], value[2], value[0]),
+                )
+                reason = (
+                    "only_rrf_or_dual_tail" if not candidates
+                    else "duplicate_displaced" if len(candidates) > 1
+                    else "facet_quota_exhausted"
+                )
+                below.append({
+                    "arm": arm,
+                    "topic_id": topic,
+                    "document_id": document,
+                    "qrels_grade": grade,
+                    "final_rank": final_rank,
+                    "best_facet": candidates[0][0] if candidates else None,
+                    "best_facet_percentile": candidates[0][1] if candidates else None,
+                    "prior_bm25_rank": candidates[0][2] if candidates else None,
+                    "reason": reason,
+                })
+
+    summary, _summary_bytes = _read_object_bytes(freeze_dir / "summary.json", "Task 3 summary")
+    topic_summary = summary.get("topic_summary")
+    if not isinstance(topic_summary, Mapping):
+        raise ValueError("Task 3 topic summary is missing from diagnostics")
+    pressure: list[dict[str, object]] = []
+    for topic in TOPIC_IDS:
+        record = topic_summary.get(topic)
+        duplicates = record.get("duplicate_skip_totals") if isinstance(record, Mapping) else None
+        if not isinstance(duplicates, Mapping):
+            raise ValueError("Task 3 duplicate totals are missing")
+        for arm in ("FACET-2B", "TETHERED-2B"):
+            arm_duplicates = duplicates.get(arm)
+            if not isinstance(arm_duplicates, Mapping):
+                raise ValueError("Task 3 arm duplicate totals are missing")
+            shortage_by_facet: dict[str, int] = defaultdict(int)
+            for row in ranking_rows[topic][arm]:
+                facet = row.get("generating_facet")
+                if facet:
+                    shortage_by_facet[str(facet)] = max(
+                        shortage_by_facet[str(facet)], int(row.get("shortage") or 0)
+                    )
+            pressure.append({
+                "topic_id": topic,
+                "arm": arm,
+                "duplicate_skip_totals": dict(sorted((str(key), int(value)) for key, value in arm_duplicates.items())),
+                "duplicate_skip_total": sum(int(value) for value in arm_duplicates.values()),
+                "shortage_counts": dict(sorted(shortage_by_facet.items())),
+                "shortage_total": sum(shortage_by_facet.values()),
+            })
+
+    try:
+        preflight = json.loads(contents["tethered_preflight"])
+        receipt = json.loads(contents["tethered_scoring_receipt"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Task 1/2 telemetry sources are invalid") from exc
+    if not isinstance(preflight, Mapping) or not isinstance(receipt, Mapping):
+        raise ValueError("Task 1/2 telemetry sources must be objects")
+    preflight_summary = preflight.get("summary")
+    runtime = preflight.get("runtime_evidence")
+    if not isinstance(preflight_summary, Mapping) or not isinstance(runtime, Mapping):
+        raise ValueError("Task 1 telemetry summary/runtime evidence is missing")
+    telemetry = {
+        "preflight_source_sha256": hashes["tethered_preflight"],
+        "scoring_receipt_source_sha256": hashes["tethered_scoring_receipt"],
+        "model": receipt.get("model"),
+        "model_revision": receipt.get("model_revision"),
+        "query_document_pair_count": preflight_summary.get("query_document_pair_count"),
+        "planned_window_count": receipt.get("planned_window_count"),
+        "completed_window_count": receipt.get("completed_window_count"),
+        "document_score_count": receipt.get("document_score_count"),
+        "cache_hit_count": receipt.get("cache_hit_count"),
+        "cache_miss_count": int(receipt.get("completed_window_count", 0)) - int(receipt.get("cache_hit_count", 0)),
+        "unique_forward_pair_count": receipt.get("unique_forward_pair_count"),
+        "elapsed_seconds": receipt.get("elapsed_seconds"),
+        "projected_inference_seconds": runtime.get("projected_inference_seconds"),
+        "peak_device_memory_bytes": receipt.get("peak_device_memory_bytes"),
+        "peak_host_memory_bytes": receipt.get("peak_host_memory_bytes"),
+    }
+    return {
+        "noise_pattern_definitions": dict(NOISE_PATTERN_REGEX),
+        "noise_pattern_counts": noise_rows,
+        "facet_yield_changes": facet_changes,
+        "relevant_below_500": below,
+        "duplicate_and_quota_pressure": pressure,
+        "scoring_telemetry": telemetry,
+    }
+
+
 def evaluate(
     freeze_dir: Path, prior_evaluation: Path, output: Path
 ) -> dict[str, object]:
@@ -1012,7 +1251,7 @@ def evaluate(
         }
     )
 
-    rankings, ranking_rows, _freeze_bindings, freeze_binding_bytes = _load_frozen_rankings(
+    rankings, ranking_rows, freeze_bindings, freeze_binding_bytes, freeze_ranking_bytes = _load_frozen_rankings(
         freeze_dir
     )
     for topic in TOPIC_IDS:
@@ -1058,12 +1297,15 @@ def evaluate(
             "documented_basket_shortage": documented_shortage,
         }
     )
+    novel_relevant_count = sum(map(len, novel.values()))
+    decision["novel_relevant_count"] = novel_relevant_count
     metrics = {
         "schema_version": SCHEMA_VERSION,
         "topic_ids": list(TOPIC_IDS),
-        "novel_relevant_count": sum(map(len, novel.values())),
+        "novel_relevant_count": novel_relevant_count,
         "arms": arms,
     }
+    extended = _extended_diagnostics(freeze_dir, qrels, arms, ranking_rows)
     diagnostics = {
         "schema_version": SCHEMA_VERSION,
         "topic_ids": list(TOPIC_IDS),
@@ -1077,6 +1319,7 @@ def evaluate(
         "novel_relevant_ids": {topic: sorted(novel[topic]) for topic in TOPIC_IDS},
         "documented_basket_shortage": documented_shortage,
         "representatives": build_representatives(freeze_dir, qrels),
+        **extended,
     }
     seal_path = freeze_dir / "SEALED.json"
     try:
@@ -1098,6 +1341,10 @@ def evaluate(
         "task3_root_sha256": seal["root_sha256"],
         "task3_seal": _binding(seal_path, seal_bytes),
         "task3_input_bindings": _binding(freeze_dir / "input_bindings.json", freeze_binding_bytes),
+        "task3_rankings": _binding(
+            freeze_dir / "rankings.jsonl", freeze_ranking_bytes
+        ),
+        "task3_producer_sources": freeze_bindings.get("inputs"),
         "prior_freeze_root_sha256": prior_root,
         "prior_freeze_seal": _binding(prior_seal_path, prior_seal_bytes),
         "prior_freeze_rankings": _binding(
@@ -1124,6 +1371,7 @@ def evaluate(
         "status": "complete",
         "label": decision["label"],
         "topic_ids": list(TOPIC_IDS),
+        "novel_relevant_count": novel_relevant_count,
         "post_qrels_diagnostic": True,
         "historical_integrity_only": True,
         "blind_generalization_evidence": False,

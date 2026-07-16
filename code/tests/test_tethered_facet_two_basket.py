@@ -467,6 +467,7 @@ def _loader_sources(tmp_path: Path) -> tuple[Path, Path]:
                 "text": text, "text_sha256": text_hash, "rank": local_rank,
             })
             window = {
+                "schema_version": "deep-facet-candidate-minilm-score-v1",
                 "topic_id": topic, "facet_id": facet_id, "document_id": docid,
                 "window_id": f"facet-{topic}-{local_rank}", "window_text": text,
                 "window_sha256": text_hash, "document_sha256": text_hash,
@@ -482,6 +483,7 @@ def _loader_sources(tmp_path: Path) -> tuple[Path, Path]:
                 "schema_version": "tethered-facet-minilm-candidate-v1",
                 "topic_id": topic, "facet_id": facet_id, "manifest_order": topic_index,
                 "document_id": docid, "docid": docid, "facet_query": facet_query,
+                "facet_query_sha256": hashlib.sha256(facet_query.encode()).hexdigest(),
                 "query": full_query, "query_sha256": query_hash, "text": text,
                 "text_sha256": text_hash, "prior_bm25_rank": local_rank,
             })
@@ -512,11 +514,39 @@ def _loader_sources(tmp_path: Path) -> tuple[Path, Path]:
     return deep, tethered
 
 
+def _seal_for_loader(deep: Path) -> dict[str, object]:
+    roots = [deep / "freeze_v1", deep / "gate_v1", deep / "phase1_v1"]
+    files = [
+        deep / "freeze_v1" / "rankings.jsonl",
+        deep / "gate_v1" / "u_accepted.jsonl",
+        deep / "gate_v1" / "gates.json",
+        deep / "phase1_v1" / "candidates.jsonl",
+        deep / "phase1_v1" / "scores.jsonl",
+    ]
+    return {
+        "roots": [
+            {
+                "path": str(root.resolve()),
+                "files": [str(path.relative_to(root)) for path in files if path.parent == root],
+            }
+            for root in roots
+        ],
+        "artifacts": [
+            {
+                "path": str(path.resolve()),
+                "bytes": len(path.read_bytes()),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for path in sorted(files)
+        ],
+    }
+
+
 def test_real_freeze_cli_loads_authenticated_task2_and_prior_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     deep, tethered = _loader_sources(tmp_path)
-    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
     monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
     output = tmp_path / "freeze"
 
@@ -538,7 +568,7 @@ def test_loader_rejects_tethered_query_and_rank_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     deep, tethered = _loader_sources(tmp_path)
-    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
     monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
     candidates = (tethered / "candidates.jsonl").read_text().splitlines()
     first = json.loads(candidates[0])
@@ -548,4 +578,83 @@ def test_loader_rejects_tethered_query_and_rank_drift(
     (tethered / "candidates.jsonl").write_text("\n".join(candidates) + "\n")
 
     with pytest.raises(ValueError, match="exact narrative"):
+        load_frozen_inputs(deep, tethered)
+
+
+def test_loader_rejects_copied_seal_paths_before_sibling_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original, tethered = _loader_sources(tmp_path / "original")
+    copied, _unused = _loader_sources(tmp_path / "copied")
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(original))
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    (copied / "gate_v1" / "gates.json").unlink()
+
+    with pytest.raises(ValueError, match="seal.*deep root"):
+        load_frozen_inputs(copied, tethered)
+
+
+def test_loader_rejects_protected_topic_even_in_rejected_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    gates_path = deep / "gate_v1" / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["gates"].append({"topic_id": "144", "facet_id": "rejected", "manifest_order": 99, "status": "rejected"})
+    gates_path.write_text(json.dumps(gates))
+
+    with pytest.raises(ValueError, match="protected or unexpected topic"):
+        load_frozen_inputs(deep, tethered)
+
+
+@pytest.mark.parametrize("attack", ["schema", "extra_pair"])
+def test_loader_rejects_phase1_score_schema_and_extra_accepted_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    scores_path = deep / "phase1_v1" / "scores.jsonl"
+    rows = scores_path.read_text().splitlines()
+    if attack == "schema":
+        row = json.loads(rows[0])
+        row["schema_version"] = "wrong"
+        rows[0] = json.dumps(row, sort_keys=True, separators=(",", ":"))
+    else:
+        row = json.loads(rows[0])
+        row["document_id"] = "219-unknown"
+        row["docid"] = "219-unknown"
+        rows.append(json.dumps(row, sort_keys=True, separators=(",", ":")))
+    scores_path.write_text("\n".join(rows) + "\n")
+
+    with pytest.raises(ValueError, match="schema|unexpected pair"):
+        load_frozen_inputs(deep, tethered)
+
+
+def test_loader_rejects_alternate_well_formed_focus_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    candidate_path = tethered / "candidates.jsonl"
+    candidates = [json.loads(line) for line in candidate_path.read_text().splitlines()]
+    target = candidates[0]
+    old_hash = target["query_sha256"]
+    target["facet_query"] = "alternate but valid focus"
+    target["facet_query_sha256"] = hashlib.sha256(target["facet_query"].encode()).hexdigest()
+    target["query"] = "full narrative 219\n\nFocus: " + target["facet_query"]
+    target["query_sha256"] = hashlib.sha256(target["query"].encode()).hexdigest()
+    candidate_path.write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in candidates))
+    for name in ("scores.jsonl", "document_scores.jsonl"):
+        path = tethered / name
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            if row.get("query_sha256") == old_hash and row.get("document_id") == target["document_id"]:
+                row["query_sha256"] = target["query_sha256"]
+        path.write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows))
+
+    with pytest.raises(ValueError, match="facet query lineage"):
         load_frozen_inputs(deep, tethered)

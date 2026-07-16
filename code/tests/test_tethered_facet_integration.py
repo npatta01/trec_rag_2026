@@ -8,7 +8,7 @@ import pytest
 
 import trec_rag.tethered_facet_evaluate as evaluate_module
 import trec_rag.tethered_facet_two_basket as rank_module
-from test_tethered_facet_two_basket import _loader_sources
+from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
 from trec_rag.build_tethered_facet_report import ReportSources, build_artifact, build_report
 from trec_rag.tethered_facet_evaluate import TOPIC_IDS, evaluate, evaluate_arm
 
@@ -127,7 +127,7 @@ def _prior_evaluation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return evaluation
 
 
-def test_synthetic_task2_to_task5_cli_api_chain_and_provenance_tamper_rejection(
+def test_task2_compatible_fixture_chain_without_inference_and_provenance_tamper_rejection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     deep, tethered = _loader_sources(tmp_path)
@@ -137,6 +137,15 @@ def test_synthetic_task2_to_task5_cli_api_chain_and_provenance_tamper_rejection(
         "topic_ids": list(TOPIC_IDS),
         "qrels_read": False,
         "retrieval_performed": False,
+        "model": "synthetic/minilm",
+        "model_revision": "fixture-revision",
+        "summary": {
+            "query_document_pair_count": 1000,
+            "window_count": 1000,
+            "cache_hit_window_count": 400,
+            "cache_miss_window_count": 600,
+        },
+        "runtime_evidence": {"projected_inference_seconds": 12.5},
     }
     preflight_bytes = _write(tethered / "preflight.json", preflight)
     scoring = {
@@ -148,9 +157,17 @@ def test_synthetic_task2_to_task5_cli_api_chain_and_provenance_tamper_rejection(
         "network_accessed": False,
         "model": "synthetic/minilm",
         "model_revision": "fixture-revision",
+        "planned_window_count": 1000,
+        "completed_window_count": 1000,
+        "document_score_count": 1000,
+        "cache_hit_count": 400,
+        "unique_forward_pair_count": 600,
+        "elapsed_seconds": 9.5,
+        "peak_device_memory_bytes": 1234,
+        "peak_host_memory_bytes": 5678,
     }
     _write(tethered / "scoring_receipt.json", scoring)
-    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
     monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
     task3 = tmp_path / "task3"
     assert rank_module.main([
@@ -161,6 +178,23 @@ def test_synthetic_task2_to_task5_cli_api_chain_and_provenance_tamper_rejection(
     prior = _prior_evaluation(tmp_path, monkeypatch)
     task4 = tmp_path / "task4"
     assert evaluate(task3, prior, task4)["status"] == "complete"
+    diagnostics = json.loads((task4 / "diagnostics.json").read_text())
+    assert set(diagnostics) >= {
+        "noise_pattern_counts", "facet_yield_changes", "relevant_below_500",
+        "duplicate_and_quota_pressure", "scoring_telemetry", "representatives",
+    }
+    assert {row["arm"] for row in diagnostics["noise_pattern_counts"]} == {"FACET-2B", "TETHERED-2B"}
+    assert {
+        arm: sum(row["selected_count"] for row in diagnostics["noise_pattern_counts"] if row["arm"] == arm)
+        for arm in ("FACET-2B", "TETHERED-2B")
+    } == {"FACET-2B": 800, "TETHERED-2B": 800}
+    assert {row["classification"] for row in diagnostics["facet_yield_changes"]} <= {"rose", "fell", "zero", "unchanged"}
+    assert all(row["reason"] in {"facet_quota_exhausted", "duplicate_displaced", "only_rrf_or_dual_tail"} for row in diagnostics["relevant_below_500"])
+    assert diagnostics["scoring_telemetry"]["cache_hit_count"] == 400
+    assert diagnostics["scoring_telemetry"]["cache_miss_count"] == 600
+    assert diagnostics["scoring_telemetry"]["model"] == "synthetic/minilm"
+    assert len(diagnostics["duplicate_and_quota_pressure"]) == 8
+    assert all(row["duplicate_skip_total"] == sum(row["duplicate_skip_totals"].values()) for row in diagnostics["duplicate_and_quota_pressure"])
     task5 = tmp_path / "task5"
     built = build_report(ReportSources(
         topic_ids=list(TOPIC_IDS),

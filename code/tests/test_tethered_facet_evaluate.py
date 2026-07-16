@@ -400,6 +400,7 @@ def test_evaluate_authenticates_projection_and_writes_create_only_artifacts(
         "build_representatives",
         lambda _freeze, _qrels: [{"movement": "promoted"}, {"movement": "demoted"}],
     )
+    monkeypatch.setattr(module, "_extended_diagnostics", lambda *_args: {})
     output = tmp_path / "evaluation"
 
     summary = evaluate(freeze, prior, output)
@@ -626,11 +627,11 @@ def test_cli_and_evaluate_api_have_no_original_qrels_path() -> None:
 def test_task4_builds_bounded_authenticated_promoted_and_demoted_representatives(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from test_tethered_facet_two_basket import _loader_sources
+    from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
     import trec_rag.tethered_facet_two_basket as rank_module
 
     deep, tethered = _loader_sources(tmp_path)
-    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: {"status": "verified"})
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
     monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
     facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
     freeze = tmp_path / "task3"
@@ -662,3 +663,86 @@ def test_task4_builds_bounded_authenticated_promoted_and_demoted_representatives
     assert all(row["ranking_provenance"]["task3_rankings_sha256"] for row in rows)
     assert all(0 < row["facet_only_percentile"] <= 1 for row in rows)
     assert all(0 < row["tethered_percentile"] <= 1 for row in rows)
+
+
+@pytest.mark.parametrize("bad_qrels", [
+    {**{topic: {} for topic in TOPIC_IDS}, "144": {}},
+    {topic: {} for topic in TOPIC_IDS[:-1]},
+])
+def test_representatives_reject_protected_extra_or_missing_qrels_topics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_qrels: dict[str, dict[str, int]]
+) -> None:
+    from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
+    import trec_rag.tethered_facet_two_basket as rank_module
+
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
+    freeze = tmp_path / "task3"
+    rank_module.freeze_rankings(facet_topics=facet_topics, tethered_topics=tethered_topics, input_paths=paths, output=freeze)
+
+    with pytest.raises(ValueError, match="qrels.*exact protected pilot topics"):
+        build_representatives(freeze, bad_qrels)
+
+
+def test_representatives_consume_each_authenticated_source_buffer_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
+    import trec_rag.tethered_facet_two_basket as rank_module
+
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
+    freeze = tmp_path / "task3"
+    rank_module.freeze_rankings(facet_topics=facet_topics, tethered_topics=tethered_topics, input_paths=paths, output=freeze)
+    monkeypatch.setattr(module, "verify_freeze", lambda _path: {"status": "verified"})
+    watched = (deep / "phase1_v1" / "candidates.jsonl").resolve()
+    original_read = Path.read_bytes
+    reads = 0
+
+    def guarded_read(path: Path) -> bytes:
+        nonlocal reads
+        if path.resolve() == watched:
+            reads += 1
+            if reads > 1:
+                raise AssertionError("authenticated source was reread after its hash check")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read)
+    qrels = {topic: {} for topic in TOPIC_IDS}
+
+    rows = build_representatives(freeze, qrels, max_per_class=1)
+
+    assert rows
+    assert reads == 1
+
+
+@pytest.mark.parametrize("attack", ["window_hash", "model", "span"])
+def test_representatives_reject_nested_window_model_and_span_tamper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    from test_tethered_facet_two_basket import _loader_sources, _seal_for_loader
+    import trec_rag.tethered_facet_two_basket as rank_module
+
+    deep, tethered = _loader_sources(tmp_path)
+    scores_path = tethered / "scores.jsonl"
+    rows = [json.loads(line) for line in scores_path.read_text().splitlines()]
+    target = next(row for row in rows if row["document_id"] == "219-d500")
+    if attack == "window_hash":
+        target["window_sha256"] = "0" * 64
+    elif attack == "model":
+        target["model"] = "tampered/model"
+    else:
+        target["document_end_token"] = target["document_start_token"]
+    scores_path.write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows))
+    monkeypatch.setattr(rank_module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(rank_module, "verify_scoring", lambda _path: {"status": "complete"})
+    facet_topics, tethered_topics, paths = rank_module.load_frozen_inputs(deep, tethered)
+    freeze = tmp_path / "task3"
+    rank_module.freeze_rankings(facet_topics=facet_topics, tethered_topics=tethered_topics, input_paths=paths, output=freeze)
+
+    with pytest.raises(ValueError, match="window|model|span|passage"):
+        build_representatives(freeze, {topic: {} for topic in TOPIC_IDS}, max_per_class=1)

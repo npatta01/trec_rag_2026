@@ -8,6 +8,7 @@ import html
 import json
 import os
 import sqlite3
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,14 +79,10 @@ def _require_hash(actual_content: bytes, expected: object, label: str) -> None:
         raise ValueError(f"{label} SHA-256 differs from its authenticated binding")
 
 
-def _contains_hash(value: object, digest: str) -> bool:
-    if value == digest:
-        return True
-    if isinstance(value, Mapping):
-        return any(_contains_hash(item, digest) for item in value.values())
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return any(_contains_hash(item, digest) for item in value)
-    return False
+def _exact_binding(raw: object, path: Path, content: bytes, label: str) -> None:
+    expected = {"path": str(path.resolve()), "bytes": len(content), "sha256": _sha256(content)}
+    if raw != expected:
+        raise ValueError(f"{label} exact source binding differs")
 
 
 def _validate_topics(value: object, label: str) -> None:
@@ -105,6 +102,58 @@ def _mapping(value: object, label: str) -> Mapping[str, object]:
     return value
 
 
+def _jsonl_rows(content: bytes, label: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(content.splitlines(), 1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{label} line {line_number} is invalid") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"{label} rows must be objects")
+        rows.append(row)
+    return rows
+
+
+def _percentiles(scores: Mapping[str, object]) -> dict[str, float]:
+    grouped: dict[float, list[str]] = defaultdict(list)
+    for document, raw in scores.items():
+        grouped[float(raw)].append(str(document))
+    count = len(scores)
+    output: dict[str, float] = {}
+    first = 1
+    for score in sorted(grouped, reverse=True):
+        last = first + len(grouped[score]) - 1
+        value = (count - ((first + last) / 2) + 1) / count
+        for document in grouped[score]:
+            output[document] = value
+        first = last + 1
+    return output
+
+
+def _selected_windows(windows: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    ordered = sorted(
+        windows,
+        key=lambda row: (-float(row["score"]), int(row["document_start_token"]), str(row["window_id"])),
+    )
+    selected: list[Mapping[str, object]] = []
+    covered: list[tuple[int, int]] = []
+    for row in ordered:
+        start, end = int(row["document_start_token"]), int(row["document_end_token"])
+        if start < 0 or end <= start:
+            raise ValueError("representative scored window span is invalid")
+        overlap = sum(
+            max(0, min(end, right) - max(start, left)) for left, right in covered
+        )
+        if selected and end - start - overlap < 128:
+            continue
+        selected.append(row)
+        covered.append((start, end))
+        if len(selected) == 4:
+            break
+    return selected
+
+
 def _verify_sources(sources: ReportSources) -> dict[str, object]:
     """Verify every upstream hash and semantic boundary before using evidence."""
 
@@ -117,13 +166,15 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
         if "topic_ids" in payload:
             _validate_topics(payload.get("topic_ids"), label)
     if (
-        task1.get("status") != "tokenizer_only_preflight_complete"
+        task1.get("schema_version") != "tethered-facet-minilm-preflight-v1"
+        or task1.get("status") != "tokenizer_only_preflight_complete"
         or task1.get("qrels_opened", task1.get("qrels_read")) is not False
         or task1.get("retrieval_path_supported", task1.get("retrieval_performed")) is not False
     ):
         raise ValueError("Task 1 receipt is not an offline completed preflight")
     if (
-        task2.get("status") != "complete"
+        task2.get("schema_version") != "tethered-facet-minilm-scoring-v1"
+        or task2.get("status") != "complete"
         or task2.get("qrels_opened", task2.get("qrels_read")) is not False
         or task2.get("network_access_supported", task2.get("network_accessed")) is not False
     ):
@@ -133,6 +184,8 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
     seal, seal_bytes = _read_object(freeze / "SEALED.json", "Task 3 seal")
     if seal.get("status") not in {"sealed", "sealed_before_qrels"}:
         raise ValueError("Task 3 freeze is not sealed")
+    if seal.get("schema_version") != "tethered-facet-two-basket-seal-v1":
+        raise ValueError("Task 3 seal schema differs")
     sealed_files = _mapping(seal.get("files"), "Task 3 sealed files")
     if "root_sha256" in seal:
         material = {
@@ -165,12 +218,14 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
     task3_summary = json.loads(freeze_bytes["summary.json"])
     if not isinstance(task3_bindings, Mapping) or not isinstance(task3_summary, Mapping):
         raise ValueError("Task 3 authenticated metadata is invalid")
-    if task3_summary.get("status") not in {"complete", "rankings_frozen_before_qrels"} or task3_summary.get("qrels_opened") is not False:
+    if (
+        task3_bindings.get("schema_version") != "tethered-facet-two-basket-freeze-v1"
+        or task3_summary.get("schema_version") != "tethered-facet-two-basket-freeze-v1"
+        or task3_summary.get("status") not in {"complete", "rankings_frozen_before_qrels"}
+        or task3_summary.get("qrels_opened") is not False
+    ):
         raise ValueError("Task 3 freeze is not a qrels-free completed freeze")
     _validate_topics(task3_summary.get("topic_ids"), "Task 3")
-    # Task 2 authenticates Task 1 above; Task 3 must in turn authenticate Task 2.
-    if not _contains_hash(task3_bindings, _sha256(task2_bytes)):
-        raise ValueError("Task 2 receipt SHA-256 is absent from Task 3 input bindings")
     task3_artifacts = task3_summary.get("artifacts")
     if isinstance(task3_artifacts, Mapping):
         _require_hash(freeze_bytes["rankings.jsonl"], task3_artifacts.get("rankings.jsonl"), "Task 3 rankings")
@@ -203,16 +258,57 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
         _require_hash(content, expected, f"Task 4 {stem}")
         evaluation_payloads[stem] = payload
         evaluation_bytes[stem] = content
+    for stem in ("metrics", "diagnostics"):
+        if evaluation_payloads[stem].get("schema_version") != "tethered-facet-evaluation-v1":
+            raise ValueError(f"Task 4 {stem} schema differs")
     evaluation_bindings = evaluation_payloads["input_bindings"]
-    if not _contains_hash(evaluation_bindings, _sha256(seal_bytes)):
-        raise ValueError("Task 3 seal SHA-256 is absent from Task 4 input bindings")
+    if evaluation_bindings.get("schema_version") != "tethered-facet-evaluation-v1":
+        raise ValueError("Task 4 input binding schema differs")
+    if evaluation_bindings.get("task3_root_sha256") != seal.get("root_sha256"):
+        raise ValueError("Task 4 exact Task 3 root binding differs")
+    _exact_binding(evaluation_bindings.get("task3_seal"), freeze / "SEALED.json", seal_bytes, "Task 4 Task 3 seal")
+    _exact_binding(
+        evaluation_bindings.get("task3_input_bindings"),
+        freeze / "input_bindings.json",
+        freeze_bytes["input_bindings.json"],
+        "Task 4 Task 3 input bindings",
+    )
+    _exact_binding(
+        evaluation_bindings.get("task3_rankings"),
+        freeze / "rankings.jsonl",
+        freeze_bytes["rankings.jsonl"],
+        "Task 4 Task 3 rankings",
+    )
+    raw_inputs = task3_bindings.get("inputs")
+    if not isinstance(raw_inputs, Mapping) or evaluation_bindings.get("task3_producer_sources") != raw_inputs:
+        raise ValueError("Task 4 exact producer source bindings differ from Task 3")
+    producer_names = (
+        "facet_candidates", "facet_window_scores", "tethered_candidates",
+        "tethered_window_scores", "tethered_document_scores",
+        "tethered_preflight", "tethered_scoring_receipt",
+    )
+    producer_bytes: dict[str, bytes] = {}
+    producer_hashes: dict[str, str] = {}
+    for name in producer_names:
+        raw = raw_inputs.get(name)
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"Task 3 exact producer binding is missing: {name}")
+        path = Path(str(raw.get("path")))
+        if path.is_symlink():
+            raise ValueError(f"Task 3 producer source is unsafe: {name}")
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Task 3 producer source is unreadable: {name}") from exc
+        _exact_binding(raw, path, content, f"Task 3 {name}")
+        producer_bytes[name] = content
+        producer_hashes[name] = _sha256(content)
+    _exact_binding(raw_inputs["tethered_preflight"], Path(sources.task1_receipt), task1_bytes, "Task 1 direct receipt")
+    _exact_binding(raw_inputs["tethered_scoring_receipt"], Path(sources.task2_receipt), task2_bytes, "Task 2 direct receipt")
     _validate_topics(evaluation_payloads["metrics"].get("topic_ids"), "Task 4 metrics")
     if "topic_ids" in evaluation_payloads["diagnostics"]:
         _validate_topics(evaluation_payloads["diagnostics"].get("topic_ids"), "Task 4 diagnostics")
 
-    raw_inputs = task3_bindings.get("inputs")
-    if not isinstance(raw_inputs, Mapping):
-        raise ValueError("Task 3 authenticated raw input bindings are missing")
     representative_source_hashes: dict[str, str] = {}
     for name in (
         "facet_candidates", "facet_window_scores", "tethered_candidates",
@@ -240,6 +336,9 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
         "metrics": evaluation_payloads["metrics"],
         "diagnostics": evaluation_payloads["diagnostics"],
         "decision": evaluation_payloads["decision"],
+        "task4_summary": dict(evaluation_summary),
+        "producer_bytes": producer_bytes,
+        "task3_bindings": dict(task3_bindings),
         "task3_rankings_sha256": _sha256(freeze_bytes["rankings.jsonl"]),
         "task3_ranking_rows": ranking_rows,
         "representative_source_hashes": representative_source_hashes,
@@ -344,6 +443,8 @@ def _representatives(
     task3_rankings_sha256: str,
     task3_ranking_rows: Mapping[tuple[str, str, str], Mapping[str, object]],
     source_hashes: Mapping[str, str],
+    producer_bytes: Mapping[str, bytes],
+    task3_bindings: Mapping[str, object],
 ) -> list[dict[str, object]]:
     raw = diagnostics.get("representatives")
     if not isinstance(raw, list) or not raw:
@@ -367,6 +468,42 @@ def _representatives(
     }
     rows: list[dict[str, object]] = []
     movements: set[str] = set()
+    candidate_maps: dict[str, dict[tuple[str, str, str], dict[str, object]]] = {}
+    for name in ("facet_candidates", "tethered_candidates"):
+        parsed = _jsonl_rows(producer_bytes[name], name)
+        candidate_maps[name] = {
+            (str(item.get("topic_id")), str(item.get("facet_id", item.get("variant"))), str(item.get("document_id"))): item
+            for item in parsed
+        }
+        if len(candidate_maps[name]) != len(parsed):
+            raise ValueError(f"{name} contains duplicate identities")
+    window_maps: dict[str, dict[tuple[str, str, str], list[dict[str, object]]]] = {}
+    for name in ("facet_window_scores", "tethered_window_scores"):
+        grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+        for item in _jsonl_rows(producer_bytes[name], name):
+            grouped[(str(item.get("topic_id")), str(item.get("facet_id", item.get("variant"))), str(item.get("document_id")))].append(item)
+        window_maps[name] = grouped
+    document_scores = {
+        (str(item.get("topic_id")), str(item.get("facet_id")), str(item.get("document_id"))): item
+        for item in _jsonl_rows(producer_bytes["tethered_document_scores"], "tethered document scores")
+    }
+    raw_topic_inputs = task3_bindings.get("topic_inputs")
+    if not isinstance(raw_topic_inputs, Mapping):
+        raise ValueError("Task 3 semantic inputs are missing")
+    semantic: dict[tuple[str, str, str], tuple[dict[str, float], Mapping[str, object]]] = {}
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        arm_inputs = raw_topic_inputs.get(arm)
+        if not isinstance(arm_inputs, Mapping):
+            raise ValueError("Task 3 semantic arm inputs are missing")
+        for topic, topic_input in arm_inputs.items():
+            facets = topic_input.get("facets") if isinstance(topic_input, Mapping) else None
+            if not isinstance(facets, list):
+                raise ValueError("Task 3 semantic facets are missing")
+            for facet in facets:
+                scores = facet.get("scores") if isinstance(facet, Mapping) else None
+                if not isinstance(scores, Mapping):
+                    raise ValueError("Task 3 semantic scores are missing")
+                semantic[(arm, str(topic), str(facet.get("facet_id")))] = (_percentiles(scores), facet)
     for value in raw:
         row = _mapping(value, "representative row")
         if not required <= set(row):
@@ -447,6 +584,65 @@ def _representatives(
             )
         ):
             raise ValueError("representative passage provenance does not match Task 3 inputs")
+        identity = (topic, str(row["facet_id"]), str(row["document_id"]))
+        facet_candidate = candidate_maps["facet_candidates"].get(identity)
+        tethered_candidate = candidate_maps["tethered_candidates"].get(identity)
+        if not isinstance(facet_candidate, Mapping) or not isinstance(tethered_candidate, Mapping):
+            raise ValueError("representative candidate identity is absent from exact producer sources")
+        facet_query = tethered_candidate.get("facet_query")
+        narrative = row["narrative"]
+        exact_query = str(narrative) + "\n\nFocus: " + str(facet_query)
+        if (
+            facet_query != row["facet_query"]
+            or tethered_candidate.get("query") != exact_query
+            or tethered_candidate.get("query_sha256") != _sha256(exact_query.encode())
+            or tethered_candidate.get("facet_query_sha256") != _sha256(str(facet_query).encode())
+            or facet_candidate.get("query") != facet_query
+            or facet_candidate.get("query_sha256") != tethered_candidate.get("facet_query_sha256")
+            or facet_candidate.get("text_sha256") != tethered_candidate.get("text_sha256")
+            or int(tethered_candidate.get("prior_bm25_rank", 0)) != normalized["prior_bm25_rank"]
+        ):
+            raise ValueError("representative narrative/facet/query/text/BM25 provenance differs")
+        chosen_prefix = "tethered" if movement == "promoted" else "facet"
+        chosen_windows = window_maps[f"{chosen_prefix}_window_scores"].get(identity, [])
+        chosen = next((item for item in chosen_windows if item.get("window_id") == passage["window_id"]), None)
+        selected_windows = _selected_windows(chosen_windows)
+        semantic_percentiles, semantic_facet = semantic[("TETHERED-2B" if movement == "promoted" else "FACET-2B", topic, str(row["facet_id"]))]
+        if (
+            not isinstance(chosen, Mapping)
+            or not selected_windows
+            or chosen != selected_windows[0]
+            or chosen.get("window_text") != row["selected_passage"]
+            or chosen.get("window_sha256") != _sha256(str(row["selected_passage"]).encode())
+            or chosen.get("window_sha256") != passage["window_sha256"]
+            or chosen.get("query_sha256") != passage["query_sha256"]
+            or chosen.get("document_sha256", chosen.get("text_sha256")) != passage["text_sha256"]
+            or chosen.get("model") != passage["model"]
+            or chosen.get("model_revision") != passage["model_revision"]
+            or chosen.get("document_start_token") != passage["document_start_token"]
+            or chosen.get("document_end_token") != passage["document_end_token"]
+            or semantic_facet.get("model") != passage["model"]
+            or semantic_facet.get("model_revision") != passage["model_revision"]
+        ):
+            raise ValueError("representative passage/model/span provenance differs from exact producer sources")
+        facet_percentiles, _ = semantic[("FACET-2B", topic, str(row["facet_id"]))]
+        tethered_percentiles, _ = semantic[("TETHERED-2B", topic, str(row["facet_id"]))]
+        if (
+            normalized["facet_only_percentile"] != facet_percentiles.get(str(row["document_id"]))
+            or normalized["tethered_percentile"] != tethered_percentiles.get(str(row["document_id"]))
+        ):
+            raise ValueError("representative query-local percentiles differ from Task 3")
+        if movement == "promoted":
+            document = document_scores.get(identity)
+            if (
+                not isinstance(document, Mapping)
+                or passage["document_score_source_sha256"] != source_hashes["tethered_document_scores"]
+                or passage["window_sha256"] not in document.get("window_hashes", [])
+                or document.get("window_hashes") != [item.get("window_sha256") for item in selected_windows]
+                or document.get("model") != passage["model"]
+                or document.get("model_revision") != passage["model_revision"]
+            ):
+                raise ValueError("representative document score provenance differs")
         normalized["passage_provenance"] = dict(passage)
         normalized["ranking_provenance"] = dict(ranking)
         rows.append(normalized)
@@ -477,6 +673,8 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         task3_rankings_sha256=str(verified["task3_rankings_sha256"]),
         task3_ranking_rows=verified["task3_ranking_rows"],  # type: ignore[arg-type]
         source_hashes=verified["representative_source_hashes"],  # type: ignore[arg-type]
+        producer_bytes=verified["producer_bytes"],  # type: ignore[arg-type]
+        task3_bindings=verified["task3_bindings"],  # type: ignore[arg-type]
     )
     decision = dict(_mapping(verified["decision"], "decision"))
     if decision.get("production_promotion_authorized") is True:
@@ -509,9 +707,81 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         decision.get("next_step")
         or "Run a preregistered evaluation on fresh topics and untouched qrels."
     )
+    novel_ids = _mapping(diagnostics.get("novel_relevant_ids"), "novel relevant IDs")
+    if set(novel_ids) != set(TOPIC_IDS) or any(not isinstance(value, list) for value in novel_ids.values()):
+        raise ValueError("diagnostic novel relevant IDs have invalid topic coverage")
+    reconciled_novel_count = sum(len(set(map(str, value))) for value in novel_ids.values())  # type: ignore[arg-type]
+    task4_summary = _mapping(verified["task4_summary"], "Task 4 summary")
+    claimed_counts = (
+        metrics.get("novel_relevant_total", metrics.get("novel_relevant_count")),
+        task4_summary.get("novel_relevant_count"),
+        decision.get("novel_relevant_count"),
+    )
+    if any(value != reconciled_novel_count for value in claimed_counts):
+        raise ValueError("novel relevant count differs across authenticated Task 4 evidence")
+    diagnostic_fields = (
+        "noise_pattern_definitions", "noise_pattern_counts", "facet_yield_changes",
+        "relevant_below_500", "duplicate_and_quota_pressure", "scoring_telemetry",
+    )
+    report_diagnostics = {field: diagnostics.get(field) for field in diagnostic_fields}
+    if (
+        not isinstance(report_diagnostics["noise_pattern_definitions"], Mapping)
+        or any(not isinstance(report_diagnostics[field], list) for field in diagnostic_fields[1:5])
+        or not isinstance(report_diagnostics["scoring_telemetry"], Mapping)
+    ):
+        raise ValueError("Task 4 complete diagnostic schema differs")
+    patterns = report_diagnostics["noise_pattern_definitions"]
+    assert isinstance(patterns, Mapping)
+    for row in report_diagnostics["noise_pattern_counts"]:  # type: ignore[union-attr]
+        if not isinstance(row, Mapping) or set(patterns) - set(row):
+            raise ValueError("noise pattern count schema differs")
+        if any(int(row[name]) < 0 or int(row[name]) > int(row["selected_count"]) for name in patterns):
+            raise ValueError("noise pattern counts do not reconcile")
+    for row in report_diagnostics["facet_yield_changes"]:  # type: ignore[union-attr]
+        if not isinstance(row, Mapping) or row.get("classification") not in {"rose", "fell", "zero", "unchanged"}:
+            raise ValueError("facet yield change schema differs")
+        if int(row.get("tethered_relevant_count", 0)) - int(row.get("facet_only_relevant_count", 0)) != int(row.get("delta", 0)):
+            raise ValueError("facet yield change counts do not reconcile")
+    for row in report_diagnostics["relevant_below_500"]:  # type: ignore[union-attr]
+        if not isinstance(row, Mapping) or row.get("reason") not in {"facet_quota_exhausted", "duplicate_displaced", "only_rrf_or_dual_tail"}:
+            raise ValueError("relevant-below-500 reason schema differs")
+    for row in report_diagnostics["duplicate_and_quota_pressure"]:  # type: ignore[union-attr]
+        duplicates = row.get("duplicate_skip_totals") if isinstance(row, Mapping) else None
+        shortages = row.get("shortage_counts") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(duplicates, Mapping)
+            or not isinstance(shortages, Mapping)
+            or sum(map(int, duplicates.values())) != int(row.get("duplicate_skip_total", -1))
+            or sum(map(int, shortages.values())) != int(row.get("shortage_total", -1))
+        ):
+            raise ValueError("duplicate/quota pressure counts do not reconcile")
+    telemetry = _mapping(report_diagnostics["scoring_telemetry"], "scoring telemetry")
+    task1 = _mapping(verified["task1"], "Task 1")
+    task2 = _mapping(verified["task2"], "Task 2")
+    task1_summary = _mapping(task1.get("summary"), "Task 1 summary")
+    runtime = _mapping(task1.get("runtime_evidence"), "Task 1 runtime evidence")
+    expected_telemetry = {
+        "preflight_source_sha256": verified["source_hashes"]["task1_receipt_sha256"],  # type: ignore[index]
+        "scoring_receipt_source_sha256": verified["source_hashes"]["task2_receipt_sha256"],  # type: ignore[index]
+        "model": task2.get("model"),
+        "model_revision": task2.get("model_revision"),
+        "query_document_pair_count": task1_summary.get("query_document_pair_count"),
+        "planned_window_count": task2.get("planned_window_count"),
+        "completed_window_count": task2.get("completed_window_count"),
+        "document_score_count": task2.get("document_score_count"),
+        "cache_hit_count": task2.get("cache_hit_count"),
+        "cache_miss_count": int(task2.get("completed_window_count", 0)) - int(task2.get("cache_hit_count", 0)),
+        "unique_forward_pair_count": task2.get("unique_forward_pair_count"),
+        "elapsed_seconds": task2.get("elapsed_seconds"),
+        "projected_inference_seconds": runtime.get("projected_inference_seconds"),
+        "peak_device_memory_bytes": task2.get("peak_device_memory_bytes"),
+        "peak_host_memory_bytes": task2.get("peak_host_memory_bytes"),
+    }
+    if dict(telemetry) != expected_telemetry:
+        raise ValueError("scoring telemetry differs from exact Task 1/2 sources")
     label = str(decision.get("label", "unknown"))
     title_label = label.replace("_", " ").title()
-    novel_total_raw = metrics.get("novel_relevant_total", metrics.get("novel_relevant_count"))
+    novel_total_raw = reconciled_novel_count
     if type(novel_total_raw) is not int or novel_total_raw <= 0:
         raise ValueError("Task 4 metrics lack authenticated novel relevant total")
     return {
@@ -545,6 +815,7 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         "topic_contributions": topic_rows,
         "facet_contributions": facet_rows,
         "representatives": representatives,
+        "diagnostics": report_diagnostics,
         "decision": decision,
         "source_hashes": verified["source_hashes"],
     }
@@ -567,6 +838,7 @@ def _render_html(artifact: Mapping[str, object]) -> str:
     deltas = _mapping(artifact["metric_deltas"], "metric deltas")
     answers = _mapping(artifact["answers"], "answers")
     decision = _mapping(artifact["decision"], "decision")
+    diagnostics = _mapping(artifact["diagnostics"], "diagnostics")
     representatives = artifact["representatives"]
     topic_rows = artifact["topic_contributions"]
     facet_rows = artifact["facet_contributions"]
@@ -612,11 +884,15 @@ def _render_html(artifact: Mapping[str, object]) -> str:
         f"<dt>Tethered final rank</dt><dd>{int(row['tethered_final_rank']):,}</dd>"
         f"<dt>Prior facet BM25 rank</dt><dd>{int(row['prior_bm25_rank']):,}</dd>"
         f"<dt>Passage provenance</dt><dd>window {esc(row['passage_provenance']['window_id'])}; "
-        f"SHA-256 {esc(row['passage_provenance']['window_sha256'])}; model {esc(row['passage_provenance']['model'])} "
+        f"candidate source {esc(row['passage_provenance']['candidate_source_sha256'])}; window source {esc(row['passage_provenance']['window_score_source_sha256'])}; "
+        f"document source {esc(row['passage_provenance']['document_score_source_sha256'])}; query {esc(row['passage_provenance']['query_sha256'])}; "
+        f"text {esc(row['passage_provenance']['text_sha256'])}; window {esc(row['passage_provenance']['window_sha256'])}; model {esc(row['passage_provenance']['model'])} "
         f"revision {esc(row['passage_provenance']['model_revision'])}; tokens "
-        f"{int(row['passage_provenance']['document_start_token'])}–{int(row['passage_provenance']['document_end_token'])}</dd>"
+        f"{int(row['passage_provenance']['document_start_token'])}–{int(row['passage_provenance']['document_end_token'])}; rank source {esc(row['passage_provenance']['rank_source'])}</dd>"
         f"<dt>Ranking provenance</dt><dd>Task 3 SHA-256 {esc(row['ranking_provenance']['task3_rankings_sha256'])}; "
-        f"{esc(row['ranking_provenance']['percentile_method'])}</dd></dl>"
+        f"facet source {esc(row['ranking_provenance']['facet_only_source'])}; tethered source {esc(row['ranking_provenance']['tethered_source'])}; "
+        f"generating facet {esc(row['ranking_provenance']['generating_facet'])}; {esc(row['ranking_provenance']['percentile_method'])}; "
+        f"rank source {esc(row['ranking_provenance']['rank_source'])}</dd></dl>"
         "</article>"
         for row in representatives
     )
@@ -626,6 +902,32 @@ def _render_html(artifact: Mapping[str, object]) -> str:
         "Relevant facet-basket contributions increased and a judged-irrelevant high facet-only match was demoted when narrative context was restored."
         if answers["narrative_tether_reduced_noise"]
         else "The saved contribution counts and representative movements do not establish a clear reduction in facet noise."
+    )
+    noise_rows = diagnostics["noise_pattern_counts"]
+    facet_changes = diagnostics["facet_yield_changes"]
+    below_rows = diagnostics["relevant_below_500"]
+    pressure_rows = diagnostics["duplicate_and_quota_pressure"]
+    telemetry = _mapping(diagnostics["scoring_telemetry"], "scoring telemetry")
+    assert all(isinstance(value, list) for value in (noise_rows, facet_changes, below_rows, pressure_rows))
+    noise_body = "".join(
+        f"<tr><th scope='row'>{esc(row['facet_id'])}</th><td>{esc(row['arm'])}</td><td>{int(row['selected_count'])}</td>"
+        f"<td>{sum(int(row.get(name, 0)) for name in diagnostics['noise_pattern_definitions'])}</td></tr>"
+        for row in noise_rows
+    )
+    change_body = "".join(
+        f"<tr><th scope='row'>{esc(row['facet_id'])}</th><td>{int(row['facet_only_relevant_count'])}</td>"
+        f"<td>{int(row['tethered_relevant_count'])}</td><td>{esc(row['classification'])}</td></tr>"
+        for row in facet_changes
+    )
+    below_body = "".join(
+        f"<tr><th scope='row'>{esc(row['document_id'])}</th><td>{esc(row['arm'])}</td><td>{esc(row['topic_id'])}</td>"
+        f"<td>{int(row['final_rank'])}</td><td>{esc(row['best_facet'])}</td><td>{esc(row['reason'])}</td></tr>"
+        for row in below_rows
+    ) or "<tr><td colspan='6'>No grade-2+ documents were below rank 500.</td></tr>"
+    pressure_body = "".join(
+        f"<tr><th scope='row'>{esc(row['topic_id'])}</th><td>{esc(row['arm'])}</td>"
+        f"<td>{int(row['duplicate_skip_total'])}</td><td>{int(row['shortage_total'])}</td></tr>"
+        for row in pressure_rows
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -658,6 +960,11 @@ dl{{display:grid;grid-template-columns:minmax(9rem,1fr) 3fr;gap:.5rem 1rem}}dt{{
 <section aria-labelledby="topics"><h2 id="topics">Where the change came from</h2><div class="table-wrap"><table><caption>Per-topic TETHERED-2B deltas versus FACET-2B at 500</caption><thead><tr><th scope="col">Topic</th><th scope="col">Recall@500</th><th scope="col">Graded Recall@500</th></tr></thead><tbody>{topic_body}</tbody></table></div>
 <div class="table-wrap" style="margin-top:1rem"><table><caption>Per-facet relevant contribution</caption><thead><tr><th scope="col">Facet</th><th scope="col">Arm</th><th scope="col">Selected</th><th scope="col">Relevant</th><th scope="col">Yield</th></tr></thead><tbody>{facet_body}</tbody></table></div></section>
 <section aria-labelledby="examples"><h2 id="examples">Representative promoted and demoted passages</h2><p>These bounded rows come from authenticated diagnostics; the report does not reopen canonical qrels or rankings.</p><div class="grid">{evidence}</div></section>
+<section aria-labelledby="noise"><h2 id="noise">Noise patterns</h2><div class="table-wrap"><table><caption>Frozen regex pattern counts by arm and facet</caption><thead><tr><th>Facet</th><th>Arm</th><th>Selected</th><th>Pattern flags</th></tr></thead><tbody>{noise_body}</tbody></table></div></section>
+<section aria-labelledby="yield-changes"><h2 id="yield-changes">Facet yield changes</h2><div class="table-wrap"><table><caption>Relevant contribution changes</caption><thead><tr><th>Facet</th><th>Facet-only</th><th>Tethered</th><th>Classification</th></tr></thead><tbody>{change_body}</tbody></table></div></section>
+<section aria-labelledby="below"><h2 id="below">Relevant below rank 500</h2><div class="table-wrap"><table><caption>Grade-2+ documents and explicit miss reasons</caption><thead><tr><th>Document</th><th>Arm</th><th>Topic</th><th>Rank</th><th>Best facet</th><th>Reason</th></tr></thead><tbody>{below_body}</tbody></table></div></section>
+<section aria-labelledby="pressure"><h2 id="pressure">Duplicate and quota pressure</h2><div class="table-wrap"><table><caption>Exact duplicate skips and shortages</caption><thead><tr><th>Topic</th><th>Arm</th><th>Duplicate skips</th><th>Shortages</th></tr></thead><tbody>{pressure_body}</tbody></table></div></section>
+<section aria-labelledby="telemetry"><h2 id="telemetry">Scoring telemetry</h2><dl><dt>Model / revision</dt><dd>{esc(telemetry.get('model'))} / {esc(telemetry.get('model_revision'))}</dd><dt>Cache hits / misses</dt><dd>{esc(telemetry.get('cache_hit_count'))} / {esc(telemetry.get('cache_miss_count'))}</dd><dt>Windows completed</dt><dd>{esc(telemetry.get('completed_window_count'))}</dd><dt>Elapsed / projected seconds</dt><dd>{esc(telemetry.get('elapsed_seconds'))} / {esc(telemetry.get('projected_inference_seconds'))}</dd><dt>Peak device / host bytes</dt><dd>{esc(telemetry.get('peak_device_memory_bytes'))} / {esc(telemetry.get('peak_host_memory_bytes'))}</dd></dl></section>
 <section aria-labelledby="limits"><h2 id="limits">What this does not establish</h2><p>The mechanical label is <strong>{esc(decision.get('label','unknown'))}</strong>, but the topics and judgments were already inspected. This is evidence for a fresh preregistered test, not authorization to promote a production system.</p></section></main>
 <footer>Standalone offline artifact · source hashes are recorded in artifact.json · no external runtime dependencies.</footer></body></html>
 """
