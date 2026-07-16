@@ -121,6 +121,126 @@ git commit -m "Add all-topic facet validation contract"
 
 ---
 
+### Task 1b: Author, review, and freeze the real 22-topic facet plan
+
+**Files:**
+- Modify: `code/trec_rag/all_topic_facet_contract.py`
+- Modify: `code/tests/test_all_topic_facet_contract.py`
+- Create: `reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json`
+- Create at run time: `outputs/all_topic_tethered_facet_validation_v1/planning/`
+
+**Interfaces:**
+- Consumes: the approved Task 1 contract, all 22 narrative rows, authenticated original cache files, and historical facet manifests only as qrels-blind wording references.
+- Produces: a reviewed exact-22 `facet_manifest.json`, a contract CLI, exact request count, cache bindings, and verified planning seal.
+
+- [ ] **Step 1: Write failing CLI and production-manifest tests**
+
+```python
+def test_production_manifest_is_exact_and_valid() -> None:
+    payload = json.loads(PRODUCTION_MANIFEST.read_text())
+    validated = validate_facet_manifest(payload)
+    assert tuple(validated["topic_ids"]) == ALL_TOPIC_IDS
+    assert 3 * len(ALL_TOPIC_IDS) <= len(validated["facets"]) <= 9 * len(ALL_TOPIC_IDS)
+
+
+def test_cache_discovery_binds_each_topic_once(tmp_path: Path) -> None:
+    _write_exact_cache_files(tmp_path, ALL_TOPIC_IDS)
+    bindings = discover_original_caches(tmp_path, _production_narratives())
+    assert tuple(bindings) == ALL_TOPIC_IDS
+    assert len({row["path"] for row in bindings.values()}) == len(ALL_TOPIC_IDS)
+
+
+def test_cli_preflight_never_opens_qrels_or_network(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(socket, "create_connection", _forbidden)
+    result = main(["freeze", "--manifest", str(PRODUCTION_MANIFEST),
+                   "--cache-root", str(_exact_cache_root()),
+                   "--output", str(tmp_path / "planning")])
+    assert result == 0
+```
+
+- [ ] **Step 2: Run tests and verify RED**
+
+Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py`
+
+Expected: tests fail because the production manifest, cache discovery, and CLI
+do not exist.
+
+- [ ] **Step 3: Author the qrels-blind manifest**
+
+For every topic, read only the narrative and historical facet manifests. Enumerate
+three-to-nine explicit obligations in narrative order. Render each query with
+subject, population/domain, and requested relation. Use no retrieved documents,
+qrels, nuggets, candidate answers, or web sources. Add bridge provenance for
+every unsupported query term. Save exact narrative/query hashes and frozen
+analyzer output. The manifest must pass `validate_facet_manifest()` unchanged.
+
+- [ ] **Step 4: Add cache discovery and the planning CLI**
+
+Implement:
+
+```python
+def discover_original_caches(
+    approved_cache_root: Path,
+    narratives: Mapping[str, str],
+) -> dict[str, dict[str, str]]:
+    """Return one authenticated path/SHA binding per exact authorized topic."""
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Support `freeze` and `verify` without qrels/network/model access."""
+```
+
+Discovery must authenticate each candidate through `_authenticate_original_cache`,
+reject duplicate/missing topic bindings, avoid following escaping symlinks, and
+return bindings in `ALL_TOPIC_IDS` order. `freeze` loads the tracked manifest,
+discovers exact caches, and calls `freeze_planning`; `verify` calls
+`verify_planning`. Neither command accepts topic overrides or qrels paths.
+
+- [ ] **Step 5: Obtain independent facet-content review before freezing**
+
+The reviewer receives only narratives, `facet_prompt.md`, and the proposed
+manifest. For each topic, verify obligation completeness, no invented subtopic,
+query tethering, bridge safety, deterministic order, and likely BM25 lexical
+specificity. Record all findings in
+`reports/experiments/all_topic_tethered_facet_validation_v1/facet_review.md`.
+Resolve every Critical or Important finding and rerun validation.
+
+- [ ] **Step 6: Freeze and verify the exact planning preflight**
+
+Run:
+
+```bash
+.venv/bin/python -m trec_rag.all_topic_facet_contract freeze \
+  --manifest reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json \
+  --cache-root /home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote \
+  --output outputs/all_topic_tethered_facet_validation_v1/planning
+.venv/bin/python -m trec_rag.all_topic_facet_contract verify \
+  --cache-root /home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote \
+  --planning outputs/all_topic_tethered_facet_validation_v1/planning
+```
+
+Expected: 22 authenticated original top-1,000 cache hits, zero original requests,
+an exact top-200 facet request count, immutable authorization pre-seal, no qrels
+binding, and a verified planning root hash.
+
+- [ ] **Step 7: Run focused and compatibility tests**
+
+Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py code/tests/test_deep_facet_candidate_gate.py code/tests/test_sparse_relevance_manifest.py`
+
+Expected: all tests pass.
+
+- [ ] **Step 8: Commit Task 1b**
+
+```bash
+git add code/trec_rag/all_topic_facet_contract.py \
+  code/tests/test_all_topic_facet_contract.py \
+  reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json \
+  reports/experiments/all_topic_tethered_facet_validation_v1/facet_review.md
+git commit -m "Freeze all-topic facet plan"
+```
+
+---
+
 ### Task 2: Retrieve and authenticate the uniform candidate union
 
 **Files:**
@@ -579,4 +699,3 @@ git add code/trec_rag/build_all_topic_tethered_report.py \
   reports/experiments/all_topic_tethered_facet_validation_v1
 git commit -m "Report all-topic facet validation"
 ```
-
