@@ -13,8 +13,9 @@ The experiment-specific authorized topic order is:
 `14, 31, 37, 58, 72, 84, 144, 161, 200, 213, 219, 224, 225, 233, 273, 300, 407, 477, 499, 515, 707, 897`
 
 This authorization does not change the repository's shared protected-topic
-constants. Planning must seal the authorization receipt before opening the
-topic source. Qrels fields are forbidden anywhere in the planning manifest.
+constants. Planning must fsync the authorization receipt and a separate,
+read-only authorization pre-seal before opening the topic source; the final
+seal binds both. Qrels fields are forbidden anywhere in the planning manifest.
 
 ## Rendering rules
 
@@ -65,6 +66,12 @@ Reject bridge terms that supply a candidate answer, factual claim, cause,
 outcome, example, date, or narrower subtopic. Prefer no bridge term when the
 narrative already provides a clear tether.
 
+Every analyzed bridge surface must be nonempty, occur exactly in the query, and
+cover every query term that is not supported by the narrative or obligation.
+Only ordinary analyzer glue words and conservative morphological variants are
+allowed without a bridge record. Anchor, domain, and relation tethers must each
+have nonempty analyzer output and be supported by the narrative or obligation.
+
 ## Required facet fields
 
 Each facet record contains only:
@@ -81,6 +88,10 @@ created.
 ## Retrieval planning invariants
 
 - Reuse the exact original-narrative cache at depth 1,000 for all 22 topics.
+- Supply an approved cache root and authenticate each existing regular cache
+  file under it from actual bytes: validate its 64-hex SHA-256, recomputed
+  request key, topic/query/variant/depth identity, raw-response provenance, and
+  exact 1,000-candidate schema. Reject missing, tampered, or escaping paths.
 - Schedule zero original-narrative requests.
 - Schedule each accepted facet exactly once at depth 200.
 - Freeze the exact facet request count before retrieval.
