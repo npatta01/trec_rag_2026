@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 
@@ -131,10 +133,21 @@ class _Transport:
         self.crash_variant = crash_variant
         self.identities: list[str] = []
         self.raw_exists_when_called: list[bool] = []
+        self.last_start_event: dict[str, object] | None = None
+        self._event_count = 0
+        self._lock = threading.Lock()
 
     def __call__(self, request):
         variant = request.identity.variant_name.rsplit(":", 1)[-1]
-        self.identities.append(variant)
+        with self._lock:
+            self.identities.append(variant)
+            epoch = 1_700_000_000.0 + self._event_count * 3.0
+            self._event_count += 1
+            self.last_start_event = {
+                "request_key": request.identity.request_key,
+                "started_at_epoch": epoch,
+                "started_at_utc": f"2023-11-14T22:13:{20 + int(epoch - 1_700_000_000):02d}Z",
+            }
         if variant == self.crash_variant:
             raise KeyboardInterrupt("synthetic crash")
         if variant == self.fail_variant:
@@ -166,6 +179,7 @@ class _Clock:
 @pytest.fixture(autouse=True)
 def _authorized_synthetic_topics(monkeypatch):
     monkeypatch.setattr(module, "ALL_TOPIC_IDS", TOPICS)
+    monkeypatch.setattr(module, "EXPECTED_FACET_REQUEST_COUNT", 3)
 
 
 def test_original_requests_must_be_exact_cache_hits() -> None:
@@ -243,10 +257,10 @@ def test_limiter_spaces_attempts_and_failed_identity_is_never_retried(tmp_path: 
     assert len(raw) == 3
 
     resumed = _Transport()
-    with pytest.raises(ValueError, match="immutable failed attempt"):
+    with pytest.raises(ValueError, match="immutable shared failure attempt"):
         run_retrieval(
             _planning(),
-            tmp_path / "retrieval",
+            tmp_path / "different-output-after-failure",
             resumed,
             clock=_Clock(),
             cache_root=tmp_path / "cache",
@@ -273,7 +287,7 @@ def test_crash_resume_reuses_successes_and_refuses_pending_attempt(tmp_path: Pat
     with pytest.raises(ValueError, match="pending attempt"):
         run_retrieval(
             _planning(),
-            output,
+            tmp_path / "different-output-after-crash",
             resumed,
             clock=_Clock(),
             cache_root=tmp_path / "cache",
@@ -282,7 +296,7 @@ def test_crash_resume_reuses_successes_and_refuses_pending_attempt(tmp_path: Pat
     assert resumed.identities == []
 
 
-def test_successful_cache_only_resume_seals_and_verifies_union(tmp_path: Path) -> None:
+def test_successful_cache_only_resume_seals_and_verifies_union(monkeypatch, tmp_path: Path) -> None:
     output = tmp_path / "retrieval"
     cache_root = tmp_path / "cache"
     first = run_retrieval(
@@ -295,7 +309,7 @@ def test_successful_cache_only_resume_seals_and_verifies_union(tmp_path: Path) -
     )
     assert first["complete"] is True
     assert first["external_attempts"] == 3
-    assert verify_retrieval(output)["verified"] is True
+    assert _verify_against_synthetic_planning(monkeypatch, output)["verified"] is True
 
     # A fresh output consumes only authenticated exact cache entries.
     cache_transport = _Transport()
@@ -315,7 +329,7 @@ def test_successful_cache_only_resume_seals_and_verifies_union(tmp_path: Path) -
     union_path = second_output / "accepted_union.jsonl"
     union_path.write_bytes(union_path.read_bytes() + b"{}\n")
     with pytest.raises(ValueError, match="retrieval seal mismatch"):
-        verify_retrieval(second_output)
+        _verify_against_synthetic_planning(monkeypatch, second_output)
 
 
 def test_transport_rejects_original_network_request(tmp_path: Path) -> None:
@@ -342,6 +356,10 @@ def test_live_transport_uses_persistent_limiter_and_makes_one_attempt() -> None:
 
         def get(self, url, **kwargs):
             self.calls.append((url, kwargs))
+            self.last_grant_event = {
+                "started_at_epoch": 1_700_000_000.0,
+                "started_at_utc": "2023-11-14T22:13:20Z",
+            }
             return Response()
 
     request = module._build_facet_requests(build_retrieval_plan(_planning(), _original_cache()))[0]
@@ -361,7 +379,7 @@ def test_live_transport_uses_persistent_limiter_and_makes_one_attempt() -> None:
 
 
 def test_verify_rejects_semantic_provenance_drift_even_with_fresh_self_seal(
-    tmp_path: Path,
+    monkeypatch, tmp_path: Path,
 ) -> None:
     output = tmp_path / "retrieval"
     run_retrieval(
@@ -386,4 +404,177 @@ def test_verify_rejects_semantic_provenance_drift_even_with_fresh_self_seal(
     module._create_seal(output)
 
     with pytest.raises(ValueError, match="original stream provenance"):
-        verify_retrieval(output)
+        _verify_against_synthetic_planning(monkeypatch, output)
+
+
+def _verify_against_synthetic_planning(
+    monkeypatch, output: Path, *, planning: dict[str, object] | None = None
+) -> dict[str, object]:
+    expected = _planning() if planning is None else planning
+    monkeypatch.setattr(
+        module,
+        "_load_sealed_planning",
+        lambda planning_dir, *, approved_original_cache_root: expected,
+    )
+    monkeypatch.setattr(module, "_load_original_caches", lambda plan, *, approved_root: _original_cache())
+    return verify_retrieval(
+        output,
+        Path("/synthetic/planning"),
+        approved_original_cache_root=Path(
+            "/home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote"
+        ),
+    )
+
+
+def test_verify_authenticates_external_planning_root(monkeypatch, tmp_path: Path) -> None:
+    output = tmp_path / "retrieval"
+    run_retrieval(
+        _planning(),
+        output,
+        _Transport(),
+        clock=_Clock(),
+        cache_root=tmp_path / "cache",
+        original_cache=_original_cache(),
+    )
+    drifted = _planning()
+    drifted["planning_root_sha256"] = "e" * 64
+
+    with pytest.raises(ValueError, match="sealed planning binding"):
+        _verify_against_synthetic_planning(monkeypatch, output, planning=drifted)
+
+
+def test_verify_rejects_resealed_zero_facet_artifact(monkeypatch, tmp_path: Path) -> None:
+    output = tmp_path / "retrieval"
+    run_retrieval(
+        _planning(),
+        output,
+        _Transport(),
+        clock=_Clock(),
+        cache_root=tmp_path / "cache",
+        original_cache=_original_cache(),
+    )
+    original = [json.loads(line) for line in (output / "original_candidates.jsonl").read_text().splitlines()]
+    (output / "facet_candidates.jsonl").write_bytes(b"")
+    (output / "accepted_union.jsonl").write_bytes(module._jsonl_bytes(build_union(original, [])))
+    summary = json.loads((output / "retrieval_summary.json").read_text())
+    summary["facet_request_count"] = 0
+    summary["facet_candidate_rows"] = 0
+    summary["accepted_union_rows"] = len(original)
+    (output / "retrieval_summary.json").write_bytes(module._pretty_bytes(summary))
+    (output / "RETRIEVAL_SEALED.json").unlink()
+    module._create_seal(output)
+
+    with pytest.raises(ValueError, match="facet count|facet stream"):
+        _verify_against_synthetic_planning(monkeypatch, output)
+
+
+def test_verify_reopens_original_cache_and_rejects_forged_rows(
+    monkeypatch, tmp_path: Path
+) -> None:
+    planning = _planning()
+    root = tmp_path / "approved-original-cache"
+    root.mkdir()
+    for sealed in planning["originals"]:
+        topic_id = sealed["topic_id"]
+        supplied = _original_cache()[topic_id]
+        payload = {
+            "topic_id": topic_id,
+            "variant_name": "original",
+            "hits": 1000,
+            "index": module.ORIGINAL_INDEX,
+            "index_url": module.ORIGINAL_INDEX_URL,
+            "response": {
+                "candidates": [
+                    {
+                        "docid": row["docid"],
+                        "rank": row["rank"],
+                        "score": row["score"],
+                        "doc": row["text"],
+                    }
+                    for row in supplied["candidates"]
+                ]
+            },
+        }
+        raw = module._pretty_bytes(payload)
+        path = root / f"{topic_id}.json"
+        path.write_bytes(raw)
+        sealed["cache_path"] = str(path)
+        sealed["cache_sha256"] = _sha(raw)
+        sealed["raw_response_provenance"]["cache_content_sha256"] = _sha(raw)
+    monkeypatch.setattr(module, "APPROVED_ORIGINAL_CACHE_ROOT", root)
+    source_cache = module._load_original_caches(planning, approved_root=root)
+    output = tmp_path / "retrieval"
+    run_retrieval(
+        planning,
+        output,
+        _Transport(),
+        clock=_Clock(),
+        cache_root=tmp_path / "cache",
+        original_cache=source_cache,
+    )
+    original_path = output / "original_candidates.jsonl"
+    original = [json.loads(line) for line in original_path.read_text().splitlines()]
+    original[0]["document_id"] = "forged-docid"
+    original[0]["text"] = "forged passage"
+    original[0]["score"] = 999999.0
+    original_path.write_bytes(module._jsonl_bytes(original))
+    facets = [json.loads(line) for line in (output / "facet_candidates.jsonl").read_text().splitlines()]
+    (output / "accepted_union.jsonl").write_bytes(module._jsonl_bytes(build_union(original, facets)))
+    (output / "RETRIEVAL_SEALED.json").unlink()
+    module._create_seal(output)
+
+    monkeypatch.setattr(
+        module,
+        "_load_sealed_planning",
+        lambda planning_dir, *, approved_original_cache_root: planning,
+    )
+    with pytest.raises(ValueError, match="original cache candidate"):
+        verify_retrieval(
+            output,
+            Path("/synthetic/planning"),
+            approved_original_cache_root=root,
+        )
+
+
+def test_request_start_events_survive_cache_only_restart(monkeypatch, tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    first = tmp_path / "first"
+    run_retrieval(
+        _planning(), first, _Transport(), clock=_Clock(), cache_root=cache_root,
+        original_cache=_original_cache(),
+    )
+    second = tmp_path / "second"
+    run_retrieval(
+        _planning(), second, _Transport(), clock=_Clock(), cache_root=cache_root,
+        original_cache=_original_cache(),
+    )
+
+    result = _verify_against_synthetic_planning(monkeypatch, second)
+    assert result["request_start_count"] == 3
+    assert result["minimum_request_start_delta_seconds"] == 3.0
+    metadata = [json.loads(path.read_text()) for path in sorted((second / "ledger" / "metadata").glob("*.json"))]
+    assert all(row["limiter_granted_start_utc"].endswith("Z") for row in metadata)
+    assert len({row["limiter_granted_request_key"] for row in metadata}) == 3
+
+
+def test_shared_cache_claim_allows_only_one_call_per_identity(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    transport = _Transport()
+    barrier = threading.Barrier(2)
+
+    def execute(name: str):
+        barrier.wait()
+        return run_retrieval(
+            _planning(),
+            tmp_path / name,
+            transport,
+            clock=_Clock(),
+            cache_root=cache_root,
+            original_cache=_original_cache(),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(execute, ("race-a", "race-b")))
+
+    assert all(result["complete"] is True for result in results)
+    assert sorted(transport.identities) == ["facet-a", "facet-b", "facet-c"]

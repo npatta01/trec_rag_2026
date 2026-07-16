@@ -9,15 +9,22 @@ and represented by durable create-only ledger records.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import math
 import os
+import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
 import requests
+from pyrate_limiter import FileLockSQLiteBucket, Limiter, RequestRate
+from requests_ratelimiter import LimiterSession
 
 from .all_topic_facet_contract import (
     ALL_TOPIC_IDS,
@@ -31,7 +38,6 @@ from .all_topic_facet_contract import (
     verify_planning,
 )
 from .deep_facet_candidate_run import (
-    CACHE_SCHEMA_VERSION,
     ENDPOINT,
     INDEX_ID,
     SHARED_CACHE_DIR,
@@ -41,7 +47,6 @@ from .deep_facet_candidate_run import (
     build_live_config,
 )
 from .det_sparse_ledger import RETRIEVER_VERSION, RawTransportResponse, RetrievalRequest
-from .remote_client import rate_limited_session
 from .remote_config import RemotePyseriniConfig
 from .repo_env import find_repo_root, load_repo_env
 
@@ -52,6 +57,10 @@ STREAM_SCHEMA_VERSION = "all-topic-retrieval-stream-row-v1"
 UNION_SCHEMA_VERSION = "all-topic-authenticated-union-row-v1"
 SUMMARY_SCHEMA_VERSION = "all-topic-retrieval-summary-v1"
 SEAL_SCHEMA_VERSION = "all-topic-retrieval-seal-v1"
+EXPECTED_FACET_REQUEST_COUNT = 148
+APPROVED_ORIGINAL_CACHE_ROOT = Path(
+    "/home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote"
+)
 _TIMEOUT_SECONDS = 60.0
 
 
@@ -214,6 +223,7 @@ def build_retrieval_plan(
         or isinstance(facet_count, bool)
         or not isinstance(facet_count, int)
         or facet_count != len(facets)
+        or facet_count != EXPECTED_FACET_REQUEST_COUNT
         or planning.get("total_external_request_count") != facet_count
     ):
         raise ValueError("manifest drift in facet request count")
@@ -258,6 +268,9 @@ def build_retrieval_plan(
         "facet_requests": list(facets),
         "analyzer_sha256": analyzer_sha,
         "planning_root_sha256": root_sha,
+        "planning_files": planning.get("planning_files"),
+        "planning_seal_sha256": planning.get("planning_seal_sha256"),
+        "approved_original_cache_root": planning.get("approved_original_cache_root"),
     }
 
 
@@ -321,7 +334,8 @@ class RateLimitedFacetTransport:
                 raise ValueError("transport allowlist violates facet-only identity")
         self.config = config
         self.timeout_seconds = timeout_seconds
-        self.session = session if session is not None else rate_limited_session(config)
+        self.session = session if session is not None else _grant_timestamp_session(config)
+        self.last_start_event: dict[str, object] | None = None
 
     def __call__(self, request: RetrievalRequest) -> RawTransportResponse:
         identity = request.identity
@@ -330,20 +344,28 @@ class RateLimitedFacetTransport:
         if self._allowed.get(identity.request_key) != request:
             raise ValueError("request is not in the frozen facet transport allowlist")
         started = time.monotonic()
-        response = self.session.get(  # type: ignore[attr-defined]
-            ENDPOINT,
-            params={"query": request.query_text, "hits": str(FACET_DEPTH)},
-            headers={
-                "Accept": "application/json",
-                **(
-                    {"Authorization": f"Bearer {self.config.api_token}"}
-                    if self.config.api_token is not None
-                    else {}
-                ),
-            },
-            timeout=self.timeout_seconds,
-            allow_redirects=False,
-        )
+        try:
+            response = self.session.get(  # type: ignore[attr-defined]
+                ENDPOINT,
+                params={"query": request.query_text, "hits": str(FACET_DEPTH)},
+                headers={
+                    "Accept": "application/json",
+                    **(
+                        {"Authorization": f"Bearer {self.config.api_token}"}
+                        if self.config.api_token is not None
+                        else {}
+                    ),
+                },
+                timeout=self.timeout_seconds,
+                allow_redirects=False,
+            )
+        finally:
+            granted = getattr(self.session, "last_grant_event", None)
+            if isinstance(granted, Mapping):
+                self.last_start_event = {
+                    **dict(granted),
+                    "request_key": request.identity.request_key,
+                }
         elapsed = getattr(response, "elapsed", None)
         elapsed_seconds = (
             float(elapsed.total_seconds())
@@ -356,6 +378,45 @@ class RateLimitedFacetTransport:
             body=bytes(response.content),
             elapsed_seconds=elapsed_seconds,
         )
+
+
+class _GrantTimestampLimiterSession(LimiterSession):
+    """LimiterSession that records wall time only after the SQLite grant."""
+
+    last_grant_event: dict[str, object] | None = None
+
+    def send(self, request, **kwargs):  # type: ignore[no-untyped-def,override]
+        with self.limiter.ratelimit(
+            self._bucket_name(request), delay=True, max_delay=self.max_delay
+        ):
+            epoch = time.time()
+            self.last_grant_event = {
+                "started_at_epoch": epoch,
+                "started_at_utc": datetime.fromtimestamp(
+                    epoch, timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
+            }
+            response = requests.Session.send(self, request, **kwargs)
+            if response.status_code in self.limit_statuses:
+                self._fill_bucket(request)
+            return response
+
+
+def _grant_timestamp_session(config: RemotePyseriniConfig) -> requests.Session:
+    config.limiter_state_path.parent.mkdir(parents=True, exist_ok=True)
+    limiter = Limiter(
+        RequestRate(1, math.ceil(config.min_interval_seconds)),
+        bucket_class=FileLockSQLiteBucket,
+        bucket_kwargs={"path": config.limiter_state_path},
+        time_function=time.time,
+    )
+    session = _GrantTimestampLimiterSession(
+        limiter=limiter, per_host=True, max_delay=None
+    )
+    adapter = requests.adapters.HTTPAdapter(max_retries=0)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 def build_union(
@@ -465,7 +526,18 @@ def _original_stream_rows(
     return rows
 
 
-def _load_original_caches(plan: Mapping[str, object]) -> dict[str, dict[str, object]]:
+def _approved_original_root(value: Path) -> Path:
+    expected = APPROVED_ORIGINAL_CACHE_ROOT.resolve()
+    supplied = Path(value).resolve()
+    if supplied != expected:
+        raise ValueError("approved original cache root differs from the fixed documented root")
+    return supplied
+
+
+def _load_original_caches(
+    plan: Mapping[str, object], *, approved_root: Path
+) -> dict[str, dict[str, object]]:
+    root = _approved_original_root(approved_root)
     result: dict[str, dict[str, object]] = {}
     for sealed in plan.get("originals", []):
         if not isinstance(sealed, Mapping):
@@ -475,7 +547,11 @@ def _load_original_caches(plan: Mapping[str, object]) -> dict[str, dict[str, obj
         expected_sha = sealed.get("cache_sha256")
         if not isinstance(path_value, str) or not isinstance(expected_sha, str):
             raise ValueError("original cache incomplete")
-        path = Path(path_value)
+        path = Path(path_value).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("original cache path escapes the approved fixed root") from exc
         try:
             raw = path.read_bytes()
             payload = json.loads(raw)
@@ -515,20 +591,15 @@ def _load_original_caches(plan: Mapping[str, object]) -> dict[str, dict[str, obj
     return result
 
 
-def _load_sealed_planning(planning_dir: Path) -> dict[str, object]:
+def _load_sealed_planning(
+    planning_dir: Path, *, approved_original_cache_root: Path
+) -> dict[str, object]:
     planning_dir = Path(planning_dir)
+    approved_root = _approved_original_root(approved_original_cache_root)
     plan = _read_json(planning_dir / "request_plan.json", "sealed request plan")
     originals = plan.get("originals")
     if not isinstance(originals, list) or not originals:
         raise ValueError("sealed request plan has no original cache bindings")
-    paths = [
-        Path(str(row["cache_path"])).resolve()
-        for row in originals
-        if isinstance(row, Mapping) and isinstance(row.get("cache_path"), str)
-    ]
-    if len(paths) != len(originals):
-        raise ValueError("sealed request plan original cache paths are invalid")
-    approved_root = Path(os.path.commonpath([str(path.parent) for path in paths]))
     verified = verify_planning(planning_dir, approved_cache_root=approved_root)
     manifest = _read_json(planning_dir / "manifest.json", "sealed facet manifest")
     analyzer = manifest.get("analyzer")
@@ -537,6 +608,15 @@ def _load_sealed_planning(planning_dir: Path) -> dict[str, object]:
     enriched = dict(plan)
     enriched["analyzer_sha256"] = _sha256_bytes(_canonical_bytes(analyzer))
     enriched["planning_root_sha256"] = verified["root_sha256"]
+    planning_seal_raw = (planning_dir / "SEALED.json").read_bytes()
+    planning_seal = json.loads(planning_seal_raw)
+    if not isinstance(planning_seal, Mapping) or not isinstance(
+        planning_seal.get("files"), Mapping
+    ):
+        raise ValueError("sealed planning file bindings are invalid")
+    enriched["planning_files"] = dict(planning_seal["files"])
+    enriched["planning_seal_sha256"] = _sha256_bytes(planning_seal_raw)
+    enriched["approved_original_cache_root"] = str(approved_root)
     return enriched
 
 
@@ -602,6 +682,58 @@ def _record_failure(
     )
 
 
+def _shared_claim_paths(cache_root: Path, request_key: str) -> tuple[Path, Path]:
+    root = Path(cache_root) / "all-topic-attempts-v1" / request_key[:2]
+    return root / f"{request_key}.lock", root / f"{request_key}.json"
+
+
+@contextmanager
+def _exclusive_request_claim(cache_root: Path, request_key: str):
+    lock_path, claim_path = _shared_claim_paths(cache_root, request_key)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield claim_path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _replace_json(path: Path, value: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(_pretty_bytes(value))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _transport_start_event(
+    transport: RetrievalTransport, request: RetrievalRequest
+) -> dict[str, object]:
+    event = getattr(transport, "last_start_event", None)
+    if (
+        not isinstance(event, Mapping)
+        or event.get("request_key") != request.identity.request_key
+        or isinstance(event.get("started_at_epoch"), bool)
+        or not isinstance(event.get("started_at_epoch"), (int, float))
+        or not isinstance(event.get("started_at_utc"), str)
+        or not str(event["started_at_utc"]).endswith("Z")
+    ):
+        raise ValueError("transport did not return a limiter-granted request-start event")
+    return dict(event)
+
+
 def _attempt_request(
     request: RetrievalRequest,
     transport: RetrievalTransport,
@@ -626,20 +758,185 @@ def _attempt_request(
             "request_order": order,
         },
     )
-    cached = _load_verified_cache(cache_root, request)
-    if cached is not None:
-        raw, candidates = cached
-        raw_sha = _sha256_bytes(raw)
+    with _exclusive_request_claim(cache_root, request.identity.request_key) as claim_path:
+        # The cache is rechecked only after the cross-process identity lock.
+        cached = _load_verified_cache(cache_root, request)
+        shared_claim = (
+            _read_json(claim_path, "shared request claim")
+            if claim_path.exists()
+            else None
+        )
+        if cached is not None:
+            if (
+                not isinstance(shared_claim, Mapping)
+                or shared_claim.get("status") != "success"
+                or shared_claim.get("request_key")
+                != request.identity.request_key
+                or shared_claim.get("identity")
+                != request.identity.canonical_dict()
+                or shared_claim.get("query_text") != request.query_text
+            ):
+                raise ValueError("exact cache lacks an authenticated shared attempt claim")
+            event = shared_claim.get("start_event")
+            if (
+                not isinstance(event, Mapping)
+                or event.get("request_key") != request.identity.request_key
+            ):
+                raise ValueError("shared attempt claim lacks limiter-granted start evidence")
+            raw, candidates = cached
+            raw_sha = _sha256_bytes(raw)
+            if shared_claim.get("raw_sha256") != raw_sha:
+                raise ValueError("shared attempt claim/cache hash mismatch")
+            _write_exclusive(paths["raw"], raw)
+            _write_json(
+                paths["metadata"],
+                {
+                    "schema_version": LEDGER_SCHEMA_VERSION,
+                    "request_key": request.identity.request_key,
+                    "http_status": 200,
+                    "elapsed_seconds": 0.0,
+                    "raw_sha256": raw_sha,
+                    "cache_hit": True,
+                    "limiter_granted_request_key": event.get("request_key"),
+                    "limiter_granted_start_epoch": event.get("started_at_epoch"),
+                    "limiter_granted_start_utc": event.get("started_at_utc"),
+                },
+            )
+            _write_exclusive(paths["candidates"], _pretty_bytes(list(candidates)))
+            _write_json(
+                paths["outcome"],
+                {
+                    "schema_version": LEDGER_SCHEMA_VERSION,
+                    "request_key": request.identity.request_key,
+                    "status": "cache_hit",
+                    "candidate_count": len(candidates),
+                    "raw_sha256": raw_sha,
+                },
+            )
+            return candidates, raw_sha, True, last_start
+        if shared_claim is not None:
+            raise ValueError(
+                f"immutable shared {shared_claim.get('status')} attempt cannot be retried: "
+                f"{request.identity.request_key}"
+            )
+        _write_json(
+            claim_path,
+            {
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "request_key": request.identity.request_key,
+                "identity": request.identity.canonical_dict(),
+                "query_text": request.query_text,
+                "status": "pending",
+            },
+        )
+        if last_start is not None:
+            remaining = REQUEST_INTERVAL_SECONDS - (clock.monotonic() - last_start)
+            if remaining > 0:
+                clock.sleep(remaining)
+        started = clock.monotonic()
+        try:
+            response = transport(request)
+            event = _transport_start_event(transport, request)
+        except Exception as exc:
+            try:
+                event = _transport_start_event(transport, request)
+            except ValueError:
+                event = None
+            _replace_json(
+                claim_path,
+                {
+                    "schema_version": LEDGER_SCHEMA_VERSION,
+                    "request_key": request.identity.request_key,
+                    "identity": request.identity.canonical_dict(),
+                    "query_text": request.query_text,
+                    "status": "failure",
+                    "failure_type": "transport_exception",
+                    "start_event": event,
+                },
+            )
+            _record_failure(
+                paths["outcome"],
+                request,
+                failure_type="transport_exception",
+                message=f"{type(exc).__name__}: {exc}",
+                raw_sha256=None,
+            )
+            return None, None, False, started
+        raw = response.body
         _write_exclusive(paths["raw"], raw)
+        raw_sha = _sha256_bytes(raw)
         _write_json(
             paths["metadata"],
             {
                 "schema_version": LEDGER_SCHEMA_VERSION,
                 "request_key": request.identity.request_key,
-                "http_status": 200,
-                "elapsed_seconds": 0.0,
+                "http_status": response.status,
+                "headers": dict(response.headers),
+                "elapsed_seconds": float(response.elapsed_seconds),
                 "raw_sha256": raw_sha,
-                "cache_hit": True,
+                "cache_hit": False,
+                "limiter_granted_request_key": event["request_key"],
+                "limiter_granted_start_epoch": event["started_at_epoch"],
+                "limiter_granted_start_utc": event["started_at_utc"],
+            },
+        )
+        if response.status != 200:
+            _replace_json(
+                claim_path,
+                {
+                    "schema_version": LEDGER_SCHEMA_VERSION,
+                    "request_key": request.identity.request_key,
+                    "identity": request.identity.canonical_dict(),
+                    "query_text": request.query_text,
+                    "status": "failure",
+                    "failure_type": "http_error",
+                    "raw_sha256": raw_sha,
+                    "start_event": event,
+                },
+            )
+            _record_failure(
+                paths["outcome"],
+                request,
+                failure_type="http_error",
+                message=f"HTTP status {response.status} is not successful",
+                raw_sha256=raw_sha,
+            )
+            return None, raw_sha, False, started
+        try:
+            candidates = _normalize_response(raw)
+        except ValueError as exc:
+            _replace_json(
+                claim_path,
+                {
+                    "schema_version": LEDGER_SCHEMA_VERSION,
+                    "request_key": request.identity.request_key,
+                    "identity": request.identity.canonical_dict(),
+                    "query_text": request.query_text,
+                    "status": "failure",
+                    "failure_type": "response_validation_error",
+                    "raw_sha256": raw_sha,
+                    "start_event": event,
+                },
+            )
+            _record_failure(
+                paths["outcome"],
+                request,
+                failure_type="response_validation_error",
+                message=str(exc),
+                raw_sha256=raw_sha,
+            )
+            return None, raw_sha, False, started
+        _store_cache(cache_root, request, raw, candidates)
+        _replace_json(
+            claim_path,
+            {
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "request_key": request.identity.request_key,
+                "identity": request.identity.canonical_dict(),
+                "query_text": request.query_text,
+                "status": "success",
+                "raw_sha256": raw_sha,
+                "start_event": event,
             },
         )
         _write_exclusive(paths["candidates"], _pretty_bytes(list(candidates)))
@@ -648,78 +945,12 @@ def _attempt_request(
             {
                 "schema_version": LEDGER_SCHEMA_VERSION,
                 "request_key": request.identity.request_key,
-                "status": "cache_hit",
+                "status": "success",
                 "candidate_count": len(candidates),
                 "raw_sha256": raw_sha,
             },
         )
-        return candidates, raw_sha, True, last_start
-
-    if last_start is not None:
-        remaining = REQUEST_INTERVAL_SECONDS - (clock.monotonic() - last_start)
-        if remaining > 0:
-            clock.sleep(remaining)
-    started = clock.monotonic()
-    try:
-        response = transport(request)
-    except Exception as exc:
-        _record_failure(
-            paths["outcome"],
-            request,
-            failure_type="transport_exception",
-            message=f"{type(exc).__name__}: {exc}",
-            raw_sha256=None,
-        )
-        return None, None, False, started
-    raw = response.body
-    _write_exclusive(paths["raw"], raw)
-    raw_sha = _sha256_bytes(raw)
-    _write_json(
-        paths["metadata"],
-        {
-            "schema_version": LEDGER_SCHEMA_VERSION,
-            "request_key": request.identity.request_key,
-            "http_status": response.status,
-            "headers": dict(response.headers),
-            "elapsed_seconds": float(response.elapsed_seconds),
-            "raw_sha256": raw_sha,
-            "cache_hit": False,
-            "request_started_monotonic": started,
-        },
-    )
-    if response.status != 200:
-        _record_failure(
-            paths["outcome"],
-            request,
-            failure_type="http_error",
-            message=f"HTTP status {response.status} is not successful",
-            raw_sha256=raw_sha,
-        )
-        return None, raw_sha, False, started
-    try:
-        candidates = _normalize_response(raw)
-    except ValueError as exc:
-        _record_failure(
-            paths["outcome"],
-            request,
-            failure_type="response_validation_error",
-            message=str(exc),
-            raw_sha256=raw_sha,
-        )
-        return None, raw_sha, False, started
-    _store_cache(cache_root, request, raw, candidates)
-    _write_exclusive(paths["candidates"], _pretty_bytes(list(candidates)))
-    _write_json(
-        paths["outcome"],
-        {
-            "schema_version": LEDGER_SCHEMA_VERSION,
-            "request_key": request.identity.request_key,
-            "status": "success",
-            "candidate_count": len(candidates),
-            "raw_sha256": raw_sha,
-        },
-    )
-    return candidates, raw_sha, False, started
+        return candidates, raw_sha, False, started
 
 
 def _facet_stream_rows(
@@ -779,6 +1010,7 @@ def run_retrieval(
     clock: Clock | None = None,
     cache_root: Path = SHARED_CACHE_DIR,
     original_cache: Mapping[str, Mapping[str, object]] | None = None,
+    approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
 ) -> dict[str, object]:
     """Run or resume the exact facet allowlist; original network calls are impossible."""
 
@@ -787,18 +1019,29 @@ def run_retrieval(
     raw_plan = (
         dict(planning_dir)
         if isinstance(planning_dir, Mapping)
-        else _load_sealed_planning(Path(planning_dir))
+        else _load_sealed_planning(
+            Path(planning_dir),
+            approved_original_cache_root=approved_original_cache_root,
+        )
     )
     cache_values = (
         dict(original_cache)
         if original_cache is not None
-        else _load_original_caches(raw_plan)
+        else _load_original_caches(
+            raw_plan, approved_root=approved_original_cache_root
+        )
     )
     plan = build_retrieval_plan(raw_plan, cache_values)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     if (output / "RETRIEVAL_SEALED.json").exists():
-        verification = verify_retrieval(output)
+        if isinstance(planning_dir, Mapping):
+            raise ValueError("sealed retrieval resume requires the original planning directory")
+        verification = verify_retrieval(
+            output,
+            Path(planning_dir),
+            approved_original_cache_root=approved_original_cache_root,
+        )
         return _read_json(output / "retrieval_summary.json", "retrieval summary") | verification
     plan_path = output / "retrieval_plan.json"
     plan_raw = _pretty_bytes(plan)
@@ -855,6 +1098,9 @@ def run_retrieval(
     _write_exclusive(output / "original_candidates.jsonl", _jsonl_bytes(original_rows))
     _write_exclusive(output / "facet_candidates.jsonl", _jsonl_bytes(facet_rows))
     _write_exclusive(output / "accepted_union.jsonl", _jsonl_bytes(union_rows))
+    start_count, minimum_start_delta, actual_start_deltas = _verify_request_start_events(
+        output, requests_to_run
+    )
     summary: dict[str, object] = {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "experiment_id": EXPERIMENT_ID,
@@ -866,7 +1112,9 @@ def run_retrieval(
         "failures": 0,
         "retry_count": 0,
         "original_network_requests": 0,
-        "request_start_deltas": deltas,
+        "request_start_count": start_count,
+        "minimum_request_start_delta_seconds": minimum_start_delta,
+        "request_start_deltas": actual_start_deltas,
         "original_candidate_rows": len(original_rows),
         "facet_candidate_rows": len(facet_rows),
         "accepted_union_rows": len(union_rows),
@@ -882,6 +1130,7 @@ def _verify_stream_provenance(
     plan: Mapping[str, object],
     original_rows: Sequence[Mapping[str, object]],
     facet_rows: Sequence[Mapping[str, object]],
+    source_original_cache: Mapping[str, Mapping[str, object]],
 ) -> None:
     if (
         plan.get("schema_version") != RETRIEVAL_PLAN_SCHEMA_VERSION
@@ -917,7 +1166,15 @@ def _verify_stream_provenance(
         provenance = sealed.get("raw_response_provenance")
         if not isinstance(identity, Mapping) or not isinstance(provenance, Mapping):
             raise ValueError("original stream provenance binding is invalid")
-        for rank, row in enumerate(rows, start=1):
+        source = source_original_cache.get(topic_id)
+        source_candidates = source.get("candidates") if isinstance(source, Mapping) else None
+        if not isinstance(source_candidates, list) or len(source_candidates) != ORIGINAL_DEPTH:
+            raise ValueError("original cache candidate source is incomplete")
+        for rank, (row, source_candidate) in enumerate(
+            zip(rows, source_candidates, strict=True), start=1
+        ):
+            if not isinstance(source_candidate, Mapping):
+                raise ValueError("original cache candidate source is invalid")
             if (
                 row.get("schema_version") != STREAM_SCHEMA_VERSION
                 or row.get("stream_id") != "original"
@@ -926,8 +1183,14 @@ def _verify_stream_provenance(
                 or row.get("query_sha256") != identity.get("query_sha256")
                 or row.get("response_sha256")
                 != provenance.get("cache_content_sha256")
+                or row.get("document_id") != source_candidate.get("docid")
+                or row.get("text") != source_candidate.get("text")
+                or row.get("score") != source_candidate.get("score", 0.0)
+                or source_candidate.get("rank") != rank
             ):
-                raise ValueError("original stream provenance differs from sealed planning")
+                raise ValueError(
+                    "original cache candidate differs from sealed original stream provenance"
+                )
 
     requests_to_run = _build_facet_requests(plan)
     facets = plan.get("facet_requests")
@@ -982,10 +1245,63 @@ def _verify_stream_provenance(
                 raise ValueError("facet stream provenance differs from its authenticated response")
 
 
-def verify_retrieval(output_dir: Path) -> dict[str, object]:
+def _verify_request_start_events(
+    output: Path, requests_to_run: Sequence[RetrievalRequest]
+) -> tuple[int, float | None, list[float]]:
+    events: dict[str, tuple[float, str]] = {}
+    for request in requests_to_run:
+        metadata = _read_json(
+            _ledger_paths(output, request.identity.request_key)["metadata"],
+            "facet response metadata",
+        )
+        request_key = metadata.get("limiter_granted_request_key")
+        epoch = metadata.get("limiter_granted_start_epoch")
+        utc = metadata.get("limiter_granted_start_utc")
+        if (
+            request_key != request.identity.request_key
+            or isinstance(epoch, bool)
+            or not isinstance(epoch, (int, float))
+            or not isinstance(utc, str)
+            or not utc.endswith("Z")
+        ):
+            raise ValueError("limiter-granted request-start evidence is invalid")
+        try:
+            parsed = datetime.fromisoformat(utc.removesuffix("Z") + "+00:00").timestamp()
+        except ValueError as exc:
+            raise ValueError("limiter-granted request-start wall timestamp is invalid") from exc
+        if abs(parsed - float(epoch)) > 0.001:
+            raise ValueError("limiter-granted request-start epoch/UTC mismatch")
+        previous = events.get(str(request_key))
+        current = (float(epoch), utc)
+        if previous is not None and previous != current:
+            raise ValueError("request identity has conflicting limiter-granted starts")
+        events[str(request_key)] = current
+    if set(events) != {request.identity.request_key for request in requests_to_run}:
+        raise ValueError("complete shared attempt ledger is missing request starts")
+    chronological = sorted(epoch for epoch, _ in events.values())
+    deltas = [right - left for left, right in zip(chronological, chronological[1:])]
+    if any(delta < REQUEST_INTERVAL_SECONDS for delta in deltas):
+        raise ValueError("shared request starts violate the 3-second limiter interval")
+    return len(events), min(deltas) if deltas else None, deltas
+
+
+def verify_retrieval(
+    output_dir: Path,
+    planning_dir: Path,
+    *,
+    approved_original_cache_root: Path = APPROVED_ORIGINAL_CACHE_ROOT,
+) -> dict[str, object]:
     """Authenticate every sealed byte and recompute the accepted union."""
 
     output = Path(output_dir)
+    trusted_raw_plan = _load_sealed_planning(
+        Path(planning_dir),
+        approved_original_cache_root=approved_original_cache_root,
+    )
+    source_original_cache = _load_original_caches(
+        trusted_raw_plan, approved_root=approved_original_cache_root
+    )
+    trusted_plan = build_retrieval_plan(trusted_raw_plan, source_original_cache)
     seal = _read_json(output / "RETRIEVAL_SEALED.json", "retrieval seal")
     if (
         seal.get("schema_version") != SEAL_SCHEMA_VERSION
@@ -1023,7 +1339,36 @@ def verify_retrieval(output_dir: Path) -> dict[str, object]:
     facet_rows = _read_jsonl(output / "facet_candidates.jsonl", "facet candidates")
     accepted = _read_jsonl(output / "accepted_union.jsonl", "accepted union")
     plan = _read_json(output / "retrieval_plan.json", "persisted retrieval plan")
-    _verify_stream_provenance(output, plan, original_rows, facet_rows)
+    if plan != trusted_plan:
+        raise ValueError("retrieval does not match the external sealed planning binding")
+    requests_to_run = _build_facet_requests(trusted_plan)
+    expected_original_rows = len(ALL_TOPIC_IDS) * ORIGINAL_DEPTH
+    expected_facet_rows = len(requests_to_run) * FACET_DEPTH
+    if (
+        summary.get("topic_count") != len(ALL_TOPIC_IDS)
+        or summary.get("facet_request_count") != len(requests_to_run)
+        or summary.get("original_candidate_rows") != expected_original_rows
+        or summary.get("facet_candidate_rows") != expected_facet_rows
+        or len(original_rows) != expected_original_rows
+        or len(facet_rows) != expected_facet_rows
+        or not isinstance(summary.get("external_attempts"), int)
+        or not isinstance(summary.get("cache_hits"), int)
+        or summary["external_attempts"] + summary["cache_hits"]
+        != len(requests_to_run)
+    ):
+        raise ValueError("retrieval summary facet count or candidate counts are invalid")
+    _verify_stream_provenance(
+        output, plan, original_rows, facet_rows, source_original_cache
+    )
+    start_count, minimum_delta, start_deltas = _verify_request_start_events(
+        output, requests_to_run
+    )
+    if (
+        summary.get("request_start_count") != start_count
+        or summary.get("minimum_request_start_delta_seconds") != minimum_delta
+        or summary.get("request_start_deltas") != start_deltas
+    ):
+        raise ValueError("retrieval summary request-start evidence is invalid")
     if accepted != build_union(original_rows, facet_rows):
         raise ValueError("accepted union does not match authenticated stream provenance")
     if summary.get("accepted_union_rows") != len(accepted):
@@ -1036,6 +1381,8 @@ def verify_retrieval(output_dir: Path) -> dict[str, object]:
         "topic_count": len(topics),
         "accepted_union_rows": len(accepted),
         "root_sha256": seal["root_sha256"],
+        "request_start_count": start_count,
+        "minimum_request_start_delta_seconds": minimum_delta,
     }
 
 
@@ -1046,8 +1393,15 @@ def _parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--planning", type=Path, required=True)
     run_parser.add_argument("--output", type=Path, required=True)
     run_parser.add_argument("--cache-root", type=Path, default=SHARED_CACHE_DIR)
+    run_parser.add_argument(
+        "--original-cache-root", type=Path, default=APPROVED_ORIGINAL_CACHE_ROOT
+    )
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--retrieval", type=Path, required=True)
+    verify_parser.add_argument("--planning", type=Path, required=True)
+    verify_parser.add_argument(
+        "--original-cache-root", type=Path, default=APPROVED_ORIGINAL_CACHE_ROOT
+    )
     return parser
 
 
@@ -1056,10 +1410,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_repo_env(repo_root)
     args = _parser().parse_args(argv)
     if args.command == "verify":
-        payload = verify_retrieval(args.retrieval)
+        payload = verify_retrieval(
+            args.retrieval,
+            args.planning,
+            approved_original_cache_root=args.original_cache_root,
+        )
     else:
-        raw_plan = _load_sealed_planning(args.planning)
-        original_cache = _load_original_caches(raw_plan)
+        raw_plan = _load_sealed_planning(
+            args.planning,
+            approved_original_cache_root=args.original_cache_root,
+        )
+        original_cache = _load_original_caches(
+            raw_plan, approved_root=args.original_cache_root
+        )
         plan = build_retrieval_plan(raw_plan, original_cache)
         requests_to_run = _build_facet_requests(plan)
         transport = RateLimitedFacetTransport(
@@ -1072,6 +1435,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             transport,
             cache_root=args.cache_root,
             original_cache=original_cache,
+            approved_original_cache_root=args.original_cache_root,
         )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
