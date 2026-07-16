@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import builtins
 import copy
 import hashlib
+import http.client
 import inspect
 import json
+import os
 import socket
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -178,6 +182,47 @@ def test_production_manifest_is_exact_and_valid() -> None:
     assert 3 * len(ALL_TOPIC_IDS) <= len(validated["facets"]) <= 9 * len(ALL_TOPIC_IDS)
 
 
+def test_reviewed_production_facet_splits_and_queries_are_frozen() -> None:
+    payload = json.loads(PRODUCTION_MANIFEST.read_text())
+    by_topic: dict[str, list[dict[str, object]]] = {
+        topic_id: [] for topic_id in ALL_TOPIC_IDS
+    }
+    for facet in payload["facets"]:
+        by_topic[str(facet["topic_id"])].append(facet)
+
+    assert [row["facet_id"] for row in by_topic["58"]] == [
+        "58-pros", "58-cons", "58-safety", "58-accident-risks", "58-uses",
+        "58-climate", "58-fusion", "58-bison-energy", "58-peninsula-clean-energy",
+    ]
+    assert [row["facet_id"] for row in by_topic["144"]][2:7] == [
+        "144-safety", "144-trust", "144-services", "144-regulation",
+        "144-economic-development",
+    ]
+    assert [row["facet_id"] for row in by_topic["200"]] == [
+        "200-definition", "200-why", "200-how", "200-responsibility",
+        "200-historical-impact", "200-societal-impact", "200-conclusion",
+        "200-lasting-effects", "200-historical-comparison",
+    ]
+    assert [row["facet_id"] for row in by_topic["213"]] == [
+        "213-origins", "213-ending", "213-us-involvement", "213-us-politics",
+        "213-errors", "213-presidents",
+    ]
+    assert [row["facet_id"] for row in by_topic["219"]] == [
+        "219-daily-life-positive", "219-daily-life-negative",
+        "219-government-positive", "219-government-negative",
+        "219-business-positive", "219-business-negative", "219-societies",
+        "219-rationing",
+    ]
+    queries = {row["facet_id"]: row["query"] for row in payload["facets"]}
+    assert queries["161-current-options"] == (
+        "current abortion options including abortion pill"
+    )
+    assert queries["477-definition"] == "concept of race how defined"
+    assert queries["499-western-countries"] == (
+        "euthanasia Western countries perspectives influence debates"
+    )
+
+
 def test_cache_discovery_binds_each_topic_once(tmp_path: Path) -> None:
     narratives = _write_exact_cache_files(tmp_path, ALL_TOPIC_IDS)
     bindings = discover_original_caches(tmp_path, narratives)
@@ -215,6 +260,123 @@ def test_cli_freeze_and_verify_never_open_network(
     assert main([
         "verify", "--cache-root", str(tmp_path), "--planning", str(planning),
     ]) == 0
+
+
+def test_cli_firewall_blocks_network_qrels_and_model_loading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = json.loads(PRODUCTION_MANIFEST.read_text())
+    narratives = {
+        str(topic["topic_id"]): str(topic["narrative"])
+        for topic in payload["topics"]
+    }
+    for topic_id, narrative in narratives.items():
+        _write_cache(tmp_path, topic_id=topic_id, narrative=narrative)
+
+    monkeypatch.setattr(socket, "create_connection", _forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", _forbidden)
+    monkeypatch.setattr(socket.socket, "connect", _forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", _forbidden)
+    monkeypatch.setattr(urllib.request, "urlopen", _forbidden)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", _forbidden)
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", _forbidden)
+    monkeypatch.setattr(http.client.HTTPSConnection, "connect", _forbidden)
+    real_open = builtins.open
+    real_os_open = os.open
+    real_path_open = Path.open
+    real_import = builtins.__import__
+
+    def guarded_open(file: object, *args: object, **kwargs: object):
+        if "qrel" in str(file).lower():
+            raise AssertionError("qrels access is forbidden during planning")
+        return real_open(file, *args, **kwargs)
+
+    def guarded_path_open(path: Path, *args: object, **kwargs: object):
+        if "qrel" in str(path).lower():
+            raise AssertionError("qrels access is forbidden during planning")
+        return real_path_open(path, *args, **kwargs)
+
+    def guarded_os_open(path: object, *args: object, **kwargs: object):
+        if "qrel" in str(path).lower():
+            raise AssertionError("qrels access is forbidden during planning")
+        return real_os_open(path, *args, **kwargs)
+
+    def guarded_import(name: str, *args: object, **kwargs: object):
+        if name.split(".", 1)[0] in {"torch", "transformers", "sentence_transformers"}:
+            raise AssertionError("model loading is forbidden during planning")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(os, "open", guarded_os_open)
+    monkeypatch.setattr(Path, "open", guarded_path_open)
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    planning = tmp_path / "planning"
+    assert main([
+        "freeze", "--manifest", str(PRODUCTION_MANIFEST),
+        "--cache-root", str(tmp_path), "--output", str(planning),
+    ]) == 0
+    assert main([
+        "verify", "--cache-root", str(tmp_path), "--planning", str(planning),
+    ]) == 0
+
+
+def test_cache_discovery_rejects_missing_topic_and_escaping_symlink(
+    tmp_path: Path,
+) -> None:
+    approved = tmp_path / "approved"
+    approved.mkdir()
+    narratives = _write_exact_cache_files(approved, ALL_TOPIC_IDS)
+    missing = next(approved.glob("14__original__*.json"))
+    missing.unlink()
+    with pytest.raises(ValueError, match="missing.*14"):
+        discover_original_caches(approved, narratives)
+
+    _write_cache(approved, topic_id="14", narrative=narratives["14"])
+    path = next(approved.glob("14__original__*.json"))
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    path.symlink_to(outside)
+    with pytest.raises(ValueError, match="unsafe path.*14"):
+        discover_original_caches(approved, narratives)
+
+
+def test_manifest_rejects_coerced_ids_boolean_orders_and_extra_schema() -> None:
+    for mutation in ("topic-list-id", "topic-record-id", "facet-topic-id"):
+        payload = _manifest()
+        if mutation == "topic-list-id":
+            payload["topic_ids"][0] = 14
+        elif mutation == "topic-record-id":
+            payload["topics"][0]["topic_id"] = 14
+        else:
+            payload["facets"][0]["topic_id"] = 14
+        with pytest.raises(ValueError, match="topic.*string"):
+            _validate_facet_manifest(payload, ("14",))
+
+    for collection, field in (
+        ("topics", "manifest_order"),
+        ("facets", "manifest_order"),
+    ):
+        payload = _manifest()
+        payload[collection][0][field] = False
+        with pytest.raises(ValueError, match="order.*integer"):
+            _validate_facet_manifest(payload, ("14",))
+
+    payload = _manifest()
+    payload["topics"][0]["explicit_obligation_count"] = True
+    with pytest.raises(ValueError, match="obligation count"):
+        _validate_facet_manifest(payload, ("14",))
+
+    for target in ("top", "analyzer", "topic"):
+        payload = _manifest()
+        if target == "top":
+            payload["extra"] = "forbidden"
+        elif target == "analyzer":
+            payload["analyzer"]["extra"] = "forbidden"
+        else:
+            payload["topics"][0]["extra"] = "forbidden"
+        with pytest.raises(ValueError, match="schema"):
+            _validate_facet_manifest(payload, ("14",))
 
 
 def test_scope_is_exactly_the_authorized_22() -> None:

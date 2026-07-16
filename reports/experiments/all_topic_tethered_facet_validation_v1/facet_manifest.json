@@ -746,7 +746,31 @@
       "analyzer_terms": [
         "nuclear",
         "energy",
-        "safety",
+        "safety"
+      ],
+      "anchor_terms": [
+        "nuclear",
+        "energy"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "energy"
+      ],
+      "facet_id": "58-safety",
+      "manifest_order": 2,
+      "obligation": "Safety of nuclear energy.",
+      "obligation_id": "58:o3",
+      "query": "nuclear energy safety",
+      "query_sha256": "79525a2b54faa0a3bdc2568351e3aad3455ac7757e4c4aa8239db4acb3bd46db",
+      "relation_terms": [
+        "safety"
+      ],
+      "topic_id": "58"
+    },
+    {
+      "analyzer_terms": [
+        "nuclear",
+        "energy",
         "accident",
         "risks",
         "chernobyl"
@@ -759,14 +783,14 @@
       "domain_terms": [
         "Chernobyl"
       ],
-      "facet_id": "58-safety-risks",
-      "manifest_order": 2,
-      "obligation": "Nuclear energy safety and accident risks such as Chernobyl.",
-      "obligation_id": "58:o3",
-      "query": "nuclear energy safety accident risks Chernobyl",
-      "query_sha256": "94db2e77c6cc5e9b0fd5907aace6bc17f711aefee066ab472fbd5234113f264b",
+      "facet_id": "58-accident-risks",
+      "manifest_order": 3,
+      "obligation": "Nuclear energy accident risks, such as Chernobyl.",
+      "obligation_id": "58:o4",
+      "query": "nuclear energy accident risks Chernobyl",
+      "query_sha256": "c6ed2a3b9b77f088eb3faf8cdec912f61c1a0b85c6f9de48e4b5a595b2a42290",
       "relation_terms": [
-        "safety",
+        "accident",
         "risks"
       ],
       "topic_id": "58"
@@ -786,9 +810,9 @@
         "energy"
       ],
       "facet_id": "58-uses",
-      "manifest_order": 3,
+      "manifest_order": 4,
       "obligation": "Uses of nuclear energy.",
-      "obligation_id": "58:o4",
+      "obligation_id": "58:o5",
       "query": "nuclear energy uses",
       "query_sha256": "2b007cbcdba2b642f0c7fd833af15a7e096c91946d4b219ef9b1b4b0867ed6b0",
       "relation_terms": [
@@ -814,9 +838,9 @@
         "change"
       ],
       "facet_id": "58-climate",
-      "manifest_order": 4,
+      "manifest_order": 5,
       "obligation": "Nuclear energy impact on climate change.",
-      "obligation_id": "58:o5",
+      "obligation_id": "58:o6",
       "query": "nuclear energy climate change impact",
       "query_sha256": "f7f999d8b28ab43abca5d75b59009cc4380a038b4e8302a9896b820109dbd03c",
       "relation_terms": [
@@ -840,7 +864,9 @@
       ],
       "bridge_terms": [
         {
-          "analyzer_output": ["comparison"],
+          "analyzer_output": [
+            "comparison"
+          ],
           "not_candidate_answer_rationale": "A relation label, not an energy form or comparison result.",
           "purpose": "relation_paraphrasing",
           "scope_rationale": "Nominalizes the narrative request to compare nuclear energy with other energy forms.",
@@ -853,9 +879,9 @@
         "forms"
       ],
       "facet_id": "58-fusion",
-      "manifest_order": 5,
+      "manifest_order": 6,
       "obligation": "Comparison of nuclear energy with fusion and other energy forms.",
-      "obligation_id": "58:o6",
+      "obligation_id": "58:o7",
       "query": "nuclear energy comparison fusion other energy forms",
       "query_sha256": "2f347ea7d3e7e3223cdb148cb9cc1dba2ca5d13dad51caed8fe55755bf38ce5a",
       "relation_terms": [
@@ -879,9 +905,9 @@
         "energy"
       ],
       "facet_id": "58-bison-energy",
-      "manifest_order": 6,
+      "manifest_order": 7,
       "obligation": "Information about the energy source called bison energy.",
-      "obligation_id": "58:o7",
+      "obligation_id": "58:o8",
       "query": "bison energy source",
       "query_sha256": "e92fcb671d06a01e3a78db8a61e97dc47936ea92046ba76625e5665d7966332e",
       "relation_terms": [
@@ -906,9 +932,9 @@
         "energy"
       ],
       "facet_id": "58-peninsula-clean-energy",
-      "manifest_order": 7,
+      "manifest_order": 8,
       "obligation": "Information about the energy source called Peninsula Clean Energy.",
-      "obligation_id": "58:o8",
+      "obligation_id": "58:o9",
       "query": "Peninsula Clean Energy source",
       "query_sha256": "af682f45b73ececff73d7210b5f8ba03b1579efacad97d6efe171268137cb041",
       "relation_terms": [
@@ -927,7 +953,9 @@
       ],
       "bridge_terms": [
         {
-          "analyzer_output": ["environmental"],
+          "analyzer_output": [
+            "environmental"
+          ],
           "not_candidate_answer_rationale": "A domain adjective, not an environmental effect.",
           "purpose": "domain_disambiguation",
           "scope_rationale": "Converts the narrative noun 'environment' into its conventional adjective without narrowing scope.",
@@ -1342,7 +1370,37 @@
         "credit",
         "unions",
         "compare",
-        "safety",
+        "safety"
+      ],
+      "anchor_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "banks",
+        "credit",
+        "unions"
+      ],
+      "facet_id": "144-safety",
+      "manifest_order": 2,
+      "obligation": "How banks and credit unions compare in safety.",
+      "obligation_id": "144:o3",
+      "query": "banks credit unions compare safety",
+      "query_sha256": "09d9f7855745edafef66a5d0f8e09c6dc046039aad2ffad813d2b239d06d0baf",
+      "relation_terms": [
+        "compare",
+        "safety"
+      ],
+      "topic_id": "144"
+    },
+    {
+      "analyzer_terms": [
+        "banks",
+        "credit",
+        "unions",
+        "compare",
         "trust"
       ],
       "anchor_terms": [
@@ -1356,15 +1414,14 @@
         "credit",
         "unions"
       ],
-      "facet_id": "144-safety-trust",
-      "manifest_order": 2,
-      "obligation": "How banks and credit unions compare in safety and trust.",
-      "obligation_id": "144:o3",
-      "query": "banks credit unions compare safety trust",
-      "query_sha256": "9c891947a955f57a66d8d3ed75116f6550edde42ebf3a54eda327ffb7c5fcd40",
+      "facet_id": "144-trust",
+      "manifest_order": 3,
+      "obligation": "How banks and credit unions compare in trust.",
+      "obligation_id": "144:o4",
+      "query": "banks credit unions compare trust",
+      "query_sha256": "dff2447e54d5ed10406058d38b789daffc95e0a5fc52037e364ad1b7c0eb6b03",
       "relation_terms": [
         "compare",
-        "safety",
         "trust"
       ],
       "topic_id": "144"
@@ -1389,9 +1446,9 @@
         "unions"
       ],
       "facet_id": "144-services",
-      "manifest_order": 3,
+      "manifest_order": 4,
       "obligation": "How banks and credit unions compare in services.",
-      "obligation_id": "144:o4",
+      "obligation_id": "144:o5",
       "query": "banks credit unions compare services",
       "query_sha256": "a38dff75aa2b4b1c6732a31a940a4b7047e6b2c6bb5e84b3531d82364bcf4c11",
       "relation_terms": [
@@ -1420,9 +1477,9 @@
         "unions"
       ],
       "facet_id": "144-regulation",
-      "manifest_order": 4,
+      "manifest_order": 5,
       "obligation": "How banks and credit unions compare in regulation.",
-      "obligation_id": "144:o5",
+      "obligation_id": "144:o6",
       "query": "banks credit unions compare regulation",
       "query_sha256": "e8703dad461dabb0795be06dec8f38c25963c93a5432567412f9e5dabad7ad08",
       "relation_terms": [
@@ -1451,9 +1508,9 @@
         "development"
       ],
       "facet_id": "144-economic-development",
-      "manifest_order": 5,
+      "manifest_order": 6,
       "obligation": "Roles of banks and credit unions in economic development.",
-      "obligation_id": "144:o6",
+      "obligation_id": "144:o7",
       "query": "banks credit unions roles economic development",
       "query_sha256": "496b567f618bee6d21333a9fa4ccdc5cc9a5a28c83bf9a681b2cbd21ef43a7d7",
       "relation_terms": [
@@ -1602,10 +1659,11 @@
     },
     {
       "analyzer_terms": [
-        "women",
         "current",
         "abortion",
         "options",
+        "including",
+        "abortion",
         "pill"
       ],
       "anchor_terms": [
@@ -1613,17 +1671,18 @@
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "women"
+        "abortion"
       ],
       "facet_id": "161-current-options",
       "manifest_order": 5,
-      "obligation": "Current abortion options for women, including the abortion pill.",
+      "obligation": "Current abortion options, including the abortion pill.",
       "obligation_id": "161:o6",
-      "query": "women current abortion options pill",
-      "query_sha256": "7fa2c69f69cfb23d1418917492cba3404876277cd680efea5de3180a3499e345",
+      "query": "current abortion options including abortion pill",
+      "query_sha256": "fa05feaf52980de1c417e30cd9f14f3f42f3622b429b8865003e6b78eb290b3a",
       "relation_terms": [
         "current",
         "options",
+        "including",
         "pill"
       ],
       "topic_id": "161"
@@ -1642,7 +1701,9 @@
       ],
       "bridge_terms": [
         {
-          "analyzer_output": ["prioritize"],
+          "analyzer_output": [
+            "prioritize"
+          ],
           "not_candidate_answer_rationale": "A requested relation, not a rights-group priority.",
           "purpose": "relation_paraphrasing",
           "scope_rationale": "Uses the base form of the narrative verb 'prioritizing' without changing the request.",
@@ -1672,24 +1733,21 @@
         "holocaust",
         "what",
         "it",
-        "was",
-        "european",
-        "jewry"
+        "was"
       ],
       "anchor_terms": [
         "Holocaust"
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "European",
-        "Jewry"
+        "Holocaust"
       ],
       "facet_id": "200-definition",
       "manifest_order": 0,
-      "obligation": "What the Holocaust was, particularly for European Jewry.",
+      "obligation": "What the Holocaust was.",
       "obligation_id": "200:o1",
-      "query": "Holocaust what it was European Jewry",
-      "query_sha256": "08d3bb7e566d8d4811715e5973a8544c7821b3adcd5e81b7f36481c797ddff29",
+      "query": "Holocaust what it was",
+      "query_sha256": "d47c5090f3121de5f2cd106131e13b6ca8b36e9056a3f4b89b3a7b3426a942f3",
       "relation_terms": [
         "what",
         "was"
@@ -1700,24 +1758,21 @@
       "analyzer_terms": [
         "holocaust",
         "why",
-        "transpired",
-        "european",
-        "jewry"
+        "transpired"
       ],
       "anchor_terms": [
         "Holocaust"
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "European",
-        "Jewry"
+        "Holocaust"
       ],
       "facet_id": "200-why",
       "manifest_order": 1,
       "obligation": "Why the Holocaust transpired.",
       "obligation_id": "200:o2",
-      "query": "Holocaust why transpired European Jewry",
-      "query_sha256": "ad6c5b763c43366ec57feae71b1e5f4cdd731dc93857680f699a145770c10c04",
+      "query": "Holocaust why transpired",
+      "query_sha256": "50267628c0b3ab59723f0f13989b3fbe741a78d65ff9bb06c4f625c4d9c58c55",
       "relation_terms": [
         "why",
         "transpired"
@@ -1728,24 +1783,21 @@
       "analyzer_terms": [
         "holocaust",
         "how",
-        "transpired",
-        "european",
-        "jewry"
+        "transpired"
       ],
       "anchor_terms": [
         "Holocaust"
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "European",
-        "Jewry"
+        "Holocaust"
       ],
       "facet_id": "200-how",
       "manifest_order": 2,
       "obligation": "How the Holocaust transpired.",
       "obligation_id": "200:o3",
-      "query": "Holocaust how transpired European Jewry",
-      "query_sha256": "6324260019c9ec8fbdc58f5a819cd911eab2e957864f8db83ee53dd0e5b33b08",
+      "query": "Holocaust how transpired",
+      "query_sha256": "78576384bb80a602a30c63fcc7ddf246b39860f6937a7f2188fb8126a50e4c43",
       "relation_terms": [
         "how",
         "transpired"
@@ -1757,7 +1809,31 @@
         "holocaust",
         "who",
         "was",
-        "responsible",
+        "responsible"
+      ],
+      "anchor_terms": [
+        "Holocaust"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "Holocaust"
+      ],
+      "facet_id": "200-responsibility",
+      "manifest_order": 3,
+      "obligation": "Who was responsible for the Holocaust.",
+      "obligation_id": "200:o4",
+      "query": "Holocaust who was responsible",
+      "query_sha256": "6ae4f9e99b9cb6e45c25658bb3b240d5e148bd302480d34b3ca185c4f641cbc9",
+      "relation_terms": [
+        "responsible"
+      ],
+      "topic_id": "200"
+    },
+    {
+      "analyzer_terms": [
+        "holocaust",
+        "historical",
+        "impact",
         "european",
         "jewry"
       ],
@@ -1769,21 +1845,21 @@
         "European",
         "Jewry"
       ],
-      "facet_id": "200-responsibility",
-      "manifest_order": 3,
-      "obligation": "Who was responsible for the Holocaust.",
-      "obligation_id": "200:o4",
-      "query": "Holocaust who was responsible European Jewry",
-      "query_sha256": "b4b182b58cc5f51902f28648ee72469b43ad2f7f45e1c59d80e5bb6f6cceac20",
+      "facet_id": "200-historical-impact",
+      "manifest_order": 4,
+      "obligation": "Historical impact of the Holocaust on European Jewry.",
+      "obligation_id": "200:o5",
+      "query": "Holocaust historical impact European Jewry",
+      "query_sha256": "0bcaeeda8de61e90e516b56362cfddfd8e36f5da5a7b320f227e05d86212509e",
       "relation_terms": [
-        "responsible"
+        "historical",
+        "impact"
       ],
       "topic_id": "200"
     },
     {
       "analyzer_terms": [
         "holocaust",
-        "historical",
         "societal",
         "impact",
         "european",
@@ -1797,14 +1873,13 @@
         "European",
         "Jewry"
       ],
-      "facet_id": "200-impact",
-      "manifest_order": 4,
-      "obligation": "Historical and societal impact of the Holocaust on European Jewry.",
-      "obligation_id": "200:o5",
-      "query": "Holocaust historical societal impact European Jewry",
-      "query_sha256": "685b3219e7e8113447c34646595470d09057288f531a94d5c9524b8151bd7413",
+      "facet_id": "200-societal-impact",
+      "manifest_order": 5,
+      "obligation": "Societal impact of the Holocaust on European Jewry.",
+      "obligation_id": "200:o6",
+      "query": "Holocaust societal impact European Jewry",
+      "query_sha256": "9dd684f1e779839c19266f3c9abe4b5168169361d5e9716a0bdfc910a7e7706e",
       "relation_terms": [
-        "historical",
         "societal",
         "impact"
       ],
@@ -1815,16 +1890,16 @@
         "holocaust",
         "conclusion",
         "how",
-        "concluded",
-        "european",
-        "jewry"
+        "concluded"
       ],
       "anchor_terms": [
         "Holocaust"
       ],
       "bridge_terms": [
         {
-          "analyzer_output": ["concluded"],
+          "analyzer_output": [
+            "concluded"
+          ],
           "not_candidate_answer_rationale": "A relation verb, not an account of how the Holocaust ended.",
           "purpose": "relation_paraphrasing",
           "scope_rationale": "Verbalizes the narrative noun 'conclusion' while preserving the requested ending relation.",
@@ -1833,15 +1908,14 @@
         }
       ],
       "domain_terms": [
-        "European",
-        "Jewry"
+        "Holocaust"
       ],
       "facet_id": "200-conclusion",
-      "manifest_order": 5,
+      "manifest_order": 6,
       "obligation": "How the Holocaust concluded.",
-      "obligation_id": "200:o6",
-      "query": "Holocaust conclusion how concluded European Jewry",
-      "query_sha256": "940116a7c9836f0616e1dab5c5d53e055487e03c692375f916d1c3e5e61017aa",
+      "obligation_id": "200:o7",
+      "query": "Holocaust conclusion how concluded",
+      "query_sha256": "dc03c53c37c1c1234b7f415887f6dce3d28c8c520144e3e0e3c4953d206fd3c2",
       "relation_terms": [
         "conclusion",
         "concluded"
@@ -1852,24 +1926,21 @@
       "analyzer_terms": [
         "holocaust",
         "lasting",
-        "effects",
-        "european",
-        "jewry"
+        "effects"
       ],
       "anchor_terms": [
         "Holocaust"
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "European",
-        "Jewry"
+        "Holocaust"
       ],
       "facet_id": "200-lasting-effects",
-      "manifest_order": 6,
-      "obligation": "Lasting effects of the Holocaust on European Jewry.",
-      "obligation_id": "200:o7",
-      "query": "Holocaust lasting effects European Jewry",
-      "query_sha256": "824ebac23ac4c9aa443b8c658e4cbb31faa33d6aa5e4e5d81126f57177e90107",
+      "manifest_order": 7,
+      "obligation": "Lasting effects of the Holocaust.",
+      "obligation_id": "200:o8",
+      "query": "Holocaust lasting effects",
+      "query_sha256": "be289f32aaeb60383ee2c164d475f3310cd2cd3f153a4e955921bd335dfe05d0",
       "relation_terms": [
         "lasting",
         "effects"
@@ -1895,9 +1966,9 @@
         "events"
       ],
       "facet_id": "200-historical-comparison",
-      "manifest_order": 7,
+      "manifest_order": 8,
       "obligation": "How the Holocaust aligns with destructive historical events such as Sodom and Gomorrah.",
-      "obligation_id": "200:o8",
+      "obligation_id": "200:o9",
       "query": "Holocaust aligns destructive historical events Sodom Gomorrah",
       "query_sha256": "9c03ffaec50cbe1662a26d02910d070c714ab999964b0a06991aa543a1335e78",
       "relation_terms": [
@@ -1966,34 +2037,7 @@
         "war",
         "why",
         "us",
-        "involved"
-      ],
-      "anchor_terms": [
-        "Korean",
-        "War"
-      ],
-      "bridge_terms": [],
-      "domain_terms": [
-        "US"
-      ],
-      "facet_id": "213-us-involvement",
-      "manifest_order": 2,
-      "obligation": "Why the US got involved in the Korean War.",
-      "obligation_id": "213:o3",
-      "query": "Korean War why US involved",
-      "query_sha256": "4139e5193f150cbb863cc40637af16952bfc51658a99a414743892040e16c7f9",
-      "relation_terms": [
-        "why",
-        "involved"
-      ],
-      "topic_id": "213"
-    },
-    {
-      "analyzer_terms": [
-        "korean",
-        "war",
-        "us",
-        "involvement",
+        "involved",
         "cold",
         "war",
         "strategy"
@@ -2002,29 +2046,21 @@
         "Korean",
         "War"
       ],
-      "bridge_terms": [
-        {
-          "analyzer_output": ["involvement"],
-          "not_candidate_answer_rationale": "A relation noun, not a reason for US participation.",
-          "purpose": "relation_paraphrasing",
-          "scope_rationale": "Nominalizes the narrative phrase 'got involved' without adding a cause or outcome.",
-          "source": "Ordinary relation paraphrase of the narrative phrase 'got involved'.",
-          "surface": "involvement"
-        }
-      ],
+      "bridge_terms": [],
       "domain_terms": [
         "US",
         "Cold",
         "War"
       ],
-      "facet_id": "213-cold-war",
-      "manifest_order": 3,
-      "obligation": "US involvement in the Korean War in the context of Cold War strategy.",
-      "obligation_id": "213:o4",
-      "query": "Korean War US involvement Cold War strategy",
-      "query_sha256": "c0a41b118a215e730590f4c802b1f3c198b27e19abd62071938b0682a6e28f44",
+      "facet_id": "213-us-involvement",
+      "manifest_order": 2,
+      "obligation": "Why the US got involved in the Korean War in the context of Cold War strategy.",
+      "obligation_id": "213:o3",
+      "query": "Korean War why US involved Cold War strategy",
+      "query_sha256": "8822f3b1fee46cf2288f05dacdaf4968d5f7ca9902ee7827da0a725dab30ff6b",
       "relation_terms": [
-        "involvement",
+        "why",
+        "involved",
         "strategy"
       ],
       "topic_id": "213"
@@ -2047,9 +2083,9 @@
         "politics"
       ],
       "facet_id": "213-us-politics",
-      "manifest_order": 4,
+      "manifest_order": 3,
       "obligation": "Effects of the Korean War on US politics.",
-      "obligation_id": "213:o5",
+      "obligation_id": "213:o4",
       "query": "Korean War effects US politics",
       "query_sha256": "996d3bc5298b253cff35e6f5966b2e1797157a621d1f66b1fabad2c56c78c853",
       "relation_terms": [
@@ -2074,9 +2110,9 @@
         "War"
       ],
       "facet_id": "213-errors",
-      "manifest_order": 5,
+      "manifest_order": 4,
       "obligation": "Major errors that occurred during the Korean War.",
-      "obligation_id": "213:o6",
+      "obligation_id": "213:o5",
       "query": "Korean War major errors",
       "query_sha256": "ebf6b2fce58a8c3e1aba20c453f7aa91d445bd026da25ef29478a97e5820be89",
       "relation_terms": [
@@ -2104,9 +2140,9 @@
         "presidents"
       ],
       "facet_id": "213-presidents",
-      "manifest_order": 6,
+      "manifest_order": 5,
       "obligation": "How different US presidents perceived the Korean War.",
-      "obligation_id": "213:o7",
+      "obligation_id": "213:o6",
       "query": "Korean War different US presidents perceived conflict",
       "query_sha256": "c5e0827cc157a426f6451d1f9d567164ae03165e46a45e441c266cc33f8d570d",
       "relation_terms": [
@@ -2120,7 +2156,6 @@
         "technology",
         "positive",
         "effects",
-        "society",
         "daily",
         "life"
       ],
@@ -2129,16 +2164,15 @@
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "society",
         "daily",
         "life"
       ],
-      "facet_id": "219-positive",
+      "facet_id": "219-daily-life-positive",
       "manifest_order": 0,
-      "obligation": "Positive effects of technology on society and daily life.",
+      "obligation": "Positive effects of technology on daily life.",
       "obligation_id": "219:o1",
-      "query": "technology positive effects society daily life",
-      "query_sha256": "294f7ab2b5669ed1dd27eea1e4cd399d5bef8c951558ae7f47390c233a094e18",
+      "query": "technology positive effects daily life",
+      "query_sha256": "7d43d6d6ad088497de70dbab692967c3a58e201a1bb5059468d21390f3a73575",
       "relation_terms": [
         "positive",
         "effects"
@@ -2150,7 +2184,6 @@
         "technology",
         "negative",
         "effects",
-        "society",
         "daily",
         "life"
       ],
@@ -2159,16 +2192,15 @@
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "society",
         "daily",
         "life"
       ],
-      "facet_id": "219-negative",
+      "facet_id": "219-daily-life-negative",
       "manifest_order": 1,
-      "obligation": "Negative effects of technology on society and daily life.",
+      "obligation": "Negative effects of technology on daily life.",
       "obligation_id": "219:o2",
-      "query": "technology negative effects society daily life",
-      "query_sha256": "28888e851f5e7d22974056a91f26b1f9861a3b9218ba00e165d908989ef983e1",
+      "query": "technology negative effects daily life",
+      "query_sha256": "0b120597c3080a4c5c77c534ade007389188833ed1443211f5a560c2560a8786",
       "relation_terms": [
         "negative",
         "effects"
@@ -2178,8 +2210,8 @@
     {
       "analyzer_terms": [
         "technology",
-        "societal",
-        "impact",
+        "positive",
+        "effects",
         "government"
       ],
       "anchor_terms": [
@@ -2189,67 +2221,101 @@
       "domain_terms": [
         "government"
       ],
-      "facet_id": "219-government",
+      "facet_id": "219-government-positive",
       "manifest_order": 2,
-      "obligation": "Technology societal impact on government.",
+      "obligation": "Positive effects of technology on government.",
       "obligation_id": "219:o3",
-      "query": "technology societal impact government",
-      "query_sha256": "7069d6ffb6602894875f01e4f79d87934de851da9c8c3797c5eb9fbd630f17f0",
+      "query": "technology positive effects government",
+      "query_sha256": "a2d10f93e1e59b7ca3108cc11fa74c9e1fd9150283bd3b4cc560fe2e93a98124",
       "relation_terms": [
-        "societal",
-        "impact"
+        "positive",
+        "effects"
       ],
       "topic_id": "219"
     },
     {
       "analyzer_terms": [
         "technology",
-        "societal",
-        "impact",
-        "business"
+        "negative",
+        "effects",
+        "government"
       ],
       "anchor_terms": [
         "technology"
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "business"
+        "government"
       ],
-      "facet_id": "219-business",
+      "facet_id": "219-government-negative",
       "manifest_order": 3,
-      "obligation": "Technology societal impact on business.",
+      "obligation": "Negative effects of technology on government.",
       "obligation_id": "219:o4",
-      "query": "technology societal impact business",
-      "query_sha256": "436db311e2bd67495fb44d8ffdf7535ba382bfc50e95b3a669e2a5c0d8162929",
+      "query": "technology negative effects government",
+      "query_sha256": "7a8d48135b4b3949e3e5b569ea5709c3aef3e2931b24b3f54676dfd261398daf",
       "relation_terms": [
-        "societal",
-        "impact"
+        "negative",
+        "effects"
       ],
       "topic_id": "219"
     },
     {
       "analyzer_terms": [
         "technology",
-        "impact",
-        "telehealth",
-        "business"
+        "positive",
+        "effects",
+        "business",
+        "sectors",
+        "telehealth"
       ],
       "anchor_terms": [
         "technology"
       ],
       "bridge_terms": [],
       "domain_terms": [
-        "telehealth",
-        "business"
+        "business",
+        "sectors",
+        "telehealth"
       ],
-      "facet_id": "219-telehealth",
+      "facet_id": "219-business-positive",
       "manifest_order": 4,
-      "obligation": "Technology impact on telehealth business.",
+      "obligation": "Positive effects of technology on business sectors such as telehealth.",
       "obligation_id": "219:o5",
-      "query": "technology impact telehealth business",
-      "query_sha256": "c512e826e9e9276eb72682ba0578b9db0636f5c55cc8d501847d24a7606eedd3",
+      "query": "technology positive effects business sectors telehealth",
+      "query_sha256": "f807803ec20abf38c89d8e40b9e4c2402d183c4d06af1336b746c7687c85a19c",
       "relation_terms": [
-        "impact"
+        "positive",
+        "effects"
+      ],
+      "topic_id": "219"
+    },
+    {
+      "analyzer_terms": [
+        "technology",
+        "negative",
+        "effects",
+        "business",
+        "sectors",
+        "telehealth"
+      ],
+      "anchor_terms": [
+        "technology"
+      ],
+      "bridge_terms": [],
+      "domain_terms": [
+        "business",
+        "sectors",
+        "telehealth"
+      ],
+      "facet_id": "219-business-negative",
+      "manifest_order": 5,
+      "obligation": "Negative effects of technology on business sectors such as telehealth.",
+      "obligation_id": "219:o6",
+      "query": "technology negative effects business sectors telehealth",
+      "query_sha256": "7c9083115e401ded8ab65180d37743e796af10f677935e8df99d14414fae47d7",
+      "relation_terms": [
+        "negative",
+        "effects"
       ],
       "topic_id": "219"
     },
@@ -2269,9 +2335,9 @@
         "societies"
       ],
       "facet_id": "219-societies",
-      "manifest_order": 5,
+      "manifest_order": 6,
       "obligation": "Role of technical societies in technology.",
-      "obligation_id": "219:o6",
+      "obligation_id": "219:o7",
       "query": "technology role technical societies",
       "query_sha256": "d7b2387721adfcf20c0143ba01e144a48407e55656d7a91b0b51c26abb6c4d05",
       "relation_terms": [
@@ -2296,9 +2362,9 @@
         "devices"
       ],
       "facet_id": "219-rationing",
-      "manifest_order": 6,
+      "manifest_order": 7,
       "obligation": "Why rationing devices may be needed with technological advancements.",
-      "obligation_id": "219:o7",
+      "obligation_id": "219:o8",
       "query": "technological advancements why rationing devices needed",
       "query_sha256": "9e86a727c096c75dd6ee2b5905b4d0b8ee2168b388e123e935cb000bc4e5cb70",
       "relation_terms": [
@@ -3103,7 +3169,9 @@
       ],
       "bridge_terms": [
         {
-          "analyzer_output": ["compared"],
+          "analyzer_output": [
+            "compared"
+          ],
           "not_candidate_answer_rationale": "A comparison relation, not an economic cost or outcome.",
           "purpose": "relation_paraphrasing",
           "scope_rationale": "Inflects the narrative verb 'compare' to express the same requested cost comparison.",
@@ -3285,11 +3353,14 @@
     },
     {
       "analyzer_terms": [
+        "concept",
+        "of",
         "race",
         "how",
         "defined"
       ],
       "anchor_terms": [
+        "concept",
         "race"
       ],
       "bridge_terms": [],
@@ -3300,8 +3371,8 @@
       "manifest_order": 0,
       "obligation": "How race is defined.",
       "obligation_id": "477:o1",
-      "query": "race how defined",
-      "query_sha256": "7efd617a7d64cc790e65247c2b2d1d9583c4001c708fc09c5afa5ac60ccf6195",
+      "query": "concept of race how defined",
+      "query_sha256": "53fefd323f1be3142b441c9a067b745e4eaba1ce875616a547b6d40f93c3db56",
       "relation_terms": [
         "defined"
       ],
@@ -3346,7 +3417,9 @@
       ],
       "bridge_terms": [
         {
-          "analyzer_output": ["us"],
+          "analyzer_output": [
+            "us"
+          ],
           "not_candidate_answer_rationale": "A location label, not a claim about racial views.",
           "purpose": "domain_disambiguation",
           "scope_rationale": "Normalizes the narrative abbreviation 'U.S.' without changing the country requested.",
@@ -3594,6 +3667,7 @@
         "western",
         "countries",
         "perspectives",
+        "influence",
         "debates"
       ],
       "anchor_terms": [
@@ -3608,10 +3682,11 @@
       "manifest_order": 4,
       "obligation": "How Western countries perspectives influence euthanasia debates.",
       "obligation_id": "499:o5",
-      "query": "euthanasia Western countries perspectives debates",
-      "query_sha256": "4aaaa8cc85fd5f1a02d579f3b8709bee8769b2033ae301cef56d11ca83c398c3",
+      "query": "euthanasia Western countries perspectives influence debates",
+      "query_sha256": "70466dca7d6986d627f94524d98a30ed924ee739eea997bb09720084122bf762",
       "relation_terms": [
         "perspectives",
+        "influence",
         "debates"
       ],
       "topic_id": "499"
@@ -4212,7 +4287,7 @@
       "topic_id": "37"
     },
     {
-      "explicit_obligation_count": 8,
+      "explicit_obligation_count": 9,
       "manifest_order": 3,
       "narrative": "I'm interested in nuclear energy's pros, cons, safety, and accident risks, like Chernobyl, plus its uses and climate change impact. I also want to compare it to other energy forms like fusion and learn about sources such as bison energy and Peninsula Clean Energy.",
       "narrative_sha256": "0d9d11e9d50f4ed394a4e207d0d18801f4ca69d00d9c60c4efb6597b13352b6a",
@@ -4233,7 +4308,7 @@
       "topic_id": "84"
     },
     {
-      "explicit_obligation_count": 6,
+      "explicit_obligation_count": 7,
       "manifest_order": 6,
       "narrative": "I'm seeking a comprehensive understanding of financial institutions, specifically why banks like Silicon Valley Bank fail and the hidden risks investors face. Could you detail how banks and credit unions compare in terms of safety, trust, services, and regulation, while also outlining their roles in economic development?",
       "narrative_sha256": "b78a23bf9b58574839bb45916367df99f8405b1135f8304ad440d6a169188186",
@@ -4247,21 +4322,21 @@
       "topic_id": "161"
     },
     {
-      "explicit_obligation_count": 8,
+      "explicit_obligation_count": 9,
       "manifest_order": 8,
       "narrative": "I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah.",
       "narrative_sha256": "2375e7c8ddf0b7f36dbc525b1344489725c4e0da4e05ac03da03ba1b44119723",
       "topic_id": "200"
     },
     {
-      "explicit_obligation_count": 7,
+      "explicit_obligation_count": 6,
       "manifest_order": 9,
       "narrative": "I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.",
       "narrative_sha256": "f499a0b22af55afdc71d4a4265681a9ccc2845d4c44ce9e4e927f881a912f4db",
       "topic_id": "213"
     },
     {
-      "explicit_obligation_count": 7,
+      "explicit_obligation_count": 8,
       "manifest_order": 10,
       "narrative": "I'm interested in understanding technology's societal impact, exploring its positive and negative effects on daily life, government, and business sectors like telehealth. Could you also explain the role of technical societies and why rationing devices might be needed with technological advancements?",
       "narrative_sha256": "52a3c2cf4d03fd2cf5d50a69bacd5028e67f645f53b854675056cafae7a9f319",

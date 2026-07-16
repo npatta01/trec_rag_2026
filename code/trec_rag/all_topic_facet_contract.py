@@ -61,6 +61,15 @@ _FACET_KEYS = {
     "anchor_terms", "domain_terms", "relation_terms", "analyzer_terms",
     "bridge_terms", "manifest_order", "query_sha256",
 }
+_MANIFEST_KEYS = {
+    "schema_version", "experiment_id", "topic_ids", "analyzer", "topics",
+    "facets",
+}
+_ANALYZER_KEYS = {"contract"}
+_TOPIC_KEYS = {
+    "topic_id", "narrative", "narrative_sha256",
+    "explicit_obligation_count", "manifest_order",
+}
 _BRIDGE_KEYS = {
     "surface", "source", "purpose", "scope_rationale", "analyzer_output",
     "not_candidate_answer_rationale",
@@ -180,13 +189,21 @@ def _validate_bridge_terms(
     for bridge in value:
         if not isinstance(bridge, Mapping) or set(bridge) != _BRIDGE_KEYS:
             raise ValueError("bridge provenance is incomplete")
+        for key in _BRIDGE_KEYS - {"analyzer_output"}:
+            if not isinstance(bridge.get(key), str):
+                raise ValueError("bridge provenance values must be strings")
         if bridge.get("purpose") not in ALLOWED_BRIDGE_PURPOSES:
             raise ValueError("bridge purpose is not allowed")
         if any(not bridge.get(key) for key in _BRIDGE_KEYS - {"analyzer_output"}):
             raise ValueError("bridge provenance is incomplete")
         surface_terms = _analyze(str(bridge.get("surface", "")))
         analyzer_output = bridge.get("analyzer_output")
-        if not surface_terms or analyzer_output != surface_terms:
+        if (
+            not isinstance(analyzer_output, list)
+            or any(not isinstance(term, str) for term in analyzer_output)
+            or not surface_terms
+            or analyzer_output != surface_terms
+        ):
             raise ValueError("bridge analyzer output must be exact and nonempty")
         surface_text = " ".join(surface_terms)
         if not re.search(rf"(?:^| ){re.escape(surface_text)}(?: |$)", query_text):
@@ -204,6 +221,8 @@ def _validate_facet_manifest(
     if not authorized or len(set(authorized)) != len(authorized):
         raise ValueError("private authorized topic scope must be unique and nonempty")
     _reject_qrels_fields(payload)
+    if set(payload) != _MANIFEST_KEYS:
+        raise ValueError("manifest top-level schema mismatch")
     if (
         payload.get("schema_version") != SCHEMA_VERSION
         or payload.get("experiment_id") != EXPERIMENT_ID
@@ -212,24 +231,44 @@ def _validate_facet_manifest(
     topic_ids_raw = payload.get("topic_ids")
     if not isinstance(topic_ids_raw, list):
         raise ValueError("topic_ids must be an array")
-    topic_ids = tuple(map(str, topic_ids_raw))
+    if any(not isinstance(topic_id, str) for topic_id in topic_ids_raw):
+        raise ValueError("manifest topic IDs must be exact strings")
+    topic_ids = tuple(topic_ids_raw)
     if topic_ids != authorized:
         raise ValueError("manifest topic_ids do not follow authorized order")
     analyzer = payload.get("analyzer")
-    if not isinstance(analyzer, Mapping) or analyzer.get("contract") != ANALYZER_CONTRACT:
-        raise ValueError("analyzer contract mismatch")
+    if (
+        not isinstance(analyzer, Mapping)
+        or set(analyzer) != _ANALYZER_KEYS
+        or not isinstance(analyzer.get("contract"), str)
+        or analyzer.get("contract") != ANALYZER_CONTRACT
+    ):
+        raise ValueError("analyzer contract or schema mismatch")
     topics = payload.get("topics")
     facets = payload.get("facets")
     if not isinstance(topics, list) or not isinstance(facets, list):
         raise ValueError("topics and facets must be arrays")
-    if [str(row.get("topic_id")) for row in topics if isinstance(row, Mapping)] != list(authorized):
+    if any(not isinstance(row, Mapping) or set(row) != _TOPIC_KEYS for row in topics):
+        raise ValueError("topic record schema mismatch")
+    if any(not isinstance(row.get("topic_id"), str) for row in topics):
+        raise ValueError("topic record IDs must be exact strings")
+    if [row.get("topic_id") for row in topics] != list(authorized):
         raise ValueError("topic records must follow authorized order")
 
     topic_by_id: dict[str, Mapping[str, object]] = {}
     for order, row in enumerate(topics):
-        if not isinstance(row, Mapping) or row.get("manifest_order") != order:
-            raise ValueError("topic records must follow authorized order")
-        topic_id = str(row.get("topic_id"))
+        assert isinstance(row, Mapping)
+        manifest_order = row.get("manifest_order")
+        if (
+            isinstance(manifest_order, bool)
+            or not isinstance(manifest_order, int)
+            or manifest_order != order
+        ):
+            raise ValueError("topic manifest order must be an exact integer")
+        topic_id_value = row.get("topic_id")
+        if not isinstance(topic_id_value, str):
+            raise ValueError("topic record ID must be an exact string")
+        topic_id = topic_id_value
         narrative = row.get("narrative")
         if (
             not isinstance(narrative, str)
@@ -249,7 +288,10 @@ def _validate_facet_manifest(
     for facet in facets:
         if not isinstance(facet, Mapping) or set(facet) != _FACET_KEYS:
             raise ValueError("facet schema mismatch")
-        topic_id = str(facet.get("topic_id"))
+        topic_id_value = facet.get("topic_id")
+        if not isinstance(topic_id_value, str):
+            raise ValueError("facet topic ID must be an exact string")
+        topic_id = topic_id_value
         if topic_id not in facets_by_topic:
             raise ValueError(f"facet topic {topic_id} is outside all-topic authorization")
         if not observed_topic_order or observed_topic_order[-1] != topic_id:
@@ -273,10 +315,21 @@ def _validate_facet_manifest(
             )
         narrative = str(topic["narrative"])
         for local_order, facet in enumerate(topic_facets):
-            facet_id = str(facet["facet_id"])
-            obligation_id = str(facet["obligation_id"])
-            if facet.get("manifest_order") != local_order:
-                raise ValueError("facet records must follow topic-local manifest order")
+            facet_id_value = facet["facet_id"]
+            obligation_id_value = facet["obligation_id"]
+            if not isinstance(facet_id_value, str) or not isinstance(
+                obligation_id_value, str
+            ):
+                raise ValueError("facet and obligation IDs must be exact strings")
+            facet_id = facet_id_value
+            obligation_id = obligation_id_value
+            manifest_order = facet.get("manifest_order")
+            if (
+                isinstance(manifest_order, bool)
+                or not isinstance(manifest_order, int)
+                or manifest_order != local_order
+            ):
+                raise ValueError("facet topic-local manifest order must be an exact integer")
             if obligation_id != f"{topic_id}:o{local_order + 1}":
                 raise ValueError("facets must follow deterministic topic-local obligation order")
             obligation = facet.get("obligation")
