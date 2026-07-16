@@ -8,7 +8,7 @@ import json
 import math
 import os
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from .adaptive_evidence_contract import PILOT_TOPIC_IDS, PROTECTED_TOPIC_IDS
@@ -195,7 +195,10 @@ def evaluate_proxy(
                 topic_metrics.update({
                     f"binary_recall@{depth}": _ratio(len(prefix_relevant), len(relevant)),
                     f"graded_recall@{depth}": _ratio(retrieved_gain, total_gain),
+                    f"retrieved_gain@{depth}": retrieved_gain,
                     f"relevant_count@{depth}": len(prefix_relevant),
+                    f"judged_count@{depth}": sum(document in topic_qrels for document in prefix),
+                    f"candidate_count@{depth}": len(prefix),
                     f"judged_rate@{depth}": _ratio(sum(document in topic_qrels for document in prefix), len(prefix)),
                     f"facet_only_relevant_retained@{depth}": facet_retained,
                     f"facet_only_relevant_retention@{depth}": _ratio(facet_retained, len(facet_only)),
@@ -206,7 +209,10 @@ def evaluate_proxy(
             topic_metrics.update({
                 "binary_recall_full": _ratio(len(full_relevant), len(relevant)),
                 "graded_recall_full": _ratio(full_gain, total_gain),
+                "retrieved_gain_full": full_gain,
                 "relevant_count_full": len(full_relevant),
+                "judged_count_full": sum(document in topic_qrels for document in ranking),
+                "candidate_count_full": len(ranking),
                 "judged_rate_full": _ratio(sum(document in topic_qrels for document in ranking), len(ranking)),
                 "facet_only_relevant_retained_full": len(set(ranking) & facet_only),
                 "facet_only_relevant_retention_full": _ratio(len(set(ranking) & facet_only), len(facet_only)),
@@ -214,17 +220,70 @@ def evaluate_proxy(
             facet_counts: dict[str, int] = defaultdict(int)
             for document, row in zip(ranking, rows, strict=True):
                 facet = row.get("coverage_facet")
-                if facet is not None and document in relevant:
+                bonus = row.get("coverage_bonus")
+                if (
+                    facet is not None
+                    and isinstance(bonus, (int, float))
+                    and not isinstance(bonus, bool)
+                    and bonus > 0
+                    and document in relevant
+                ):
                     facet_counts[str(facet)] += 1
             attribution[arm][topic] = dict(sorted(facet_counts.items()))
             per_topic[topic] = topic_metrics
-        aggregate: dict[str, object] = {}
-        keys = [key for key in per_topic[PILOT_TOPIC_IDS[0]] if key not in {"total_relevant", "total_graded_gain", "facet_only_relevant_total"}]
-        for key in keys:
-            values = [per_topic[topic][key] for topic in PILOT_TOPIC_IDS]
-            aggregate[key] = sum(values) if "count" in key or "retained" in key else math.fsum(float(value) for value in values) / len(values)
-        aggregate["total_relevant"] = sum(int(per_topic[topic]["total_relevant"]) for topic in PILOT_TOPIC_IDS)
-        aggregate["facet_only_relevant_total"] = sum(int(per_topic[topic]["facet_only_relevant_total"]) for topic in PILOT_TOPIC_IDS)
+        aggregate: dict[str, object] = {
+            "total_relevant": sum(int(per_topic[topic]["total_relevant"]) for topic in PILOT_TOPIC_IDS),
+            "total_graded_gain": sum(int(per_topic[topic]["total_graded_gain"]) for topic in PILOT_TOPIC_IDS),
+            "facet_only_relevant_total": sum(int(per_topic[topic]["facet_only_relevant_total"]) for topic in PILOT_TOPIC_IDS),
+        }
+
+        def macro(key: str) -> None:
+            values = [float(per_topic[topic][key]) for topic in PILOT_TOPIC_IDS]
+            value = math.fsum(values) / len(values)
+            aggregate[key] = value
+            aggregate[f"{key}_aggregation"] = {
+                "method": "macro_topic_mean", "topic_count": len(values), "value": value
+            }
+
+        def pooled(key: str, numerator_key: str, denominator_key: str) -> None:
+            numerator = sum(int(per_topic[topic][numerator_key]) for topic in PILOT_TOPIC_IDS)
+            denominator = sum(int(per_topic[topic][denominator_key]) for topic in PILOT_TOPIC_IDS)
+            value = _ratio(numerator, denominator)
+            aggregate[key] = value
+            aggregate[f"{key}_aggregation"] = {
+                "method": "pooled_micro", "numerator": numerator,
+                "denominator": denominator, "value": value,
+            }
+
+        macro("recall_auc")
+        macro("ndcg@10")
+        for depth in ordered_depths:
+            macro(f"ndcg@{depth}")
+            for count_key in (
+                f"retrieved_gain@{depth}", f"relevant_count@{depth}",
+                f"judged_count@{depth}", f"candidate_count@{depth}",
+                f"facet_only_relevant_retained@{depth}",
+            ):
+                aggregate[count_key] = sum(int(per_topic[topic][count_key]) for topic in PILOT_TOPIC_IDS)
+            pooled(f"binary_recall@{depth}", f"relevant_count@{depth}", "total_relevant")
+            pooled(f"graded_recall@{depth}", f"retrieved_gain@{depth}", "total_graded_gain")
+            pooled(f"judged_rate@{depth}", f"judged_count@{depth}", f"candidate_count@{depth}")
+            pooled(
+                f"facet_only_relevant_retention@{depth}",
+                f"facet_only_relevant_retained@{depth}", "facet_only_relevant_total",
+            )
+        for count_key in (
+            "retrieved_gain_full", "relevant_count_full", "judged_count_full",
+            "candidate_count_full", "facet_only_relevant_retained_full",
+        ):
+            aggregate[count_key] = sum(int(per_topic[topic][count_key]) for topic in PILOT_TOPIC_IDS)
+        pooled("binary_recall_full", "relevant_count_full", "total_relevant")
+        pooled("graded_recall_full", "retrieved_gain_full", "total_graded_gain")
+        pooled("judged_rate_full", "judged_count_full", "candidate_count_full")
+        pooled(
+            "facet_only_relevant_retention_full",
+            "facet_only_relevant_retained_full", "facet_only_relevant_total",
+        )
         arms_result[arm] = {"per_topic": per_topic, "aggregate": aggregate}
     deltas: dict[str, dict[str, dict[str, float]]] = {}
     for topic in PILOT_TOPIC_IDS:
@@ -253,8 +312,10 @@ def evaluate_proxy(
     }
 
 
-def _load_verified_rankings(freeze: Path, summary: Mapping[str, object]) -> tuple[dict[str, dict[str, list[dict[str, object]]]], dict[str, str]]:
-    rows = _read_jsonl_bytes((freeze / "rankings.jsonl").read_bytes(), "rankings")
+def _load_verified_rankings(
+    summary: Mapping[str, object], ranking_content: bytes
+) -> tuple[dict[str, dict[str, list[dict[str, object]]]], dict[str, str]]:
+    rows = _read_jsonl_bytes(ranking_content, "rankings")
     grouped: dict[str, dict[str, list[dict[str, object]]]] = {topic: {arm: [] for arm in ARMS} for topic in PILOT_TOPIC_IDS}
     for row in rows:
         topic, arm = _reject_topic(row.get("topic_id")), str(row.get("arm"))
@@ -332,19 +393,35 @@ def evaluate_frozen_proxy(
     *,
     expected_qrels_sha256: str = PINNED_QRELS_SHA256,
     depths: Sequence[int] = DEFAULT_DEPTHS,
+    reader: Callable[[Path], bytes] | None = None,
 ) -> dict[str, object]:
     """Verify rankings completely, then open the already-pinned qrels projection."""
 
     freeze, qrels, union, output = map(Path, (freeze, qrels, union, output))
     if output.exists():
         raise FileExistsError(f"evaluation output already exists: {output}")
+    read = reader or (lambda path: path.read_bytes())
     freeze_summary = verify_soft_freeze(freeze)
-    rankings, ranking_hashes = _load_verified_rankings(freeze, freeze_summary)
-    union_content = union.read_bytes()
+    ranking_content = read(freeze / "rankings.jsonl")
+    rankings, ranking_hashes = _load_verified_rankings(freeze_summary, ranking_content)
+    seal_content = read(freeze / "SEALED.json")
+    try:
+        seal = json.loads(seal_content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("verified freeze seal cannot be parsed") from exc
+    seal_root = seal.get("root_sha256") if isinstance(seal, Mapping) else None
+    if not isinstance(seal_root, str) or len(seal_root) != 64 or any(character not in "0123456789abcdef" for character in seal_root):
+        raise ValueError("verified freeze seal root SHA-256 is invalid")
+    seal_files = seal.get("files") if isinstance(seal, Mapping) else None
+    if not isinstance(seal_files, Mapping) or seal_files.get("rankings.jsonl") != {
+        "bytes": len(ranking_content), "sha256": _sha256(ranking_content)
+    }:
+        raise ValueError("ranking buffer differs from sealed artifact")
+    union_content = read(union)
     provenance = _load_union(union_content)
     # This is the qrels access boundary: every ranking was sealed, hashed, and
     # checked as a complete permutation above.
-    qrels_content = qrels.read_bytes()
+    qrels_content = read(qrels)
     if _sha256(qrels_content) != expected_qrels_sha256:
         raise ValueError("qrels projection SHA-256 differs from the pinned projection")
     parsed_qrels = _load_qrels(qrels_content)
@@ -356,11 +433,10 @@ def evaluate_frozen_proxy(
         "coverage_proxy": metrics["coverage_proxy"],
     }
     metrics = {key: value for key, value in metrics.items() if key not in {"per_topic_deltas", "coverage_proxy"}}
-    ranking_content = (freeze / "rankings.jsonl").read_bytes()
     bindings = {
         "schema_version": SCHEMA_VERSION,
         "ranking_hashes_verified_before_qrels_open": True,
-        "freeze": {"path": str(freeze.resolve()), "seal_root_sha256": freeze_summary.get("root_sha256")},
+        "freeze": {"path": str(freeze.resolve()), "seal_root_sha256": seal_root},
         "rankings": _binding(freeze / "rankings.jsonl", ranking_content, rows=len(_read_jsonl_bytes(ranking_content, "rankings"))),
         "qrels_projection": _binding(qrels, qrels_content, rows=len(_read_jsonl_bytes(qrels_content, "qrels projection"))),
         "accepted_union": _binding(union, union_content, rows=len(_read_jsonl_bytes(union_content, "accepted union"))),

@@ -33,6 +33,7 @@ def _rankings() -> dict[str, dict[str, list[dict[str, object]]]]:
                 {
                     "document_id": document,
                     "coverage_facet": f"{topic}-facet" if arm.startswith("TETHERED") and rank == 1 else None,
+                    "coverage_bonus": 0.1 if arm.startswith("TETHERED") and rank == 1 else 0.0,
                 }
                 for rank, document in enumerate(order, start=1)
             ]
@@ -94,6 +95,34 @@ def test_grade_below_two_is_not_relevant_and_auc_uses_all_qrels_relevant() -> No
     assert topic["recall_auc"] == pytest.approx((1 / 3 + 1 / 3 + 1 / 3 + 2 / 3) / 4)
 
 
+def test_aggregate_recall_retention_and_judged_rate_use_pooled_denominators() -> None:
+    rankings, provenance = _rankings(), _provenance()
+    for topic, keep in (("300", {"i", "j"}), ("84", {"m", "n"})):
+        for arm in ARMS:
+            rankings[topic][arm] = [row for row in rankings[topic][arm] if row["document_id"] in keep]
+        provenance[topic] = {document: value for document, value in provenance[topic].items() if document in keep}
+    result = evaluate_proxy(rankings, _qrels(), provenance, depths=(1, 4))
+    aggregate = result["arms"]["RRF"]["aggregate"]
+    assert aggregate["binary_recall_full"] == pytest.approx(5 / 7)
+    assert aggregate["graded_recall_full"] == pytest.approx(23 / 53)
+    assert aggregate["judged_rate_full"] == pytest.approx(7 / 12)
+    assert aggregate["binary_recall_full_aggregation"] == {
+        "method": "pooled_micro", "numerator": 5, "denominator": 7, "value": pytest.approx(5 / 7)
+    }
+    tethered = result["arms"]["TETHERED-DUAL"]["aggregate"]
+    assert tethered["facet_only_relevant_retention@1"] == pytest.approx(1 / 2)
+    assert tethered["facet_only_relevant_retention@1_aggregation"]["method"] == "pooled_micro"
+    assert aggregate["recall_auc_aggregation"]["method"] == "macro_topic_mean"
+    assert aggregate["ndcg@10_aggregation"]["method"] == "macro_topic_mean"
+
+
+def test_qrels_positive_facet_attribution_requires_positive_coverage_gain() -> None:
+    rankings = _rankings()
+    rankings["219"]["TETHERED-DUAL"][0]["coverage_bonus"] = 0.0
+    result = evaluate_proxy(rankings, _qrels(), _provenance(), depths=(1, 4))
+    assert result["coverage_proxy"]["qrels_positive_facet_attribution"]["TETHERED-DUAL"]["219"] == {}
+
+
 def test_evaluate_proxy_rejects_protected_or_incomplete_scope() -> None:
     rankings = _rankings()
     rankings["144"] = rankings.pop("219")
@@ -114,6 +143,11 @@ def test_frozen_evaluation_verifies_freeze_before_opening_qrels_and_writes_creat
     freeze.mkdir()
     ranking_rows = [{"topic_id": topic, "arm": arm, "rank": rank, **row} for topic, arms in _rankings().items() for arm, rows in arms.items() for rank, row in enumerate(rows, 1)]
     _jsonl(freeze / "rankings.jsonl", ranking_rows)
+    ranking_bytes = (freeze / "rankings.jsonl").read_bytes()
+    (freeze / "SEALED.json").write_text(json.dumps({
+        "root_sha256": "a" * 64,
+        "files": {"rankings.jsonl": {"bytes": len(ranking_bytes), "sha256": hashlib.sha256(ranking_bytes).hexdigest()}},
+    }), encoding="utf-8")
     _jsonl(qrels_path, [{"topic_id": topic, "document_id": document, "grade": grade} for topic, rows in _qrels().items() for document, grade in rows.items()])
     _jsonl(union_path, [{"topic_id": topic, "document_id": document, "union_order": rank, "provenance": provenance} for topic, rows in _provenance().items() for rank, (document, provenance) in enumerate(rows.items(), 1)])
     qrels_hash = hashlib.sha256(qrels_path.read_bytes()).hexdigest()
@@ -125,19 +159,27 @@ def test_frozen_evaluation_verifies_freeze_before_opening_qrels_and_writes_creat
         return {"topic_ids": list(TOPICS), "arms": list(ARMS), "topic_summary": {topic: {"complete_permutations": {arm: True for arm in ARMS}} for topic in TOPICS}}
 
     original = Path.read_bytes
+    ranking_reads = 0
 
     def read_bytes(path: Path) -> bytes:
+        nonlocal ranking_reads
+        if path == freeze / "rankings.jsonl":
+            ranking_reads += 1
+            if ranking_reads > 1:
+                return b'{"mutated":true}\n'
         if path == qrels_path:
             assert events == ["verified"]
             events.append("qrels-opened")
         return original(path)
 
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", verify)
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
-    summary = evaluate_frozen_proxy(freeze, qrels_path, union_path, output, expected_qrels_sha256=qrels_hash, depths=(1, 2, 4))
+    summary = evaluate_frozen_proxy(freeze, qrels_path, union_path, output, expected_qrels_sha256=qrels_hash, depths=(1, 2, 4), reader=read_bytes)
     assert summary["status"] == "complete"
     assert events == ["verified", "qrels-opened"]
+    assert ranking_reads == 1
     assert set(path.name for path in output.iterdir()) == {"metrics.json", "diagnostics.json", "summary.json", "input_bindings.json"}
+    bindings = json.loads((output / "input_bindings.json").read_text(encoding="utf-8"))
+    assert bindings["freeze"]["seal_root_sha256"] == "a" * 64
     with pytest.raises(FileExistsError):
         evaluate_frozen_proxy(freeze, qrels_path, union_path, output, expected_qrels_sha256=qrels_hash, depths=(1, 2, 4))
 
@@ -145,8 +187,43 @@ def test_frozen_evaluation_verifies_freeze_before_opening_qrels_and_writes_creat
 def test_frozen_evaluation_authenticates_projection_before_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     freeze, qrels_path, union_path = tmp_path / "freeze", tmp_path / "qrels.jsonl", tmp_path / "union.jsonl"
     freeze.mkdir(); qrels_path.write_bytes(b"not json\n"); union_path.write_bytes(b"")
+    (freeze / "rankings.jsonl").write_bytes(b"")
+    (freeze / "SEALED.json").write_text(json.dumps({
+        "root_sha256": "a" * 64,
+        "files": {"rankings.jsonl": {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()}},
+    }), encoding="utf-8")
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", lambda _path: {})
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate._load_verified_rankings", lambda *_args: (_rankings(), {"all": "verified"}))
     monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate._load_union", lambda _content: _provenance())
     with pytest.raises(ValueError, match="qrels projection SHA-256"):
         evaluate_frozen_proxy(freeze, qrels_path, union_path, tmp_path / "out", expected_qrels_sha256="0" * 64, depths=(1,))
+
+
+def test_frozen_evaluation_rejects_post_verify_ranking_mutation_before_qrels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze, qrels_path, union_path = tmp_path / "freeze", tmp_path / "qrels.jsonl", tmp_path / "union.jsonl"
+    freeze.mkdir(); qrels_path.write_bytes(b"must not open"); union_path.write_bytes(b"")
+    rows = [{"topic_id": topic, "arm": arm, "rank": rank, **row} for topic, arms in _rankings().items() for arm, arm_rows in arms.items() for rank, row in enumerate(arm_rows, 1)]
+    original = b"".join((json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode() for row in rows)
+    mutated_rows = list(rows)
+    first, second = mutated_rows[0].copy(), mutated_rows[1].copy()
+    first["document_id"], second["document_id"] = second["document_id"], first["document_id"]
+    mutated_rows[0], mutated_rows[1] = first, second
+    mutated = b"".join((json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode() for row in mutated_rows)
+    (freeze / "rankings.jsonl").write_bytes(original)
+    (freeze / "SEALED.json").write_text(json.dumps({
+        "root_sha256": "b" * 64,
+        "files": {"rankings.jsonl": {"bytes": len(original), "sha256": hashlib.sha256(original).hexdigest()}},
+    }), encoding="utf-8")
+    monkeypatch.setattr("trec_rag.tethered_facet_soft_coverage_evaluate.verify_soft_freeze", lambda _path: {
+        "topic_summary": {topic: {"complete_permutations": {arm: True for arm in ARMS}} for topic in TOPICS}
+    })
+
+    def reader(path: Path) -> bytes:
+        if path == freeze / "rankings.jsonl":
+            return mutated
+        if path == qrels_path:
+            raise AssertionError("qrels opened before ranking buffer authentication")
+        return path.read_bytes()
+
+    with pytest.raises(ValueError, match="ranking buffer differs from sealed artifact"):
+        evaluate_frozen_proxy(freeze, qrels_path, union_path, tmp_path / "out", reader=reader)
