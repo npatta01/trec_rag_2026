@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import resource
+import struct
 import subprocess
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -17,11 +20,13 @@ from pathlib import Path
 from .facet_local_minilm_preflight import (
     MODEL_ID,
     MODEL_REVISION,
+    PAIR_MAX_TOKENS,
     build_window_plan,
     load_verified_materialization,
     load_verified_tokenizer,
     score_cache_context,
 )
+from .facet_local_minilm_rank import aggregate_top4
 from .rerank_score_cache import GlobalScoreCache
 
 
@@ -41,6 +46,10 @@ SCORE_CACHE_ROOT = Path(
 )
 PREFLIGHT_SCHEMA_VERSION = "tethered-facet-minilm-preflight-v1"
 CANDIDATE_SCHEMA_VERSION = "tethered-facet-minilm-candidate-v1"
+SCORE_SCHEMA_VERSION = "tethered-facet-minilm-score-v1"
+DOCUMENT_SCORE_SCHEMA_VERSION = "tethered-facet-minilm-document-score-v1"
+SCORING_RECEIPT_SCHEMA_VERSION = "tethered-facet-minilm-scoring-receipt-v1"
+BATCH_SIZE = 32
 
 _SCORING_RECEIPT_REQUIRED = frozenset(
     {
@@ -1131,7 +1140,551 @@ def create_preflight(
     return payload
 
 
-def build_argument_parser() -> argparse.ArgumentParser:
+def _float32(value: object) -> float:
+    converted = float(value)
+    if not math.isfinite(converted):
+        raise ValueError("MiniLM score must be finite")
+    return struct.unpack(">f", struct.pack(">f", converted))[0]
+
+
+def _host_memory_bytes() -> int:
+    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+
+
+def _selected_top4(
+    windows: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    """Mirror the frozen span-distinct selection used by ``aggregate_top4``."""
+
+    ordered = sorted(
+        windows,
+        key=lambda row: (
+            -float(row["score"]),
+            int(row["document_start_token"]),
+            str(row["window_id"]),
+        ),
+    )
+    selected: list[Mapping[str, object]] = []
+    covered: list[tuple[int, int]] = []
+    for row in ordered:
+        start = int(row["document_start_token"])
+        end = int(row["document_end_token"])
+        score = float(row["score"])
+        if not math.isfinite(score) or start < 0 or end <= start:
+            raise ValueError("window score and token span must be valid")
+        overlaps = sorted(
+            (max(start, left), min(end, right))
+            for left, right in covered
+            if min(end, right) > max(start, left)
+        )
+        cursor = start
+        covered_count = 0
+        for left, right in overlaps:
+            if right <= cursor:
+                continue
+            covered_count += right - max(left, cursor)
+            cursor = right
+        if selected and end - start - covered_count < 128:
+            continue
+        selected.append(row)
+        covered.append((start, end))
+        if len(selected) == 4:
+            break
+    return selected
+
+
+def aggregate_document_scores(
+    window_rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Aggregate exact query/document windows with the frozen top-four contract."""
+
+    grouped: dict[tuple[str, str, str], list[Mapping[str, object]]] = defaultdict(list)
+    for row in window_rows:
+        topic_id = reject_topic(row.get("topic_id"))
+        facet_id = _required_text(row, "facet_id", "scored window")
+        document_id = _required_text(row, "document_id", "scored window")
+        grouped[(topic_id, facet_id, document_id)].append(row)
+
+    output: list[dict[str, object]] = []
+    for identity, windows in sorted(
+        grouped.items(),
+        key=lambda item: (
+            TOPIC_IDS.index(item[0][0]),
+            item[0][1],
+            item[0][2],
+        ),
+    ):
+        bindings: dict[str, object] = {}
+        for field in (
+            "query_sha256",
+            "document_sha256",
+            "model",
+            "model_revision",
+        ):
+            values = {row.get(field) for row in windows}
+            if len(values) != 1 or None in values:
+                raise ValueError(f"document windows differ on required {field} binding")
+            bindings[field] = next(iter(values))
+        if (
+            bindings["model"] != MODEL_ID
+            or bindings["model_revision"] != MODEL_REVISION
+        ):
+            raise ValueError("document windows differ from the frozen model identity")
+        selected = _selected_top4(windows)
+        if not selected:
+            raise ValueError("top-four aggregation requires at least one scored window")
+        window_hashes = []
+        for row in selected:
+            window_hash = row.get("window_sha256")
+            if not isinstance(window_hash, str) or len(window_hash) != 64:
+                raise ValueError("selected window requires its exact text hash")
+            window_hashes.append(window_hash)
+        topic_id, facet_id, document_id = identity
+        output.append(
+            {
+                "topic_id": topic_id,
+                "facet_id": facet_id,
+                "document_id": document_id,
+                "score": aggregate_top4(windows),
+                "selected_window_count": len(selected),
+                "query_sha256": bindings["query_sha256"],
+                "text_sha256": bindings["document_sha256"],
+                "model": bindings["model"],
+                "model_revision": bindings["model_revision"],
+                "window_hashes": window_hashes,
+            }
+        )
+    return output
+
+
+def verify_preflight(
+    preflight_source: Path | Mapping[str, object],
+) -> dict[str, object]:
+    """Fail closed on the Task 1 receipt before cache or model construction."""
+
+    if isinstance(preflight_source, Mapping):
+        preflight = dict(preflight_source)
+    else:
+        preflight, _ = _read_object(Path(preflight_source), "tethered MiniLM preflight")
+
+    # The topic firewall deliberately precedes all other dependency access.
+    topic_values: list[object] = []
+    summary = preflight.get("summary")
+    if isinstance(summary, Mapping):
+        counts = summary.get("topic_pair_counts")
+        if isinstance(counts, Mapping):
+            topic_values.extend(counts)
+    raw_topics = preflight.get("topic_ids")
+    if isinstance(raw_topics, Sequence) and not isinstance(raw_topics, (str, bytes)):
+        topic_values.extend(raw_topics)
+    for topic_id in topic_values:
+        reject_topic(topic_id)
+
+    if (
+        preflight.get("schema_version") != PREFLIGHT_SCHEMA_VERSION
+        or preflight.get("status") != "tokenizer_only_preflight_complete"
+        or preflight.get("qrels_opened") is not False
+        or preflight.get("network_access_supported") is not False
+        or preflight.get("hosted_inference_supported") is not False
+        or preflight.get("model") != MODEL_ID
+        or preflight.get("model_revision") != MODEL_REVISION
+    ):
+        raise ValueError("tethered MiniLM preflight differs from the frozen contract")
+    if (
+        preflight.get("windows_file") != "windows.jsonl"
+        or preflight.get("candidates_file") != "candidates.jsonl"
+    ):
+        raise ValueError("tethered MiniLM artifact filenames must be fixed local basenames")
+    _required_sha256(preflight.get("windows_sha256"), "tethered windows")
+    _required_sha256(preflight.get("candidates_sha256"), "tethered candidates")
+    _required_sha256(
+        preflight.get("model_materialization_receipt_sha256"),
+        "model materialization receipt",
+    )
+    if not isinstance(preflight.get("model_materialization_receipt"), str):
+        raise ValueError("model materialization receipt path is required")
+    if not isinstance(summary, Mapping):
+        raise ValueError("tethered MiniLM preflight summary is required")
+    if (
+        summary.get("query_document_pair_count") != PAIR_COUNT
+        or type(summary.get("window_count")) is not int
+        or int(summary["window_count"]) > WINDOW_CEILING
+        or type(summary.get("unique_pair_count")) is not int
+        or type(summary.get("unique_cache_miss_count")) is not int
+        or summary.get("accepted_facet_count") != ACCEPTED_FACET_COUNT
+    ):
+        raise ValueError("tethered MiniLM preflight counts differ from the frozen contract")
+    topic_counts = summary.get("topic_pair_counts")
+    facet_counts = summary.get("facet_pair_counts")
+    if (
+        not isinstance(topic_counts, Mapping)
+        or set(topic_counts) != set(TOPIC_IDS)
+        or any(topic_counts.get(topic) != 1200 for topic in TOPIC_IDS)
+        or not isinstance(facet_counts, Mapping)
+        or len(facet_counts) != ACCEPTED_FACET_COUNT
+        or set(facet_counts.values()) != {200}
+        or int(summary["window_count"]) < PAIR_COUNT
+        or not 0 <= int(summary["unique_cache_miss_count"]) <= int(summary["unique_pair_count"])
+        or int(summary["unique_pair_count"]) > int(summary["window_count"])
+    ):
+        raise ValueError("tethered MiniLM preflight population differs from the frozen contract")
+    ceilings = preflight.get("ceilings")
+    if (
+        not isinstance(ceilings, Mapping)
+        or ceilings.get("exact_query_document_pair_count") != PAIR_COUNT
+        or ceilings.get("maximum_window_count") != WINDOW_CEILING
+        or ceilings.get("maximum_runtime_seconds") != RUNTIME_CEILING_SECONDS
+    ):
+        raise ValueError("tethered MiniLM preflight ceilings differ from the frozen contract")
+    return preflight
+
+
+class _LocalMiniLMRunner:
+    def __init__(self, model_receipt: Path) -> None:
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        verified = load_verified_materialization(model_receipt)
+        if not torch.cuda.is_available() or not getattr(torch.version, "hip", None):
+            raise RuntimeError("ROCm MiniLM scoring requires an available torch cuda device")
+        self.torch = torch
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            verified.snapshot,
+            local_files_only=True,
+            trust_remote_code=False,
+            use_fast=True,
+        )
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            verified.snapshot,
+            local_files_only=True,
+            trust_remote_code=False,
+            use_safetensors=True,
+            torch_dtype=torch.float32,
+        ).float().eval().to("cuda")
+        torch.cuda.reset_peak_memory_stats()
+
+    def score(self, rows: Sequence[Mapping[str, object]]) -> list[float]:
+        encoded = self.tokenizer(
+            [str(row["query"]) for row in rows],
+            [str(row["window_text"]) for row in rows],
+            padding=True,
+            truncation=False,
+            max_length=PAIR_MAX_TOKENS,
+            return_tensors="pt",
+        )
+        inputs = {name: tensor.to("cuda") for name, tensor in encoded.items()}
+        with self.torch.inference_mode():
+            logits = self.model(**inputs).logits.detach().float().cpu().tolist()
+        if len(logits) != len(rows) or any(
+            not isinstance(value, list) or len(value) != 1 for value in logits
+        ):
+            raise ValueError("MiniLM logits must have shape (batch, 1)")
+        return [_float32(value[0]) for value in logits]
+
+    @property
+    def peak_device_memory_bytes(self) -> int:
+        return int(self.torch.cuda.max_memory_allocated())
+
+
+def run_local_scoring(
+    preflight_path: Path,
+    cache_root: Path = SCORE_CACHE_ROOT,
+    *,
+    runner: object | None = None,
+) -> dict[str, object]:
+    """Score only frozen cache misses locally and create bound score artifacts."""
+
+    path = Path(preflight_path)
+    output = path.parent
+    for filename in (
+        "scoring_reservation.json",
+        "scores.jsonl",
+        "document_scores.jsonl",
+        "scoring_receipt.json",
+    ):
+        if (output / filename).exists():
+            raise FileExistsError(f"create-only scoring output exists: {filename}")
+    preflight = verify_preflight(path)
+    preflight_bytes = path.read_bytes()
+    windows_path = output / "windows.jsonl"
+    candidates_path = output / "candidates.jsonl"
+    window_bytes = windows_path.read_bytes()
+    candidate_bytes = candidates_path.read_bytes()
+    if (
+        _sha256_bytes(window_bytes) != preflight.get("windows_sha256")
+        or _sha256_bytes(candidate_bytes) != preflight.get("candidates_sha256")
+    ):
+        raise ValueError("window or candidate bytes differ from tethered preflight")
+    windows = _read_jsonl_source(window_bytes, "tethered MiniLM windows")
+    if len(windows) != preflight["summary"]["window_count"]:  # type: ignore[index]
+        raise ValueError("window rows differ from tethered preflight count")
+    candidates = _read_jsonl_source(candidate_bytes, "tethered MiniLM candidates")
+    if len(candidates) != PAIR_COUNT:
+        raise ValueError("candidate rows differ from the exact 4,800-pair contract")
+    for row in windows:
+        reject_topic(row.get("topic_id"))
+    window_identities = {
+        (
+            str(row.get("topic_id")),
+            str(row.get("facet_id")),
+            str(row.get("document_id")),
+        )
+        for row in windows
+    }
+    candidate_identities: set[tuple[str, str, str]] = set()
+    for row in candidates:
+        topic_id = reject_topic(row.get("topic_id"))
+        facet_id = _required_text(row, "facet_id", "tethered candidate")
+        document_id = _required_text(row, "document_id", "tethered candidate")
+        if row.get("schema_version") != CANDIDATE_SCHEMA_VERSION:
+            raise ValueError("tethered candidate schema differs")
+        candidate_identities.add((topic_id, facet_id, document_id))
+    if len(candidate_identities) != PAIR_COUNT:
+        raise ValueError("tethered candidates require 4,800 unique identities")
+    if candidate_identities != window_identities:
+        raise ValueError("tethered candidate and window identities differ")
+
+    model_receipt = Path(str(preflight.get("model_materialization_receipt")))
+    verified = load_verified_materialization(model_receipt)
+    if verified.sha256 != preflight.get("model_materialization_receipt_sha256"):
+        raise ValueError("model receipt differs from tethered MiniLM preflight")
+    cache = GlobalScoreCache(Path(cache_root), score_cache_context())
+    by_key: dict[str, Mapping[str, object]] = {}
+    planned_miss_keys: set[str] = set()
+    for row in windows:
+        query = _required_text(row, "query", "planned window")
+        text = _required_text(row, "window_text", "planned window")
+        key = _required_text(row, "cache_key", "planned window")
+        if cache.cache_key(query_text=query, text=text) != key:  # type: ignore[attr-defined]
+            raise ValueError("planned window cache key differs from exact content")
+        by_key.setdefault(key, row)
+        if row.get("cache_hit") is False:
+            planned_miss_keys.add(key)
+    actual_misses = [
+        row
+        for key, row in sorted(by_key.items())
+        if cache.get(query_text=str(row["query"]), text=str(row["window_text"])) is None  # type: ignore[attr-defined]
+    ]
+    actual_miss_keys = {str(row["cache_key"]) for row in actual_misses}
+    if (
+        actual_miss_keys != planned_miss_keys
+        or len(actual_miss_keys) != preflight["summary"]["unique_cache_miss_count"]  # type: ignore[index]
+    ):
+        raise ValueError("score-cache misses changed after tethered MiniLM preflight")
+
+    reservation_bytes = _pretty_bytes(
+        {
+            "schema_version": SCORING_RECEIPT_SCHEMA_VERSION,
+            "status": "reserved",
+            "preflight_sha256": _sha256_bytes(preflight_bytes),
+            "planned_unique_forward_pair_count": len(actual_misses),
+            "hard_ceiling_seconds": RUNTIME_CEILING_SECONDS,
+            "qrels_opened": False,
+            "automatic_retry": False,
+        }
+    )
+    _exclusive_write(output / "scoring_reservation.json", reservation_bytes)
+    started = time.perf_counter()
+    scorer = runner
+    if actual_misses and scorer is None:
+        scorer = _LocalMiniLMRunner(model_receipt)
+    for start in range(0, len(actual_misses), BATCH_SIZE):
+        if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
+            raise RuntimeError("tethered MiniLM scoring exceeded the 600-second ceiling; no retry")
+        batch = actual_misses[start : start + BATCH_SIZE]
+        values = scorer.score(batch)  # type: ignore[union-attr]
+        if len(values) != len(batch):
+            raise ValueError("MiniLM runner returned an unexpected score count")
+        cache.add_many(  # type: ignore[attr-defined]
+            (str(row["query"]), str(row["window_text"]), _float32(score))
+            for row, score in zip(batch, values, strict=True)
+        )
+        if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
+            raise RuntimeError("tethered MiniLM scoring exceeded the 600-second ceiling; no retry")
+
+    score_rows: list[dict[str, object]] = []
+    for row in windows:
+        score = cache.get(query_text=str(row["query"]), text=str(row["window_text"]))  # type: ignore[attr-defined]
+        if score is None:
+            raise ValueError("score cache does not cover a frozen tethered window")
+        score_rows.append(
+            {
+                **row,
+                "schema_version": SCORE_SCHEMA_VERSION,
+                "score": _float32(score),
+                "model": MODEL_ID,
+                "model_revision": MODEL_REVISION,
+                "score_representation": "raw_logits",
+                "inference_dtype": "float32",
+            }
+        )
+    document_rows = aggregate_document_scores(score_rows)
+    if len(document_rows) != PAIR_COUNT:
+        raise ValueError("document aggregation requires exactly 4,800 rows")
+    bound_document_rows = [
+        {"schema_version": DOCUMENT_SCORE_SCHEMA_VERSION, **row}
+        for row in document_rows
+    ]
+    score_bytes = _jsonl_bytes(score_rows)
+    document_bytes = _jsonl_bytes(bound_document_rows)
+    if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
+        raise RuntimeError("tethered MiniLM scoring exceeded the 600-second ceiling; no retry")
+    _exclusive_write(output / "scores.jsonl", score_bytes)
+    _exclusive_write(output / "document_scores.jsonl", document_bytes)
+    elapsed = time.perf_counter() - started
+    if elapsed >= RUNTIME_CEILING_SECONDS:
+        raise RuntimeError("tethered MiniLM scoring exceeded the 600-second ceiling; no retry")
+    receipt: dict[str, object] = {
+        "schema_version": SCORING_RECEIPT_SCHEMA_VERSION,
+        "status": "complete",
+        "qrels_opened": False,
+        "network_access_supported": False,
+        "hosted_inference_supported": False,
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "preflight_sha256": _sha256_bytes(preflight_bytes),
+        "scoring_reservation_sha256": _sha256_bytes(reservation_bytes),
+        "windows_sha256": _sha256_bytes(window_bytes),
+        "scores_sha256": _sha256_bytes(score_bytes),
+        "document_scores_sha256": _sha256_bytes(document_bytes),
+        "planned_window_count": len(windows),
+        "completed_window_count": len(score_rows),
+        "document_score_count": len(document_rows),
+        "unique_forward_pair_count": len(actual_misses),
+        "cache_hit_count": len(by_key) - len(actual_misses),
+        "cache_reuse_pair_count": len(by_key) - len(actual_misses),
+        "elapsed_seconds": elapsed,
+        "hard_ceiling_seconds": RUNTIME_CEILING_SECONDS,
+        "peak_device_memory_bytes": int(
+            getattr(scorer, "peak_device_memory_bytes", 0)
+        ),
+        "peak_host_memory_bytes": _host_memory_bytes(),
+        "device": "cuda",
+        "execution_backend": "rocm",
+        "score_cache_path": str(cache.path),  # type: ignore[attr-defined]
+    }
+    _exclusive_write(output / "scoring_receipt.json", _pretty_bytes(receipt))
+    return receipt
+
+
+def verify_scoring(preflight_path: Path) -> dict[str, object]:
+    """Verify create-only scoring artifacts remain bound to the Task 1 plan."""
+
+    path = Path(preflight_path)
+    preflight = verify_preflight(path)
+    output = path.parent
+    receipt, _ = _read_object(output / "scoring_receipt.json", "scoring receipt")
+    reservation, reservation_bytes = _read_object(
+        output / "scoring_reservation.json", "scoring reservation"
+    )
+    window_bytes = (output / "windows.jsonl").read_bytes()
+    score_bytes = (output / "scores.jsonl").read_bytes()
+    document_bytes = (output / "document_scores.jsonl").read_bytes()
+    windows = _read_jsonl_source(window_bytes, "tethered MiniLM windows")
+    score_rows = _read_jsonl_source(score_bytes, "tethered MiniLM scores")
+    document_rows = _read_jsonl_source(
+        document_bytes, "tethered MiniLM document scores"
+    )
+    if _sha256_bytes(window_bytes) != preflight.get("windows_sha256"):
+        raise ValueError("current planned windows differ from the tethered preflight")
+    if len(windows) != len(score_rows):
+        raise ValueError("scoring rows do not exactly cover planned windows")
+    lineage_fields = (
+        "topic_id",
+        "facet_id",
+        "document_id",
+        "window_id",
+        "query_sha256",
+        "document_sha256",
+        "window_sha256",
+        "cache_key",
+    )
+    for window, score_row in zip(windows, score_rows, strict=True):
+        if any(window.get(field) != score_row.get(field) for field in lineage_fields):
+            raise ValueError("score row lineage differs from its planned window")
+        score = score_row.get("score")
+        if (
+            score_row.get("schema_version") != SCORE_SCHEMA_VERSION
+            or score_row.get("model") != MODEL_ID
+            or score_row.get("model_revision") != MODEL_REVISION
+            or score_row.get("score_representation") != "raw_logits"
+            or score_row.get("inference_dtype") != "float32"
+            or isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or _float32(score) != float(score)
+        ):
+            raise ValueError("score row differs from the frozen float32 contract")
+        planned_payload = {
+            key: value for key, value in window.items() if key != "schema_version"
+        }
+        scored_payload = {
+            key: value
+            for key, value in score_row.items()
+            if key
+            not in {
+                "schema_version",
+                "score",
+                "model",
+                "model_revision",
+                "score_representation",
+                "inference_dtype",
+            }
+        }
+        if scored_payload != planned_payload:
+            raise ValueError("score row payload differs from its exact planned window")
+    recomputed = [
+        {"schema_version": DOCUMENT_SCORE_SCHEMA_VERSION, **row}
+        for row in aggregate_document_scores(score_rows)
+    ]
+    if _jsonl_bytes(recomputed) != document_bytes or len(document_rows) != PAIR_COUNT:
+        raise ValueError("document aggregation differs from scored windows")
+    preflight_sha = _sha256_bytes(path.read_bytes())
+    summary = preflight["summary"]
+    planned_misses = summary["unique_cache_miss_count"]  # type: ignore[index]
+    unique_pairs = summary["unique_pair_count"]  # type: ignore[index]
+    elapsed = receipt.get("elapsed_seconds")
+    if (
+        reservation.get("schema_version") != SCORING_RECEIPT_SCHEMA_VERSION
+        or reservation.get("status") != "reserved"
+        or reservation.get("qrels_opened") is not False
+        or reservation.get("automatic_retry") is not False
+        or reservation.get("preflight_sha256") != preflight_sha
+        or reservation.get("hard_ceiling_seconds") != RUNTIME_CEILING_SECONDS
+        or reservation.get("planned_unique_forward_pair_count") != planned_misses
+        or receipt.get("schema_version") != SCORING_RECEIPT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or receipt.get("qrels_opened") is not False
+        or receipt.get("network_access_supported") is not False
+        or receipt.get("hosted_inference_supported") is not False
+        or receipt.get("model") != MODEL_ID
+        or receipt.get("model_revision") != MODEL_REVISION
+        or receipt.get("device") != "cuda"
+        or receipt.get("execution_backend") != "rocm"
+        or receipt.get("hard_ceiling_seconds") != RUNTIME_CEILING_SECONDS
+        or isinstance(elapsed, bool)
+        or not isinstance(elapsed, (int, float))
+        or not math.isfinite(float(elapsed))
+        or not 0 <= float(elapsed) < RUNTIME_CEILING_SECONDS
+        or receipt.get("preflight_sha256") != preflight_sha
+        or receipt.get("scoring_reservation_sha256") != _sha256_bytes(reservation_bytes)
+        or receipt.get("windows_sha256") != preflight.get("windows_sha256")
+        or receipt.get("scores_sha256") != _sha256_bytes(score_bytes)
+        or receipt.get("document_scores_sha256") != _sha256_bytes(document_bytes)
+        or len(score_bytes.splitlines()) != preflight["summary"]["window_count"]  # type: ignore[index]
+        or len(document_bytes.splitlines()) != PAIR_COUNT
+        or receipt.get("planned_window_count") != len(windows)
+        or receipt.get("completed_window_count") != len(score_rows)
+        or receipt.get("document_score_count") != len(document_rows)
+        or receipt.get("unique_forward_pair_count")
+        != reservation.get("planned_unique_forward_pair_count")
+        or receipt.get("cache_hit_count") != unique_pairs - planned_misses
+        or receipt.get("cache_reuse_pair_count") != unique_pairs - planned_misses
+    ):
+        raise ValueError("scoring artifacts differ from the frozen receipt")
+    return receipt
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     preflight = subparsers.add_parser("preflight")
@@ -1140,20 +1693,36 @@ def build_argument_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--gate", required=True, type=Path)
     preflight.add_argument("--output", required=True, type=Path)
     preflight.add_argument("--cache-root", type=Path, default=SCORE_CACHE_ROOT)
+    score = subparsers.add_parser("score")
+    score.add_argument("--preflight", required=True, type=Path)
+    score.add_argument("--cache-root", type=Path, default=SCORE_CACHE_ROOT)
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--preflight", required=True, type=Path)
     return parser
 
 
+def build_argument_parser() -> argparse.ArgumentParser:
+    """Backward-compatible parser name retained for the Task 1 CLI."""
+
+    return build_parser()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_argument_parser().parse_args(argv)
-    result = create_preflight(
-        {
-            "manifest": args.manifest,
-            "phase1": args.phase1,
-            "gate": args.gate,
-            "cache_root": args.cache_root,
-        },
-        args.output,
-    )
+    args = build_parser().parse_args(argv)
+    if args.command == "preflight":
+        result = create_preflight(
+            {
+                "manifest": args.manifest,
+                "phase1": args.phase1,
+                "gate": args.gate,
+                "cache_root": args.cache_root,
+            },
+            args.output,
+        )
+    elif args.command == "score":
+        result = run_local_scoring(args.preflight, cache_root=args.cache_root)
+    else:
+        result = verify_scoring(args.preflight)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

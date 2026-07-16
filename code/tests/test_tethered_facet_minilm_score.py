@@ -15,11 +15,14 @@ from trec_rag.facet_local_minilm_preflight import (
     materialize_model,
 )
 from trec_rag.tethered_facet_minilm_score import (
+    aggregate_document_scores,
     build_argument_parser,
+    build_parser,
     build_tethered_candidates,
     create_preflight,
     enforce_preflight_ceiling,
     render_tethered_query,
+    run_local_scoring,
 )
 
 
@@ -240,12 +243,107 @@ class FakeCache:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.scores: dict[str, float] = {}
+        self.aliases: dict[tuple[str, str], str] = {}
 
     def cache_key(self, *, query_text: str, text: str) -> str:
-        return _sha256(_compact([query_text, text]))
+        return self.aliases.get(
+            (query_text, text), _sha256(_compact([query_text, text]))
+        )
 
     def get(self, *, query_text: str, text: str):
         return self.scores.get(self.cache_key(query_text=query_text, text=text))
+
+    def add_many(self, rows):
+        for query_text, text, score in rows:
+            self.scores[self.cache_key(query_text=query_text, text=text)] = score
+
+
+class FakeRunner:
+    def __init__(self, scores: dict[str, float]) -> None:
+        self.scores = scores
+        self.forwarded_keys: list[str] = []
+
+    def score(self, rows):
+        self.forwarded_keys.extend(row["cache_key"] for row in rows)
+        return [self.scores[row["cache_key"]] for row in rows]
+
+
+def scoring_fixture(tmp_path: Path) -> tuple[Path, FakeCache]:
+    output = output_path(tmp_path)
+    output.mkdir(parents=True)
+    cache = FakeCache(tmp_path / "score-cache.jsonl")
+    rows = []
+    candidates = []
+    for number in range(1, module.PAIR_COUNT + 1):
+        key_number = 1 if number % 2 else 2
+        query, text = f"q{key_number}", f"t{key_number}"
+        cache_key = f"k{key_number}"
+        cache.aliases[(query, text)] = cache_key
+        rows.append(
+            {
+                "topic_id": "219",
+                "facet_id": "219-positive",
+                "document_id": f"d{number}",
+                "query": query,
+                "query_sha256": _sha256(query.encode()),
+                "document_sha256": _sha256(text.encode()),
+                "window_id": f"w{number}",
+                "window_text": text,
+                "window_sha256": _sha256(text.encode()),
+                "cache_key": cache_key,
+                "document_start_token": 0,
+                "document_end_token": 256,
+                "cache_hit": key_number == 1,
+            }
+        )
+        candidates.append(
+            {
+                "schema_version": module.CANDIDATE_SCHEMA_VERSION,
+                "topic_id": "219",
+                "facet_id": "219-positive",
+                "document_id": f"d{number}",
+            }
+        )
+    window_bytes = b"".join(_compact(row) + b"\n" for row in rows)
+    candidate_bytes = b"".join(_compact(row) + b"\n" for row in candidates)
+    (output / "windows.jsonl").write_bytes(window_bytes)
+    (output / "candidates.jsonl").write_bytes(candidate_bytes)
+    preflight = {
+        "schema_version": module.PREFLIGHT_SCHEMA_VERSION,
+        "status": "tokenizer_only_preflight_complete",
+        "qrels_opened": False,
+        "network_access_supported": False,
+        "hosted_inference_supported": False,
+        "model": module.MODEL_ID,
+        "model_revision": module.MODEL_REVISION,
+        "model_materialization_receipt": str(tmp_path / "materialization.json"),
+        "model_materialization_receipt_sha256": "a" * 64,
+        "candidates_file": "candidates.jsonl",
+        "windows_file": "windows.jsonl",
+        "windows_sha256": _sha256(window_bytes),
+        "candidates_sha256": _sha256(candidate_bytes),
+        "summary": {
+            "query_document_pair_count": module.PAIR_COUNT,
+            "window_count": module.PAIR_COUNT,
+            "unique_pair_count": 2,
+            "unique_cache_miss_count": 1,
+            "accepted_facet_count": module.ACCEPTED_FACET_COUNT,
+            "topic_pair_counts": {topic: 1200 for topic in module.TOPIC_IDS},
+            "facet_pair_counts": {
+                f"{topic}-facet-{number}": 200
+                for topic in module.TOPIC_IDS
+                for number in range(6)
+            },
+        },
+        "ceilings": {
+            "exact_query_document_pair_count": module.PAIR_COUNT,
+            "maximum_window_count": module.WINDOW_CEILING,
+            "maximum_runtime_seconds": module.RUNTIME_CEILING_SECONDS,
+        },
+    }
+    (output / "preflight.json").write_bytes(_pretty(preflight))
+    cache.scores["k1"] = 1.0
+    return output / "preflight.json", cache
 
 
 def working_rocm_probe() -> dict[str, object]:
@@ -805,3 +903,229 @@ def test_rocm_probe_uses_disk_backed_temp_without_model_construction(monkeypatch
     assert calls[0]["kwargs"]["env"]["TMPDIR"] == "/var/tmp"
     assert "torch.zeros" in calls[0]["args"][0][2]
     assert "AutoModel" not in calls[0]["args"][0][2]
+
+
+def test_scoring_only_forwards_exact_cache_misses(tmp_path, monkeypatch):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    runner = FakeRunner(scores={"k2": 2.0})
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+
+    receipt = run_local_scoring(preflight_path, runner=runner)
+
+    assert runner.forwarded_keys == ["k2"]
+    assert receipt["unique_forward_pair_count"] == 1
+    assert receipt["cache_hit_count"] == 1
+
+
+def test_document_aggregation_matches_existing_top4_contract():
+    rows = aggregate_document_scores(
+        [
+            {
+                "topic_id": "219",
+                "facet_id": "219-positive",
+                "document_id": "d1",
+                "query_sha256": "1" * 64,
+                "document_sha256": "2" * 64,
+                "window_id": "overlap",
+                "window_sha256": "3" * 64,
+                "document_start_token": 0,
+                "document_end_token": 256,
+                "score": 8.0,
+                "model": module.MODEL_ID,
+                "model_revision": module.MODEL_REVISION,
+            },
+            {
+                "topic_id": "219",
+                "facet_id": "219-positive",
+                "document_id": "d1",
+                "query_sha256": "1" * 64,
+                "document_sha256": "2" * 64,
+                "window_id": "discarded-overlap",
+                "window_sha256": "4" * 64,
+                "document_start_token": 64,
+                "document_end_token": 320,
+                "score": 7.0,
+                "model": module.MODEL_ID,
+                "model_revision": module.MODEL_REVISION,
+            },
+            {
+                "topic_id": "219",
+                "facet_id": "219-positive",
+                "document_id": "d1",
+                "query_sha256": "1" * 64,
+                "document_sha256": "2" * 64,
+                "window_id": "distinct",
+                "window_sha256": "5" * 64,
+                "document_start_token": 256,
+                "document_end_token": 512,
+                "score": 5.92,
+                "model": module.MODEL_ID,
+                "model_revision": module.MODEL_REVISION,
+            },
+        ]
+    )
+
+    assert rows == [
+        {
+            "topic_id": "219",
+            "facet_id": "219-positive",
+            "document_id": "d1",
+            "score": pytest.approx(7.35),
+            "selected_window_count": 2,
+            "query_sha256": "1" * 64,
+            "text_sha256": "2" * 64,
+            "model": module.MODEL_ID,
+            "model_revision": module.MODEL_REVISION,
+            "window_hashes": ["3" * 64, "5" * 64],
+        }
+    ]
+
+
+def test_score_cli_has_no_download_network_retrieval_or_qrels_argument():
+    parser = build_parser()
+    parsers = [parser]
+    for action in parser._actions:
+        choices = getattr(action, "choices", None)
+        if choices:
+            parsers.extend(choices.values())
+    help_text = "\n".join(candidate.format_help() for candidate in parsers)
+    for forbidden in ("qrels", "endpoint", "download", "retrieval"):
+        assert forbidden not in help_text.lower()
+    assert parser.parse_args(["score", "--preflight", "preflight.json"]).command == "score"
+    assert parser.parse_args(["verify", "--preflight", "preflight.json"]).command == "verify"
+
+
+def test_protected_topic_fails_before_cache_or_model(monkeypatch):
+    class ExplodingDependency:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("dependency must not be constructed")
+
+    monkeypatch.setattr(module, "GlobalScoreCache", ExplodingDependency)
+    preflight = {
+        "schema_version": module.PREFLIGHT_SCHEMA_VERSION,
+        "status": "tokenizer_only_preflight_complete",
+        "qrels_opened": False,
+        "network_access_supported": False,
+        "hosted_inference_supported": False,
+        "model": module.MODEL_ID,
+        "model_revision": module.MODEL_REVISION,
+        "topic_ids": ["144"],
+        "summary": {},
+    }
+    with pytest.raises(ValueError, match="protected topic 144"):
+        module.verify_preflight(preflight)
+
+
+def test_verify_recomputes_document_aggregation_after_receipt_restamp(
+    tmp_path, monkeypatch
+):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+    run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+    assert module.verify_scoring(preflight_path)["status"] == "complete"
+    document_path = preflight_path.parent / "document_scores.jsonl"
+    lines = document_path.read_text(encoding="utf-8").splitlines()
+    first = json.loads(lines[0])
+    first["score"] = 99.0
+    lines[0] = _compact(first).decode()
+    document_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    receipt_path = preflight_path.parent / "scoring_receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["document_scores_sha256"] = _sha256(document_path.read_bytes())
+    receipt_path.write_bytes(_pretty(receipt))
+
+    with pytest.raises(ValueError, match="document|aggregation"):
+        module.verify_scoring(preflight_path)
+
+
+def test_scoring_finalization_cannot_cross_hard_ceiling(tmp_path, monkeypatch):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+    ticks = iter((0.0, 1.0, 2.0, 601.0))
+    monkeypatch.setattr(module.time, "perf_counter", lambda: next(ticks))
+
+    with pytest.raises(RuntimeError, match="600-second ceiling"):
+        run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+    assert not (preflight_path.parent / "scoring_receipt.json").exists()
+
+
+def test_preflight_rejects_nonlocal_artifact_filenames(tmp_path):
+    preflight_path, _cache = scoring_fixture(tmp_path)
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["windows_file"] = "../windows.jsonl"
+
+    with pytest.raises(ValueError, match="artifact filenames"):
+        module.verify_preflight(preflight)
+
+
+def test_verify_binds_full_score_payload_to_preflight_windows(tmp_path, monkeypatch):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+    run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
+    output = preflight_path.parent
+    windows = [json.loads(line) for line in (output / "windows.jsonl").read_bytes().splitlines()]
+    scores = [json.loads(line) for line in (output / "scores.jsonl").read_bytes().splitlines()]
+    windows[0]["document_end_token"] += 1
+    scores[0]["document_end_token"] += 1
+    (output / "windows.jsonl").write_bytes(b"".join(_compact(row) + b"\n" for row in windows))
+    score_bytes = b"".join(_compact(row) + b"\n" for row in scores)
+    (output / "scores.jsonl").write_bytes(score_bytes)
+    documents = [
+        {"schema_version": module.DOCUMENT_SCORE_SCHEMA_VERSION, **row}
+        for row in module.aggregate_document_scores(scores)
+    ]
+    document_bytes = b"".join(_compact(row) + b"\n" for row in documents)
+    (output / "document_scores.jsonl").write_bytes(document_bytes)
+    receipt_path = output / "scoring_receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["scores_sha256"] = _sha256(score_bytes)
+    receipt["document_scores_sha256"] = _sha256(document_bytes)
+    receipt_path.write_bytes(_pretty(receipt))
+
+    with pytest.raises(ValueError, match="planned windows|planned window"):
+        module.verify_scoring(preflight_path)
+
+
+def test_scoring_requires_candidate_and_window_identity_sets_to_match(
+    tmp_path, monkeypatch
+):
+    preflight_path, cache = scoring_fixture(tmp_path)
+    output = preflight_path.parent
+    candidates = [
+        json.loads(line) for line in (output / "candidates.jsonl").read_bytes().splitlines()
+    ]
+    candidates[-1]["document_id"] = "different-document"
+    candidate_bytes = b"".join(_compact(row) + b"\n" for row in candidates)
+    (output / "candidates.jsonl").write_bytes(candidate_bytes)
+    preflight = json.loads(preflight_path.read_bytes())
+    preflight["candidates_sha256"] = _sha256(candidate_bytes)
+    preflight_path.write_bytes(_pretty(preflight))
+    monkeypatch.setattr(module, "GlobalScoreCache", lambda *_args: cache)
+    monkeypatch.setattr(
+        module,
+        "load_verified_materialization",
+        lambda _path: type("Receipt", (), {"sha256": "a" * 64})(),
+    )
+
+    with pytest.raises(ValueError, match="candidate.*window identities"):
+        run_local_scoring(preflight_path, runner=FakeRunner(scores={"k2": 2.0}))
