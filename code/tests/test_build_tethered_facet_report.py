@@ -203,7 +203,7 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     }
     qrels = {
         **{(topic, document): 2 for topic, documents in novel_ids.items() for document in documents},
-        ("219", "doc-promoted"): 2,
+        ("219", "doc-promoted"): 4,
         ("84", "doc-demoted"): 0,
         ("219", "below-500"): 2,
     }
@@ -305,7 +305,7 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
             "selected_passage": "The program increased access while preserving local services.",
             "facet_only_percentile": 0.5,
             "tethered_percentile": 1.0,
-            "qrels_grade": 2,
+            "qrels_grade": 4,
             "facet_only_final_rank": 611,
             "tethered_final_rank": 202,
             "prior_bm25_rank": 7,
@@ -510,6 +510,17 @@ def test_report_accepts_exact_production_task2_receipt_schema(
 
     assert receipt["schema_version"] == "tethered-facet-minilm-scoring-receipt-v1"
     assert artifact["schema_version"] == "tethered-facet-diagnostic-report-v1"
+
+
+def test_report_accepts_production_grade_four_projection(
+    sources: ReportSources,
+) -> None:
+    artifact = build_artifact(sources)
+
+    promoted = next(
+        row for row in artifact["representatives"] if row["movement"] == "promoted"
+    )
+    assert promoted["qrels_grade"] == 4
 
 
 def test_report_rejects_synthetic_only_task2_receipt_schema(

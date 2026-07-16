@@ -43,10 +43,12 @@ def test_top100_identity_is_a_hard_invariant() -> None:
         validate_protected_head(rrf=list(range(100)), arm=list(range(99)) + [999])
 
 
-def _projection_bytes(topic_ids: tuple[str, ...] = TOPIC_IDS) -> bytes:
+def _projection_bytes(
+    topic_ids: tuple[str, ...] = TOPIC_IDS, *, grade: int = 2
+) -> bytes:
     return b"".join(
         json.dumps(
-            {"topic_id": topic, "document_id": f"{topic}-relevant", "grade": 2},
+            {"topic_id": topic, "document_id": f"{topic}-relevant", "grade": grade},
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -76,6 +78,22 @@ def test_projection_requires_exact_contiguous_topics_and_rejects_protected(
     )
     with pytest.raises(ValueError, match="line 1 is invalid"):
         load_projection(projection)
+
+
+def test_projection_accepts_grade_four_and_rejects_out_of_range_grades(
+    tmp_path: Path,
+) -> None:
+    projection = tmp_path / "projection.jsonl"
+    projection.write_bytes(_projection_bytes(grade=4))
+    assert all(
+        set(topic_grades.values()) == {4}
+        for topic_grades in load_projection(projection).values()
+    )
+
+    for grade in (-1, 5):
+        projection.write_bytes(_projection_bytes(grade=grade))
+        with pytest.raises(ValueError, match="line 1 is invalid"):
+            load_projection(projection)
 
 
 def test_derive_novel_set_uses_relevant_facet_candidates_absent_original_1000() -> None:

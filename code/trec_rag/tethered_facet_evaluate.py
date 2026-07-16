@@ -26,6 +26,8 @@ from .tethered_facet_minilm_score import _selected_top4
 TOPIC_IDS = PILOT_TOPIC_IDS
 PROTECTED_TOPIC_IDS = frozenset({"144", "213", "224", "407", "515"})
 NOVEL_RELEVANT_TOTAL = 177
+QRELS_GRADE_MIN = 0
+QRELS_GRADE_MAX = 4
 SCHEMA_VERSION = "tethered-facet-evaluation-v1"
 PRIOR_SCHEMA_VERSION = "deep-facet-candidate-evaluation-v1"
 PRIOR_EVALUATION_FILES = frozenset(
@@ -648,6 +650,7 @@ def _parse_projection(content: bytes) -> dict[str, dict[str, int]]:
                 or not isinstance(raw_document, str)
                 or not isinstance(raw_grade, int)
                 or isinstance(raw_grade, bool)
+                or not QRELS_GRADE_MIN <= raw_grade <= QRELS_GRADE_MAX
             ):
                 raise TypeError
             topic_id, document_id, grade = raw_topic, raw_document, raw_grade

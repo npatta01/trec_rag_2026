@@ -252,7 +252,13 @@ def _authenticated_qrels_evidence(
         topic, document, grade = str(row.get("topic_id")), str(row.get("document_id")), row.get("grade")
         if topic in PROTECTED_TOPIC_IDS or topic not in qrels:
             raise ValueError("historical qrels projection contains an unexpected topic")
-        if type(grade) is not int or grade < 0 or grade > 3 or not document or document in qrels[topic]:
+        if (
+            type(grade) is not int
+            or grade < task4_evaluate.QRELS_GRADE_MIN
+            or grade > task4_evaluate.QRELS_GRADE_MAX
+            or not document
+            or document in qrels[topic]
+        ):
             raise ValueError("historical qrels projection row is invalid")
         if not seen_topics or seen_topics[-1] != topic:
             seen_topics.append(topic)
