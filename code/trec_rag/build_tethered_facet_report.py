@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import tethered_facet_evaluate as task4_evaluate
+
 
 TOPIC_IDS = ("219", "72", "300", "84")
 PROTECTED_TOPIC_IDS = frozenset({"144", "213", "224", "407", "515"})
@@ -154,6 +156,129 @@ def _selected_windows(windows: Sequence[Mapping[str, object]]) -> list[Mapping[s
     return selected
 
 
+def _bound_bytes(raw: object, label: str) -> tuple[Path, bytes]:
+    binding = _mapping(raw, label)
+    path = Path(str(binding.get("path")))
+    if path.is_symlink():
+        raise ValueError(f"{label} is unsafe")
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    _exact_binding(binding, path, content, label)
+    return path, content
+
+
+def _authenticated_qrels_evidence(
+    bindings: Mapping[str, object],
+) -> tuple[dict[str, dict[str, int]], dict[str, set[str]]]:
+    """Verify the Task 4 historical leaf and derive grades/novel IDs from it."""
+
+    anchor = task4_evaluate.HISTORICAL_PRIOR_EVALUATION_IDENTITY
+    if bindings.get("historical_integrity_anchor") != anchor:
+        raise ValueError("Task 4 historical qrels integrity anchor differs")
+    if (
+        bindings.get("historical_integrity_only") is not True
+        or bindings.get("blind_generalization_evidence") is not False
+        or bindings.get("original_qrels_opened") is not False
+    ):
+        raise ValueError("Task 4 historical qrels boundary differs")
+    _prior_seal_path, prior_seal_bytes = _bound_bytes(
+        bindings.get("prior_freeze_seal"), "Task 4 prior freeze seal"
+    )
+    _prior_rankings_path, _prior_rankings_bytes = _bound_bytes(
+        bindings.get("prior_freeze_rankings"), "Task 4 prior freeze rankings"
+    )
+    try:
+        prior_seal = json.loads(prior_seal_bytes)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Task 4 prior freeze seal is invalid") from exc
+    if (
+        not isinstance(prior_seal, Mapping)
+        or bindings.get("prior_freeze_root_sha256") != prior_seal.get("root_sha256")
+    ):
+        raise ValueError("Task 4 prior freeze root differs")
+
+    source_names = {
+        "qrels_projection": "qrels_projection.jsonl",
+        "qrels_access_receipt": "qrels_access_receipt.json",
+        "prior_metrics": "metrics.json",
+        "prior_decision": "decision.json",
+        "prior_summary": "summary.json",
+    }
+    contents: dict[str, bytes] = {}
+    for binding_name, filename in source_names.items():
+        _path, content = _bound_bytes(
+            bindings.get(binding_name), f"Task 4 {binding_name.replace('_', ' ')}"
+        )
+        contents[filename] = content
+    expected_files = anchor.get("files") if isinstance(anchor, Mapping) else None
+    if (
+        anchor.get("schema_version") != "deep-facet-candidate-evaluation-v1"
+        or anchor.get("topic_ids") != list(TOPIC_IDS)
+        or not isinstance(expected_files, Mapping)
+        or set(expected_files) != set(contents)
+        or any(_sha256(contents[name]) != expected_files.get(name) for name in contents)
+        or len(contents["qrels_projection.jsonl"].splitlines())
+        != anchor.get("qrels_projection_rows")
+    ):
+        raise ValueError("Task 4 historical qrels integrity evidence differs")
+    try:
+        receipt = json.loads(contents["qrels_access_receipt.json"])
+        prior_metrics = json.loads(contents["metrics.json"])
+        prior_summary = json.loads(contents["summary.json"])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Task 4 historical qrels evidence is invalid") from exc
+    if not all(isinstance(value, Mapping) for value in (receipt, prior_metrics, prior_summary)):
+        raise ValueError("Task 4 historical qrels evidence must be objects")
+    projection_bytes = contents["qrels_projection.jsonl"]
+    if (
+        receipt.get("status") != "qrels_access_boundary_crossed"
+        or receipt.get("qrels_opened") is not True
+        or receipt.get("upstream_mutation_forbidden") is not True
+        or receipt.get("topic_ids") != list(TOPIC_IDS)
+        or receipt.get("seal_sha256") != _sha256(prior_seal_bytes)
+        or receipt.get("seal_root_sha256") != prior_seal.get("root_sha256")
+        or receipt.get("qrels_projection_sha256") != _sha256(projection_bytes)
+        or receipt.get("qrels_projection_rows") != len(projection_bytes.splitlines())
+        or prior_summary.get("metrics_sha256") != _sha256(contents["metrics.json"])
+        or prior_summary.get("decision_sha256") != _sha256(contents["decision.json"])
+    ):
+        raise ValueError("Task 4 historical qrels trust chain differs")
+
+    qrels = {topic: {} for topic in TOPIC_IDS}
+    seen_topics: list[str] = []
+    for row in _jsonl_rows(projection_bytes, "historical qrels projection"):
+        topic, document, grade = str(row.get("topic_id")), str(row.get("document_id")), row.get("grade")
+        if topic in PROTECTED_TOPIC_IDS or topic not in qrels:
+            raise ValueError("historical qrels projection contains an unexpected topic")
+        if type(grade) is not int or grade < 0 or grade > 3 or not document or document in qrels[topic]:
+            raise ValueError("historical qrels projection row is invalid")
+        if not seen_topics or seen_topics[-1] != topic:
+            seen_topics.append(topic)
+        qrels[topic][document] = grade
+    if seen_topics != list(TOPIC_IDS):
+        raise ValueError("historical qrels projection topic order differs")
+    discovery = prior_metrics.get("discovery")
+    if not isinstance(discovery, Mapping) or set(discovery) != set(TOPIC_IDS):
+        raise ValueError("historical novel evidence is missing")
+    novel: dict[str, set[str]] = {}
+    for topic in TOPIC_IDS:
+        record = discovery.get(topic)
+        ids = record.get("novel_relevant_ids") if isinstance(record, Mapping) else None
+        if not isinstance(ids, list) or len(ids) != len(set(map(str, ids))):
+            raise ValueError("historical novel evidence is invalid")
+        novel[topic] = set(map(str, ids))
+        if any(qrels[topic].get(document, 0) < 2 for document in novel[topic]):
+            raise ValueError("historical novel evidence differs from qrels grades")
+    if (
+        prior_metrics.get("novel_relevant_count") != sum(map(len, novel.values()))
+        or prior_summary.get("novel_relevant_count") != sum(map(len, novel.values()))
+    ):
+        raise ValueError("historical novel count differs")
+    return qrels, novel
+
+
 def _verify_sources(sources: ReportSources) -> dict[str, object]:
     """Verify every upstream hash and semantic boundary before using evidence."""
 
@@ -266,6 +391,9 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
         raise ValueError("Task 4 input binding schema differs")
     if evaluation_bindings.get("task3_root_sha256") != seal.get("root_sha256"):
         raise ValueError("Task 4 exact Task 3 root binding differs")
+    authenticated_qrels, authenticated_novel = _authenticated_qrels_evidence(
+        evaluation_bindings
+    )
     _exact_binding(evaluation_bindings.get("task3_seal"), freeze / "SEALED.json", seal_bytes, "Task 4 Task 3 seal")
     _exact_binding(
         evaluation_bindings.get("task3_input_bindings"),
@@ -339,6 +467,8 @@ def _verify_sources(sources: ReportSources) -> dict[str, object]:
         "task4_summary": dict(evaluation_summary),
         "producer_bytes": producer_bytes,
         "task3_bindings": dict(task3_bindings),
+        "authenticated_qrels": authenticated_qrels,
+        "authenticated_novel": authenticated_novel,
         "task3_rankings_sha256": _sha256(freeze_bytes["rankings.jsonl"]),
         "task3_ranking_rows": ranking_rows,
         "representative_source_hashes": representative_source_hashes,
@@ -445,6 +575,7 @@ def _representatives(
     source_hashes: Mapping[str, str],
     producer_bytes: Mapping[str, bytes],
     task3_bindings: Mapping[str, object],
+    authenticated_qrels: Mapping[str, Mapping[str, int]],
 ) -> list[dict[str, object]]:
     raw = diagnostics.get("representatives")
     if not isinstance(raw, list) or not raw:
@@ -558,6 +689,12 @@ def _representatives(
             raise ValueError("representative ranking provenance SHA-256 is invalid")
         if ranking["task3_rankings_sha256"] != task3_rankings_sha256:
             raise ValueError("representative ranking provenance does not match Task 3 rankings")
+        if (
+            passage["rank_source"] != "prior_bm25_rank"
+            or ranking["percentile_method"] != "query_local_average_rank"
+            or ranking["rank_source"] != "Task 3 sealed rankings.jsonl"
+        ):
+            raise ValueError("representative provenance constants differ")
         facet_row = task3_ranking_rows.get((topic, str(row["document_id"]), "FACET-2B"))
         tethered_row = task3_ranking_rows.get((topic, str(row["document_id"]), "TETHERED-2B"))
         generating_row = tethered_row if movement == "promoted" else facet_row
@@ -585,6 +722,8 @@ def _representatives(
         ):
             raise ValueError("representative passage provenance does not match Task 3 inputs")
         identity = (topic, str(row["facet_id"]), str(row["document_id"]))
+        if normalized["qrels_grade"] != authenticated_qrels[topic].get(str(row["document_id"]), 0):
+            raise ValueError("representative qrels grade differs from authenticated projection")
         facet_candidate = candidate_maps["facet_candidates"].get(identity)
         tethered_candidate = candidate_maps["tethered_candidates"].get(identity)
         if not isinstance(facet_candidate, Mapping) or not isinstance(tethered_candidate, Mapping):
@@ -675,6 +814,7 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         source_hashes=verified["representative_source_hashes"],  # type: ignore[arg-type]
         producer_bytes=verified["producer_bytes"],  # type: ignore[arg-type]
         task3_bindings=verified["task3_bindings"],  # type: ignore[arg-type]
+        authenticated_qrels=verified["authenticated_qrels"],  # type: ignore[arg-type]
     )
     decision = dict(_mapping(verified["decision"], "decision"))
     if decision.get("production_promotion_authorized") is True:
@@ -710,6 +850,12 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
     novel_ids = _mapping(diagnostics.get("novel_relevant_ids"), "novel relevant IDs")
     if set(novel_ids) != set(TOPIC_IDS) or any(not isinstance(value, list) for value in novel_ids.values()):
         raise ValueError("diagnostic novel relevant IDs have invalid topic coverage")
+    authenticated_novel = verified["authenticated_novel"]
+    if any(
+        set(map(str, novel_ids[topic])) != authenticated_novel[topic]  # type: ignore[index]
+        for topic in TOPIC_IDS
+    ):
+        raise ValueError("diagnostic novel relevant IDs differ from authenticated qrels evidence")
     reconciled_novel_count = sum(len(set(map(str, value))) for value in novel_ids.values())  # type: ignore[arg-type]
     task4_summary = _mapping(verified["task4_summary"], "Task 4 summary")
     claimed_counts = (
@@ -743,8 +889,18 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         if int(row.get("tethered_relevant_count", 0)) - int(row.get("facet_only_relevant_count", 0)) != int(row.get("delta", 0)):
             raise ValueError("facet yield change counts do not reconcile")
     for row in report_diagnostics["relevant_below_500"]:  # type: ignore[union-attr]
-        if not isinstance(row, Mapping) or row.get("reason") not in {"facet_quota_exhausted", "duplicate_displaced", "only_rrf_or_dual_tail"}:
+        if not isinstance(row, Mapping) or row.get("reason") not in {
+            "not_in_facet_candidate_pool", "facet_quota_exhausted",
+            "facet_basket_capacity_exhausted",
+        }:
             raise ValueError("relevant-below-500 reason schema differs")
+        topic, document = str(row.get("topic_id")), str(row.get("document_id"))
+        if (
+            topic not in TOPIC_IDS
+            or int(row.get("qrels_grade", -1))
+            != verified["authenticated_qrels"][topic].get(document, 0)  # type: ignore[index]
+        ):
+            raise ValueError("relevant-below-500 qrels grade differs from authenticated projection")
     for row in report_diagnostics["duplicate_and_quota_pressure"]:  # type: ignore[union-attr]
         duplicates = row.get("duplicate_skip_totals") if isinstance(row, Mapping) else None
         shortages = row.get("shortage_counts") if isinstance(row, Mapping) else None
@@ -760,6 +916,16 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
     task2 = _mapping(verified["task2"], "Task 2")
     task1_summary = _mapping(task1.get("summary"), "Task 1 summary")
     runtime = _mapping(task1.get("runtime_evidence"), "Task 1 runtime evidence")
+    cache_hits = int(task2.get("cache_hit_count", -1))
+    forward_pairs = int(task2.get("unique_forward_pair_count", -1))
+    available_unique_pairs = task1_summary.get("unique_pair_count")
+    unique_pairs = (
+        int(available_unique_pairs)
+        if available_unique_pairs is not None
+        else cache_hits + forward_pairs
+    )
+    if min(cache_hits, forward_pairs, unique_pairs) < 0 or cache_hits + forward_pairs != unique_pairs:
+        raise ValueError("Task 1/2 unique scoring pair accounting differs")
     expected_telemetry = {
         "preflight_source_sha256": verified["source_hashes"]["task1_receipt_sha256"],  # type: ignore[index]
         "scoring_receipt_source_sha256": verified["source_hashes"]["task2_receipt_sha256"],  # type: ignore[index]
@@ -769,9 +935,10 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         "planned_window_count": task2.get("planned_window_count"),
         "completed_window_count": task2.get("completed_window_count"),
         "document_score_count": task2.get("document_score_count"),
-        "cache_hit_count": task2.get("cache_hit_count"),
-        "cache_miss_count": int(task2.get("completed_window_count", 0)) - int(task2.get("cache_hit_count", 0)),
-        "unique_forward_pair_count": task2.get("unique_forward_pair_count"),
+        "cache_hit_count": cache_hits,
+        "cache_miss_count": forward_pairs,
+        "unique_forward_pair_count": forward_pairs,
+        "unique_scoring_pair_count": unique_pairs,
         "elapsed_seconds": task2.get("elapsed_seconds"),
         "projected_inference_seconds": runtime.get("projected_inference_seconds"),
         "peak_device_memory_bytes": task2.get("peak_device_memory_bytes"),
@@ -909,25 +1076,46 @@ def _render_html(artifact: Mapping[str, object]) -> str:
     pressure_rows = diagnostics["duplicate_and_quota_pressure"]
     telemetry = _mapping(diagnostics["scoring_telemetry"], "scoring telemetry")
     assert all(isinstance(value, list) for value in (noise_rows, facet_changes, below_rows, pressure_rows))
+    pattern_definitions = _mapping(
+        diagnostics["noise_pattern_definitions"], "noise pattern definitions"
+    )
+    pattern_names = sorted(pattern_definitions)
+    pattern_definition_html = "".join(
+        f"<dt>{esc(name)}</dt><dd><code>{esc(pattern_definitions[name])}</code></dd>"
+        for name in pattern_names
+    )
     noise_body = "".join(
         f"<tr><th scope='row'>{esc(row['facet_id'])}</th><td>{esc(row['arm'])}</td><td>{int(row['selected_count'])}</td>"
-        f"<td>{sum(int(row.get(name, 0)) for name in diagnostics['noise_pattern_definitions'])}</td></tr>"
+        + "".join(f"<td>{int(row.get(name, 0))}</td>" for name in pattern_names)
+        + "</tr>"
         for row in noise_rows
     )
+    noise_headers = "".join(f'<th scope="col">{esc(name)}</th>' for name in pattern_names)
     change_body = "".join(
         f"<tr><th scope='row'>{esc(row['facet_id'])}</th><td>{int(row['facet_only_relevant_count'])}</td>"
-        f"<td>{int(row['tethered_relevant_count'])}</td><td>{esc(row['classification'])}</td></tr>"
+        f"<td>{int(row['tethered_relevant_count'])}</td><td>{_signed(row['delta'])}</td>"
+        f"<td>{esc(row['classification'])}</td></tr>"
         for row in facet_changes
     )
     below_body = "".join(
         f"<tr><th scope='row'>{esc(row['document_id'])}</th><td>{esc(row['arm'])}</td><td>{esc(row['topic_id'])}</td>"
-        f"<td>{int(row['final_rank'])}</td><td>{esc(row['best_facet'])}</td><td>{esc(row['reason'])}</td></tr>"
+        f"<td>{int(row['qrels_grade'])}</td><td>{int(row['final_rank'])}</td><td>{esc(row['best_facet'])}</td>"
+        f"<td>{esc(row['best_facet_percentile'])}</td><td>{esc(row['prior_bm25_rank'])}</td>"
+        f"<td>{esc(row['reason'])}</td></tr>"
         for row in below_rows
-    ) or "<tr><td colspan='6'>No grade-2+ documents were below rank 500.</td></tr>"
+    ) or "<tr><td colspan='9'>No grade-2+ documents were below rank 500.</td></tr>"
+    def map_text(value: object) -> str:
+        mapping = _mapping(value, "diagnostic pressure map")
+        return ", ".join(f"{key}: {int(mapping[key])}" for key in sorted(mapping)) or "None"
+
     pressure_body = "".join(
         f"<tr><th scope='row'>{esc(row['topic_id'])}</th><td>{esc(row['arm'])}</td>"
-        f"<td>{int(row['duplicate_skip_total'])}</td><td>{int(row['shortage_total'])}</td></tr>"
+        f"<td>{esc(map_text(row['duplicate_skip_totals']))}</td><td>{int(row['duplicate_skip_total'])}</td>"
+        f"<td>{esc(map_text(row['shortage_counts']))}</td><td>{int(row['shortage_total'])}</td></tr>"
         for row in pressure_rows
+    )
+    telemetry_html = "".join(
+        f"<dt>{esc(key)}</dt><dd>{esc(telemetry[key])}</dd>" for key in telemetry
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -960,11 +1148,11 @@ dl{{display:grid;grid-template-columns:minmax(9rem,1fr) 3fr;gap:.5rem 1rem}}dt{{
 <section aria-labelledby="topics"><h2 id="topics">Where the change came from</h2><div class="table-wrap"><table><caption>Per-topic TETHERED-2B deltas versus FACET-2B at 500</caption><thead><tr><th scope="col">Topic</th><th scope="col">Recall@500</th><th scope="col">Graded Recall@500</th></tr></thead><tbody>{topic_body}</tbody></table></div>
 <div class="table-wrap" style="margin-top:1rem"><table><caption>Per-facet relevant contribution</caption><thead><tr><th scope="col">Facet</th><th scope="col">Arm</th><th scope="col">Selected</th><th scope="col">Relevant</th><th scope="col">Yield</th></tr></thead><tbody>{facet_body}</tbody></table></div></section>
 <section aria-labelledby="examples"><h2 id="examples">Representative promoted and demoted passages</h2><p>These bounded rows come from authenticated diagnostics; the report does not reopen canonical qrels or rankings.</p><div class="grid">{evidence}</div></section>
-<section aria-labelledby="noise"><h2 id="noise">Noise patterns</h2><div class="table-wrap"><table><caption>Frozen regex pattern counts by arm and facet</caption><thead><tr><th>Facet</th><th>Arm</th><th>Selected</th><th>Pattern flags</th></tr></thead><tbody>{noise_body}</tbody></table></div></section>
-<section aria-labelledby="yield-changes"><h2 id="yield-changes">Facet yield changes</h2><div class="table-wrap"><table><caption>Relevant contribution changes</caption><thead><tr><th>Facet</th><th>Facet-only</th><th>Tethered</th><th>Classification</th></tr></thead><tbody>{change_body}</tbody></table></div></section>
-<section aria-labelledby="below"><h2 id="below">Relevant below rank 500</h2><div class="table-wrap"><table><caption>Grade-2+ documents and explicit miss reasons</caption><thead><tr><th>Document</th><th>Arm</th><th>Topic</th><th>Rank</th><th>Best facet</th><th>Reason</th></tr></thead><tbody>{below_body}</tbody></table></div></section>
-<section aria-labelledby="pressure"><h2 id="pressure">Duplicate and quota pressure</h2><div class="table-wrap"><table><caption>Exact duplicate skips and shortages</caption><thead><tr><th>Topic</th><th>Arm</th><th>Duplicate skips</th><th>Shortages</th></tr></thead><tbody>{pressure_body}</tbody></table></div></section>
-<section aria-labelledby="telemetry"><h2 id="telemetry">Scoring telemetry</h2><dl><dt>Model / revision</dt><dd>{esc(telemetry.get('model'))} / {esc(telemetry.get('model_revision'))}</dd><dt>Cache hits / misses</dt><dd>{esc(telemetry.get('cache_hit_count'))} / {esc(telemetry.get('cache_miss_count'))}</dd><dt>Windows completed</dt><dd>{esc(telemetry.get('completed_window_count'))}</dd><dt>Elapsed / projected seconds</dt><dd>{esc(telemetry.get('elapsed_seconds'))} / {esc(telemetry.get('projected_inference_seconds'))}</dd><dt>Peak device / host bytes</dt><dd>{esc(telemetry.get('peak_device_memory_bytes'))} / {esc(telemetry.get('peak_host_memory_bytes'))}</dd></dl></section>
+<section aria-labelledby="noise"><h2 id="noise">Noise patterns</h2><dl>{pattern_definition_html}</dl><div class="table-wrap"><table><caption>Frozen regex pattern counts by arm and facet</caption><thead><tr><th scope="col">Facet</th><th scope="col">Arm</th><th scope="col">Selected</th>{noise_headers}</tr></thead><tbody>{noise_body}</tbody></table></div></section>
+<section aria-labelledby="yield-changes"><h2 id="yield-changes">Facet yield changes</h2><div class="table-wrap"><table><caption>Relevant contribution changes</caption><thead><tr><th scope="col">Facet</th><th scope="col">Facet-only</th><th scope="col">Tethered</th><th scope="col">Delta</th><th scope="col">Classification</th></tr></thead><tbody>{change_body}</tbody></table></div></section>
+<section aria-labelledby="below"><h2 id="below">Relevant below rank 500</h2><div class="table-wrap"><table><caption>Grade-2+ documents and explicit miss reasons</caption><thead><tr><th scope="col">Document</th><th scope="col">Arm</th><th scope="col">Topic</th><th scope="col">Qrels grade</th><th scope="col">Rank</th><th scope="col">Best facet</th><th scope="col">Best facet percentile</th><th scope="col">Prior BM25 rank</th><th scope="col">Reason</th></tr></thead><tbody>{below_body}</tbody></table></div></section>
+<section aria-labelledby="pressure"><h2 id="pressure">Duplicate and quota pressure</h2><div class="table-wrap"><table><caption>Exact per-facet duplicate skips and shortages</caption><thead><tr><th scope="col">Topic</th><th scope="col">Arm</th><th scope="col">Duplicate map</th><th scope="col">Duplicate total</th><th scope="col">Shortage map</th><th scope="col">Shortage total</th></tr></thead><tbody>{pressure_body}</tbody></table></div></section>
+<section aria-labelledby="telemetry"><h2 id="telemetry">Scoring telemetry</h2><dl>{telemetry_html}</dl></section>
 <section aria-labelledby="limits"><h2 id="limits">What this does not establish</h2><p>The mechanical label is <strong>{esc(decision.get('label','unknown'))}</strong>, but the topics and judgments were already inspected. This is evidence for a fresh preregistered test, not authorization to promote a production system.</p></section></main>
 <footer>Standalone offline artifact · source hashes are recorded in artifact.json · no external runtime dependencies.</footer></body></html>
 """

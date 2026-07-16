@@ -149,6 +149,50 @@ def test_shortage_records_global_duplicate_attribution_not_candidate_count() -> 
     assert dict(result.duplicate_skip_totals)[scarce.facet_id] > 0
 
 
+def test_rank_trace_and_shortages_cover_every_document_and_facet() -> None:
+    topic = fixture_topic()
+    excluded_only = _facet(0, list(topic.accepted_union[:10]))
+    plentiful = tuple(
+        _facet(number, list(topic.accepted_union[300:610]), score_offset=number * 1000)
+        for number in range(1, 4)
+    )
+
+    result = build_facet_basket(replace(topic, facets=(excluded_only, *plentiful)))
+    trace = {row.document_id: row for row in result.selection_trace}
+
+    assert dict(result.shortage_counts)[excluded_only.facet_id] == 50
+    assert set(dict(result.shortage_counts)) == {facet.facet_id for facet in (excluded_only, *plentiful)}
+    assert len(trace) == len(topic.accepted_union)
+    assert trace[topic.accepted_union[0]].outcome == "rrf_prefix_excluded"
+    assert trace[topic.accepted_union[299]].outcome == "rrf_prefix_excluded"
+    assert trace[topic.accepted_union[-1]].outcome == "not_in_facet_candidate_pool"
+    assert {
+        row.outcome for row in trace.values() if row.document_id not in result.document_ids
+    } >= {"facet_basket_capacity_exhausted", "not_in_facet_candidate_pool"}
+
+
+def test_freeze_summary_recomputes_complete_shortages_and_rank_trace(tmp_path: Path) -> None:
+    output = tmp_path / "freeze"
+    binding = tmp_path / "source.jsonl"
+    binding.write_text("{}\n", encoding="utf-8")
+
+    freeze_rankings(
+        facet_topics=fixture_topics(),
+        tethered_topics=fixture_topics(),
+        input_paths={"source": binding},
+        output=output,
+    )
+
+    summary = json.loads((output / "summary.json").read_text())
+    topic = summary["topic_summary"]["219"]
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        assert topic["facet_shortage_counts"][arm] == {
+            f"219-facet-{number}": 0 for number in range(4)
+        }
+        assert sum(topic["facet_selection_outcome_counts"][arm].values()) == 650
+    verify_freeze(output)
+
+
 def test_redistribution_counts_each_duplicate_edge_once_and_totals_reconcile() -> None:
     topic = fixture_topic()
     scarce = _facet(0, list(topic.accepted_union[300:310]))
@@ -606,6 +650,21 @@ def test_loader_rejects_protected_topic_even_in_rejected_gate(
     gates_path.write_text(json.dumps(gates))
 
     with pytest.raises(ValueError, match="protected or unexpected topic"):
+        load_frozen_inputs(deep, tethered)
+
+
+def test_loader_rejects_unknown_gate_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep, tethered = _loader_sources(tmp_path)
+    monkeypatch.setattr(module, "verify_prior_seal", lambda _path: _seal_for_loader(deep))
+    monkeypatch.setattr(module, "verify_scoring", lambda _path: {"status": "complete"})
+    gates_path = deep / "gate_v1" / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["gates"][0]["status"] = "skipped"
+    gates_path.write_text(json.dumps(gates))
+
+    with pytest.raises(ValueError, match="status.*accepted or rejected"):
         load_frozen_inputs(deep, tethered)
 
 

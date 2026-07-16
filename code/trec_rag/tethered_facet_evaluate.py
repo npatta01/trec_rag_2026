@@ -178,10 +178,13 @@ def _representative_candidate_maps(
 
 def _sealed_task3_buffers(
     freeze_dir: Path,
-) -> tuple[dict[str, object], bytes, bytes]:
+) -> tuple[dict[str, object], dict[str, object], bytes, bytes]:
     seal, _seal_bytes = _read_object_bytes(freeze_dir / "SEALED.json", "Task 3 seal")
     bindings, binding_bytes = _read_object_bytes(
         freeze_dir / "input_bindings.json", "Task 3 bindings"
+    )
+    summary, summary_bytes = _read_object_bytes(
+        freeze_dir / "summary.json", "Task 3 summary"
     )
     try:
         ranking_bytes = (freeze_dir / "rankings.jsonl").read_bytes()
@@ -193,10 +196,11 @@ def _sealed_task3_buffers(
     for name, content in (
         ("input_bindings.json", binding_bytes),
         ("rankings.jsonl", ranking_bytes),
+        ("summary.json", summary_bytes),
     ):
         if files.get(name) != {"bytes": len(content), "sha256": _sha256(content)}:
             raise ValueError(f"Task 3 exact buffer differs from seal: {name}")
-    return bindings, binding_bytes, ranking_bytes
+    return bindings, summary, binding_bytes, ranking_bytes
 
 
 def _representative_sources(
@@ -315,7 +319,7 @@ def build_representatives(
     if type(max_per_class) is not int or max_per_class <= 0 or max_per_class > 8:
         raise ValueError("representative bound must be between 1 and 8")
     verify_freeze(freeze_dir)
-    bindings, _binding_bytes, ranking_bytes = _sealed_task3_buffers(Path(freeze_dir))
+    bindings, _summary, _binding_bytes, ranking_bytes = _sealed_task3_buffers(Path(freeze_dir))
     raw_inputs = bindings.get("topic_inputs")
     if not isinstance(raw_inputs, Mapping):
         raise ValueError("Task 3 semantic score maps are missing")
@@ -689,12 +693,11 @@ def _load_frozen_rankings(
     dict[str, dict[str, list[str]]],
     dict[str, dict[str, list[dict[str, object]]]],
     dict[str, object],
+    dict[str, object],
     bytes,
     bytes,
 ]:
-    bindings, binding_bytes = _read_object_bytes(
-        freeze_dir / "input_bindings.json", "freeze input bindings"
-    )
+    bindings, summary, binding_bytes, ranking_bytes = _sealed_task3_buffers(freeze_dir)
     raw_topic_inputs = bindings.get("topic_inputs")
     if not isinstance(raw_topic_inputs, Mapping) or set(raw_topic_inputs) != {
         "FACET-2B",
@@ -709,10 +712,6 @@ def _load_frozen_rankings(
         if not isinstance(raw, Mapping) or not isinstance(raw.get("rrf"), list):
             raise ValueError("freeze semantic topic input is invalid")
 
-    try:
-        ranking_bytes = (freeze_dir / "rankings.jsonl").read_bytes()
-    except OSError as exc:
-        raise ValueError("frozen rankings are unreadable") from exc
     collected: dict[str, dict[str, list[dict[str, object]]]] = {
         topic: {"FACET-2B": [], "TETHERED-2B": []} for topic in TOPIC_IDS
     }
@@ -742,7 +741,7 @@ def _load_frozen_rankings(
                 raise ValueError("frozen ranking is empty or contains duplicates")
             collected[topic][arm] = rows
             rankings[arm][topic] = ids
-    return rankings, collected, bindings, binding_bytes, ranking_bytes
+    return rankings, collected, bindings, summary, binding_bytes, ranking_bytes
 
 
 def _validate_prior_novel_set(
@@ -949,7 +948,7 @@ def _extended_diagnostics(
     arms: Mapping[str, Mapping[str, object]],
     ranking_rows: Mapping[str, Mapping[str, list[dict[str, object]]]],
 ) -> dict[str, object]:
-    bindings, _binding_bytes, _ranking_bytes = _sealed_task3_buffers(freeze_dir)
+    bindings, summary, _binding_bytes, _ranking_bytes = _sealed_task3_buffers(freeze_dir)
     contents, hashes = _representative_sources(bindings, include_telemetry=True)
     facet_candidates, tethered_candidates = _representative_candidate_maps(contents)
     texts = {
@@ -1004,59 +1003,34 @@ def _extended_diagnostics(
             "classification": classification,
         })
 
-    raw_topic_inputs = bindings.get("topic_inputs")
-    if not isinstance(raw_topic_inputs, Mapping):
-        raise ValueError("Task 3 semantic inputs are missing from diagnostics")
     below: list[dict[str, object]] = []
     for arm in ("FACET-2B", "TETHERED-2B"):
-        arm_inputs = raw_topic_inputs.get(arm)
-        if not isinstance(arm_inputs, Mapping):
-            raise ValueError("Task 3 arm semantic inputs are missing from diagnostics")
         for topic in TOPIC_IDS:
-            topic_input = arm_inputs.get(topic)
-            facets_input = topic_input.get("facets") if isinstance(topic_input, Mapping) else None
-            if not isinstance(facets_input, list):
-                raise ValueError("Task 3 facet semantic inputs are missing from diagnostics")
-            memberships: dict[str, list[tuple[str, float, int]]] = defaultdict(list)
-            for facet in facets_input:
-                if not isinstance(facet, Mapping):
-                    raise ValueError("Task 3 facet semantic input is invalid")
-                scores = facet.get("scores")
-                ranks = facet.get("bm25_ranks")
-                if not isinstance(scores, Mapping) or not isinstance(ranks, Mapping):
-                    raise ValueError("Task 3 diagnostic score/rank maps are invalid")
-                percentiles = average_rank_percentiles(scores)  # type: ignore[arg-type]
-                facet_id = str(facet.get("facet_id"))
-                for document, percentile in percentiles.items():
-                    memberships[document].append((facet_id, percentile, int(ranks[document])))
             for row in ranking_rows[topic][arm]:
                 document = str(row["document_id"])
                 grade = int(qrels[topic].get(document, 0))
                 final_rank = int(row["rank"])
                 if grade < 2 or final_rank <= 500:
                     continue
-                candidates = sorted(
-                    memberships.get(document, []),
-                    key=lambda value: (-value[1], value[2], value[0]),
-                )
-                reason = (
-                    "only_rrf_or_dual_tail" if not candidates
-                    else "duplicate_displaced" if len(candidates) > 1
-                    else "facet_quota_exhausted"
-                )
+                reason = row.get("facet_selection_outcome")
+                if reason not in {
+                    "not_in_facet_candidate_pool",
+                    "facet_quota_exhausted",
+                    "facet_basket_capacity_exhausted",
+                }:
+                    raise ValueError("Task 3 below-500 rank trace is invalid")
                 below.append({
                     "arm": arm,
                     "topic_id": topic,
                     "document_id": document,
                     "qrels_grade": grade,
                     "final_rank": final_rank,
-                    "best_facet": candidates[0][0] if candidates else None,
-                    "best_facet_percentile": candidates[0][1] if candidates else None,
-                    "prior_bm25_rank": candidates[0][2] if candidates else None,
+                    "best_facet": row.get("best_candidate_facet"),
+                    "best_facet_percentile": row.get("best_candidate_percentile"),
+                    "prior_bm25_rank": row.get("best_candidate_bm25_rank"),
                     "reason": reason,
                 })
 
-    summary, _summary_bytes = _read_object_bytes(freeze_dir / "summary.json", "Task 3 summary")
     topic_summary = summary.get("topic_summary")
     if not isinstance(topic_summary, Mapping):
         raise ValueError("Task 3 topic summary is missing from diagnostics")
@@ -1064,26 +1038,21 @@ def _extended_diagnostics(
     for topic in TOPIC_IDS:
         record = topic_summary.get(topic)
         duplicates = record.get("duplicate_skip_totals") if isinstance(record, Mapping) else None
-        if not isinstance(duplicates, Mapping):
-            raise ValueError("Task 3 duplicate totals are missing")
+        shortages = record.get("facet_shortage_counts") if isinstance(record, Mapping) else None
+        if not isinstance(duplicates, Mapping) or not isinstance(shortages, Mapping):
+            raise ValueError("Task 3 duplicate/shortage totals are missing")
         for arm in ("FACET-2B", "TETHERED-2B"):
             arm_duplicates = duplicates.get(arm)
-            if not isinstance(arm_duplicates, Mapping):
-                raise ValueError("Task 3 arm duplicate totals are missing")
-            shortage_by_facet: dict[str, int] = defaultdict(int)
-            for row in ranking_rows[topic][arm]:
-                facet = row.get("generating_facet")
-                if facet:
-                    shortage_by_facet[str(facet)] = max(
-                        shortage_by_facet[str(facet)], int(row.get("shortage") or 0)
-                    )
+            arm_shortages = shortages.get(arm)
+            if not isinstance(arm_duplicates, Mapping) or not isinstance(arm_shortages, Mapping):
+                raise ValueError("Task 3 arm duplicate/shortage totals are missing")
             pressure.append({
                 "topic_id": topic,
                 "arm": arm,
                 "duplicate_skip_totals": dict(sorted((str(key), int(value)) for key, value in arm_duplicates.items())),
                 "duplicate_skip_total": sum(int(value) for value in arm_duplicates.values()),
-                "shortage_counts": dict(sorted(shortage_by_facet.items())),
-                "shortage_total": sum(shortage_by_facet.values()),
+                "shortage_counts": dict(sorted((str(key), int(value)) for key, value in arm_shortages.items())),
+                "shortage_total": sum(int(value) for value in arm_shortages.values()),
             })
 
     try:
@@ -1097,6 +1066,26 @@ def _extended_diagnostics(
     runtime = preflight.get("runtime_evidence")
     if not isinstance(preflight_summary, Mapping) or not isinstance(runtime, Mapping):
         raise ValueError("Task 1 telemetry summary/runtime evidence is missing")
+    try:
+        cache_hits = int(receipt["cache_hit_count"])
+        forward_pairs = int(receipt["unique_forward_pair_count"])
+        available_unique_pairs = preflight_summary.get("unique_pair_count")
+        unique_pairs = (
+            int(available_unique_pairs)
+            if available_unique_pairs is not None
+            else cache_hits + forward_pairs
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Task 1/2 scoring pair telemetry is invalid") from exc
+    if (
+        min(cache_hits, forward_pairs, unique_pairs) < 0
+        or cache_hits + forward_pairs != unique_pairs
+        or (
+            receipt.get("cache_reuse_pair_count") is not None
+            and int(receipt["cache_reuse_pair_count"]) != cache_hits
+        )
+    ):
+        raise ValueError("Task 1/2 unique scoring pair accounting differs")
     telemetry = {
         "preflight_source_sha256": hashes["tethered_preflight"],
         "scoring_receipt_source_sha256": hashes["tethered_scoring_receipt"],
@@ -1106,9 +1095,10 @@ def _extended_diagnostics(
         "planned_window_count": receipt.get("planned_window_count"),
         "completed_window_count": receipt.get("completed_window_count"),
         "document_score_count": receipt.get("document_score_count"),
-        "cache_hit_count": receipt.get("cache_hit_count"),
-        "cache_miss_count": int(receipt.get("completed_window_count", 0)) - int(receipt.get("cache_hit_count", 0)),
-        "unique_forward_pair_count": receipt.get("unique_forward_pair_count"),
+        "cache_hit_count": cache_hits,
+        "cache_miss_count": forward_pairs,
+        "unique_forward_pair_count": forward_pairs,
+        "unique_scoring_pair_count": unique_pairs,
         "elapsed_seconds": receipt.get("elapsed_seconds"),
         "projected_inference_seconds": runtime.get("projected_inference_seconds"),
         "peak_device_memory_bytes": receipt.get("peak_device_memory_bytes"),
@@ -1251,7 +1241,7 @@ def evaluate(
         }
     )
 
-    rankings, ranking_rows, freeze_bindings, freeze_binding_bytes, freeze_ranking_bytes = _load_frozen_rankings(
+    rankings, ranking_rows, freeze_bindings, task3_summary, freeze_binding_bytes, freeze_ranking_bytes = _load_frozen_rankings(
         freeze_dir
     )
     for topic in TOPIC_IDS:
@@ -1275,12 +1265,22 @@ def evaluate(
             ranking_rows=row_views["TETHERED-2B"], depths=(100, 500, 1000),
         ),
     }
-    documented_shortage = any(
-        int(row.get("shortage") or 0) > 0
-        for topic in TOPIC_IDS
-        for arm in ("FACET-2B", "TETHERED-2B")
-        for row in ranking_rows[topic][arm]
-    )
+    topic_summary = task3_summary.get("topic_summary")
+    if not isinstance(topic_summary, Mapping):
+        raise ValueError("Task 3 topic summary is missing")
+    documented_shortage = False
+    for topic in TOPIC_IDS:
+        record = topic_summary.get(topic)
+        shortages = record.get("facet_shortage_counts") if isinstance(record, Mapping) else None
+        if not isinstance(shortages, Mapping):
+            raise ValueError("Task 3 complete shortage evidence is missing")
+        for arm in ("FACET-2B", "TETHERED-2B"):
+            arm_shortages = shortages.get(arm)
+            if not isinstance(arm_shortages, Mapping):
+                raise ValueError("Task 3 arm shortage evidence is missing")
+            documented_shortage = documented_shortage or any(
+                int(value) > 0 for value in arm_shortages.values()
+            )
     aggregate = {arm: result["aggregate"] for arm, result in arms.items()}
     per_topic = {topic: {} for topic in TOPIC_IDS}
     for topic in TOPIC_IDS:

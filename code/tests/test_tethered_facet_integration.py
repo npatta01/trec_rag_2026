@@ -142,6 +142,7 @@ def test_task2_compatible_fixture_chain_without_inference_and_provenance_tamper_
         "summary": {
             "query_document_pair_count": 1000,
             "window_count": 1000,
+            "unique_pair_count": 1000,
             "cache_hit_window_count": 400,
             "cache_miss_window_count": 600,
         },
@@ -158,7 +159,7 @@ def test_task2_compatible_fixture_chain_without_inference_and_provenance_tamper_
         "model": "synthetic/minilm",
         "model_revision": "fixture-revision",
         "planned_window_count": 1000,
-        "completed_window_count": 1000,
+        "completed_window_count": 1200,
         "document_score_count": 1000,
         "cache_hit_count": 400,
         "unique_forward_pair_count": 600,
@@ -189,12 +190,18 @@ def test_task2_compatible_fixture_chain_without_inference_and_provenance_tamper_
         for arm in ("FACET-2B", "TETHERED-2B")
     } == {"FACET-2B": 800, "TETHERED-2B": 800}
     assert {row["classification"] for row in diagnostics["facet_yield_changes"]} <= {"rose", "fell", "zero", "unchanged"}
-    assert all(row["reason"] in {"facet_quota_exhausted", "duplicate_displaced", "only_rrf_or_dual_tail"} for row in diagnostics["relevant_below_500"])
+    assert all(row["reason"] in {"not_in_facet_candidate_pool", "facet_quota_exhausted", "facet_basket_capacity_exhausted"} for row in diagnostics["relevant_below_500"])
+    assert all(row["reason"] != "duplicate_displaced" for row in diagnostics["relevant_below_500"])
     assert diagnostics["scoring_telemetry"]["cache_hit_count"] == 400
     assert diagnostics["scoring_telemetry"]["cache_miss_count"] == 600
+    assert diagnostics["scoring_telemetry"]["unique_scoring_pair_count"] == 1000
     assert diagnostics["scoring_telemetry"]["model"] == "synthetic/minilm"
     assert len(diagnostics["duplicate_and_quota_pressure"]) == 8
     assert all(row["duplicate_skip_total"] == sum(row["duplicate_skip_totals"].values()) for row in diagnostics["duplicate_and_quota_pressure"])
+    assert all(
+        set(row["shortage_counts"]) == {f"{row['topic_id']}-facet"}
+        for row in diagnostics["duplicate_and_quota_pressure"]
+    )
     task5 = tmp_path / "task5"
     built = build_report(ReportSources(
         topic_ids=list(TOPIC_IDS),

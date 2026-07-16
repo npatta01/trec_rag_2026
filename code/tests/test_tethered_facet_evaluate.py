@@ -270,7 +270,27 @@ def _synthetic_evaluation_inputs(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in ranking_rows),
         encoding="utf-8",
     )
-    _write_json(freeze / "SEALED.json", {"root_sha256": "a" * 64})
+    _write_json(freeze / "summary.json", {
+        "topic_summary": {
+            topic: {
+                "facet_shortage_counts": {
+                    arm: {f"{topic}-facet": 0}
+                    for arm in ("FACET-2B", "TETHERED-2B")
+                }
+            }
+            for topic in TOPIC_IDS
+        }
+    })
+    _write_json(freeze / "SEALED.json", {
+        "root_sha256": "a" * 64,
+        "files": {
+            name: {
+                "bytes": len((freeze / name).read_bytes()),
+                "sha256": hashlib.sha256((freeze / name).read_bytes()).hexdigest(),
+            }
+            for name in ("input_bindings.json", "rankings.jsonl", "summary.json")
+        },
+    })
 
     prior_root = tmp_path / "prior"
     prior = prior_root / "evaluation_v1"
@@ -658,7 +678,15 @@ def test_task4_builds_bounded_authenticated_promoted_and_demoted_representatives
         "ranking_provenance",
     }
     assert all(set(row) == required for row in rows)
-    assert all(row["narrative"] + "\n\nFocus: " + row["facet_query"] for row in rows)
+    tethered_candidates = {
+        (row["topic_id"], row["facet_id"], row["document_id"]): row
+        for row in map(json.loads, (tethered / "candidates.jsonl").read_text().splitlines())
+    }
+    assert all(
+        tethered_candidates[(row["topic_id"], row["facet_id"], row["document_id"])]["query"]
+        == row["narrative"] + "\n\nFocus: " + row["facet_query"]
+        for row in rows
+    )
     assert all(row["passage_provenance"]["window_sha256"] for row in rows)
     assert all(row["ranking_provenance"]["task3_rankings_sha256"] for row in rows)
     assert all(0 < row["facet_only_percentile"] <= 1 for row in rows)
@@ -746,3 +774,63 @@ def test_representatives_reject_nested_window_model_and_span_tamper(
 
     with pytest.raises(ValueError, match="window|model|span|passage"):
         build_representatives(freeze, {topic: {} for topic in TOPIC_IDS}, max_per_class=1)
+
+
+def test_diagnostics_reject_scoring_pair_accounting_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    freeze = tmp_path / "freeze"
+    freeze.mkdir()
+    (freeze / "summary.json").write_text(json.dumps({
+        "topic_summary": {
+            topic: {
+                "duplicate_skip_totals": {
+                    arm: {f"{topic}-facet": 0}
+                    for arm in ("FACET-2B", "TETHERED-2B")
+                },
+                "facet_shortage_counts": {
+                    arm: {f"{topic}-facet": 0}
+                    for arm in ("FACET-2B", "TETHERED-2B")
+                },
+            }
+            for topic in TOPIC_IDS
+        }
+    }))
+    preflight = json.dumps({
+        "summary": {"query_document_pair_count": 1000, "unique_pair_count": 1000},
+        "runtime_evidence": {"projected_inference_seconds": 1.0},
+    }).encode()
+    receipt = json.dumps({
+        "cache_hit_count": 400,
+        "unique_forward_pair_count": 599,
+    }).encode()
+    contents = {
+        "facet_candidates": b"",
+        "facet_window_scores": b"",
+        "tethered_candidates": b"",
+        "tethered_window_scores": b"",
+        "tethered_document_scores": b"",
+        "tethered_preflight": preflight,
+        "tethered_scoring_receipt": receipt,
+    }
+    summary = json.loads((freeze / "summary.json").read_text())
+    monkeypatch.setattr(
+        module, "_sealed_task3_buffers", lambda _path: ({}, summary, b"", b"")
+    )
+    monkeypatch.setattr(
+        module,
+        "_representative_sources",
+        lambda *_args, **_kwargs: (contents, {name: hashlib.sha256(value).hexdigest() for name, value in contents.items()}),
+    )
+    arms = {
+        arm: {"facet_yield": {}} for arm in ("FACET-2B", "TETHERED-2B")
+    }
+    ranking_rows = {
+        topic: {arm: [] for arm in ("FACET-2B", "TETHERED-2B")}
+        for topic in TOPIC_IDS
+    }
+
+    with pytest.raises(ValueError, match="unique scoring pair accounting"):
+        module._extended_diagnostics(
+            freeze, {topic: {} for topic in TOPIC_IDS}, arms, ranking_rows
+        )

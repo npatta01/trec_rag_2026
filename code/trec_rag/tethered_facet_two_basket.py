@@ -72,9 +72,22 @@ class BasketSelection:
 
 
 @dataclass(frozen=True)
+class FacetSelectionTrace:
+    """Qrels-free explanation of how one document met the facet basket."""
+
+    document_id: str
+    outcome: str
+    best_facet_id: str | None
+    best_percentile: float | None
+    best_prior_bm25_rank: int | None
+
+
+@dataclass(frozen=True)
 class FacetBasket:
     selections: tuple[BasketSelection, ...]
     duplicate_skip_totals: tuple[tuple[str, int], ...]
+    shortage_counts: tuple[tuple[str, int], ...]
+    selection_trace: tuple[FacetSelectionTrace, ...]
 
     @property
     def document_ids(self) -> tuple[str, ...]:
@@ -88,12 +101,15 @@ class RankingEntry:
     rrf_rank: int
     dual_rank: int
     facet: BasketSelection | None = None
+    facet_trace: FacetSelectionTrace | None = None
 
 
 @dataclass(frozen=True)
 class TwoBasketPermutation:
     entries: tuple[RankingEntry, ...]
     duplicate_skip_totals: tuple[tuple[str, int], ...]
+    shortage_counts: tuple[tuple[str, int], ...]
+    selection_trace: tuple[FacetSelectionTrace, ...]
 
     @property
     def document_ids(self) -> tuple[str, ...]:
@@ -361,11 +377,34 @@ def build_facet_basket(topic: TopicInput) -> FacetBasket:
         )
         for edge, duplicate_skip_delta in selected_edges
     )
+    selected_ids = {row.document_id for row in selections}
+    best_edges: dict[str, tuple[float, int, int, str, FacetScores, int]] = {}
+    for edge in edges:
+        best_edges.setdefault(edge[3], edge)
+    capacity_redistributed = any(value > 0 for value in shortages.values())
+    trace = tuple(
+        FacetSelectionTrace(
+            document_id=document_id,
+            outcome=(
+                "rrf_prefix_excluded" if document_id in excluded
+                else "selected_facet_basket" if document_id in selected_ids
+                else "not_in_facet_candidate_pool" if document_id not in best_edges
+                else "facet_basket_capacity_exhausted" if capacity_redistributed
+                else "facet_quota_exhausted"
+            ),
+            best_facet_id=(best_edges[document_id][4].facet_id if document_id in best_edges else None),
+            best_percentile=(-best_edges[document_id][0] if document_id in best_edges else None),
+            best_prior_bm25_rank=(best_edges[document_id][2] if document_id in best_edges else None),
+        )
+        for document_id in topic.rrf
+    )
     return FacetBasket(
         selections,
         tuple(
             (facet.facet_id, duplicate_skips[facet.facet_id]) for facet in facets
         ),
+        tuple((facet.facet_id, shortages[facet.facet_id]) for facet in facets),
+        trace,
     )
 
 
@@ -374,10 +413,16 @@ def build_two_basket_permutation(topic: TopicInput) -> TwoBasketPermutation:
 
     _validate_topic(topic)
     facet_basket = build_facet_basket(topic)
+    trace_by_document = {
+        row.document_id: row for row in facet_basket.selection_trace
+    }
     rrf_rank = {document_id: rank for rank, document_id in enumerate(topic.rrf, 1)}
     dual_rank = {document_id: rank for rank, document_id in enumerate(topic.dual, 1)}
     entries = [
-        RankingEntry(document_id, "rrf_head", rrf_rank[document_id], dual_rank[document_id])
+        RankingEntry(
+            document_id, "rrf_head", rrf_rank[document_id], dual_rank[document_id],
+            facet_trace=trace_by_document[document_id],
+        )
         for document_id in topic.rrf[:HEAD_SIZE]
     ]
     for rrf_document, facet in zip(
@@ -391,6 +436,7 @@ def build_two_basket_permutation(topic: TopicInput) -> TwoBasketPermutation:
                 "rrf_basket",
                 rrf_rank[rrf_document],
                 dual_rank[rrf_document],
+                facet_trace=trace_by_document[rrf_document],
             )
         )
         entries.append(
@@ -400,15 +446,22 @@ def build_two_basket_permutation(topic: TopicInput) -> TwoBasketPermutation:
                 rrf_rank[facet.document_id],
                 dual_rank[facet.document_id],
                 facet,
+                trace_by_document[facet.document_id],
             )
         )
     selected = {entry.document_id for entry in entries}
     entries.extend(
-        RankingEntry(document_id, "dual_tail", rrf_rank[document_id], dual_rank[document_id])
+        RankingEntry(
+            document_id, "dual_tail", rrf_rank[document_id], dual_rank[document_id],
+            facet_trace=trace_by_document[document_id],
+        )
         for document_id in topic.dual
         if document_id not in selected
     )
-    result = TwoBasketPermutation(tuple(entries), facet_basket.duplicate_skip_totals)
+    result = TwoBasketPermutation(
+        tuple(entries), facet_basket.duplicate_skip_totals,
+        facet_basket.shortage_counts, facet_basket.selection_trace,
+    )
     if (
         len(result.document_ids) != len(set(result.document_ids))
         or set(result.document_ids) != set(topic.accepted_union)
@@ -419,6 +472,7 @@ def build_two_basket_permutation(topic: TopicInput) -> TwoBasketPermutation:
 
 def _entry_row(topic_id: str, arm: str, rank: int, entry: RankingEntry) -> dict[str, object]:
     facet = entry.facet
+    trace = entry.facet_trace
     return {
         "schema_version": SCHEMA_VERSION,
         "topic_id": topic_id,
@@ -433,6 +487,10 @@ def _entry_row(topic_id: str, arm: str, rank: int, entry: RankingEntry) -> dict[
         "nominal_quota": facet.nominal_quota if facet else None,
         "shortage": facet.shortage if facet else None,
         "duplicate_skip_delta": facet.duplicate_skip_delta if facet else None,
+        "facet_selection_outcome": trace.outcome if trace else None,
+        "best_candidate_facet": trace.best_facet_id if trace else None,
+        "best_candidate_percentile": trace.best_percentile if trace else None,
+        "best_candidate_bm25_rank": trace.best_prior_bm25_rank if trace else None,
         "rrf_rank": entry.rrf_rank,
         "dual_rank": entry.dual_rank,
         "query_sha256": facet.query_sha256 if facet else None,
@@ -534,6 +592,8 @@ def _accepted_facets(path: Path) -> tuple[dict[tuple[str, str], int], set[tuple[
             raise ValueError("gate contains a protected or unexpected topic or invalid identity")
         identity = (topic, facet)
         status = row.get("status")
+        if status not in {"accepted", "rejected"}:
+            raise ValueError("gate status must be exactly accepted or rejected")
         if status == "accepted":
             if identity in result or identity in rejected:
                 raise ValueError("accepted gate identity is duplicated")
@@ -923,23 +983,33 @@ def _ranking_parameters() -> dict[str, object]:
 def _topic_summary(
     by_arm: Mapping[str, Mapping[str, TopicInput]],
 ) -> dict[str, dict[str, object]]:
-    return {
-        topic_id: {
+    output: dict[str, dict[str, object]] = {}
+    for topic_id in PILOT_TOPIC_IDS:
+        results = {
+            arm: build_two_basket_permutation(by_arm[arm][topic_id])
+            for arm in ARMS
+        }
+        output[topic_id] = {
             "accepted_union_count": len(by_arm["FACET-2B"][topic_id].accepted_union),
             "facet_counts": {
                 arm: len(by_arm[arm][topic_id].facets) for arm in ARMS
             },
             "duplicate_skip_totals": {
-                arm: dict(
-                    build_two_basket_permutation(
-                        by_arm[arm][topic_id]
-                    ).duplicate_skip_totals
-                )
+                arm: dict(results[arm].duplicate_skip_totals)
+                for arm in ARMS
+            },
+            "facet_shortage_counts": {
+                arm: dict(results[arm].shortage_counts) for arm in ARMS
+            },
+            "facet_selection_outcome_counts": {
+                arm: dict(sorted(
+                    (outcome, sum(row.outcome == outcome for row in results[arm].selection_trace))
+                    for outcome in sorted({row.outcome for row in results[arm].selection_trace})
+                ))
                 for arm in ARMS
             },
         }
-        for topic_id in PILOT_TOPIC_IDS
-    }
+    return output
 
 
 def freeze_rankings(

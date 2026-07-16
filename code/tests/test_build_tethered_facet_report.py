@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+import trec_rag.tethered_facet_evaluate as evaluate_module
 from trec_rag.build_tethered_facet_report import (
     ReportSources,
     build_artifact,
@@ -39,7 +41,7 @@ def _binding(path: Path) -> dict[str, object]:
 
 
 @pytest.fixture
-def sources(tmp_path: Path) -> ReportSources:
+def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     source = tmp_path / "sources"
     task3 = source / "task3"
     task4 = source / "task4"
@@ -54,7 +56,11 @@ def sources(tmp_path: Path) -> ReportSources:
         "retrieval_performed": False,
         "model": "synthetic/minilm",
         "model_revision": "fixture-revision",
-        "summary": {"query_document_pair_count": 4800, "window_count": 5000},
+        "summary": {
+            "query_document_pair_count": 4800,
+            "window_count": 5200,
+            "unique_pair_count": 5000,
+        },
         "runtime_evidence": {"projected_inference_seconds": 12.5},
     }
     preflight_bytes = _write(source / "preflight.json", preflight)
@@ -68,7 +74,7 @@ def sources(tmp_path: Path) -> ReportSources:
         "model": "synthetic/minilm",
         "model_revision": "fixture-revision",
         "planned_window_count": 5000,
-        "completed_window_count": 5000,
+        "completed_window_count": 5200,
         "document_score_count": 4800,
         "cache_hit_count": 1000,
         "unique_forward_pair_count": 4000,
@@ -183,6 +189,76 @@ def sources(tmp_path: Path) -> ReportSources:
         **seal_material,
         "root_sha256": _sha(json.dumps(seal_material, sort_keys=True, separators=(",", ":")).encode()),
     })
+
+    prior_freeze = source / "prior_freeze"
+    prior = source / "prior_evaluation"
+    prior_freeze.mkdir()
+    prior.mkdir()
+    prior_seal_bytes = _write(prior_freeze / "SEALED.json", {"root_sha256": "b" * 64})
+    (prior_freeze / "rankings.jsonl").write_text("{}\n")
+    novel_ids = {
+        topic: [f"{topic}-novel-{index}" for index in range(50 + (3 if topic == "84" else 0))]
+        for topic in TOPICS
+    }
+    qrels = {
+        **{(topic, document): 2 for topic, documents in novel_ids.items() for document in documents},
+        ("219", "doc-promoted"): 2,
+        ("84", "doc-demoted"): 0,
+        ("219", "below-500"): 2,
+    }
+    projection_bytes = b"".join(
+        json.dumps(
+            {"topic_id": topic, "document_id": document, "grade": grade},
+            sort_keys=True, separators=(",", ":"),
+        ).encode() + b"\n"
+        for (topic, document), grade in sorted(qrels.items(), key=lambda item: (TOPICS.index(item[0][0]), item[0][1]))
+    )
+    (prior / "qrels_projection.jsonl").write_bytes(projection_bytes)
+    receipt_bytes = _write(prior / "qrels_access_receipt.json", {
+        "schema_version": "deep-facet-candidate-evaluation-v1",
+        "status": "qrels_access_boundary_crossed",
+        "qrels_opened": True,
+        "upstream_mutation_forbidden": True,
+        "topic_ids": TOPICS,
+        "qrels_projection_rows": len(projection_bytes.splitlines()),
+        "qrels_projection_sha256": _sha(projection_bytes),
+        "seal_sha256": _sha(prior_seal_bytes),
+        "seal_root_sha256": "b" * 64,
+        "qrels_source_name": "synthetic historical projection",
+        "evaluator_code_sha256": "c" * 64,
+    })
+    prior_metrics_bytes = _write(prior / "metrics.json", {
+        "schema_version": "deep-facet-candidate-evaluation-v1",
+        "topic_ids": TOPICS,
+        "novel_relevant_count": 203,
+        "discovery": {
+            topic: {"novel_relevant_ids": documents}
+            for topic, documents in novel_ids.items()
+        },
+    })
+    prior_decision_bytes = _write(prior / "decision.json", {})
+    prior_summary_bytes = _write(prior / "summary.json", {
+        "schema_version": "deep-facet-candidate-evaluation-v1",
+        "status": "complete",
+        "qrels_opened": True,
+        "topic_ids": TOPICS,
+        "novel_relevant_count": 203,
+        "metrics_sha256": _sha(prior_metrics_bytes),
+        "decision_sha256": _sha(prior_decision_bytes),
+    })
+    historical_anchor = {
+        "schema_version": "deep-facet-candidate-evaluation-v1",
+        "topic_ids": TOPICS,
+        "qrels_projection_rows": len(projection_bytes.splitlines()),
+        "files": {
+            "qrels_access_receipt.json": _sha(receipt_bytes),
+            "qrels_projection.jsonl": _sha(projection_bytes),
+            "metrics.json": _sha(prior_metrics_bytes),
+            "decision.json": _sha(prior_decision_bytes),
+            "summary.json": _sha(prior_summary_bytes),
+        },
+    }
+    monkeypatch.setattr(evaluate_module, "HISTORICAL_PRIOR_EVALUATION_IDENTITY", historical_anchor)
 
     aggregate = {
         "RRF": {
@@ -320,10 +396,7 @@ def sources(tmp_path: Path) -> ReportSources:
                 "FACET-2B": {"facet_basket": {"selected_count": 800, "relevant_count": 92}},
                 "TETHERED-2B": {"facet_basket": {"selected_count": 800, "relevant_count": 101}},
             },
-            "novel_relevant_ids": {
-                topic: [f"{topic}-novel-{index}" for index in range(50 + (3 if topic == "84" else 0))]
-                for topic in TOPICS
-            },
+            "novel_relevant_ids": novel_ids,
             "noise_pattern_definitions": {"wrong_domain": "wrong domain"},
             "noise_pattern_counts": [
                 {"arm": arm, "facet_id": "219-positive", "selected_count": 50, "wrong_domain": int(arm == "FACET-2B")}
@@ -349,9 +422,10 @@ def sources(tmp_path: Path) -> ReportSources:
                 "scoring_receipt_source_sha256": _sha(scoring_bytes),
                 "model": "synthetic/minilm", "model_revision": "fixture-revision",
                 "query_document_pair_count": 4800, "planned_window_count": 5000,
-                "completed_window_count": 5000, "document_score_count": 4800,
+                "completed_window_count": 5200, "document_score_count": 4800,
                 "cache_hit_count": 1000, "cache_miss_count": 4000,
-                "unique_forward_pair_count": 4000, "elapsed_seconds": 9.5,
+                "unique_forward_pair_count": 4000, "unique_scoring_pair_count": 5000,
+                "elapsed_seconds": 9.5,
                 "projected_inference_seconds": 12.5,
                 "peak_device_memory_bytes": 1234, "peak_host_memory_bytes": 5678,
             },
@@ -376,6 +450,18 @@ def sources(tmp_path: Path) -> ReportSources:
             "task3_input_bindings": _binding(task3 / "input_bindings.json"),
             "task3_rankings": _binding(task3 / "rankings.jsonl"),
             "task3_producer_sources": json.loads(bindings_bytes)["inputs"],
+            "prior_freeze_root_sha256": "b" * 64,
+            "prior_freeze_seal": _binding(prior_freeze / "SEALED.json"),
+            "prior_freeze_rankings": _binding(prior_freeze / "rankings.jsonl"),
+            "qrels_projection": _binding(prior / "qrels_projection.jsonl"),
+            "qrels_access_receipt": _binding(prior / "qrels_access_receipt.json"),
+            "prior_metrics": _binding(prior / "metrics.json"),
+            "prior_decision": _binding(prior / "decision.json"),
+            "prior_summary": _binding(prior / "summary.json"),
+            "historical_integrity_anchor": historical_anchor,
+            "historical_integrity_only": True,
+            "blind_generalization_evidence": False,
+            "original_qrels_opened": False,
         },
     )
     _write(
@@ -563,6 +649,56 @@ def test_report_rejects_reconciled_novel_count_mismatch_after_restamp(
         build_artifact(sources)
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda diagnostics: diagnostics["representatives"][0].__setitem__("qrels_grade", 3),
+        lambda diagnostics: diagnostics["relevant_below_500"][0].__setitem__("qrels_grade", 1),
+        lambda diagnostics: diagnostics["novel_relevant_ids"]["219"].__setitem__(0, "219-invented-novel"),
+    ],
+)
+def test_report_rejects_restamped_qrels_derived_evidence(
+    sources: ReportSources, mutate,
+) -> None:
+    diagnostics_path = sources.task4_evaluation / "diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    mutate(diagnostics)
+    diagnostics_bytes = _bytes(diagnostics)
+    diagnostics_path.write_bytes(diagnostics_bytes)
+    summary_path = sources.task4_evaluation / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["diagnostics_sha256"] = _sha(diagnostics_bytes)
+    summary_path.write_bytes(_bytes(summary))
+
+    with pytest.raises(ValueError, match="qrels|novel"):
+        build_artifact(sources)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "bad_value"),
+    [
+        ("passage_provenance", "rank_source", "invented"),
+        ("ranking_provenance", "percentile_method", "global_rank"),
+        ("ranking_provenance", "rank_source", "invented.jsonl"),
+    ],
+)
+def test_report_rejects_restamped_provenance_constants(
+    sources: ReportSources, section: str, field: str, bad_value: str,
+) -> None:
+    diagnostics_path = sources.task4_evaluation / "diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["representatives"][0][section][field] = bad_value
+    diagnostics_bytes = _bytes(diagnostics)
+    diagnostics_path.write_bytes(diagnostics_bytes)
+    summary_path = sources.task4_evaluation / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["diagnostics_sha256"] = _sha(diagnostics_bytes)
+    summary_path.write_bytes(_bytes(summary))
+
+    with pytest.raises(ValueError, match="provenance"):
+        build_artifact(sources)
+
+
 def test_task4_exact_producer_schema_matches_task5_consumer(sources: ReportSources) -> None:
     artifact = build_artifact(sources)
     assert set(artifact["diagnostics"]) == {
@@ -576,6 +712,24 @@ def test_task4_exact_producer_schema_matches_task5_consumer(sources: ReportSourc
         "tethered_final_rank", "prior_bm25_rank", "passage_provenance",
         "ranking_provenance",
     }
+
+
+def test_html_renders_complete_authenticated_diagnostics_with_column_scopes(built) -> None:
+    html = built.html
+    lower = html.lower()
+    for value in (
+        "wrong_domain", "+4", "qrels grade", "best facet percentile",
+        "prior bm25 rank", "219-positive: 2", "219-positive: 1",
+        "preflight_source_sha256", "scoring_receipt_source_sha256",
+        "unique_scoring_pair_count", "document_score_count",
+    ):
+        assert value.lower() in lower
+    headers = re.findall(r"<thead><tr>(.*?)</tr></thead>", html, flags=re.DOTALL)
+    assert headers
+    assert all(
+        all("scope=\"col\"" in tag or "scope='col'" in tag for tag in re.findall(r"<th\b[^>]*>", header))
+        for header in headers
+    )
 
 
 def test_sqlite_companion_contains_exact_bounded_datasets(built) -> None:
