@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import trec_rag.build_tethered_facet_report as report_module
 import trec_rag.tethered_facet_evaluate as evaluate_module
 from trec_rag.build_tethered_facet_report import (
     ReportSources,
@@ -121,13 +122,20 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     raw_paths["tethered_preflight"] = source / "preflight.json"
     raw_paths["tethered_scoring_receipt"] = source / "scoring_receipt.json"
 
+    novel_ids = {
+        topic: [
+            f"{topic}-novel-{index}"
+            for index in range(44 + (1 if topic == "84" else 0))
+        ]
+        for topic in TOPICS
+    }
     ranking_rows = [
         json.dumps(
             {
                 "topic_id": topic,
                 "arm": arm,
                 "rank": 1,
-                "document_id": f"{topic}-{arm}-d1",
+                "document_id": f"{topic}-head-d1",
                 "source": "protected_head",
             },
             sort_keys=True,
@@ -136,6 +144,22 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
         for topic in TOPICS
         for arm in ("FACET-2B", "TETHERED-2B")
     ]
+    ranking_rows.extend(
+        json.dumps(
+            {
+                "topic_id": topic,
+                "arm": arm,
+                "rank": rank,
+                "document_id": document,
+                "source": "facet_basket",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for topic in TOPICS
+        for arm in ("FACET-2B", "TETHERED-2B")
+        for rank, document in enumerate(novel_ids[topic], 2)
+    )
     ranking_rows.extend([
         json.dumps({"topic_id": "219", "arm": "FACET-2B", "rank": 611, "document_id": "doc-promoted", "source": "dual_tail", "prior_bm25_rank": None}),
         json.dumps({"topic_id": "219", "arm": "TETHERED-2B", "rank": 202, "document_id": "doc-promoted", "source": "facet_basket", "prior_bm25_rank": 7}),
@@ -197,10 +221,6 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     prior.mkdir()
     prior_seal_bytes = _write(prior_freeze / "SEALED.json", {"root_sha256": "b" * 64})
     (prior_freeze / "rankings.jsonl").write_text("{}\n")
-    novel_ids = {
-        topic: [f"{topic}-novel-{index}" for index in range(50 + (3 if topic == "84" else 0))]
-        for topic in TOPICS
-    }
     qrels = {
         **{(topic, document): 2 for topic, documents in novel_ids.items() for document in documents},
         ("219", "doc-promoted"): 4,
@@ -231,7 +251,7 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     prior_metrics_bytes = _write(prior / "metrics.json", {
         "schema_version": "deep-facet-candidate-evaluation-v1",
         "topic_ids": TOPICS,
-        "novel_relevant_count": 203,
+        "novel_relevant_count": 177,
         "discovery": {
             topic: {"novel_relevant_ids": documents}
             for topic, documents in novel_ids.items()
@@ -243,7 +263,7 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
         "status": "complete",
         "qrels_opened": True,
         "topic_ids": TOPICS,
-        "novel_relevant_count": 203,
+        "novel_relevant_count": 177,
         "metrics_sha256": _sha(prior_metrics_bytes),
         "decision_sha256": _sha(prior_decision_bytes),
     })
@@ -263,7 +283,8 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
 
     aggregate = {
         "RRF": {
-            "recall@500": 0.62,
+            "ndcg@100": 0.42,
+            "recall@500": 0.19760,
             "graded_recall@500": 0.58,
             "recall@1000": 0.78,
             "graded_recall@1000": 0.74,
@@ -272,7 +293,8 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
             "judged_rate@500": 0.61,
         },
         "FACET-2B": {
-            "recall@500": 0.64,
+            "ndcg@100": 0.42,
+            "recall@500": 0.19000,
             "graded_recall@500": 0.60,
             "recall@1000": 0.79,
             "graded_recall@1000": 0.75,
@@ -281,7 +303,8 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
             "judged_rate@500": 0.58,
         },
         "TETHERED-2B": {
-            "recall@500": 0.67,
+            "ndcg@100": 0.42,
+            "recall@500": 0.19439,
             "graded_recall@500": 0.63,
             "recall@1000": 0.81,
             "graded_recall@1000": 0.77,
@@ -290,9 +313,23 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
             "judged_rate@500": 0.60,
         },
     }
+    per_topic = {
+        topic: {
+            "RRF": {"recall@500": 0.30 if topic == "84" else 0.20},
+            "FACET-2B": {"recall@500": 0.28 if topic == "84" else 0.19},
+            "TETHERED-2B": {"recall@500": 0.275 if topic == "84" else 0.21},
+        }
+        for topic in TOPICS
+    }
     metrics_bytes = _write(
         task4 / "metrics.json",
-        {"schema_version": "tethered-facet-evaluation-v1", "topic_ids": TOPICS, "aggregate": aggregate, "novel_relevant_total": 203},
+        {
+            "schema_version": "tethered-facet-evaluation-v1",
+            "topic_ids": TOPICS,
+            "aggregate": aggregate,
+            "per_topic": per_topic,
+            "novel_relevant_total": 177,
+        },
     )
     representatives = [
         {
@@ -398,10 +435,34 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
                 "TETHERED-2B": {"facet_basket": {"selected_count": 800, "relevant_count": 101}},
             },
             "novel_relevant_ids": novel_ids,
-            "noise_pattern_definitions": {"wrong_domain": "wrong domain"},
+            "noise_pattern_definitions": {
+                "dictionary_or_scrabble": "dictionary|scrabble",
+                "essay_or_homework": "essay|homework",
+                "generic_process": "how to|best practices",
+                "pet_health": "pet health|veterinary",
+                "wrong_domain": "wrong domain",
+            },
             "noise_pattern_counts": [
-                {"arm": arm, "facet_id": "219-positive", "selected_count": 50, "wrong_domain": int(arm == "FACET-2B")}
-                for arm in ("FACET-2B", "TETHERED-2B")
+                {
+                    "arm": "FACET-2B",
+                    "facet_id": "219-positive",
+                    "selected_count": 50,
+                    "dictionary_or_scrabble": 3,
+                    "essay_or_homework": 4,
+                    "generic_process": 3,
+                    "pet_health": 2,
+                    "wrong_domain": 0,
+                },
+                {
+                    "arm": "TETHERED-2B",
+                    "facet_id": "219-positive",
+                    "selected_count": 50,
+                    "dictionary_or_scrabble": 5,
+                    "essay_or_homework": 6,
+                    "generic_process": 7,
+                    "pet_health": 3,
+                    "wrong_domain": 0,
+                },
             ],
             "facet_yield_changes": [{
                 "facet_id": "219-positive", "facet_only_relevant_count": 8,
@@ -435,11 +496,11 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
     decision_bytes = _write(
         task4 / "decision.json",
         {
-            "label": "mechanical_pass",
+            "label": "mechanical_fail",
             "guards": {"recall500": True, "novel500": True, "judged_coverage": True},
             "next_step": "Run a preregistered evaluation on fresh topics and untouched qrels.",
             "production_promotion_authorized": False,
-            "novel_relevant_count": 203,
+            "novel_relevant_count": 177,
         },
     )
     evaluation_bindings_bytes = _write(
@@ -473,7 +534,7 @@ def sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReportSources:
             "topic_ids": TOPICS,
             "post_qrels_diagnostic": True,
             "production_validation": False,
-            "novel_relevant_count": 203,
+            "novel_relevant_count": 177,
             "metrics_sha256": _sha(metrics_bytes),
             "diagnostics_sha256": _sha(diagnostics_bytes),
             "decision_sha256": _sha(decision_bytes),
@@ -501,6 +562,127 @@ def test_report_answers_the_three_user_questions(built) -> None:
     assert "what should happen next?" in html
 
 
+def test_v2_report_states_only_authenticated_bounded_conclusions(built) -> None:
+    artifact = built.artifact
+    answers = artifact["answers"]
+    assert artifact["schema_version"] == "tethered-facet-diagnostic-report-v2"
+    assert built.summary["schema_version"] == artifact["schema_version"]
+    assert answers["narrative_tether_reduced_noise"] is False
+    assert answers["narrative_tether_noise_conclusion"] == "not_established"
+    assert (
+        answers["narrative_tether_noise_answer"]
+        == "Judged-relevant yield improved; net noise reduction not established."
+    )
+    assert artifact["diagnostics"]["noise_pattern_aggregate"] == [
+        {
+            "arm": "FACET-2B",
+            "selected_count": 50,
+            "dictionary_or_scrabble": 3,
+            "essay_or_homework": 4,
+            "generic_process": 3,
+            "pet_health": 2,
+            "wrong_domain": 0,
+        },
+        {
+            "arm": "TETHERED-2B",
+            "selected_count": 50,
+            "dictionary_or_scrabble": 5,
+            "essay_or_homework": 6,
+            "generic_process": 7,
+            "pet_health": 3,
+            "wrong_domain": 0,
+        },
+    ]
+    assert artifact["representative_grade_distribution"] == {
+        "overall": {"0": 1, "4": 1},
+        "by_movement": {"demoted": {"0": 1}, "promoted": {"4": 1}},
+    }
+    assert artifact["novel_evidence"] == {
+        "document_count": 177,
+        "all_in_frozen_accepted_union": True,
+        "absent_from_original_top1000": True,
+        "new_retrieval": False,
+        "conclusion": "preexisting_candidate_pool_reordered",
+    }
+    assert artifact["mechanical_failure"] == {
+        "label": "mechanical_fail",
+        "tethered_recall@500": pytest.approx(0.19439),
+        "rrf_recall@500": pytest.approx(0.19760),
+        "tethered_vs_rrf_recall@500_delta": pytest.approx(-0.00321),
+        "topic_84_tethered_recall@500": pytest.approx(0.275),
+        "topic_84_rrf_recall@500": pytest.approx(0.30),
+        "topic_84_tethered_vs_rrf_delta": pytest.approx(-0.025),
+        "protected_ndcg@100_identical": True,
+        "protected_ndcg@100": pytest.approx(0.42),
+    }
+    assert artifact["full_union_ceiling"]["micro"] == {
+        "relevant_in_union": 178,
+        "relevant_total": 179,
+        "recall": pytest.approx(178 / 179),
+    }
+    assert {
+        row["topic_id"]: (row["relevant_in_union"], row["relevant_total"])
+        for row in artifact["full_union_ceiling"]["per_topic"]
+    } == {"219": (45, 46), "72": (44, 44), "300": (44, 44), "84": (45, 45)}
+
+
+def test_v2_html_discloses_limits_failure_and_next_experiment(built) -> None:
+    html = built.html
+    for text in (
+        "Judged-relevant yield improved; net noise reduction not established.",
+        "crude lexical warnings",
+        "cannot establish semantic drift",
+        "177 novel relevant documents were pre-existing",
+        "did not discover or retrieve them",
+        "0.19439",
+        "0.19760",
+        "-0.00321",
+        "soft-coverage",
+        "100, 250, 500, 1,000, 1,500, and full union",
+        "area under the curve",
+        "bounded diagnostic recomputation from the exact anchored projection",
+        "Displayed representative qrels grades",
+    ):
+        assert text in html
+    assert "equal hard quotas" in html and "terminal truncation" in html
+    assert "<caption>Full accepted-union recall ceiling</caption>" in html
+    assert "<caption>Aggregate crude warning-regex counts by arm</caption>" in html
+
+
+def test_full_union_ceiling_rejects_unequal_arm_identity_sets() -> None:
+    rows = {
+        (topic, f"{topic}-doc", arm): {
+            "topic_id": topic, "document_id": f"{topic}-doc", "arm": arm, "rank": 1
+        }
+        for topic in TOPICS
+        for arm in ("FACET-2B", "TETHERED-2B")
+    }
+    rows[("219", "extra", "FACET-2B")] = {
+        "topic_id": "219", "document_id": "extra", "arm": "FACET-2B", "rank": 2
+    }
+    qrels = {topic: {f"{topic}-doc": 2} for topic in TOPICS}
+
+    with pytest.raises(ValueError, match="accepted-union identities differ"):
+        report_module._full_union_ceiling(rows, qrels)
+
+
+def test_full_union_ceiling_rejects_duplicate_ranks() -> None:
+    rows = {
+        (topic, f"{topic}-doc", arm): {
+            "topic_id": topic, "document_id": f"{topic}-doc", "arm": arm, "rank": 1
+        }
+        for topic in TOPICS
+        for arm in ("FACET-2B", "TETHERED-2B")
+    }
+    rows[("219", "extra", "FACET-2B")] = {
+        "topic_id": "219", "document_id": "extra", "arm": "FACET-2B", "rank": 1
+    }
+    qrels = {topic: {f"{topic}-doc": 2} for topic in TOPICS}
+
+    with pytest.raises(ValueError, match="accepted-union rank is duplicated"):
+        report_module._full_union_ceiling(rows, qrels)
+
+
 def test_report_accepts_exact_production_task2_receipt_schema(
     sources: ReportSources,
 ) -> None:
@@ -509,7 +691,7 @@ def test_report_accepts_exact_production_task2_receipt_schema(
     artifact = build_artifact(sources)
 
     assert receipt["schema_version"] == "tethered-facet-minilm-scoring-receipt-v1"
-    assert artifact["schema_version"] == "tethered-facet-diagnostic-report-v1"
+    assert artifact["schema_version"] == "tethered-facet-diagnostic-report-v2"
 
 
 def test_report_accepts_production_grade_four_projection(
@@ -637,9 +819,9 @@ def test_report_is_standalone_accessible_and_explicitly_bounded(built) -> None:
     assert ":focus-visible" in html and "@media (max-width:" in html
     assert "rrf" in html and "facet-2b" in html and "tethered-2b" in html
     assert "recall@500" in html and "recall@1000" in html
-    assert built.artifact["decision"]["label"] == "mechanical_pass"
-    assert "/203" in html or "/ 203" in html
-    assert "/177" not in html and "/ 177" not in html
+    assert built.artifact["decision"]["label"] == "mechanical_fail"
+    assert "/177" in html or "/ 177" in html
+    assert "/203" not in html and "/ 203" not in html
     assert "facet-only final rank" in html and "tethered final rank" in html
     assert "prior facet bm25 rank" in html
     assert "passage provenance" in html and "ranking provenance" in html
@@ -738,7 +920,7 @@ def test_report_rejects_restamped_provenance_constants(
 def test_task4_exact_producer_schema_matches_task5_consumer(sources: ReportSources) -> None:
     artifact = build_artifact(sources)
     assert set(artifact["diagnostics"]) == {
-        "noise_pattern_definitions", "noise_pattern_counts", "facet_yield_changes",
+        "noise_pattern_definitions", "noise_pattern_counts", "noise_pattern_aggregate", "facet_yield_changes",
         "relevant_below_500", "duplicate_and_quota_pressure", "scoring_telemetry",
     }
     assert set(artifact["representatives"][0]) == {

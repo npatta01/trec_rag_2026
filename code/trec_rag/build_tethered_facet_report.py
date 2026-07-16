@@ -21,7 +21,7 @@ PROTECTED_TOPIC_IDS = frozenset({"144", "213", "224", "407", "515"})
 ARMS = ("RRF", "FACET-2B", "TETHERED-2B")
 DEPTHS = (500, 1000)
 OUTPUT_FILES = ("artifact.json", "summary.json", "report_data.sqlite", "report.html")
-SCHEMA_VERSION = "tethered-facet-diagnostic-report-v1"
+SCHEMA_VERSION = "tethered-facet-diagnostic-report-v2"
 
 
 @dataclass
@@ -575,6 +575,150 @@ def _contribution_rows(diagnostics: Mapping[str, object]) -> tuple[list[dict[str
     return topic_rows, facet_rows
 
 
+def _noise_pattern_aggregate(
+    rows: Sequence[object], patterns: Mapping[str, object]
+) -> list[dict[str, object]]:
+    """Derive arm totals from the authenticated per-facet warning ledger."""
+
+    output: list[dict[str, object]] = []
+    for arm in ("FACET-2B", "TETHERED-2B"):
+        arm_rows = [row for row in rows if isinstance(row, Mapping) and row.get("arm") == arm]
+        if not arm_rows:
+            raise ValueError(f"noise pattern counts omit {arm}")
+        aggregate: dict[str, object] = {
+            "arm": arm,
+            "selected_count": sum(int(row["selected_count"]) for row in arm_rows),
+        }
+        aggregate.update(
+            {name: sum(int(row[name]) for row in arm_rows) for name in patterns}
+        )
+        output.append(aggregate)
+    return output
+
+
+def _representative_grade_distribution(
+    representatives: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    overall: dict[str, int] = defaultdict(int)
+    by_movement: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for row in representatives:
+        grade = str(int(row["qrels_grade"]))
+        movement = str(row["movement"])
+        overall[grade] += 1
+        by_movement[movement][grade] += 1
+    return {
+        "overall": dict(sorted(overall.items(), key=lambda item: int(item[0]))),
+        "by_movement": {
+            movement: dict(sorted(grades.items(), key=lambda item: int(item[0])))
+            for movement, grades in sorted(by_movement.items())
+        },
+    }
+
+
+def _full_union_ceiling(
+    ranking_rows: Mapping[tuple[str, str, str], Mapping[str, object]],
+    qrels: Mapping[str, Mapping[str, int]],
+) -> tuple[dict[str, object], dict[str, set[str]]]:
+    """Validate accepted ranking identities and derive their grade-2+ ceiling."""
+
+    identities: dict[str, dict[str, set[str]]] = {
+        arm: {topic: set() for topic in TOPIC_IDS}
+        for arm in ("FACET-2B", "TETHERED-2B")
+    }
+    ranks: set[tuple[str, str, int]] = set()
+    for (topic_key, document_key, arm_key), row in ranking_rows.items():
+        arm, topic, document = str(row.get("arm")), str(row.get("topic_id")), str(row.get("document_id"))
+        if (topic, document, arm) != (topic_key, document_key, arm_key):
+            raise ValueError("Task 3 ranking key differs from row identity")
+        if arm not in identities:
+            continue
+        if topic not in TOPIC_IDS or not document.strip():
+            raise ValueError("Task 3 accepted-union ranking identity is invalid")
+        raw_rank = row.get("rank")
+        if isinstance(raw_rank, bool) or not isinstance(raw_rank, int) or raw_rank <= 0:
+            raise ValueError("Task 3 accepted-union rank is invalid")
+        rank_identity = (arm, topic, raw_rank)
+        if rank_identity in ranks:
+            raise ValueError("Task 3 accepted-union rank is duplicated")
+        ranks.add(rank_identity)
+        identities[arm][topic].add(document)
+
+    shared: dict[str, set[str]] = {}
+    per_topic: list[dict[str, object]] = []
+    for topic in TOPIC_IDS:
+        facet = identities["FACET-2B"][topic]
+        tethered = identities["TETHERED-2B"][topic]
+        if not facet or facet != tethered:
+            raise ValueError(f"Task 3 accepted-union identities differ for topic {topic}")
+        shared[topic] = facet
+        relevant = {document for document, grade in qrels[topic].items() if int(grade) >= 2}
+        if not relevant:
+            raise ValueError(f"authenticated projection has no relevant documents for topic {topic}")
+        numerator = len(facet & relevant)
+        denominator = len(relevant)
+        per_topic.append(
+            {
+                "topic_id": topic,
+                "relevant_in_union": numerator,
+                "relevant_total": denominator,
+                "recall": numerator / denominator,
+            }
+        )
+    micro_numerator = sum(int(row["relevant_in_union"]) for row in per_topic)
+    micro_denominator = sum(int(row["relevant_total"]) for row in per_topic)
+    return (
+        {
+            "provenance": "bounded diagnostic recomputation from the exact anchored projection",
+            "per_topic": per_topic,
+            "micro": {
+                "relevant_in_union": micro_numerator,
+                "relevant_total": micro_denominator,
+                "recall": micro_numerator / micro_denominator,
+            },
+        },
+        shared,
+    )
+
+
+def _mechanical_failure(
+    metrics: Mapping[str, object], aggregate: Mapping[str, object], label: str
+) -> dict[str, object]:
+    if isinstance(metrics.get("per_topic"), Mapping):
+        per_topic = _mapping(metrics.get("per_topic"), "per-topic metrics")
+    else:
+        arms = _mapping(metrics.get("arms"), "arm metrics")
+        per_topic = {
+            topic: {
+                arm: _mapping(_mapping(arms[arm], f"{arm} metrics").get("per_topic"), f"{arm} per-topic metrics")[topic]
+                for arm in ARMS
+            }
+            for topic in TOPIC_IDS
+        }
+    topic_84 = _mapping(per_topic.get("84"), "topic 84 metrics")
+    tethered_500 = _number(_mapping(aggregate["TETHERED-2B"], "tethered aggregate").get("recall@500"), "tethered recall@500")
+    rrf_500 = _number(_mapping(aggregate["RRF"], "RRF aggregate").get("recall@500"), "RRF recall@500")
+    tethered_topic = _number(_mapping(topic_84.get("TETHERED-2B"), "topic 84 tethered metrics").get("recall@500"), "topic 84 tethered recall@500")
+    rrf_topic = _number(_mapping(topic_84.get("RRF"), "topic 84 RRF metrics").get("recall@500"), "topic 84 RRF recall@500")
+    protected = [
+        _number(_mapping(aggregate[arm], f"{arm} aggregate").get("ndcg@100"), f"{arm} nDCG@100")
+        for arm in ARMS
+    ]
+    identical = all(value == protected[0] for value in protected[1:])
+    if not identical:
+        raise ValueError("protected nDCG@100 is not identical across arms")
+    return {
+        "label": label,
+        "tethered_recall@500": tethered_500,
+        "rrf_recall@500": rrf_500,
+        "tethered_vs_rrf_recall@500_delta": tethered_500 - rrf_500,
+        "topic_84_tethered_recall@500": tethered_topic,
+        "topic_84_rrf_recall@500": rrf_topic,
+        "topic_84_tethered_vs_rrf_delta": tethered_topic - rrf_topic,
+        "protected_ndcg@100_identical": identical,
+        "protected_ndcg@100": protected[0],
+    }
+
+
 def _representatives(
     diagnostics: Mapping[str, object],
     *,
@@ -847,13 +991,14 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         and float(row["tethered_percentile"]) < float(row["facet_only_percentile"])
         for row in representatives
     )
-    reduced_noise = tethered_relevant > facet_relevant and demoted_irrelevant
     recovered_novel = metric("TETHERED-2B", 500, "novel_retained") >= 89 and metric(
         "TETHERED-2B", 1000, "novel_retained"
     ) >= 142
-    next_step = str(
-        decision.get("next_step")
-        or "Run a preregistered evaluation on fresh topics and untouched qrels."
+    next_step = (
+        "Run an offline full-union soft-coverage experiment using existing scores, "
+        "without terminal truncation or equal hard quotas; measure recall at 100, 250, "
+        "500, 1000, 1500, and the full union plus area under the recall-depth curve, "
+        "then validate on fresh preregistered topics."
     )
     novel_ids = _mapping(diagnostics.get("novel_relevant_ids"), "novel relevant IDs")
     if set(novel_ids) != set(TOPIC_IDS) or any(not isinstance(value, list) for value in novel_ids.values()):
@@ -873,6 +1018,15 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
     )
     if any(value != reconciled_novel_count for value in claimed_counts):
         raise ValueError("novel relevant count differs across authenticated Task 4 evidence")
+    full_union_ceiling, accepted_union = _full_union_ceiling(
+        verified["task3_ranking_rows"],  # type: ignore[arg-type]
+        verified["authenticated_qrels"],  # type: ignore[arg-type]
+    )
+    if any(
+        not authenticated_novel[topic] <= accepted_union[topic]  # type: ignore[index]
+        for topic in TOPIC_IDS
+    ):
+        raise ValueError("authenticated novel relevant IDs are absent from the frozen accepted union")
     diagnostic_fields = (
         "noise_pattern_definitions", "noise_pattern_counts", "facet_yield_changes",
         "relevant_below_500", "duplicate_and_quota_pressure", "scoring_telemetry",
@@ -891,6 +1045,9 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
             raise ValueError("noise pattern count schema differs")
         if any(int(row[name]) < 0 or int(row[name]) > int(row["selected_count"]) for name in patterns):
             raise ValueError("noise pattern counts do not reconcile")
+    report_diagnostics["noise_pattern_aggregate"] = _noise_pattern_aggregate(
+        report_diagnostics["noise_pattern_counts"], patterns  # type: ignore[arg-type]
+    )
     for row in report_diagnostics["facet_yield_changes"]:  # type: ignore[union-attr]
         if not isinstance(row, Mapping) or row.get("classification") not in {"rose", "fell", "zero", "unchanged"}:
             raise ValueError("facet yield change schema differs")
@@ -956,6 +1113,8 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         raise ValueError("scoring telemetry differs from exact Task 1/2 sources")
     label = str(decision.get("label", "unknown"))
     title_label = label.replace("_", " ").title()
+    mechanical_failure = _mechanical_failure(metrics, aggregate, label)
+    grade_distribution = _representative_grade_distribution(representatives)
     novel_total_raw = reconciled_novel_count
     if type(novel_total_raw) is not int or novel_total_raw <= 0:
         raise ValueError("Task 4 metrics lack authenticated novel relevant total")
@@ -971,7 +1130,9 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
             "novel_relevant_total": novel_total_raw,
         },
         "answers": {
-            "narrative_tether_reduced_noise": reduced_noise,
+            "narrative_tether_reduced_noise": False,
+            "narrative_tether_noise_conclusion": "not_established",
+            "narrative_tether_noise_answer": "Judged-relevant yield improved; net noise reduction not established.",
             "two_basket_recovered_novel_relevant": recovered_novel,
             "next_step": next_step,
             "noise_basis": {
@@ -990,6 +1151,25 @@ def build_artifact(sources: ReportSources) -> dict[str, object]:
         "topic_contributions": topic_rows,
         "facet_contributions": facet_rows,
         "representatives": representatives,
+        "representative_grade_distribution": grade_distribution,
+        "novel_evidence": {
+            "document_count": reconciled_novel_count,
+            "all_in_frozen_accepted_union": True,
+            "absent_from_original_top1000": True,
+            "new_retrieval": False,
+            "conclusion": "preexisting_candidate_pool_reordered",
+        },
+        "mechanical_failure": mechanical_failure,
+        "full_union_ceiling": full_union_ceiling,
+        "next_step_experiment": {
+            "mode": "offline_full_union_soft_coverage",
+            "uses_existing_scores": True,
+            "terminal_truncation": False,
+            "equal_hard_quotas": False,
+            "curve_depths": [100, 250, 500, 1000, 1500, "full_union"],
+            "summary_metric": "area_under_recall_depth_curve",
+            "follow_up": "fresh_preregistered_topics",
+        },
         "diagnostics": report_diagnostics,
         "decision": decision,
         "source_hashes": verified["source_hashes"],
@@ -1020,6 +1200,11 @@ def _render_html(artifact: Mapping[str, object]) -> str:
     assert isinstance(representatives, list) and isinstance(topic_rows, list) and isinstance(facet_rows, list)
     scope = _mapping(artifact["scope"], "scope")
     novel_total = int(scope["novel_relevant_total"])
+    mechanical = _mapping(artifact["mechanical_failure"], "mechanical failure")
+    ceiling = _mapping(artifact["full_union_ceiling"], "full union ceiling")
+    grade_distribution = _mapping(
+        artifact["representative_grade_distribution"], "representative grade distribution"
+    )
 
     metric_body = "".join(
         "<tr>"
@@ -1071,13 +1256,8 @@ def _render_html(artifact: Mapping[str, object]) -> str:
         "</article>"
         for row in representatives
     )
-    yes_noise = "Yes, within this diagnostic" if answers["narrative_tether_reduced_noise"] else "No clear reduction"
+    noise_answer = esc(answers["narrative_tether_noise_answer"])
     yes_novel = "Yes, within this diagnostic" if answers["two_basket_recovered_novel_relevant"] else "No"
-    noise_basis = (
-        "Relevant facet-basket contributions increased and a judged-irrelevant high facet-only match was demoted when narrative context was restored."
-        if answers["narrative_tether_reduced_noise"]
-        else "The saved contribution counts and representative movements do not establish a clear reduction in facet noise."
-    )
     noise_rows = diagnostics["noise_pattern_counts"]
     facet_changes = diagnostics["facet_yield_changes"]
     below_rows = diagnostics["relevant_below_500"]
@@ -1099,6 +1279,14 @@ def _render_html(artifact: Mapping[str, object]) -> str:
         for row in noise_rows
     )
     noise_headers = "".join(f'<th scope="col">{esc(name)}</th>' for name in pattern_names)
+    noise_aggregate = diagnostics["noise_pattern_aggregate"]
+    assert isinstance(noise_aggregate, list)
+    noise_aggregate_body = "".join(
+        f"<tr><th scope='row'>{esc(row['arm'])}</th><td>{int(row['selected_count'])}</td>"
+        + "".join(f"<td>{int(row[name])}</td>" for name in pattern_names)
+        + "</tr>"
+        for row in noise_aggregate
+    )
     change_body = "".join(
         f"<tr><th scope='row'>{esc(row['facet_id'])}</th><td>{int(row['facet_only_relevant_count'])}</td>"
         f"<td>{int(row['tethered_relevant_count'])}</td><td>{_signed(row['delta'])}</td>"
@@ -1125,6 +1313,29 @@ def _render_html(artifact: Mapping[str, object]) -> str:
     telemetry_html = "".join(
         f"<dt>{esc(key)}</dt><dd>{esc(telemetry[key])}</dd>" for key in telemetry
     )
+    ceiling_rows = ceiling["per_topic"]
+    assert isinstance(ceiling_rows, list)
+    ceiling_body = "".join(
+        f"<tr><th scope='row'>{esc(row['topic_id'])}</th><td>{int(row['relevant_in_union'])}</td>"
+        f"<td>{int(row['relevant_total'])}</td><td>{_pct(row['recall'])}</td></tr>"
+        for row in ceiling_rows
+    )
+    ceiling_micro = _mapping(ceiling["micro"], "full union micro ceiling")
+    overall_grades = _mapping(grade_distribution["overall"], "overall representative grades")
+    grade_text = ", ".join(
+        f"grade {grade}: {int(count)}" for grade, count in overall_grades.items()
+    )
+    movement_grades = _mapping(
+        grade_distribution["by_movement"], "representative grades by movement"
+    )
+    movement_grade_text = "; ".join(
+        f"{movement}: "
+        + ", ".join(
+            f"grade {grade}: {int(count)}"
+            for grade, count in _mapping(grades, f"{movement} grades").items()
+        )
+        for movement, grades in movement_grades.items()
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(artifact['title'])}</title>
@@ -1147,17 +1358,19 @@ dl{{display:grid;grid-template-columns:minmax(9rem,1fr) 3fr;gap:.5rem 1rem}}dt{{
 <header><span class="label">{esc(artifact['mechanical_label'])}</span><h1>{esc(artifact['title'])}</h1>
 <p class="lede">The fixed comparison preserved the RRF head, then compared RRF, FACET-2B, and TETHERED-2B. Tethering changed Recall@500 by {_signed(deltas['binary_recall@500_tethered_vs_facet'], percentage=True)} and novel retention@500 by {_signed(deltas['novel_retained@500_tethered_vs_facet'])} documents versus FACET-2B.</p>
 <p class="boundary"><strong>Interpretation boundary:</strong> post-qrels diagnostic · no new retrieval · not production validation.</p>
-<p>The report builder reads only the exact historically anchored qrels projection already bound by Task 4, solely to authenticate qrels-derived diagnostics. It does not read original qrels or perform a new evaluation.</p></header>
+<p>Qrels-derived totals are a bounded diagnostic recomputation from the exact anchored projection: the exact historically anchored qrels projection already bound by Task 4. The builder does not read original qrels or perform a new evaluation. It also runs no new retrieval.</p></header>
 <main id="main"><section aria-labelledby="questions"><h2 id="questions">Three decisions this report answers</h2><div class="grid">
-<article class="card"><h3>Did narrative tethering reduce facet noise?</h3><p class="answer">{yes_noise}.</p><p>{noise_basis}</p></article>
-<article class="card"><h3>Did two-basket fusion recover novel relevant documents?</h3><p class="answer">{yes_novel}.</p><p>TETHERED-2B retained {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==500))}/{novel_total} at 500 and {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==1000))}/{novel_total} at 1,000.</p></article>
-<article class="card"><h3>What should happen next?</h3><p class="answer">Fresh validation.</p><p>{esc(answers['next_step'])}</p></article></div></section>
+<article class="card"><h3>Did narrative tethering reduce facet noise?</h3><p class="answer">{noise_answer}</p><p>Relevant-yield counts can improve while net noise remains unknown.</p></article>
+<article class="card"><h3>Did two-basket fusion recover novel relevant documents?</h3><p class="answer">{yes_novel}.</p><p>{novel_total} novel relevant documents were pre-existing in the frozen accepted facet candidate pool and absent from the original top 1,000. MiniLM reordered, promoted, or retained them; it did not discover or retrieve them. TETHERED-2B retained {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==500))}/{novel_total} at 500 and {int(next(row['novel_retained'] for row in metrics if row['arm']=='TETHERED-2B' and row['depth']==1000))}/{novel_total} at 1,000.</p></article>
+<article class="card"><h3>What should happen next?</h3><p class="answer">Offline soft-coverage, then fresh validation.</p><p>{esc(answers['next_step'])}</p><p>Use existing scores without terminal truncation or equal hard quotas; trace 100, 250, 500, 1,000, 1,500, and full union, summarize area under the curve, then test fresh preregistered topics.</p></article></div></section>
 <section aria-labelledby="pipeline"><h2 id="pipeline">Fixed pipeline</h2><ol class="pipeline"><li>Sealed candidates</li><li>Facet + narrative MiniLM</li><li>Query-local percentiles</li><li>Protected two-basket fusion</li><li>Projection-only evaluation</li></ol></section>
 <section aria-labelledby="metrics"><h2 id="metrics">Metric comparison</h2><p>Rows report Recall@500 and Recall@1000 alongside the corresponding graded recall and novel-document counts.</p><div class="table-wrap"><table><caption>RRF, FACET-2B, and TETHERED-2B at 500 and 1,000</caption><thead><tr><th scope="col">Arm</th><th scope="col">Depth</th><th scope="col">Recall</th><th scope="col">Graded recall</th><th scope="col">Novel relevant retained</th></tr></thead><tbody>{metric_body}</tbody></table></div></section>
 <section aria-labelledby="topics"><h2 id="topics">Where the change came from</h2><div class="table-wrap"><table><caption>Per-topic TETHERED-2B deltas versus FACET-2B at 500</caption><thead><tr><th scope="col">Topic</th><th scope="col">Recall@500</th><th scope="col">Graded Recall@500</th></tr></thead><tbody>{topic_body}</tbody></table></div>
 <div class="table-wrap" style="margin-top:1rem"><table><caption>Per-facet relevant contribution</caption><thead><tr><th scope="col">Facet</th><th scope="col">Arm</th><th scope="col">Selected</th><th scope="col">Relevant</th><th scope="col">Yield</th></tr></thead><tbody>{facet_body}</tbody></table></div></section>
-<section aria-labelledby="examples"><h2 id="examples">Representative promoted and demoted passages</h2><p>These bounded rows come from authenticated diagnostics. The builder checks their grades against Task 4's exact historically anchored projection; it does not read original qrels or perform a new evaluation.</p><div class="grid">{evidence}</div></section>
-<section aria-labelledby="noise"><h2 id="noise">Noise patterns</h2><dl>{pattern_definition_html}</dl><div class="table-wrap"><table><caption>Frozen regex pattern counts by arm and facet</caption><thead><tr><th scope="col">Facet</th><th scope="col">Arm</th><th scope="col">Selected</th>{noise_headers}</tr></thead><tbody>{noise_body}</tbody></table></div></section>
+<section aria-labelledby="mechanical"><h2 id="mechanical">Why the mechanical gate failed</h2><p>TETHERED-2B Recall@500 was {float(mechanical['tethered_recall@500']):.5f}, below RRF at {float(mechanical['rrf_recall@500']):.5f} (delta {float(mechanical['tethered_vs_rrf_recall@500_delta']):+.5f}). Topic 84 lost more than 0.02 ({float(mechanical['topic_84_tethered_vs_rrf_delta']):+.3f}), while protected nDCG@100 was identical by construction at {float(mechanical['protected_ndcg@100']):.2f}.</p></section>
+<section aria-labelledby="ceiling"><h2 id="ceiling">Full accepted-union ceiling</h2><p>This is a bounded diagnostic recomputation from the exact anchored projection; it uses authenticated Task 3 ranking identities and no original qrels or new retrieval.</p><div class="table-wrap"><table><caption>Full accepted-union recall ceiling</caption><thead><tr><th scope="col">Topic</th><th scope="col">Relevant in union</th><th scope="col">Relevant total</th><th scope="col">Recall</th></tr></thead><tbody>{ceiling_body}<tr><th scope="row">Micro</th><td>{int(ceiling_micro['relevant_in_union'])}</td><td>{int(ceiling_micro['relevant_total'])}</td><td>{_pct(ceiling_micro['recall'])}</td></tr></tbody></table></div></section>
+<section aria-labelledby="examples"><h2 id="examples">Representative promoted and demoted passages</h2><p>Displayed representative qrels grades: {esc(grade_text)}. By movement: {esc(movement_grade_text)}. This distribution covers every displayed row and does not support a one-example net-noise claim. These bounded rows come from authenticated diagnostics.</p><div class="grid">{evidence}</div></section>
+<section aria-labelledby="noise"><h2 id="noise">Noise patterns</h2><p>These are crude lexical warnings. Counts are literal regex matches; in particular, <code>wrong_domain</code> cannot establish semantic drift.</p><dl>{pattern_definition_html}</dl><div class="table-wrap"><table><caption>Aggregate crude warning-regex counts by arm</caption><thead><tr><th scope="col">Arm</th><th scope="col">Selected</th>{noise_headers}</tr></thead><tbody>{noise_aggregate_body}</tbody></table></div><div class="table-wrap" style="margin-top:1rem"><table><caption>Frozen regex pattern counts by arm and facet</caption><thead><tr><th scope="col">Facet</th><th scope="col">Arm</th><th scope="col">Selected</th>{noise_headers}</tr></thead><tbody>{noise_body}</tbody></table></div></section>
 <section aria-labelledby="yield-changes"><h2 id="yield-changes">Facet yield changes</h2><div class="table-wrap"><table><caption>Relevant contribution changes</caption><thead><tr><th scope="col">Facet</th><th scope="col">Facet-only</th><th scope="col">Tethered</th><th scope="col">Delta</th><th scope="col">Classification</th></tr></thead><tbody>{change_body}</tbody></table></div></section>
 <section aria-labelledby="below"><h2 id="below">Relevant below rank 500</h2><div class="table-wrap"><table><caption>Grade-2+ documents and explicit miss reasons</caption><thead><tr><th scope="col">Document</th><th scope="col">Arm</th><th scope="col">Topic</th><th scope="col">Qrels grade</th><th scope="col">Rank</th><th scope="col">Best facet</th><th scope="col">Best facet percentile</th><th scope="col">Prior BM25 rank</th><th scope="col">Reason</th></tr></thead><tbody>{below_body}</tbody></table></div></section>
 <section aria-labelledby="pressure"><h2 id="pressure">Duplicate and quota pressure</h2><div class="table-wrap"><table><caption>Exact per-facet duplicate skips and shortages</caption><thead><tr><th scope="col">Topic</th><th scope="col">Arm</th><th scope="col">Duplicate map</th><th scope="col">Duplicate total</th><th scope="col">Shortage map</th><th scope="col">Shortage total</th></tr></thead><tbody>{pressure_body}</tbody></table></div></section>
