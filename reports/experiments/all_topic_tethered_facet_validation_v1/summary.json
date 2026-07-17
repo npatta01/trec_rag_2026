@@ -7,6 +7,22 @@
     "RRF100-REINIT-DUAL-NR",
     "RRF500-REINIT-DUAL"
   ],
+  "capture": {
+    "full_union": {
+      "binary_recall": 0.3866296980899569,
+      "graded_gain": 35840,
+      "graded_recall": 0.423841059602649,
+      "known_relevant": 5020
+    },
+    "graded_gain_total": 84560,
+    "known_relevant_total": 12984,
+    "rrf_at_1000": {
+      "binary_recall": 0.30445163277880466,
+      "graded_gain": 28815,
+      "graded_recall": 0.3407639545884579,
+      "known_relevant": 3953
+    }
+  },
   "costs": {
     "cache_reuse_pairs": 68079,
     "facet_requests": 148,
@@ -56,6 +72,11 @@
     "not evidence of generalization",
     "downstream RAG answer generation is out of scope"
   ],
+  "postmortem": {
+    "recommendation": "Retain canonical RRF; use the cap replay only as bounded recovery evidence while beginning source-diverse RAG evidence selection.",
+    "schema_version": "topic-failure-postmortem-v1",
+    "sha256": "1ea57eaf566f95e1d63d4b44e136b0eea0d07aa0ed2bf11f5357328bb52ad3f1"
+  },
   "provenance": {
     "evaluation_root_sha256": "e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84",
     "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
