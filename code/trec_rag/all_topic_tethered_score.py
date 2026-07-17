@@ -28,6 +28,7 @@ from .facet_local_minilm_preflight import (
     MODEL_ID,
     MODEL_REVISION,
     PAIR_MAX_TOKENS,
+    WINDOW_SCHEMA_VERSION,
     WINDOW_POLICY_VERSION,
     WindowPlanRow,
     _window_id,
@@ -49,6 +50,9 @@ from .tethered_facet_minilm_score import (
 
 PLANNING_ROOT_SHA256 = "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2"
 RETRIEVAL_ROOT_SHA256 = "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb"
+APPROVED_SCORE_PLAN_ROOT_SHA256 = "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3"
+MANIFEST_SHA256 = "03a55f669f312b09434226928d9eb3a61f49f47f463b88acf9bd4d57d743f1d5"
+ACCEPTED_UNION_SHA256 = "f91c38f721e6821015d28ae9928637757f2763eeb5c7270822d4e695b312d1d9"
 EXPECTED_UNION_ROWS = 45_144
 EXPECTED_FACET_ASSOCIATIONS = 29_600
 EXPECTED_PAIR_COUNT = 119_888
@@ -485,7 +489,12 @@ def percentile_features(
         first_rank = 1
         for score in sorted(score_groups, reverse=True):
             last_rank = first_rank + len(score_groups[score]) - 1
-            value = (count - ((first_rank + last_rank) / 2.0) + 1.0) / count
+            average_rank = (first_rank + last_rank) / 2.0
+            value = (
+                1.0
+                if count == 1
+                else (count - average_rank) / (count - 1.0)
+            )
             for index in score_groups[score]:
                 percentiles[index] = value
             first_rank = last_rank + 1
@@ -676,7 +685,101 @@ def create_preflight(
         raise
 
 
-def verify_preflight(scoring_dir: Path) -> dict[str, object]:
+def _validate_plan_rows(
+    scoring: Path, payload: Mapping[str, object]
+) -> tuple[set[tuple[str, str, str]], set[str]]:
+    pair_identities: set[tuple[str, str, str]] = set()
+    for row in _iter_jsonl(scoring / "pairs.jsonl", "score pairs"):
+        topic_id = row.get("topic_id")
+        query_id = row.get("query_id")
+        document_id = row.get("document_id")
+        query = row.get("query")
+        text_sha = row.get("text_sha256")
+        if (
+            row.get("schema_version") != PAIR_SCHEMA_VERSION
+            or topic_id not in ALL_TOPIC_IDS
+            or not isinstance(query_id, str)
+            or not query_id
+            or not isinstance(document_id, str)
+            or not document_id
+            or not isinstance(query, str)
+            or row.get("query_sha256") != _sha256_text(query)
+            or not isinstance(text_sha, str)
+            or len(text_sha) != 64
+        ):
+            raise ValueError("score pair row identity/lineage is invalid")
+        identity = (str(topic_id), query_id, document_id)
+        if identity in pair_identities:
+            raise ValueError("score pair identity is duplicated")
+        pair_identities.add(identity)
+
+    window_pair_identities: set[tuple[str, str, str]] = set()
+    window_ids: set[str] = set()
+    cache_keys: set[str] = set()
+    unique_misses: set[str] = set()
+    hits = 0
+    misses = 0
+    original_context_factory = _window_module.score_cache_context
+    frozen_context = original_context_factory()
+    _window_module.score_cache_context = lambda: frozen_context
+    try:
+        for row in _iter_jsonl(scoring / "windows.jsonl", "score windows"):
+            topic_id = row.get("topic_id")
+            query_id = row.get("query_id")
+            document_id = row.get("document_id")
+            query = row.get("query")
+            window_text = row.get("window_text")
+            window_id = row.get("window_id")
+            cache_key = row.get("cache_key")
+            if (
+                row.get("schema_version") != WINDOW_SCHEMA_VERSION
+                or topic_id not in ALL_TOPIC_IDS
+                or not isinstance(query_id, str)
+                or not isinstance(document_id, str)
+                or not isinstance(query, str)
+                or not isinstance(window_text, str)
+                or row.get("query_sha256") != _sha256_text(query)
+                or row.get("window_sha256") != _sha256_text(window_text)
+                or cache_key != _window_module._score_cache_key(query, window_text)
+                or window_id != _window_id(row)
+                or not isinstance(row.get("cache_hit"), bool)
+                or not isinstance(row.get("pair_token_count"), int)
+                or int(row["pair_token_count"]) > PAIR_MAX_TOKENS
+            ):
+                raise ValueError("score window identity/content is invalid")
+            identity = (str(topic_id), query_id, document_id)
+            if identity not in pair_identities:
+                raise ValueError("score window is absent from the pair plan")
+            if window_id in window_ids:
+                raise ValueError("score window ID is duplicated")
+            window_ids.add(str(window_id))
+            window_pair_identities.add(identity)
+            cache_keys.add(str(cache_key))
+            if row["cache_hit"]:
+                hits += 1
+            else:
+                misses += 1
+                unique_misses.add(str(cache_key))
+    finally:
+        _window_module.score_cache_context = original_context_factory
+    if (
+        pair_identities != window_pair_identities
+        or len(pair_identities) != payload.get("pair_count")
+        or len(window_ids) != payload.get("window_count")
+        or hits != payload.get("cache_hit_count")
+        or misses != payload.get("cache_miss_count")
+        or len(cache_keys) != payload.get("unique_pair_count")
+        or len(unique_misses) != payload.get("unique_cache_miss_count")
+    ):
+        raise ValueError("score-plan semantic counters/coverage differ")
+    return pair_identities, window_ids
+
+
+def verify_preflight(
+    scoring_dir: Path,
+    *,
+    expected_root_sha256: str = APPROVED_SCORE_PLAN_ROOT_SHA256,
+) -> dict[str, object]:
     """Verify the sealed tokenizer plan without opening a model or qrels."""
 
     scoring = Path(scoring_dir)
@@ -689,6 +792,7 @@ def verify_preflight(scoring_dir: Path) -> dict[str, object]:
         or not isinstance(files, Mapping)
         or set(files) != {"pairs.jsonl", "windows.jsonl", "preflight.json"}
         or seal.get("root_sha256") != _sha256_bytes(_compact_bytes(files))
+        or seal.get("root_sha256") != expected_root_sha256
     ):
         raise ValueError("score-plan seal is invalid")
     for name, binding in files.items():
@@ -696,6 +800,9 @@ def verify_preflight(scoring_dir: Path) -> dict[str, object]:
             raise ValueError(f"score-plan seal differs for {name}")
     artifacts = payload.get("artifacts")
     runtime = payload.get("runtime_projection")
+    sources = payload.get("sources")
+    tokenizer = payload.get("tokenizer")
+    cache_evidence = payload.get("score_cache")
     if (
         payload.get("schema_version") != PREFLIGHT_SCHEMA_VERSION
         or payload.get("status") != "tokenizer_only_preflight_complete"
@@ -709,6 +816,18 @@ def verify_preflight(scoring_dir: Path) -> dict[str, object]:
         or payload.get("external_calls") != _ZERO_EXTERNAL_CALLS
         or payload.get("model_constructed") is not False
         or payload.get("inference_authorized") is not False
+        or not isinstance(sources, Mapping)
+        or sources.get("planning_root_sha256") != PLANNING_ROOT_SHA256
+        or sources.get("retrieval_root_sha256") != RETRIEVAL_ROOT_SHA256
+        or not isinstance(sources.get("manifest"), Mapping)
+        or sources["manifest"].get("sha256") != MANIFEST_SHA256  # type: ignore[union-attr]
+        or not isinstance(sources.get("accepted_union"), Mapping)
+        or sources["accepted_union"].get("sha256") != ACCEPTED_UNION_SHA256  # type: ignore[union-attr]
+        or not isinstance(tokenizer, Mapping)
+        or tokenizer.get("load_count") != 1
+        or tokenizer.get("local_files_only") is not True
+        or not isinstance(cache_evidence, Mapping)
+        or cache_evidence.get("context") != score_cache_context().artifact_metadata
         or not isinstance(artifacts, Mapping)
         or artifacts.get("pairs.jsonl") != _file_binding(scoring / "pairs.jsonl")
         or artifacts.get("windows.jsonl") != _file_binding(scoring / "windows.jsonl")
@@ -722,10 +841,14 @@ def verify_preflight(scoring_dir: Path) -> dict[str, object]:
         "sha256": _sha256_bytes(preflight_source),
     }:
         raise ValueError("score preflight byte binding differs")
-    pair_count = sum(1 for _ in _iter_jsonl(scoring / "pairs.jsonl", "score pairs"))
-    window_count = sum(1 for _ in _iter_jsonl(scoring / "windows.jsonl", "score windows"))
-    if pair_count != payload.get("pair_count") or window_count != payload.get("window_count"):
-        raise ValueError("score-plan row counts differ")
+    materialization = load_verified_materialization(
+        Path(str(payload.get("model_materialization_receipt")))
+    )
+    if materialization.sha256 != payload.get("model_materialization_receipt_sha256"):
+        raise ValueError("model materialization differs from the approved score plan")
+    pair_identities, window_ids = _validate_plan_rows(scoring, payload)
+    pair_count = len(pair_identities)
+    window_count = len(window_ids)
     return {
         "verified": True,
         "root_sha256": seal["root_sha256"],
@@ -858,7 +981,7 @@ def run_scores(
         for row in documents
     ]
     features = [
-        {"schema_version": FEATURE_SCHEMA_VERSION, **row}
+        {**row, "schema_version": FEATURE_SCHEMA_VERSION}
         for row in percentile_features(bound_documents)
     ]
     output_rows = {
@@ -911,21 +1034,37 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
 
     scoring = Path(scoring_dir)
     preflight = verify_preflight(scoring)
-    receipt, _ = _read_json(scoring / "scoring_receipt.json", "scoring receipt")
+    preflight_payload, preflight_source = _read_json(
+        scoring / "preflight.json", "score preflight"
+    )
+    receipt, receipt_source = _read_json(
+        scoring / "scoring_receipt.json", "scoring receipt"
+    )
     seal, _ = _read_json(scoring / "SCORING_SEALED.json", "scoring seal")
     files = seal.get("files")
     if (
         seal.get("schema_version") != SCORING_SEAL_SCHEMA_VERSION
+        or seal.get("experiment_id") != EXPERIMENT_ID
         or seal.get("score_plan_root_sha256") != preflight["root_sha256"]
         or not isinstance(files, Mapping)
+        or set(files)
+        != {
+            "scores.jsonl",
+            "document_scores.jsonl",
+            "features.jsonl",
+            "scoring_receipt.json",
+        }
         or seal.get("root_sha256") != _sha256_bytes(_compact_bytes(files))
     ):
         raise ValueError("scoring seal is invalid")
     for name, binding in files.items():
         if not isinstance(binding, Mapping) or dict(binding) != _file_binding(scoring / name):
             raise ValueError(f"scoring seal differs for {name}")
+    artifacts = receipt.get("artifacts")
     if (
         receipt.get("status") != "complete"
+        or receipt.get("schema_version") != SCORING_RECEIPT_SCHEMA_VERSION
+        or receipt.get("preflight_sha256") != _sha256_bytes(preflight_source)
         or receipt.get("planned_window_count") != preflight["window_count"]
         or receipt.get("completed_window_count") != preflight["window_count"]
         or receipt.get("document_score_count") != EXPECTED_PAIR_COUNT
@@ -934,8 +1073,82 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
         or receipt.get("hosted_calls") != 0
         or receipt.get("paid_calls") != 0
         or receipt.get("qrels_opened") is not False
+        or not isinstance(artifacts, Mapping)
+        or set(artifacts)
+        != {"scores.jsonl", "document_scores.jsonl", "features.jsonl"}
+        or any(
+            not isinstance(binding, Mapping)
+            or dict(binding) != _file_binding(scoring / name)
+            for name, binding in artifacts.items()
+        )
+        or files.get("scoring_receipt.json")
+        != {"bytes": len(receipt_source), "sha256": _sha256_bytes(receipt_source)}
     ):
         raise ValueError("scoring coverage or safety evidence differs")
+    pair_identities, planned_window_ids = _validate_plan_rows(
+        scoring, preflight_payload
+    )
+    scored_window_ids: set[str] = set()
+    for row in _iter_jsonl(scoring / "scores.jsonl", "window scores"):
+        window_id = row.get("window_id")
+        score = row.get("score")
+        if (
+            row.get("schema_version") != SCORE_SCHEMA_VERSION
+            or window_id not in planned_window_ids
+            or window_id in scored_window_ids
+            or isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+            or row.get("model") != MODEL_ID
+            or row.get("model_revision") != MODEL_REVISION
+        ):
+            raise ValueError("window score identity/coverage is invalid")
+        scored_window_ids.add(str(window_id))
+    if scored_window_ids != planned_window_ids:
+        raise ValueError("window score coverage differs from the plan")
+
+    document_identities: set[tuple[str, str, str]] = set()
+    for row in _iter_jsonl(scoring / "document_scores.jsonl", "document scores"):
+        identity = (
+            str(row.get("topic_id")),
+            str(row.get("query_id")),
+            str(row.get("document_id")),
+        )
+        score = row.get("score")
+        if (
+            row.get("schema_version") != DOCUMENT_SCORE_SCHEMA_VERSION
+            or identity not in pair_identities
+            or identity in document_identities
+            or isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+        ):
+            raise ValueError("document score identity/coverage is invalid")
+        document_identities.add(identity)
+    if document_identities != pair_identities:
+        raise ValueError("document score coverage differs from the pair plan")
+
+    feature_identities: set[tuple[str, str, str]] = set()
+    for row in _iter_jsonl(scoring / "features.jsonl", "percentile features"):
+        identity = (
+            str(row.get("topic_id")),
+            str(row.get("query_id")),
+            str(row.get("document_id")),
+        )
+        percentile = row.get("percentile")
+        if (
+            row.get("schema_version") != FEATURE_SCHEMA_VERSION
+            or identity not in document_identities
+            or identity in feature_identities
+            or isinstance(percentile, bool)
+            or not isinstance(percentile, (int, float))
+            or not math.isfinite(float(percentile))
+            or not 0.0 <= float(percentile) <= 1.0
+        ):
+            raise ValueError("percentile feature identity/coverage is invalid")
+        feature_identities.add(identity)
+    if feature_identities != document_identities:
+        raise ValueError("percentile feature coverage differs from document scores")
     return {
         "verified": True,
         "root_sha256": seal["root_sha256"],

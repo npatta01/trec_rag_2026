@@ -124,8 +124,8 @@ def test_raw_scores_never_normalize_across_queries() -> None:
         ("14", "n"),
         ("14", "f1"),
     }
-    assert _percentiles(rows, "n") == [1.0, 0.5]
-    assert _percentiles(rows, "f1") == [0.75, 0.75]
+    assert _percentiles(rows, "n") == [1.0, 0.0]
+    assert _percentiles(rows, "f1") == [0.5, 0.5]
 
 
 def test_preflight_has_no_model_load() -> None:
