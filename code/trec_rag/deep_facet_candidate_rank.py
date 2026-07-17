@@ -22,6 +22,7 @@ from .deep_facet_candidate_manifest import (
     load_manifest,
 )
 from .deep_facet_candidate_score import aggregate_top4
+from .repo_env import find_repo_root, repo_cache_root
 
 
 SCHEMA_VERSION = "deep-facet-candidate-rank-freeze-v1"
@@ -29,6 +30,9 @@ SEAL_SCHEMA_VERSION = "deep-facet-candidate-seal-v1"
 ARM_NAMES = ("RRF", "GLOBAL", "FACET", "DUAL", "DUAL-NR")
 PREFIX_DEPTHS = (100, 500, 1000)
 RRF_K = 60
+RETRIEVAL_CACHE_ROOT = (
+    repo_cache_root(find_repo_root(Path(__file__))) / "retrieval/pyserini_remote"
+)
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -625,7 +629,7 @@ def freeze_rankings(
         raise FileExistsError(f"create-only freeze output already exists: {output}")
     manifest = load_manifest(
         manifest_path,
-        cache_root=Path("/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote"),
+        cache_root=RETRIEVAL_CACHE_ROOT,
     )
     _verify_inputs(Path(gate_dir), Path(phase2_dir))
     inputs = _load_topic_inputs(manifest, Path(gate_dir), Path(phase2_dir))

@@ -51,7 +51,7 @@ from .deep_facet_candidate_run import (
 )
 from .det_sparse_ledger import RETRIEVER_VERSION, RawTransportResponse, RetrievalRequest
 from .remote_config import RemotePyseriniConfig
-from .repo_env import find_repo_root, load_repo_env
+from .repo_env import find_repo_root, load_repo_env, shared_checkout_root
 
 
 RETRIEVAL_PLAN_SCHEMA_VERSION = "all-topic-retrieval-plan-v1"
@@ -61,8 +61,10 @@ UNION_SCHEMA_VERSION = "all-topic-authenticated-union-row-v1"
 SUMMARY_SCHEMA_VERSION = "all-topic-retrieval-summary-v1"
 SEAL_SCHEMA_VERSION = "all-topic-retrieval-seal-v1"
 EXPECTED_FACET_REQUEST_COUNT = 148
-APPROVED_ORIGINAL_CACHE_ROOT = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote"
+_REPO_ROOT = find_repo_root(Path(__file__))
+_SHARED_CHECKOUT_ROOT = shared_checkout_root(_REPO_ROOT) or _REPO_ROOT
+APPROVED_ORIGINAL_CACHE_ROOT = (
+    _SHARED_CHECKOUT_ROOT / "outputs/_retriever_cache/pyserini_remote"
 )
 LIMITER_GRANT_LEDGER_PATH = LIMITER_STATE_PATH.with_name(
     "all-topic-limiter-grants-v1.jsonl"

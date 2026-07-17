@@ -26,7 +26,7 @@ from .deep_facet_candidate_manifest import (
 from .det_sparse_ledger import RETRIEVER_VERSION, RawTransportResponse, RetrievalRequest
 from .remote_client import extract_text, rate_limited_session
 from .remote_config import RemotePyseriniConfig
-from .repo_env import find_repo_root, load_repo_env
+from .repo_env import find_repo_root, load_repo_env, repo_cache_root
 
 
 ENDPOINT = "http://api.castorini.uwaterloo.ca/v1/climbmix-400b/search"
@@ -34,12 +34,8 @@ INDEX_ID = "climbmix-400b"
 MIN_INTERVAL_SECONDS = 3.0
 MAX_EXTERNAL_REQUESTS = 25
 MAX_EXTERNAL_REQUESTS_PER_TOPIC = 7
-LIMITER_STATE_PATH = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote/rate-limit.sqlite"
-)
-SHARED_CACHE_DIR = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote"
-)
+SHARED_CACHE_DIR = repo_cache_root(find_repo_root(Path(__file__))) / "retrieval/pyserini_remote"
+LIMITER_STATE_PATH = SHARED_CACHE_DIR / "rate-limit.sqlite"
 PREFLIGHT_SCHEMA_VERSION = "deep-facet-candidate-retrieval-preflight-v1"
 CANDIDATE_SCHEMA_VERSION = "deep-facet-candidate-row-v1"
 SUMMARY_SCHEMA_VERSION = "deep-facet-candidate-retrieval-summary-v1"

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only in `/home/npatta01/.codex/worktrees/41f9/trec_rag_2026` on `codex/structured-query-planner`.
+- Work only in the isolated experiment worktree on its dedicated branch.
 - Preserve every immutable historical artifact and do not modify shared protected-topic constants.
 - New experiment scope is exactly `14,31,37,58,72,84,144,161,200,213,219,224,225,233,273,300,407,477,499,515,707,897`.
 - Authorization of `144,213,224,407,515` applies only inside the new all-topic experiment namespace.
@@ -212,10 +212,10 @@ Run:
 ```bash
 .venv/bin/python -m trec_rag.all_topic_facet_contract freeze \
   --manifest reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json \
-  --cache-root /home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote \
+  --cache-root <shared-checkout>/outputs/_retriever_cache/pyserini_remote \
   --output outputs/all_topic_tethered_facet_validation_v1/planning
 .venv/bin/python -m trec_rag.all_topic_facet_contract verify \
-  --cache-root /home/npatta01/data/competitions/trec_rag_2026/outputs/_retriever_cache/pyserini_remote \
+  --cache-root <shared-checkout>/outputs/_retriever_cache/pyserini_remote \
   --planning outputs/all_topic_tethered_facet_validation_v1/planning
 ```
 

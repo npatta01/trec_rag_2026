@@ -21,6 +21,7 @@ from .det_sparse_ledger import (
     RetrievalRequest,
     RetrievalResult,
 )
+from .repo_env import repo_cache_root
 
 
 SCHEMA_VERSION = "facet-local-minilm-manifest-v1"
@@ -146,6 +147,7 @@ _R1_SPECS = (
 )
 
 _DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_CACHE_ROOT = repo_cache_root(_DEFAULT_REPO_ROOT)
 _DEFAULT_R1_MANIFEST = Path(
     "reports/experiments/sparse_relevance_pilot_v1/r1_manifest.json"
 )
@@ -153,15 +155,11 @@ _DEFAULT_PRIOR_FREEZE = Path("outputs/rag25_sparse_relevance_paired_v1/freeze_v1
 _DEFAULT_BASE_RUN = Path(
     "outputs/rag25_det_sparse_prompt_lab_v1/rate_limited_continuation_v1"
 )
-_DEFAULT_BASE_CACHE = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/"
-    "rag25_det_sparse_prompt_lab_base_http_restart_v1"
+_DEFAULT_BASE_CACHE = (
+    _DEFAULT_CACHE_ROOT / "retrieval/rag25_det_sparse_prompt_lab_base_http_restart_v1"
 )
 _DEFAULT_R1_RUN = Path("outputs/rag25_sparse_relevance_paired_v1/run_v2/R1/ledger")
-_DEFAULT_R1_CACHE = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/"
-    "rag25_sparse_relevance_paired_v1"
-)
+_DEFAULT_R1_CACHE = _DEFAULT_CACHE_ROOT / "retrieval/rag25_sparse_relevance_paired_v1"
 _DEFAULT_SOURCE_OUTPUT = Path("outputs/rag25_facet_local_minilm_v1/source_v1")
 
 _STREAM_FIELDS = frozenset(

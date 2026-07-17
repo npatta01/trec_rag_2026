@@ -28,6 +28,7 @@ from .facet_local_minilm_preflight import (
 )
 from .facet_local_minilm_rank import aggregate_top4
 from .rerank_score_cache import GlobalScoreCache
+from .repo_env import find_repo_root, repo_cache_root
 
 
 TOPIC_IDS = ("219", "72", "300", "84")
@@ -41,9 +42,7 @@ WINDOW_CEILING = 25_000
 RUNTIME_CEILING_SECONDS = 600.0
 REFERENCE_FIXED_SECONDS = 30.0
 PUBLICATION_SUFFIX = ("post_qrels_tethered_facet_minilm_v1", "scoring")
-SCORE_CACHE_ROOT = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/cache/reranker"
-)
+SCORE_CACHE_ROOT = repo_cache_root(find_repo_root(Path(__file__))) / "reranker"
 PREFLIGHT_SCHEMA_VERSION = "tethered-facet-minilm-preflight-v1"
 CANDIDATE_SCHEMA_VERSION = "tethered-facet-minilm-candidate-v1"
 SCORE_SCHEMA_VERSION = "tethered-facet-minilm-score-v1"

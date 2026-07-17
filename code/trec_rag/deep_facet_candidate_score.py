@@ -33,6 +33,7 @@ from .facet_local_minilm_preflight import (
 )
 from .facet_local_minilm_rank import aggregate_top4
 from .rerank_score_cache import GlobalScoreCache
+from .repo_env import find_repo_root, repo_cache_root
 
 
 SOURCE_RECEIPT_PATH = Path(
@@ -41,9 +42,9 @@ SOURCE_RECEIPT_PATH = Path(
 SOURCE_RECEIPT_SHA256 = (
     "346f3239373924d3ed8dc76076dfb3221c0a29ab8ab24ce71a1e5f98ce180122"
 )
-SCORE_CACHE_ROOT = Path(
-    "/home/npatta01/data/competitions/trec_rag_2026/cache/reranker"
-)
+_CACHE_ROOT = repo_cache_root(find_repo_root(Path(__file__)))
+SCORE_CACHE_ROOT = _CACHE_ROOT / "reranker"
+RETRIEVAL_CACHE_ROOT = _CACHE_ROOT / "retrieval/pyserini_remote"
 MAX_PHASE_SECONDS = 600.0
 REFERENCE_PAIRS_PER_SECOND = 300.0
 REFERENCE_FIXED_SECONDS = 30.0
@@ -969,7 +970,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = load_manifest(
             args.manifest,
             cache_root=Path(
-                "/home/npatta01/data/competitions/trec_rag_2026/cache/retrieval/pyserini_remote"
+                str(RETRIEVAL_CACHE_ROOT)
             ),
         )
         if args.command == "preflight-phase1":

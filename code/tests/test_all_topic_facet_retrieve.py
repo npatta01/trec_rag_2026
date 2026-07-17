@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 import multiprocessing
 import os
@@ -14,6 +15,11 @@ import pytest
 import requests
 
 import trec_rag.all_topic_facet_retrieve as module
+import trec_rag.deep_facet_candidate_run as deep_run
+import trec_rag.deep_facet_candidate_rank as deep_rank
+import trec_rag.deep_facet_candidate_score as deep_score
+import trec_rag.facet_local_minilm_manifest as local_manifest
+import trec_rag.tethered_facet_minilm_score as tethered_score
 from trec_rag.all_topic_facet_retrieve import (
     _run_synthetic_retrieval,
     _verify_synthetic_retrieval,
@@ -26,6 +32,18 @@ from trec_rag.det_sparse_ledger import RawTransportResponse
 
 
 TOPICS = ("1", "2")
+
+
+def test_default_cache_paths_are_repo_derived() -> None:
+    modules = (
+        module,
+        deep_run,
+        deep_rank,
+        deep_score,
+        local_manifest,
+        tethered_score,
+    )
+    assert all("/home/npatta01" not in inspect.getsource(subject) for subject in modules)
 
 
 def _sha(value: bytes) -> str:
