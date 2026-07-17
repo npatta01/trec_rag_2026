@@ -1,0 +1,92 @@
+{
+  "arms": [
+    "RRF",
+    "RRF100-STATIC-DUAL",
+    "RRF100-STATIC-DUAL-NR",
+    "RRF100-REINIT-DUAL",
+    "RRF100-REINIT-DUAL-NR",
+    "RRF500-REINIT-DUAL"
+  ],
+  "costs": {
+    "cache_reuse_pairs": 68079,
+    "facet_requests": 148,
+    "hosted_calls": 0,
+    "local_forward_pairs": 771725,
+    "original_network_requests": 0,
+    "paid_calls": 0,
+    "peak_device_bytes": 489715200,
+    "peak_host_bytes": 12323328000,
+    "retrieval_failures": 0,
+    "retrieval_retries": 0,
+    "scoring_seconds": 2727.4372494689887,
+    "windows": 848183
+  },
+  "decision": {
+    "primary_arm": "RRF100-STATIC-DUAL",
+    "primary_loss_topic_ids": [
+      "31",
+      "300"
+    ],
+    "primary_losses": 2,
+    "primary_ties": 0,
+    "primary_wins": 20,
+    "promoted": false,
+    "recommendation": "retain RRF",
+    "selected_arm": "RRF",
+    "selection_ladder": [
+      "RRF100-STATIC-DUAL",
+      "RRF500-REINIT-DUAL",
+      "RRF100-REINIT-DUAL",
+      "RRF100-REINIT-DUAL-NR",
+      "RRF100-STATIC-DUAL-NR"
+    ]
+  },
+  "depths": [
+    100,
+    250,
+    500,
+    1000,
+    1500,
+    "full"
+  ],
+  "experiment_id": "all_topic_tethered_facet_validation_v1",
+  "limitations": [
+    "retrospective full-development stress test",
+    "known-relevant evidence is judgment-pool dependent",
+    "not evidence of generalization",
+    "downstream RAG answer generation is out of scope"
+  ],
+  "provenance": {
+    "evaluation_root_sha256": "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b",
+    "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
+    "ranking_root_sha256": "e2084842076119608977843f65ef749572c196d56f43d28b3e5440236c6a1578",
+    "retrieval_root_sha256": "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb",
+    "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
+    "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
+  },
+  "schema_version": "all-topic-tethered-report-summary-v1",
+  "topic_ids": [
+    "14",
+    "31",
+    "37",
+    "58",
+    "72",
+    "84",
+    "144",
+    "161",
+    "200",
+    "213",
+    "219",
+    "224",
+    "225",
+    "233",
+    "273",
+    "300",
+    "407",
+    "477",
+    "499",
+    "515",
+    "707",
+    "897"
+  ]
+}

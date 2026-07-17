@@ -1,0 +1,38 @@
+{
+  "datasets": {
+    "arm_metrics": {
+      "row_count": 6,
+      "sha256": "3714fd4099dcb95b24e4b4e1911e3778068b8b879e22c242a56f1a7ae93eb7b0"
+    },
+    "depth_metrics": {
+      "row_count": 20,
+      "sha256": "842a8e49520fb00d18af73c901bcb58e284a66c78a6427acb186abd6a7e9db89"
+    },
+    "facet_bucket_yield": {
+      "row_count": 88,
+      "sha256": "2a7b675658d4ae0d83278b103d45c907e1740c3a386b104c79d06e414bda93bd"
+    },
+    "topic_metrics": {
+      "row_count": 22,
+      "sha256": "41b7a72d585960d78223d45bc6e0d456c05ded500afdc83b93b50a83edc06c8a"
+    }
+  },
+  "html_sha256": "ddb52ef404318899bd189058c8d635f8add41f92a86e3451a3d569fcef6ba3ae",
+  "sanitization": {
+    "credentials": false,
+    "document_ids": false,
+    "external_dependencies": false,
+    "raw_documents": false,
+    "raw_qrels": false
+  },
+  "schema_version": "all-topic-tethered-report-artifact-v1",
+  "source_roots": {
+    "evaluation_root_sha256": "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b",
+    "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
+    "ranking_root_sha256": "e2084842076119608977843f65ef749572c196d56f43d28b3e5440236c6a1578",
+    "retrieval_root_sha256": "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb",
+    "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
+    "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
+  },
+  "summary_sha256": "03c95de5bcbfb92124f489b71df9dd8eec93891ca667877c51724e0a36aae3c3"
+}
