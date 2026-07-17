@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-CANONICAL_RANKING_ROOT_SHA256 = "e2084842076119608977843f65ef749572c196d56f43d28b3e5440236c6a1578"
-CANONICAL_EVALUATION_ROOT_SHA256 = "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b"
+CANONICAL_RANKING_ROOT_SHA256 = "6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305"
+CANONICAL_EVALUATION_ROOT_SHA256 = "e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84"
 CANONICAL_PLANNING_ROOT_SHA256 = "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2"
 CANONICAL_RETRIEVAL_ROOT_SHA256 = "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb"
 CANONICAL_SCORE_PLAN_ROOT_SHA256 = "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3"
@@ -26,10 +26,14 @@ SOURCE_SEAL_SHA256 = {
     "scoring/SCORE_PLAN_SEALED.json": "f224599eaadab08453bc3a6b7c28c00e1462e5b6b033e7c91bf22ca63ff67d9f",
     "scoring/SCORING_SEALED.json": "fcbdc59bc9dd27aaf42df7df8b5508a3f4af93d2e5a96217b350b0b728b391fb",
 }
-RANKING_DIR = "rankings_v2"
-EVALUATION_DIR = "evaluation_v2"
+RANKING_DIR = "rankings_v3"
+EVALUATION_DIR = "evaluation_v3"
 DEPTHS = (100, 250, 500, 1000, 1500)
 PRIMARY_ARM = "RRF100-STATIC-DUAL"
+VERIFICATION_BUNDLE_PATH = (
+    "cache/experiments/all_topic_tethered_facet_validation_v1_sources_v3.tar.zst"
+)
+VERIFICATION_BUNDLE_SHA256 = "3b726dcff28f8e67e6d4a5cf330e390c150b0a601091af17ae59b5870bc46e59"
 
 
 @dataclass(frozen=True)
@@ -102,7 +106,7 @@ def _verify_cost_sources(root: Path) -> dict[str, dict[str, Any]]:
 
 def _load_sources(root: Path, ranking_dir_name: str, evaluation_dir_name: str) -> dict[str, dict[str, Any]]:
     if ranking_dir_name != RANKING_DIR or evaluation_dir_name != EVALUATION_DIR:
-        raise ValueError("superseded v1 ranking/evaluation evidence is rejected")
+        raise ValueError("superseded v1/v2 ranking/evaluation evidence is rejected")
     ranking_dir = root / ranking_dir_name
     evaluation_dir = root / evaluation_dir_name
     ranking_seal = _verify_seal(ranking_dir, CANONICAL_RANKING_ROOT_SHA256)
@@ -119,8 +123,8 @@ def _load_sources(root: Path, ranking_dir_name: str, evaluation_dir_name: str) -
     }:
         raise ValueError("evaluation upstream roots differ from canonical cost sources")
     summary = _json(evaluation_dir / "summary.json")
-    if summary.get("schema_version") != "all-topic-tethered-evaluation-v2":
-        raise ValueError("evaluation schema is not canonical v2")
+    if summary.get("schema_version") != "all-topic-tethered-evaluation-v3":
+        raise ValueError("evaluation schema is not canonical v3")
     return {
         "ranking_seal": ranking_seal,
         "evaluation_seal": evaluation_seal,
@@ -285,16 +289,16 @@ def _render_html(summary: Mapping[str, Any], datasets: Mapping[str, list[dict[st
 <style>
 :root{{--bg:#f4f6f8;--card:#fff;--ink:#17202a;--muted:#56616e;--line:#cbd3dc;--accent:#274f91;--warn:#a33d30;--good:#1d745d}}@media(prefers-color-scheme:dark){{:root{{--bg:#111820;--card:#18232e;--ink:#edf3f8;--muted:#b9c4cf;--line:#40505f;--accent:#91b9ff;--warn:#ff9f91;--good:#78d6b7}}}}*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,sans-serif}}main{{max-width:1120px;margin:auto;padding:24px}}header,section{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:clamp(18px,3vw,34px);margin:0 0 20px}}h1{{font-size:clamp(2rem,5vw,4rem);line-height:1.02;max-width:15ch;margin:.2em 0}}h2{{font-size:clamp(1.4rem,3vw,2.1rem);line-height:1.15}}h3{{margin-top:1.8em}}p{{max-width:78ch}}.eyebrow{{text-transform:uppercase;letter-spacing:.12em;color:var(--accent);font-weight:750}}.verdict{{border-left:7px solid var(--warn)}}.kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}}.kpi{{border:1px solid var(--line);border-radius:10px;padding:16px}}.kpi strong{{display:block;font-size:1.8rem}}.muted,figcaption{{color:var(--muted)}}.callout{{background:color-mix(in srgb,var(--warn) 10%,transparent);border-left:4px solid var(--warn);padding:12px 16px}}.table-wrap{{overflow-x:auto;max-width:100%;border:1px solid var(--line);border-radius:9px}}table{{border-collapse:collapse;width:100%;min-width:780px}}th,td{{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}}th:first-child,td:first-child{{text-align:left;position:sticky;left:0;background:var(--card)}}thead th{{text-align:right;background:color-mix(in srgb,var(--accent) 9%,var(--card))}}tr.loss th,tr.loss td{{color:var(--warn);font-weight:700}}figure{{margin:24px 0}}svg{{width:100%;height:auto;background:color-mix(in srgb,var(--accent) 4%,var(--card));border-radius:10px}}svg text{{fill:var(--ink);font:13px system-ui,sans-serif}}svg .grid{{stroke:var(--line);stroke-width:1}}svg .value{{font-weight:750}}.legend{{display:flex;gap:18px;flex-wrap:wrap}}.legend i{{display:inline-block;width:16px;height:4px;vertical-align:middle;margin-right:6px}}.method{{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}}.method div{{flex:1 1 135px;border:1px solid var(--line);padding:12px;border-radius:8px}}.method b{{display:block}}details{{border-top:1px solid var(--line);padding:12px 0}}summary{{cursor:pointer;font-weight:700}}summary:focus-visible,a:focus-visible,.table-wrap:focus-visible{{outline:3px solid var(--accent);outline-offset:3px}}code{{overflow-wrap:anywhere}}@media(max-width:600px){{main{{padding:10px}}header,section{{padding:17px}}.kpi strong{{font-size:1.4rem}}}}
 </style></head><body><main>
-<header class="verdict" id="top"><p class="eyebrow">Corrected canonical v2 evidence · decision report</p><h1>Retain RRF.</h1><p class="lede">The preregistered alternatives improve pooled known-relevant recall, but every alternative loses at least one topic at depth 1,000. That violates the zero-loss promotion rule.</p><div class="kpis"><div class="kpi"><strong>{base["known_relevant_at_1000"]:,}</strong>RRF known relevant @1,000</div><div class="kpi"><strong>+{primary["known_relevant_at_1000"]-base["known_relevant_at_1000"]}</strong>primary DUAL pooled gain</div><div class="kpi"><strong>{primary["wins"]}/{primary["ties"]}/{primary["losses"]}</strong>topic wins / ties / losses</div><div class="kpi"><strong>−7</strong>worst loss, Topic 31</div></div><p class="callout"><strong>Why not promote?</strong> Primary DUAL loses 7 known-relevant documents on Topic 31 and 3 on Topic 300 at 1,000. RRF500-REINIT-DUAL removes the Topic 31 loss but still loses 3 on Topic 300.</p></header>
-<section id="scope"><h2>What this result means—and what it does not</h2><p>This is a <strong>retrospective full-development stress test</strong> over all 22 development topics using already known judgments. It measures retrieval of <strong>known-relevant</strong> documents and is useful for diagnosing headroom and regressions. It is <strong>not evidence of generalization</strong> to new topics, unseen judgments, or production traffic. The downstream RAG answer generation is out of scope; no claim is made about answer accuracy, faithfulness, citation quality, or user utility.</p><p>The v1 ranking/evaluation rejected label is intentional: only corrected <code>rankings_v2</code> and <code>evaluation_v2</code> are admissible here.</p></section>
+<header class="verdict" id="top"><p class="eyebrow">Portable canonical v3 evidence · decision report</p><h1>Retain RRF.</h1><p class="lede">The preregistered alternatives improve pooled known-relevant recall, but every alternative loses at least one topic at depth 1,000. That violates the zero-loss promotion rule.</p><div class="kpis"><div class="kpi"><strong>{base["known_relevant_at_1000"]:,}</strong>RRF known relevant @1,000</div><div class="kpi"><strong>+{primary["known_relevant_at_1000"]-base["known_relevant_at_1000"]}</strong>primary DUAL pooled gain</div><div class="kpi"><strong>{primary["wins"]}/{primary["ties"]}/{primary["losses"]}</strong>topic wins / ties / losses</div><div class="kpi"><strong>−7</strong>worst loss, Topic 31</div></div><p class="callout"><strong>Why not promote?</strong> Primary DUAL loses 7 known-relevant documents on Topic 31 and 3 on Topic 300 at 1,000. RRF500-REINIT-DUAL removes the Topic 31 loss but still loses 3 on Topic 300.</p></header>
+<section id="scope"><h2>What this result means—and what it does not</h2><p>This is a <strong>retrospective full-development stress test</strong> over all 22 development topics using already known judgments. It measures retrieval of <strong>known-relevant</strong> documents and is useful for diagnosing headroom and regressions. It is <strong>not evidence of generalization</strong> to new topics, unseen judgments, or production traffic. The downstream RAG answer generation is out of scope; no claim is made about answer accuracy, faithfulness, citation quality, or user utility.</p><p>The v1/v2 ranking/evaluation rejected label is intentional: only portable <code>rankings_v3</code> and <code>evaluation_v3</code> are admissible here. Their ranking bytes and scientific conclusion are unchanged from corrected v2; v3 removes checkout-local paths from sealed identity and enforces the judged-rate promotion guard.</p></section>
 <section id="ladder"><h2>Exact preregistered selection ladder</h2><p>The baseline appears first for orientation; alternatives follow the sealed ladder exactly. Aggregate improvements are insufficient when a zero-loss guard fails.</p><div class="table-wrap" tabindex="0" role="region" aria-label="Exact selection ladder; scroll horizontally for all columns"><table><thead><tr><th scope="col">Arm</th><th scope="col">Known rel. @1k</th><th scope="col">Δ vs RRF</th><th scope="col">Pooled recall</th><th scope="col">W/T/L</th><th scope="col">Loss topics</th><th scope="col">Decision</th></tr></thead><tbody>{ladder_rows}</tbody></table></div></section>
 <section id="depth"><h2>Recall and retained facet evidence by depth</h2><p>Recall rises as the cutoff expands, and DUAL variants retain more facet-only evidence. The aggregate curves explain the attraction of the alternatives; the per-topic guard below explains the decision.</p><figure>{_line_chart(depth_rows)}<figcaption>Pooled binary recall over the 12,984 known-relevant documents. Depth 100 is protected and identical across arms.</figcaption></figure><p class="muted">Judged-rate caveat: RRF judged rate falls from {_fmt_pct(next(r for r in depth_rows if r["arm"]=="RRF" and r["depth"]==100)["judged_rate"])} at 100 to {_fmt_pct(next(r for r in depth_rows if r["arm"]=="RRF" and r["depth"]==1000)["judged_rate"])} at 1,000. Unjudged documents are not negatives, so deep precision and yield are conservative and judgment-pool dependent.</p></section>
 <section id="yield"><h2>Known-relevant yield falls with facet depth</h2><p>The first 50 results of each deduplicated facet stream carry the highest pooled known-relevant yield. Later buckets still add evidence but at lower density, supporting depth discipline rather than blanket expansion.</p><figure>{_bucket_chart(bucket_rows)}<figcaption>Pooled known-relevant count divided by pooled unique candidates in each facet-rank bucket across 148 facet streams.</figcaption></figure></section>
 <section id="topics"><h2>Per-topic deltas expose the promotion blockers</h2><p>Every topic is shown. Count deltas are alternative minus RRF; negative values are regressions. The final column gives primary DUAL deltas at depths 250 / 500 / 1,500.</p><div class="table-wrap" tabindex="0" role="region" aria-label="Per-topic metrics; scroll horizontally for all columns"><table><thead><tr><th scope="col">Topic</th><th scope="col">Known rel.</th><th scope="col">RRF @1k</th><th scope="col">RRF recall</th><th scope="col">Primary Δ @1k</th><th scope="col">RRF500 Δ @1k</th><th scope="col">NR Δ @1k</th><th scope="col">Primary Δ 250/500/1500</th></tr></thead><tbody>{topic_rows}</tbody></table></div><h3>Representative diagnostics</h3>{diag}</section>
-<section id="method"><h2>Method and evidence boundary</h2><div class="method" role="list" aria-label="Evaluation method"><div role="listitem"><b>1 · Plan</b>22 narratives → 148 tethered facet queries.</div><div role="listitem"><b>2 · Retrieve</b>Top 200 per facet; 45,144-document union.</div><div role="listitem"><b>3 · Score</b>Local MiniLM narrative/facet features.</div><div role="listitem"><b>4 · Freeze blind</b>Six complete arms, qrels unopened.</div><div role="listitem"><b>5 · Evaluate</b>Pinned development qrels opened only after v2 freeze verification.</div><div role="listitem"><b>6 · Decide</b>Apply exact ladder and all promotion guards.</div></div><p>The corrected ranking freeze has 22 topics, 6 complete arms, 270,864 ranking rows, and 206,030 audit rows. The evaluation independently binds that freeze before opening the pinned qrels. The paired exact sign-flip test for primary DUAL estimates +3.394 percentage points mean topic recall (95% bootstrap CI +2.118 to +5.052; raw p=0.000002623; Holm-adjusted p=0.000006676). Statistical significance cannot override the preregistered topic-loss rule.</p></section>
+<section id="method"><h2>Method and evidence boundary</h2><div class="method" role="list" aria-label="Evaluation method"><div role="listitem"><b>1 · Plan</b>22 narratives → 148 tethered facet queries.</div><div role="listitem"><b>2 · Retrieve</b>Top 200 per facet; 45,144-document union.</div><div role="listitem"><b>3 · Score</b>Local MiniLM narrative/facet features.</div><div role="listitem"><b>4 · Freeze blind</b>Six complete arms, qrels unopened.</div><div role="listitem"><b>5 · Evaluate</b>Pinned development qrels opened only after v3 freeze verification.</div><div role="listitem"><b>6 · Decide</b>Apply exact ladder and all promotion guards.</div></div><p>The portable ranking freeze has 22 topics, 6 complete arms, 270,864 ranking rows, and 206,030 audit rows. The evaluation independently binds that freeze before opening the pinned qrels. The paired exact sign-flip test for primary DUAL estimates +3.394 percentage points mean topic recall (95% bootstrap CI +2.118 to +5.052; raw p=0.000002623; Holm-adjusted p=0.000006676). Statistical significance cannot override the preregistered topic-loss rule.</p></section>
 <section id="costs"><h2>Costs and execution accounting</h2><div class="kpis"><div class="kpi"><strong>{costs["facet_requests"]}</strong>live facet retrieval requests</div><div class="kpi"><strong>{costs["local_forward_pairs"]:,}</strong>local forward pairs</div><div class="kpi"><strong>{costs["scoring_seconds"]:.3f}s</strong>local scoring wall time</div><div class="kpi"><strong>$0 recorded</strong>hosted / paid inference</div></div><p>Original-query requests: 0. Retrieval failures/retries: 0/0. Shared-score cache reuses: {costs["cache_reuse_pairs"]:,}. Completed score windows: {costs["windows"]:,}. Peak device/host memory: {costs["peak_device_bytes"]:,} / {costs["peak_host_bytes"]:,} bytes. Ranking and evaluation added zero retrieval, inference, model-load, hosted, paid, or network calls.</p></section>
 <section id="limits"><h2>Limitations, decision, and next step</h2><ul><li>Retrospective known-judgment evidence can overstate certainty and does not establish held-out generalization.</li><li>Judgment incompleteness grows with depth; unjudged candidates may contain useful evidence.</li><li>The experiment evaluates retrieval and ranking only; answer generation remains untested.</li><li>Topic 31 and Topic 300 losses are small in pooled terms but decisive under the frozen guard.</li></ul><p><strong>Recommendation:</strong> retain RRF for promotion. Use the all-topic result diagnostically to design a separately preregistered, held-out approach that explicitly protects Topics 31/300-like failure modes.</p></section>
-<section id="provenance"><h2>Authenticated provenance</h2><p>Ranking v2 root: <code>{prov["ranking_root_sha256"]}</code><br>Evaluation v2 root: <code>{prov["evaluation_root_sha256"]}</code><br>Planning root: <code>{prov["planning_root_sha256"]}</code><br>Retrieval root: <code>{prov["retrieval_root_sha256"]}</code><br>Scoring root: <code>{prov["scoring_root_sha256"]}</code></p><p class="muted">This sanitized report contains aggregate metrics and hashes only: no credentials, raw qrels, raw documents, document identifiers, request logs, or local filesystem paths.</p><p><a href="#top">Back to top</a></p></section>
+<section id="provenance"><h2>Authenticated provenance</h2><p>Ranking v3 root: <code>{prov["ranking_root_sha256"]}</code><br>Evaluation v3 root: <code>{prov["evaluation_root_sha256"]}</code><br>Planning root: <code>{prov["planning_root_sha256"]}</code><br>Retrieval root: <code>{prov["retrieval_root_sha256"]}</code><br>Scoring root: <code>{prov["scoring_root_sha256"]}</code></p><p class="muted">This sanitized report contains aggregate metrics and hashes only: no credentials, raw qrels, raw documents, document identifiers, request logs, or local filesystem paths.</p><p><a href="#top">Back to top</a></p></section>
 </main></body></html>'''
 
 
@@ -422,7 +426,7 @@ def verify_report(report: Path, root: Path = Path("outputs/all_topic_tethered_fa
     if summary.get("provenance") != artifact.get("source_roots"):
         raise ValueError("artifact roots differ from summary")
     if summary["provenance"].get("ranking_root_sha256") != CANONICAL_RANKING_ROOT_SHA256 or summary["provenance"].get("evaluation_root_sha256") != CANONICAL_EVALUATION_ROOT_SHA256:
-        raise ValueError("report is not canonical v2")
+        raise ValueError("report is not canonical v3")
     sqlite_bytes = (report / "report_data.sqlite").read_bytes()
     if _sha256_bytes(sqlite_bytes) != artifact.get("sqlite_sha256"):
         raise ValueError("SQLite differs from artifact hash")
@@ -456,7 +460,46 @@ def verify_report(report: Path, root: Path = Path("outputs/all_topic_tethered_fa
 
 
 def _readme(summary: Mapping[str, Any]) -> str:
-    return f"""# All-topic tethered-facet validation v1\n\nDecision: **{summary['decision']['recommendation']}**.\n\nThis directory contains the sanitized, reproducible report over the corrected canonical v2 ranking and evaluation. The superseded v1 ranking and evaluation are rejected evidence. This is a retrospective full-development stress test using known-relevant judgments; it is not evidence of generalization, and downstream RAG answer generation is out of scope.\n\nThe report-source trust boundary pins exact planning, retrieval, score-plan, scoring, ranking-v2, and evaluation-v2 roots. To avoid an unnecessary multi-gigabyte semantic replay, verification checks exact bytes of four pinned upstream seal files and the two sealed cost leaves; ranking and evaluation inventories are rehashed in full. It then independently rebuilds and compares JSON, HTML, SQLite bytes, table schemas, and every dataset payload.\n\n- `summary.json`: decision, exact roots, costs, statistics, and scope limits\n- `report_data.sqlite`: arm, depth, topic, and facet-bucket rows\n- `artifact.json`: hashes and sanitization declaration\n- `report.html`: self-contained accessible report\n\nRun verification from the repository root:\n\n```bash\n.venv/bin/python -m trec_rag.build_all_topic_tethered_report verify --report reports/experiments/all_topic_tethered_facet_validation_v1\n```\n"""
+    return f"""# All-topic tethered-facet validation v1
+
+Decision: **{summary['decision']['recommendation']}**.
+
+This directory contains the sanitized report over portable canonical v3 ranking
+and evaluation evidence. Superseded v1/v2 evidence remains immutable but is not
+admissible for this report. This is a retrospective full-development stress test
+using known-relevant judgments; it is not evidence of generalization, and
+downstream RAG answer generation is out of scope.
+
+The tracked report is directly viewable without external data. Full source
+verification additionally requires a 3 MiB compressed bundle (about 92 MiB
+expanded) containing sealed rankings, evaluation tables, and minimal upstream
+receipts. It contains candidate document identifiers. It is not stored in Git
+or published with the sanitized report.
+
+Expected local bundle:
+
+- `{VERIFICATION_BUNDLE_PATH}`
+- SHA-256: `{VERIFICATION_BUNDLE_SHA256}`
+
+Restore and verify from the repository root on an authorized machine:
+
+```bash
+sha256sum {VERIFICATION_BUNDLE_PATH}
+tar --zstd -xf {VERIFICATION_BUNDLE_PATH} -C .
+.venv/bin/python -m trec_rag.build_all_topic_tethered_report verify \\
+  --report reports/experiments/all_topic_tethered_facet_validation_v1 \\
+  --root outputs/all_topic_tethered_facet_validation_v1
+```
+
+The first command must match the pinned SHA-256 above. Obtain the bundle through
+the repository's private artifact-transfer process when it is absent; verification
+does not download it automatically.
+
+- `summary.json`: decision, exact roots, costs, statistics, and scope limits
+- `report_data.sqlite`: arm, depth, topic, and facet-bucket rows
+- `artifact.json`: hashes and sanitization declaration
+- `report.html`: self-contained accessible report
+"""
 
 
 def main(argv: list[str] | None = None) -> int:

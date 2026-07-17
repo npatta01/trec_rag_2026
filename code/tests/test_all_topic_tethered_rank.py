@@ -196,11 +196,23 @@ def test_plain_and_reinitialized_dual_share_one_objective(monkeypatch: pytest.Mo
 
 def test_production_bindings_reject_resealed_upstream_root_counterfeit() -> None:
     bindings = module._expected_input_bindings(
-        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2")
+        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v3")
     )
     bindings["retrieval_root_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="binding|retrieval"):
-        module._validate_production_bindings(bindings, Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2"))
+        module._validate_production_bindings(bindings, Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v3"))
+
+
+def test_production_bindings_are_portable_across_checkout_roots() -> None:
+    first = module._expected_input_bindings(
+        Path("/tmp/checkout-a/outputs/all_topic_tethered_facet_validation_v1/rankings_v3")
+    )
+    second = module._expected_input_bindings(
+        Path("/tmp/checkout-b/outputs/all_topic_tethered_facet_validation_v1/rankings_v3")
+    )
+    assert first == second
+    for name in module._INPUT_FILE_BINDINGS:
+        assert not Path(str(first[name]["path"])).is_absolute()
 
 
 def test_parameters_are_derived_from_local_pins() -> None:
@@ -208,13 +220,13 @@ def test_parameters_are_derived_from_local_pins() -> None:
     assert parameters["arms"] == list(DESIGN_ARMS)
     assert parameters["dual"] == module.DUAL_WEIGHTS
     assert parameters["dual_nr_redundancy_fixed_zero"] is True
-    assert parameters["schema_version"].endswith("v2")
+    assert parameters["schema_version"].endswith("v3")
 
 
 @pytest.mark.parametrize("field", ["network_calls", "model_loads", "inference_calls"])
 def test_summary_counter_counterfeit_is_rejected(field: str) -> None:
     summary = json.loads(
-        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2/summary.json").read_text()
+        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v3/summary.json").read_text()
     )
     summary[field] = 1
     with pytest.raises(ValueError, match="counter|safety"):
@@ -237,7 +249,7 @@ def test_audit_counterfeit_missing_objective_is_rejected() -> None:
 
 
 def test_resealed_canonical_counterfeits_are_rejected(tmp_path: Path) -> None:
-    source = Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2")
+    source = Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v3")
     counterfeit = tmp_path / "rankings"
     shutil.copytree(source, counterfeit)
 

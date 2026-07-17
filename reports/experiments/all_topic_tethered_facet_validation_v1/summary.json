@@ -57,9 +57,9 @@
     "downstream RAG answer generation is out of scope"
   ],
   "provenance": {
-    "evaluation_root_sha256": "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b",
+    "evaluation_root_sha256": "e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84",
     "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
-    "ranking_root_sha256": "e2084842076119608977843f65ef749572c196d56f43d28b3e5440236c6a1578",
+    "ranking_root_sha256": "6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305",
     "retrieval_root_sha256": "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb",
     "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
     "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"

@@ -156,7 +156,10 @@ An arm is eligible only if all conditions hold:
   Holm-adjusted exact paired randomization test is below `0.05`;
 - no topic regression at depths 250 or 500;
 - exact identity with RRF through its protected prefix;
-- no judged-rate collapse that invalidates interpretation.
+- nonnegative macro judged-rate delta at depth 1,000. This deterministic guard
+  prevents promotion when the alternative reduces aggregate judgment coverage;
+  judged rate remains a caveat rather than a relevance label because unjudged
+  documents are not assumed irrelevant.
 
 If no arm passes, retain RRF. Correct implementation may still merge even if the
 ranking hypothesis fails. Promotion, candidate-generation conclusions, and
@@ -174,3 +177,12 @@ final RAG answer quality are separate decisions.
 - a sanitized rendered copy under `/home/npatta01/codex-rendered/plans/` and a
   verified private tailnet-only portal link;
 - independent code/method review and an explicit merge/promotion recommendation.
+
+## Portable evidence amendment
+
+Canonical ranking and evaluation v3 preserve the v2 document orders and metric
+meaning while replacing checkout-local absolute paths with experiment-relative
+logical paths authenticated by byte counts and SHA-256 digests. Immutable v1/v2
+artifacts remain preserved but are superseded evidence. Full report verification
+requires the separately stored minimal source bundle described in the report
+README; the tracked report itself contains no raw documents or qrels.

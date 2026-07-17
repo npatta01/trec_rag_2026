@@ -49,6 +49,7 @@ def _passing_metrics(one_loss: bool = False) -> dict[str, object]:
         "loss_topic_ids": ["31"] if one_loss else [],
         "pooled_delta_at_1000": 0.01,
         "macro_delta_at_1000": 0.01,
+        "macro_judged_rate_delta_at_1000": 0.0,
         "wins_at_1000": 8,
         "protected_prefix_identical": True,
     }
@@ -171,13 +172,12 @@ def test_holm_family_contains_every_nonbaseline_arm_once() -> None:
     assert all("holm_adjusted_p" in statistics[arm] for arm in SELECTION_LADDER)
 
 
-def test_judged_rate_is_diagnostic_not_a_promotion_threshold() -> None:
+def test_judged_rate_regression_blocks_promotion() -> None:
     metrics = _passing_metrics()
     metrics["macro_judged_rate_delta_at_1000"] = -1.0
-    metrics["judged_rate_interpretable"] = False
     decision = apply_promotion_rules(metrics, _passing_statistics())
-    assert decision["promoted"] is True
-    assert "interpretable_judged_rate" not in decision["rules"]
+    assert decision["promoted"] is False
+    assert decision["rules"]["no_macro_judged_rate_regression_at_1000"] is False
 
 
 def test_aggregate_tables_cover_every_required_metric() -> None:
@@ -273,7 +273,7 @@ def test_verify_rejects_noncanonical_evaluation_root_before_acceptance(
         verify_evaluation(output)
 
 
-def test_canonical_v2_evaluation_root_is_pinned_after_successful_run() -> None:
-    assert module.CANONICAL_EVALUATION_ROOT_SHA256 == (
-        "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b"
-    )
+def test_canonical_v3_evaluation_root_is_pinned_after_successful_run() -> None:
+    assert module.SCHEMA_VERSION.endswith("v3")
+    assert module.PINNED_RANKINGS_PATH.endswith("rankings_v3")
+    assert len(module.CANONICAL_EVALUATION_ROOT_SHA256) == 64

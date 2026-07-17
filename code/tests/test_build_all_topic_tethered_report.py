@@ -11,6 +11,8 @@ import pytest
 from trec_rag.build_all_topic_tethered_report import (
     CANONICAL_EVALUATION_ROOT_SHA256,
     CANONICAL_RANKING_ROOT_SHA256,
+    VERIFICATION_BUNDLE_SHA256,
+    _readme,
     build_report,
     verify_report,
     write_report,
@@ -36,13 +38,13 @@ def test_report_names_every_topic_and_regression() -> None:
     assert "Topic 300" in built.html
 
 
-def test_report_uses_only_corrected_canonical_roots_and_rejects_v1() -> None:
+def test_report_uses_only_portable_canonical_roots_and_rejects_v1_v2() -> None:
     built = build_report(SOURCE_ROOT)
     assert built.summary["provenance"]["ranking_root_sha256"] == CANONICAL_RANKING_ROOT_SHA256
     assert built.summary["provenance"]["evaluation_root_sha256"] == CANONICAL_EVALUATION_ROOT_SHA256
-    assert "v1 ranking/evaluation rejected" in built.html
+    assert "v1/v2 ranking/evaluation rejected" in built.html
 
-    with pytest.raises(ValueError, match="superseded v1"):
+    with pytest.raises(ValueError, match="superseded v1/v2"):
         build_report(SOURCE_ROOT, ranking_dir_name="rankings", evaluation_dir_name="evaluation")
 
 
@@ -52,6 +54,14 @@ def test_report_states_retrospective_known_relevant_and_generation_limits() -> N
     assert "known-relevant" in html
     assert "not evidence of generalization" in html
     assert "downstream RAG answer generation is out of scope" in html
+
+
+def test_readme_documents_external_bundle_restore_and_identity() -> None:
+    readme = _readme(build_report(SOURCE_ROOT).summary)
+    assert VERIFICATION_BUNDLE_SHA256 in readme
+    assert "tar --zstd -xf cache/experiments/" in readme
+    assert "not stored in Git" in readme
+    assert "--root outputs/all_topic_tethered_facet_validation_v1" in readme
 
 
 def test_report_contains_requested_evidence_and_accessibility_contract() -> None:
@@ -124,7 +134,7 @@ def test_verify_rejects_sqlite_metric_forgery(tmp_path: Path) -> None:
 
 def test_cost_sources_are_authenticated_before_reporting(tmp_path: Path) -> None:
     root = tmp_path / "source"
-    for relative in ("rankings_v2", "evaluation_v2"):
+    for relative in ("rankings_v3", "evaluation_v3"):
         shutil.copytree(SOURCE_ROOT / relative, root / relative)
     for relative, names in {
         "planning": ("SEALED.json",),

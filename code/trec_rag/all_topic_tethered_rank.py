@@ -33,14 +33,14 @@ ARMS = (
     "RRF500-REINIT-DUAL",
 )
 PREFIX_DEPTHS = (100, 500)
-SCHEMA_VERSION = "all-topic-tethered-ranking-freeze-v2"
-SEAL_SCHEMA_VERSION = "all-topic-tethered-ranking-seal-v2"
+SCHEMA_VERSION = "all-topic-tethered-ranking-freeze-v3"
+SEAL_SCHEMA_VERSION = "all-topic-tethered-ranking-seal-v3"
 PLANNING_ROOT_SHA256 = "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2"
 RETRIEVAL_ROOT_SHA256 = "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb"
 SCORE_PLAN_ROOT_SHA256 = "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3"
 SCORING_ROOT_SHA256 = "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
 SUPERSEDED_RANKING_ROOT_SHA256 = "b371c81136296e9e775bf3eaa8b249ff03d258a13973617360d5fb5a5de8e55c"
-CANONICAL_RANKING_ROOT_SHA256 = "e2084842076119608977843f65ef749572c196d56f43d28b3e5440236c6a1578"
+CANONICAL_RANKING_ROOT_SHA256 = "6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305"
 RRF_K = 60
 RRF_FAMILY_WEIGHTS = {"original": 0.5, "accepted_facets_total": 0.5}
 DUAL_WEIGHTS = {"G": 0.35, "N": 0.15, "R": 0.15, "L": 0.25, "B": 0.10, "D": -0.15}
@@ -85,9 +85,13 @@ def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def _binding(path: Path) -> dict[str, object]:
+def _binding(path: Path, *, logical_path: str | None = None) -> dict[str, object]:
     content = path.read_bytes()
-    return {"path": str(path.resolve()), "bytes": len(content), "sha256": _sha256(content)}
+    return {
+        "path": logical_path if logical_path is not None else str(path.resolve()),
+        "bytes": len(content),
+        "sha256": _sha256(content),
+    }
 
 
 def _exclusive_write(path: Path, content: bytes) -> None:
@@ -479,7 +483,7 @@ def _parameters() -> dict[str, object]:
 
 
 def _expected_input_bindings(ranking_root: Path) -> dict[str, object]:
-    experiment = Path(ranking_root).resolve().parent
+    del ranking_root
     result: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "qrels_opened": False,
@@ -490,7 +494,7 @@ def _expected_input_bindings(ranking_root: Path) -> dict[str, object]:
     }
     for name, (relative, byte_count, sha256) in _INPUT_FILE_BINDINGS.items():
         result[name] = {
-            "path": str((experiment / relative).resolve()),
+            "path": relative,
             "bytes": byte_count,
             "sha256": sha256,
         }
@@ -701,12 +705,20 @@ def freeze_rankings(planning: Path, retrieval: Path, scoring: Path, output: Path
         "retrieval_root_sha256": RETRIEVAL_ROOT_SHA256,
         "score_plan_root_sha256": SCORE_PLAN_ROOT_SHA256,
         "scoring_root_sha256": SCORING_ROOT_SHA256,
-        "planning_seal": _binding(planning / "SEALED.json"),
-        "retrieval_seal": _binding(retrieval / "RETRIEVAL_SEALED.json"),
-        "score_plan_seal": _binding(scoring / "SCORE_PLAN_SEALED.json"),
-        "scoring_seal": _binding(scoring / "SCORING_SEALED.json"),
-        "accepted_union": _binding(retrieval / "accepted_union.jsonl"),
-        "features": _binding(scoring / "features.jsonl"),
+        "planning_seal": _binding(planning / "SEALED.json", logical_path="planning/SEALED.json"),
+        "retrieval_seal": _binding(
+            retrieval / "RETRIEVAL_SEALED.json", logical_path="retrieval/RETRIEVAL_SEALED.json"
+        ),
+        "score_plan_seal": _binding(
+            scoring / "SCORE_PLAN_SEALED.json", logical_path="scoring/SCORE_PLAN_SEALED.json"
+        ),
+        "scoring_seal": _binding(
+            scoring / "SCORING_SEALED.json", logical_path="scoring/SCORING_SEALED.json"
+        ),
+        "accepted_union": _binding(
+            retrieval / "accepted_union.jsonl", logical_path="retrieval/accepted_union.jsonl"
+        ),
+        "features": _binding(scoring / "features.jsonl", logical_path="scoring/features.jsonl"),
     }
     return _freeze_loaded_topics(
         topic_inputs, controls, output, input_bindings=input_bindings, expected_topic_ids=ALL_TOPIC_IDS

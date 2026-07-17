@@ -699,3 +699,19 @@ git add code/trec_rag/build_all_topic_tethered_report.py \
   reports/experiments/all_topic_tethered_facet_validation_v1
 git commit -m "Report all-topic facet validation"
 ```
+
+---
+
+### Merge-hardening amendment: portable v3 evidence
+
+- [ ] Replace absolute upstream paths in ranking bindings with stable logical
+  paths plus the existing byte-count and SHA-256 authentication.
+- [ ] Freeze create-only `rankings_v3` without modifying immutable v1/v2
+  evidence and prove its document orders are byte-equivalent to corrected v2.
+- [ ] Enforce nonnegative macro judged-rate delta at depth 1,000 as the
+  deterministic interpretation guard already required by the design.
+- [ ] Evaluate create-only `evaluation_v3`, rebuild the report, and confirm the
+  retain-RRF decision and every scientific metric are unchanged.
+- [ ] Create a minimal external verification bundle, document its SHA-256 and
+  restoration command, and verify from a relocated checkout/root.
+- [ ] Re-run the complete targeted suite and obtain a final independent review.

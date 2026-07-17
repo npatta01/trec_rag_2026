@@ -25,8 +25,8 @@ from .all_topic_tethered_rank import (
 )
 
 
-SCHEMA_VERSION = "all-topic-tethered-evaluation-v2"
-SEAL_SCHEMA_VERSION = "all-topic-tethered-evaluation-seal-v2"
+SCHEMA_VERSION = "all-topic-tethered-evaluation-v3"
+SEAL_SCHEMA_VERSION = "all-topic-tethered-evaluation-seal-v3"
 DEPTHS = (100, 250, 500, 1000, 1500)
 BOOTSTRAP_SEED = 20260716
 BOOTSTRAP_SAMPLES = 100_000
@@ -35,7 +35,7 @@ PINNED_QRELS_SUFFIX = (
     "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
     "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
 )
-PINNED_RANKINGS_PATH = "outputs/all_topic_tethered_facet_validation_v1/rankings_v2"
+PINNED_RANKINGS_PATH = "outputs/all_topic_tethered_facet_validation_v1/rankings_v3"
 PINNED_UNION_PATH = "outputs/all_topic_tethered_facet_validation_v1/retrieval/accepted_union.jsonl"
 PINNED_UPSTREAM_ROOTS = {
     "planning_root_sha256": PLANNING_ROOT_SHA256,
@@ -51,7 +51,7 @@ SELECTION_LADDER = (
     "RRF100-REINIT-DUAL-NR",
     "RRF100-STATIC-DUAL-NR",
 )
-CANONICAL_EVALUATION_ROOT_SHA256 = "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b"
+CANONICAL_EVALUATION_ROOT_SHA256 = "e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84"
 
 
 def _compact(value: object) -> bytes:
@@ -364,6 +364,10 @@ def apply_promotion_rules(metrics: Mapping[str, object], statistics: Mapping[str
         ("at_least_eight_wins_at_1000", int(metrics.get("wins_at_1000", 0)) >= 8),
         ("corrected_significance", significant),
         ("protected_prefix_identity", metrics.get("protected_prefix_identical") is True),
+        (
+            "no_macro_judged_rate_regression_at_1000",
+            float(metrics.get("macro_judged_rate_delta_at_1000", -1.0)) >= 0.0,
+        ),
     )
     failed = [name for name, passed in checks if not passed]
     return {"promoted": not failed, "failed_rules": failed, "rules": {name: passed for name, passed in checks}}
@@ -413,7 +417,11 @@ def evaluate_all_topics(
         "statistics": statistics,
         "decision": _select(arms, statistics),
         "facet_rank_bucket_yield": facet_yield,
-        "judged_rate_interpretation": {"promotion_threshold": None, "diagnostic_only": True, "unjudged_treated_as_nonrelevant": True},
+        "judged_rate_interpretation": {
+            "promotion_threshold": {"macro_judged_rate_delta_at_1000": 0.0},
+            "diagnostic_only": False,
+            "unjudged_treated_as_nonrelevant": True,
+        },
     }
 
 
@@ -556,7 +564,7 @@ def _recompute_from_paths(
 
     ranking_verification = verify_rankings(rankings)
     if ranking_verification.get("root_sha256") != CANONICAL_RANKING_ROOT_SHA256:
-        raise ValueError("ranking seal is not the canonical approved v2 root")
+        raise ValueError("ranking seal is not the canonical approved v3 root")
     seal_content = (rankings / "SEALED.json").read_bytes()
     seal = json.loads(seal_content)
     ranking_content = (rankings / "rankings.jsonl").read_bytes()
@@ -568,7 +576,7 @@ def _recompute_from_paths(
         raise ValueError("ranking input binding differs from the verified ranking seal")
     frozen_bindings = json.loads(frozen_bindings_content)
     if {key: frozen_bindings.get(key) for key in PINNED_UPSTREAM_ROOTS} != PINNED_UPSTREAM_ROOTS:
-        raise ValueError("ranking upstream root bindings differ from the preregistered v2 inputs")
+        raise ValueError("ranking upstream root bindings differ from the preregistered v3 inputs")
     accepted_binding = frozen_bindings.get("accepted_union")
     if not isinstance(accepted_binding, Mapping):
         raise ValueError("ranking accepted-union binding is missing")
@@ -624,7 +632,7 @@ def evaluate_frozen(
     )
     actual = (rankings.resolve(), retrieval.resolve(), qrels.resolve())
     if actual != expected:
-        raise ValueError("evaluation inputs are not the exact canonical v2 paths")
+        raise ValueError("evaluation inputs are not the exact canonical v3 paths")
     result, bindings = _recompute_from_paths(
         rankings, retrieval, qrels, qrels_reader=qrels_reader
     )
