@@ -2,17 +2,152 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from trec_rag.topic_failure_postmortem import (
+    _attribution,
     _verify_root_seal,
     analyze_boundary_changes,
+    compute_capture_diagnostic,
     eligible_documents_for_facet_cap,
     main,
     render_postmortem,
     replay_recovery_arms,
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+POSTMORTEM_PATH = (
+    REPO_ROOT
+    / "reports/experiments/all_topic_tethered_facet_validation_v1/postmortem.json"
+)
+
+
+def test_capture_diagnostic_derives_binary_and_graded_totals_from_qrels() -> None:
+    result = compute_capture_diagnostic(
+        {
+            "31": ["a", "b", "c"],
+            "300": ["x", "y", "z"],
+        },
+        {
+            "31": {"a": 4, "b": 2, "c": 1, "outside": 3},
+            "300": {"x": 3, "y": 0, "outside": 2},
+        },
+        depth=2,
+    )
+
+    assert result == {
+        "arm": "RRF",
+        "depth": 2,
+        "metric_source": "postmortem diagnostic",
+        "known_relevant_count": 3,
+        "known_relevant_total": 5,
+        "binary_recall": pytest.approx(0.6),
+        "graded_gain": 25,
+        "graded_gain_total": 35,
+        "graded_recall": pytest.approx(25 / 35),
+        "judged_count": 4,
+        "retrieved_count": 4,
+        "judged_rate": pytest.approx(1.0),
+    }
+
+
+def test_boundary_attribution_separates_retrieval_streams_from_dual_coverage() -> None:
+    result = _attribution(
+        {"relevant", "below", "unknown"},
+        {
+            "relevant": [
+                {"stream_id": "original", "stream_rank": 400},
+                {"stream_id": "300-strategies", "stream_rank": 120},
+            ],
+            "below": [
+                {"stream_id": "300-global-measures", "stream_rank": 50},
+            ],
+            "unknown": [{"stream_id": "original", "stream_rank": 600}],
+        },
+        {
+            "relevant": "300-strategies",
+            "below": "300-strategies",
+            "unknown": "300-strategies",
+        },
+        {"relevant": 2, "below": 1},
+        {
+            "300-strategies": {
+                "facet_label": "strategies",
+                "query_formulation": "effective strategies prevent reduce",
+            },
+            "300-global-measures": {
+                "facet_label": "global measures",
+                "query_formulation": "global measures address climate change",
+            },
+        },
+    )
+
+    assert result["facet_retrieval_stream_memberships"] == {
+        "300-global-measures": {
+            "facet_label": "global measures",
+            "query_formulation": "global measures address climate change",
+            "total": 1,
+            "known_relevant": 0,
+            "judged_below_2": 1,
+            "unjudged": 0,
+            "rank_buckets": {"1-50": 1},
+        },
+        "300-strategies": {
+            "facet_label": "strategies",
+            "query_formulation": "effective strategies prevent reduce",
+            "total": 1,
+            "known_relevant": 1,
+            "judged_below_2": 0,
+            "unjudged": 0,
+            "rank_buckets": {"101-150": 1},
+        },
+    }
+    assert result["dual_selection_coverage_facets"] == {"300-strategies": 3}
+    assert "primary_selection_coverage_facet" not in result
+
+
+def test_tracked_postmortem_contains_authenticated_depth_20_capture() -> None:
+    postmortem = json.loads(POSTMORTEM_PATH.read_text())
+    capture = postmortem["rrf_capture_diagnostic_at_20"]
+
+    assert capture["known_relevant_count"] == 316
+    assert capture["known_relevant_total"] == 12984
+    assert capture["binary_recall"] == pytest.approx(316 / 12984)
+    assert capture["graded_gain"] == 2492
+    assert capture["graded_gain_total"] == 84560
+    assert capture["graded_recall"] == pytest.approx(2492 / 84560)
+    assert capture["metric_source"] == "postmortem diagnostic"
+    assert postmortem["provenance"]["qrels_sha256"] == (
+        "42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37"
+    )
+
+
+def test_tracked_topic_300_attribution_names_actual_stream_formulations() -> None:
+    postmortem = json.loads(POSTMORTEM_PATH.read_text())
+    attribution = postmortem["topics"]["300"]["primary_boundary_attribution"]
+    incoming = attribution["incoming"]
+    streams = incoming["facet_retrieval_stream_memberships"]
+
+    assert {stream_id: row["total"] for stream_id, row in streams.items()} == {
+        "300-antarctica": 35,
+        "300-economic-costs": 32,
+        "300-global-measures": 51,
+        "300-strategies": 54,
+    }
+    assert streams["300-strategies"] == {
+        "facet_label": "strategies",
+        "query_formulation": "global warming climate change effective strategies prevent reduce",
+        "total": 54,
+        "known_relevant": 1,
+        "judged_below_2": 0,
+        "unjudged": 53,
+        "rank_buckets": {"101-150": 27, "151-200": 27},
+    }
+    assert incoming["dual_selection_coverage_facets"]["300-strategies"] == 276
+    assert "primary_selection_coverage_facet" not in incoming
 
 
 def test_boundary_analysis_keeps_unjudged_separate() -> None:
@@ -99,11 +234,30 @@ def test_markdown_labels_unknown_judgments_and_diagnostic_only_ablation() -> Non
             "ranking_root_sha256": "a" * 64,
             "retrieval_root_sha256": "b" * 64,
             "scoring_root_sha256": "c" * 64,
+            "qrels_sha256": "d" * 64,
+        },
+        "rrf_capture_diagnostic_at_20": {
+            "known_relevant_count": 3,
+            "known_relevant_total": 100,
+            "binary_recall": 0.03,
+            "graded_gain": 21,
+            "graded_gain_total": 500,
+            "graded_recall": 0.042,
         },
         "topics": {
             "31": {"primary_at_1000": boundary},
             "300": {
                 "primary_at_1000": boundary,
+                "primary_boundary_attribution": {
+                    "outgoing": {
+                        "facet_retrieval_stream_memberships": {},
+                        "dual_selection_coverage_facets": {"300-strategies": 4},
+                    },
+                    "incoming": {
+                        "facet_retrieval_stream_memberships": {},
+                        "dual_selection_coverage_facets": {"300-strategies": 4},
+                    },
+                },
                 "facet_bucket_yield": {"1-50": 0.3, "51-100": 0.2, "101-150": 0.1, "151-200": 0.05},
                 "recovery_replay": {
                     "protected_prefix_depth": 100,
@@ -132,6 +286,9 @@ def test_markdown_labels_unknown_judgments_and_diagnostic_only_ablation() -> Non
     assert "not promotion-eligible" in markdown
     assert "fixed objective minus 0.15*N; no greedy replay" in markdown
     assert "Protected RRF prefix: 100" in markdown
+    assert "3 / 100 known-relevant" in markdown
+    assert "Facet retrieval-stream attribution (not DUAL selection coverage)" in markdown
+    assert "DUAL selection-coverage attribution (not retrieval-stream provenance)" in markdown
 
 
 def test_cli_requires_every_explicit_source_and_output_path() -> None:

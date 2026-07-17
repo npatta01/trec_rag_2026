@@ -5,8 +5,8 @@
       "sha256": "3714fd4099dcb95b24e4b4e1911e3778068b8b879e22c242a56f1a7ae93eb7b0"
     },
     "depth_metrics": {
-      "row_count": 24,
-      "sha256": "ae83f7a9a1377e313871e26d610098912feeb21d440675820e42e48a9d9102c7"
+      "row_count": 25,
+      "sha256": "12b7467845ac8b54b4428bc57927d373312b8f132cee0e7ffd9974cc6965067d"
     },
     "facet_bucket_yield": {
       "row_count": 88,
@@ -14,14 +14,14 @@
     },
     "failure_evidence": {
       "row_count": 2,
-      "sha256": "3683e10b2552015cce634f8dbd685d9788750d37ca0a0d3edbc02df3e6e525dd"
+      "sha256": "d3f935f63201627123e7b8f78bbc837bb02a5fbe4c7ae83407952254c23f397b"
     },
     "topic_metrics": {
       "row_count": 22,
       "sha256": "41b7a72d585960d78223d45bc6e0d456c05ded500afdc83b93b50a83edc06c8a"
     }
   },
-  "html_sha256": "65225919629e15966cf4a46837b6df73fba128f5508b3bd6c4c371f0e8499d66",
+  "html_sha256": "1464a026979cd14eceea7bcd5edc751dbd0f34dc6f96124f1447dfab82fc6b06",
   "sanitization": {
     "credentials": false,
     "document_ids": false,
@@ -33,11 +33,12 @@
   "source_roots": {
     "evaluation_root_sha256": "e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84",
     "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
+    "qrels_sha256": "42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37",
     "ranking_root_sha256": "6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305",
     "retrieval_root_sha256": "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb",
     "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
     "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
   },
-  "sqlite_sha256": "7dfa7847b86f3b50b632b34b00a06f48a0a2fe2076ddd8898e8c8a5d0dcbd27a",
-  "summary_sha256": "4f5ff138447f6c10d89242759cdcd70e186ad8346cee2e396cbe259f0273b228"
+  "sqlite_sha256": "5e5d5a653d22e7ea8bdcb06cd9e8ed17756bafcf1e3bbe8fb127fd3619304c28",
+  "summary_sha256": "640e20e0a02942278a87f3aea5948e51e4ae97dbf3c87912a053bf3724d4ec0e"
 }

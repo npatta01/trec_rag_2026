@@ -411,3 +411,33 @@ Confirm:
 Mark this plan's verified steps complete, record exact test counts/hashes, run a
 whole-branch code review from merge base to HEAD, resolve all Critical or
 Important findings, and rerun affected tests.
+
+Whole-branch review remediation evidence (2026-07-17; final review remains
+open):
+
+- [x] Restored the postmortem-only RRF depth-20 diagnostic from the
+  authenticated ranking and pinned qrels: 316 / 12,984 known relevant
+  (2.4337646334%) and 2,492 / 84,560 graded gain (2.9470198675%). The report
+  independently recomputes it from authenticated sources, reconciles both
+  denominators to the sealed evaluation totals, labels it separately from
+  sealed depths, and rejects a coordinated postmortem-count forgery.
+- [x] Separated Topic 300 facet retrieval-stream membership from greedy DUAL
+  selection-coverage audit state. The sanitized JSON, Markdown, and HTML name
+  each tracked facet id/query formulation and keep known relevant,
+  judged-below-2, and unjudged (unknown) counts separate.
+- [x] Rebuilt and verified the canonical report for 22 topics / 6 arms. Exact
+  SHA-256 values: postmortem JSON
+  `4642dd17887ef043ed75e8677909291d0dcf4b0110ed856a5caa4ecc9c7775a8`,
+  HTML `1464a026979cd14eceea7bcd5edc751dbd0f34dc6f96124f1447dfab82fc6b06`,
+  summary `640e20e0a02942278a87f3aea5948e51e4ae97dbf3c87912a053bf3724d4ec0e`,
+  and SQLite
+  `5e5d5a653d22e7ea8bdcb06cd9e8ed17756bafcf1e3bbe8fb127fd3619304c28`.
+- [x] Fresh relevant integration suite: 120 passed in 22.96 seconds; report
+  index smoke test and `git diff --check` passed. Desktop 1440×1100 and mobile
+  390×844 screenshots were captured and inspected.
+- [x] Replaced the authorized private rendered copy. Portal/direct HTTP status
+  is 200, the live body exactly matches the tracked HTML SHA-256 above, and
+  Tailscale Serve remains an HTTPS file handler with no Funnel configuration.
+- [ ] Rerun the independent whole-branch review from merge base through the
+  remediation commit and close this final gate only if no Critical or Important
+  finding remains.

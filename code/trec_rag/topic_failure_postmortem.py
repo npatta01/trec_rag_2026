@@ -35,6 +35,62 @@ NO_REDUNDANCY_ARM = "RRF100-STATIC-DUAL-NR"
 ANALYSIS_DEPTHS = (250, 500, 1000, 1500)
 
 
+def _graded_gain(grade: int) -> int:
+    return 2**grade - 1 if grade >= 2 else 0
+
+
+def compute_capture_diagnostic(
+    rankings: Mapping[str, Sequence[str]],
+    qrels: Mapping[str, Mapping[str, int]],
+    *,
+    depth: int,
+) -> dict[str, object]:
+    """Derive pooled RRF capture at a non-sealed diagnostic depth."""
+
+    if depth < 1:
+        raise ValueError("capture diagnostic depth must be positive")
+    if set(rankings) != set(qrels) or not rankings:
+        raise ValueError("capture rankings and qrels must cover the same topics")
+    known_relevant_total = sum(
+        grade >= 2 for topic_qrels in qrels.values() for grade in topic_qrels.values()
+    )
+    graded_gain_total = sum(
+        _graded_gain(grade)
+        for topic_qrels in qrels.values()
+        for grade in topic_qrels.values()
+    )
+    retrieved = [
+        (topic_id, document_id)
+        for topic_id, ranking in rankings.items()
+        for document_id in ranking[:depth]
+    ]
+    known_relevant_count = sum(
+        qrels[topic_id].get(document_id, 0) >= 2
+        for topic_id, document_id in retrieved
+    )
+    graded_gain = sum(
+        _graded_gain(qrels[topic_id].get(document_id, 0))
+        for topic_id, document_id in retrieved
+    )
+    judged_count = sum(
+        document_id in qrels[topic_id] for topic_id, document_id in retrieved
+    )
+    return {
+        "arm": "RRF",
+        "depth": depth,
+        "metric_source": "postmortem diagnostic",
+        "known_relevant_count": known_relevant_count,
+        "known_relevant_total": known_relevant_total,
+        "binary_recall": known_relevant_count / known_relevant_total,
+        "graded_gain": graded_gain,
+        "graded_gain_total": graded_gain_total,
+        "graded_recall": graded_gain / graded_gain_total,
+        "judged_count": judged_count,
+        "retrieved_count": len(retrieved),
+        "judged_rate": judged_count / len(retrieved),
+    }
+
+
 def _label_counts(document_ids: set[str], qrels: Mapping[str, int]) -> dict[str, int]:
     known_relevant = sum(qrels[document_id] >= 2 for document_id in document_ids if document_id in qrels)
     judged_below_2 = sum(qrels[document_id] < 2 for document_id in document_ids if document_id in qrels)
@@ -280,6 +336,55 @@ def _movement_markdown(boundary: Mapping[str, object]) -> str:
     )
 
 
+def _topic300_stream_markdown(attribution: Mapping[str, object]) -> str:
+    lines = [
+        "### Facet retrieval-stream attribution (not DUAL selection coverage)",
+        "",
+        "These memberships come from authenticated accepted-union retrieval provenance and the tracked facet manifest. They identify which query stream retrieved a moved candidate; they do not claim that the stream caused relevance or the rank change. A candidate may have more than one stream membership, while original-only candidates have none.",
+        "",
+        "| Movement | Facet stream | Tracked query formulation | Memberships | Known relevant | Judged below 2 | Unjudged (unknown) | Per-stream rank buckets |",
+        "|---|---|---|---:|---:|---:|---:|---|",
+    ]
+    for direction in ("outgoing", "incoming"):
+        values = _required_mapping(attribution.get(direction), f"{direction} attribution")
+        streams = _required_mapping(
+            values.get("facet_retrieval_stream_memberships"),
+            f"{direction} facet retrieval streams",
+        )
+        for stream_id, raw in streams.items():
+            stream = _required_mapping(raw, f"{stream_id} stream attribution")
+            buckets = _required_mapping(stream.get("rank_buckets"), f"{stream_id} rank buckets")
+            bucket_text = ", ".join(
+                f"{bucket}: {int(count)}" for bucket, count in buckets.items()
+            )
+            lines.append(
+                f"| {direction.title()} | `{stream_id}` ({stream['facet_label']}) | "
+                f"{stream['query_formulation']} | {int(stream['total'])} | "
+                f"{int(stream['known_relevant'])} | {int(stream['judged_below_2'])} | "
+                f"{int(stream['unjudged'])} | {bucket_text} |"
+            )
+    lines.extend(
+        [
+            "",
+            "### DUAL selection-coverage attribution (not retrieval-stream provenance)",
+            "",
+            "The greedy DUAL audit records which facet coverage state was credited when a candidate was selected. It does not identify the query stream that retrieved that candidate.",
+            "",
+            "| Movement | DUAL coverage facet | Selected candidates |",
+            "|---|---|---:|",
+        ]
+    )
+    for direction in ("outgoing", "incoming"):
+        values = _required_mapping(attribution.get(direction), f"{direction} attribution")
+        coverage = _required_mapping(
+            values.get("dual_selection_coverage_facets"),
+            f"{direction} DUAL selection coverage",
+        )
+        for facet_id, count in coverage.items():
+            lines.append(f"| {direction.title()} | `{facet_id}` | {int(count)} |")
+    return "\n".join(lines)
+
+
 def render_postmortem(analysis: Mapping[str, object]) -> str:
     """Render a deterministic, source-backed Markdown postmortem."""
 
@@ -298,6 +403,13 @@ def render_postmortem(analysis: Mapping[str, object]) -> str:
     bucket_yield = _required_mapping(topic300.get("facet_bucket_yield"), "facet bucket yield")
     checks = _required_mapping(recovery.get("permutation_checks"), "permutation checks")
     provenance = _required_mapping(analysis.get("provenance"), "provenance")
+    capture20 = _required_mapping(
+        analysis.get("rrf_capture_diagnostic_at_20"), "RRF depth-20 capture diagnostic"
+    )
+    topic300_attribution = _required_mapping(
+        topic300.get("primary_boundary_attribution"),
+        "Topic 300 boundary attribution",
+    )
 
     lines = [
         "# Topic 31/300 retrieval-failure postmortem",
@@ -307,6 +419,10 @@ def render_postmortem(analysis: Mapping[str, object]) -> str:
         "## Evidence boundary",
         "",
         "Relevance means UMBRELA grade 2 or higher. Every unjudged (unknown) document remains separate from judged-below-2 evidence and is never described as nonrelevant. All replays are offline over frozen accepted-union candidates and features.",
+        "",
+        "## RRF depth-20 capture diagnostic",
+        "",
+        f"This postmortem-only diagnostic derives from the authenticated RRF ranking and pinned qrels; it does not alter the sealed evaluation depths. RRF captures {int(capture20['known_relevant_count']):,} / {int(capture20['known_relevant_total']):,} known-relevant documents ({float(capture20['binary_recall']):.2%}) and {int(capture20['graded_gain']):,} / {int(capture20['graded_gain_total']):,} graded-gain units ({float(capture20['graded_recall']):.2%}) at depth 20.",
         "",
         "## Topic 31 cutoff mechanics",
         "",
@@ -319,6 +435,8 @@ def render_postmortem(analysis: Mapping[str, object]) -> str:
         f"Primary DUAL changes known-relevant capture by {int(primary300['known_relevant_delta']):+d} at depth 1,000.",
         "",
         _movement_markdown(primary300),
+        "",
+        _topic300_stream_markdown(topic300_attribution),
         "",
         "### Judgment-pool dependent facet-tail yield",
         "",
@@ -347,6 +465,7 @@ def render_postmortem(analysis: Mapping[str, object]) -> str:
             "## Authenticated provenance",
             "",
             f"- Ranking root: `{provenance['ranking_root_sha256']}`",
+            f"- Qrels SHA-256: `{provenance['qrels_sha256']}`",
             f"- Retrieval root: `{provenance['retrieval_root_sha256']}`",
             f"- Scoring root: `{provenance['scoring_root_sha256']}`",
             "- Retrieval, inference, download, model-load, hosted, and paid calls during replay: 0.",
@@ -535,6 +654,19 @@ def _load_rankings(source_root: Path) -> dict[str, dict[str, list[str]]]:
     return {topic_id: dict(arms) for topic_id, arms in result.items()}
 
 
+def _load_all_rrf_rankings(source_root: Path) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = defaultdict(list)
+    path = source_root / "rankings_v3" / "rankings.jsonl"
+    with path.open("r", encoding="utf-8") as source:
+        for line in source:
+            row = json.loads(line)
+            if row.get("arm") == "RRF":
+                result[str(row["topic_id"])].append(str(row["document_id"]))
+    if not result or any(not ranking for ranking in result.values()):
+        raise ValueError("canonical rankings are missing all-topic RRF orders")
+    return dict(result)
+
+
 def _load_audit(
     source_root: Path,
 ) -> tuple[dict[str, dict[str, str | None]], dict[str, dict[str, float]]]:
@@ -608,6 +740,23 @@ def _facet_rows(facet_manifest: Mapping[str, object], topic_id: str) -> list[dic
     if not result or len({str(row["facet_id"]) for row in result}) != len(result):
         raise ValueError(f"Topic {topic_id} facet manifest is invalid")
     return result
+
+
+def _facet_definitions(
+    facet_manifest: Mapping[str, object], topic_id: str
+) -> dict[str, dict[str, str]]:
+    definitions: dict[str, dict[str, str]] = {}
+    for row in _facet_rows(facet_manifest, topic_id):
+        facet_id = str(row["facet_id"])
+        query = row.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError(f"Topic {topic_id} facet query is invalid")
+        label = facet_id.split("-", 1)[-1].replace("-", " ")
+        definitions[facet_id] = {
+            "facet_label": label,
+            "query_formulation": query,
+        }
+    return definitions
 
 
 def _load_topic300_input(
@@ -698,10 +847,13 @@ def _attribution(
     document_ids: set[str],
     provenance: Mapping[str, Sequence[Mapping[str, object]]],
     audit: Mapping[str, str | None],
+    qrels: Mapping[str, int],
+    facet_definitions: Mapping[str, Mapping[str, str]],
 ) -> dict[str, object]:
     source_family = Counter()
     best_facet_bucket = Counter()
     coverage_facet = Counter()
+    stream_memberships: dict[str, dict[str, object]] = {}
     for document_id in document_ids:
         entries = provenance[document_id]
         has_original = any(str(entry.get("stream_id")) == "original" for entry in entries)
@@ -718,11 +870,49 @@ def _attribution(
             source_family["facet_only"] += 1
         best_facet_bucket[_bucket_for_rank(min(facet_ranks) if facet_ranks else None)] += 1
         coverage_facet[audit.get(document_id) or "none"] += 1
+        for entry in entries:
+            stream_id = str(entry.get("stream_id"))
+            if stream_id == "original":
+                continue
+            definition = facet_definitions.get(stream_id)
+            if definition is None:
+                raise ValueError("boundary provenance references an unknown facet stream")
+            record = stream_memberships.setdefault(
+                stream_id,
+                {
+                    "facet_label": definition["facet_label"],
+                    "query_formulation": definition["query_formulation"],
+                    "total": 0,
+                    "known_relevant": 0,
+                    "judged_below_2": 0,
+                    "unjudged": 0,
+                    "rank_buckets": Counter(),
+                },
+            )
+            record["total"] = int(record["total"]) + 1
+            if document_id not in qrels:
+                label = "unjudged"
+            elif qrels[document_id] >= 2:
+                label = "known_relevant"
+            else:
+                label = "judged_below_2"
+            record[label] = int(record[label]) + 1
+            rank_buckets = record["rank_buckets"]
+            assert isinstance(rank_buckets, Counter)
+            rank_buckets[_bucket_for_rank(int(entry["stream_rank"]))] += 1
+    serialized_streams = {
+        stream_id: {
+            **record,
+            "rank_buckets": dict(sorted(record["rank_buckets"].items())),
+        }
+        for stream_id, record in sorted(stream_memberships.items())
+    }
     return {
         "total": len(document_ids),
         "source_family": dict(sorted(source_family.items())),
         "best_facet_rank_bucket": dict(sorted(best_facet_bucket.items())),
-        "primary_selection_coverage_facet": dict(sorted(coverage_facet.items())),
+        "facet_retrieval_stream_memberships": serialized_streams,
+        "dual_selection_coverage_facets": dict(sorted(coverage_facet.items())),
     }
 
 
@@ -752,6 +942,7 @@ def _topic_analysis(
     qrels: Mapping[str, int],
     provenance: Mapping[str, Sequence[Mapping[str, object]]],
     audit: Mapping[str, str | None],
+    facet_definitions: Mapping[str, Mapping[str, str]],
 ) -> dict[str, object]:
     rrf = rankings["RRF"]
     primary = rankings[PRIMARY_ARM]
@@ -774,8 +965,20 @@ def _topic_analysis(
             rrf, rankings[NO_REDUNDANCY_ARM], qrels, 1000
         ),
         "primary_boundary_attribution": {
-            "outgoing": _attribution(baseline_prefix - primary_prefix, provenance, audit),
-            "incoming": _attribution(primary_prefix - baseline_prefix, provenance, audit),
+            "outgoing": _attribution(
+                baseline_prefix - primary_prefix,
+                provenance,
+                audit,
+                qrels,
+                facet_definitions,
+            ),
+            "incoming": _attribution(
+                primary_prefix - baseline_prefix,
+                provenance,
+                audit,
+                qrels,
+                facet_definitions,
+            ),
         },
     }
 
@@ -831,6 +1034,7 @@ def _build_analysis(
             qrels[topic_id],
             provenance[topic_id],
             audit[topic_id],
+            _facet_definitions(facet_manifest, topic_id),
         )
         for topic_id in TOPIC_IDS
     }
@@ -868,6 +1072,9 @@ def _build_analysis(
             "paid_calls": 0,
         },
         "provenance": provenance_roots,
+        "rrf_capture_diagnostic_at_20": compute_capture_diagnostic(
+            _load_all_rrf_rankings(source_root), qrels, depth=20
+        ),
         "topics": topics,
         "recommendation": "Retain canonical RRF; use the cap replay only as bounded recovery evidence while beginning source-diverse RAG evidence selection.",
     }

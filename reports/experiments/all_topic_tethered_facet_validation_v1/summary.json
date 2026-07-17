@@ -21,6 +21,13 @@
       "graded_gain": 28815,
       "graded_recall": 0.3407639545884579,
       "known_relevant": 3953
+    },
+    "rrf_at_20": {
+      "binary_recall": 0.024337646333949477,
+      "graded_gain": 2492,
+      "graded_recall": 0.02947019867549669,
+      "known_relevant": 316,
+      "metric_source": "postmortem diagnostic"
     }
   },
   "costs": {
@@ -75,11 +82,12 @@
   "postmortem": {
     "recommendation": "Retain canonical RRF; use the cap replay only as bounded recovery evidence while beginning source-diverse RAG evidence selection.",
     "schema_version": "topic-failure-postmortem-v1",
-    "sha256": "1ea57eaf566f95e1d63d4b44e136b0eea0d07aa0ed2bf11f5357328bb52ad3f1"
+    "sha256": "4642dd17887ef043ed75e8677909291d0dcf4b0110ed856a5caa4ecc9c7775a8"
   },
   "provenance": {
     "evaluation_root_sha256": "e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84",
     "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
+    "qrels_sha256": "42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37",
     "ranking_root_sha256": "6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305",
     "retrieval_root_sha256": "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb",
     "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
