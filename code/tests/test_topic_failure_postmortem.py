@@ -144,13 +144,56 @@ def test_planning_root_seal_uses_its_newline_terminated_canonical_form(tmp_path)
     canonical = json.dumps(files, sort_keys=True, separators=(",", ":")) + "\n"
     expected_root = hashlib.sha256(canonical.encode()).hexdigest()
     seal_path = tmp_path / "SEALED.json"
-    seal_path.write_text(json.dumps({"files": files, "root_sha256": expected_root}))
+    content = json.dumps({"files": files, "root_sha256": expected_root}).encode()
+    seal_path.write_bytes(content)
 
     result = _verify_root_seal(
         seal_path,
         expected_root,
         "planning seal",
+        authenticated_binding={
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        },
         canonical_trailing_newline=True,
     )
 
     assert result["root_sha256"] == expected_root
+
+
+@pytest.mark.parametrize("forgery", ["metadata", "extra", "missing"])
+def test_authenticated_seal_binding_rejects_forged_contract_keys(
+    tmp_path, forgery: str
+) -> None:
+    files = {"artifact.json": {"bytes": 2, "sha256": "a" * 64}}
+    root = hashlib.sha256(
+        json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    canonical = {
+        "schema_version": "canonical-seal-v1",
+        "experiment_id": "canonical-experiment",
+        "files": files,
+        "root_sha256": root,
+    }
+    authenticated = json.dumps(canonical, sort_keys=True).encode()
+    binding = {
+        "bytes": len(authenticated),
+        "sha256": hashlib.sha256(authenticated).hexdigest(),
+    }
+    forged = dict(canonical)
+    if forgery == "metadata":
+        forged["schema_version"] = "forged-seal"
+    elif forgery == "extra":
+        forged["untrusted_extra"] = True
+    else:
+        del forged["experiment_id"]
+    seal_path = tmp_path / "SEALED.json"
+    seal_path.write_text(json.dumps(forged, sort_keys=True))
+
+    with pytest.raises(ValueError, match="authenticated.*binding"):
+        _verify_root_seal(
+            seal_path,
+            root,
+            "upstream seal",
+            authenticated_binding=binding,
+        )

@@ -405,8 +405,15 @@ def _verify_root_seal(
     expected_root: str,
     label: str,
     *,
+    authenticated_binding: Mapping[str, object],
     canonical_trailing_newline: bool = False,
 ) -> dict[str, object]:
+    expected_binding = {
+        "bytes": authenticated_binding.get("bytes"),
+        "sha256": authenticated_binding.get("sha256"),
+    }
+    if _file_binding(path) != expected_binding:
+        raise ValueError(f"{label} authenticated byte binding differs")
     seal = _read_json(path, label)
     files = seal.get("files")
     canonical = _compact_bytes(files)
@@ -428,33 +435,49 @@ def _verify_sources(
     if ranking.get("root_sha256") != CANONICAL_RANKING_ROOT_SHA256:
         raise ValueError("canonical ranking verification differs")
 
+    bindings = _read_json(
+        source_root / "rankings_v3" / "input_bindings.json", "ranking input bindings"
+    )
+    seal_bindings: dict[str, Mapping[str, object]] = {}
+    for name, logical_path in {
+        "planning_seal": "planning/SEALED.json",
+        "retrieval_seal": "retrieval/RETRIEVAL_SEALED.json",
+        "score_plan_seal": "scoring/SCORE_PLAN_SEALED.json",
+        "scoring_seal": "scoring/SCORING_SEALED.json",
+    }.items():
+        binding = _required_mapping(bindings.get(name), f"{name} ranking binding")
+        if set(binding) != {"path", "bytes", "sha256"} or binding.get("path") != logical_path:
+            raise ValueError(f"{name} ranking binding contract differs")
+        seal_bindings[name] = binding
+
     planning = _verify_root_seal(
         source_root / "planning" / "SEALED.json",
         PLANNING_ROOT_SHA256,
         "planning seal",
+        authenticated_binding=seal_bindings["planning_seal"],
         canonical_trailing_newline=True,
     )
     retrieval = _verify_root_seal(
         source_root / "retrieval" / "RETRIEVAL_SEALED.json",
         RETRIEVAL_ROOT_SHA256,
         "retrieval seal",
+        authenticated_binding=seal_bindings["retrieval_seal"],
     )
     score_plan = _verify_root_seal(
         source_root / "scoring" / "SCORE_PLAN_SEALED.json",
         SCORE_PLAN_ROOT_SHA256,
         "score-plan seal",
+        authenticated_binding=seal_bindings["score_plan_seal"],
     )
     scoring = _verify_root_seal(
         source_root / "scoring" / "SCORING_SEALED.json",
         SCORING_ROOT_SHA256,
         "scoring seal",
+        authenticated_binding=seal_bindings["scoring_seal"],
     )
     if scoring.get("score_plan_root_sha256") != SCORE_PLAN_ROOT_SHA256:
         raise ValueError("scoring seal is not bound to the canonical score plan")
 
-    bindings = _read_json(
-        source_root / "rankings_v3" / "input_bindings.json", "ranking input bindings"
-    )
     accepted = _required_mapping(bindings.get("accepted_union"), "accepted-union binding")
     features = _required_mapping(bindings.get("features"), "feature binding")
     accepted_actual = _file_binding(source_root / "retrieval" / "accepted_union.jsonl")

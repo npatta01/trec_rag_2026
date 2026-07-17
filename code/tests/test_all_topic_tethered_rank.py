@@ -156,8 +156,30 @@ def test_verify_rejects_one_topic_resealed_counterfeit(tmp_path: Path) -> None:
         module.verify_rankings(output)
 
 
-def test_superseded_v1_freeze_is_rejected() -> None:
-    old = Path("outputs/all_topic_tethered_facet_validation_v1/rankings")
+def test_superseded_v1_freeze_is_rejected(tmp_path: Path) -> None:
+    old = tmp_path / "superseded-rankings"
+    old.mkdir()
+    files = {
+        name: {"bytes": 0, "sha256": "0" * 64}
+        for name in (
+            "parameters.json",
+            "input_bindings.json",
+            "rankings.jsonl",
+            "audit.jsonl",
+            "summary.json",
+        )
+    }
+    seal = {
+        "schema_version": "all-topic-tethered-ranking-seal-v1",
+        "experiment_id": module.EXPERIMENT_ID,
+        "status": "sealed_before_qrels",
+        "qrels_opened": False,
+        "topic_ids": list(module.ALL_TOPIC_IDS),
+        "files": files,
+        "root_sha256": module._sha256(module._compact_bytes(files)),
+    }
+    (old / "SEALED.json").write_text(json.dumps(seal))
+
     with pytest.raises(ValueError, match="contract|canonical|superseded"):
         module.verify_rankings(old)
 
