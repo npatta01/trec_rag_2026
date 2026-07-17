@@ -18,8 +18,8 @@ Durable evidence:
   for planning, retrieval, score planning, scoring, rankings v3, and evaluation
   v3;
 - [contract, retrieval, scoring, ranking, evaluation, and report tests](../../../code/tests/)
-  plus the final independent-review status recorded in the merge-hardening
-  amendment below;
+  provide committed test source and contract evidence only, not historical
+  execution receipts;
 - [self-contained decision report](../../../reports/experiments/all_topic_tethered_facet_validation_v1/report.html)
   and [machine summary](../../../reports/experiments/all_topic_tethered_facet_validation_v1/summary.json);
 - [private verification-bundle receipt and SHA-256](../../../reports/experiments/all_topic_tethered_facet_validation_v1/README.md),
@@ -27,15 +27,18 @@ Durable evidence:
 - [facet-content review](../../../reports/experiments/all_topic_tethered_facet_validation_v1/facet_review.md)
   and retained-decision rationale in the report.
 
-Checkboxes below are reconciled from committed files, sealed roots, and the
-recorded merge-hardening review. Historical RED command output was not retained
-as a durable artifact, so the seven RED-execution steps remain unchecked rather
-than being inferred after the fact. **Unperformed:** the planned desktop/mobile
-Chrome accessibility pass did not complete under the original host setup.
-**Not durably evidenced:** the original live HTTPS hash and Funnel-off receipt.
-The local private rendered copy exists and matches the tracked HTML, but that
-does not prove the full historical Serve check. Those two combined steps
-therefore also remain unchecked.
+Checkboxes below are reconciled from committed files and sealed roots.
+Historical RED command output was not retained as a durable artifact, so
+execution is not inferred from committed test source.
+Of the 55 checkboxes, **38 are checked and 17 remain open**: seven historical
+RED executions; six focused, compatibility, or synthetic test executions; the
+complete-suite/review action and its merge-hardening duplicate; and the two
+browser/live-delivery actions. The test and review actions have no committed or
+sealed command-output or verdict receipt. **Unperformed:** the planned
+desktop/mobile Chrome accessibility pass did not complete under the original
+host setup. **Not durably evidenced:** the original live HTTPS hash and
+Funnel-off receipt. The local private rendered copy exists and matches the
+tracked HTML, but that does not prove the full historical Serve check.
 
 **Architecture:** A new experiment-specific contract authorizes exactly 22 development topics without changing shared protected-topic guards. Reusable planner, retrieval, scoring, ranking, evaluation, and report modules consume small authenticated artifacts; every ranking freezes before the evaluator can open qrels. Candidate retrieval remains top-1,000 for narratives and top-200 per facet, with an explicit depth-saturation diagnostic rather than an unplanned deeper search.
 
@@ -137,7 +140,7 @@ Expected: exactly 22 authorized topics, top-1,000 original cache hits for all 22
 zero original retrieval requests, an exact top-200 facet request count, no qrels
 binding, and a verified planning seal.
 
-- [x] **Step 5: Run focused and compatibility tests**
+- [ ] **Step 5: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py code/tests/test_deep_facet_candidate_gate.py code/tests/test_sparse_relevance_manifest.py`
 
@@ -256,7 +259,7 @@ Expected: 22 authenticated original top-1,000 cache hits, zero original requests
 an exact top-200 facet request count, immutable authorization pre-seal, no qrels
 binding, and a verified planning root hash.
 
-- [x] **Step 7: Run focused and compatibility tests**
+- [ ] **Step 7: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py code/tests/test_deep_facet_candidate_gate.py code/tests/test_sparse_relevance_manifest.py`
 
@@ -320,7 +323,7 @@ and any attempted original-query network request. Persist each raw response
 before parsing candidates. Union rows must retain every stream ID, stream rank,
 request identity, query hash, and response hash.
 
-- [x] **Step 4: Run synthetic and cache-only verification**
+- [ ] **Step 4: Run synthetic and cache-only verification**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_retrieve.py code/tests/test_deep_facet_candidate_run.py`
 
@@ -425,7 +428,7 @@ Run:
 Expected: every planned pair has exactly one score, hosted/paid calls are zero,
 and within-query percentile features are sealed.
 
-- [x] **Step 6: Run focused and compatibility tests**
+- [ ] **Step 6: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_score.py code/tests/test_tethered_facet_minilm_score.py code/tests/test_facet_local_minilm_score.py`
 
@@ -494,7 +497,7 @@ complete ranking, and write `parameters.json`, `input_bindings.json`,
 `rankings.jsonl`, `audit.jsonl`, `summary.json`, and `SEALED.json` with exclusive
 creation semantics.
 
-- [x] **Step 5: Run focused and compatibility tests**
+- [ ] **Step 5: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_rank.py code/tests/test_tethered_facet_soft_coverage.py code/tests/test_deep_facet_candidate_rank.py`
 
@@ -582,7 +585,7 @@ Require zero losses at 250, 500, and 1,000; positive pooled and macro recall at
 and interpretable judged-rate behavior. Try the primary arm first, then the fixed
 alternative ladder. If none passes, return `RRF` with every failed rule.
 
-- [x] **Step 5: Run focused and compatibility tests**
+- [ ] **Step 5: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_evaluate.py code/tests/test_tethered_facet_soft_coverage_evaluate.py code/tests/test_evaluation.py`
 
@@ -705,7 +708,7 @@ index link, verify the live HTTPS response hash matches the local rendered copy,
 and confirm the Serve mapping remains tailnet-only. Do not expose repository
 files, raw logs, caches, qrels, or secrets.
 
-- [x] **Step 7: Run the complete targeted suite and independent review**
+- [ ] **Step 7: Run the complete targeted suite and independent review**
 
 Run:
 
@@ -747,4 +750,4 @@ git commit -m "Report all-topic facet validation"
   retain-RRF decision and every scientific metric are unchanged.
 - [x] Create a minimal external verification bundle, document its SHA-256 and
   restoration command, and verify from a relocated checkout/root.
-- [x] Re-run the complete targeted suite and obtain a final independent review.
+- [ ] Re-run the complete targeted suite and obtain a final independent review.

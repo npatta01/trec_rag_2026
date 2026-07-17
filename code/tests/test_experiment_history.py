@@ -85,3 +85,36 @@ def test_completed_all_topic_plan_distinguishes_unperformed_steps() -> None:
     assert "## Completion summary — 2026-07-17" in text
     assert "Unperformed" in text
     assert "private" in text.lower()
+
+
+def test_completed_plan_checks_only_receipted_execution_and_review_actions() -> None:
+    text = (
+        REPO_ROOT
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-07-16-all-topic-tethered-facet-validation.md"
+    ).read_text(encoding="utf-8")
+
+    unsupported_actions = {
+        "**Step 4: Run synthetic and cache-only verification**": 1,
+        "**Step 5: Run focused and compatibility tests**": 3,
+        "**Step 6: Run focused and compatibility tests**": 1,
+        "**Step 7: Run focused and compatibility tests**": 1,
+        "**Step 7: Run the complete targeted suite and independent review**": 1,
+        "Re-run the complete targeted suite and obtain a final independent review.": 1,
+    }
+    for action, expected_count in unsupported_actions.items():
+        assert text.count(f"- [ ] {action}") == expected_count
+        assert f"- [x] {action}" not in text
+
+    checkbox_lines = [line for line in text.splitlines() if line.startswith(("- [x]", "- [ ]"))]
+    assert sum(line.startswith("- [x]") for line in checkbox_lines) == 38
+    assert sum(line.startswith("- [ ]") for line in checkbox_lines) == 17
+    assert "38 are checked and 17 remain open" in text
+    assert "test source and contract evidence only" in text
+    assert "final independent-review status recorded" not in text
+    assert "recorded merge-hardening review" not in text
+
+    assert "- [x] **Step 5: Obtain independent facet-content review before freezing**" in text
+    assert "- [x] **Step 6: Freeze and verify the exact planning preflight**" in text
