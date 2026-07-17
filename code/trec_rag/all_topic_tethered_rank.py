@@ -26,20 +26,21 @@ from .deep_facet_candidate_rank import (
 
 ARMS = (
     "RRF",
-    "DUAL",
     "RRF100-STATIC-DUAL",
-    "RRF500-STATIC-DUAL",
+    "RRF100-STATIC-DUAL-NR",
     "RRF100-REINIT-DUAL",
+    "RRF100-REINIT-DUAL-NR",
     "RRF500-REINIT-DUAL",
 )
 PREFIX_DEPTHS = (100, 500)
-SCHEMA_VERSION = "all-topic-tethered-ranking-freeze-v1"
-SEAL_SCHEMA_VERSION = "all-topic-tethered-ranking-seal-v1"
+SCHEMA_VERSION = "all-topic-tethered-ranking-freeze-v2"
+SEAL_SCHEMA_VERSION = "all-topic-tethered-ranking-seal-v2"
 PLANNING_ROOT_SHA256 = "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2"
 RETRIEVAL_ROOT_SHA256 = "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb"
 SCORE_PLAN_ROOT_SHA256 = "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3"
 SCORING_ROOT_SHA256 = "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
-CANONICAL_RANKING_ROOT_SHA256 = "b371c81136296e9e775bf3eaa8b249ff03d258a13973617360d5fb5a5de8e55c"
+SUPERSEDED_RANKING_ROOT_SHA256 = "b371c81136296e9e775bf3eaa8b249ff03d258a13973617360d5fb5a5de8e55c"
+CANONICAL_RANKING_ROOT_SHA256 = "e2084842076119608977843f65ef749572c196d56f43d28b3e5440236c6a1578"
 RRF_K = 60
 RRF_FAMILY_WEIGHTS = {"original": 0.5, "accepted_facets_total": 0.5}
 DUAL_WEIGHTS = {"G": 0.35, "N": 0.15, "R": 0.15, "L": 0.25, "B": 0.10, "D": -0.15}
@@ -52,7 +53,7 @@ EXPECTED_UNION_COUNTS = {
 }
 EXPECTED_UNION_TOTAL = 45_144
 EXPECTED_RANKING_ROWS = EXPECTED_UNION_TOTAL * len(ARMS)
-EXPECTED_AUDIT_ROWS = 199_430
+EXPECTED_AUDIT_ROWS = 206_030
 _INPUT_FILE_BINDINGS = {
     "planning_seal": ("planning/SEALED.json", 876, "dda97e1872c864f35af16f1a0b8d57d7218778a1274700197c773cb8ae75aa85"),
     "retrieval_seal": ("retrieval/RETRIEVAL_SEALED.json", 153969, "3175f303a63b561b5fe4d3b6c0185f262fcc1032dd97a1ac7b12573db73a6288"),
@@ -171,6 +172,8 @@ def _dual_objective(
     local: np.ndarray,
     bonus: np.ndarray,
     redundancy: np.ndarray,
+    *,
+    use_redundancy: bool,
 ) -> np.ndarray:
     """The single pinned DUAL objective used for every initialization state."""
 
@@ -181,11 +184,13 @@ def _dual_objective(
             + DUAL_WEIGHTS["R"] * rrf[document_id]
             for document_id in docids
         ]
-    ) + DUAL_WEIGHTS["L"] * local + DUAL_WEIGHTS["B"] * bonus + DUAL_WEIGHTS["D"] * redundancy
+    ) + DUAL_WEIGHTS["L"] * local + DUAL_WEIGHTS["B"] * bonus + (
+        DUAL_WEIGHTS["D"] * redundancy if use_redundancy else 0.0
+    )
 
 
 def _dual_from_features(
-    features: Mapping[str, object], prefix: Sequence[str]
+    features: Mapping[str, object], prefix: Sequence[str], *, use_redundancy: bool
 ) -> tuple[list[str], dict[str, object]]:
     """Replay a protected prefix, then continue the unchanged DUAL objective."""
 
@@ -210,18 +215,23 @@ def _dual_from_features(
     coverage = np.zeros(len(facets), dtype=np.float64)
     redundancy = np.zeros(count, dtype=np.float64)
     remaining = np.ones(count, dtype=bool)
-    token_sets = [frozenset(analyze_terms(texts[document_id])) for document_id in docids]
+    token_sets = (
+        [frozenset(analyze_terms(texts[document_id])) for document_id in docids]
+        if use_redundancy
+        else []
+    )
     selected = list(prefix)
     for document_id in prefix:
         chosen = index_by_id[document_id]
         remaining[chosen] = False
         if facets:
             coverage = np.maximum(coverage, matrix[chosen])
-        selected_tokens = token_sets[chosen]
-        for index in np.flatnonzero(remaining):
-            penalty = redundancy_penalty(_jaccard(token_sets[index], selected_tokens))
-            if penalty > redundancy[index]:
-                redundancy[index] = penalty
+        if use_redundancy:
+            selected_tokens = token_sets[chosen]
+            for index in np.flatnonzero(remaining):
+                penalty = redundancy_penalty(_jaccard(token_sets[index], selected_tokens))
+                if penalty > redundancy[index]:
+                    redundancy[index] = penalty
 
     seed_coverage = {
         str(facet["facet_id"]): float(coverage[index]) for index, facet in enumerate(facets)
@@ -235,7 +245,10 @@ def _dual_from_features(
         else:
             bonus = np.zeros(count)
             bonus_facet = np.zeros(count, dtype=int)
-        objective = _dual_objective(docids, g, n_score, r, local, bonus, redundancy)
+        objective = _dual_objective(
+            docids, g, n_score, r, local, bonus, redundancy,
+            use_redundancy=use_redundancy,
+        )
         objective[~remaining] = -np.inf
         maximum = float(objective.max())
         tied = np.flatnonzero(objective == maximum)
@@ -255,20 +268,22 @@ def _dual_from_features(
             "objective": maximum,
             "coverage_bonus": float(bonus[chosen]),
             "coverage_facet": str(facets[int(bonus_facet[chosen])]["facet_id"]) if facets else None,
-            "redundancy_penalty": float(redundancy[chosen]),
+            "redundancy_penalty": float(redundancy[chosen]) if use_redundancy else 0.0,
         }
         remaining[chosen] = False
         if facets:
             coverage = np.maximum(coverage, matrix[chosen])
-        selected_tokens = token_sets[chosen]
-        for index in np.flatnonzero(remaining):
-            penalty = redundancy_penalty(_jaccard(token_sets[index], selected_tokens))
-            if penalty > redundancy[index]:
-                redundancy[index] = penalty
+        if use_redundancy:
+            selected_tokens = token_sets[chosen]
+            for index in np.flatnonzero(remaining):
+                penalty = redundancy_penalty(_jaccard(token_sets[index], selected_tokens))
+                if penalty > redundancy[index]:
+                    redundancy[index] = penalty
     return selected, {
         "seed_document_count": len(prefix),
         "seed_coverage": seed_coverage,
-        "seed_redundancy_replayed": True,
+        "seed_redundancy_replayed": use_redundancy and bool(prefix),
+        "redundancy_fixed_zero": not use_redundancy,
         "documents": document_audit,
     }
 
@@ -279,7 +294,10 @@ def reinitialized_dual(
     """Public deterministic DUAL continuation from replayed prefix state."""
 
     _reject_qrels(topic_input)
-    return _dual_from_features(_features_for_authorized_topic(topic_input), protected_prefix)
+    return _dual_from_features(
+        _features_for_authorized_topic(topic_input), protected_prefix,
+        use_redundancy=True,
+    )
 
 
 def build_rankings(
@@ -292,37 +310,53 @@ def build_rankings(
     features = _features_for_authorized_topic(topic_input)
     docids: list[str] = features["docids"]  # type: ignore[assignment]
     rrf = _complete_order(controls.get("RRF"), set(docids), "RRF control")
-    dual, dual_state = _dual_from_features(features, ())
+    dual, dual_state = _dual_from_features(features, (), use_redundancy=True)
     dual_audit: dict[str, dict[str, object]] = dual_state["documents"]  # type: ignore[assignment]
-    reinit100, audit100 = _dual_from_features(features, rrf[:100])
-    reinit500, audit500 = _dual_from_features(features, rrf[:500])
+    dual_nr, dual_nr_state = _dual_from_features(features, (), use_redundancy=False)
+    dual_nr_audit: dict[str, dict[str, object]] = dual_nr_state["documents"]  # type: ignore[assignment]
+    reinit100, audit100 = _dual_from_features(
+        features, rrf[:100], use_redundancy=True
+    )
+    reinit100_nr, audit100_nr = _dual_from_features(
+        features, rrf[:100], use_redundancy=False
+    )
+    reinit500, audit500 = _dual_from_features(
+        features, rrf[:500], use_redundancy=True
+    )
     rankings = {
         "RRF": rrf,
-        "DUAL": dual,
         "RRF100-STATIC-DUAL": _splice_prefix(rrf, dual, 100),
-        "RRF500-STATIC-DUAL": _splice_prefix(rrf, dual, 500),
+        "RRF100-STATIC-DUAL-NR": _splice_prefix(rrf, dual_nr, 100),
         "RRF100-REINIT-DUAL": reinit100,
+        "RRF100-REINIT-DUAL-NR": reinit100_nr,
         "RRF500-REINIT-DUAL": reinit500,
     }
     expected = set(docids)
     if any(len(order) != len(expected) or set(order) != expected for order in rankings.values()):
         raise ValueError("ranking is not a complete accepted-union permutation")
-    prefix100, prefix500 = set(rrf[:100]), set(rrf[:500])
+    prefix100 = set(rrf[:100])
     audit: dict[str, object] = {
-        "DUAL": {"seed_document_count": 0, "seed_coverage": {}, "documents": dual_audit},
         "RRF100-STATIC-DUAL": {
             "seed_document_count": 0,
             "protected_document_count": min(100, len(rrf)),
             "objective_state": "empty",
+            "seed_redundancy_replayed": False,
+            "redundancy_fixed_zero": False,
             "documents": {document_id: dual_audit[document_id] for document_id in dual if document_id not in prefix100},
         },
-        "RRF500-STATIC-DUAL": {
+        "RRF100-STATIC-DUAL-NR": {
             "seed_document_count": 0,
-            "protected_document_count": min(500, len(rrf)),
+            "protected_document_count": min(100, len(rrf)),
             "objective_state": "empty",
-            "documents": {document_id: dual_audit[document_id] for document_id in dual if document_id not in prefix500},
+            "seed_redundancy_replayed": False,
+            "redundancy_fixed_zero": True,
+            "documents": {
+                document_id: dual_nr_audit[document_id]
+                for document_id in dual_nr if document_id not in prefix100
+            },
         },
         "RRF100-REINIT-DUAL": audit100,
+        "RRF100-REINIT-DUAL-NR": audit100_nr,
         "RRF500-REINIT-DUAL": audit500,
     }
     return rankings, audit
@@ -431,6 +465,7 @@ def _parameters() -> dict[str, object]:
         "rrf_k": RRF_K,
         "rrf_family_weights": dict(RRF_FAMILY_WEIGHTS),
         "dual": dict(DUAL_WEIGHTS),
+        "dual_nr_redundancy_fixed_zero": True,
         "redundancy_jaccard_threshold": REDUNDANCY_JACCARD_THRESHOLD,
         "facet_score_source": "narrative_tethered_percentile",
         "static_state": "empty",
@@ -749,8 +784,9 @@ def verify_rankings(path: Path) -> dict[str, object]:
         ):
             raise ValueError("ranking is not a complete permutation")
         if any(
-            orders[f"RRF{depth}-{mode}-DUAL"][:depth] != orders["RRF"][:depth]
-            for depth in PREFIX_DEPTHS for mode in ("STATIC", "REINIT")
+            orders[arm][:(500 if "500" in arm else 100)]
+            != orders["RRF"][:(500 if "500" in arm else 100)]
+            for arm in ARMS if arm != "RRF"
         ):
             raise ValueError("protected prefix differs")
         claimed = topic_summary.get(topic_id)
@@ -774,29 +810,29 @@ def verify_rankings(path: Path) -> dict[str, object]:
             if key in state_seen:
                 raise ValueError("ranking audit state is duplicated")
             state_seen.add(key)
-            if arm == "DUAL":
-                expected_state = {
-                    "schema_version": SCHEMA_VERSION, "topic_id": topic_id, "arm": arm,
-                    "kind": "state", "seed_document_count": 0, "seed_coverage": {},
-                }
-                if row != expected_state:
-                    raise ValueError("DUAL audit state differs")
-            elif "STATIC" in arm:
-                depth = 100 if "100" in arm else 500
+            if "STATIC" in arm:
                 expected_state = {
                     "schema_version": SCHEMA_VERSION, "topic_id": topic_id, "arm": arm,
                     "kind": "state", "seed_document_count": 0,
-                    "protected_document_count": depth, "objective_state": "empty",
+                    "protected_document_count": 100, "objective_state": "empty",
+                    "seed_redundancy_replayed": False,
+                    "redundancy_fixed_zero": arm.endswith("-NR"),
                 }
                 if row != expected_state:
                     raise ValueError("static DUAL audit state differs")
             else:
                 depth = 100 if "100" in arm else 500
                 coverage = row.get("seed_coverage")
+                nr = arm.endswith("-NR")
                 if (
-                    set(row) != {"schema_version", "topic_id", "arm", "kind", "seed_document_count", "seed_coverage", "seed_redundancy_replayed"}
+                    set(row) != {
+                        "schema_version", "topic_id", "arm", "kind",
+                        "seed_document_count", "seed_coverage",
+                        "seed_redundancy_replayed", "redundancy_fixed_zero",
+                    }
                     or row.get("seed_document_count") != depth
-                    or row.get("seed_redundancy_replayed") is not True
+                    or row.get("seed_redundancy_replayed") is not (False if nr else True)
+                    or row.get("redundancy_fixed_zero") is not nr
                     or not isinstance(coverage, Mapping)
                     or not coverage
                     or any(
@@ -810,7 +846,7 @@ def verify_rankings(path: Path) -> dict[str, object]:
                 ):
                     raise ValueError("reinitialized DUAL audit state differs")
         elif row.get("kind") == "selection":
-            depth = 100 if "100" in arm else 500 if "500" in arm else 0
+            depth = 500 if "500" in arm else 100
             expected_documents = set(all_orders[topic_id]["RRF"])
             if depth:
                 expected_documents -= set(all_orders[topic_id]["RRF"][:depth])
@@ -826,7 +862,7 @@ def verify_rankings(path: Path) -> dict[str, object]:
     if state_seen != expected_state_keys:
         raise ValueError("ranking audit state coverage differs")
     for topic_id, arm in expected_state_keys:
-        depth = 100 if "100" in arm else 500 if "500" in arm else 0
+        depth = 500 if "500" in arm else 100
         expected_documents = set(all_orders[topic_id]["RRF"])
         if depth:
             expected_documents -= set(all_orders[topic_id]["RRF"][:depth])

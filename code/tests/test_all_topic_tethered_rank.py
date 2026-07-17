@@ -10,6 +10,16 @@ import trec_rag.all_topic_tethered_rank as module
 from trec_rag.all_topic_tethered_rank import ARMS, build_rankings
 
 
+DESIGN_ARMS = (
+    "RRF",
+    "RRF100-STATIC-DUAL",
+    "RRF100-STATIC-DUAL-NR",
+    "RRF100-REINIT-DUAL",
+    "RRF100-REINIT-DUAL-NR",
+    "RRF500-REINIT-DUAL",
+)
+
+
 def _topic_input() -> dict[str, object]:
     docids = [f"d{i:03d}" for i in range(1, 601)]
     scores = {docid: float(601 - index) for index, docid in enumerate(docids, 1)}
@@ -60,6 +70,12 @@ def test_every_arm_is_the_same_complete_union() -> None:
     assert all(len(order) == len(expected) and set(order) == expected for order in rankings.values())
 
 
+def test_arm_set_and_order_match_the_approved_design() -> None:
+    assert ARMS == DESIGN_ARMS
+    assert "DUAL" not in ARMS
+    assert "RRF500-STATIC-DUAL" not in ARMS
+
+
 def test_protected_prefixes_are_exact() -> None:
     rankings, _ = build_rankings(_topic_input(), _controls())
     assert rankings["RRF100-STATIC-DUAL"][:100] == rankings["RRF"][:100]
@@ -70,6 +86,17 @@ def test_reinitialized_state_includes_prefix_coverage() -> None:
     _, audit = build_rankings(_topic_input(), _controls())
     assert audit["RRF100-REINIT-DUAL"]["seed_document_count"] == 100
     assert audit["RRF100-REINIT-DUAL"]["seed_coverage"] == _expected_seed_coverage()
+
+
+def test_nr_arms_fix_redundancy_to_zero_without_replaying_it() -> None:
+    _, audit = build_rankings(_topic_input(), _controls())
+    for arm in ("RRF100-STATIC-DUAL-NR", "RRF100-REINIT-DUAL-NR"):
+        assert audit[arm]["redundancy_fixed_zero"] is True
+        assert audit[arm]["seed_redundancy_replayed"] is False
+        assert all(
+            row["redundancy_penalty"] == 0.0
+            for row in audit[arm]["documents"].values()
+        )
 
 
 def test_input_reordering_cannot_change_rankings() -> None:
@@ -129,6 +156,12 @@ def test_verify_rejects_one_topic_resealed_counterfeit(tmp_path: Path) -> None:
         module.verify_rankings(output)
 
 
+def test_superseded_v1_freeze_is_rejected() -> None:
+    old = Path("outputs/all_topic_tethered_facet_validation_v1/rankings")
+    with pytest.raises(ValueError, match="contract|canonical|superseded"):
+        module.verify_rankings(old)
+
+
 def test_feature_adapter_uses_authorized_identity_without_legacy_spoof(monkeypatch: pytest.MonkeyPatch) -> None:
     from trec_rag.deep_facet_candidate_rank import _features
 
@@ -158,28 +191,30 @@ def test_plain_and_reinitialized_dual_share_one_objective(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(module, "_dual_objective", counted)
     build_rankings(_topic_input(), _controls())
-    assert calls == 2 * len(_topic_input()["docids"])
+    assert calls == 5 * len(_topic_input()["docids"]) - 700
 
 
 def test_production_bindings_reject_resealed_upstream_root_counterfeit() -> None:
     bindings = module._expected_input_bindings(
-        Path("outputs/all_topic_tethered_facet_validation_v1/rankings")
+        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2")
     )
     bindings["retrieval_root_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="binding|retrieval"):
-        module._validate_production_bindings(bindings, Path("outputs/all_topic_tethered_facet_validation_v1/rankings"))
+        module._validate_production_bindings(bindings, Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2"))
 
 
 def test_parameters_are_derived_from_local_pins() -> None:
-    assert module._parameters() == json.loads(
-        Path("outputs/all_topic_tethered_facet_validation_v1/rankings/parameters.json").read_text()
-    )
+    parameters = module._parameters()
+    assert parameters["arms"] == list(DESIGN_ARMS)
+    assert parameters["dual"] == module.DUAL_WEIGHTS
+    assert parameters["dual_nr_redundancy_fixed_zero"] is True
+    assert parameters["schema_version"].endswith("v2")
 
 
 @pytest.mark.parametrize("field", ["network_calls", "model_loads", "inference_calls"])
 def test_summary_counter_counterfeit_is_rejected(field: str) -> None:
     summary = json.loads(
-        Path("outputs/all_topic_tethered_facet_validation_v1/rankings/summary.json").read_text()
+        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2/summary.json").read_text()
     )
     summary[field] = 1
     with pytest.raises(ValueError, match="counter|safety"):
@@ -202,7 +237,7 @@ def test_audit_counterfeit_missing_objective_is_rejected() -> None:
 
 
 def test_resealed_canonical_counterfeits_are_rejected(tmp_path: Path) -> None:
-    source = Path("outputs/all_topic_tethered_facet_validation_v1/rankings")
+    source = Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v2")
     counterfeit = tmp_path / "rankings"
     shutil.copytree(source, counterfeit)
 
