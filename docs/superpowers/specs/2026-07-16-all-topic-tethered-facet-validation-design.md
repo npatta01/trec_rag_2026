@@ -174,4 +174,3 @@ final RAG answer quality are separate decisions.
 - a sanitized rendered copy under `/home/npatta01/codex-rendered/plans/` and a
   verified private tailnet-only portal link;
 - independent code/method review and an explicit merge/promotion recommendation.
-
