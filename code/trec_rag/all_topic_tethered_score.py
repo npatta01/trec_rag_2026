@@ -19,6 +19,7 @@ import time
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
+from itertools import zip_longest
 from pathlib import Path
 
 from . import facet_local_minilm_preflight as _window_module
@@ -63,6 +64,7 @@ SCORE_SCHEMA_VERSION = "all-topic-tethered-window-score-v1"
 DOCUMENT_SCORE_SCHEMA_VERSION = "all-topic-tethered-document-score-v1"
 FEATURE_SCHEMA_VERSION = "all-topic-tethered-percentile-feature-v1"
 SCORING_RECEIPT_SCHEMA_VERSION = "all-topic-tethered-scoring-receipt-v1"
+SCORE_LEDGER_SCHEMA_VERSION = "all-topic-tethered-score-ledger-v1"
 PLAN_SEAL_SCHEMA_VERSION = "all-topic-tethered-score-plan-seal-v1"
 SCORING_SEAL_SCHEMA_VERSION = "all-topic-tethered-scoring-seal-v1"
 DEFAULT_MODEL_RECEIPT = Path("outputs/rag25_facet_local_minilm_v1/model_v1/materialization.json")
@@ -295,13 +297,12 @@ def _facet_ids_from_provenance(
     return output
 
 
-def _pair_rows(
-    union_rows: Sequence[Mapping[str, object]], manifest: Mapping[str, object]
-) -> list[dict[str, object]]:
+def _iter_pair_rows(
+    union_rows: Iterable[Mapping[str, object]], manifest: Mapping[str, object]
+) -> Iterable[dict[str, object]]:
     narratives, facets, common_queries = _manifest_indexes(manifest)
     topic_ranks: Counter[str] = Counter()
     seen: set[tuple[str, str]] = set()
-    output: list[dict[str, object]] = []
     for row in union_rows:
         topic_id = row.get("topic_id")
         document_id = row.get("document_id")
@@ -341,36 +342,37 @@ def _pair_rows(
             ("narrative", "n", narratives[str(topic_id)]),
             ("common", "g", common_queries[str(topic_id)]),
         ):
-            output.append(
-                {
-                    **base,
-                    "family": family,
-                    "variant": f"{topic_id}:{query_id}",
-                    "query_id": query_id,
-                    "rank": rank,
-                    "query": query,
-                    "query_sha256": _sha256_text(query),
-                }
-            )
+            yield {
+                **base,
+                "family": family,
+                "variant": f"{topic_id}:{query_id}",
+                "query_id": query_id,
+                "rank": rank,
+                "query": query,
+                "query_sha256": _sha256_text(query),
+            }
         for facet_id in _facet_ids_from_provenance(row, facets):
             facet = facets[facet_id]
             if facet.get("topic_id") != topic_id:
                 raise ValueError("facet provenance crosses topics")
             query = render_tethered_query(narratives[str(topic_id)], str(facet["query"]))
-            output.append(
-                {
-                    **base,
-                    "family": "tethered_facet",
-                    "variant": facet_id,
-                    "query_id": facet_id,
-                    "facet_id": facet_id,
-                    "manifest_order": facet.get("manifest_order"),
-                    "rank": rank,
-                    "query": query,
-                    "query_sha256": _sha256_text(query),
-                }
-            )
-    return output
+            yield {
+                **base,
+                "family": "tethered_facet",
+                "variant": facet_id,
+                "query_id": facet_id,
+                "facet_id": facet_id,
+                "manifest_order": facet.get("manifest_order"),
+                "rank": rank,
+                "query": query,
+                "query_sha256": _sha256_text(query),
+            }
+
+
+def _pair_rows(
+    union_rows: Sequence[Mapping[str, object]], manifest: Mapping[str, object]
+) -> list[dict[str, object]]:
+    return list(_iter_pair_rows(union_rows, manifest))
 
 
 def _authorized_window_plan(
@@ -775,10 +777,149 @@ def _validate_plan_rows(
     return pair_identities, window_ids
 
 
+def _replay_plan_derivation(
+    scoring: Path,
+    payload: Mapping[str, object],
+    *,
+    tokenizer: object | None = None,
+    cache: object | None = None,
+    authenticate_upstream: bool = True,
+) -> tuple[set[tuple[str, str, str]], set[str]]:
+    """Re-derive every pair/window from authenticated source semantics."""
+
+    sources = payload.get("sources")
+    if not isinstance(sources, Mapping):
+        raise ValueError("preflight semantic sources are missing")
+    manifest_binding = sources.get("manifest")
+    union_binding = sources.get("accepted_union")
+    if not isinstance(manifest_binding, Mapping) or not isinstance(union_binding, Mapping):
+        raise ValueError("preflight semantic source bindings are invalid")
+    manifest_path = Path(str(manifest_binding.get("path"))).resolve()
+    union_path = Path(str(union_binding.get("path"))).resolve()
+    planning = manifest_path.parent
+    retrieval = union_path.parent
+    if authenticate_upstream:
+        planning_evidence = verify_planning(
+            planning, approved_cache_root=APPROVED_ORIGINAL_CACHE_ROOT
+        )
+        retrieval_evidence = verify_retrieval(
+            retrieval,
+            planning,
+            approved_original_cache_root=APPROVED_ORIGINAL_CACHE_ROOT,
+        )
+        if (
+            planning_evidence.get("root_sha256") != PLANNING_ROOT_SHA256
+            or retrieval_evidence.get("root_sha256") != RETRIEVAL_ROOT_SHA256
+        ):
+            raise ValueError("semantic replay upstream roots differ")
+    manifest, manifest_source = _read_json(manifest_path, "semantic replay manifest")
+    if (
+        _sha256_bytes(manifest_source) != manifest_binding.get("sha256")
+        or _file_binding(union_path) != {
+            "bytes": union_binding.get("bytes"),
+            "sha256": union_binding.get("sha256"),
+        }
+    ):
+        raise ValueError("semantic replay source bytes differ")
+    _manifest_indexes(manifest, production=authenticate_upstream)
+    if tokenizer is None:
+        tokenizer = load_verified_tokenizer(
+            Path(str(payload.get("model_materialization_receipt"))),
+            auto_tokenizer_cls=TokenizerOnlyAuto,
+        )
+    prepared = _PreparedDocumentTokenizer(tokenizer)
+    if cache is None:
+        cache_evidence = payload.get("score_cache")
+        if not isinstance(cache_evidence, Mapping):
+            raise ValueError("semantic replay cache evidence is missing")
+        binding = cache_evidence.get("binding")
+        if not isinstance(binding, Mapping):
+            raise ValueError("semantic replay cache binding is invalid")
+        cache_path = Path(str(binding.get("path")))
+        context = score_cache_context()
+        root = cache_path
+        for _ in context.path_parts:
+            root = root.parent
+        cache = GlobalScoreCache(root, context)
+        if _cache_binding(cache) != binding:
+            raise ValueError("semantic replay cache bytes differ from preflight")
+
+    persisted_pairs = _iter_jsonl(scoring / "pairs.jsonl", "score pairs")
+    persisted_windows = _iter_jsonl(scoring / "windows.jsonl", "score windows")
+    pair_iterator = iter(persisted_pairs)
+    window_iterator = iter(persisted_windows)
+    pair_identities: set[tuple[str, str, str]] = set()
+    window_ids: set[str] = set()
+    cache_keys: set[str] = set()
+    unique_misses: set[str] = set()
+    hits = misses = 0
+    original_context_factory = _window_module.score_cache_context
+    frozen_context = original_context_factory()
+    _window_module.score_cache_context = lambda: frozen_context
+    try:
+        union_rows = _iter_jsonl(union_path, "semantic replay accepted union")
+        for derived_pair in _iter_pair_rows(union_rows, manifest):
+            observed_pair = next(pair_iterator, None)
+            expected_pair = {
+                "schema_version": PAIR_SCHEMA_VERSION,
+                **{key: value for key, value in derived_pair.items() if key != "text"},
+            }
+            if observed_pair != expected_pair:
+                raise ValueError("score pair differs from semantic derivation")
+            identity = (
+                str(derived_pair["topic_id"]),
+                str(derived_pair["query_id"]),
+                str(derived_pair["document_id"]),
+            )
+            if identity in pair_identities:
+                raise ValueError("semantic pair identity is duplicated")
+            pair_identities.add(identity)
+            for planned in _authorized_window_plan(derived_pair, prepared):
+                cached = cache.get(  # type: ignore[attr-defined]
+                    query_text=planned.query, text=planned.window_text
+                ) is not None
+                expected_window = replace(planned, cache_hit=cached).to_dict()
+                expected_window["query_id"] = derived_pair["query_id"]
+                if "facet_id" in derived_pair:
+                    expected_window["facet_id"] = derived_pair["facet_id"]
+                    expected_window["manifest_order"] = derived_pair["manifest_order"]
+                observed_window = next(window_iterator, None)
+                if observed_window != expected_window:
+                    raise ValueError("score window differs from semantic derivation")
+                window_id = str(planned.window_id)
+                if window_id in window_ids:
+                    raise ValueError("semantic window identity is duplicated")
+                window_ids.add(window_id)
+                cache_keys.add(planned.cache_key)
+                if cached:
+                    hits += 1
+                else:
+                    misses += 1
+                    unique_misses.add(planned.cache_key)
+        if next(pair_iterator, None) is not None or next(window_iterator, None) is not None:
+            raise ValueError("score plan has rows beyond semantic derivation")
+    finally:
+        _window_module.score_cache_context = original_context_factory
+    if (
+        len(pair_identities) != payload.get("pair_count")
+        or len(window_ids) != payload.get("window_count")
+        or hits != payload.get("cache_hit_count")
+        or misses != payload.get("cache_miss_count")
+        or len(cache_keys) != payload.get("unique_pair_count")
+        or len(unique_misses) != payload.get("unique_cache_miss_count")
+    ):
+        raise ValueError("semantic replay counters differ")
+    return pair_identities, window_ids
+
+
 def verify_preflight(
     scoring_dir: Path,
     *,
     expected_root_sha256: str = APPROVED_SCORE_PLAN_ROOT_SHA256,
+    semantic_replay: bool = True,
+    authenticate_upstream: bool = True,
+    tokenizer: object | None = None,
+    cache: object | None = None,
 ) -> dict[str, object]:
     """Verify the sealed tokenizer plan without opening a model or qrels."""
 
@@ -801,7 +942,7 @@ def verify_preflight(
     artifacts = payload.get("artifacts")
     runtime = payload.get("runtime_projection")
     sources = payload.get("sources")
-    tokenizer = payload.get("tokenizer")
+    tokenizer_evidence = payload.get("tokenizer")
     cache_evidence = payload.get("score_cache")
     if (
         payload.get("schema_version") != PREFLIGHT_SCHEMA_VERSION
@@ -823,9 +964,9 @@ def verify_preflight(
         or sources["manifest"].get("sha256") != MANIFEST_SHA256  # type: ignore[union-attr]
         or not isinstance(sources.get("accepted_union"), Mapping)
         or sources["accepted_union"].get("sha256") != ACCEPTED_UNION_SHA256  # type: ignore[union-attr]
-        or not isinstance(tokenizer, Mapping)
-        or tokenizer.get("load_count") != 1
-        or tokenizer.get("local_files_only") is not True
+        or not isinstance(tokenizer_evidence, Mapping)
+        or tokenizer_evidence.get("load_count") != 1
+        or tokenizer_evidence.get("local_files_only") is not True
         or not isinstance(cache_evidence, Mapping)
         or cache_evidence.get("context") != score_cache_context().artifact_metadata
         or not isinstance(artifacts, Mapping)
@@ -846,7 +987,16 @@ def verify_preflight(
     )
     if materialization.sha256 != payload.get("model_materialization_receipt_sha256"):
         raise ValueError("model materialization differs from the approved score plan")
-    pair_identities, window_ids = _validate_plan_rows(scoring, payload)
+    if semantic_replay:
+        pair_identities, window_ids = _replay_plan_derivation(
+            scoring,
+            payload,
+            tokenizer=tokenizer,
+            cache=cache,
+            authenticate_upstream=authenticate_upstream,
+        )
+    else:
+        pair_identities, window_ids = _validate_plan_rows(scoring, payload)
     pair_count = len(pair_identities)
     window_count = len(window_ids)
     return {
@@ -914,94 +1064,242 @@ def _aggregate_query_documents(
     return output
 
 
+def _load_score_ledger(
+    path: Path,
+) -> tuple[dict[str, float], Counter[str], dict[str, tuple[str, str]]]:
+    scores: dict[str, float] = {}
+    sources: Counter[str] = Counter()
+    lineage: dict[str, tuple[str, str]] = {}
+    if not path.exists():
+        return scores, sources, lineage
+    for row in _iter_jsonl(path, "run-local score ledger"):
+        cache_key = row.get("cache_key")
+        score = row.get("score")
+        source = row.get("source")
+        query_sha = row.get("query_sha256")
+        window_sha = row.get("window_sha256")
+        if (
+            row.get("schema_version") != SCORE_LEDGER_SCHEMA_VERSION
+            or not isinstance(cache_key, str)
+            or len(cache_key) != 64
+            or isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+            or source not in {"preflight_cache", "local_runner"}
+            or not isinstance(query_sha, str)
+            or len(query_sha) != 64
+            or not isinstance(window_sha, str)
+            or len(window_sha) != 64
+        ):
+            raise ValueError("run-local score ledger row is invalid")
+        value = _float32(score)
+        if cache_key in scores:
+            if scores[cache_key] != value:
+                raise ValueError("run-local score ledger has conflicting duplicates")
+            continue
+        scores[cache_key] = value
+        lineage[cache_key] = (query_sha, window_sha)
+        sources[str(source)] += 1
+    return scores, sources, lineage
+
+
+def _append_score_ledger(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as sink:
+        for row in rows:
+            sink.write(_compact_bytes(row) + b"\n")
+        sink.flush()
+        os.fsync(sink.fileno())
+
+
+def _flush_file(handle: object) -> None:
+    handle.flush()  # type: ignore[attr-defined]
+    os.fsync(handle.fileno())  # type: ignore[attr-defined]
+
+
 def run_scores(
     scoring_dir: Path,
     *,
     cache_root: Path = SCORE_CACHE_ROOT,
     runner: object | None = None,
+    publish_hook: object | None = None,
 ) -> dict[str, object]:
-    """Run local ROCm scores for a separately approved sealed preflight."""
+    """Resume local scores into a run ledger, then publish terminal files."""
 
     scoring = Path(scoring_dir)
-    verify_preflight(scoring)
-    for name in (
+    preflight_verification = verify_preflight(scoring)
+    terminal_names = (
         "scores.jsonl", "document_scores.jsonl", "features.jsonl",
         "scoring_receipt.json", "SCORING_SEALED.json",
-    ):
-        if (scoring / name).exists():
-            raise FileExistsError(f"create-only scoring artifact exists: {name}")
+    )
+    if (scoring / "SCORING_SEALED.json").exists():
+        verify_scores(scoring)
+        return _read_json(scoring / "scoring_receipt.json", "scoring receipt")[0]
+    # A crash during terminal publication is recoverable from the ledger.  No
+    # unsealed terminal file is authoritative.
+    for name in terminal_names:
+        path = scoring / name
+        if path.exists():
+            path.unlink()
     preflight, preflight_source = _read_json(scoring / "preflight.json", "score preflight")
     cache = GlobalScoreCache(Path(cache_root), score_cache_context())
     if _cache_binding(cache) != preflight["score_cache"]["binding"]:  # type: ignore[index]
         raise ValueError("score cache changed after preflight")
-    windows = list(_iter_jsonl(scoring / "windows.jsonl", "score windows"))
-    representatives: dict[str, Mapping[str, object]] = {}
-    for row in windows:
-        key = str(row.get("cache_key"))
-        representatives.setdefault(key, row)
-    misses = [
-        row for key, row in sorted(representatives.items())
-        if cache.get(query_text=str(row["query"]), text=str(row["window_text"])) is None
-    ]
-    if len(misses) != preflight.get("unique_cache_miss_count"):
-        raise ValueError("cache misses changed after preflight")
+    ledger_path = scoring / "score_ledger.jsonl"
+    ledger_scores, ledger_sources, ledger_lineage = _load_score_ledger(ledger_path)
     scorer = runner
     started = time.perf_counter()
-    if misses and scorer is None:
-        scorer = _LocalMiniLMRunner(Path(str(preflight["model_materialization_receipt"])))
-    for start in range(0, len(misses), BATCH_SIZE):
-        batch = misses[start : start + BATCH_SIZE]
+    seen_keys: set[str] = set()
+    batch: list[Mapping[str, object]] = []
+    cached_ledger_batch: list[dict[str, object]] = []
+
+    def flush_cached_ledger() -> None:
+        if not cached_ledger_batch:
+            return
+        _append_score_ledger(ledger_path, cached_ledger_batch)
+        for row in cached_ledger_batch:
+            key = str(row["cache_key"])
+            ledger_scores[key] = float(row["score"])
+            ledger_lineage[key] = (
+                str(row["query_sha256"]), str(row["window_sha256"])
+            )
+            ledger_sources["preflight_cache"] += 1
+        cached_ledger_batch.clear()
+
+    def flush_batch() -> None:
+        nonlocal scorer
+        if not batch:
+            return
+        if scorer is None:
+            scorer = _LocalMiniLMRunner(
+                Path(str(preflight["model_materialization_receipt"]))
+            )
         values = scorer.score(batch)  # type: ignore[union-attr]
         if len(values) != len(batch):
             raise ValueError("MiniLM runner returned the wrong score count")
-        cache.add_many(
-            (str(row["query"]), str(row["window_text"]), _float32(score))
-            for row, score in zip(batch, values, strict=True)
-        )
-    score_rows: list[dict[str, object]] = []
-    for row in windows:
-        score = cache.get(query_text=str(row["query"]), text=str(row["window_text"]))
-        if score is None:
-            raise ValueError("frozen window lacks a local score")
-        score_rows.append(
+        ledger_rows = [
             {
-                **row,
+                "schema_version": SCORE_LEDGER_SCHEMA_VERSION,
+                "cache_key": str(row["cache_key"]),
+                "query_sha256": str(row["query_sha256"]),
+                "window_sha256": str(row["window_sha256"]),
+                "score": _float32(value),
+                "source": "local_runner",
+            }
+            for row, value in zip(batch, values, strict=True)
+        ]
+        _append_score_ledger(ledger_path, ledger_rows)
+        for row in ledger_rows:
+            ledger_scores[str(row["cache_key"])] = float(row["score"])
+            ledger_lineage[str(row["cache_key"])] = (
+                str(row["query_sha256"]), str(row["window_sha256"])
+            )
+            ledger_sources["local_runner"] += 1
+        batch.clear()
+
+    for row in _iter_jsonl(scoring / "windows.jsonl", "score windows"):
+        key = str(row["cache_key"])
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        if key in ledger_scores:
+            if ledger_lineage[key] != (
+                str(row["query_sha256"]), str(row["window_sha256"])
+            ):
+                raise ValueError("run-local ledger lineage differs from score plan")
+            continue
+        cached = cache.get(query_text=str(row["query"]), text=str(row["window_text"]))
+        if cached is not None:
+            ledger_row = {
+                "schema_version": SCORE_LEDGER_SCHEMA_VERSION,
+                "cache_key": key,
+                "query_sha256": str(row["query_sha256"]),
+                "window_sha256": str(row["window_sha256"]),
+                "score": _float32(cached),
+                "source": "preflight_cache",
+            }
+            cached_ledger_batch.append(ledger_row)
+            if len(cached_ledger_batch) == BATCH_SIZE:
+                flush_cached_ledger()
+        else:
+            batch.append(row)
+            if len(batch) == BATCH_SIZE:
+                flush_batch()
+    flush_batch()
+    flush_cached_ledger()
+    if len(ledger_scores) != preflight.get("unique_pair_count"):
+        raise ValueError("run-local ledger does not cover every unique planned pair")
+
+    stage = scoring / ".score-stage"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir()
+    document_rows: list[dict[str, object]] = []
+    score_count = 0
+    current_identity: tuple[str, str, str] | None = None
+    current_rows: list[dict[str, object]] = []
+    scores_path = stage / "scores.jsonl"
+    documents_path = stage / "document_scores.jsonl"
+    with scores_path.open("xb") as score_sink, documents_path.open("xb") as document_sink:
+        for planned in _iter_jsonl(scoring / "windows.jsonl", "score windows"):
+            key = str(planned["cache_key"])
+            if key not in ledger_scores:
+                raise ValueError("run-local ledger lacks a planned window score")
+            scored = {
+                **planned,
                 "schema_version": SCORE_SCHEMA_VERSION,
-                "score": _float32(score),
+                "score": ledger_scores[key],
                 "model": MODEL_ID,
                 "model_revision": MODEL_REVISION,
             }
-        )
-    documents = _aggregate_query_documents(score_rows)
-    bound_documents = [
-        {
-            "schema_version": DOCUMENT_SCORE_SCHEMA_VERSION,
-            **row,
-        }
-        for row in documents
-    ]
-    features = [
+            score_sink.write(_compact_bytes(scored) + b"\n")
+            score_count += 1
+            identity = (
+                str(scored["topic_id"]),
+                str(scored["query_id"]),
+                str(scored["document_id"]),
+            )
+            if current_identity is not None and identity != current_identity:
+                document = {
+                    "schema_version": DOCUMENT_SCORE_SCHEMA_VERSION,
+                    **_aggregate_query_documents(current_rows)[0],
+                }
+                document_sink.write(_compact_bytes(document) + b"\n")
+                document_rows.append(document)
+                current_rows = []
+            current_identity = identity
+            current_rows.append(scored)
+        if current_rows:
+            document = {
+                "schema_version": DOCUMENT_SCORE_SCHEMA_VERSION,
+                **_aggregate_query_documents(current_rows)[0],
+            }
+            document_sink.write(_compact_bytes(document) + b"\n")
+            document_rows.append(document)
+        _flush_file(score_sink)
+        _flush_file(document_sink)
+    feature_rows = [
         {**row, "schema_version": FEATURE_SCHEMA_VERSION}
-        for row in percentile_features(bound_documents)
+        for row in percentile_features(document_rows)
     ]
-    output_rows = {
-        "scores.jsonl": score_rows,
-        "document_scores.jsonl": bound_documents,
-        "features.jsonl": features,
-    }
-    for name, rows in output_rows.items():
-        _write_exclusive(scoring / name, b"".join(_compact_bytes(row) + b"\n" for row in rows))
+    features_path = stage / "features.jsonl"
+    with features_path.open("xb") as feature_sink:
+        for row in feature_rows:
+            feature_sink.write(_compact_bytes(row) + b"\n")
+        _flush_file(feature_sink)
     elapsed = time.perf_counter() - started
+    output_names = ("scores.jsonl", "document_scores.jsonl", "features.jsonl")
     receipt = {
         "schema_version": SCORING_RECEIPT_SCHEMA_VERSION,
         "status": "complete",
         "preflight_sha256": _sha256_bytes(preflight_source),
-        "planned_window_count": len(windows),
-        "completed_window_count": len(score_rows),
-        "document_score_count": len(bound_documents),
-        "feature_count": len(features),
-        "unique_forward_pair_count": len(misses),
-        "cache_reuse_pair_count": len(representatives) - len(misses),
+        "score_plan_root_sha256": preflight_verification["root_sha256"],
+        "planned_window_count": int(preflight["window_count"]),
+        "completed_window_count": score_count,
+        "document_score_count": len(document_rows),
+        "feature_count": len(feature_rows),
+        "unique_forward_pair_count": ledger_sources["local_runner"],
+        "cache_reuse_pair_count": ledger_sources["preflight_cache"],
         "elapsed_seconds": elapsed,
         "peak_device_memory_bytes": int(getattr(scorer, "peak_device_memory_bytes", 0)),
         "peak_host_memory_bytes": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024,
@@ -1011,21 +1309,30 @@ def run_scores(
         "hosted_calls": 0,
         "paid_calls": 0,
         "qrels_opened": False,
-        "artifacts": {name: _file_binding(scoring / name) for name in output_rows},
+        "ledger": _file_binding(ledger_path),
+        "shared_cache_mutated": False,
+        "artifacts": {name: _file_binding(stage / name) for name in output_names},
     }
-    _write_exclusive(scoring / "scoring_receipt.json", _pretty_bytes(receipt))
+    _write_exclusive(stage / "scoring_receipt.json", _pretty_bytes(receipt))
     files = {
-        name: _file_binding(scoring / name)
-        for name in (*output_rows, "scoring_receipt.json")
+        name: _file_binding(stage / name)
+        for name in (*output_names, "scoring_receipt.json")
     }
+    files["score_ledger.jsonl"] = _file_binding(ledger_path)
     seal = {
         "schema_version": SCORING_SEAL_SCHEMA_VERSION,
         "experiment_id": EXPERIMENT_ID,
-        "score_plan_root_sha256": verify_preflight(scoring)["root_sha256"],
+        "score_plan_root_sha256": preflight_verification["root_sha256"],
         "files": files,
         "root_sha256": _sha256_bytes(_compact_bytes(files)),
     }
-    _write_exclusive(scoring / "SCORING_SEALED.json", _pretty_bytes(seal))
+    _write_exclusive(stage / "SCORING_SEALED.json", _pretty_bytes(seal))
+    for name in (*output_names, "scoring_receipt.json"):
+        os.replace(stage / name, scoring / name)
+        if callable(publish_hook):
+            publish_hook(name)
+    os.replace(stage / "SCORING_SEALED.json", scoring / "SCORING_SEALED.json")
+    stage.rmdir()
     return receipt
 
 
@@ -1053,6 +1360,7 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
             "document_scores.jsonl",
             "features.jsonl",
             "scoring_receipt.json",
+            "score_ledger.jsonl",
         }
         or seal.get("root_sha256") != _sha256_bytes(_compact_bytes(files))
     ):
@@ -1073,6 +1381,9 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
         or receipt.get("hosted_calls") != 0
         or receipt.get("paid_calls") != 0
         or receipt.get("qrels_opened") is not False
+        or receipt.get("shared_cache_mutated") is not False
+        or receipt.get("score_plan_root_sha256") != preflight["root_sha256"]
+        or receipt.get("ledger") != _file_binding(scoring / "score_ledger.jsonl")
         or not isinstance(artifacts, Mapping)
         or set(artifacts)
         != {"scores.jsonl", "document_scores.jsonl", "features.jsonl"}
@@ -1088,10 +1399,33 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
     pair_identities, planned_window_ids = _validate_plan_rows(
         scoring, preflight_payload
     )
+    ledger_scores, ledger_sources, ledger_lineage = _load_score_ledger(
+        scoring / "score_ledger.jsonl"
+    )
+    if (
+        len(ledger_scores) != preflight_payload.get("unique_pair_count")
+        or ledger_sources["local_runner"] != receipt.get("unique_forward_pair_count")
+        or ledger_sources["preflight_cache"] != receipt.get("cache_reuse_pair_count")
+    ):
+        raise ValueError("run-local ledger coverage differs")
     scored_window_ids: set[str] = set()
-    for row in _iter_jsonl(scoring / "scores.jsonl", "window scores"):
+    recomputed_documents: list[dict[str, object]] = []
+    current_identity: tuple[str, str, str] | None = None
+    current_rows: list[dict[str, object]] = []
+    planned_rows = _iter_jsonl(scoring / "windows.jsonl", "score windows")
+    score_rows = _iter_jsonl(scoring / "scores.jsonl", "window scores")
+    for planned, row in zip_longest(planned_rows, score_rows):
+        if planned is None or row is None:
+            raise ValueError("window score row count differs from plan")
         window_id = row.get("window_id")
         score = row.get("score")
+        expected_lineage = {
+            **planned,
+            "schema_version": SCORE_SCHEMA_VERSION,
+            "model": MODEL_ID,
+            "model_revision": MODEL_REVISION,
+        }
+        observed_lineage = {key: value for key, value in row.items() if key != "score"}
         if (
             row.get("schema_version") != SCORE_SCHEMA_VERSION
             or window_id not in planned_window_ids
@@ -1101,14 +1435,43 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
             or not math.isfinite(float(score))
             or row.get("model") != MODEL_ID
             or row.get("model_revision") != MODEL_REVISION
+            or observed_lineage != expected_lineage
+            or ledger_scores.get(str(row.get("cache_key"))) != _float32(score)
+            or ledger_lineage.get(str(row.get("cache_key")))
+            != (str(row.get("query_sha256")), str(row.get("window_sha256")))
         ):
             raise ValueError("window score identity/coverage is invalid")
         scored_window_ids.add(str(window_id))
+        identity = (
+            str(row["topic_id"]), str(row["query_id"]), str(row["document_id"])
+        )
+        if current_identity is not None and identity != current_identity:
+            recomputed_documents.append(
+                {
+                    "schema_version": DOCUMENT_SCORE_SCHEMA_VERSION,
+                    **_aggregate_query_documents(current_rows)[0],
+                }
+            )
+            current_rows = []
+        current_identity = identity
+        current_rows.append(row)
+    if current_rows:
+        recomputed_documents.append(
+            {
+                "schema_version": DOCUMENT_SCORE_SCHEMA_VERSION,
+                **_aggregate_query_documents(current_rows)[0],
+            }
+        )
     if scored_window_ids != planned_window_ids:
         raise ValueError("window score coverage differs from the plan")
 
     document_identities: set[tuple[str, str, str]] = set()
-    for row in _iter_jsonl(scoring / "document_scores.jsonl", "document scores"):
+    for expected, row in zip_longest(
+        recomputed_documents,
+        _iter_jsonl(scoring / "document_scores.jsonl", "document scores"),
+    ):
+        if expected is None or row is None or row != expected:
+            raise ValueError("document score differs from aggregate_top4 recomputation")
         identity = (
             str(row.get("topic_id")),
             str(row.get("query_id")),
@@ -1128,8 +1491,17 @@ def verify_scores(scoring_dir: Path) -> dict[str, object]:
     if document_identities != pair_identities:
         raise ValueError("document score coverage differs from the pair plan")
 
+    recomputed_features = [
+        {**row, "schema_version": FEATURE_SCHEMA_VERSION}
+        for row in percentile_features(recomputed_documents)
+    ]
     feature_identities: set[tuple[str, str, str]] = set()
-    for row in _iter_jsonl(scoring / "features.jsonl", "percentile features"):
+    for expected, row in zip_longest(
+        recomputed_features,
+        _iter_jsonl(scoring / "features.jsonl", "percentile features"),
+    ):
+        if expected is None or row is None or row != expected:
+            raise ValueError("percentile feature differs from recomputation")
         identity = (
             str(row.get("topic_id")),
             str(row.get("query_id")),
