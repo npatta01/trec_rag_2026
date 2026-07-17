@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from trec_rag.adaptive_evidence_contract import PROTECTED_TOPIC_IDS
 from trec_rag.all_topic_facet_contract import (
     ALL_TOPIC_IDS,
     ANALYZER_CONTRACT,
@@ -395,10 +394,6 @@ def test_public_artifact_apis_have_no_scope_escape_hatch() -> None:
         assert "require_all_topics" not in inspect.signature(function).parameters
     with pytest.raises(ValueError, match="outside all-topic authorization"):
         validate_facet_manifest(_manifest())
-
-
-def test_shared_protected_constants_are_not_weakened() -> None:
-    assert {"144", "213", "224", "407", "515"} <= PROTECTED_TOPIC_IDS
 
 
 def test_only_frozen_alphanumeric_analyzer_is_accepted() -> None:

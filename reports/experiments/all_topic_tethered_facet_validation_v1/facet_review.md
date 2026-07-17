@@ -73,5 +73,6 @@ Scrabble, essay-writing, or generic-process wording.
 | 897 | 7 |
 | **Total** | **148** |
 
-The real planning directory remains unfrozen pending a clean independent
-re-review of these resolutions.
+These resolutions were independently re-reviewed before the real planning
+directory was frozen. The canonical planning root is
+`bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2`.
