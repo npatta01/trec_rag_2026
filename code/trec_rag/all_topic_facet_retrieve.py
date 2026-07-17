@@ -68,6 +68,7 @@ LIMITER_GRANT_LEDGER_PATH = LIMITER_STATE_PATH.with_name(
     "all-topic-limiter-grants-v1.jsonl"
 )
 _TIMEOUT_SECONDS = 60.0
+_START_EVIDENCE_TOLERANCE_SECONDS = 0.001
 _GRANT_LEDGER_SCHEMA_VERSION = "all-topic-limiter-grant-v1"
 _REQUEST_KEY_HEADER = "X-TREC-RAG-Request-Key"
 
@@ -606,6 +607,7 @@ def build_union(
             raise ValueError("candidate stream provenance is incomplete")
         _require_sha(provenance["query_sha256"], "stream query hash")
         _require_sha(provenance["response_sha256"], "stream response hash")
+        provenance["text_sha256"] = _sha256_bytes(text.encode("utf-8"))
         if "score" in row:
             provenance["score"] = row["score"]
         key = (topic_id, document_id)
@@ -620,7 +622,9 @@ def build_union(
             }
             by_identity[key] = existing
             union.append(existing)
-        elif existing["text"] != text:
+        elif existing["text"] != text and " ".join(
+            str(existing["text"]).split()
+        ) != " ".join(text.split()):
             raise ValueError("same topic/document has conflicting passage text")
         stream_provenance = existing["stream_provenance"]
         assert isinstance(stream_provenance, list)
@@ -1544,9 +1548,18 @@ def _verify_request_start_events(
         raise ValueError("complete shared attempt ledger is missing request starts")
     chronological = sorted(epoch for epoch, _ in events.values())
     deltas = [right - left for left, right in zip(chronological, chronological[1:])]
-    if any(delta < REQUEST_INTERVAL_SECONDS for delta in deltas):
-        raise ValueError("shared request starts violate the 3-second limiter interval")
+    _validate_request_start_deltas(deltas)
     return len(events), min(deltas) if deltas else None, deltas, grant_event_ids
+
+
+def _validate_request_start_deltas(deltas: Sequence[float]) -> None:
+    """Allow only sub-millisecond wall-clock measurement jitter."""
+
+    if any(
+        delta < REQUEST_INTERVAL_SECONDS - _START_EVIDENCE_TOLERANCE_SECONDS
+        for delta in deltas
+    ):
+        raise ValueError("shared request starts violate the 3-second limiter interval")
 
 
 def _verify_retrieval(

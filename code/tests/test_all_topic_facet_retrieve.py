@@ -332,6 +332,69 @@ def test_union_deduplicates_by_topic_and_document_with_provenance() -> None:
     )
 
 
+def test_union_accepts_whitespace_only_text_variants_and_preserves_first_text() -> None:
+    original = [
+        {
+            "topic_id": "1",
+            "document_id": "doc-a",
+            "text": "Heading\n\nFirst line.\nSecond line.",
+            "stream_id": "original",
+            "stream_rank": 1,
+            "request_identity": {"variant_name": "original"},
+            "query_sha256": "a" * 64,
+            "response_sha256": "b" * 64,
+        }
+    ]
+    facets = [
+        {
+            "topic_id": "1",
+            "document_id": "doc-a",
+            "text": "Heading First line. Second line.",
+            "stream_id": "facet-a",
+            "stream_rank": 2,
+            "request_identity": {"variant_name": "facet-a"},
+            "query_sha256": "c" * 64,
+            "response_sha256": "d" * 64,
+        }
+    ]
+
+    rows = build_union(original, facets)
+
+    assert rows[0]["text"] == original[0]["text"]
+    assert [item["text_sha256"] for item in rows[0]["stream_provenance"]] == [
+        hashlib.sha256(original[0]["text"].encode()).hexdigest(),
+        hashlib.sha256(facets[0]["text"].encode()).hexdigest(),
+    ]
+
+
+def test_union_rejects_non_whitespace_text_conflict() -> None:
+    rows = [
+        {
+            "topic_id": "1",
+            "document_id": "doc-a",
+            "text": "Materially different passage one.",
+            "stream_id": "original",
+            "stream_rank": 1,
+            "request_identity": {"variant_name": "original"},
+            "query_sha256": "a" * 64,
+            "response_sha256": "b" * 64,
+        },
+        {
+            "topic_id": "1",
+            "document_id": "doc-a",
+            "text": "Materially different passage two.",
+            "stream_id": "facet-a",
+            "stream_rank": 1,
+            "request_identity": {"variant_name": "facet-a"},
+            "query_sha256": "c" * 64,
+            "response_sha256": "d" * 64,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="conflicting passage text"):
+        build_union(rows[:1], rows[1:])
+
+
 def test_limiter_spaces_attempts_and_failed_identity_is_never_retried(tmp_path: Path) -> None:
     transport = _Transport(fail_variant="facet-b")
     result = _run_synthetic_retrieval(
@@ -648,6 +711,13 @@ def test_request_start_events_survive_cache_only_restart(monkeypatch, tmp_path: 
     metadata = [json.loads(path.read_text()) for path in sorted((second / "ledger" / "metadata").glob("*.json"))]
     assert all(row["limiter_granted_start_utc"].endswith("Z") for row in metadata)
     assert len({row["limiter_granted_request_key"] for row in metadata}) == 3
+
+
+def test_request_start_verifier_allows_sub_millisecond_wall_clock_jitter() -> None:
+    module._validate_request_start_deltas([2.9999120235443115, 3.0001])
+
+    with pytest.raises(ValueError, match="3-second limiter interval"):
+        module._validate_request_start_deltas([2.998])
 
 
 def test_shared_cache_claim_allows_only_one_call_per_identity(tmp_path: Path) -> None:
