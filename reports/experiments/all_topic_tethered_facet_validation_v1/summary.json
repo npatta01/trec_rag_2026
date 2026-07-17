@@ -65,6 +65,16 @@
     "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
   },
   "schema_version": "all-topic-tethered-report-summary-v1",
+  "statistics": {
+    "bootstrap_ci_95": [
+      0.02117981702789347,
+      0.05051801483632322
+    ],
+    "holm_adjusted_p_value": 6.67572021484375e-06,
+    "primary_mean_recall_delta": 0.03393849239169528,
+    "raw_p_value": 2.6226043701171875e-06,
+    "test": "paired exact sign-flip test"
+  },
   "topic_ids": [
     "14",
     "31",

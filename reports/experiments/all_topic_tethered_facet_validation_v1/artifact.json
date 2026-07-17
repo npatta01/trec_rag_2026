@@ -17,7 +17,7 @@
       "sha256": "41b7a72d585960d78223d45bc6e0d456c05ded500afdc83b93b50a83edc06c8a"
     }
   },
-  "html_sha256": "ddb52ef404318899bd189058c8d635f8add41f92a86e3451a3d569fcef6ba3ae",
+  "html_sha256": "859472f4a5e0b0d829b7e88df43ffc50748df429fc239fcaf4fed03f5d28bf29",
   "sanitization": {
     "credentials": false,
     "document_ids": false,
@@ -34,5 +34,6 @@
     "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
     "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
   },
-  "summary_sha256": "03c95de5bcbfb92124f489b71df9dd8eec93891ca667877c51724e0a36aae3c3"
+  "sqlite_sha256": "648c36024bf450aafb37cf2c0874457303d1ae02c1fea1e14dfc1578cd659110",
+  "summary_sha256": "e8f4e15357178f1798ccad6b82392039b772e4f5f202e2bc3c99bdf61d6b1010"
 }
