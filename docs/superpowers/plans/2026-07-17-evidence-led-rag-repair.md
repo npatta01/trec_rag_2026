@@ -21,6 +21,15 @@
 - Browser QA must use disk-backed temporary/profile/cache directories and clean only directories it creates.
 - Every code or behavior change follows red-green TDD; documentation-only generated outputs must be covered by a smoke or contract test.
 
+## Verification evidence (2026-07-17)
+
+- Tasks 1 through 3 completed their red-green cycles and independent reviews. The retained commits are `e8e71a7` plus seal/portability fix `2cdd8c6`, `7978150` plus receipt-status fix `9b877d7`, and `f4339c1` plus URL-hardening fix `9cdfd22`.
+- The Task 4 integration suite passed `115` tests, including `test_experiment_records.py`; `node reports/index.test.js` passed and `git diff --check` was clean.
+- The canonical report verifier passed for `22` topics and `6` arms. The tracked and live report SHA-256 is `65225919629e15966cf4a46837b6df73fba128f5508b3bd6c4c371f0e8499d66`; the summary SHA-256 is `4f5ff138447f6c10d89242759cdcd70e186ad8346cee2e396cbe259f0273b228`.
+- Sanitized JSON/report checks found no credentials, absolute home paths, raw document text/identifier fields, or external runtime dependencies. `artifact.json` verification passed.
+- The private portal and direct report returned HTTP 200. The live report body matched the tracked SHA-256, required title/capture/Topic 300 signals were present, and `tailscale serve status --json` showed the tailnet HTTPS file handler at `/home/npatta01/codex-rendered` with no Funnel configuration.
+- Whole-branch independent review remains the final open gate below; completion must be recorded only after that review resolves every Critical or Important finding.
+
 ---
 
 ### Task 1: Reproducible Topic 31/300 postmortem and bounded recovery replay
@@ -36,7 +45,7 @@
 - Consumes: canonical `rankings_v3/rankings.jsonl`, `rankings_v3/audit.jsonl`, UMBRELA qrels, tracked `facet_manifest.json`, and the authenticated full `retrieval/accepted_union.jsonl` plus `scoring/features.jsonl` when replaying ablations.
 - Produces: typed boundary-analysis, recovery-replay, and Markdown-rendering functions plus sanitized deterministic `postmortem.json`/`postmortem.md`.
 
-- [ ] **Step 1: Write failing fixture tests for cutoff mechanics and unknown labels**
+- [x] **Step 1: Write failing fixture tests for cutoff mechanics and unknown labels**
 
 ```python
 def test_boundary_analysis_keeps_unjudged_separate() -> None:
@@ -59,7 +68,7 @@ def test_rank_cap_keeps_original_candidates_and_rejects_deep_facet_only() -> Non
     assert eligible_documents_for_facet_cap(provenance, 100) == {"original", "shallow"}
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -69,7 +78,7 @@ TMPDIR="$HOME/.cache/trec-rag/tmp" .venv/bin/python -m pytest -q code/tests/test
 
 Expected: collection fails because `trec_rag.topic_failure_postmortem` does not exist.
 
-- [ ] **Step 3: Implement pure boundary, attribution, and replay helpers**
+- [x] **Step 3: Implement pure boundary, attribution, and replay helpers**
 
 Implement four public functions with these typed parameters and returns:
 
@@ -85,7 +94,7 @@ or above the cap; ineligible documents are appended in canonical RRF order.
 Also report a no-narrative-score diagnostic using the unchanged remaining DUAL
 weights, clearly labeled post-hoc and not promotion-eligible.
 
-- [ ] **Step 4: Add CLI validation and canonical regression assertions**
+- [x] **Step 4: Add CLI validation and canonical regression assertions**
 
 The CLI accepts explicit `--source-root`, `--qrels`, `--facet-manifest`, and
 `--output-dir` paths. It verifies canonical seals before analysis and asserts:
@@ -101,13 +110,14 @@ assert analysis["topics"]["300"]["facet_bucket_yield"] == {
 }
 ```
 
-- [ ] **Step 5: Run the canonical offline replay and write sanitized outputs**
+- [x] **Step 5: Run the canonical offline replay and write sanitized outputs**
 
-Run:
+Set `ALL_TOPIC_SOURCE_ROOT` to the authenticated local all-topic output directory,
+then run:
 
 ```bash
 TMPDIR="$HOME/.cache/trec-rag/tmp" .venv/bin/python -m trec_rag.topic_failure_postmortem \
-  --source-root /home/npatta01/.codex/worktrees/41f9/trec_rag_2026/outputs/all_topic_tethered_facet_validation_v1 \
+  --source-root "$ALL_TOPIC_SOURCE_ROOT" \
   --qrels trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels \
   --facet-manifest reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json \
   --output-dir reports/experiments/all_topic_tethered_facet_validation_v1
@@ -116,7 +126,7 @@ TMPDIR="$HOME/.cache/trec-rag/tmp" .venv/bin/python -m trec_rag.topic_failure_po
 Expected: deterministic `postmortem.json` and `postmortem.md`; no document text,
 credentials, absolute paths, or raw model scores are written.
 
-- [ ] **Step 6: Verify and commit Task 1**
+- [x] **Step 6: Verify and commit Task 1**
 
 Run:
 
@@ -159,7 +169,7 @@ git commit -m "analyze topic retrieval failures"
 - Consumes: merged experiment records, Task 1 postmortem, and explicitly labeled branch-only/uncommitted evidence.
 - Produces: one human state ledger, one machine run row for the merged all-topic experiment, and report navigation that exposes the latest evidence.
 
-- [ ] **Step 1: Write failing history and reports-index contract tests**
+- [x] **Step 1: Write failing history and reports-index contract tests**
 
 ```python
 def test_history_names_merged_decisions_and_separates_unmerged_work() -> None:
@@ -180,7 +190,7 @@ Extend `reports/index.test.js` so it fails until the report card links
 `experiments/all_topic_tethered_facet_validation_v1/report.html` and exposes an
 `Experiment history` link.
 
-- [ ] **Step 2: Run contract tests and verify RED**
+- [x] **Step 2: Run contract tests and verify RED**
 
 Run:
 
@@ -191,7 +201,7 @@ node reports/index.test.js
 
 Expected: both commands fail on missing history/report signals.
 
-- [ ] **Step 3: Rewrite the human ledger and update machine indexes**
+- [x] **Step 3: Rewrite the human ledger and update machine indexes**
 
 `experiment.md` must contain, in order:
 
@@ -210,14 +220,14 @@ paths. Correct the old coverage manifest's machine-specific cache path, then
 regenerate `runs.csv` through `trec_rag.experiment_records`; do not hand-edit
 the generated CSV.
 
-- [ ] **Step 4: Reconcile the completed all-topic plan**
+- [x] **Step 4: Reconcile the completed all-topic plan**
 
 Add a dated completion summary linking canonical roots, tests, report, private
 bundle, and retained decision. Mark only steps proven by committed artifacts or
 sealed receipts as complete; leave any genuinely unperformed administrative
 step unchecked with a short reason.
 
-- [ ] **Step 5: Verify and commit Task 2**
+- [x] **Step 5: Verify and commit Task 2**
 
 Run:
 
@@ -259,7 +269,7 @@ git commit -m "document experiment decisions and status"
 - Consumes: canonical evaluation metrics plus Task 1 `postmortem.json`.
 - Produces: graded/binary capture datasets, failure-evidence datasets, expanded progressive HTML, and a reusable `run_headless_chrome.py` command.
 
-- [ ] **Step 1: Write failing report assertions**
+- [x] **Step 1: Write failing report assertions**
 
 Add tests requiring:
 
@@ -279,7 +289,7 @@ Add a wrapper test with a fake Chrome executable that records its environment
 and arguments. It must prove that `TMPDIR`, `--user-data-dir`, and
 `--disk-cache-dir` are all inside the wrapper-created disk-backed root.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -291,7 +301,7 @@ TMPDIR="$HOME/.cache/trec-rag/tmp" .venv/bin/python -m pytest -q \
 
 Expected: failures identify missing capture/postmortem fields and wrapper.
 
-- [ ] **Step 3: Extend report datasets, summary, SQLite, and HTML**
+- [x] **Step 3: Extend report datasets, summary, SQLite, and HTML**
 
 Add `graded_recall`, `graded_gain`, `known_relevant_total`, and
 `graded_gain_total` to depth rows and SQLite. Add one answer-first section with
@@ -300,7 +310,7 @@ detailed facet attribution and incoming/outgoing counts live inside native
 `details/summary` disclosure. Keep all existing sections, ids, source hashes,
 tables, charts, and caveats unless directly dependent on the new fields.
 
-- [ ] **Step 4: Implement the disk-backed Chrome wrapper**
+- [x] **Step 4: Implement the disk-backed Chrome wrapper**
 
 The wrapper CLI is:
 
@@ -316,7 +326,7 @@ root below `--scratch-root` or `$HOME/.cache/trec-rag/browser-qa`, exports
 `TMPDIR` and `XDG_CACHE_HOME`, passes private profile/cache flags, checks the PNG
 exists and is nonempty, and removes only the private root in a `finally` block.
 
-- [ ] **Step 5: Rebuild and verify the canonical report**
+- [x] **Step 5: Rebuild and verify the canonical report**
 
 Run:
 
@@ -329,7 +339,7 @@ TMPDIR="$HOME/.cache/trec-rag/tmp" .venv/bin/python -m trec_rag.build_all_topic_
   --report reports/experiments/all_topic_tethered_facet_validation_v1
 ```
 
-- [ ] **Step 6: Verify desktop/mobile rendering and commit Task 3**
+- [x] **Step 6: Verify desktop/mobile rendering and commit Task 3**
 
 Run focused tests, generate 1440×1100 and 390×844 screenshots through the
 wrapper, inspect both screenshots, confirm `scrollWidth <= clientWidth`, and
@@ -358,7 +368,7 @@ git commit -m "expand retrieval evidence report"
 - Consumes: reviewed Tasks 1 through 3.
 - Produces: verified repository state, exact rendered copy, current tailnet-only link, and completed progress evidence.
 
-- [ ] **Step 1: Run the full relevant test suite**
+- [x] **Step 1: Run the full relevant test suite**
 
 ```bash
 TMPDIR="$HOME/.cache/trec-rag/tmp" .venv/bin/python -m pytest -q \
@@ -373,19 +383,19 @@ node reports/index.test.js
 git diff --check
 ```
 
-- [ ] **Step 2: Run secret, portability, and artifact checks**
+- [x] **Step 2: Run secret, portability, and artifact checks**
 
 Verify no tracked diff contains `.env`, bearer tokens, API tokens, absolute
 active-worktree paths, raw document text, or non-tailnet URLs. Verify the report
 has no external runtime dependency and matches `artifact.json`.
 
-- [ ] **Step 3: Update the authorized private rendered copy**
+- [x] **Step 3: Update the authorized private rendered copy**
 
 Copy the exact verified `report.html` to the existing Tailscale Serve document
 root and change the portal description from stale canonical v2 wording to
 portable canonical v3 plus postmortem/graded-capture wording.
 
-- [ ] **Step 4: Verify live delivery**
+- [x] **Step 4: Verify live delivery**
 
 Confirm:
 

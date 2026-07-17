@@ -103,7 +103,7 @@ def test_wrapper_rejects_option_shaped_url_before_starting_browser(tmp_path: Pat
     [
         "file:relative-report.html",
         "https:///missing-host/report.html",
-        "ftp://example.test/report.html",
+        "ftp://npatta01-framework.tail481212.ts.net/report.html",
     ],
 )
 def test_wrapper_rejects_malformed_or_unsupported_url(
@@ -122,8 +122,8 @@ def test_wrapper_rejects_malformed_or_unsupported_url(
 @pytest.mark.parametrize(
     "url",
     [
-        "http://example.test/report.html",
-        "https://example.test/report.html",
+        "http://npatta01-framework.tail481212.ts.net/report.html",
+        "https://npatta01-framework.tail481212.ts.net/report.html",
     ],
 )
 def test_wrapper_accepts_http_and_https_urls(tmp_path: Path, url: str) -> None:
