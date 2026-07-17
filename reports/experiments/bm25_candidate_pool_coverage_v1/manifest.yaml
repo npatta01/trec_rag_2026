@@ -25,7 +25,7 @@ tracked_record_files:
 local_artifacts:
   full_diagnostic_json: tmp/bm25_candidate_pool_coverage.json
   full_diagnostic_markdown: tmp/bm25_candidate_pool_coverage.md
-  cache_dir: /home/nidhin/projects/trec_rag/outputs/cache_demo_two_topics_hits1000/cache
+  cache_dir: cache/retrieval/pyserini_remote
   note: Full per-topic diagnostics are local ignored files, not tracked in git.
 
 metrics:

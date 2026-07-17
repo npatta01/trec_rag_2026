@@ -4,6 +4,39 @@
 
 **Goal:** Build and run a uniform 22-topic retrospective validation that determines whether protected, narrative-tethered facet ordering introduces any topic-level recall regression versus RRF.
 
+## Completion summary — 2026-07-17
+
+**Outcome:** implementation and portable canonical v3 evidence merged in
+`origin/master` commit `75e3bf1`; **retain RRF**. The primary DUAL arm improved
+pooled known-relevant capture but lost 7 documents on Topic 31 and 3 on Topic
+300 at depth 1,000, so it and every alternative failed the preregistered
+zero-loss guard.
+
+Durable evidence:
+
+- [canonical sealed roots](../../../reports/experiments/all_topic_tethered_facet_validation_v1/artifact.json)
+  for planning, retrieval, score planning, scoring, rankings v3, and evaluation
+  v3;
+- [contract, retrieval, scoring, ranking, evaluation, and report tests](../../../code/tests/)
+  plus the final independent-review status recorded in the merge-hardening
+  amendment below;
+- [self-contained decision report](../../../reports/experiments/all_topic_tethered_facet_validation_v1/report.html)
+  and [machine summary](../../../reports/experiments/all_topic_tethered_facet_validation_v1/summary.json);
+- [private verification-bundle receipt and SHA-256](../../../reports/experiments/all_topic_tethered_facet_validation_v1/README.md),
+  with restoration instructions and no automatic download; and
+- [facet-content review](../../../reports/experiments/all_topic_tethered_facet_validation_v1/facet_review.md)
+  and retained-decision rationale in the report.
+
+Checkboxes below are reconciled from committed files, sealed roots, and the
+recorded merge-hardening review. Historical RED command output was not retained
+as a durable artifact, so the seven RED-execution steps remain unchecked rather
+than being inferred after the fact. **Unperformed:** the planned desktop/mobile
+Chrome accessibility pass did not complete under the original host setup.
+**Not durably evidenced:** the original live HTTPS hash and Funnel-off receipt.
+The local private rendered copy exists and matches the tracked HTML, but that
+does not prove the full historical Serve check. Those two combined steps
+therefore also remain unchecked.
+
 **Architecture:** A new experiment-specific contract authorizes exactly 22 development topics without changing shared protected-topic guards. Reusable planner, retrieval, scoring, ranking, evaluation, and report modules consume small authenticated artifacts; every ranking freezes before the evaluator can open qrels. Candidate retrieval remains top-1,000 for narratives and top-200 per facet, with an explicit depth-saturation diagnostic rather than an unplanned deeper search.
 
 **Tech Stack:** Python 3.12, pytest, existing Pyserini remote retrieval ledger and persistent limiter, `cross-encoder/ms-marco-MiniLM-L6-v2`, ROCm PyTorch, NumPy, standard-library JSON/SQLite/HTML, headless Chrome, and the private Tailscale Serve portal.
@@ -40,7 +73,7 @@
 - Consumes: the 22 development narratives and audited historical facet definitions as reference material.
 - Produces: `ALL_TOPIC_IDS`, `validate_authorized_scope(topic_ids)`, `validate_facet_manifest(payload)`, `build_request_plan(payload, original_cache)`, and sealed `manifest.json`, `authorization.json`, `request_plan.json`, and `SEALED.json`.
 
-- [ ] **Step 1: Write failing scope and manifest tests**
+- [x] **Step 1: Write failing scope and manifest tests**
 
 ```python
 def test_scope_is_exactly_the_authorized_22() -> None:
@@ -65,7 +98,7 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py`
 
 Expected: collection fails because `trec_rag.all_topic_facet_contract` does not exist.
 
-- [ ] **Step 3: Implement the experiment-specific contract**
+- [x] **Step 3: Implement the experiment-specific contract**
 
 Define immutable constants and validate exact scope before any source reader runs:
 
@@ -85,7 +118,7 @@ bridge-term provenance, deterministic order, query hashes, three-to-nine accepte
 facets per topic unless the narrative contains fewer explicit obligations, and
 zero qrels fields. Seal the authorization receipt before reading topic sources.
 
-- [ ] **Step 4: Author and validate one 22-topic facet manifest**
+- [x] **Step 4: Author and validate one 22-topic facet manifest**
 
 Render every facet through the rules in
 `reports/experiments/all_topic_tethered_facet_validation_v1/facet_prompt.md`.
@@ -104,13 +137,13 @@ Expected: exactly 22 authorized topics, top-1,000 original cache hits for all 22
 zero original retrieval requests, an exact top-200 facet request count, no qrels
 binding, and a verified planning seal.
 
-- [ ] **Step 5: Run focused and compatibility tests**
+- [x] **Step 5: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py code/tests/test_deep_facet_candidate_gate.py code/tests/test_sparse_relevance_manifest.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add code/trec_rag/all_topic_facet_contract.py \
@@ -133,7 +166,7 @@ git commit -m "Add all-topic facet validation contract"
 - Consumes: the approved Task 1 contract, all 22 narrative rows, authenticated original cache files, and historical facet manifests only as qrels-blind wording references.
 - Produces: a reviewed exact-22 `facet_manifest.json`, a contract CLI, exact request count, cache bindings, and verified planning seal.
 
-- [ ] **Step 1: Write failing CLI and production-manifest tests**
+- [x] **Step 1: Write failing CLI and production-manifest tests**
 
 ```python
 def test_production_manifest_is_exact_and_valid() -> None:
@@ -165,7 +198,7 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py`
 Expected: tests fail because the production manifest, cache discovery, and CLI
 do not exist.
 
-- [ ] **Step 3: Author the qrels-blind manifest**
+- [x] **Step 3: Author the qrels-blind manifest**
 
 For every topic, read only the narrative and historical facet manifests. Enumerate
 three-to-nine explicit obligations in narrative order. Render each query with
@@ -174,7 +207,7 @@ qrels, nuggets, candidate answers, or web sources. Add bridge provenance for
 every unsupported query term. Save exact narrative/query hashes and frozen
 analyzer output. The manifest must pass `validate_facet_manifest()` unchanged.
 
-- [ ] **Step 4: Add cache discovery and the planning CLI**
+- [x] **Step 4: Add cache discovery and the planning CLI**
 
 Implement:
 
@@ -196,7 +229,7 @@ return bindings in `ALL_TOPIC_IDS` order. `freeze` loads the tracked manifest,
 discovers exact caches, and calls `freeze_planning`; `verify` calls
 `verify_planning`. Neither command accepts topic overrides or qrels paths.
 
-- [ ] **Step 5: Obtain independent facet-content review before freezing**
+- [x] **Step 5: Obtain independent facet-content review before freezing**
 
 The reviewer receives only narratives, `facet_prompt.md`, and the proposed
 manifest. For each topic, verify obligation completeness, no invented subtopic,
@@ -205,7 +238,7 @@ specificity. Record all findings in
 `reports/experiments/all_topic_tethered_facet_validation_v1/facet_review.md`.
 Resolve every Critical or Important finding and rerun validation.
 
-- [ ] **Step 6: Freeze and verify the exact planning preflight**
+- [x] **Step 6: Freeze and verify the exact planning preflight**
 
 Run:
 
@@ -223,13 +256,13 @@ Expected: 22 authenticated original top-1,000 cache hits, zero original requests
 an exact top-200 facet request count, immutable authorization pre-seal, no qrels
 binding, and a verified planning root hash.
 
-- [ ] **Step 7: Run focused and compatibility tests**
+- [x] **Step 7: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_contract.py code/tests/test_deep_facet_candidate_gate.py code/tests/test_sparse_relevance_manifest.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 8: Commit Task 1b**
+- [x] **Step 8: Commit Task 1b**
 
 ```bash
 git add code/trec_rag/all_topic_facet_contract.py \
@@ -252,7 +285,7 @@ git commit -m "Freeze all-topic facet plan"
 - Consumes: Task 1 sealed planning artifacts, complete original top-1,000 cache, exact facet cache, and the existing rate-limited transport.
 - Produces: `run_retrieval(planning_dir, output_dir, transport)`, `verify_retrieval(output_dir)`, raw-first ledgers, candidate lists, `accepted_union.jsonl`, and a retrieval seal.
 
-- [ ] **Step 1: Write failing cache, limiter, and union tests**
+- [x] **Step 1: Write failing cache, limiter, and union tests**
 
 ```python
 def test_original_requests_must_be_exact_cache_hits() -> None:
@@ -279,7 +312,7 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_retrieve.py`
 
 Expected: collection fails because the retrieval module does not exist.
 
-- [ ] **Step 3: Implement retrieval by adapting the existing transport**
+- [x] **Step 3: Implement retrieval by adapting the existing transport**
 
 Reuse `RateLimitedFacetTransport` and the exact-identity cache behavior from
 `deep_facet_candidate_run.py`. Reject manifest drift, topic drift, depth drift,
@@ -287,13 +320,13 @@ and any attempted original-query network request. Persist each raw response
 before parsing candidates. Union rows must retain every stream ID, stream rank,
 request identity, query hash, and response hash.
 
-- [ ] **Step 4: Run synthetic and cache-only verification**
+- [x] **Step 4: Run synthetic and cache-only verification**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_facet_retrieve.py code/tests/test_deep_facet_candidate_run.py`
 
 Expected: all tests pass, including crash-resume and failed-attempt behavior.
 
-- [ ] **Step 5: Execute the sealed retrieval plan**
+- [x] **Step 5: Execute the sealed retrieval plan**
 
 Run:
 
@@ -309,7 +342,7 @@ Expected: exactly the Task 1 missing request identities are issued, all starts
 are at least three seconds apart, original requests remain zero, and every
 topic has one authenticated union.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add code/trec_rag/all_topic_facet_retrieve.py code/tests/test_all_topic_facet_retrieve.py
@@ -329,7 +362,7 @@ git commit -m "Add uniform all-topic facet retrieval"
 - Consumes: Task 2 authenticated unions, Task 1 narratives/facets, pinned MiniLM model identity, and exact score cache.
 - Produces: `build_score_plan(...)`, `run_scores(...)`, `verify_scores(...)`, tokenizer window plan, within-query percentile features, and a scoring seal.
 
-- [ ] **Step 1: Write failing query, cache, and normalization tests**
+- [x] **Step 1: Write failing query, cache, and normalization tests**
 
 ```python
 def test_tethered_query_contains_narrative_and_one_facet() -> None:
@@ -355,14 +388,14 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_score.py`
 
 Expected: collection fails because the scorer does not exist.
 
-- [ ] **Step 3: Implement scoring as a strict adapter**
+- [x] **Step 3: Implement scoring as a strict adapter**
 
 Reuse model revision, tokenizer-only backend, window construction, cache keys,
 and local runner from `tethered_facet_minilm_score.py`. Generate narrative,
 common/global, and narrative-plus-originating-facet score identities. Record exact
 pair, window, cache-hit, cache-miss, estimated memory, and runtime counters.
 
-- [ ] **Step 4: Freeze tokenizer-only preflight and verify**
+- [x] **Step 4: Freeze tokenizer-only preflight and verify**
 
 Run:
 
@@ -378,7 +411,7 @@ Expected: exact pair/window/cache-miss counts, zero model loads, and a sealed
 score plan. Compare actual counts with the inventory estimate and record the
 projected ROCm runtime before inference.
 
-- [ ] **Step 5: Run local scoring and verify authenticated coverage**
+- [x] **Step 5: Run local scoring and verify authenticated coverage**
 
 Run:
 
@@ -392,13 +425,13 @@ Run:
 Expected: every planned pair has exactly one score, hosted/paid calls are zero,
 and within-query percentile features are sealed.
 
-- [ ] **Step 6: Run focused and compatibility tests**
+- [x] **Step 6: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_score.py code/tests/test_tethered_facet_minilm_score.py code/tests/test_facet_local_minilm_score.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```bash
 git add code/trec_rag/all_topic_tethered_score.py code/tests/test_all_topic_tethered_score.py
@@ -418,7 +451,7 @@ git commit -m "Add all-topic tethered MiniLM scoring"
 - Consumes: Tasks 1-3 seals, complete unions, existing RRF features, pinned DUAL coefficients, and tethered percentile features.
 - Produces: `build_rankings(topic_input, controls)`, `reinitialized_dual(...)`, `verify_rankings(path)`, six complete per-topic permutations, audit traces, and a ranking seal.
 
-- [ ] **Step 1: Write failing permutation and protected-prefix tests**
+- [x] **Step 1: Write failing permutation and protected-prefix tests**
 
 ```python
 def test_every_arm_is_the_same_complete_union() -> None:
@@ -446,7 +479,7 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_rank.py`
 
 Expected: collection fails because the ranker does not exist.
 
-- [ ] **Step 3: Implement all six preregistered arms**
+- [x] **Step 3: Implement all six preregistered arms**
 
 Reuse the existing family-balanced RRF and DUAL objective without tuning. Static
 arms call the current empty-state DUAL permutation and splice a prefix. Reinitialized
@@ -454,20 +487,20 @@ arms seed facet-coverage and lexical-redundancy state by replaying the protected
 RRF prefix, then greedily select residual documents with deterministic document-ID
 tie-breaking. Preserve objective components and marginal coverage attribution.
 
-- [ ] **Step 4: Enforce the qrels firewall and create-only seal**
+- [x] **Step 4: Enforce the qrels firewall and create-only seal**
 
 Reject qrels paths/fields recursively, verify every upstream seal, hash every
 complete ranking, and write `parameters.json`, `input_bindings.json`,
 `rankings.jsonl`, `audit.jsonl`, `summary.json`, and `SEALED.json` with exclusive
 creation semantics.
 
-- [ ] **Step 5: Run focused and compatibility tests**
+- [x] **Step 5: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_rank.py code/tests/test_tethered_facet_soft_coverage.py code/tests/test_deep_facet_candidate_rank.py`
 
 Expected: all tests pass and input reordering cannot change any ranking.
 
-- [ ] **Step 6: Freeze and verify real rankings**
+- [x] **Step 6: Freeze and verify real rankings**
 
 Run:
 
@@ -484,7 +517,7 @@ Run:
 Expected: six complete permutations for each of 22 topics, exact protected
 prefixes, and a verified seal created before qrels access.
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 ```bash
 git add code/trec_rag/all_topic_tethered_rank.py code/tests/test_all_topic_tethered_rank.py
@@ -504,7 +537,7 @@ git commit -m "Add all-topic protected DUAL rankings"
 - Consumes: Task 4 verified seal, Task 2 provenance, pinned all-22 projected qrels, and the frozen promotion ladder.
 - Produces: `evaluate_all_topics(...)`, `paired_bootstrap(...)`, `paired_sign_flip(...)`, `apply_promotion_rules(...)`, metrics/diagnostics tables, and an evaluation seal.
 
-- [ ] **Step 1: Write failing metric, regression, and firewall tests**
+- [x] **Step 1: Write failing metric, regression, and firewall tests**
 
 ```python
 def test_any_topic_loss_blocks_promotion() -> None:
@@ -532,7 +565,7 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_evaluate.
 
 Expected: collection fails because the evaluator does not exist.
 
-- [ ] **Step 3: Implement frozen metrics and paired inference**
+- [x] **Step 3: Implement frozen metrics and paired inference**
 
 Use relevance grade `>=2`, exact depths `(100, 250, 500, 1000, 1500)`, full
 union, deterministic bootstrap seed `20260716`, 100,000 topic-bootstrap samples,
@@ -542,20 +575,20 @@ Compute known-relevant count, binary/graded recall, nDCG, precision, judged rate
 normalized recall AUC, facet-only retention, full-union ceiling, per-topic deltas,
 win/tie/loss, worst regression, and facet-rank-bucket yield.
 
-- [ ] **Step 4: Encode the complete promotion contract**
+- [x] **Step 4: Encode the complete promotion contract**
 
 Require zero losses at 250, 500, and 1,000; positive pooled and macro recall at
 1,000; at least eight wins; corrected significance; protected-prefix identity;
 and interpretable judged-rate behavior. Try the primary arm first, then the fixed
 alternative ladder. If none passes, return `RRF` with every failed rule.
 
-- [ ] **Step 5: Run focused and compatibility tests**
+- [x] **Step 5: Run focused and compatibility tests**
 
 Run: `.venv/bin/python -m pytest -q code/tests/test_all_topic_tethered_evaluate.py code/tests/test_tethered_facet_soft_coverage_evaluate.py code/tests/test_evaluation.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Evaluate once and verify reproducibility**
+- [x] **Step 6: Evaluate once and verify reproducibility**
 
 Run:
 
@@ -572,7 +605,7 @@ Run:
 Expected: all 22 topics appear in every per-topic table and recomputation matches
 saved metrics and the mechanical promotion decision exactly.
 
-- [ ] **Step 7: Commit Task 5**
+- [x] **Step 7: Commit Task 5**
 
 ```bash
 git add code/trec_rag/all_topic_tethered_evaluate.py code/tests/test_all_topic_tethered_evaluate.py
@@ -598,7 +631,7 @@ git commit -m "Evaluate all-topic facet ranking regressions"
 - Consumes: verified planning, retrieval, scoring, ranking, and evaluation seals.
 - Produces: a self-contained accessible HTML report, machine-readable summary and SQLite data, artifact hashes, private rendered copy, and merge/promotion recommendation.
 
-- [ ] **Step 1: Write failing report-contract tests**
+- [x] **Step 1: Write failing report-contract tests**
 
 ```python
 def test_report_names_every_topic_and_every_regression() -> None:
@@ -628,7 +661,7 @@ Run: `.venv/bin/python -m pytest -q code/tests/test_build_all_topic_tethered_rep
 
 Expected: collection fails because the report builder does not exist.
 
-- [ ] **Step 3: Implement an answer-first, source-backed report**
+- [x] **Step 3: Implement an answer-first, source-backed report**
 
 Lead with `promote` or `retain RRF`, followed by win/tie/loss counts and worst
 topic regression. Include a per-topic responsive table, recall-depth curves,
@@ -636,7 +669,7 @@ facet-rank saturation chart, judged-rate caveat, provenance strata, exact costs,
 method diagram, and expandable representative diagnostics. Bind every headline
 number to the sealed evaluation artifacts and include zero secrets/raw datasets.
 
-- [ ] **Step 4: Build canonical artifacts and reproduce the decision**
+- [x] **Step 4: Build canonical artifacts and reproduce the decision**
 
 Run:
 
@@ -672,7 +705,7 @@ index link, verify the live HTTPS response hash matches the local rendered copy,
 and confirm the Serve mapping remains tailnet-only. Do not expose repository
 files, raw logs, caches, qrels, or secrets.
 
-- [ ] **Step 7: Run the complete targeted suite and independent review**
+- [x] **Step 7: Run the complete targeted suite and independent review**
 
 Run:
 
@@ -691,7 +724,7 @@ firewall, ranking correctness, per-topic regression logic, statistical tests,
 report reproducibility, and merge versus promotion conclusions. Resolve every
 Critical or Important finding and re-run covering tests.
 
-- [ ] **Step 8: Commit Task 6**
+- [x] **Step 8: Commit Task 6**
 
 ```bash
 git add code/trec_rag/build_all_topic_tethered_report.py \

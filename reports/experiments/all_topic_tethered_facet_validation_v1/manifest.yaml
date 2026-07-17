@@ -1,0 +1,64 @@
+experiment:
+  id: all_topic_tethered_facet_validation_v1
+  runtime_id: portable_canonical_v3
+  run_date: 2026-07-16
+  split: dev
+  description: Uniform 22-topic retrospective validation of tethered facet ranking arms.
+
+config:
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: original_narrative_and_reviewed_facets
+  ranking: family_balanced_rrf_and_preregistered_dual_arms
+
+scope:
+  original_candidate_depth: 1000
+  facet_candidate_depth: 200
+  evaluation_depths:
+    - 100
+    - 250
+    - 500
+    - 1000
+    - 1500
+    - full_union
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 22
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  evaluation_kind: dev_projected_qrels
+  relevance_threshold: 2
+  unjudged_policy: unknown
+
+decision:
+  selected_arm: RRF
+  recommendation: retain RRF
+  rejected_for_promotion:
+    - RRF100-STATIC-DUAL
+    - RRF500-REINIT-DUAL
+    - RRF100-REINIT-DUAL
+    - RRF100-REINIT-DUAL-NR
+    - RRF100-STATIC-DUAL-NR
+
+tracked_record_files:
+  readme: reports/experiments/all_topic_tethered_facet_validation_v1/README.md
+  facet_prompt: reports/experiments/all_topic_tethered_facet_validation_v1/facet_prompt.md
+  facet_manifest: reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json
+  facet_review: reports/experiments/all_topic_tethered_facet_validation_v1/facet_review.md
+  summary: reports/experiments/all_topic_tethered_facet_validation_v1/summary.json
+  report_data: reports/experiments/all_topic_tethered_facet_validation_v1/report_data.sqlite
+  artifact: reports/experiments/all_topic_tethered_facet_validation_v1/artifact.json
+  report: reports/experiments/all_topic_tethered_facet_validation_v1/report.html
+  postmortem_json: reports/experiments/all_topic_tethered_facet_validation_v1/postmortem.json
+  postmortem_markdown: reports/experiments/all_topic_tethered_facet_validation_v1/postmortem.md
+
+notes: >-
+  Portable canonical v3 sealed roots: planning
+  bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2;
+  retrieval f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb;
+  score plan 48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3;
+  scoring 4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990;
+  ranking 6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305;
+  evaluation e49ce3f7f0cfeedf1863670ae4cfe5781d40163449a172a5822d8eb11eeffe84.
+  The tracked report is sanitized; the private verification bundle is documented
+  in the experiment README.
