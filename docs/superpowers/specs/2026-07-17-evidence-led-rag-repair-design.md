@@ -1,7 +1,7 @@
 # Evidence-Led RAG Repair Design
 
-**Date:** 2026-07-17  
-**Status:** Approved  
+**Date:** 2026-07-17
+**Status:** Approved
 **Audience:** Technical contributors preparing the TREC RAG 2026 system
 
 ## Objective
