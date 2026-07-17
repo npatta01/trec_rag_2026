@@ -488,6 +488,41 @@ def test_successful_cache_only_resume_seals_and_verifies_union(monkeypatch, tmp_
         _verify_against_synthetic_planning(monkeypatch, second_output)
 
 
+def test_same_output_resume_reports_authenticated_lifetime_attempts(tmp_path: Path) -> None:
+    output = tmp_path / "retrieval"
+    first = _run_synthetic_retrieval(
+        _planning(),
+        output,
+        _Transport(),
+        clock=_Clock(),
+        cache_root=tmp_path / "cache",
+        original_cache=_original_cache(),
+    )
+    assert first["external_attempts"] == 3
+    assert first["cache_hits"] == 0
+
+    for name in (
+        "RETRIEVAL_SEALED.json",
+        "retrieval_summary.json",
+        "original_candidates.jsonl",
+        "facet_candidates.jsonl",
+        "accepted_union.jsonl",
+    ):
+        (output / name).unlink()
+
+    resumed = _run_synthetic_retrieval(
+        _planning(),
+        output,
+        _Transport(),
+        clock=_Clock(),
+        cache_root=tmp_path / "cache",
+        original_cache=_original_cache(),
+    )
+
+    assert resumed["external_attempts"] == 3
+    assert resumed["cache_hits"] == 0
+
+
 def test_transport_rejects_original_network_request(tmp_path: Path) -> None:
     request = module._build_facet_requests(build_retrieval_plan(_planning(), _original_cache()))[0]
     original = copy.deepcopy(request)
@@ -621,6 +656,27 @@ def test_verify_rejects_resealed_zero_facet_artifact(monkeypatch, tmp_path: Path
     module._create_seal(output)
 
     with pytest.raises(ValueError, match="facet count|facet stream"):
+        _verify_against_synthetic_planning(monkeypatch, output)
+
+
+def test_verify_rejects_resealed_attempt_counter_drift(monkeypatch, tmp_path: Path) -> None:
+    output = tmp_path / "retrieval"
+    _run_synthetic_retrieval(
+        _planning(),
+        output,
+        _Transport(),
+        clock=_Clock(),
+        cache_root=tmp_path / "cache",
+        original_cache=_original_cache(),
+    )
+    summary = json.loads((output / "retrieval_summary.json").read_text())
+    summary["external_attempts"] = 0
+    summary["cache_hits"] = 3
+    (output / "retrieval_summary.json").write_bytes(module._pretty_bytes(summary))
+    (output / "RETRIEVAL_SEALED.json").unlink()
+    module._create_seal(output)
+
+    with pytest.raises(ValueError, match="facet count or candidate counts"):
         _verify_against_synthetic_planning(monkeypatch, output)
 
 

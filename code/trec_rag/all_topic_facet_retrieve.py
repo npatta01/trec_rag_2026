@@ -786,7 +786,7 @@ def _ledger_paths(output: Path, request_key: str) -> dict[str, Path]:
 
 def _load_completed_attempt(
     paths: Mapping[str, Path], request: RetrievalRequest
-) -> tuple[tuple[dict[str, object], ...], str] | None:
+) -> tuple[tuple[dict[str, object], ...], str, bool] | None:
     if not paths["reservation"].exists():
         if any(path.exists() for name, path in paths.items() if name != "reservation"):
             raise ValueError("ledger artifacts exist without a durable reservation")
@@ -811,7 +811,29 @@ def _load_completed_attempt(
     normalized = _normalize_response(raw)
     if list(normalized) != candidate_value:
         raise ValueError("completed attempt candidates mismatch raw response")
-    return normalized, raw_sha
+    return normalized, raw_sha, outcome["status"] == "cache_hit"
+
+
+def _authenticated_attempt_counts(
+    output: Path, requests: Sequence[RetrievalRequest]
+) -> tuple[int, int]:
+    """Return lifetime external/cache counts from sealed per-request evidence."""
+
+    external_attempts = 0
+    cache_hits = 0
+    for request in requests:
+        paths = _ledger_paths(output, request.identity.request_key)
+        outcome = _read_json(paths["outcome"], "retrieval outcome")
+        metadata = _read_json(paths["metadata"], "retrieval response metadata")
+        status = outcome.get("status")
+        cache_hit = metadata.get("cache_hit")
+        if status == "success" and cache_hit is False:
+            external_attempts += 1
+        elif status == "cache_hit" and cache_hit is True:
+            cache_hits += 1
+        else:
+            raise ValueError("retrieval outcome/cache provenance is inconsistent")
+    return external_attempts, cache_hits
 
 
 def _record_failure(
@@ -904,7 +926,7 @@ def _attempt_request(
     paths = _ledger_paths(output, request.identity.request_key)
     completed = _load_completed_attempt(paths, request)
     if completed is not None:
-        return completed[0], completed[1], True, last_start
+        return completed[0], completed[1], completed[2], last_start
     _write_json(
         paths["reservation"],
         {
@@ -1284,14 +1306,17 @@ def _execute_retrieval(
     ) = _verify_request_start_events(
         output, requests_to_run, production=execution_mode == "production"
     )
+    lifetime_external_attempts, lifetime_cache_hits = _authenticated_attempt_counts(
+        output, requests_to_run
+    )
     summary: dict[str, object] = {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "experiment_id": EXPERIMENT_ID,
         "complete": True,
         "topic_count": len(ALL_TOPIC_IDS),
         "facet_request_count": len(requests_to_run),
-        "external_attempts": len(starts),
-        "cache_hits": cache_hits,
+        "external_attempts": lifetime_external_attempts,
+        "cache_hits": lifetime_cache_hits,
         "failures": 0,
         "retry_count": 0,
         "original_network_requests": 0,
@@ -1640,6 +1665,9 @@ def _verify_retrieval(
     if plan != trusted_plan:
         raise ValueError("retrieval does not match the external sealed planning binding")
     requests_to_run = _build_facet_requests(trusted_plan)
+    lifetime_external_attempts, lifetime_cache_hits = _authenticated_attempt_counts(
+        output, requests_to_run
+    )
     expected_original_rows = len(ALL_TOPIC_IDS) * ORIGINAL_DEPTH
     expected_facet_rows = len(requests_to_run) * FACET_DEPTH
     if (
@@ -1651,8 +1679,8 @@ def _verify_retrieval(
         or len(facet_rows) != expected_facet_rows
         or not isinstance(summary.get("external_attempts"), int)
         or not isinstance(summary.get("cache_hits"), int)
-        or summary["external_attempts"] + summary["cache_hits"]
-        != len(requests_to_run)
+        or summary["external_attempts"] != lifetime_external_attempts
+        or summary["cache_hits"] != lifetime_cache_hits
     ):
         raise ValueError("retrieval summary facet count or candidate counts are invalid")
     _verify_stream_provenance(
