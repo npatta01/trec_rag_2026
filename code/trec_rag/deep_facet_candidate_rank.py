@@ -158,7 +158,18 @@ def _coerce_score_map(value: object, label: str) -> dict[str, float]:
 
 
 def _features(inputs: Mapping[str, object]) -> dict[str, object]:
-    topic_id = _topic(inputs.get("topic_id"))
+    """Build features for the legacy authorized scope."""
+
+    _topic(inputs.get("topic_id"))
+    return _features_pure(inputs)
+
+
+def _features_pure(inputs: Mapping[str, object]) -> dict[str, object]:
+    """Build ranking features without applying an experiment-specific topic gate."""
+
+    topic_id = str(inputs.get("topic_id"))
+    if not topic_id:
+        raise ValueError("topic_id must be non-empty")
     raw_docids = inputs.get("docids")
     if not isinstance(raw_docids, Sequence) or isinstance(raw_docids, (str, bytes)):
         raise ValueError("docids must be a sequence")

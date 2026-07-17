@@ -9,9 +9,7 @@ import math
 import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from itertools import zip_longest
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -20,10 +18,8 @@ from .all_topic_facet_retrieve import APPROVED_ORIGINAL_CACHE_ROOT, verify_retri
 from .all_topic_tethered_score import verify_scores
 from .deep_facet_candidate_manifest import analyze_terms
 from .deep_facet_candidate_rank import (
-    _features,
-    _greedy,
+    _features_pure,
     _jaccard,
-    ranking_parameters,
     redundancy_penalty,
 )
 
@@ -43,6 +39,28 @@ PLANNING_ROOT_SHA256 = "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05
 RETRIEVAL_ROOT_SHA256 = "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb"
 SCORE_PLAN_ROOT_SHA256 = "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3"
 SCORING_ROOT_SHA256 = "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
+CANONICAL_RANKING_ROOT_SHA256 = "b371c81136296e9e775bf3eaa8b249ff03d258a13973617360d5fb5a5de8e55c"
+RRF_K = 60
+RRF_FAMILY_WEIGHTS = {"original": 0.5, "accepted_facets_total": 0.5}
+DUAL_WEIGHTS = {"G": 0.35, "N": 0.15, "R": 0.15, "L": 0.25, "B": 0.10, "D": -0.15}
+REDUNDANCY_JACCARD_THRESHOLD = 0.80
+EXPECTED_UNION_COUNTS = {
+    "14": 1943, "31": 2104, "37": 2543, "58": 2453, "72": 2133, "84": 2292,
+    "144": 2103, "161": 2158, "200": 2249, "213": 1825, "219": 2301,
+    "224": 2131, "225": 1894, "233": 1325, "273": 2166, "300": 1701,
+    "407": 1794, "477": 2259, "499": 1522, "515": 2067, "707": 1909, "897": 2272,
+}
+EXPECTED_UNION_TOTAL = 45_144
+EXPECTED_RANKING_ROWS = EXPECTED_UNION_TOTAL * len(ARMS)
+EXPECTED_AUDIT_ROWS = 199_430
+_INPUT_FILE_BINDINGS = {
+    "planning_seal": ("planning/SEALED.json", 876, "dda97e1872c864f35af16f1a0b8d57d7218778a1274700197c773cb8ae75aa85"),
+    "retrieval_seal": ("retrieval/RETRIEVAL_SEALED.json", 153969, "3175f303a63b561b5fe4d3b6c0185f262fcc1032dd97a1ac7b12573db73a6288"),
+    "score_plan_seal": ("scoring/SCORE_PLAN_SEALED.json", 638, "f224599eaadab08453bc3a6b7c28c00e1462e5b6b033e7c91bf22ca63ff67d9f"),
+    "scoring_seal": ("scoring/SCORING_SEALED.json", 1029, "fcbdc59bc9dd27aaf42df7df8b5508a3f4af93d2e5a96217b350b0b728b391fb"),
+    "accepted_union": ("retrieval/accepted_union.jsonl", 905937269, "f91c38f721e6821015d28ae9928637757f2763eeb5c7270822d4e695b312d1d9"),
+    "features": ("scoring/features.jsonl", 87725430, "46ee87b6ea5f8c1bb7459cae7c415efe215ace5fc5667136c87c0815c9f461f9"),
+}
 
 
 def _compact_bytes(value: object) -> bytes:
@@ -117,6 +135,8 @@ def _reject_qrels(value: object, path: str = "input") -> None:
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for index, child in enumerate(value):
             _reject_qrels(child, f"{path}[{index}]")
+    elif isinstance(value, (str, Path)) and "qrel" in str(value).casefold():
+        raise ValueError(f"qrels value is forbidden: {path}")
 
 
 def _complete_order(value: object, expected: set[str], label: str) -> list[str]:
@@ -128,14 +148,13 @@ def _complete_order(value: object, expected: set[str], label: str) -> list[str]:
     return result
 
 
-def _dual_features(topic_input: Mapping[str, object]) -> dict[str, object]:
-    """Use the established feature math without its superseded four-topic gate."""
+def _features_for_authorized_topic(topic_input: Mapping[str, object]) -> dict[str, object]:
+    """Apply this experiment's exact authorization before pure feature math."""
 
-    adapted = dict(topic_input)
-    adapted["topic_id"] = "219"
-    features = _features(adapted)
-    features["topic_id"] = str(topic_input.get("topic_id"))
-    return features
+    topic_id = str(topic_input.get("topic_id"))
+    if topic_id not in ALL_TOPIC_IDS:
+        raise ValueError(f"topic {topic_id} is outside the authorized all-topic scope")
+    return _features_pure(topic_input)
 
 
 def _splice_prefix(prefix_source: Sequence[str], tail: Sequence[str], depth: int) -> list[str]:
@@ -144,7 +163,28 @@ def _splice_prefix(prefix_source: Sequence[str], tail: Sequence[str], depth: int
     return prefix + [document_id for document_id in tail if document_id not in seen]
 
 
-def _reinitialized_from_features(
+def _dual_objective(
+    docids: Sequence[str],
+    g: Mapping[str, float],
+    narrative: Mapping[str, float],
+    rrf: Mapping[str, float],
+    local: np.ndarray,
+    bonus: np.ndarray,
+    redundancy: np.ndarray,
+) -> np.ndarray:
+    """The single pinned DUAL objective used for every initialization state."""
+
+    return np.asarray(
+        [
+            DUAL_WEIGHTS["G"] * g[document_id]
+            + DUAL_WEIGHTS["N"] * narrative[document_id]
+            + DUAL_WEIGHTS["R"] * rrf[document_id]
+            for document_id in docids
+        ]
+    ) + DUAL_WEIGHTS["L"] * local + DUAL_WEIGHTS["B"] * bonus + DUAL_WEIGHTS["D"] * redundancy
+
+
+def _dual_from_features(
     features: Mapping[str, object], prefix: Sequence[str]
 ) -> tuple[list[str], dict[str, object]]:
     """Replay a protected prefix, then continue the unchanged DUAL objective."""
@@ -195,9 +235,7 @@ def _reinitialized_from_features(
         else:
             bonus = np.zeros(count)
             bonus_facet = np.zeros(count, dtype=int)
-        objective = np.asarray(
-            [0.35 * g[d] + 0.15 * n_score[d] + 0.15 * r[d] for d in docids]
-        ) + 0.25 * local + 0.10 * bonus - 0.15 * redundancy
+        objective = _dual_objective(docids, g, n_score, r, local, bonus, redundancy)
         objective[~remaining] = -np.inf
         maximum = float(objective.max())
         tied = np.flatnonzero(objective == maximum)
@@ -241,7 +279,7 @@ def reinitialized_dual(
     """Public deterministic DUAL continuation from replayed prefix state."""
 
     _reject_qrels(topic_input)
-    return _reinitialized_from_features(_dual_features(topic_input), protected_prefix)
+    return _dual_from_features(_features_for_authorized_topic(topic_input), protected_prefix)
 
 
 def build_rankings(
@@ -251,12 +289,13 @@ def build_rankings(
 
     _reject_qrels(topic_input)
     _reject_qrels(controls)
-    features = _dual_features(topic_input)
+    features = _features_for_authorized_topic(topic_input)
     docids: list[str] = features["docids"]  # type: ignore[assignment]
     rrf = _complete_order(controls.get("RRF"), set(docids), "RRF control")
-    dual, dual_audit = _greedy(features, "DUAL")
-    reinit100, audit100 = _reinitialized_from_features(features, rrf[:100])
-    reinit500, audit500 = _reinitialized_from_features(features, rrf[:500])
+    dual, dual_state = _dual_from_features(features, ())
+    dual_audit: dict[str, dict[str, object]] = dual_state["documents"]  # type: ignore[assignment]
+    reinit100, audit100 = _dual_from_features(features, rrf[:100])
+    reinit500, audit500 = _dual_from_features(features, rrf[:500])
     rankings = {
         "RRF": rrf,
         "DUAL": dual,
@@ -290,7 +329,7 @@ def build_rankings(
 
 
 def _rrf_control(topic_input: Mapping[str, object]) -> list[str]:
-    features = _dual_features(topic_input)
+    features = _features_for_authorized_topic(topic_input)
     docids: list[str] = features["docids"]  # type: ignore[assignment]
     raw_rrf: dict[str, float] = features["raw_RRF"]  # type: ignore[assignment]
     best_stream_rank: dict[str, int] = features["best_stream_rank"]  # type: ignore[assignment]
@@ -380,18 +419,19 @@ def _load_topic_inputs(planning: Path, retrieval: Path, scoring: Path) -> dict[s
     return result
 
 
-def _parameters(topic_ids: Sequence[str]) -> dict[str, object]:
-    inherited = ranking_parameters()
+def _parameters() -> dict[str, object]:
+    """Return the production parameters from experiment-local trusted pins."""
+
     return {
         "schema_version": SCHEMA_VERSION,
         "experiment_id": EXPERIMENT_ID,
-        "topic_ids": list(topic_ids),
+        "topic_ids": list(ALL_TOPIC_IDS),
         "arms": list(ARMS),
         "prefix_depths": list(PREFIX_DEPTHS),
-        "rrf_k": inherited["rrf_k"],
-        "rrf_family_weights": inherited["rrf_family_weights"],
-        "dual": inherited["dual"],
-        "redundancy_jaccard_threshold": inherited["redundancy_jaccard_threshold"],
+        "rrf_k": RRF_K,
+        "rrf_family_weights": dict(RRF_FAMILY_WEIGHTS),
+        "dual": dict(DUAL_WEIGHTS),
+        "redundancy_jaccard_threshold": REDUNDANCY_JACCARD_THRESHOLD,
         "facet_score_source": "narrative_tethered_percentile",
         "static_state": "empty",
         "reinitialized_state": "protected RRF prefix replay",
@@ -401,6 +441,97 @@ def _parameters(topic_ids: Sequence[str]) -> dict[str, object]:
         "model_loads": 0,
         "inference_calls": 0,
     }
+
+
+def _expected_input_bindings(ranking_root: Path) -> dict[str, object]:
+    experiment = Path(ranking_root).resolve().parent
+    result: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "qrels_opened": False,
+        "planning_root_sha256": PLANNING_ROOT_SHA256,
+        "retrieval_root_sha256": RETRIEVAL_ROOT_SHA256,
+        "score_plan_root_sha256": SCORE_PLAN_ROOT_SHA256,
+        "scoring_root_sha256": SCORING_ROOT_SHA256,
+    }
+    for name, (relative, byte_count, sha256) in _INPUT_FILE_BINDINGS.items():
+        result[name] = {
+            "path": str((experiment / relative).resolve()),
+            "bytes": byte_count,
+            "sha256": sha256,
+        }
+    return result
+
+
+def _validate_production_bindings(bindings: Mapping[str, object], ranking_root: Path) -> None:
+    expected = _expected_input_bindings(ranking_root)
+    if dict(bindings) != expected:
+        differing = sorted(
+            key for key in set(bindings) | set(expected) if bindings.get(key) != expected.get(key)
+        )
+        raise ValueError(f"production input binding differs: {', '.join(differing)}")
+
+
+def _validate_summary_contract(summary: Mapping[str, object]) -> None:
+    fixed = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "rankings_frozen_before_qrels",
+        "qrels_opened": False,
+        "topic_count": len(ALL_TOPIC_IDS),
+        "arm_count": len(ARMS),
+        "ranking_row_count": EXPECTED_RANKING_ROWS,
+        "audit_row_count": EXPECTED_AUDIT_ROWS,
+        "network_calls": 0,
+        "model_loads": 0,
+        "inference_calls": 0,
+    }
+    if set(summary) != set(fixed) | {"topic_summary"} or any(
+        summary.get(key) != value for key, value in fixed.items()
+    ):
+        raise ValueError("ranking summary count or safety counter differs")
+    topic_summary = summary.get("topic_summary")
+    if not isinstance(topic_summary, Mapping) or set(topic_summary) != set(ALL_TOPIC_IDS):
+        raise ValueError("ranking summary topic scope differs")
+    for topic_id in ALL_TOPIC_IDS:
+        row = topic_summary.get(topic_id)
+        if not isinstance(row, Mapping) or set(row) != {
+            "accepted_union_count", "ranking_sha256", "complete_permutations", "protected_prefixes_exact"
+        }:
+            raise ValueError(f"ranking summary contract differs for topic {topic_id}")
+        hashes = row.get("ranking_sha256")
+        if (
+            row.get("accepted_union_count") != EXPECTED_UNION_COUNTS[topic_id]
+            or row.get("complete_permutations") != {arm: True for arm in ARMS}
+            or row.get("protected_prefixes_exact") != {"100": True, "500": True}
+            or not isinstance(hashes, Mapping)
+            or set(hashes) != set(ARMS)
+            or any(
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+                for value in hashes.values()
+            )
+        ):
+            raise ValueError(f"ranking summary coverage differs for topic {topic_id}")
+
+
+def _validate_selection_audit(row: Mapping[str, object], expected_documents: set[str]) -> str:
+    required = {
+        "schema_version", "topic_id", "arm", "kind", "document_id", "objective",
+        "coverage_bonus", "coverage_facet", "redundancy_penalty",
+    }
+    document_id = str(row.get("document_id"))
+    numeric = (row.get("objective"), row.get("coverage_bonus"), row.get("redundancy_penalty"))
+    if (
+        set(row) != required
+        or row.get("kind") != "selection"
+        or document_id not in expected_documents
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in numeric)
+        or not 0.0 <= float(row["coverage_bonus"]) <= 1.0
+        or not 0.0 <= float(row["redundancy_penalty"]) <= 1.0
+        or (row.get("coverage_facet") is not None and not isinstance(row.get("coverage_facet"), str))
+    ):
+        raise ValueError("ranking audit objective/selection row differs")
+    return document_id
 
 
 def _freeze_loaded_topics(
@@ -463,7 +594,7 @@ def _freeze_loaded_topics(
             "protected_prefixes_exact": {str(depth): True for depth in PREFIX_DEPTHS},
         }
 
-    parameters = _pretty_bytes(_parameters(expected_topic_ids))
+    parameters = _pretty_bytes(_parameters())
     bindings = _pretty_bytes({"schema_version": SCHEMA_VERSION, "qrels_opened": False, **input_bindings})
     rankings_bytes = _jsonl_bytes(ranking_rows)
     audit_bytes = _jsonl_bytes(audit_rows)
@@ -510,6 +641,7 @@ def _freeze_loaded_topics(
 def freeze_rankings(planning: Path, retrieval: Path, scoring: Path, output: Path) -> dict[str, object]:
     """Verify every upstream producer, load offline features, and create the freeze."""
 
+    _reject_qrels([planning, retrieval, scoring, output], "freeze paths")
     planning, retrieval, scoring = map(Path, (planning, retrieval, scoring))
     planning_evidence = verify_planning(
         planning, approved_cache_root=APPROVED_ORIGINAL_CACHE_ROOT
@@ -550,20 +682,25 @@ def verify_rankings(path: Path) -> dict[str, object]:
     """Verify file hashes, complete permutations, prefix contracts, and ranking hashes."""
 
     root = Path(path)
+    _reject_qrels(root, "rankings path")
     seal, _ = _read_json(root / "SEALED.json", "ranking seal")
     files = seal.get("files")
     topic_ids = seal.get("topic_ids")
     if (
+        set(seal) != {"schema_version", "experiment_id", "status", "qrels_opened", "topic_ids", "files", "root_sha256"}
+        or
         seal.get("schema_version") != SEAL_SCHEMA_VERSION
         or seal.get("experiment_id") != EXPERIMENT_ID
         or seal.get("status") != "sealed_before_qrels"
         or seal.get("qrels_opened") is not False
-        or not isinstance(topic_ids, list)
+        or topic_ids != list(ALL_TOPIC_IDS)
         or not isinstance(files, Mapping)
         or set(files) != {"parameters.json", "input_bindings.json", "rankings.jsonl", "audit.jsonl", "summary.json"}
         or seal.get("root_sha256") != _sha256(_compact_bytes(files))
     ):
         raise ValueError("ranking seal contract differs")
+    if seal.get("root_sha256") != CANONICAL_RANKING_ROOT_SHA256:
+        raise ValueError("canonical ranking root differs")
     actual_names = {entry.name for entry in root.iterdir() if entry.is_file()}
     if actual_names != set(files) | {"SEALED.json"}:
         raise ValueError("ranking seal has missing or extra files")
@@ -573,22 +710,32 @@ def verify_rankings(path: Path) -> dict[str, object]:
     parameters, _ = _read_json(root / "parameters.json", "ranking parameters")
     bindings, _ = _read_json(root / "input_bindings.json", "ranking input bindings")
     summary, _ = _read_json(root / "summary.json", "ranking summary")
-    if parameters != _parameters([str(value) for value in topic_ids]):
+    if parameters != _parameters():
         raise ValueError("ranking parameters differ")
-    if bindings.get("qrels_opened") is not False or summary.get("qrels_opened") is not False:
-        raise ValueError("qrels firewall evidence differs")
+    _validate_production_bindings(bindings, root)
+    _validate_summary_contract(summary)
     grouped: dict[tuple[str, str], list[tuple[int, str]]] = defaultdict(list)
     row_count = 0
     for row in _iter_jsonl(root / "rankings.jsonl", "rankings"):
         topic_id, arm = str(row.get("topic_id")), str(row.get("arm"))
-        if row.get("schema_version") != SCHEMA_VERSION or topic_id not in topic_ids or arm not in ARMS:
+        rank, document_id = row.get("rank"), row.get("document_id")
+        if (
+            set(row) != {"schema_version", "topic_id", "arm", "rank", "document_id"}
+            or row.get("schema_version") != SCHEMA_VERSION
+            or topic_id not in topic_ids
+            or arm not in ARMS
+            or isinstance(rank, bool)
+            or not isinstance(rank, int)
+            or rank <= 0
+            or not isinstance(document_id, str)
+            or not document_id
+        ):
             raise ValueError("ranking row contract differs")
-        grouped[(topic_id, arm)].append((int(row["rank"]), str(row["document_id"])))
+        grouped[(topic_id, arm)].append((rank, document_id))
         row_count += 1
-    topic_summary = summary.get("topic_summary")
-    if not isinstance(topic_summary, Mapping):
-        raise ValueError("ranking topic summary is missing")
-    for topic_id in map(str, topic_ids):
+    topic_summary: Mapping[str, object] = summary["topic_summary"]  # type: ignore[assignment]
+    all_orders: dict[str, dict[str, list[str]]] = {}
+    for topic_id in ALL_TOPIC_IDS:
         orders: dict[str, list[str]] = {}
         for arm in ARMS:
             pairs = grouped.get((topic_id, arm), [])
@@ -596,7 +743,10 @@ def verify_rankings(path: Path) -> dict[str, object]:
                 raise ValueError("ranking positions are not contiguous")
             orders[arm] = [document_id for _, document_id in pairs]
         expected = set(orders["RRF"])
-        if not expected or any(len(order) != len(expected) or set(order) != expected for order in orders.values()):
+        if (
+            len(expected) != EXPECTED_UNION_COUNTS[topic_id]
+            or any(len(order) != len(expected) or set(order) != expected for order in orders.values())
+        ):
             raise ValueError("ranking is not a complete permutation")
         if any(
             orders[f"RRF{depth}-{mode}-DUAL"][:depth] != orders["RRF"][:depth]
@@ -607,18 +757,100 @@ def verify_rankings(path: Path) -> dict[str, object]:
         hashes = claimed.get("ranking_sha256") if isinstance(claimed, Mapping) else None
         if hashes != {arm: _sha256(_compact_bytes(orders[arm])) for arm in ARMS}:
             raise ValueError("ranking hash differs")
-    if row_count != summary.get("ranking_row_count") or len(grouped) != len(topic_ids) * len(ARMS):
+        all_orders[topic_id] = orders
+    if row_count != EXPECTED_RANKING_ROWS or len(grouped) != len(ALL_TOPIC_IDS) * len(ARMS):
         raise ValueError("ranking row coverage differs")
-    audit_count = sum(1 for _ in _iter_jsonl(root / "audit.jsonl", "ranking audit"))
-    if audit_count != summary.get("audit_row_count"):
+
+    state_seen: set[tuple[str, str]] = set()
+    selection_seen: dict[tuple[str, str], set[str]] = defaultdict(set)
+    audit_count = 0
+    for row in _iter_jsonl(root / "audit.jsonl", "ranking audit"):
+        audit_count += 1
+        topic_id, arm = str(row.get("topic_id")), str(row.get("arm"))
+        if row.get("schema_version") != SCHEMA_VERSION or topic_id not in ALL_TOPIC_IDS or arm not in ARMS or arm == "RRF":
+            raise ValueError("ranking audit identity differs")
+        key = (topic_id, arm)
+        if row.get("kind") == "state":
+            if key in state_seen:
+                raise ValueError("ranking audit state is duplicated")
+            state_seen.add(key)
+            if arm == "DUAL":
+                expected_state = {
+                    "schema_version": SCHEMA_VERSION, "topic_id": topic_id, "arm": arm,
+                    "kind": "state", "seed_document_count": 0, "seed_coverage": {},
+                }
+                if row != expected_state:
+                    raise ValueError("DUAL audit state differs")
+            elif "STATIC" in arm:
+                depth = 100 if "100" in arm else 500
+                expected_state = {
+                    "schema_version": SCHEMA_VERSION, "topic_id": topic_id, "arm": arm,
+                    "kind": "state", "seed_document_count": 0,
+                    "protected_document_count": depth, "objective_state": "empty",
+                }
+                if row != expected_state:
+                    raise ValueError("static DUAL audit state differs")
+            else:
+                depth = 100 if "100" in arm else 500
+                coverage = row.get("seed_coverage")
+                if (
+                    set(row) != {"schema_version", "topic_id", "arm", "kind", "seed_document_count", "seed_coverage", "seed_redundancy_replayed"}
+                    or row.get("seed_document_count") != depth
+                    or row.get("seed_redundancy_replayed") is not True
+                    or not isinstance(coverage, Mapping)
+                    or not coverage
+                    or any(
+                        not isinstance(facet, str)
+                        or isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(float(value))
+                        or not 0.0 <= float(value) <= 1.0
+                        for facet, value in coverage.items()
+                    )
+                ):
+                    raise ValueError("reinitialized DUAL audit state differs")
+        elif row.get("kind") == "selection":
+            depth = 100 if "100" in arm else 500 if "500" in arm else 0
+            expected_documents = set(all_orders[topic_id]["RRF"])
+            if depth:
+                expected_documents -= set(all_orders[topic_id]["RRF"][:depth])
+            document_id = _validate_selection_audit(row, expected_documents)
+            if document_id in selection_seen[key]:
+                raise ValueError("ranking audit selection is duplicated")
+            selection_seen[key].add(document_id)
+        else:
+            raise ValueError("ranking audit kind differs")
+    expected_state_keys = {
+        (topic_id, arm) for topic_id in ALL_TOPIC_IDS for arm in ARMS if arm != "RRF"
+    }
+    if state_seen != expected_state_keys:
+        raise ValueError("ranking audit state coverage differs")
+    for topic_id, arm in expected_state_keys:
+        depth = 100 if "100" in arm else 500 if "500" in arm else 0
+        expected_documents = set(all_orders[topic_id]["RRF"])
+        if depth:
+            expected_documents -= set(all_orders[topic_id]["RRF"][:depth])
+        if selection_seen[(topic_id, arm)] != expected_documents:
+            raise ValueError("ranking audit selection coverage differs")
+    if audit_count != EXPECTED_AUDIT_ROWS:
         raise ValueError("ranking audit coverage differs")
+    safety_counter_total = sum(
+        int(parameters[name]) + int(summary[name])
+        for name in ("network_calls", "model_loads", "inference_calls")
+    ) + sum(
+        int(bool(value))
+        for value in (
+            seal["qrels_opened"], parameters["qrels_opened"],
+            bindings["qrels_opened"], summary["qrels_opened"],
+        )
+    )
     return {
         "verified": True,
         "root_sha256": seal["root_sha256"],
-        "topic_count": len(topic_ids),
+        "topic_count": len(ALL_TOPIC_IDS),
         "arm_count": len(ARMS),
         "ranking_row_count": row_count,
-        "qrels_network_model_calls": 0,
+        "qrels_network_model_calls": safety_counter_total,
     }
 
 
@@ -638,8 +870,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "freeze":
+        _reject_qrels([args.planning, args.retrieval, args.scoring, args.output], "CLI paths")
         payload = freeze_rankings(args.planning, args.retrieval, args.scoring, args.output)
     else:
+        _reject_qrels(args.rankings, "CLI rankings path")
         payload = verify_rankings(args.rankings)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
