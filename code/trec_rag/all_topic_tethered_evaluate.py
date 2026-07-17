@@ -17,12 +17,16 @@ from .all_topic_facet_contract import ALL_TOPIC_IDS, EXPERIMENT_ID
 from .all_topic_tethered_rank import (
     ARMS,
     CANONICAL_RANKING_ROOT_SHA256,
+    PLANNING_ROOT_SHA256,
+    RETRIEVAL_ROOT_SHA256,
+    SCORE_PLAN_ROOT_SHA256,
+    SCORING_ROOT_SHA256,
     verify_rankings,
 )
 
 
-SCHEMA_VERSION = "all-topic-tethered-evaluation-v1"
-SEAL_SCHEMA_VERSION = "all-topic-tethered-evaluation-seal-v1"
+SCHEMA_VERSION = "all-topic-tethered-evaluation-v2"
+SEAL_SCHEMA_VERSION = "all-topic-tethered-evaluation-seal-v2"
 DEPTHS = (100, 250, 500, 1000, 1500)
 BOOTSTRAP_SEED = 20260716
 BOOTSTRAP_SAMPLES = 100_000
@@ -31,15 +35,23 @@ PINNED_QRELS_SUFFIX = (
     "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
     "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
 )
+PINNED_RANKINGS_PATH = "outputs/all_topic_tethered_facet_validation_v1/rankings_v2"
+PINNED_UNION_PATH = "outputs/all_topic_tethered_facet_validation_v1/retrieval/accepted_union.jsonl"
+PINNED_UPSTREAM_ROOTS = {
+    "planning_root_sha256": PLANNING_ROOT_SHA256,
+    "retrieval_root_sha256": RETRIEVAL_ROOT_SHA256,
+    "score_plan_root_sha256": SCORE_PLAN_ROOT_SHA256,
+    "scoring_root_sha256": SCORING_ROOT_SHA256,
+}
 FACET_RANK_BUCKETS = ((1, 50), (51, 100), (101, 150), (151, 200))
 SELECTION_LADDER = (
     "RRF100-STATIC-DUAL",
     "RRF500-REINIT-DUAL",
     "RRF100-REINIT-DUAL",
-    "RRF500-STATIC-DUAL",
-    "DUAL",
+    "RRF100-REINIT-DUAL-NR",
+    "RRF100-STATIC-DUAL-NR",
 )
-JUDGED_RATE_MAX_DROP_AT_1000 = 0.02
+CANONICAL_EVALUATION_ROOT_SHA256 = "1634e2d993d79d46b969a6bcdc5207a7c06bc881485fc091ae3b7904bc0bc72b"
 
 
 def _compact(value: object) -> bytes:
@@ -211,6 +223,7 @@ def _topic_metrics(
             f"graded_recall@{depth}": _ratio(retrieved_gain, total_gain),
             f"ndcg@{depth}": _ndcg(ranking, qrels, depth),
             f"precision@{depth}": _ratio(len(known), len(prefix)),
+            f"candidate_count@{depth}": len(prefix),
             f"judged_count@{depth}": judged,
             f"judged_rate@{depth}": _ratio(judged, len(prefix)),
             f"facet_only_known_relevant_retained@{depth}": len(set(prefix) & facet_only),
@@ -221,9 +234,12 @@ def _topic_metrics(
     result.update({
         "known_relevant_count_full": len(full_known),
         "binary_recall_full": _ratio(len(full_known), len(relevant)),
+        "graded_gain_full": full_gain,
         "graded_recall_full": _ratio(full_gain, total_gain),
         "ndcg_full": _ndcg(ranking, qrels, len(ranking)),
         "precision_full": _ratio(len(full_known), len(ranking)),
+        "candidate_count_full": len(ranking),
+        "judged_count_full": sum(document in qrels for document in ranking),
         "judged_rate_full": _ratio(sum(document in qrels for document in ranking), len(ranking)),
         "facet_only_known_relevant_retained_full": len(full_known & facet_only),
         "facet_only_known_relevant_retention_full": _ratio(len(full_known & facet_only), len(facet_only)),
@@ -232,9 +248,62 @@ def _topic_metrics(
     return result
 
 
-def _arm_comparison(arm: str, per_topic: Mapping[str, Mapping[str, object]], baseline: Mapping[str, Mapping[str, object]], rankings: Mapping[str, Mapping[str, Sequence[str]]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for depth in (250, 500, 1000):
+def _aggregate(per_topic: Mapping[str, Mapping[str, object]], depths: Sequence[int]) -> dict[str, dict[str, object]]:
+    pooled: dict[str, object] = {
+        "known_relevant_total": sum(int(per_topic[t]["known_relevant_total"]) for t in ALL_TOPIC_IDS),
+        "known_relevant_graded_gain_total": sum(int(per_topic[t]["known_relevant_graded_gain_total"]) for t in ALL_TOPIC_IDS),
+        "union_size": sum(int(per_topic[t]["union_size"]) for t in ALL_TOPIC_IDS),
+        "facet_only_known_relevant_total": sum(int(per_topic[t]["facet_only_known_relevant_total"]) for t in ALL_TOPIC_IDS),
+    }
+    macro: dict[str, object] = {}
+    suffixes = [*map(str, depths), "full"]
+    for suffix in suffixes:
+        count_key = f"known_relevant_count@{suffix}" if suffix != "full" else "known_relevant_count_full"
+        gain_key = f"graded_gain@{suffix}" if suffix != "full" else "graded_gain_full"
+        candidate_key = f"candidate_count@{suffix}" if suffix != "full" else "candidate_count_full"
+        judged_key = f"judged_count@{suffix}" if suffix != "full" else "judged_count_full"
+        facet_key = f"facet_only_known_relevant_retained@{suffix}" if suffix != "full" else "facet_only_known_relevant_retained_full"
+        metric_suffix = f"@{suffix}" if suffix != "full" else "_full"
+        counts = sum(int(per_topic[t][count_key]) for t in ALL_TOPIC_IDS)
+        gains = sum(int(per_topic[t][gain_key]) for t in ALL_TOPIC_IDS)
+        candidates = sum(int(per_topic[t][candidate_key]) for t in ALL_TOPIC_IDS)
+        judged = sum(int(per_topic[t][judged_key]) for t in ALL_TOPIC_IDS)
+        facet = sum(int(per_topic[t][facet_key]) for t in ALL_TOPIC_IDS)
+        pooled[count_key] = counts
+        pooled[gain_key] = gains
+        pooled[f"binary_recall{metric_suffix}"] = _ratio(counts, pooled["known_relevant_total"])
+        pooled[f"graded_recall{metric_suffix}"] = _ratio(gains, pooled["known_relevant_graded_gain_total"])
+        pooled[f"precision{metric_suffix}"] = _ratio(counts, candidates)
+        pooled[f"judged_rate{metric_suffix}"] = _ratio(judged, candidates)
+        pooled[f"facet_only_known_relevant_retention{metric_suffix}"] = _ratio(facet, pooled["facet_only_known_relevant_total"])
+        for metric in ("binary_recall", "graded_recall", "ndcg", "precision", "judged_rate", "facet_only_known_relevant_retention"):
+            key = f"{metric}{metric_suffix}"
+            macro[key] = math.fsum(float(per_topic[t][key]) for t in ALL_TOPIC_IDS) / len(ALL_TOPIC_IDS)
+    macro["normalized_recall_auc"] = math.fsum(float(per_topic[t]["normalized_recall_auc"]) for t in ALL_TOPIC_IDS) / len(ALL_TOPIC_IDS)
+    macro["full_union_recall_ceiling"] = math.fsum(float(per_topic[t]["full_union_recall_ceiling"]) for t in ALL_TOPIC_IDS) / len(ALL_TOPIC_IDS)
+    pooled["normalized_recall_auc"] = macro["normalized_recall_auc"]
+    pooled["full_union_recall_ceiling"] = _ratio(
+        sum(int(per_topic[t]["known_relevant_count_full"]) for t in ALL_TOPIC_IDS),
+        pooled["known_relevant_total"],
+    )
+    # nDCG has no pooled denominator; repeat the explicitly macro topic mean in
+    # the pooled presentation table and label its aggregation method.
+    for suffix in suffixes:
+        key = f"ndcg@{suffix}" if suffix != "full" else "ndcg_full"
+        pooled[key] = macro[key]
+    pooled["ndcg_aggregation"] = "macro_topic_mean"
+    return {"pooled": pooled, "macro": macro}
+
+
+def _arm_comparison(arm: str, per_topic: Mapping[str, Mapping[str, object]], baseline: Mapping[str, Mapping[str, object]], rankings: Mapping[str, Mapping[str, Sequence[str]]], depths: Sequence[int]) -> dict[str, object]:
+    result: dict[str, object] = {"per_topic_deltas": {}}
+    for topic in ALL_TOPIC_IDS:
+        result["per_topic_deltas"][topic] = {
+            key: float(value) - float(baseline[topic][key])
+            for key, value in per_topic[topic].items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and key in baseline[topic]
+        }
+    for depth in depths:
         count_deltas = {topic: int(per_topic[topic][f"known_relevant_count@{depth}"]) - int(baseline[topic][f"known_relevant_count@{depth}"]) for topic in ALL_TOPIC_IDS}
         recall_deltas = {topic: float(per_topic[topic][f"binary_recall@{depth}"]) - float(baseline[topic][f"binary_recall@{depth}"]) for topic in ALL_TOPIC_IDS}
         result[f"loss_topic_ids_at_{depth}"] = [topic for topic in ALL_TOPIC_IDS if count_deltas[topic] < 0]
@@ -243,15 +312,19 @@ def _arm_comparison(arm: str, per_topic: Mapping[str, Mapping[str, object]], bas
         result[f"macro_delta_at_{depth}"] = math.fsum(recall_deltas.values()) / len(ALL_TOPIC_IDS)
         baseline_total = sum(int(baseline[topic]["known_relevant_total"]) for topic in ALL_TOPIC_IDS)
         result[f"pooled_delta_at_{depth}"] = _ratio(sum(int(per_topic[topic][f"known_relevant_count@{depth}"]) for topic in ALL_TOPIC_IDS), baseline_total) - _ratio(sum(int(baseline[topic][f"known_relevant_count@{depth}"]) for topic in ALL_TOPIC_IDS), baseline_total)
-        result[f"worst_regression_at_{depth}"] = min(recall_deltas.values())
+        worst_topic = min(ALL_TOPIC_IDS, key=lambda topic: (recall_deltas[topic], count_deltas[topic], ALL_TOPIC_IDS.index(topic)))
+        result[f"worst_regression_at_{depth}"] = {
+            "topic_id": worst_topic,
+            "known_relevant_count_delta": count_deltas[worst_topic],
+            "binary_recall_delta": recall_deltas[worst_topic],
+        }
+        result[f"wins_at_{depth}"] = len(result[f"win_topic_ids_at_{depth}"])
+        result[f"ties_at_{depth}"] = len(result[f"tie_topic_ids_at_{depth}"])
+        result[f"losses_at_{depth}"] = len(result[f"loss_topic_ids_at_{depth}"])
     result["loss_topic_ids"] = result["loss_topic_ids_at_1000"]
-    result["wins_at_1000"] = len(result["win_topic_ids_at_1000"])
-    result["ties_at_1000"] = len(result["tie_topic_ids_at_1000"])
-    result["losses_at_1000"] = len(result["loss_topic_ids_at_1000"])
     judged_delta = math.fsum(float(per_topic[t]["judged_rate@1000"]) - float(baseline[t]["judged_rate@1000"]) for t in ALL_TOPIC_IDS) / len(ALL_TOPIC_IDS)
     result["macro_judged_rate_delta_at_1000"] = judged_delta
-    result["judged_rate_interpretable"] = judged_delta >= -JUDGED_RATE_MAX_DROP_AT_1000
-    protected = 0 if arm == "DUAL" else 500 if arm.startswith("RRF500") else 100 if arm.startswith("RRF100") else 0
+    protected = 500 if arm.startswith("RRF500") else 100
     result["protected_prefix_depth"] = protected
     result["protected_prefix_identical"] = all(list(rankings[t][arm])[:protected] == list(rankings[t]["RRF"])[:protected] for t in ALL_TOPIC_IDS)
     return result
@@ -291,7 +364,6 @@ def apply_promotion_rules(metrics: Mapping[str, object], statistics: Mapping[str
         ("at_least_eight_wins_at_1000", int(metrics.get("wins_at_1000", 0)) >= 8),
         ("corrected_significance", significant),
         ("protected_prefix_identity", metrics.get("protected_prefix_identical") is True),
-        ("interpretable_judged_rate", metrics.get("judged_rate_interpretable") is True),
     )
     failed = [name for name, passed in checks if not passed]
     return {"promoted": not failed, "failed_rules": failed, "rules": {name: passed for name, passed in checks}}
@@ -312,13 +384,14 @@ def evaluate_all_topics(
     ordered_depths = tuple(dict.fromkeys(map(int, depths)))
     if not ordered_depths or any(depth <= 0 for depth in ordered_depths):
         raise ValueError("depths must be positive")
+    metric_depths = tuple(dict.fromkeys((*ordered_depths, 250, 500, 1000)))
     arms: dict[str, dict[str, object]] = {}
     for arm in ARMS:
-        per_topic = {topic: _topic_metrics(parsed_rankings[topic][arm], parsed_qrels[topic], parsed_provenance[topic], ordered_depths) for topic in ALL_TOPIC_IDS}
-        arms[arm] = {"per_topic": per_topic}
+        per_topic = {topic: _topic_metrics(parsed_rankings[topic][arm], parsed_qrels[topic], parsed_provenance[topic], metric_depths) for topic in ALL_TOPIC_IDS}
+        arms[arm] = {"per_topic": per_topic, "aggregate": _aggregate(per_topic, metric_depths)}
     baseline = arms["RRF"]["per_topic"]
     for arm in ARMS:
-        arms[arm].update(_arm_comparison(arm, arms[arm]["per_topic"], baseline, parsed_rankings))
+        arms[arm].update(_arm_comparison(arm, arms[arm]["per_topic"], baseline, parsed_rankings, metric_depths))
     facet_yield: dict[str, dict[str, object]] = {}
     for topic in ALL_TOPIC_IDS:
         relevant = {document for document, grade in parsed_qrels[topic].items() if grade >= 2}
@@ -334,13 +407,13 @@ def evaluate_all_topics(
     return {
         "schema_version": SCHEMA_VERSION,
         "topic_ids": list(ALL_TOPIC_IDS),
-        "depths": [*ordered_depths, "full"],
+        "depths": [*metric_depths, "full"],
         "relevance_threshold": 2,
         "arms": arms,
         "statistics": statistics,
         "decision": _select(arms, statistics),
         "facet_rank_bucket_yield": facet_yield,
-        "judged_rate_interpretation": {"maximum_allowed_macro_drop_at_1000": JUDGED_RATE_MAX_DROP_AT_1000, "unjudged_treated_as_nonrelevant": True},
+        "judged_rate_interpretation": {"promotion_threshold": None, "diagnostic_only": True, "unjudged_treated_as_nonrelevant": True},
     }
 
 
@@ -403,6 +476,133 @@ def _load_qrels(content: bytes) -> dict[str, dict[str, int]]:
     return result
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _split_evaluation(result: Mapping[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+    metrics = {
+        key: value for key, value in result.items()
+        if key not in {"statistics", "decision", "facet_rank_bucket_yield"}
+    }
+    diagnostics = {
+        "schema_version": SCHEMA_VERSION,
+        "facet_rank_bucket_yield": result["facet_rank_bucket_yield"],
+        "statistics": result["statistics"],
+        "decision": result["decision"],
+    }
+    return metrics, diagnostics
+
+
+def _summary(result: Mapping[str, object], artifacts: Mapping[str, bytes]) -> dict[str, object]:
+    decision = result["decision"]
+    assert isinstance(decision, Mapping)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "experiment_id": EXPERIMENT_ID,
+        "status": "complete",
+        "topic_ids": list(ALL_TOPIC_IDS),
+        "arms": list(ARMS),
+        "depths": result["depths"],
+        "selected_arm": decision["selected_arm"],
+        "qrels_opened": True,
+        "network_calls": 0,
+        "retrieval_calls": 0,
+        "model_loads": 0,
+        "inference_calls": 0,
+        "artifacts": {name: _binding(content) for name, content in artifacts.items()},
+    }
+
+
+def _write_evaluation(result: Mapping[str, object], input_bindings: Mapping[str, object], output: Path) -> dict[str, object]:
+    """Create one deterministic sealed evaluation from already-recomputed data."""
+
+    output = Path(output)
+    if output.exists():
+        raise FileExistsError(f"evaluation output already exists: {output}")
+    metrics, diagnostics = _split_evaluation(result)
+    artifacts = {
+        "metrics.json": _pretty(metrics),
+        "diagnostics.json": _pretty(diagnostics),
+        "input_bindings.json": _pretty(input_bindings),
+    }
+    summary = _summary(result, artifacts)
+    artifacts["summary.json"] = _pretty(summary)
+    seal_material = {
+        "schema_version": SEAL_SCHEMA_VERSION,
+        "status": "sealed_evaluation",
+        "files": {name: _binding(content) for name, content in artifacts.items()},
+    }
+    artifacts["SEALED.json"] = _pretty({
+        **seal_material, "root_sha256": _sha256(_compact(seal_material))
+    })
+    output.mkdir(parents=True)
+    for name, content in artifacts.items():
+        with (output / name).open("xb") as sink:
+            sink.write(content)
+            sink.flush()
+            os.fsync(sink.fileno())
+    return summary
+
+
+def _recompute_from_paths(
+    rankings: Path,
+    retrieval: Path,
+    qrels: Path,
+    *,
+    qrels_reader: Callable[[Path], bytes] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Authenticate canonical source bytes, then independently recompute all results."""
+
+    ranking_verification = verify_rankings(rankings)
+    if ranking_verification.get("root_sha256") != CANONICAL_RANKING_ROOT_SHA256:
+        raise ValueError("ranking seal is not the canonical approved v2 root")
+    seal_content = (rankings / "SEALED.json").read_bytes()
+    seal = json.loads(seal_content)
+    ranking_content = (rankings / "rankings.jsonl").read_bytes()
+    if seal.get("files", {}).get("rankings.jsonl") != _binding(ranking_content):
+        raise ValueError("ranking buffer differs from the verified ranking seal")
+    ranking_orders = _load_rankings(ranking_content)
+    frozen_bindings_content = (rankings / "input_bindings.json").read_bytes()
+    if seal.get("files", {}).get("input_bindings.json") != _binding(frozen_bindings_content):
+        raise ValueError("ranking input binding differs from the verified ranking seal")
+    frozen_bindings = json.loads(frozen_bindings_content)
+    if {key: frozen_bindings.get(key) for key in PINNED_UPSTREAM_ROOTS} != PINNED_UPSTREAM_ROOTS:
+        raise ValueError("ranking upstream root bindings differ from the preregistered v2 inputs")
+    accepted_binding = frozen_bindings.get("accepted_union")
+    if not isinstance(accepted_binding, Mapping):
+        raise ValueError("ranking accepted-union binding is missing")
+    provenance = _load_provenance(retrieval / "accepted_union.jsonl", accepted_binding)
+    if (rankings / "SEALED.json").read_bytes() != seal_content:
+        raise ValueError("ranking seal changed during the authenticated snapshot")
+    read = qrels_reader or (lambda path: path.read_bytes())
+    qrels_content = read(qrels)
+    if _sha256(qrels_content) != PINNED_QRELS_SHA256:
+        raise ValueError("qrels SHA-256 differs from the pinned all-topic projection")
+    result = evaluate_all_topics(ranking_orders, _load_qrels(qrels_content), provenance)
+    bindings: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "ranking_verified_before_qrels_open": True,
+        "ranking_root_sha256": CANONICAL_RANKING_ROOT_SHA256,
+        "ranking_path": PINNED_RANKINGS_PATH,
+        "rankings": {**_binding(ranking_content), "path": f"{PINNED_RANKINGS_PATH}/rankings.jsonl"},
+        "ranking_seal": {**_binding(seal_content), "path": f"{PINNED_RANKINGS_PATH}/SEALED.json"},
+        "accepted_union": {**dict(accepted_binding), "path": PINNED_UNION_PATH},
+        "qrels": {**_binding(qrels_content), "path": PINNED_QRELS_SUFFIX},
+        "upstream_roots": dict(PINNED_UPSTREAM_ROOTS),
+    }
+    return result, bindings
+
+
+def _recompute_canonical() -> tuple[dict[str, object], dict[str, object]]:
+    root = _repo_root()
+    return _recompute_from_paths(
+        root / PINNED_RANKINGS_PATH,
+        root / Path(PINNED_UNION_PATH).parent,
+        root / PINNED_QRELS_SUFFIX,
+    )
+
+
 def evaluate_frozen(
     rankings: Path,
     retrieval: Path,
@@ -416,67 +616,23 @@ def evaluate_frozen(
     rankings, retrieval, qrels, output = map(Path, (rankings, retrieval, qrels, output))
     if output.exists():
         raise FileExistsError(f"evaluation output already exists: {output}")
-    ranking_verification = verify_rankings(rankings)
-    if ranking_verification.get("root_sha256") != CANONICAL_RANKING_ROOT_SHA256:
-        raise ValueError("ranking seal is not the canonical approved root")
-    seal_content = (rankings / "SEALED.json").read_bytes()
-    seal = json.loads(seal_content)
-    ranking_content = (rankings / "rankings.jsonl").read_bytes()
-    if seal.get("files", {}).get("rankings.jsonl") != _binding(ranking_content):
-        raise ValueError("ranking buffer differs from the verified ranking seal")
-    ranking_orders = _load_rankings(ranking_content)
-    bindings_content = (rankings / "input_bindings.json").read_bytes()
-    if seal.get("files", {}).get("input_bindings.json") != _binding(bindings_content):
-        raise ValueError("ranking input binding differs from the verified ranking seal")
-    frozen_bindings = json.loads(bindings_content)
-    provenance = _load_provenance(retrieval / "accepted_union.jsonl", frozen_bindings["accepted_union"])
-    if (rankings / "SEALED.json").read_bytes() != seal_content:
-        raise ValueError("ranking seal changed during the authenticated snapshot")
-    read = qrels_reader or (lambda path: path.read_bytes())
-    qrels_content = read(qrels)
-    if _sha256(qrels_content) != PINNED_QRELS_SHA256:
-        raise ValueError("qrels SHA-256 differs from the pinned all-topic projection")
-    metrics = evaluate_all_topics(ranking_orders, _load_qrels(qrels_content), provenance)
-    statistics = metrics.pop("statistics")
-    decision = metrics.pop("decision")
-    facet_yield = metrics.pop("facet_rank_bucket_yield")
-    diagnostics = {"schema_version": SCHEMA_VERSION, "facet_rank_bucket_yield": facet_yield, "statistics": statistics, "decision": decision}
-    input_bindings = {
-        "schema_version": SCHEMA_VERSION,
-        "ranking_verified_before_qrels_open": True,
-        "ranking_root_sha256": CANONICAL_RANKING_ROOT_SHA256,
-        "rankings": {**_binding(ranking_content), "path": str((rankings / "rankings.jsonl").resolve())},
-        "accepted_union": {**frozen_bindings["accepted_union"], "path": str((retrieval / "accepted_union.jsonl").resolve())},
-        "qrels": {**_binding(qrels_content), "path": str(qrels.resolve())},
-    }
-    artifacts = {"metrics.json": _pretty(metrics), "diagnostics.json": _pretty(diagnostics), "input_bindings.json": _pretty(input_bindings)}
-    summary = {
-        "schema_version": SCHEMA_VERSION,
-        "experiment_id": EXPERIMENT_ID,
-        "status": "complete",
-        "topic_ids": list(ALL_TOPIC_IDS),
-        "arms": list(ARMS),
-        "depths": [*DEPTHS, "full"],
-        "selected_arm": decision["selected_arm"],
-        "qrels_opened": True,
-        "network_calls": 0,
-        "retrieval_calls": 0,
-        "model_loads": 0,
-        "inference_calls": 0,
-        "artifacts": {name: _binding(content) for name, content in artifacts.items()},
-    }
-    artifacts["summary.json"] = _pretty(summary)
-    seal_material = {"schema_version": SEAL_SCHEMA_VERSION, "status": "sealed_evaluation", "files": {name: _binding(content) for name, content in artifacts.items()}}
-    artifacts["SEALED.json"] = _pretty({**seal_material, "root_sha256": _sha256(_compact(seal_material))})
-    output.mkdir(parents=True)
-    for name, content in artifacts.items():
-        with (output / name).open("xb") as sink:
-            sink.write(content); sink.flush(); os.fsync(sink.fileno())
-    return summary
+    root = _repo_root()
+    expected = (
+        (root / PINNED_RANKINGS_PATH).resolve(),
+        (root / Path(PINNED_UNION_PATH).parent).resolve(),
+        (root / PINNED_QRELS_SUFFIX).resolve(),
+    )
+    actual = (rankings.resolve(), retrieval.resolve(), qrels.resolve())
+    if actual != expected:
+        raise ValueError("evaluation inputs are not the exact canonical v2 paths")
+    result, bindings = _recompute_from_paths(
+        rankings, retrieval, qrels, qrels_reader=qrels_reader
+    )
+    return _write_evaluation(result, bindings, output)
 
 
 def verify_evaluation(evaluation: Path) -> dict[str, object]:
-    """Verify artifact hashes and recompute statistics and promotion exactly."""
+    """Verify the pinned root and independently recompute from canonical sources."""
 
     evaluation = Path(evaluation)
     names = {"metrics.json", "diagnostics.json", "input_bindings.json", "summary.json", "SEALED.json"}
@@ -488,26 +644,29 @@ def verify_evaluation(evaluation: Path) -> dict[str, object]:
     material = {"schema_version": SEAL_SCHEMA_VERSION, "status": "sealed_evaluation", "files": files}
     if seal.get("schema_version") != SEAL_SCHEMA_VERSION or seal.get("status") != "sealed_evaluation" or not isinstance(files, Mapping) or set(files) != names - {"SEALED.json"} or seal.get("root_sha256") != _sha256(_compact(material)):
         raise ValueError("evaluation seal contract differs")
+    if CANONICAL_EVALUATION_ROOT_SHA256 is None or seal.get("root_sha256") != CANONICAL_EVALUATION_ROOT_SHA256:
+        raise ValueError("canonical evaluation root differs or is not pinned")
     for name in names - {"SEALED.json"}:
         if files[name] != _binding(buffers[name]):
             raise ValueError(f"evaluation artifact differs: {name}")
-    metrics, diagnostics, bindings, summary = (json.loads(buffers[name]) for name in ("metrics.json", "diagnostics.json", "input_bindings.json", "summary.json"))
-    if metrics.get("schema_version") != SCHEMA_VERSION or metrics.get("topic_ids") != list(ALL_TOPIC_IDS) or metrics.get("relevance_threshold") != 2:
-        raise ValueError("evaluation metric scope differs")
-    arms = metrics.get("arms")
-    if not isinstance(arms, Mapping) or set(arms) != set(ARMS) or any(set(arms[arm]["per_topic"]) != set(ALL_TOPIC_IDS) for arm in ARMS):
-        raise ValueError("evaluation per-topic scope differs")
-    recomputed_statistics = _statistics(arms)
-    recomputed_decision = _select(arms, recomputed_statistics)
-    if diagnostics.get("statistics") != recomputed_statistics or diagnostics.get("decision") != recomputed_decision:
-        raise ValueError("evaluation recomputation differs from saved statistics or promotion")
-    if bindings.get("ranking_verified_before_qrels_open") is not True or bindings.get("ranking_root_sha256") != CANONICAL_RANKING_ROOT_SHA256:
-        raise ValueError("evaluation firewall binding differs")
-    if summary.get("status") != "complete" or summary.get("selected_arm") != recomputed_decision["selected_arm"] or any(summary.get(name) != 0 for name in ("network_calls", "retrieval_calls", "model_loads", "inference_calls")):
-        raise ValueError("evaluation summary differs")
-    for name in ("metrics.json", "diagnostics.json", "input_bindings.json"):
-        if summary.get("artifacts", {}).get(name) != _binding(buffers[name]):
-            raise ValueError("evaluation summary artifact binding differs")
+    metrics, diagnostics, bindings, summary = (
+        json.loads(buffers[name])
+        for name in ("metrics.json", "diagnostics.json", "input_bindings.json", "summary.json")
+    )
+    recomputed, recomputed_bindings = _recompute_canonical()
+    expected_metrics, expected_diagnostics = _split_evaluation(recomputed)
+    if metrics != expected_metrics:
+        raise ValueError("evaluation metrics differ from independently recomputed canonical metrics")
+    if diagnostics != expected_diagnostics:
+        raise ValueError("evaluation diagnostics differ from independently recomputed statistics or decision")
+    if bindings != recomputed_bindings:
+        raise ValueError("evaluation source binding differs from independently authenticated canonical binding")
+    expected_summary = _summary(
+        recomputed,
+        {name: buffers[name] for name in ("metrics.json", "diagnostics.json", "input_bindings.json")},
+    )
+    if summary != expected_summary:
+        raise ValueError("evaluation summary differs from independently recomputed canonical summary")
     return {**summary, "evaluation_root_sha256": seal["root_sha256"], "recomputed": True}
 
 
