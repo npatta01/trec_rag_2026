@@ -24,11 +24,11 @@
 ## Verification evidence (2026-07-17)
 
 - Tasks 1 through 3 completed their red-green cycles and independent reviews. The retained commits are `e8e71a7` plus seal/portability fix `2cdd8c6`, `7978150` plus receipt-status fix `9b877d7`, and `f4339c1` plus URL-hardening fix `9cdfd22`.
-- The Task 4 integration suite passed `115` tests, including `test_experiment_records.py`; `node reports/index.test.js` passed and `git diff --check` was clean.
-- The canonical report verifier passed for `22` topics and `6` arms. The tracked and live report SHA-256 is `65225919629e15966cf4a46837b6df73fba128f5508b3bd6c4c371f0e8499d66`; the summary SHA-256 is `4f5ff138447f6c10d89242759cdcd70e186ad8346cee2e396cbe259f0273b228`.
+- The final integration suite passed `120` tests, including `test_experiment_records.py`; `node reports/index.test.js` passed and `git diff --check` was clean.
+- The canonical report verifier passed for `22` topics and `6` arms. The tracked and live report SHA-256 is `1464a026979cd14eceea7bcd5edc751dbd0f34dc6f96124f1447dfab82fc6b06`; the summary SHA-256 is `640e20e0a02942278a87f3aea5948e51e4ae97dbf3c87912a053bf3724d4ec0e`.
 - Sanitized JSON/report checks found no credentials, absolute home paths, raw document text/identifier fields, or external runtime dependencies. `artifact.json` verification passed.
 - The private portal and direct report returned HTTP 200. The live report body matched the tracked SHA-256, required title/capture/Topic 300 signals were present, and `tailscale serve status --json` showed the tailnet HTTPS file handler at `/home/npatta01/codex-rendered` with no Funnel configuration.
-- Whole-branch independent review remains the final open gate below; completion must be recorded only after that review resolves every Critical or Important finding.
+- Whole-branch independent re-review approved remediation commit `28f094c`; no Critical or Important findings remain.
 
 ---
 
@@ -406,14 +406,13 @@ Confirm:
 - the live document title, graded-capture section, and Topic 300 disclosure are
   present.
 
-- [ ] **Step 5: Complete the plan ledger and final review**
+- [x] **Step 5: Complete the plan ledger and final review**
 
 Mark this plan's verified steps complete, record exact test counts/hashes, run a
 whole-branch code review from merge base to HEAD, resolve all Critical or
 Important findings, and rerun affected tests.
 
-Whole-branch review remediation evidence (2026-07-17; final review remains
-open):
+Whole-branch review remediation evidence (2026-07-17):
 
 - [x] Restored the postmortem-only RRF depth-20 diagnostic from the
   authenticated ranking and pinned qrels: 316 / 12,984 known relevant
@@ -438,6 +437,8 @@ open):
 - [x] Replaced the authorized private rendered copy. Portal/direct HTTP status
   is 200, the live body exactly matches the tracked HTML SHA-256 above, and
   Tailscale Serve remains an HTTPS file handler with no Funnel configuration.
-- [ ] Rerun the independent whole-branch review from merge base through the
-  remediation commit and close this final gate only if no Critical or Important
-  finding remains.
+- [x] Independent whole-branch re-review from merge base through remediation
+  commit `28f094c` passed. It independently reproduced the depth-20 diagnostic,
+  rebuilt the postmortem from authenticated full sources, verified the separate
+  Topic 300 retrieval-stream and DUAL coverage attribution, reran 120 integration
+  tests, and found no remaining Critical or Important issue.
