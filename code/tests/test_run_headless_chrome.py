@@ -7,6 +7,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = REPO_ROOT / "code/tools/run_headless_chrome.py"
@@ -51,6 +53,7 @@ def _run_wrapper(
     tmp_path: Path,
     *,
     extra_env: dict[str, str] | None = None,
+    url: str = "file:///absolute/report.html",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, object], Path, Path]:
     browser = _fake_browser(tmp_path)
     record_path = tmp_path / "browser-record.json"
@@ -65,8 +68,7 @@ def _run_wrapper(
             str(browser),
             "--scratch-root",
             str(scratch_root),
-            "--url",
-            "file:///absolute/report.html",
+            f"--url={url}",
             "--output",
             str(output_path),
             "--width",
@@ -81,6 +83,57 @@ def _run_wrapper(
     )
     record = json.loads(record_path.read_text()) if record_path.exists() else {}
     return completed, record, output_path, scratch_root
+
+
+def test_wrapper_rejects_option_shaped_url_before_starting_browser(tmp_path: Path) -> None:
+    completed, record, output_path, scratch_root = _run_wrapper(
+        tmp_path,
+        url="--user-data-dir=/tmp/attacker-profile",
+    )
+
+    assert completed.returncode != 0
+    assert "URL scheme" in completed.stderr
+    assert record == {}
+    assert not output_path.exists()
+    assert not scratch_root.exists()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:relative-report.html",
+        "https:///missing-host/report.html",
+        "ftp://example.test/report.html",
+    ],
+)
+def test_wrapper_rejects_malformed_or_unsupported_url(
+    tmp_path: Path,
+    url: str,
+) -> None:
+    completed, record, output_path, scratch_root = _run_wrapper(tmp_path, url=url)
+
+    assert completed.returncode != 0
+    assert "URL" in completed.stderr
+    assert record == {}
+    assert not output_path.exists()
+    assert not scratch_root.exists()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.test/report.html",
+        "https://example.test/report.html",
+    ],
+)
+def test_wrapper_accepts_http_and_https_urls(tmp_path: Path, url: str) -> None:
+    completed, record, output_path, scratch_root = _run_wrapper(tmp_path, url=url)
+
+    assert completed.returncode == 0, completed.stderr
+    assert record["args"][-1] == url
+    assert output_path.read_bytes() == b"fake-png"
+    assert scratch_root.is_dir()
+    assert list(scratch_root.iterdir()) == []
 
 
 def test_wrapper_places_environment_profile_and_cache_in_private_root(tmp_path: Path) -> None:

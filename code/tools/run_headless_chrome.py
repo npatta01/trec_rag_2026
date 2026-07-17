@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 
 
 DEFAULT_SCRATCH_ROOT = Path.home() / ".cache/trec-rag/browser-qa"
@@ -19,6 +20,20 @@ def _browser_executable(browser: str | None) -> str:
         name = browser or "google-chrome"
         raise FileNotFoundError(f"Chrome executable not found: {name}")
     return executable
+
+
+def _validated_url(url: str) -> str:
+    if any(ord(character) < 32 or ord(character) == 127 for character in url):
+        raise ValueError("URL contains a control character")
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"file", "http", "https"}:
+        raise ValueError("URL scheme must be file, http, or https")
+    if parsed.scheme == "file":
+        if parsed.netloc not in {"", "localhost"} or not parsed.path.startswith("/"):
+            raise ValueError("file URL must use an absolute local path")
+    elif parsed.hostname is None:
+        raise ValueError("http/https URL must include a host")
+    return url
 
 
 def capture_page(
@@ -35,6 +50,7 @@ def capture_page(
     if width <= 0 or height <= 0:
         raise ValueError("width and height must be positive")
 
+    url = _validated_url(url)
     executable = _browser_executable(browser)
     output = Path(output).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
