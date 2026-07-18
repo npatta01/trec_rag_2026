@@ -1,0 +1,948 @@
+{
+  "execution_counters": {
+    "download_calls": 0,
+    "hosted_calls": 0,
+    "inference_calls": 0,
+    "model_loads": 0,
+    "network_calls": 0,
+    "paid_calls": 0,
+    "retrieval_calls": 0
+  },
+  "experiment_id": "all_topic_tethered_facet_validation_v1",
+  "provenance": {
+    "accepted_union_sha256": "f91c38f721e6821015d28ae9928637757f2763eeb5c7270822d4e695b312d1d9",
+    "facet_manifest_sha256": "03a55f669f312b09434226928d9eb3a61f49f47f463b88acf9bd4d57d743f1d5",
+    "features_sha256": "46ee87b6ea5f8c1bb7459cae7c415efe215ace5fc5667136c87c0815c9f461f9",
+    "planning_root_sha256": "bc1351cca8aa05dd0979a342c8dd5f72395f2b7a9207ae20668aba05f1ab85a2",
+    "qrels_sha256": "42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37",
+    "ranking_root_sha256": "6f4c35899f90c1d60324caf24bf8834d3482c5e8b9e785f8316ab0eec55fc305",
+    "retrieval_root_sha256": "f2191c295f600d0243f4dcd2b1dc23a05b9fa8a7d9a4d6258983a0d3c9433aeb",
+    "score_plan_root_sha256": "48c8b9be21adece21c1f17cdeec4de8694a83f5ee7fccaa9fc07ff8ca36944c3",
+    "scoring_root_sha256": "4f67107770b1cd35598adc75beeeafe205ba984f201cedf4b505c4d20515e990"
+  },
+  "recommendation": "Retain canonical RRF; use the cap replay only as bounded recovery evidence while beginning source-diverse RAG evidence selection.",
+  "rrf_capture_diagnostic_at_20": {
+    "arm": "RRF",
+    "binary_recall": 0.024337646333949477,
+    "depth": 20,
+    "graded_gain": 2492,
+    "graded_gain_total": 84560,
+    "graded_recall": 0.02947019867549669,
+    "judged_count": 440,
+    "judged_rate": 1.0,
+    "known_relevant_count": 316,
+    "known_relevant_total": 12984,
+    "metric_source": "postmortem diagnostic",
+    "retrieved_count": 440
+  },
+  "schema_version": "topic-failure-postmortem-v1",
+  "scope": {
+    "document_identifiers_emitted": false,
+    "raw_model_scores_emitted": false,
+    "relevance_threshold": 2,
+    "replay_type": "offline frozen-candidate analysis",
+    "topic_ids": [
+      "31",
+      "300"
+    ],
+    "unjudged_interpretation": "unknown; never nonrelevant"
+  },
+  "topics": {
+    "300": {
+      "facet_bucket_yield": {
+        "1-50": 0.36180904522613067,
+        "101-150": 0.06,
+        "151-200": 0.08,
+        "51-100": 0.29292929292929293
+      },
+      "known_relevant_total": 635,
+      "no_redundancy_at_1000": {
+        "baseline": {
+          "judged_below_2": 133,
+          "known_relevant": 226,
+          "total": 1000,
+          "unjudged": 641
+        },
+        "candidate": {
+          "judged_below_2": 107,
+          "known_relevant": 224,
+          "total": 1000,
+          "unjudged": 669
+        },
+        "depth": 1000,
+        "incoming": {
+          "judged_below_2": 10,
+          "known_relevant": 12,
+          "total": 281,
+          "unjudged": 259
+        },
+        "known_relevant_delta": -2,
+        "outgoing": {
+          "judged_below_2": 36,
+          "known_relevant": 14,
+          "total": 281,
+          "unjudged": 231
+        }
+      },
+      "primary_at_1000": {
+        "baseline": {
+          "judged_below_2": 133,
+          "known_relevant": 226,
+          "total": 1000,
+          "unjudged": 641
+        },
+        "candidate": {
+          "judged_below_2": 107,
+          "known_relevant": 223,
+          "total": 1000,
+          "unjudged": 670
+        },
+        "depth": 1000,
+        "incoming": {
+          "judged_below_2": 11,
+          "known_relevant": 13,
+          "total": 281,
+          "unjudged": 257
+        },
+        "known_relevant_delta": -3,
+        "outgoing": {
+          "judged_below_2": 37,
+          "known_relevant": 16,
+          "total": 281,
+          "unjudged": 228
+        }
+      },
+      "primary_boundary_attribution": {
+        "incoming": {
+          "best_facet_rank_bucket": {
+            "101-150": 94,
+            "151-200": 78,
+            "none": 109
+          },
+          "dual_selection_coverage_facets": {
+            "300-antarctica": 2,
+            "300-economic-costs": 2,
+            "300-global-measures": 1,
+            "300-strategies": 276
+          },
+          "facet_retrieval_stream_memberships": {
+            "300-antarctica": {
+              "facet_label": "antarctica",
+              "judged_below_2": 7,
+              "known_relevant": 0,
+              "query_formulation": "climate change actions help Antarctica",
+              "rank_buckets": {
+                "101-150": 22,
+                "151-200": 13
+              },
+              "total": 35,
+              "unjudged": 28
+            },
+            "300-economic-costs": {
+              "facet_label": "economic costs",
+              "judged_below_2": 0,
+              "known_relevant": 2,
+              "query_formulation": "global warming economic costs addressing compared dealing impacts",
+              "rank_buckets": {
+                "101-150": 17,
+                "151-200": 15
+              },
+              "total": 32,
+              "unjudged": 30
+            },
+            "300-global-measures": {
+              "facet_label": "global measures",
+              "judged_below_2": 0,
+              "known_relevant": 0,
+              "query_formulation": "global measures address global warming climate change",
+              "rank_buckets": {
+                "101-150": 28,
+                "151-200": 23
+              },
+              "total": 51,
+              "unjudged": 51
+            },
+            "300-strategies": {
+              "facet_label": "strategies",
+              "judged_below_2": 0,
+              "known_relevant": 1,
+              "query_formulation": "global warming climate change effective strategies prevent reduce",
+              "rank_buckets": {
+                "101-150": 27,
+                "151-200": 27
+              },
+              "total": 54,
+              "unjudged": 53
+            }
+          },
+          "source_family": {
+            "facet_only": 172,
+            "original_only": 109
+          },
+          "total": 281
+        },
+        "outgoing": {
+          "best_facet_rank_bucket": {
+            "1-50": 34,
+            "101-150": 7,
+            "51-100": 61,
+            "none": 179
+          },
+          "dual_selection_coverage_facets": {
+            "300-strategies": 281
+          },
+          "facet_retrieval_stream_memberships": {
+            "300-antarctica": {
+              "facet_label": "antarctica",
+              "judged_below_2": 1,
+              "known_relevant": 0,
+              "query_formulation": "climate change actions help Antarctica",
+              "rank_buckets": {
+                "1-50": 10,
+                "101-150": 3,
+                "51-100": 13
+              },
+              "total": 26,
+              "unjudged": 25
+            },
+            "300-economic-costs": {
+              "facet_label": "economic costs",
+              "judged_below_2": 0,
+              "known_relevant": 0,
+              "query_formulation": "global warming economic costs addressing compared dealing impacts",
+              "rank_buckets": {
+                "1-50": 11,
+                "101-150": 3,
+                "51-100": 18
+              },
+              "total": 32,
+              "unjudged": 32
+            },
+            "300-global-measures": {
+              "facet_label": "global measures",
+              "judged_below_2": 27,
+              "known_relevant": 3,
+              "query_formulation": "global measures address global warming climate change",
+              "rank_buckets": {
+                "1-50": 7,
+                "51-100": 23
+              },
+              "total": 30,
+              "unjudged": 0
+            },
+            "300-strategies": {
+              "facet_label": "strategies",
+              "judged_below_2": 8,
+              "known_relevant": 5,
+              "query_formulation": "global warming climate change effective strategies prevent reduce",
+              "rank_buckets": {
+                "1-50": 6,
+                "101-150": 1,
+                "51-100": 7
+              },
+              "total": 14,
+              "unjudged": 1
+            }
+          },
+          "source_family": {
+            "facet_only": 102,
+            "original_only": 179
+          },
+          "total": 281
+        }
+      },
+      "primary_by_depth": {
+        "1000": {
+          "baseline": {
+            "judged_below_2": 133,
+            "known_relevant": 226,
+            "total": 1000,
+            "unjudged": 641
+          },
+          "candidate": {
+            "judged_below_2": 107,
+            "known_relevant": 223,
+            "total": 1000,
+            "unjudged": 670
+          },
+          "depth": 1000,
+          "incoming": {
+            "judged_below_2": 11,
+            "known_relevant": 13,
+            "total": 281,
+            "unjudged": 257
+          },
+          "known_relevant_delta": -3,
+          "outgoing": {
+            "judged_below_2": 37,
+            "known_relevant": 16,
+            "total": 281,
+            "unjudged": 228
+          }
+        },
+        "1500": {
+          "baseline": {
+            "judged_below_2": 145,
+            "known_relevant": 236,
+            "total": 1500,
+            "unjudged": 1119
+          },
+          "candidate": {
+            "judged_below_2": 139,
+            "known_relevant": 244,
+            "total": 1500,
+            "unjudged": 1117
+          },
+          "depth": 1500,
+          "incoming": {
+            "judged_below_2": 3,
+            "known_relevant": 10,
+            "total": 138,
+            "unjudged": 125
+          },
+          "known_relevant_delta": 8,
+          "outgoing": {
+            "judged_below_2": 9,
+            "known_relevant": 2,
+            "total": 138,
+            "unjudged": 127
+          }
+        },
+        "250": {
+          "baseline": {
+            "judged_below_2": 41,
+            "known_relevant": 109,
+            "total": 250,
+            "unjudged": 100
+          },
+          "candidate": {
+            "judged_below_2": 47,
+            "known_relevant": 129,
+            "total": 250,
+            "unjudged": 74
+          },
+          "depth": 250,
+          "incoming": {
+            "judged_below_2": 17,
+            "known_relevant": 40,
+            "total": 118,
+            "unjudged": 61
+          },
+          "known_relevant_delta": 20,
+          "outgoing": {
+            "judged_below_2": 11,
+            "known_relevant": 20,
+            "total": 118,
+            "unjudged": 87
+          }
+        },
+        "500": {
+          "baseline": {
+            "judged_below_2": 71,
+            "known_relevant": 161,
+            "total": 500,
+            "unjudged": 268
+          },
+          "candidate": {
+            "judged_below_2": 74,
+            "known_relevant": 178,
+            "total": 500,
+            "unjudged": 248
+          },
+          "depth": 500,
+          "incoming": {
+            "judged_below_2": 23,
+            "known_relevant": 36,
+            "total": 223,
+            "unjudged": 164
+          },
+          "known_relevant_delta": 17,
+          "outgoing": {
+            "judged_below_2": 20,
+            "known_relevant": 19,
+            "total": 223,
+            "unjudged": 184
+          }
+        }
+      },
+      "recovery_replay": {
+        "arms": {
+          "facet_rank_cap_100": {
+            "baseline": {
+              "judged_below_2": 133,
+              "known_relevant": 226,
+              "total": 1000,
+              "unjudged": 641
+            },
+            "candidate": {
+              "judged_below_2": 109,
+              "known_relevant": 228,
+              "total": 1000,
+              "unjudged": 663
+            },
+            "depth": 1000,
+            "incoming": {
+              "judged_below_2": 4,
+              "known_relevant": 11,
+              "total": 183,
+              "unjudged": 168
+            },
+            "known_relevant_delta": 2,
+            "outgoing": {
+              "judged_below_2": 28,
+              "known_relevant": 9,
+              "total": 183,
+              "unjudged": 146
+            }
+          },
+          "no_narrative_score": {
+            "base_arm": "RRF100-STATIC-DUAL-NR",
+            "baseline": {
+              "judged_below_2": 133,
+              "known_relevant": 226,
+              "total": 1000,
+              "unjudged": 641
+            },
+            "candidate": {
+              "judged_below_2": 107,
+              "known_relevant": 226,
+              "total": 1000,
+              "unjudged": 667
+            },
+            "depth": 1000,
+            "incoming": {
+              "judged_below_2": 9,
+              "known_relevant": 15,
+              "total": 277,
+              "unjudged": 253
+            },
+            "known_relevant_delta": 0,
+            "method": "fixed objective minus 0.15*N; no greedy replay",
+            "outgoing": {
+              "judged_below_2": 35,
+              "known_relevant": 15,
+              "total": 277,
+              "unjudged": 227
+            },
+            "promotion_eligible": false,
+            "redundancy_state": "fixed zero inherited from diagnostic base arm",
+            "removed_weight": "N",
+            "status": "post-hoc diagnostic",
+            "unchanged_weights": [
+              "G",
+              "R",
+              "L",
+              "B"
+            ]
+          }
+        },
+        "deferred_document_count": 353,
+        "eligible_document_count": 1348,
+        "facet_rank_cap": 100,
+        "ineligible_document_count": 353,
+        "permutation_checks": {
+          "RRF": true,
+          "canonical_primary": true,
+          "facet_rank_cap_100": true,
+          "no_narrative_score": true
+        },
+        "protected_prefix_depth": 100,
+        "protected_prefix_identical": {
+          "canonical_primary": true,
+          "facet_rank_cap_100": true,
+          "no_narrative_score": true
+        }
+      },
+      "rrf500_at_1000": {
+        "baseline": {
+          "judged_below_2": 133,
+          "known_relevant": 226,
+          "total": 1000,
+          "unjudged": 641
+        },
+        "candidate": {
+          "judged_below_2": 111,
+          "known_relevant": 223,
+          "total": 1000,
+          "unjudged": 666
+        },
+        "depth": 1000,
+        "incoming": {
+          "judged_below_2": 9,
+          "known_relevant": 10,
+          "total": 238,
+          "unjudged": 219
+        },
+        "known_relevant_delta": -3,
+        "outgoing": {
+          "judged_below_2": 31,
+          "known_relevant": 13,
+          "total": 238,
+          "unjudged": 194
+        }
+      },
+      "union_size": 1701
+    },
+    "31": {
+      "known_relevant_total": 925,
+      "no_redundancy_at_1000": {
+        "baseline": {
+          "judged_below_2": 9,
+          "known_relevant": 273,
+          "total": 1000,
+          "unjudged": 718
+        },
+        "candidate": {
+          "judged_below_2": 7,
+          "known_relevant": 268,
+          "total": 1000,
+          "unjudged": 725
+        },
+        "depth": 1000,
+        "incoming": {
+          "judged_below_2": 0,
+          "known_relevant": 26,
+          "total": 320,
+          "unjudged": 294
+        },
+        "known_relevant_delta": -5,
+        "outgoing": {
+          "judged_below_2": 2,
+          "known_relevant": 31,
+          "total": 320,
+          "unjudged": 287
+        }
+      },
+      "primary_at_1000": {
+        "baseline": {
+          "judged_below_2": 9,
+          "known_relevant": 273,
+          "total": 1000,
+          "unjudged": 718
+        },
+        "candidate": {
+          "judged_below_2": 7,
+          "known_relevant": 266,
+          "total": 1000,
+          "unjudged": 727
+        },
+        "depth": 1000,
+        "incoming": {
+          "judged_below_2": 0,
+          "known_relevant": 26,
+          "total": 322,
+          "unjudged": 296
+        },
+        "known_relevant_delta": -7,
+        "outgoing": {
+          "judged_below_2": 2,
+          "known_relevant": 33,
+          "total": 322,
+          "unjudged": 287
+        }
+      },
+      "primary_boundary_attribution": {
+        "incoming": {
+          "best_facet_rank_bucket": {
+            "1-50": 25,
+            "101-150": 84,
+            "151-200": 65,
+            "51-100": 74,
+            "none": 74
+          },
+          "dual_selection_coverage_facets": {
+            "31-economies": 1,
+            "31-environment": 320,
+            "31-innovations": 1
+          },
+          "facet_retrieval_stream_memberships": {
+            "31-business-actions": {
+              "facet_label": "business actions",
+              "judged_below_2": 0,
+              "known_relevant": 4,
+              "query_formulation": "businesses practical steps responsible waste handling",
+              "rank_buckets": {
+                "101-150": 11,
+                "151-200": 4,
+                "51-100": 8
+              },
+              "total": 23,
+              "unjudged": 19
+            },
+            "31-economies": {
+              "facet_label": "economies",
+              "judged_below_2": 0,
+              "known_relevant": 1,
+              "query_formulation": "proper waste recycling benefits local economies",
+              "rank_buckets": {
+                "1-50": 4,
+                "101-150": 12,
+                "151-200": 5,
+                "51-100": 9
+              },
+              "total": 30,
+              "unjudged": 29
+            },
+            "31-environment": {
+              "facet_label": "environment",
+              "judged_below_2": 0,
+              "known_relevant": 3,
+              "query_formulation": "e-waste other waste environmental impacts",
+              "rank_buckets": {
+                "1-50": 2,
+                "101-150": 10,
+                "151-200": 9,
+                "51-100": 6
+              },
+              "total": 27,
+              "unjudged": 24
+            },
+            "31-health": {
+              "facet_label": "health",
+              "judged_below_2": 0,
+              "known_relevant": 7,
+              "query_formulation": "e-waste other waste health impacts",
+              "rank_buckets": {
+                "1-50": 5,
+                "101-150": 7,
+                "151-200": 11,
+                "51-100": 9
+              },
+              "total": 32,
+              "unjudged": 25
+            },
+            "31-improper-management": {
+              "facet_label": "improper management",
+              "judged_below_2": 0,
+              "known_relevant": 1,
+              "query_formulation": "improper waste management risks environmental health",
+              "rank_buckets": {
+                "1-50": 8,
+                "101-150": 17,
+                "151-200": 18,
+                "51-100": 20
+              },
+              "total": 63,
+              "unjudged": 62
+            },
+            "31-individual-actions": {
+              "facet_label": "individual actions",
+              "judged_below_2": 0,
+              "known_relevant": 2,
+              "query_formulation": "individuals practical steps responsible waste handling",
+              "rank_buckets": {
+                "1-50": 1,
+                "101-150": 3,
+                "151-200": 9,
+                "51-100": 9
+              },
+              "total": 22,
+              "unjudged": 20
+            },
+            "31-innovations": {
+              "facet_label": "innovations",
+              "judged_below_2": 0,
+              "known_relevant": 2,
+              "query_formulation": "waste recycling recent innovations",
+              "rank_buckets": {
+                "1-50": 1,
+                "101-150": 8,
+                "151-200": 3,
+                "51-100": 4
+              },
+              "total": 16,
+              "unjudged": 14
+            },
+            "31-sustainability": {
+              "facet_label": "sustainability",
+              "judged_below_2": 0,
+              "known_relevant": 0,
+              "query_formulation": "proper waste recycling benefits sustainability",
+              "rank_buckets": {
+                "1-50": 4,
+                "101-150": 16,
+                "151-200": 10,
+                "51-100": 9
+              },
+              "total": 39,
+              "unjudged": 39
+            }
+          },
+          "source_family": {
+            "facet_only": 248,
+            "original_only": 74
+          },
+          "total": 322
+        },
+        "outgoing": {
+          "best_facet_rank_bucket": {
+            "1-50": 101,
+            "101-150": 6,
+            "151-200": 6,
+            "51-100": 10,
+            "none": 199
+          },
+          "dual_selection_coverage_facets": {
+            "31-environment": 322
+          },
+          "facet_retrieval_stream_memberships": {
+            "31-business-actions": {
+              "facet_label": "business actions",
+              "judged_below_2": 1,
+              "known_relevant": 4,
+              "query_formulation": "businesses practical steps responsible waste handling",
+              "rank_buckets": {
+                "1-50": 17,
+                "101-150": 1,
+                "51-100": 3
+              },
+              "total": 21,
+              "unjudged": 16
+            },
+            "31-economies": {
+              "facet_label": "economies",
+              "judged_below_2": 0,
+              "known_relevant": 1,
+              "query_formulation": "proper waste recycling benefits local economies",
+              "rank_buckets": {
+                "1-50": 15,
+                "101-150": 4,
+                "151-200": 2,
+                "51-100": 1
+              },
+              "total": 22,
+              "unjudged": 21
+            },
+            "31-environment": {
+              "facet_label": "environment",
+              "judged_below_2": 0,
+              "known_relevant": 1,
+              "query_formulation": "e-waste other waste environmental impacts",
+              "rank_buckets": {
+                "1-50": 4,
+                "101-150": 2,
+                "151-200": 1,
+                "51-100": 3
+              },
+              "total": 10,
+              "unjudged": 9
+            },
+            "31-health": {
+              "facet_label": "health",
+              "judged_below_2": 0,
+              "known_relevant": 1,
+              "query_formulation": "e-waste other waste health impacts",
+              "rank_buckets": {
+                "1-50": 5,
+                "101-150": 1,
+                "51-100": 4
+              },
+              "total": 10,
+              "unjudged": 9
+            },
+            "31-improper-management": {
+              "facet_label": "improper management",
+              "judged_below_2": 0,
+              "known_relevant": 0,
+              "query_formulation": "improper waste management risks environmental health",
+              "rank_buckets": {
+                "1-50": 9,
+                "101-150": 1
+              },
+              "total": 10,
+              "unjudged": 10
+            },
+            "31-individual-actions": {
+              "facet_label": "individual actions",
+              "judged_below_2": 1,
+              "known_relevant": 5,
+              "query_formulation": "individuals practical steps responsible waste handling",
+              "rank_buckets": {
+                "1-50": 14,
+                "101-150": 3,
+                "151-200": 4,
+                "51-100": 4
+              },
+              "total": 25,
+              "unjudged": 19
+            },
+            "31-innovations": {
+              "facet_label": "innovations",
+              "judged_below_2": 0,
+              "known_relevant": 0,
+              "query_formulation": "waste recycling recent innovations",
+              "rank_buckets": {
+                "1-50": 32
+              },
+              "total": 32,
+              "unjudged": 32
+            },
+            "31-sustainability": {
+              "facet_label": "sustainability",
+              "judged_below_2": 0,
+              "known_relevant": 0,
+              "query_formulation": "proper waste recycling benefits sustainability",
+              "rank_buckets": {
+                "1-50": 9,
+                "101-150": 2,
+                "151-200": 2,
+                "51-100": 1
+              },
+              "total": 14,
+              "unjudged": 14
+            }
+          },
+          "source_family": {
+            "facet_only": 105,
+            "original_and_facet": 18,
+            "original_only": 199
+          },
+          "total": 322
+        }
+      },
+      "primary_by_depth": {
+        "1000": {
+          "baseline": {
+            "judged_below_2": 9,
+            "known_relevant": 273,
+            "total": 1000,
+            "unjudged": 718
+          },
+          "candidate": {
+            "judged_below_2": 7,
+            "known_relevant": 266,
+            "total": 1000,
+            "unjudged": 727
+          },
+          "depth": 1000,
+          "incoming": {
+            "judged_below_2": 0,
+            "known_relevant": 26,
+            "total": 322,
+            "unjudged": 296
+          },
+          "known_relevant_delta": -7,
+          "outgoing": {
+            "judged_below_2": 2,
+            "known_relevant": 33,
+            "total": 322,
+            "unjudged": 287
+          }
+        },
+        "1500": {
+          "baseline": {
+            "judged_below_2": 11,
+            "known_relevant": 293,
+            "total": 1500,
+            "unjudged": 1196
+          },
+          "candidate": {
+            "judged_below_2": 10,
+            "known_relevant": 299,
+            "total": 1500,
+            "unjudged": 1191
+          },
+          "depth": 1500,
+          "incoming": {
+            "judged_below_2": 1,
+            "known_relevant": 17,
+            "total": 294,
+            "unjudged": 276
+          },
+          "known_relevant_delta": 6,
+          "outgoing": {
+            "judged_below_2": 2,
+            "known_relevant": 11,
+            "total": 294,
+            "unjudged": 281
+          }
+        },
+        "250": {
+          "baseline": {
+            "judged_below_2": 3,
+            "known_relevant": 160,
+            "total": 250,
+            "unjudged": 87
+          },
+          "candidate": {
+            "judged_below_2": 4,
+            "known_relevant": 133,
+            "total": 250,
+            "unjudged": 113
+          },
+          "depth": 250,
+          "incoming": {
+            "judged_below_2": 1,
+            "known_relevant": 12,
+            "total": 103,
+            "unjudged": 90
+          },
+          "known_relevant_delta": -27,
+          "outgoing": {
+            "judged_below_2": 0,
+            "known_relevant": 39,
+            "total": 103,
+            "unjudged": 64
+          }
+        },
+        "500": {
+          "baseline": {
+            "judged_below_2": 6,
+            "known_relevant": 215,
+            "total": 500,
+            "unjudged": 279
+          },
+          "candidate": {
+            "judged_below_2": 6,
+            "known_relevant": 197,
+            "total": 500,
+            "unjudged": 297
+          },
+          "depth": 500,
+          "incoming": {
+            "judged_below_2": 1,
+            "known_relevant": 30,
+            "total": 222,
+            "unjudged": 191
+          },
+          "known_relevant_delta": -18,
+          "outgoing": {
+            "judged_below_2": 1,
+            "known_relevant": 48,
+            "total": 222,
+            "unjudged": 173
+          }
+        }
+      },
+      "rrf500_at_1000": {
+        "baseline": {
+          "judged_below_2": 9,
+          "known_relevant": 273,
+          "total": 1000,
+          "unjudged": 718
+        },
+        "candidate": {
+          "judged_below_2": 7,
+          "known_relevant": 278,
+          "total": 1000,
+          "unjudged": 715
+        },
+        "depth": 1000,
+        "incoming": {
+          "judged_below_2": 0,
+          "known_relevant": 26,
+          "total": 281,
+          "unjudged": 255
+        },
+        "known_relevant_delta": 5,
+        "outgoing": {
+          "judged_below_2": 2,
+          "known_relevant": 21,
+          "total": 281,
+          "unjudged": 258
+        }
+      },
+      "union_size": 2104
+    }
+  }
+}

@@ -8,12 +8,14 @@ from pathlib import Path
 
 import pytest
 
+import trec_rag.build_all_topic_tethered_report as report_module
 from trec_rag.build_all_topic_tethered_report import (
     CANONICAL_EVALUATION_ROOT_SHA256,
     CANONICAL_RANKING_ROOT_SHA256,
     VERIFICATION_BUNDLE_SHA256,
     _readme,
     build_report,
+    main,
     verify_report,
     write_report,
 )
@@ -80,6 +82,105 @@ def test_report_contains_requested_evidence_and_accessibility_contract() -> None
     assert "<svg" in built.html
 
 
+def test_report_separates_binary_and_graded_capture() -> None:
+    built = build_report(SOURCE_ROOT)
+
+    assert built.summary["capture"]["known_relevant_total"] == 12984
+    assert built.summary["capture"]["graded_gain_total"] == 84560
+    assert built.summary["capture"]["rrf_at_20"] == {
+        "metric_source": "postmortem diagnostic",
+        "known_relevant": 316,
+        "binary_recall": pytest.approx(316 / 12984),
+        "graded_gain": 2492,
+        "graded_recall": pytest.approx(2492 / 84560),
+    }
+    assert built.summary["capture"]["rrf_at_1000"]["known_relevant"] == 3953
+    assert built.summary["capture"]["rrf_at_1000"]["graded_gain"] == 28815
+    assert built.summary["capture"]["full_union"]["binary_recall"] == pytest.approx(
+        0.3866296980899569
+    )
+
+    full_union = next(
+        row
+        for row in built.datasets["depth_metrics"]
+        if row["arm"] == "RRF" and row["depth"] == "full"
+    )
+    assert full_union == {
+        "arm": "RRF",
+        "depth": "full",
+        "metric_source": "sealed evaluation",
+        "binary_recall": pytest.approx(0.3866296980899569),
+        "known_relevant_count": 5020,
+        "known_relevant_total": 12984,
+        "graded_gain": 35840,
+        "graded_gain_total": 84560,
+        "graded_recall": pytest.approx(0.423841059602649),
+        "facet_only_retention": 1.0,
+        "judged_rate": pytest.approx(0.1779638490164806),
+    }
+    diagnostic = next(
+        row
+        for row in built.datasets["depth_metrics"]
+        if row["arm"] == "RRF" and row["depth"] == 20
+    )
+    assert diagnostic["metric_source"] == "postmortem diagnostic"
+    assert diagnostic["known_relevant_count"] == 316
+    assert diagnostic["graded_gain"] == 2492
+    assert diagnostic["facet_only_retention"] is None
+
+
+def test_report_recomputes_depth_20_capture_from_authenticated_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = report_module.POSTMORTEM_PATH
+    forged = json.loads(source.read_text())
+    capture = forged["rrf_capture_diagnostic_at_20"]
+    capture["known_relevant_count"] = 315
+    capture["binary_recall"] = 315 / capture["known_relevant_total"]
+    capture["graded_gain"] = 2491
+    capture["graded_recall"] = 2491 / capture["graded_gain_total"]
+    forged_path = tmp_path / "postmortem.json"
+    forged_path.write_text(json.dumps(forged, sort_keys=True))
+    monkeypatch.setattr(report_module, "POSTMORTEM_PATH", forged_path)
+
+    with pytest.raises(ValueError, match="authenticated ranking and qrels"):
+        build_report(SOURCE_ROOT)
+
+
+def test_report_answers_capture_failure_and_rag_questions_progressively() -> None:
+    built = build_report(SOURCE_ROOT)
+
+    assert "How much graded evidence do we capture?" in built.html
+    assert "Judgment-pool dependent" in built.html
+    assert "Source-diverse evidence selection" in built.html
+    assert "Topic 300 facet-tail replay" in built.html
+    assert "Topic 31 cutoff mechanics" in built.html
+    assert "Topic 300 cutoff mechanics" in built.html
+    assert "cap 100" in built.html
+    assert "+2" in built.html
+    assert "316 / 12,984" in built.html
+    assert "2,492 / 84,560" in built.html
+    assert "Postmortem diagnostic" in built.html
+    assert "Facet retrieval-stream memberships" in built.html
+    assert "DUAL selection-coverage facets" in built.html
+    assert "global warming climate change effective strategies prevent reduce" in built.html
+    assert built.html.index("How much graded evidence do we capture?") < built.html.index(
+        "What this result means—and what it does not"
+    )
+    assert built.html.count("<details") >= 3
+    assert built.html.count("<summary") == built.html.count("<details")
+
+    failures = {row["topic_id"]: row for row in built.datasets["failure_evidence"]}
+    assert failures["31"]["primary_at_1000"]["known_relevant_delta"] == -7
+    assert failures["300"]["primary_at_1000"]["known_relevant_delta"] == -3
+    assert failures["300"]["recovery_replay"]["known_relevant_delta"] == 2
+    assert failures["300"]["facet_bucket_yield"]["101-150"] == pytest.approx(0.06)
+    incoming = failures["300"]["primary_boundary_attribution"]["incoming"]
+    assert incoming["facet_retrieval_stream_memberships"]["300-strategies"]["total"] == 54
+    assert incoming["dual_selection_coverage_facets"]["300-strategies"] == 276
+    assert "primary_selection_coverage_facet" not in incoming
+
+
 def test_written_json_sqlite_artifact_and_html_are_consistent(tmp_path: Path) -> None:
     built = write_report(SOURCE_ROOT, tmp_path)
     receipt = verify_report(tmp_path)
@@ -95,10 +196,42 @@ def test_written_json_sqlite_artifact_and_html_are_consistent(tmp_path: Path) ->
         topics = {row[0] for row in db.execute("SELECT topic_id FROM topic_metrics")}
         arms = {row[0] for row in db.execute("SELECT arm FROM arm_metrics")}
         metadata = dict(db.execute("SELECT key, value FROM metadata"))
+        depth_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(depth_metrics)")
+        }
+        rrf_full = db.execute(
+            "SELECT known_relevant_total, graded_gain, graded_gain_total, graded_recall "
+            "FROM depth_metrics WHERE arm = 'RRF' AND depth = 'full'"
+        ).fetchone()
+        rrf_20 = db.execute(
+            "SELECT metric_source, known_relevant_count, known_relevant_total, "
+            "graded_gain, graded_gain_total FROM depth_metrics "
+            "WHERE arm = 'RRF' AND depth = '20'"
+        ).fetchone()
     assert topics == TOPICS
     assert arms == set(summary["arms"])
     assert metadata["ranking_root_sha256"] == CANONICAL_RANKING_ROOT_SHA256
     assert metadata["evaluation_root_sha256"] == CANONICAL_EVALUATION_ROOT_SHA256
+    assert {
+        "known_relevant_total",
+        "graded_gain",
+        "graded_gain_total",
+        "graded_recall",
+    } <= depth_columns
+    assert rrf_full == pytest.approx((12984, 35840, 84560, 0.423841059602649))
+    assert rrf_20 == ("postmortem diagnostic", 316, 12984, 2492, 84560)
+
+
+def test_write_subcommand_uses_canonical_report_flag(tmp_path: Path) -> None:
+    assert main([
+        "write",
+        "--root",
+        str(SOURCE_ROOT),
+        "--report",
+        str(tmp_path),
+    ]) == 0
+    assert (tmp_path / "summary.json").is_file()
+    assert (tmp_path / "report.html").is_file()
 
 
 def _copy_report(destination: Path) -> None:
@@ -153,7 +286,7 @@ def test_cost_sources_are_authenticated_before_reporting(tmp_path: Path) -> None
 
 def test_tables_are_keyboard_regions_and_statistics_are_exact() -> None:
     html = build_report(SOURCE_ROOT).html
-    assert html.count('class="table-wrap" tabindex="0" role="region" aria-label=') == 2
+    assert html.count('class="table-wrap" tabindex="0" role="region" aria-label=') == 3
     assert ".table-wrap:focus-visible" in html
     assert "paired exact sign-flip test" in html
     assert "+3.394 percentage points" in html
@@ -163,6 +296,12 @@ def test_tables_are_keyboard_regions_and_statistics_are_exact() -> None:
 
 
 def test_recall_chart_domain_is_derived_from_observed_data() -> None:
-    html = build_report(SOURCE_ROOT).html
+    built = build_report(SOURCE_ROOT)
+    html = built.html
+    expected_max = max(
+        row["binary_recall"]
+        for row in built.datasets["depth_metrics"]
+        if row["arm"] in {"RRF", "RRF100-STATIC-DUAL", "RRF500-REINIT-DUAL"}
+    ) * 1.05
     assert 'data-y-max="0.36"' not in html
-    assert 'data-y-max="0.3883"' in html
+    assert f'data-y-max="{expected_max:.4f}"' in html

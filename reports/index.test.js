@@ -19,11 +19,15 @@ const requiredSignals = [
   "Reports Home",
   "TREC RAG 2026 Briefing",
   "TREC RAG 2025 Writeups",
+  "All-topic tethered-facet validation",
+  "Experiment history",
   "reports-index",
   "Start with the briefing",
   "Use the 2025 writeups as the technique library",
   "reports/trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
+  "experiments/all_topic_tethered_facet_validation_v1/report.html",
+  "../experiment.md",
   "class=\"topbar\"",
   "class=\"hero\"",
   "class=\"shell hero-grid\"",
@@ -52,6 +56,8 @@ for (const signal of forbiddenSignals) {
 const linkedFiles = [
   "trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
+  "experiments/all_topic_tethered_facet_validation_v1/report.html",
+  "../experiment.md",
 ];
 
 for (const linkedFile of linkedFiles) {
