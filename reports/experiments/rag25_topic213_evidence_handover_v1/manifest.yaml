@@ -7,7 +7,7 @@ experiment:
   runtime_id: reviewed_handover_v1
   run_date: 2026-07-25
   split: dev
-  description: Reviewed whole-document evidence handover for Topic 213.
+  description: Reviewed handover and all-relevant-document passage extraction for Topic 213.
 
 config:
   retriever: qrel_eligible_population
@@ -26,7 +26,7 @@ data:
   topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
   topic_count: 1
   qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
-  evaluation_kind: reviewed_evidence_handover
+  evaluation_kind: reviewed_evidence_package
   relevance_threshold: 2
   unjudged_policy: unknown
 
@@ -43,6 +43,11 @@ source_revisions:
     local_quantization: Q8_0
     local_snapshot_revision: 3885219b6810b007914f3a7950a8d1b469d598a5
     role: candidate-level reading aid; final selections and claims were manually checked
+  passage_extraction_model:
+    identity: gpt-5.6-sol
+    provider: OpenAI via authenticated Codex CLI
+    reasoning_effort: low
+    role: select source-passage identifiers for each document against all ten labels
 
 source_hashes:
   topics:
@@ -63,6 +68,9 @@ source_hashes:
   shortlist:
     path: outputs/rag25_topic213_evidence_handover_v1/shortlist.json
     sha256: f067391f4fdea68411cee464e74a2289c7eb24f68a181e62c49db2616ba0f3d4
+  passage_extraction_corpus:
+    path: outputs/rag25_topic213_evidence_handover_v1/colleague_full_corpus.jsonl
+    sha256: e653a6729e1ad3ddbdcd81411bd4237194f94936402aed4f30d2ebbdad9c416e
 
 population_counts:
   released_sub_narratives: 10
@@ -78,6 +86,13 @@ population_counts:
   selected_claims: 58
   selected_support_score_2: 25
   selected_support_score_3: 25
+  passage_documents_eligible: 173
+  passage_model_calls_attempted: 173
+  passage_valid_responses: 171
+  passage_failed_responses: 2
+  passage_output_documents: 171
+  passage_evidence_assignments: 1011
+  verbatim_passages: 1478
 
 scoring_definitions:
   eligibility: organizer Topic 213 qrel grade 2, 3, or 4
@@ -129,20 +144,49 @@ review_input_hashes:
     role: integrated_review_coverage
     sha256: 50f6ecc299c3849e9ee92e31304c46e377f1b32130cc05404f378f72cf21db6a
 
+passage_extraction:
+  call_policy: exactly one model call attempted per eligible document; no retries
+  labels_per_call: 10
+  output_policy: unsupported label-document pairs omitted
+  passage_limit_per_label_document_pair: 3
+  verbatim_match_rule: exact Unicode substring of the JSON-decoded source text; no whitespace normalization
+  fragment_merge_rule: adjacent selected fragments merged only across source whitespace, then exact-substring reverified
+  oversized_document_rule: five documents over 80000 characters were bounded to source-exact Korean-War segments selected by deterministic keyword matching, with adjacent context and a 300-segment cap
+  failed_document_ids:
+    - shard_00001_10555
+    - shard_00004_63642
+  failed_response_reason: provider rejected unsupported strict-schema keywords before model inference; calls were not retried
+  output_fields:
+    - document_id
+    - evidence.sub_narrative
+    - evidence.passages
+  omitted_fields:
+    - qrel grades
+    - model ranks
+    - model scores
+    - support scores
+    - normalized claims
+    - summaries
+    - offsets
+    - machine-local paths
+
 artifact_hashes:
   hash_scope_note: manifest.yaml is excluded because a manifest cannot contain its own stable hash
   README.md:
-    sha256: 4a3f57c8105c278b3d701f02e11e6e6ca8ee70a4f805425ff49c9c7dc7e4c7f3
-    bytes: 3417
+    sha256: 2868d2e3401143efc9f24e839b0e06adda00e89b6823c3e045e06eba10a9a6cd
+    bytes: 4180
   COLLEAGUE_TASK.md:
-    sha256: e610bf04300c6897345040af2f343181507a257cf112eb7785388a2907dd65eb
-    bytes: 3938
+    sha256: d8e757d3200db8fac462691c44de0658defbb0e058e4fb1db09ca3651ff61232
+    bytes: 2730
   handover.json:
     sha256: 065a3c917116fb127fe80f638f011de7ef4db626316c7baa23a50946103d5eb3
     bytes: 21830
   handover.md:
     sha256: 931a4955da1d94400e6f9b6514d96f57d5cb93fdd9058db61f9d40f5cfe62db0
     bytes: 11622
+  passages.jsonl:
+    sha256: 4a2d91d4dd697823ccbcff01654673f4b7a2fdd77e3267dc4f029b9528845637
+    bytes: 430618
 
 limitations:
   - The ranking logits are not calibrated probabilities.
@@ -151,8 +195,11 @@ limitations:
   - A document may appear in multiple sub-narratives when it supports distinct claims.
   - Source quality varies, so final claims are intentionally narrower than some source interpretations.
   - The armistice stopped open hostilities but did not create a peace treaty.
+  - Passage selection is automated evidence triage, not a claim-level adjudication or synthesized answer.
+  - Two document calls failed provider-side schema validation and were not retried, leaving those documents absent from passages.jsonl.
+  - Five oversized mixed-topic documents used deterministic Korean-War segment filtering before their single model call.
 
 notes: >-
   Ten exact released labels; 12 candidates reviewed per label; five
-  support-score-2-or-3 documents retained per label; no raw document text or
-  passage locations tracked.
+  support-score-2-or-3 documents retained per label; 173 all-label passage
+  extraction calls attempted; no full documents or passage locations tracked.

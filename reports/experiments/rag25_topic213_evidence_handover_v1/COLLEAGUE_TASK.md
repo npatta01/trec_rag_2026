@@ -1,10 +1,11 @@
-# Colleague task: Korean War passage extraction and response generation
+# Colleague task: Korean War passage extraction
 
 ## Objective
 
-Build a source-grounded answer to Topic 213 by extracting useful passages from
-the supplied documents, converting those passages into concise supported
-claims, and synthesizing the claims into a coherent response.
+Extract concise verbatim evidence passages from every organizer-relevant Topic
+213 document. The packet is intended for a colleague who will perform any
+later claim writing or response synthesis; it does not contain generated
+claims, summaries, or a final answer.
 
 The organizer topic narrative is:
 
@@ -13,84 +14,56 @@ The organizer topic narrative is:
 > also want to understand its effects on US politics, any major errors that
 > occurred, and how different presidents perceived the conflict.
 
-Use the ten exact organizer sub-narratives in
-`colleague_subnarrative_candidates.jsonl` as the answer outline. Preserve their
-wording even where the released labels contain typos.
+## Inputs
 
-## Input package
+The private source corpus contains the 173 unique Topic 213 documents with
+organizer qrel grade 2, 3, or 4. The ten labels are the exact released
+sub-narratives, including their original quoting and typographical errors.
 
-The two private extraction files are supplied alongside this task when it is
-shared. In the source workspace they are under
-`outputs/rag25_topic213_evidence_handover_v1/`:
+The qrel grade defines eligibility for this extraction pass. It is not a
+sub-narrative support score and is intentionally omitted from the passage
+packet.
 
-- `colleague_full_corpus.jsonl`: 173 unique Topic 213 documents, each with
-  `document_id`, organizer `topic_qrel_grade`, and full `text`.
-- `colleague_subnarrative_candidates.jsonl`: one record for each of the ten
-  sub-narratives, with the 12 highest-ranked candidate document IDs, their
-  topic-level qrel grades, model ranks, and raw reranker logits.
+## Completed output
 
-The qrel grade measures relevance to the overall topic. It does **not** prove
-that a document supports a particular sub-narrative. The model score only
-orders candidates and is not a calibrated probability.
-
-Start with the 12-document shortlist for each sub-narrative. Consult the
-remaining documents in the 173-document corpus only when the shortlist is
-insufficient or contradictory. This avoids sending all 173 documents through
-the model ten separate times.
-
-## Required work
-
-For every sub-narrative:
-
-1. Read all 12 shortlisted documents.
-2. Extract the smallest self-contained passage that supports a concrete claim.
-3. Record whether support is direct, partial, contradictory, or absent.
-4. Convert supported passages into concise claims without adding facts.
-5. Resolve duplicated and conflicting claims across documents.
-6. Write a cited sub-narrative summary.
-
-Then combine the ten summaries into one response to the full topic narrative.
-Organize the response thematically or chronologically; do not answer as ten
-disconnected mini-essays.
-
-## Required outputs
-
-Produce `passages.jsonl` with one record per reviewed passage:
+`passages.jsonl` has one record per document with at least one extracted
+passage:
 
 ```json
 {
-  "sub_narrative": "exact released label",
   "document_id": "shard_...",
-  "topic_qrel_grade": 2,
-  "model_rank": 1,
-  "passage_text": "verbatim source excerpt",
-  "supporting_claim": "careful paraphrase supported by the excerpt",
-  "support": "direct",
-  "notes": "qualification, contradiction, or source-quality concern"
+  "evidence": [
+    {
+      "sub_narrative": "exact released label",
+      "passages": ["verbatim source sentence or paragraph"]
+    }
+  ]
 }
 ```
 
-Also produce:
+Unsupported label/document combinations are omitted. The packet contains no
+qrel grades, model ranks, model scores, support scores, claims, summaries,
+offsets, or machine-local paths.
 
-- `subnarrative_summaries.md`: one cited synthesis per organizer label;
-- `final_response.md`: the integrated answer, citing document IDs;
-- `coverage.json`: document and claim counts, unsupported labels, conflicts,
-  and any need to search below rank 12.
+## Extraction and verification
 
-## Quality rules
+- Exactly one external `gpt-5.6-sol` call was attempted for each of the 173
+  eligible documents, with all ten sub-narratives considered in that call.
+- The model selected immutable source-passage identifiers. Final passage text
+  was copied from the corresponding source document rather than generated.
+- Every emitted passage was verified as an exact Unicode substring of its
+  source after JSON decoding. No whitespace normalization, ellipsis, editing,
+  or generated bridging text was allowed.
+- Adjacent model-selected fragments were merged only when the intervening
+  source characters were whitespace; the resulting span was then rechecked as
+  an exact substring.
+- The two initial calls failed provider-side schema validation before a model
+  response. They were not retried, so the final packet contains 171 document
+  records and the manifest records both failures.
 
-- Every factual sentence in the summaries and final response must trace to at
-  least one extracted passage and document ID.
-- Preserve uncertainty and distinguish armistice from peace treaty.
-- Do not treat repeated documents as independent corroboration.
-- Prefer complementary evidence over five documents repeating the same point.
-- Do not infer support from the qrel grade or model score.
-- Flag dubious, partisan, or internally inconsistent sources rather than
-  silently laundering their claims.
+## Scope boundary
 
-## Optional QA reference
-
-After completing the first pass, compare the work against `handover.json`.
-That file contains a separate reviewed top-five document/claim mapping for each
-sub-narrative. Use it to find omissions or disagreements, not as ground truth
-and not as the initial extraction input.
+The separately reviewed `handover.json` remains available as an optional
+claim-level reference. Passage extraction did not modify or regenerate its
+claims. Producing normalized claims, sub-narrative summaries, or a final
+response is explicitly outside this completed task.
