@@ -1,0 +1,514 @@
+{
+  "topic_id": "213",
+  "narrative": "I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.",
+  "sub_narratives": [
+    {
+      "sub_narrative": "\"What triggered the Korean War?\"",
+      "documents": [
+        {
+          "document_id": "shard_03037_60368",
+          "topic_qrel_grade": 3,
+          "support_score": 3,
+          "claims": [
+            "North Korea's 1950 surprise attack on South Korea began the war.",
+            "The document says North Korea sought reunification under communism with Soviet and Chinese support."
+          ],
+          "review_rationale": "Directly states both the initiating invasion and a stated political objective."
+        },
+        {
+          "document_id": "shard_06506_54950",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "On June 25, 1950, about 75,000 North Korean soldiers crossed the 38th parallel and invaded South Korea without a declaration of war."
+          ],
+          "review_rationale": "Provides a specific account of the event that opened the conflict."
+        },
+        {
+          "document_id": "shard_01101_62844",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "North Korean forces invaded South Korea on June 25, 1950, in an attempt to reunify the peninsula under North Korean rule."
+          ],
+          "review_rationale": "Concise direct statement of the attack and its stated objective."
+        },
+        {
+          "document_id": "shard_04371_12269",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "The war began when Soviet- and Chinese-backed North Korea invaded South Korea."
+          ],
+          "review_rationale": "Directly identifies the initiating action and external backing."
+        },
+        {
+          "document_id": "shard_03423_69502",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "After mounting tensions and provocations, North Korea launched a surprise invasion of South Korea in June 1950."
+          ],
+          "review_rationale": "Adds the immediate prewar context to the initiating invasion."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "documents": [
+        {
+          "document_id": "shard_05943_39544",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "The United States treated Korea as part of a wider struggle against Soviet-backed communism and intervened in support of South Korea."
+          ],
+          "review_rationale": "Explicitly connects US involvement to its broader Cold War strategy."
+        },
+        {
+          "document_id": "shard_01610_35909",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "Cold War tensions led Western policymakers to view South Korea and Taiwan together as fronts against communist expansion.",
+            "NSC-68 expanded US security and intelligence measures against perceived communist threats."
+          ],
+          "review_rationale": "Shows how global containment framing shaped US security choices."
+        },
+        {
+          "document_id": "shard_01934_52375",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "The United States entered the Korean conflict in the name of containing communism."
+          ],
+          "review_rationale": "Makes the causal connection between containment and US entry explicit."
+        },
+        {
+          "document_id": "shard_02807_80928",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "US alarm over increasingly aggressive Soviet policy and communist victory in China shaped its support for the UN defense of South Korea."
+          ],
+          "review_rationale": "Places the US response within contemporary Cold War threat perceptions."
+        },
+        {
+          "document_id": "shard_04204_72809",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "Truman moved from containment to rollback by authorizing an advance into North Korea, then returned to limited-war aims after Chinese intervention."
+          ],
+          "review_rationale": "Directly traces changes in US war aims through competing Cold War strategies."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "documents": [
+        {
+          "document_id": "shard_05943_39544",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "The United States intervened to defend South Korea and prevent the spread of communism."
+          ],
+          "review_rationale": "Directly states the defensive and containment motivations."
+        },
+        {
+          "document_id": "shard_06361_56440",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "Truman committed US troops because he believed communist expansion had to be contained."
+          ],
+          "review_rationale": "Directly ties Truman's decision to containment."
+        },
+        {
+          "document_id": "shard_04810_73050",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "Truman invoked the UN Charter and feared that a North Korean victory would encourage further communist expansion by force."
+          ],
+          "review_rationale": "Provides both the collective-security rationale and strategic precedent concern."
+        },
+        {
+          "document_id": "shard_06292_54287",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "The United States intervened under UN auspices to defend South Korea and stop communism from spreading."
+          ],
+          "review_rationale": "Direct statement of the main political and security motivations."
+        },
+        {
+          "document_id": "shard_01637_77654",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "After the North Korean invasion, Truman committed US troops to defend South Korea as part of a UN force."
+          ],
+          "review_rationale": "Connects the invasion directly to the decision to defend South Korea."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "documents": [
+        {
+          "document_id": "shard_04204_72809",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "Truman's rollback strategy and advance toward the Yalu River produced a costly reversal after China intervened."
+          ],
+          "review_rationale": "The document explicitly characterizes the rollback decision as a major blunder."
+        },
+        {
+          "document_id": "shard_06013_13419",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "MacArthur underestimated the likelihood of Chinese intervention.",
+            "His public advocacy of expanding the war and using atomic weapons challenged presidential authority."
+          ],
+          "review_rationale": "Directly documents a failed forecast and the civil-military political conflict."
+        },
+        {
+          "document_id": "shard_00004_63642",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "UN forces advanced toward the Yalu despite the risk of Chinese intervention, and MacArthur later called for all-out war against China."
+          ],
+          "review_rationale": "Supports two linked escalation errors."
+        },
+        {
+          "document_id": "shard_01355_13797",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "Advancing beyond the 38th parallel contradicted containment and ended in a major defeat after Chinese forces entered the war."
+          ],
+          "review_rationale": "Directly contrasts the advance with declared strategy and records the consequence."
+        },
+        {
+          "document_id": "shard_02825_37436",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "MacArthur incorrectly predicted that China would not intervene.",
+            "Truman dismissed him after he publicly criticized the policy of limited war."
+          ],
+          "review_rationale": "Records a strategic misjudgment and its political consequence."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "documents": [
+        {
+          "document_id": "shard_06361_56440",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "The war intensified domestic debate over the draft and accelerated racial integration in the armed forces."
+          ],
+          "review_rationale": "Identifies specific domestic policy consequences."
+        },
+        {
+          "document_id": "shard_04810_73050",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "The war strengthened McCarthy's campaign against alleged internal subversion and contributed to the growth of the military-industrial complex."
+          ],
+          "review_rationale": "Directly identifies two major domestic political effects."
+        },
+        {
+          "document_id": "shard_06292_54287",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "The conflict heightened anti-communist sentiment and McCarthyism while wartime production stimulated the US economy."
+          ],
+          "review_rationale": "Connects the war to political repression and economic mobilization."
+        },
+        {
+          "document_id": "shard_04570_14502",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "The war increased US defense spending and reinforced the policy of containing communism.",
+            "Returning Black veterans' demands for equal treatment contributed to the civil-rights movement."
+          ],
+          "review_rationale": "Provides foreign-policy, fiscal, and civil-rights consequences."
+        },
+        {
+          "document_id": "shard_01515_64558",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "The war brought mounting political pressure on Truman, and MacArthur's public challenge led to his dismissal."
+          ],
+          "review_rationale": "Shows how the conflict affected presidential authority and domestic criticism."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "documents": [
+        {
+          "document_id": "shard_04371_12269",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "An armistice signed on July 27, 1953, ended hostilities and left the boundary near the 38th parallel."
+          ],
+          "review_rationale": "Directly states the mechanism, date, and territorial result."
+        },
+        {
+          "document_id": "shard_03461_23898",
+          "topic_qrel_grade": 3,
+          "support_score": 3,
+          "claims": [
+            "The July 27, 1953, armistice established a ceasefire and the DMZ but no formal peace treaty."
+          ],
+          "review_rationale": "Directly distinguishes the armistice from a peace settlement."
+        },
+        {
+          "document_id": "shard_04570_70896",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "The armistice ended the fighting, created a buffer zone along the final battle line, and established a commission to supervise the truce."
+          ],
+          "review_rationale": "Provides detailed terms of the ceasefire arrangement."
+        },
+        {
+          "document_id": "shard_00801_26714",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "The July 27, 1953, armistice created the DMZ and stopped the war after heavy military and civilian losses."
+          ],
+          "review_rationale": "States the armistice outcome and the human context in which it occurred."
+        },
+        {
+          "document_id": "shard_00001_10555",
+          "topic_qrel_grade": 3,
+          "support_score": 3,
+          "claims": [
+            "The war ended in a stalemate when the July 27, 1953, armistice suspended hostilities and created a DMZ."
+          ],
+          "review_rationale": "Direct statement of the military outcome and armistice mechanism."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "documents": [
+        {
+          "document_id": "shard_04810_73050",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "Truman emphasized collective security and containment, whereas Eisenhower relied more heavily on brinkmanship and nuclear deterrence to end the war."
+          ],
+          "review_rationale": "Directly contrasts the two administrations' approaches."
+        },
+        {
+          "document_id": "shard_06176_41401",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "Truman sought to avoid a third world war and initially limited US aims to restoring the 38th parallel."
+          ],
+          "review_rationale": "Provides detailed evidence of Truman's cautious war aims."
+        },
+        {
+          "document_id": "shard_01515_64558",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "Truman favored a limited conflict, while MacArthur publicly advocated expanding the war and using nuclear strikes against China."
+          ],
+          "review_rationale": "Clarifies the restrained presidential position through its conflict with MacArthur."
+        },
+        {
+          "document_id": "shard_06292_54287",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "Truman opposed MacArthur's proposal to expand the war into China."
+          ],
+          "review_rationale": "Direct evidence of Truman's limits on escalation."
+        },
+        {
+          "document_id": "shard_02825_37436",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "Truman enforced a limited-war policy and fired MacArthur for challenging it, while Eisenhower later hinted that nuclear weapons might be used to end the war."
+          ],
+          "review_rationale": "Directly contrasts Truman's restraint with Eisenhower's nuclear threat."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "documents": [
+        {
+          "document_id": "shard_02115_21943",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "Both Koreas suffered major damage to infrastructure and their economies.",
+            "The war left the peninsula divided between different political and economic systems."
+          ],
+          "review_rationale": "Directly addresses material destruction and enduring division."
+        },
+        {
+          "document_id": "shard_04570_70896",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "The conflict caused extensive civilian deaths and physical destruction and left North and South Korea separated by a DMZ."
+          ],
+          "review_rationale": "Provides both human costs and the lasting territorial outcome."
+        },
+        {
+          "document_id": "shard_02851_58",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "The war left a capitalist South and communist North divided by a heavily fortified border after enormous casualties."
+          ],
+          "review_rationale": "Concise account of the political and human legacy."
+        },
+        {
+          "document_id": "shard_04848_23054",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "At least 2.5 million people died in the conflict between North and South Korea."
+          ],
+          "review_rationale": "Provides a concrete measure of the war's human cost to Korea."
+        },
+        {
+          "document_id": "shard_03423_69502",
+          "topic_qrel_grade": 3,
+          "support_score": 3,
+          "claims": [
+            "The 1953 armistice created the DMZ and froze Korea's division."
+          ],
+          "review_rationale": "Direct statement of the war's enduring territorial effect."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "documents": [
+        {
+          "document_id": "shard_04570_70896",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "Korea was the first war in which the United Nations played a military role.",
+            "The Security Council called for North Korea's withdrawal and approved a unified UN Command."
+          ],
+          "review_rationale": "Directly documents the UN's precedent-setting military role."
+        },
+        {
+          "document_id": "shard_04371_12269",
+          "topic_qrel_grade": 4,
+          "support_score": 2,
+          "claims": [
+            "A US-led United Nations force intervened to defend South Korea."
+          ],
+          "review_rationale": "Directly identifies the UN coalition's wartime function."
+        },
+        {
+          "document_id": "shard_06522_38556",
+          "topic_qrel_grade": 3,
+          "support_score": 3,
+          "claims": [
+            "The UN condemned North Korea's invasion and called for military intervention, making Korea an early test of collective security."
+          ],
+          "review_rationale": "Connects the institutional response to collective security."
+        },
+        {
+          "document_id": "shard_04368_42125",
+          "topic_qrel_grade": 4,
+          "support_score": 3,
+          "claims": [
+            "The Security Council condemned North Korean aggression and authorized military force to repel it."
+          ],
+          "review_rationale": "Direct statement of the Council's decision and purpose."
+        },
+        {
+          "document_id": "shard_02851_58",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "The Soviet absence from the Security Council enabled the vote for UN military action, sending the organization to war for the first time."
+          ],
+          "review_rationale": "Documents the procedural circumstance and institutional precedent."
+        }
+      ]
+    },
+    {
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "documents": [
+        {
+          "document_id": "shard_06503_11120",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "China intervened after US-led forces reached the Yalu because Mao viewed a foreign military presence on China's border as a threat.",
+            "Mao also sought to consolidate his new regime and deter further American expansion."
+          ],
+          "review_rationale": "Provides detailed border-security, domestic, and international motivations."
+        },
+        {
+          "document_id": "shard_04570_70896",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "China warned UN forces not to advance toward its border before entering the war on North Korea's side."
+          ],
+          "review_rationale": "Direct evidence that border security preceded China's intervention."
+        },
+        {
+          "document_id": "shard_04848_23054",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "China's leadership supported communist movements on its periphery and sought greater standing within the international communist movement."
+          ],
+          "review_rationale": "Provides ideological and status motivations for China's regional policy."
+        },
+        {
+          "document_id": "shard_01841_43267",
+          "topic_qrel_grade": 2,
+          "support_score": 2,
+          "claims": [
+            "As UN forces pressed toward China, Chinese leaders reassessed American intentions and deployed troops along the border."
+          ],
+          "review_rationale": "Connects the UN advance to China's threat perception and military response."
+        },
+        {
+          "document_id": "shard_03037_60368",
+          "topic_qrel_grade": 3,
+          "support_score": 2,
+          "claims": [
+            "Cold War rivalry motivated China to support North Korea against the US-backed South."
+          ],
+          "review_rationale": "Places China's involvement in the document's stated superpower rivalry."
+        }
+      ]
+    }
+  ]
+}

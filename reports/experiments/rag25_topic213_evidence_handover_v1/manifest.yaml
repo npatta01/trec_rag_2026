@@ -1,0 +1,134 @@
+schema_version: 1
+artifact_version: rag25_topic213_evidence_handover_v1
+topic_id: "213"
+
+experiment:
+  id: rag25_topic213_evidence_handover_v1
+  runtime_id: reviewed_handover_v1
+  run_date: 2026-07-25
+  split: dev
+  description: Reviewed whole-document evidence handover for Topic 213.
+
+config:
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: released_topic_213_sub_narratives
+  hits: 12
+  ranking: mixedbread_max_chunk_raw_logit_then_evidence_review
+
+scope:
+  topic_count: 1
+  candidate_depth: 12
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 1
+  qrels: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+  evaluation_kind: reviewed_evidence_handover
+  relevance_threshold: 2
+  unjudged_policy: unknown
+
+source_revisions:
+  repository_input_revision: a3f33601d803213eab0463fa86fadfc8fa7d8412
+  accepted_union_repository_revision: d4c2f0bd7c4b4037a445a6e14b48830a62f2b590
+  trec_rag_data_revision: 1de1b22ac7f9936be7e42c9e70d576cc9cb83770
+  ranking_model:
+    identity: mixedbread-ai/mxbai-rerank-base-v2
+    revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+    score_representation: raw_logits
+  evidence_reading_aid:
+    identity: unsloth/Qwen3.5-9B-GGUF
+    local_quantization: Q8_0
+    local_snapshot_revision: 3885219b6810b007914f3a7950a8d1b469d598a5
+    role: candidate-level reading aid; final selections and claims were manually checked
+
+source_hashes:
+  topics:
+    path: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+    sha256: dec2aa2e672dede15d46b255f66bccc41f3fa1688a3523d030b2f70ee6f54abf
+  nuggets:
+    path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+    sha256: 5621d483d2964f8cf45339c05717b1aa2b69161e56072e8145043f249b89c1ef
+  qrels:
+    path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+    sha256: 42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37
+  accepted_union:
+    path: outputs/all_topic_tethered_facet_validation_v1/retrieval/accepted_union.jsonl
+    sha256: f91c38f721e6821015d28ae9928637757f2763eeb5c7270822d4e695b312d1d9
+  supplemental_documents:
+    path: outputs/rag25_topic213_evidence_handover_v1/supplemental_documents.jsonl
+    sha256: 17f006ccf8435e496872c4560a9908962defd631a818f8594793502b25fc64b7
+  shortlist:
+    path: outputs/rag25_topic213_evidence_handover_v1/shortlist.json
+    sha256: f067391f4fdea68411cee464e74a2289c7eb24f68a181e62c49db2616ba0f3d4
+
+population_counts:
+  released_sub_narratives: 10
+  eligible_documents: 173
+  accepted_union_documents: 105
+  supplemental_documents: 68
+  scored_document_sub_narrative_pairs: 1730
+  shortlisted_candidates_per_sub_narrative: 12
+  reviewed_candidates: 120
+  selected_documents_per_sub_narrative: 5
+  selected_document_assignments: 50
+  distinct_selected_documents: 32
+  selected_claims: 58
+  selected_support_score_2: 26
+  selected_support_score_3: 24
+
+scoring_definitions:
+  eligibility: organizer Topic 213 qrel grade 2, 3, or 4
+  ranking: strongest semantic-chunk raw logit retained for each whole-document pair
+  organizer_qrel_grade: topic-level source provenance; not a sub-narrative score
+  support_score_0: no support for the sub-narrative
+  support_score_1: related but insufficient or indirect
+  support_score_2: at least one useful concrete claim is supported
+  support_score_3: direct and detailed support
+  final_threshold: support_score at least 2
+
+review:
+  partitioned_passes: 3
+  candidates_reviewed_per_sub_narrative: 12
+  selection_preferences:
+    - direct support
+    - concrete detail
+    - complementary, non-redundant coverage
+  evidence_scope: whole documents
+  tracked_evidence_fields:
+    - document_id
+    - topic_qrel_grade
+    - support_score
+    - claims
+    - review_rationale
+  omitted_fields:
+    - source document text
+    - passages
+    - offsets
+    - credentials
+    - absolute machine paths
+
+artifact_hashes:
+  hash_scope_note: manifest.yaml is excluded because a manifest cannot contain its own stable hash
+  README.md:
+    sha256: 7edaed9f78d586285da6654750a647ae8ccb19ef4d5e6683d6959d8e91b1cce2
+    bytes: 2772
+  handover.json:
+    sha256: 18b1b70637276965ff633685c74fc758f13220b62af20072c96b537a61ac4413
+    bytes: 21608
+  handover.md:
+    sha256: bb953dbceabb507c159bf03e261e52ee6d88b1968d8a8893a92e339875dd0820
+    bytes: 11460
+
+limitations:
+  - The ranking logits are not calibrated probabilities.
+  - Only ranks 1 through 12 were reviewed; lower-ranked documents remain unknown.
+  - Five documents per sub-narrative are a concise handover, not an exhaustive bibliography.
+  - A document may appear in multiple sub-narratives when it supports distinct claims.
+  - Source quality varies, so final claims are intentionally narrower than some source interpretations.
+  - The armistice stopped open hostilities but did not create a peace treaty.
+
+notes: >-
+  Ten exact released labels; 12 candidates reviewed per label; five
+  support-score-2-or-3 documents retained per label; no raw document text or
+  passage locations tracked.

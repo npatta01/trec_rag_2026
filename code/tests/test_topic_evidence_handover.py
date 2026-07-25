@@ -23,6 +23,32 @@ from trec_rag.topic_evidence_handover import (
     validate_reviewed_handover,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+HANDOVER_DIRECTORY = (
+    REPO_ROOT / "reports/experiments/rag25_topic213_evidence_handover_v1"
+)
+HANDOVER = HANDOVER_DIRECTORY / "handover.json"
+MARKDOWN = HANDOVER_DIRECTORY / "handover.md"
+MANIFEST = HANDOVER_DIRECTORY / "manifest.yaml"
+CANONICAL_QRELS = (
+    REPO_ROOT
+    / "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels"
+    / "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
+)
+
+
+def canonical_eligible_grades() -> dict[str, int]:
+    """Return the released Topic 213 grade-2-through-4 provenance mapping."""
+
+    grades: dict[str, int] = {}
+    for line in CANONICAL_QRELS.read_text(encoding="utf-8").splitlines():
+        topic_id, _iteration, document_id, raw_grade = line.split()
+        grade = int(raw_grade)
+        if topic_id == "213" and grade in {2, 3, 4}:
+            grades[document_id] = grade
+    assert len(grades) == 173
+    return grades
+
 
 @pytest.fixture
 def fixture_paths(tmp_path: Path) -> dict[str, object]:
@@ -789,3 +815,31 @@ def test_render_handover_markdown_exposes_review_fields_without_document_text(sa
     assert "support score: 2" in markdown
     assert "Supported claim 1-1" in markdown
     assert "raw ClimbMix source text" not in markdown
+
+
+def test_canonical_handover_has_ten_by_five_supported_documents():
+    """Catches a tracked handover with incomplete or ineligible evidence coverage."""
+
+    payload = json.loads(HANDOVER.read_text(encoding="utf-8"))
+
+    validate_reviewed_handover(
+        payload,
+        qrel_grades=canonical_eligible_grades(),
+    )
+    assert len(payload["sub_narratives"]) == 10
+    assert all(len(row["documents"]) == 5 for row in payload["sub_narratives"])
+
+
+def test_canonical_handover_is_sanitized_and_deterministically_rendered():
+    """Catches raw text, local paths, credentials, or renderer drift in tracked files."""
+
+    payload = json.loads(HANDOVER.read_text(encoding="utf-8"))
+    handover_text = HANDOVER.read_text(encoding="utf-8")
+    markdown_text = MARKDOWN.read_text(encoding="utf-8")
+    manifest_text = MANIFEST.read_text(encoding="utf-8")
+    combined = handover_text + markdown_text + manifest_text
+
+    assert "/home/" not in combined
+    assert "PYSERINI_API_TOKEN" not in combined
+    assert '"text":' not in handover_text
+    assert markdown_text == render_handover_markdown(payload)
