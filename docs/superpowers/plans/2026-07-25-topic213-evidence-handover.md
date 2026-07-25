@@ -191,7 +191,7 @@ Run:
 
 ```bash
 .venv/bin/python -m trec_rag.topic_evidence_handover fetch-missing
-.venv/bin/python -m trec_rag.topic_evidence_handover shortlist --limit-documents 2
+.venv/bin/python-rocm -m trec_rag.topic_evidence_handover shortlist --limit-documents 2
 .venv/bin/python-rocm -m trec_rag.topic_evidence_handover shortlist
 ```
 
