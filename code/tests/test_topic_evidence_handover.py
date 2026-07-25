@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from trec_rag.topic_evidence_handover import (
+    CANONICAL_SUB_NARRATIVES,
+    EligibleDocument,
+    TopicEvidenceInputs,
     load_topic213_inputs,
     render_handover_markdown,
     validate_reviewed_handover,
@@ -79,7 +82,7 @@ def sample_handover() -> dict[str, object]:
         "narrative": "The authoritative Topic 213 narrative",
         "sub_narratives": [
             {
-                "sub_narrative": f"SN{number}",
+                "sub_narrative": sub_narrative,
                 "documents": [
                     {
                         "document_id": f"doc-{(number - 1) * 5 + rank}",
@@ -90,10 +93,26 @@ def sample_handover() -> dict[str, object]:
                     for rank in range(1, 6)
                 ],
             }
-            for number in range(1, 11)
+            for number, sub_narrative in enumerate(CANONICAL_SUB_NARRATIVES, start=1)
         ],
     }
 
+
+@pytest.fixture
+def sample_inputs() -> TopicEvidenceInputs:
+    return TopicEvidenceInputs(
+        topic_id="213",
+        narrative="The authoritative Topic 213 narrative",
+        sub_narratives=CANONICAL_SUB_NARRATIVES,
+        documents=tuple(
+            EligibleDocument(
+                document_id=f"doc-{index}",
+                text=f"source text {index}",
+                topic_qrel_grade=2,
+            )
+            for index in range(1, 51)
+        ),
+    )
 
 def test_load_topic213_inputs_preserves_population_and_subnarratives(fixture_paths):
     """Catches a loader that includes ineligible docs or alters nugget labels."""
@@ -178,6 +197,26 @@ def test_loader_allows_matching_accepted_union_and_supplemental_text(fixture_pat
     assert [document.document_id for document in loaded.documents] == ["doc-1", "doc-2", "doc-3"]
 
 
+def test_loader_rejects_conflicting_accepted_union_and_supplemental_text(fixture_paths):
+    """Catches a merge that silently selects one source's conflicting text."""
+
+    supplemental_documents = fixture_paths["supplemental_documents"]
+    assert isinstance(supplemental_documents, Path)
+    supplemental_documents.write_text(
+        "\n".join(
+            (
+                json.dumps({"document_id": "doc-1", "text": "conflicting text"}),
+                json.dumps({"document_id": "doc-3", "text": "third text"}),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="conflicting text"):
+        load_topic213_inputs(**fixture_paths)
+
+
 def test_loader_requires_canonical_population_of_173(fixture_paths):
     """Catches accidental use of a partial population in canonical artifact mode."""
 
@@ -187,7 +226,48 @@ def test_loader_requires_canonical_population_of_173(fixture_paths):
         load_topic213_inputs(**fixture_paths)
 
 
-def test_handover_requires_five_supported_unique_documents(sample_handover):
+def test_canonical_loader_requires_the_released_sub_narrative_tuple(fixture_paths):
+    """Catches a canonical load that accepts ten altered or reordered labels."""
+
+    qrels = fixture_paths["qrels"]
+    accepted_union = fixture_paths["accepted_union"]
+    nuggets_jsonl = fixture_paths["nuggets_jsonl"]
+    assert isinstance(qrels, Path)
+    assert isinstance(accepted_union, Path)
+    assert isinstance(nuggets_jsonl, Path)
+    qrels.write_text(
+        "".join(f"213 0 doc-{index} 2\n" for index in range(1, 174)),
+        encoding="utf-8",
+    )
+    accepted_union.write_text(
+        "".join(
+            json.dumps({"topic_id": "213", "document_id": f"doc-{index}", "text": f"text {index}"})
+            + "\n"
+            for index in range(1, 174)
+        ),
+        encoding="utf-8",
+    )
+    nuggets_jsonl.write_text(
+        json.dumps(
+            {
+                "qid": "213",
+                "nuggets": [
+                    {"mapped_sub_narrative": label}
+                    for label in (*CANONICAL_SUB_NARRATIVES[1:], CANONICAL_SUB_NARRATIVES[0])
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fixture_paths["supplemental_documents"] = None
+    fixture_paths["canonical"] = True
+
+    with pytest.raises(ValueError, match="exact released mapped_sub_narrative"):
+        load_topic213_inputs(**fixture_paths)
+
+
+def test_handover_requires_five_supported_unique_documents(sample_handover, sample_inputs):
     """Catches a reviewed record with a merely related, unusable document."""
 
     sample_handover["sub_narratives"][0]["documents"][0]["support_score"] = 1
@@ -195,11 +275,11 @@ def test_handover_requires_five_supported_unique_documents(sample_handover):
     with pytest.raises(ValueError, match="support_score"):
         validate_reviewed_handover(
             sample_handover,
-            eligible_docids={f"doc-{index}" for index in range(1, 51)},
+            inputs=sample_inputs,
         )
 
 
-def test_handover_rejects_duplicate_or_uneligible_documents(sample_handover):
+def test_handover_rejects_duplicate_or_uneligible_documents(sample_handover, sample_inputs):
     """Catches five-item lists that are not five eligible, distinct documents."""
 
     sample_handover["sub_narratives"][0]["documents"][4]["document_id"] = "doc-1"
@@ -207,8 +287,57 @@ def test_handover_rejects_duplicate_or_uneligible_documents(sample_handover):
     with pytest.raises(ValueError, match="unique"):
         validate_reviewed_handover(
             sample_handover,
-            eligible_docids={f"doc-{index}" for index in range(1, 51)},
+            inputs=sample_inputs,
         )
+
+
+def test_handover_requires_the_exact_canonical_sub_narrative_tuple(sample_handover, sample_inputs):
+    """Catches a final artifact that swaps the released coverage-area order."""
+
+    rows = sample_handover["sub_narratives"]
+    assert isinstance(rows, list)
+    rows[0]["sub_narrative"], rows[1]["sub_narrative"] = (
+        rows[1]["sub_narrative"],
+        rows[0]["sub_narrative"],
+    )
+
+    with pytest.raises(ValueError, match="exact released mapped_sub_narrative"):
+        validate_reviewed_handover(sample_handover, inputs=sample_inputs)
+
+
+def test_handover_requires_qrel_grade_to_match_input_provenance(sample_handover, sample_inputs):
+    """Catches a reviewer record that alters the organizer qrel grade."""
+
+    rows = sample_handover["sub_narratives"]
+    assert isinstance(rows, list)
+    rows[0]["documents"][0]["topic_qrel_grade"] = 3
+
+    with pytest.raises(ValueError, match="does not match input provenance"):
+        validate_reviewed_handover(sample_handover, inputs=sample_inputs)
+
+
+def test_handover_accepts_explicit_qrel_grade_mapping(sample_handover):
+    """Catches a validator that only works with the loader's concrete type."""
+
+    validate_reviewed_handover(
+        sample_handover,
+        qrel_grades={f"doc-{index}": 2 for index in range(1, 51)},
+    )
+
+
+def test_handover_rejects_unallowlisted_content_and_absolute_paths(sample_handover, sample_inputs):
+    """Catches artifacts that add raw content fields or absolute machine paths."""
+
+    sample_handover["sub_narratives"][0]["documents"][0]["content"] = "raw document body"
+
+    with pytest.raises(ValueError, match="allowlisted"):
+        validate_reviewed_handover(sample_handover, inputs=sample_inputs)
+
+    del sample_handover["sub_narratives"][0]["documents"][0]["content"]
+    sample_handover["sub_narratives"][0]["documents"][0]["claims"] = ["evidence=/tmp/raw.txt"]
+
+    with pytest.raises(ValueError, match="absolute filesystem path"):
+        validate_reviewed_handover(sample_handover, inputs=sample_inputs)
 
 
 def test_render_handover_markdown_exposes_review_fields_without_document_text(sample_handover):
@@ -218,7 +347,7 @@ def test_render_handover_markdown_exposes_review_fields_without_document_text(sa
 
     markdown = render_handover_markdown(sample_handover)
 
-    assert "SN1" in markdown
+    assert CANONICAL_SUB_NARRATIVES[0] in markdown
     assert "doc-1" in markdown
     assert "topic qrel grade: 2" in markdown
     assert "support score: 2" in markdown

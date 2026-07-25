@@ -8,6 +8,7 @@ and review stages; the durable handover renderer never emits it.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,9 +16,31 @@ from pathlib import Path
 
 TOPIC_ID = "213"
 CANONICAL_ELIGIBLE_DOCUMENT_COUNT = 173
-CANONICAL_SUB_NARRATIVE_COUNT = 10
+CANONICAL_SUB_NARRATIVES = (
+    '"What triggered the Korean War?"',
+    '"How did Cold War strategy influence US actions?"',
+    '"What motivated US involvement in the Korean War?"',
+    '"What major strategic or political mistakes were made during the war?"',
+    '"What impact did the Korean War have on US politics?"',
+    '"How did the Korean War conclude?"',
+    '"How did US presidents differ in their views on the Korean War?"',
+    "New: How does the Korean War affect Korea",
+    "New: How does the Korean War affect UN",
+    "New: What motivated China involvement in te Korean War?",
+)
+CANONICAL_SUB_NARRATIVE_COUNT = len(CANONICAL_SUB_NARRATIVES)
 _ELIGIBLE_GRADES = frozenset({2, 3, 4})
-_FORBIDDEN_TEXT = ("/home/", "PYSERINI_API_TOKEN")
+_HANDOVER_KEYS = frozenset({"topic_id", "narrative", "sub_narratives"})
+_SUB_NARRATIVE_KEYS = frozenset({"sub_narrative", "documents"})
+_DOCUMENT_KEYS = frozenset(
+    {"document_id", "topic_qrel_grade", "support_score", "claims", "review_rationale"}
+)
+_CREDENTIAL_KEY_RE = re.compile(
+    r"(?:api[_-]?key|authorization|credential|cookie|password|secret|token)", re.IGNORECASE
+)
+_POSIX_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/])/[^\s/]+(?:/[^\s/]+)*")
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
+_HOME_PATH_RE = re.compile(r"(?:^|[\s\"'])~[\\/]")
 
 
 @dataclass(frozen=True)
@@ -216,10 +239,10 @@ def load_topic213_inputs(
             "canonical Topic 213 eligible population must contain "
             f"{CANONICAL_ELIGIBLE_DOCUMENT_COUNT} documents, found {len(eligible_grades)}"
         )
-    if canonical and len(sub_narratives) != CANONICAL_SUB_NARRATIVE_COUNT:
+    if canonical and sub_narratives != CANONICAL_SUB_NARRATIVES:
         raise ValueError(
-            "canonical Topic 213 must contain "
-            f"{CANONICAL_SUB_NARRATIVE_COUNT} unique mapped_sub_narrative values"
+            "canonical Topic 213 must preserve the exact released "
+            "mapped_sub_narrative tuple"
         )
     return TopicEvidenceInputs(
         topic_id=TOPIC_ID,
@@ -236,55 +259,123 @@ def load_topic213_inputs(
     )
 
 
-def _contains_forbidden_content(value: object) -> bool:
+def _require_allowlisted_keys(
+    value: object,
+    *,
+    allowed: frozenset[str],
+    required: frozenset[str],
+    label: str,
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    actual = set(value)
+    credential_fields = sorted(
+        key for key in actual if _CREDENTIAL_KEY_RE.search(str(key))
+    )
+    if credential_fields:
+        raise ValueError(f"{label} contains credential-like fields")
+    unexpected = sorted(actual - allowed)
+    if unexpected:
+        raise ValueError(f"{label} contains fields outside the allowlisted schema")
+    missing = sorted(required - actual)
+    if missing:
+        raise ValueError(f"{label} is missing required allowlisted fields")
+    return value
+
+
+def _reject_absolute_paths(value: object) -> None:
     if isinstance(value, Mapping):
-        return any(
-            key == "text" or _contains_forbidden_content(child)
-            for key, child in value.items()
-        )
+        for child in value.values():
+            _reject_absolute_paths(child)
+        return
     if isinstance(value, list):
-        return any(_contains_forbidden_content(child) for child in value)
-    return isinstance(value, str) and any(forbidden in value for forbidden in _FORBIDDEN_TEXT)
+        for child in value:
+            _reject_absolute_paths(child)
+        return
+    if isinstance(value, str) and (
+        _POSIX_ABSOLUTE_PATH_RE.search(value)
+        or _WINDOWS_ABSOLUTE_PATH_RE.search(value)
+        or _HOME_PATH_RE.search(value)
+    ):
+        raise ValueError("handover contains an absolute filesystem path")
+
+
+def _provenance_grades(
+    *,
+    inputs: TopicEvidenceInputs | None,
+    qrel_grades: Mapping[str, int] | None,
+) -> Mapping[str, int]:
+    if (inputs is None) == (qrel_grades is None):
+        raise ValueError("provide exactly one of inputs or qrel_grades")
+    if inputs is not None:
+        if inputs.topic_id != TOPIC_ID:
+            raise ValueError("TopicEvidenceInputs must be for Topic 213")
+        grades = {document.document_id: document.topic_qrel_grade for document in inputs.documents}
+        if len(grades) != len(inputs.documents):
+            raise ValueError("TopicEvidenceInputs contains duplicate document IDs")
+    else:
+        assert qrel_grades is not None
+        grades = dict(qrel_grades)
+    if not grades:
+        raise ValueError("qrel-grade provenance cannot be empty")
+    for document_id, grade in grades.items():
+        if not isinstance(document_id, str) or not document_id.strip():
+            raise ValueError("qrel-grade provenance contains an invalid document ID")
+        if isinstance(grade, bool) or not isinstance(grade, int) or grade not in _ELIGIBLE_GRADES:
+            raise ValueError("qrel-grade provenance must contain grades 2, 3, or 4")
+    return grades
 
 
 def validate_reviewed_handover(
     handover: Mapping[str, object],
     *,
-    eligible_docids: set[str],
+    inputs: TopicEvidenceInputs | None = None,
+    qrel_grades: Mapping[str, int] | None = None,
 ) -> None:
     """Reject a final handover that violates its review and sanitization contract."""
 
-    if not isinstance(handover, Mapping):
-        raise ValueError("handover must be an object")
+    provenance = _provenance_grades(inputs=inputs, qrel_grades=qrel_grades)
+    handover = _require_allowlisted_keys(
+        handover,
+        allowed=_HANDOVER_KEYS,
+        required=_HANDOVER_KEYS,
+        label="handover",
+    )
     if handover.get("topic_id") != TOPIC_ID:
         raise ValueError("handover topic_id must be '213'")
-    if _contains_forbidden_content(handover):
-        raise ValueError("handover contains raw document text, a secret, or an absolute machine path")
+    _required_string(handover.get("narrative"), "handover narrative")
+    _reject_absolute_paths(handover)
     rows = handover.get("sub_narratives")
     if not isinstance(rows, list) or len(rows) != CANONICAL_SUB_NARRATIVE_COUNT:
         raise ValueError("handover must contain exactly 10 sub_narratives")
-    seen_sub_narratives: set[str] = set()
+    sub_narratives: list[str] = []
     for row_index, row in enumerate(rows, start=1):
-        if not isinstance(row, Mapping):
-            raise ValueError(f"sub_narratives[{row_index}] must be an object")
+        row = _require_allowlisted_keys(
+            row,
+            allowed=_SUB_NARRATIVE_KEYS,
+            required=_SUB_NARRATIVE_KEYS,
+            label=f"sub_narratives[{row_index}]",
+        )
         sub_narrative = _required_string(
             row.get("sub_narrative"), f"sub_narratives[{row_index}].sub_narrative"
         )
-        if sub_narrative in seen_sub_narratives:
-            raise ValueError("sub_narratives must be unique")
-        seen_sub_narratives.add(sub_narrative)
+        sub_narratives.append(sub_narrative)
         documents = row.get("documents")
         if not isinstance(documents, list) or len(documents) != 5:
             raise ValueError(f"{sub_narrative!r} must contain exactly five documents")
         seen_documents: set[str] = set()
         for document_index, document in enumerate(documents, start=1):
-            if not isinstance(document, Mapping):
-                raise ValueError(f"{sub_narrative!r} document {document_index} must be an object")
+            document = _require_allowlisted_keys(
+                document,
+                allowed=_DOCUMENT_KEYS,
+                required=_DOCUMENT_KEYS - {"review_rationale"},
+                label=f"{sub_narrative!r} document {document_index}",
+            )
             document_id = _required_string(
                 document.get("document_id"),
                 f"{sub_narrative!r} document {document_index}.document_id",
             )
-            if document_id not in eligible_docids:
+            if document_id not in provenance:
                 raise ValueError(f"{sub_narrative!r} includes an ineligible document ID")
             if document_id in seen_documents:
                 raise ValueError(f"{sub_narrative!r} documents must be unique")
@@ -292,6 +383,10 @@ def validate_reviewed_handover(
             grade = document.get("topic_qrel_grade")
             if isinstance(grade, bool) or not isinstance(grade, int) or grade not in _ELIGIBLE_GRADES:
                 raise ValueError(f"{sub_narrative!r} document topic_qrel_grade must be 2, 3, or 4")
+            if grade != provenance[document_id]:
+                raise ValueError(
+                    f"{sub_narrative!r} document topic_qrel_grade does not match input provenance"
+                )
             support_score = document.get("support_score")
             if (
                 isinstance(support_score, bool)
@@ -306,6 +401,16 @@ def validate_reviewed_handover(
                 or any(not isinstance(claim, str) or not claim.strip() for claim in claims)
             ):
                 raise ValueError(f"{sub_narrative!r} document claims must be a nonempty string array")
+            if "review_rationale" in document:
+                _required_string(
+                    document["review_rationale"],
+                    f"{sub_narrative!r} document review_rationale",
+                )
+    if tuple(sub_narratives) != CANONICAL_SUB_NARRATIVES:
+        raise ValueError(
+            "handover sub_narratives must equal the exact released "
+            "mapped_sub_narrative tuple"
+        )
 
 
 def render_handover_markdown(handover: Mapping[str, object]) -> str:
