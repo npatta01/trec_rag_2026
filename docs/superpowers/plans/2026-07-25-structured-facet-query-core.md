@@ -231,21 +231,22 @@ answer-aspect generation is ready.
   git diff --unified=0 daecd27^ -- \
     code/trec_rag/facet_query_planning.py \
     code/tests/test_facet_query_planning.py \
-    code/trec_rag/README.md | rg -n \
+    code/trec_rag/README.md \
+    docs/superpowers/plans/2026-07-25-structured-facet-query-core.md | rg -n \
     '(^|[^[:alnum:]_])/(home|Users|etc|tmp|var|opt)(/|$)|[A-Za-z]:[\\/]' || true
   git diff --unified=0 daecd27^ -- \
     code/trec_rag/facet_query_planning.py \
     code/tests/test_facet_query_planning.py \
-    code/trec_rag/README.md | rg -n -i \
+    code/trec_rag/README.md \
+    docs/superpowers/plans/2026-07-25-structured-facet-query-core.md | rg -n -i \
     '(api[_-]?key|client[_-]?secret|password|authorization|bearer|access[_-]?token|auth[_-]?token)[[:space:]]*[:=]|-----BEGIN( [A-Z]+)? PRIVATE KEY-----' || true
   ```
 
   Output: `git diff --check` produced no output. The changed-path and numstat
   commands reported only `code/trec_rag/facet_query_planning.py` (551 added
   lines), `code/tests/test_facet_query_planning.py` (537 added lines),
-  `code/trec_rag/README.md` (61 added lines), and this plan (77 added, 5
-  removed). The staged tracked sizes were 19,954, 16,899, 17,850, and 10,277
-  bytes respectively.
+  `code/trec_rag/README.md` (61 added lines), and this plan (78 added, 5
+  removed). The staged tracked sizes were 19,954, 16,899, 17,850, and 10,397
   bytes respectively. The excluded-path, implementation-content,
   host-absolute-path, and likely-secret scans produced no matches. These scans
   do not read `.env` files or other untracked content. The code has no runtime
