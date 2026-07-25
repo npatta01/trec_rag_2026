@@ -7,11 +7,21 @@ and review stages; the durable handover renderer never emits it.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+import math
+import os
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
+
+from .chunking import ChunkingConfig, SemanticTextChunker
+from .remote_client import RemotePyseriniThrottled, extract_text, rate_limited_session
+from .remote_config import RemotePyseriniConfig
+from .repo_env import find_repo_root, load_repo_env
 
 
 TOPIC_ID = "213"
@@ -46,6 +56,26 @@ _SENSITIVE_CREDENTIAL_VALUE_RE = re.compile(
 _POSIX_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/])/[^\s/]+(?:/[^\s/]+)*")
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/\\])[A-Za-z]:[\\/]")
 _HOME_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/~])~[\\/]")
+
+MODEL_ID = "mixedbread-ai/mxbai-rerank-base-v2"
+MODEL_REVISION = "3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
+DEFAULT_OUTPUT_DIRECTORY = Path("outputs/rag25_topic213_evidence_handover_v1")
+DEFAULT_ACCEPTED_UNION = Path(
+    "outputs/all_topic_tethered_facet_validation_v1/retrieval/accepted_union.jsonl"
+)
+DEFAULT_TOPIC_TSV = Path(
+    "trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv"
+)
+DEFAULT_NUGGETS_JSONL = Path(
+    "trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/"
+    "rag25-dev-nuggets.jsonl"
+)
+DEFAULT_QRELS = Path(
+    "trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/"
+    "rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels"
+)
+
+PairScorer = Callable[[str, list[str]], Sequence[float]]
 
 
 @dataclass(frozen=True)
@@ -465,3 +495,344 @@ def render_handover_markdown(handover: Mapping[str, object]) -> str:
             for claim in claims:
                 lines.append(f"  - {_required_string(claim, 'claim')}")
     return "\n".join(lines) + "\n"
+
+
+def missing_document_ids(
+    *,
+    eligible_docids: set[str],
+    available_docids: set[str],
+) -> list[str]:
+    """Return the deterministic fetch plan for organizer-eligible documents."""
+
+    return sorted(eligible_docids - available_docids)
+
+
+def score_sub_narrative_pairs(
+    inputs: TopicEvidenceInputs,
+    scorer: PairScorer,
+    *,
+    shortlist_depth: int = 12,
+) -> dict[str, object]:
+    """Score every sub-narrative/document pair and retain per-label leaders.
+
+    ``scorer`` receives each sub-narrative and its flattened document chunks,
+    then returns one raw model logit per chunk.  This keeps model execution
+    injected while the whole-document max-chunk and shortlist contracts remain
+    deterministic and independently testable.
+    """
+
+    if inputs.topic_id != TOPIC_ID:
+        raise ValueError("TopicEvidenceInputs must be for Topic 213")
+    if shortlist_depth <= 0:
+        raise ValueError("shortlist_depth must be positive")
+    if len({document.document_id for document in inputs.documents}) != len(inputs.documents):
+        raise ValueError("TopicEvidenceInputs contains duplicate document IDs")
+
+    chunker = SemanticTextChunker(ChunkingConfig())
+    chunks_by_document = {
+        document.document_id: chunker.split_text(document.text, document_id=document.document_id)
+        for document in inputs.documents
+    }
+    empty_chunks = sorted(
+        document_id for document_id, chunks in chunks_by_document.items() if not chunks
+    )
+    if empty_chunks:
+        raise ValueError("eligible documents must produce at least one text chunk")
+
+    shortlists: dict[str, list[dict[str, object]]] = {}
+    for sub_narrative in inputs.sub_narratives:
+        chunk_texts = [
+            chunk.text
+            for document in inputs.documents
+            for chunk in chunks_by_document[document.document_id]
+        ]
+        raw_scores = scorer(sub_narrative, chunk_texts)
+        if len(raw_scores) != len(chunk_texts):
+            raise ValueError("scorer must return one score for every document chunk")
+
+        scores_by_document: dict[str, list[float]] = {
+            document.document_id: [] for document in inputs.documents
+        }
+        score_index = 0
+        for document in inputs.documents:
+            for _chunk in chunks_by_document[document.document_id]:
+                raw_score = raw_scores[score_index]
+                score_index += 1
+                if isinstance(raw_score, bool):
+                    raise ValueError("scorer scores must be finite floats")
+                score = float(raw_score)
+                if not math.isfinite(score):
+                    raise ValueError("scorer scores must be finite floats")
+                scores_by_document[document.document_id].append(score)
+
+        ranked = sorted(
+            (
+                (document, max(scores_by_document[document.document_id]))
+                for document in inputs.documents
+            ),
+            key=lambda item: (-item[1], item[0].document_id),
+        )
+        shortlists[sub_narrative] = [
+            {
+                "document_id": document.document_id,
+                "topic_qrel_grade": document.topic_qrel_grade,
+                "model_score": float(score),
+                "model_rank": rank,
+            }
+            for rank, (document, score) in enumerate(ranked[:shortlist_depth], start=1)
+        ]
+
+    return {
+        "topic_id": inputs.topic_id,
+        "pair_count": len(inputs.sub_narratives) * len(inputs.documents),
+        "shortlist_depth": shortlist_depth,
+        "shortlists": shortlists,
+    }
+
+
+def _load_supplemental_document_records(path: Path, *, eligible_docids: set[str]) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    records: dict[str, str] = {}
+    for index, row in enumerate(_read_jsonl(path, "supplemental documents"), start=1):
+        document_id = _required_string(row.get("document_id"), f"supplemental documents:{index} document_id")
+        text = _required_string(row.get("text"), f"supplemental documents:{index} text")
+        response_sha256 = row.get("response_sha256")
+        if (
+            not isinstance(response_sha256, str)
+            or len(response_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in response_sha256)
+        ):
+            raise ValueError(f"supplemental documents:{index} response_sha256 must be lowercase SHA-256")
+        if document_id not in eligible_docids:
+            raise ValueError(f"supplemental documents:{index} has an ineligible document ID")
+        if document_id in records:
+            raise ValueError(f"supplemental documents contains a duplicate document ID: {document_id}")
+        records[document_id] = text
+    return records
+
+
+def _document_endpoint(index_url: str, document_id: str) -> str:
+    base_url = index_url.rstrip("/")
+    if not base_url.endswith("/search"):
+        raise ValueError("INDEX_URL must name the configured Pyserini search endpoint")
+    return f"{base_url.removesuffix('/search')}/doc/{quote(document_id, safe='')}"
+
+
+def fetch_missing_documents(
+    *,
+    topic_tsv: Path,
+    nuggets_jsonl: Path,
+    qrels: Path,
+    accepted_union: Path,
+    supplemental_documents: Path,
+    limit_documents: int | None = None,
+) -> dict[str, int]:
+    """Fetch absent eligible text exactly once per document into resumable JSONL."""
+
+    if limit_documents is not None and limit_documents <= 0:
+        raise ValueError("limit_documents must be positive")
+    # Validate the static topic and nugget inputs before making an authenticated request.
+    _load_topic_narrative(Path(topic_tsv))
+    _load_sub_narratives(Path(nuggets_jsonl))
+    eligible_grades = _load_eligible_grades(Path(qrels))
+    eligible_docids = set(eligible_grades)
+    accepted_texts = _load_document_texts(
+        _read_jsonl(Path(accepted_union), "accepted union"),
+        label="accepted union",
+        topic_scoped=True,
+        eligible_docids=eligible_docids,
+    )
+    supplemental_texts = _load_supplemental_document_records(
+        Path(supplemental_documents), eligible_docids=eligible_docids
+    )
+    missing = missing_document_ids(
+        eligible_docids=eligible_docids,
+        available_docids=set(accepted_texts).union(supplemental_texts),
+    )
+    planned = missing if limit_documents is None else missing[:limit_documents]
+
+    repo_root = find_repo_root(Path(__file__))
+    load_repo_env(repo_root)
+    config = RemotePyseriniConfig.from_env()
+    session = rate_limited_session(config)
+    destination = Path(supplemental_documents)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fetched = 0
+    with destination.open("a", encoding="utf-8") as sink:
+        for document_id in planned:
+            response = session.get(
+                _document_endpoint(config.index_url, document_id),
+                headers={
+                    "Accept": "application/json",
+                    **(
+                        {"Authorization": f"Bearer {config.api_token}"}
+                        if config.api_token
+                        else {}
+                    ),
+                },
+                timeout=30,
+                allow_redirects=False,
+            )
+            raw = response.content
+            if response.status_code == 429:
+                raise RemotePyseriniThrottled(None)
+            response.raise_for_status()
+            try:
+                payload: object = response.json()
+            except ValueError:
+                payload = raw.decode("utf-8", errors="replace")
+            text = extract_text(payload)
+            if not text.strip():
+                raise ValueError(f"document endpoint returned no text for document ID {document_id}")
+            row = {
+                "document_id": document_id,
+                "text": text,
+                "response_sha256": hashlib.sha256(raw).hexdigest(),
+            }
+            sink.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+            sink.flush()
+            os.fsync(sink.fileno())
+            fetched += 1
+    return {
+        "fetched_count": fetched,
+        "remaining_missing_count": len(missing) - fetched,
+    }
+
+
+def _model_snapshot() -> Path:
+    cache_root = Path(os.environ.get("HF_HUB_CACHE", Path.home() / ".cache/huggingface/hub"))
+    snapshot = cache_root / "models--mixedbread-ai--mxbai-rerank-base-v2" / "snapshots" / MODEL_REVISION
+    if not snapshot.is_dir():
+        raise FileNotFoundError(
+            "the pinned Mixedbread snapshot is unavailable locally; model downloads are forbidden"
+        )
+    return snapshot
+
+
+class _LocalMixedbreadScorer:
+    """Local-only Mixedbread wrapper that returns untransformed model logits."""
+
+    def __init__(self) -> None:
+        import torch
+        from sentence_transformers import CrossEncoder
+
+        if not torch.cuda.is_available() or not getattr(torch.version, "hip", None):
+            raise RuntimeError("Mixedbread scoring requires an available ROCm torch cuda device")
+        self._identity = torch.nn.Identity()
+        self._model = CrossEncoder(
+            str(_model_snapshot()),
+            device="cuda",
+            local_files_only=True,
+            trust_remote_code=False,
+            max_length=32_768,
+            activation_fn=self._identity,
+            model_kwargs={"torch_dtype": torch.bfloat16},
+        )
+
+    def __call__(self, sub_narrative: str, chunk_texts: list[str]) -> list[float]:
+        scores = self._model.predict(
+            [(sub_narrative, chunk_text) for chunk_text in chunk_texts],
+            batch_size=8,
+            show_progress_bar=False,
+            activation_fn=self._identity,
+            apply_softmax=False,
+            convert_to_numpy=True,
+        )
+        return [float(score) for score in scores]
+
+
+def _default_path(path: Path) -> Path:
+    return find_repo_root(Path(__file__)) / path
+
+
+def _load_cli_inputs(args: argparse.Namespace) -> TopicEvidenceInputs:
+    return load_topic213_inputs(
+        topic_tsv=args.topic_tsv,
+        nuggets_jsonl=args.nuggets_jsonl,
+        qrels=args.qrels,
+        accepted_union=args.accepted_union,
+        supplemental_documents=args.supplemental_documents,
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    def add_input_paths(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--topic-tsv", type=Path, default=_default_path(DEFAULT_TOPIC_TSV))
+        command.add_argument("--nuggets-jsonl", type=Path, default=_default_path(DEFAULT_NUGGETS_JSONL))
+        command.add_argument("--qrels", type=Path, default=_default_path(DEFAULT_QRELS))
+        command.add_argument("--accepted-union", type=Path, default=_default_path(DEFAULT_ACCEPTED_UNION))
+        command.add_argument(
+            "--supplemental-documents",
+            type=Path,
+            default=_default_path(DEFAULT_OUTPUT_DIRECTORY / "supplemental_documents.jsonl"),
+        )
+
+    fetch = commands.add_parser("fetch-missing", help="Fetch absent eligible documents once.")
+    add_input_paths(fetch)
+    fetch.add_argument("--limit-documents", type=int)
+
+    shortlist = commands.add_parser("shortlist", help="Score local document/sub-narrative pairs.")
+    add_input_paths(shortlist)
+    shortlist.add_argument("--limit-documents", type=int)
+    shortlist.add_argument("--shortlist-depth", type=int, default=12)
+    shortlist.add_argument(
+        "--output",
+        type=Path,
+        default=_default_path(DEFAULT_OUTPUT_DIRECTORY / "shortlist.json"),
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "fetch-missing":
+        result = fetch_missing_documents(
+            topic_tsv=args.topic_tsv,
+            nuggets_jsonl=args.nuggets_jsonl,
+            qrels=args.qrels,
+            accepted_union=args.accepted_union,
+            supplemental_documents=args.supplemental_documents,
+            limit_documents=args.limit_documents,
+        )
+        print(
+            f"fetched_records={result['fetched_count']} "
+            f"remaining_missing={result['remaining_missing_count']}"
+        )
+        return 0
+
+    inputs = _load_cli_inputs(args)
+    if args.limit_documents is not None:
+        if args.limit_documents <= 0:
+            raise ValueError("limit_documents must be positive")
+        inputs = TopicEvidenceInputs(
+            topic_id=inputs.topic_id,
+            narrative=inputs.narrative,
+            sub_narratives=inputs.sub_narratives,
+            documents=inputs.documents[: args.limit_documents],
+        )
+    result = score_sub_narrative_pairs(
+        inputs,
+        _LocalMixedbreadScorer(),
+        shortlist_depth=args.shortlist_depth,
+    )
+    payload = {
+        "model": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "score_representation": "raw_logits",
+        **result,
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"scored_pairs={result['pair_count']} "
+        f"shortlists={len(result['shortlists'])}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
 import json
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from trec_rag.topic_evidence_handover import (
     EligibleDocument,
     TopicEvidenceInputs,
     load_topic213_inputs,
+    missing_document_ids,
     render_handover_markdown,
+    score_sub_narrative_pairs,
     validate_reviewed_handover,
 )
 
@@ -113,6 +116,50 @@ def sample_inputs() -> TopicEvidenceInputs:
             for index in range(1, 51)
         ),
     )
+
+
+def deterministic_scorer(_sub_narrative: str, chunk_texts: list[str]) -> list[float]:
+    """A local score function whose expected order comes from fixture IDs."""
+
+    return [float(int(chunk_text.rsplit(" ", 1)[-1])) for chunk_text in chunk_texts]
+
+
+def test_missing_document_ids_returns_sorted_qrel_documents_without_text(sample_inputs):
+    """Catches a fetch plan that omits or nondeterministically orders absent qrel IDs."""
+
+    assert missing_document_ids(
+        eligible_docids={"doc-a", "doc-b", "doc-c"},
+        available_docids={"doc-b"},
+    ) == ["doc-a", "doc-c"]
+
+
+def test_shortlist_scores_every_pair_and_orders_descending(sample_inputs):
+    """Catches a shortlist that skips pairs or ranks lower model scores first."""
+
+    result = score_sub_narrative_pairs(
+        sample_inputs,
+        deterministic_scorer,
+        shortlist_depth=2,
+    )
+
+    assert result["pair_count"] == len(sample_inputs.sub_narratives) * len(sample_inputs.documents)
+    assert all(
+        row["model_score"] >= next_row["model_score"]
+        for rows in result["shortlists"].values()
+        for row, next_row in pairwise(rows)
+    )
+
+
+def test_shortlist_keeps_qrel_grade_separate_from_model_score(sample_inputs):
+    """Catches a review shortlist that overwrites organizer grades with model logits."""
+
+    row = score_sub_narrative_pairs(sample_inputs, deterministic_scorer)["shortlists"][
+        sample_inputs.sub_narratives[0]
+    ][0]
+
+    assert isinstance(row["topic_qrel_grade"], int)
+    assert isinstance(row["model_score"], float)
+
 
 def test_load_topic213_inputs_preserves_population_and_subnarratives(fixture_paths):
     """Catches a loader that includes ineligible docs or alters nugget labels."""
