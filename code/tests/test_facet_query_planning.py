@@ -74,7 +74,7 @@ def _plan(
                 expansions=(
                     Expansion(
                         term="rental market",
-                        relation="related",
+                        relation="neutral_search_term",
                         anchor_refs=("rent-anchor",),
                     ),
                 ),
@@ -115,15 +115,15 @@ def _housing_plan(*, facets: tuple[Facet, ...] | None = None) -> FacetPlan:
                 "rent-effects",
                 ("rent",),
                 (
-                    Expansion("rent increases", "related", ("rent",)),
-                    Expansion("affordability", "related", ("rent",)),
-                    Expansion("lease costs", "related", ("rent",)),
+                    Expansion("rent increases", "neutral_search_term", ("rent",)),
+                    Expansion("affordability", "neutral_search_term", ("rent",)),
+                    Expansion("lease costs", "neutral_search_term", ("rent",)),
                 ),
             ),
             Facet(
                 "zoning-effects",
                 ("zoning",),
-                (Expansion("land use", "related", ("zoning",)),),
+                (Expansion("land use", "neutral_search_term", ("zoning",)),),
             ),
         ),
     )
@@ -157,31 +157,83 @@ def test_rendering_uses_narrative_order_scoped_anchors_and_declared_expansions()
 
 
 @pytest.mark.parametrize(
+    "relation",
+    ("alias", "acronym", "technical_term", "common_variant", "neutral_search_term"),
+)
+def test_validation_accepts_each_allowed_lexical_expansion_relation(relation: str) -> None:
+    plan = _housing_plan(
+        facets=(
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (Expansion("affordability", relation, ("rent",)),),
+            ),
+            Facet("zoning-effects", ("zoning",), ()),
+        )
+    )
+
+    assert validate_facet_plan(_housing_topic(), plan).plan == plan
+
+
+@pytest.mark.parametrize("relation", ("related", "synonym", "semantic"))
+def test_validation_rejects_nonlexical_expansion_relations(relation: str) -> None:
+    plan = _housing_plan(
+        facets=(
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (Expansion("affordability", relation, ("rent",)),),
+            ),
+            Facet("zoning-effects", ("zoning",), ()),
+        )
+    )
+
+    with pytest.raises(FacetPlanValidationError, match="unsupported expansion relation"):
+        validate_facet_plan(_housing_topic(), plan)
+
+
+def test_validation_rejects_an_expansion_without_anchor_provenance() -> None:
+    plan = _housing_plan(
+        facets=(
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (Expansion("affordability", "alias", ()),),
+            ),
+            Facet("zoning-effects", ("zoning",), ()),
+        )
+    )
+
+    with pytest.raises(FacetPlanValidationError, match="at least one anchor"):
+        validate_facet_plan(_housing_topic(), plan)
+
+
+@pytest.mark.parametrize(
     ("expansions", "description"),
     [
-        ((Expansion("neighborhood", "related", ("zoning",)),), "inherited"),
+        ((Expansion("neighborhood", "neutral_search_term", ("zoning",)),), "inherited"),
         ((Expansion("tenant burden", "synonym", ("rent",)),), "relation"),
-        ((Expansion("tenant\nburden", "related", ("rent",)),), "control"),
-        ((Expansion("title:rent", "related", ("rent",)),), "field"),
-        ((Expansion("rent AND zoning", "related", ("rent",)),), "operator"),
-        ((Expansion("rent || zoning", "related", ("rent",)),), "operator"),
-        ((Expansion("rent 2026", "related", ("rent",)),), "numeric"),
-        ((Expansion("rent ٢٠٢٦", "related", ("rent",)),), "numeric"),
-        ((Expansion("one two three four", "related", ("rent",)),), "analyzed words"),
+        ((Expansion("tenant\nburden", "neutral_search_term", ("rent",)),), "control"),
+        ((Expansion("title:rent", "neutral_search_term", ("rent",)),), "field"),
+        ((Expansion("rent AND zoning", "neutral_search_term", ("rent",)),), "operator"),
+        ((Expansion("rent || zoning", "neutral_search_term", ("rent",)),), "operator"),
+        ((Expansion("rent 2026", "neutral_search_term", ("rent",)),), "numeric"),
+        ((Expansion("rent ٢٠٢٦", "neutral_search_term", ("rent",)),), "numeric"),
+        ((Expansion("one two three four", "neutral_search_term", ("rent",)),), "analyzed words"),
         (
             (
-                Expansion("renters facing eviction", "related", ("rent",)),
-                Expansion("legal aid support", "related", ("rent",)),
-                Expansion("subsidy", "related", ("rent",)),
+                Expansion("renters facing eviction", "neutral_search_term", ("rent",)),
+                Expansion("legal aid support", "neutral_search_term", ("rent",)),
+                Expansion("subsidy", "neutral_search_term", ("rent",)),
             ),
             "new unique content tokens",
         ),
         (
             (
-                Expansion("tenant", "related", ("rent",)),
-                Expansion("burden", "related", ("rent",)),
-                Expansion("affordability", "related", ("rent",)),
-                Expansion("lease", "related", ("rent",)),
+                Expansion("tenant", "neutral_search_term", ("rent",)),
+                Expansion("burden", "neutral_search_term", ("rent",)),
+                Expansion("affordability", "neutral_search_term", ("rent",)),
+                Expansion("lease", "neutral_search_term", ("rent",)),
             ),
             "too many expansions",
         ),
@@ -208,12 +260,12 @@ def test_rendering_discards_every_facet_and_falls_back_when_a_late_facet_is_inva
             Facet(
                 "rent-effects",
                 ("rent",),
-                (Expansion("affordability", "related", ("rent",)),),
+                (Expansion("affordability", "neutral_search_term", ("rent",)),),
             ),
             Facet(
                 "zoning-effects",
                 ("zoning",),
-                (Expansion("zoning AND permits", "related", ("zoning",)),),
+                (Expansion("zoning AND permits", "neutral_search_term", ("zoning",)),),
             ),
         )
     )
@@ -473,7 +525,7 @@ def test_validation_rejects_an_expansion_with_a_dangling_anchor_reference() -> N
                 expansions=(
                     Expansion(
                         term="rental market",
-                        relation="related",
+                        relation="neutral_search_term",
                         anchor_refs=("missing-anchor",),
                     ),
                 ),

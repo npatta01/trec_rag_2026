@@ -25,6 +25,15 @@ MAX_CONTENT_TOKENS_PER_ANCHOR = 8
 MAX_EXPANSIONS_PER_FACET = 3
 MAX_ANALYZED_WORDS_PER_EXPANSION = 3
 MAX_NEW_EXPANSION_TOKENS_PER_FACET = 6
+ALLOWED_LEXICAL_RELATIONS = frozenset(
+    {
+        "alias",
+        "acronym",
+        "technical_term",
+        "common_variant",
+        "neutral_search_term",
+    }
+)
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _BOOLEAN_OR_QUERY_OPERATOR_PATTERN = re.compile(
@@ -406,9 +415,14 @@ def _validate_facet_expansions(
     expansion_content_tokens: set[str] = set()
 
     for expansion in facet.expansions:
+        if not expansion.anchor_refs:
+            raise FacetPlanValidationError("expansion must reference at least one anchor")
         if not set(expansion.anchor_refs).issubset(inherited_anchor_ids):
             raise FacetPlanValidationError("expansion references an anchor not inherited by its facet")
-        if expansion.relation != "related":
+        if (
+            not isinstance(expansion.relation, str)
+            or expansion.relation not in ALLOWED_LEXICAL_RELATIONS
+        ):
             raise FacetPlanValidationError("unsupported expansion relation")
         if not isinstance(expansion.term, str):
             raise FacetPlanValidationError("expansion term must be a string")
