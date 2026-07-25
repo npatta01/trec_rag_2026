@@ -128,6 +128,30 @@ def test_validation_rejects_invalid_coverage_ranges(
 
 
 @pytest.mark.parametrize(
+    "token_range",
+    [
+        TokenRange("0", 1),  # type: ignore[arg-type]
+        TokenRange(0, "1"),  # type: ignore[arg-type]
+        TokenRange(0.0, 1),  # type: ignore[arg-type]
+        TokenRange(0, 1.0),  # type: ignore[arg-type]
+        TokenRange(False, 1),
+        TokenRange(0, True),
+    ],
+)
+def test_validation_rejects_non_integer_token_range_indices(
+    token_range: TokenRange,
+) -> None:
+    plan = _plan(
+        coverage_items=(
+            CoverageItem(coverage_id="rent", source_ranges=(token_range,)),
+        )
+    )
+
+    with pytest.raises(FacetPlanValidationError, match="integer token indices"):
+        validate_facet_plan(_topic(), plan)
+
+
+@pytest.mark.parametrize(
     ("topic", "plan", "description"),
     [
         (_topic(topic_id="other"), _plan(), "topic ID"),

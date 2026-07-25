@@ -312,6 +312,10 @@ def _validate_reference_tuple(
 def _validate_range_bounds(token_range: object, token_count: int, *, label: str) -> None:
     if not isinstance(token_range, TokenRange):
         raise FacetPlanValidationError(f"{label} range must be a TokenRange")
+    if type(token_range.start_token) is not int or type(token_range.end_token) is not int:
+        raise FacetPlanValidationError(
+            f"{label} range must use integer token indices"
+        )
     if token_range.start_token < 0:
         raise FacetPlanValidationError(f"{label} range has a negative start")
     if token_range.end_token <= token_range.start_token:
