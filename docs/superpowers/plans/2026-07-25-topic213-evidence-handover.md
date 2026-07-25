@@ -4,7 +4,7 @@
 
 **Goal:** Build a reproducible Topic 213 handover containing the five strongest reviewed ClimbMix documents and their supported claims for each of ten sub-narratives.
 
-**Architecture:** A reusable Python module joins the pinned topic, nuggets, qrels, and authenticated accepted-union text into 173 eligible document records. A pinned local Mixedbread cross-encoder scores all 1,730 document/sub-narrative pairs for shortlisting; evidence reviewers inspect the leading candidates and produce sanitized final mappings consumed by deterministic JSON and Markdown renderers.
+**Architecture:** A reusable Python module joins the pinned topic, nuggets, qrels, authenticated accepted-union text, and an untracked supplemental document cache into 173 eligible document records. The accepted union covers 105 eligible documents and an authenticated Pyserini document fetch supplies the remaining 68. A pinned local Mixedbread cross-encoder then scores all 1,730 document/sub-narrative pairs for shortlisting; evidence reviewers inspect the leading candidates and produce sanitized final mappings consumed by deterministic JSON and Markdown renderers.
 
 **Tech Stack:** Python 3.12.13, pytest, PyTorch/ROCm, Transformers, sentence-transformers, JSON/JSONL, YAML, SHA-256.
 
@@ -19,6 +19,8 @@
 - Do not track raw document text, credentials, absolute home paths, or model caches.
 - Treat unjudged documents as unknown, not nonrelevant.
 - Use the cached `mixedbread-ai/mxbai-rerank-base-v2` revision already pinned by the repository; do not download a new model.
+- Keep authenticated supplemental document responses under ignored `outputs/`;
+  never write tokens or authorization headers to artifacts or logs.
 
 ---
 
@@ -29,7 +31,8 @@
 - Create: `code/tests/test_topic_evidence_handover.py`
 
 **Interfaces:**
-- Consumes: topic TSV, nugget JSONL, qrels, accepted-union JSONL.
+- Consumes: topic TSV, nugget JSONL, qrels, accepted-union JSONL, and optional
+  supplemental document JSONL.
 - Produces: `load_topic213_inputs(...) -> TopicEvidenceInputs`, `validate_reviewed_handover(...) -> None`, and `render_handover_markdown(...) -> str`.
 
 - [ ] **Step 1: Write failing contract tests**
@@ -67,7 +70,8 @@ The module must:
 
 - parse qrels with integer grades and retain only grades 2 through 4;
 - extract exact unique `mapped_sub_narrative` values for Topic 213;
-- join eligible docids to accepted-union `document_id` and `text`;
+- join eligible docids to accepted-union and supplemental `document_id` and
+  `text`, rejecting conflicting duplicate texts;
 - reject missing text, duplicate document IDs, a population other than 173 in
   canonical mode, and final records violating the global constraints;
 - render claims, scores, and document identifiers without raw document text.
@@ -91,20 +95,30 @@ git commit -m "build topic evidence handover contracts"
 
 ---
 
-### Task 2: Offline Mixedbread pairwise shortlisting
+### Task 2: Missing-document resolution and offline Mixedbread pairwise shortlisting
 
 **Files:**
 - Modify: `code/trec_rag/topic_evidence_handover.py`
 - Modify: `code/tests/test_topic_evidence_handover.py`
+- Create generated scratch: `outputs/rag25_topic213_evidence_handover_v1/supplemental_documents.jsonl`
 - Create generated scratch: `outputs/rag25_topic213_evidence_handover_v1/shortlist.json`
 
 **Interfaces:**
 - Consumes: `TopicEvidenceInputs`.
-- Produces: `score_sub_narrative_pairs(inputs, scorer, *, shortlist_depth=12) -> dict[str, object]` and CLI command `shortlist`.
+- Produces: `missing_document_ids(...) -> list[str]`,
+  `score_sub_narrative_pairs(inputs, scorer, *, shortlist_depth=12) -> dict[str, object]`,
+  and CLI commands `fetch-missing` and `shortlist`.
 
-- [ ] **Step 1: Write failing score-order and provenance tests**
+- [ ] **Step 1: Write failing missing-document, score-order, and provenance tests**
 
 ```python
+def test_missing_document_ids_returns_sorted_qrel_documents_without_text(sample_inputs):
+    assert missing_document_ids(
+        eligible_docids={"doc-a", "doc-b", "doc-c"},
+        available_docids={"doc-b"},
+    ) == ["doc-a", "doc-c"]
+
+
 def test_shortlist_scores_every_pair_and_orders_descending(sample_inputs):
     result = score_sub_narrative_pairs(sample_inputs, deterministic_scorer, shortlist_depth=2)
     assert result["pair_count"] == len(sample_inputs.sub_narratives) * len(sample_inputs.documents)
@@ -131,7 +145,17 @@ Run:
 
 Expected: tests fail because the scoring interface is missing.
 
-- [ ] **Step 3: Implement injected scoring and the pinned-model CLI**
+- [ ] **Step 3: Implement secure missing-document resolution**
+
+The `fetch-missing` command must use the configured Pyserini base URL and token
+without printing either, call `GET /v1/climbmix-400b/doc/{docid}` for only the
+68 absent eligible IDs, normalize document text with the existing
+`remote_client.extract_text`, write one `{document_id, text, response_sha256}`
+JSONL record per document, and safely resume without refetching already cached
+records. It must use the repository's persistent rate limiter and perform no
+automatic HTTP retries.
+
+- [ ] **Step 4: Implement injected scoring and the pinned-model CLI**
 
 The CLI must score every one of the 1,730 pairs, chunk long documents through
 the repository's existing chunking policy, retain the strongest chunk score
@@ -149,20 +173,33 @@ per pair, store only the leading 12 candidates per sub-narrative, and record:
 The scratch shortlist may include document text for review but remains ignored
 under `outputs/`; the tracked handover must not.
 
-- [ ] **Step 4: Run tests, a two-document smoke run, and the full offline run**
+- [ ] **Step 5: Run tests and one authenticated fetch smoke test**
 
 Run:
 
 ```bash
-.venv/bin/python -m pytest -q code/tests/test_topic_evidence_handover.py
+.venv/bin/python -m pytest -q code/tests/test_topic_evidence_handover.py -k 'missing or shortlist'
+.venv/bin/python -m trec_rag.topic_evidence_handover fetch-missing --limit-documents 1
+```
+
+Expected: focused tests pass and the smoke fetch writes one supplemental record
+without exposing credentials.
+
+- [ ] **Step 6: Resolve the remaining documents and run the offline scoring smoke and full run**
+
+Run:
+
+```bash
+.venv/bin/python -m trec_rag.topic_evidence_handover fetch-missing
 .venv/bin/python -m trec_rag.topic_evidence_handover shortlist --limit-documents 2
 .venv/bin/python-rocm -m trec_rag.topic_evidence_handover shortlist
 ```
 
-Expected: the smoke run reports 20 pairs; the full run reports 1,730 pairs and
-ten 12-document shortlists without network calls or model downloads.
+Expected: the supplemental cache completes 68 documents; the scoring smoke run
+reports 20 pairs; the full scoring run reports 1,730 pairs and ten 12-document
+shortlists without network calls or model downloads.
 
-- [ ] **Step 5: Commit Task 2**
+- [ ] **Step 7: Commit Task 2**
 
 ```bash
 git add code/trec_rag/topic_evidence_handover.py code/tests/test_topic_evidence_handover.py

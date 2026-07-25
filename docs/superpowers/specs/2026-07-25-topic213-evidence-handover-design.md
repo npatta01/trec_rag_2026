@@ -21,9 +21,15 @@ performance.
 - Topic 213 nuggets and their exact `mapped_sub_narrative` values.
 - The recommended Codex UMBRELA qrels.
 - The authenticated all-topic accepted union containing ClimbMix document text.
+- An untracked supplemental document cache populated through the authenticated
+  Pyserini document endpoint for eligible qrel documents absent from that
+  accepted union.
 
 Only documents with organizer-projected qrel grade 2, 3, or 4 are eligible.
-The expected eligible population is 173 documents.
+The expected eligible population is 173 documents. The accepted union contains
+105 of those documents; the other 68 must be resolved from an authenticated
+supplemental source before canonical validation. The supplemental text remains
+untracked.
 
 ## Scoring
 
@@ -79,4 +85,3 @@ The final artifact must verify that:
 - every selected document belongs to the 173-document eligible population;
 - every selected record has `support_score` 2 or 3 and at least one claim;
 - no raw document text, secrets, or absolute machine paths are present.
-
