@@ -24,6 +24,11 @@ document/sub-narrative pairs using raw logits and the strongest semantic chunk
 score for each whole document. Review then covered all 12 ranked candidates
 for every sub-narrative, not only the final five.
 
+Candidate generation was entirely local: every one of the 173 eligible
+documents was scored for each sub-narrative before the leading 12 were
+shortlisted. The remote document endpoint was used only to acquire missing
+eligible document bodies by known ID; it was not used for top-12 retrieval.
+
 Review support scores mean:
 
 - `0`: the document does not support the sub-narrative;
@@ -34,6 +39,10 @@ Review support scores mean:
 Final documents have support score 2 or 3. Selection favors direct evidence,
 specificity, and complementary coverage; the organizer qrel grade remains a
 separate topic-level provenance field and is not a sub-narrative score.
+
+The source-text-free reviewer reports and final adjudication records remain in
+the ignored review workspace. `manifest.yaml` pins their basenames, roles, and
+SHA-256 hashes; raw-text packets and machine-local paths are not tracked.
 
 ## Reproduce the tracked contracts
 

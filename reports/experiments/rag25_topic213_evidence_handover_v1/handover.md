@@ -213,23 +213,23 @@ I'm looking into the Korean War to learn about its origins, how it ended, and wh
 - claims:
   - Truman sought to avoid a third world war and initially limited US aims to restoring the 38th parallel.
 
-### Document `shard_01515_64558`
-- topic qrel grade: 3
-- support score: 2
-- claims:
-  - Truman favored a limited conflict, while MacArthur publicly advocated expanding the war and using nuclear strikes against China.
-
-### Document `shard_06292_54287`
+### Document `shard_02044_903`
 - topic qrel grade: 4
 - support score: 2
 - claims:
-  - Truman opposed MacArthur's proposal to expand the war into China.
+  - Truman justified intervention through collective security and fear of communist expansion; the source also identifies domestic pressure to demonstrate strength.
 
 ### Document `shard_02825_37436`
 - topic qrel grade: 2
 - support score: 3
 - claims:
   - Truman enforced a limited-war policy and fired MacArthur for challenging it, while Eisenhower later hinted that nuclear weapons might be used to end the war.
+
+### Document `shard_01355_13797`
+- topic qrel grade: 2
+- support score: 3
+- claims:
+  - Truman removed MacArthur amid the general's drive toward atomic escalation and invasion of China, whereas the source says Eisenhower later threatened atomic-bomb use to press for an end to the war.
 
 ## New: How does the Korean War affect Korea
 

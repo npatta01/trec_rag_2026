@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 import trec_rag.topic_evidence_handover as handover_module
 from trec_rag.remote_client import RemotePyseriniThrottled
@@ -843,3 +844,84 @@ def test_canonical_handover_is_sanitized_and_deterministically_rendered():
     assert "PYSERINI_API_TOKEN" not in combined
     assert '"text":' not in handover_text
     assert markdown_text == render_handover_markdown(payload)
+
+
+def test_canonical_manifest_records_local_full_population_shortlisting():
+    """Catches a manifest that misstates local scoring as top-k remote retrieval."""
+
+    manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    config = manifest["config"]
+
+    assert config["retriever"] == "qrel_eligible_population"
+    assert config["candidate_generation"] == (
+        "local_full_population_scoring_then_depth_12_shortlist"
+    )
+    assert config["hits"] == 173
+    assert config["shortlist_depth"] == 12
+    assert "pyserini_remote" not in MANIFEST.read_text(encoding="utf-8")
+
+
+def test_canonical_manifest_pins_sanitized_direct_review_inputs():
+    """Catches an unpinned or path-bearing final evidence adjudication chain."""
+
+    manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+
+    assert manifest["review_input_hashes"] == [
+        {
+            "basename": "reviewer-a-report.json",
+            "role": "group_a_candidate_assessments",
+            "sha256": "7ea0caa7489e1580b5cc3777ce22854810177fe3e6e5bdb103523e543e985dc8",
+        },
+        {
+            "basename": "reviewer-b-report.json",
+            "role": "group_b_candidate_assessments",
+            "sha256": "7fc540e49cab04c73c6c66091125425f9f5480e96167ff1f624c174aa96b1e09",
+        },
+        {
+            "basename": "self-review-report.json",
+            "role": "self_candidate_assessments",
+            "sha256": "6e4fde3582eca83bee12baae5fe0ca6136615b6a24fb0945de29845ea9542554",
+        },
+        {
+            "basename": "final-review-record.json",
+            "role": "final_manual_adjudication",
+            "sha256": "065a3c917116fb127fe80f638f011de7ef4db626316c7baa23a50946103d5eb3",
+        },
+        {
+            "basename": "integrated-review-coverage.json",
+            "role": "integrated_review_coverage",
+            "sha256": "50f6ecc299c3849e9ee92e31304c46e377f1b32130cc05404f378f72cf21db6a",
+        },
+    ]
+    assert all(
+        Path(record["basename"]).name == record["basename"]
+        and len(record["sha256"]) == 64
+        for record in manifest["review_input_hashes"]
+    )
+
+
+def test_canonical_presidential_comparison_uses_complementary_qualified_evidence():
+    """Catches regression to the two weak, redundant presidential selections."""
+
+    payload = json.loads(HANDOVER.read_text(encoding="utf-8"))
+    row = next(
+        row
+        for row in payload["sub_narratives"]
+        if row["sub_narrative"]
+        == '"How did US presidents differ in their views on the Korean War?"'
+    )
+
+    assert [document["document_id"] for document in row["documents"]] == [
+        "shard_04810_73050",
+        "shard_06176_41401",
+        "shard_02044_903",
+        "shard_02825_37436",
+        "shard_01355_13797",
+    ]
+    assert [document["support_score"] for document in row["documents"]] == [
+        3,
+        3,
+        2,
+        3,
+        3,
+    ]

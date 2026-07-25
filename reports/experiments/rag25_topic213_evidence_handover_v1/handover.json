@@ -329,22 +329,13 @@
           "review_rationale": "Provides detailed evidence of Truman's cautious war aims."
         },
         {
-          "document_id": "shard_01515_64558",
-          "topic_qrel_grade": 3,
-          "support_score": 2,
-          "claims": [
-            "Truman favored a limited conflict, while MacArthur publicly advocated expanding the war and using nuclear strikes against China."
-          ],
-          "review_rationale": "Clarifies the restrained presidential position through its conflict with MacArthur."
-        },
-        {
-          "document_id": "shard_06292_54287",
+          "document_id": "shard_02044_903",
           "topic_qrel_grade": 4,
           "support_score": 2,
           "claims": [
-            "Truman opposed MacArthur's proposal to expand the war into China."
+            "Truman justified intervention through collective security and fear of communist expansion; the source also identifies domestic pressure to demonstrate strength."
           ],
-          "review_rationale": "Direct evidence of Truman's limits on escalation."
+          "review_rationale": "Adds the political and strategic reasoning behind Truman's decision to enter the war."
         },
         {
           "document_id": "shard_02825_37436",
@@ -354,6 +345,15 @@
             "Truman enforced a limited-war policy and fired MacArthur for challenging it, while Eisenhower later hinted that nuclear weapons might be used to end the war."
           ],
           "review_rationale": "Directly contrasts Truman's restraint with Eisenhower's nuclear threat."
+        },
+        {
+          "document_id": "shard_01355_13797",
+          "topic_qrel_grade": 2,
+          "support_score": 3,
+          "claims": [
+            "Truman removed MacArthur amid the general's drive toward atomic escalation and invasion of China, whereas the source says Eisenhower later threatened atomic-bomb use to press for an end to the war."
+          ],
+          "review_rationale": "Adds a second, narrowly framed source for the administrations' contrasting approaches to atomic escalation."
         }
       ]
     },

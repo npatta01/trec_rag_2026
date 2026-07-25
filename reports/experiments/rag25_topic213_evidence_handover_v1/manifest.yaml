@@ -10,10 +10,12 @@ experiment:
   description: Reviewed whole-document evidence handover for Topic 213.
 
 config:
-  retriever: pyserini_remote
+  retriever: qrel_eligible_population
   index: climbmix-400b
   query_source: released_topic_213_sub_narratives
-  hits: 12
+  hits: 173
+  shortlist_depth: 12
+  candidate_generation: local_full_population_scoring_then_depth_12_shortlist
   ranking: mixedbread_max_chunk_raw_logit_then_evidence_review
 
 scope:
@@ -72,13 +74,15 @@ population_counts:
   reviewed_candidates: 120
   selected_documents_per_sub_narrative: 5
   selected_document_assignments: 50
-  distinct_selected_documents: 32
+  distinct_selected_documents: 33
   selected_claims: 58
-  selected_support_score_2: 26
-  selected_support_score_3: 24
+  selected_support_score_2: 25
+  selected_support_score_3: 25
 
 scoring_definitions:
   eligibility: organizer Topic 213 qrel grade 2, 3, or 4
+  candidate_generation: all 173 eligible documents were scored locally for every sub-narrative before depth-12 shortlisting
+  remote_document_access: missing eligible document bodies were fetched by known document ID only; no remote top-k retrieval produced the shortlists
   ranking: strongest semantic-chunk raw logit retained for each whole-document pair
   organizer_qrel_grade: topic-level source provenance; not a sub-narrative score
   support_score_0: no support for the sub-narrative
@@ -108,17 +112,34 @@ review:
     - credentials
     - absolute machine paths
 
+review_input_hashes:
+  - basename: reviewer-a-report.json
+    role: group_a_candidate_assessments
+    sha256: 7ea0caa7489e1580b5cc3777ce22854810177fe3e6e5bdb103523e543e985dc8
+  - basename: reviewer-b-report.json
+    role: group_b_candidate_assessments
+    sha256: 7fc540e49cab04c73c6c66091125425f9f5480e96167ff1f624c174aa96b1e09
+  - basename: self-review-report.json
+    role: self_candidate_assessments
+    sha256: 6e4fde3582eca83bee12baae5fe0ca6136615b6a24fb0945de29845ea9542554
+  - basename: final-review-record.json
+    role: final_manual_adjudication
+    sha256: 065a3c917116fb127fe80f638f011de7ef4db626316c7baa23a50946103d5eb3
+  - basename: integrated-review-coverage.json
+    role: integrated_review_coverage
+    sha256: 50f6ecc299c3849e9ee92e31304c46e377f1b32130cc05404f378f72cf21db6a
+
 artifact_hashes:
   hash_scope_note: manifest.yaml is excluded because a manifest cannot contain its own stable hash
   README.md:
-    sha256: 7edaed9f78d586285da6654750a647ae8ccb19ef4d5e6683d6959d8e91b1cce2
-    bytes: 2772
+    sha256: 087a8805223e18abc5f6b86eb1f79acce85cfa0d301d973fc2e5e4e673450d35
+    bytes: 3299
   handover.json:
-    sha256: 18b1b70637276965ff633685c74fc758f13220b62af20072c96b537a61ac4413
-    bytes: 21608
+    sha256: 065a3c917116fb127fe80f638f011de7ef4db626316c7baa23a50946103d5eb3
+    bytes: 21830
   handover.md:
-    sha256: bb953dbceabb507c159bf03e261e52ee6d88b1968d8a8893a92e339875dd0820
-    bytes: 11460
+    sha256: 931a4955da1d94400e6f9b6514d96f57d5cb93fdd9058db61f9d40f5cfe62db0
+    bytes: 11622
 
 limitations:
   - The ranking logits are not calibrated probabilities.
