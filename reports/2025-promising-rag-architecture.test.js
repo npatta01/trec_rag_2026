@@ -13,7 +13,7 @@ const html = fs.readFileSync(htmlPath, "utf8");
 
 for (const signal of [
   '<a class="skip-link" href="#main-content">',
-  '<main id="main-content">',
+  '<main id="main-content" tabindex="-1">',
   'id="start"',
   'id="pipeline"',
   'id="definitions"',
@@ -36,6 +36,11 @@ for (const signal of [
   'scope="col"',
   "@media print",
   "prefers-reduced-motion",
+  "function trapFocus(event)",
+  'if (event.key !== "Tab" || lightbox.hidden) return;',
+  "if (event.shiftKey && document.activeElement === first)",
+  "else if (!event.shiftKey && document.activeElement === last)",
+  "setBackgroundInert(open);",
 ]) {
   assert(html.includes(signal), `Missing report signal: ${signal}`);
 }

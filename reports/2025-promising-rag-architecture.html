@@ -95,7 +95,7 @@
       <nav aria-label="Report sections"><ul><li><a href="#start">Answer</a></li><li><a href="#pipeline">Pipeline</a></li><li><a href="#team-evidence">Evidence</a></li><li><a href="#recommended-build">Build</a></li><li><a href="#sources">Sources</a></li></ul></nav>
     </div>
   </header>
-  <main id="main-content">
+  <main id="main-content" tabindex="-1">
     <article>
       <section id="start" aria-labelledby="start-title">
         <div class="hero">
@@ -173,12 +173,50 @@
     const lightbox = document.getElementById("figure-lightbox");
     const openFigure = document.getElementById("open-figure");
     const closeFigure = document.getElementById("close-figure");
+    const background = [...document.body.children].filter(
+      (element) => element !== lightbox && element.tagName !== "SCRIPT",
+    );
+    const focusableSelector = [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled]):not([type="hidden"])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(",");
+
+    function setBackgroundInert(inert) {
+      background.forEach((element) => {
+        element.inert = inert;
+        element.setAttribute("aria-hidden", String(inert));
+      });
+    }
 
     function setLightbox(open) {
       lightbox.hidden = !open;
       document.body.classList.toggle("lightbox-open", open);
+      setBackgroundInert(open);
       if (open) closeFigure.focus();
       else openFigure.focus();
+    }
+
+    function trapFocus(event) {
+      if (event.key !== "Tab" || lightbox.hidden) return;
+      const focusable = [...lightbox.querySelectorAll(focusableSelector)].filter(
+        (element) => element.getClientRects().length > 0,
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+
+      if (!first) {
+        event.preventDefault();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
 
     openFigure.addEventListener("click", () => setLightbox(true));
@@ -187,6 +225,7 @@
       if (event.target === lightbox) setLightbox(false);
     });
     document.addEventListener("keydown", (event) => {
+      trapFocus(event);
       if (event.key === "Escape" && !lightbox.hidden) setLightbox(false);
     });
   </script>
