@@ -172,6 +172,12 @@ QueryVariant(
 )
 ```
 
+`FacetPlanningResult` carries `queries`, `used_fallback`, and `error`. On
+success, `queries` is the rendered facet-query tuple, `used_fallback` is
+`False`, and `error` is `None`. For an invalid plan, `queries` is exactly the
+original query above, `used_fallback` is `True`, and `error` retains the
+validation-error message.
+
 Frozen validation limits are: at most 16 coverage items, 8 facets, 4 global
 anchors, 2 source ranges per coverage item, 2 coverage items per facet, and 8
 content tokens per anchor. Each facet accepts at most 3 expansions; each has

@@ -211,10 +211,44 @@ answer-aspect generation is ready.
   pre-existing failures from the absent ranking/evaluation artifact bundle
   covered by the two ignored tests; this facet core does not create or depend
   on those artifacts.
-- Scope/portability/secrets review: `git diff --check` was clean; changed paths
-  are limited to the new pure core, its tests, this concise README section, and
-  this plan. The code has no runtime generator/model/transport integration,
-  checked paths are repository-relative, and no likely credential or absolute
-  host-path additions were found. The next promotion experiment remains an
-  offline held-out retrieval comparison of externally supplied plans against
+- Scope/portability/secrets review, using only the tracked implementation diff
+  from `daecd27^` through the working tree:
+
+  ```bash
+  git diff --check daecd27^
+  git diff --name-only daecd27^
+  git diff --numstat daecd27^
+  git diff --name-only daecd27^ | while IFS= read -r path; do
+    printf '%s ' "$path"
+    git cat-file -s ":$path"
+  done
+  git diff --name-only daecd27^ | rg -n -i \
+    '(^|/)(generator|model|prompt|raw[-_]?response|sqlite)(/|$)' || true
+  git diff --unified=0 daecd27^ -- \
+    code/trec_rag/facet_query_planning.py \
+    code/tests/test_facet_query_planning.py | rg -n -i -w \
+    'generator|model|prompt|raw[-_ ]?response|sqlite' || true
+  git diff --unified=0 daecd27^ -- \
+    code/trec_rag/facet_query_planning.py \
+    code/tests/test_facet_query_planning.py \
+    code/trec_rag/README.md | rg -n \
+    '(^|[^[:alnum:]_])/(home|Users|etc|tmp|var|opt)(/|$)|[A-Za-z]:[\\/]' || true
+  git diff --unified=0 daecd27^ -- \
+    code/trec_rag/facet_query_planning.py \
+    code/tests/test_facet_query_planning.py \
+    code/trec_rag/README.md | rg -n -i \
+    '(api[_-]?key|client[_-]?secret|password|authorization|bearer|access[_-]?token|auth[_-]?token)[[:space:]]*[:=]|-----BEGIN( [A-Z]+)? PRIVATE KEY-----' || true
+  ```
+
+  Output: `git diff --check` produced no output. The changed-path and numstat
+  commands reported only `code/trec_rag/facet_query_planning.py` (551 added
+  lines), `code/tests/test_facet_query_planning.py` (537 added lines),
+  `code/trec_rag/README.md` (61 added lines), and this plan (77 added, 5
+  removed). The staged tracked sizes were 19,954, 16,899, 17,850, and 10,277
+  bytes respectively.
+  bytes respectively. The excluded-path, implementation-content,
+  host-absolute-path, and likely-secret scans produced no matches. These scans
+  do not read `.env` files or other untracked content. The code has no runtime
+  generator/model/transport integration. The next promotion experiment remains
+  an offline held-out retrieval comparison of externally supplied plans against
   the original narrative; no automatic generator is ready for runtime use.
