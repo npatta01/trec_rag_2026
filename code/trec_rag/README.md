@@ -65,6 +65,62 @@ Run validation:
 .venv/bin/python -m pytest code/tests/test_remote_pyserini.py -q
 ```
 
+## Topic 213 Evidence Handover
+
+`topic_evidence_handover.py` resolves the complete organizer-eligible Topic 213
+document population and builds an offline Mixedbread shortlist for evidence
+review.
+
+Default inputs:
+
+- Topic narratives:
+  `trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv`
+- Released nuggets:
+  `trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl`
+- Codex projected qrels:
+  `trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels`
+- Authenticated accepted union:
+  `outputs/all_topic_tethered_facet_validation_v1/retrieval/accepted_union.jsonl`
+- Resumable supplemental cache:
+  `outputs/rag25_topic213_evidence_handover_v1/supplemental_documents.jsonl`
+
+Fetch only missing eligible document text:
+
+```bash
+.venv/bin/python -m trec_rag.topic_evidence_handover fetch-missing
+```
+
+`fetch-missing` requires a nonblank `PYSERINI_API_TOKEN` only when records are
+actually absent. Before network access it requires exactly 173 eligible qrel
+documents and the exact ten released sub-narratives. A per-cache file lock and
+a second cache check prevent concurrent processes from fetching or appending
+the same document. Completed caches return without loading remote
+configuration, creating a session, or opening the supplemental file for
+append. Requests use the persistent rate limiter, disable automatic retries,
+and surface HTTP 429 as `RemotePyseriniThrottled` with `Retry-After` preserved.
+
+Run a two-document ROCm smoke and the full offline shortlist:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.topic_evidence_handover shortlist --limit-documents 2
+.venv/bin/python-rocm -m trec_rag.topic_evidence_handover shortlist
+```
+
+The scorer loads only the pinned local
+`mixedbread-ai/mxbai-rerank-base-v2` snapshot, uses identity activation/raw
+logits, applies the shared semantic chunking policy, and retains the strongest
+chunk score for each document/sub-narrative pair. The full output is
+`outputs/rag25_topic213_evidence_handover_v1/shortlist.json`: ten
+sub-narratives with the leading 12 candidates, model score/rank, and organizer
+qrel grade kept as separate fields. Both generated artifacts are ignored and
+may contain source text; do not copy raw text into tracked reports.
+
+Validate the handover helpers:
+
+```bash
+.venv/bin/python -m pytest -q code/tests/test_topic_evidence_handover.py
+```
+
 ## Config-Driven RAG Pipeline
 
 The pipeline is the preferred path for experiments. It keeps query

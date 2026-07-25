@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 from itertools import pairwise
 import json
 from pathlib import Path
 
 import pytest
 
+import trec_rag.topic_evidence_handover as handover_module
+from trec_rag.remote_client import RemotePyseriniThrottled
 from trec_rag.topic_evidence_handover import (
     CANONICAL_SUB_NARRATIVES,
     EligibleDocument,
     TopicEvidenceInputs,
+    fetch_missing_documents,
     load_topic213_inputs,
     missing_document_ids,
     render_handover_markdown,
@@ -122,6 +127,287 @@ def deterministic_scorer(_sub_narrative: str, chunk_texts: list[str]) -> list[fl
     """A local score function whose expected order comes from fixture IDs."""
 
     return [float(int(chunk_text.rsplit(" ", 1)[-1])) for chunk_text in chunk_texts]
+
+
+@pytest.fixture
+def canonical_fetch_paths(tmp_path: Path) -> dict[str, Path]:
+    topic_tsv = tmp_path / "topics.tsv"
+    topic_tsv.write_text("213\tCanonical narrative\n", encoding="utf-8")
+    nuggets_jsonl = tmp_path / "nuggets.jsonl"
+    nuggets_jsonl.write_text(
+        json.dumps(
+            {
+                "qid": "213",
+                "nuggets": [
+                    {"mapped_sub_narrative": label}
+                    for label in CANONICAL_SUB_NARRATIVES
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    qrels = tmp_path / "qrels.txt"
+    qrels.write_text(
+        "".join(f"213 0 doc-{index:04d} 2\n" for index in range(1, 174)),
+        encoding="utf-8",
+    )
+    accepted_union = tmp_path / "accepted.jsonl"
+    accepted_union.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "topic_id": "213",
+                    "document_id": f"doc-{index:04d}",
+                    "text": f"accepted text {index}",
+                }
+            )
+            + "\n"
+            for index in range(1, 173)
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "topic_tsv": topic_tsv,
+        "nuggets_jsonl": nuggets_jsonl,
+        "qrels": qrels,
+        "accepted_union": accepted_union,
+        "supplemental_documents": tmp_path / "supplemental.jsonl",
+    }
+
+
+class _Response:
+    def __init__(
+        self,
+        raw: bytes,
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.content = raw
+        self.status_code = status_code
+        self.headers = headers or {}
+
+    def json(self):
+        return json.loads(self.content)
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _Session:
+    def __init__(self, response: _Response) -> None:
+        self.response = response
+        self.requests: list[tuple[str, dict[str, object]]] = []
+
+    def get(self, url: str, **kwargs):
+        self.requests.append((url, kwargs))
+        return self.response
+
+
+def _install_remote(
+    monkeypatch,
+    session: _Session,
+    *,
+    token: str = "private-test-token",
+) -> None:
+    monkeypatch.setenv(
+        "INDEX_URL",
+        "https://example.test/v1/climbmix-400b/search",
+    )
+    monkeypatch.setenv("PYSERINI_API_TOKEN", token)
+    monkeypatch.setattr(handover_module, "load_repo_env", lambda _root: None)
+    monkeypatch.setattr(
+        handover_module,
+        "rate_limited_session",
+        lambda _config: session,
+    )
+
+
+def test_fetch_missing_requires_nonblank_token_before_request(
+    canonical_fetch_paths, monkeypatch
+):
+    session = _Session(_Response(b'{"contents":"unused"}'))
+    _install_remote(monkeypatch, session, token="   ")
+
+    with pytest.raises(ValueError, match="PYSERINI_API_TOKEN"):
+        fetch_missing_documents(**canonical_fetch_paths)
+
+    assert session.requests == []
+
+
+def test_fetch_missing_uses_document_endpoint_and_writes_normalized_hashed_record(
+    canonical_fetch_paths, monkeypatch
+):
+    raw = b'{"contents":"  normalized\\n  document   text  "}'
+    session = _Session(_Response(raw))
+    _install_remote(monkeypatch, session)
+
+    result = fetch_missing_documents(**canonical_fetch_paths)
+
+    assert result == {"fetched_count": 1, "remaining_missing_count": 0}
+    assert session.requests[0][0] == (
+        "https://example.test/v1/climbmix-400b/doc/doc-0173"
+    )
+    assert session.requests[0][1]["headers"]["Authorization"] == (
+        "Bearer private-test-token"
+    )
+    record_text = canonical_fetch_paths["supplemental_documents"].read_text(
+        encoding="utf-8"
+    )
+    assert "private-test-token" not in record_text
+    assert json.loads(record_text) == {
+        "document_id": "doc-0173",
+        "text": "normalized document text",
+        "response_sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def test_fetch_missing_complete_cache_returns_before_env_session_or_output_open(
+    canonical_fetch_paths, monkeypatch
+):
+    with canonical_fetch_paths["accepted_union"].open("a", encoding="utf-8") as sink:
+        sink.write(
+            json.dumps(
+                {
+                    "topic_id": "213",
+                    "document_id": "doc-0173",
+                    "text": "complete text",
+                }
+            )
+            + "\n"
+        )
+    monkeypatch.setattr(
+        handover_module,
+        "load_repo_env",
+        lambda _root: pytest.fail("complete resume loaded environment"),
+    )
+    monkeypatch.setattr(
+        handover_module,
+        "rate_limited_session",
+        lambda _config: pytest.fail("complete resume created a session"),
+    )
+
+    assert fetch_missing_documents(**canonical_fetch_paths) == {
+        "fetched_count": 0,
+        "remaining_missing_count": 0,
+    }
+    assert not canonical_fetch_paths["supplemental_documents"].exists()
+
+
+def test_fetch_missing_partial_resume_requests_only_uncached_id(
+    canonical_fetch_paths, monkeypatch
+):
+    accepted = canonical_fetch_paths["accepted_union"]
+    accepted.write_text(
+        "".join(accepted.read_text(encoding="utf-8").splitlines(keepends=True)[:-1]),
+        encoding="utf-8",
+    )
+    canonical_fetch_paths["supplemental_documents"].write_text(
+        json.dumps(
+            {
+                "document_id": "doc-0172",
+                "text": "cached supplemental text",
+                "response_sha256": "a" * 64,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session = _Session(_Response(b'{"contents":"last text"}'))
+    _install_remote(monkeypatch, session)
+
+    result = fetch_missing_documents(**canonical_fetch_paths)
+
+    assert result == {"fetched_count": 1, "remaining_missing_count": 0}
+    assert [request[0].rsplit("/", 1)[-1] for request in session.requests] == [
+        "doc-0173"
+    ]
+
+
+def test_fetch_missing_rechecks_cache_after_exclusive_lock(
+    canonical_fetch_paths, monkeypatch
+):
+    lock_calls: list[int] = []
+
+    def fill_cache_while_waiting(_descriptor, operation):
+        lock_calls.append(operation)
+        if operation == fcntl.LOCK_EX:
+            canonical_fetch_paths["supplemental_documents"].write_text(
+                json.dumps(
+                    {
+                        "document_id": "doc-0173",
+                        "text": "concurrent process text",
+                        "response_sha256": "b" * 64,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(handover_module.fcntl, "flock", fill_cache_while_waiting)
+    monkeypatch.setattr(
+        handover_module,
+        "load_repo_env",
+        lambda _root: pytest.fail("lock recheck loaded environment"),
+    )
+
+    assert fetch_missing_documents(**canonical_fetch_paths) == {
+        "fetched_count": 0,
+        "remaining_missing_count": 0,
+    }
+    assert lock_calls == [fcntl.LOCK_EX, fcntl.LOCK_UN]
+
+
+@pytest.mark.parametrize("invalid_source", ("qrels", "sub_narratives"))
+def test_fetch_missing_validates_canonical_inputs_before_network(
+    canonical_fetch_paths, monkeypatch, invalid_source
+):
+    if invalid_source == "qrels":
+        qrels = canonical_fetch_paths["qrels"]
+        qrels.write_text(
+            "".join(qrels.read_text(encoding="utf-8").splitlines(keepends=True)[:-1]),
+            encoding="utf-8",
+        )
+        expected = "173"
+    else:
+        nuggets = json.loads(
+            canonical_fetch_paths["nuggets_jsonl"].read_text(encoding="utf-8")
+        )
+        nuggets["nuggets"][0]["mapped_sub_narrative"] = "altered"
+        canonical_fetch_paths["nuggets_jsonl"].write_text(
+            json.dumps(nuggets) + "\n",
+            encoding="utf-8",
+        )
+        expected = "exact released"
+    monkeypatch.setattr(
+        handover_module,
+        "load_repo_env",
+        lambda _root: pytest.fail("invalid canonical source loaded environment"),
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        fetch_missing_documents(**canonical_fetch_paths)
+
+
+def test_fetch_missing_429_preserves_retry_after_without_retry(
+    canonical_fetch_paths, monkeypatch
+):
+    session = _Session(
+        _Response(
+            b'{"error":"throttled"}',
+            status_code=429,
+            headers={"Retry-After": "7"},
+        )
+    )
+    _install_remote(monkeypatch, session)
+
+    with pytest.raises(RemotePyseriniThrottled) as caught:
+        fetch_missing_documents(**canonical_fetch_paths)
+
+    assert caught.value.retry_after_seconds == 7.0
+    assert len(session.requests) == 1
 
 
 def test_missing_document_ids_returns_sorted_qrel_documents_without_text(sample_inputs):

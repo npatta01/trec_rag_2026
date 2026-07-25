@@ -8,6 +8,7 @@ and review stages; the durable handover renderer never emits it.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import math
@@ -19,7 +20,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .chunking import ChunkingConfig, SemanticTextChunker
-from .remote_client import RemotePyseriniThrottled, extract_text, rate_limited_session
+from .remote_client import (
+    RemotePyseriniThrottled,
+    _retry_after_seconds,
+    extract_text,
+    rate_limited_session,
+)
 from .remote_config import RemotePyseriniConfig
 from .repo_env import find_repo_root, load_repo_env
 
@@ -632,10 +638,21 @@ def fetch_missing_documents(
 
     if limit_documents is not None and limit_documents <= 0:
         raise ValueError("limit_documents must be positive")
-    # Validate the static topic and nugget inputs before making an authenticated request.
+    # Validate all canonical source invariants before making an authenticated request.
     _load_topic_narrative(Path(topic_tsv))
-    _load_sub_narratives(Path(nuggets_jsonl))
+    sub_narratives = _load_sub_narratives(Path(nuggets_jsonl))
     eligible_grades = _load_eligible_grades(Path(qrels))
+    if len(eligible_grades) != CANONICAL_ELIGIBLE_DOCUMENT_COUNT:
+        raise ValueError(
+            "canonical Topic 213 eligible population must contain "
+            f"{CANONICAL_ELIGIBLE_DOCUMENT_COUNT} documents, "
+            f"found {len(eligible_grades)}"
+        )
+    if sub_narratives != CANONICAL_SUB_NARRATIVES:
+        raise ValueError(
+            "canonical Topic 213 must preserve the exact released "
+            "mapped_sub_narrative tuple"
+        )
     eligible_docids = set(eligible_grades)
     accepted_texts = _load_document_texts(
         _read_jsonl(Path(accepted_union), "accepted union"),
@@ -650,54 +667,80 @@ def fetch_missing_documents(
         eligible_docids=eligible_docids,
         available_docids=set(accepted_texts).union(supplemental_texts),
     )
-    planned = missing if limit_documents is None else missing[:limit_documents]
+    if not missing:
+        return {"fetched_count": 0, "remaining_missing_count": 0}
 
-    repo_root = find_repo_root(Path(__file__))
-    load_repo_env(repo_root)
-    config = RemotePyseriniConfig.from_env()
-    session = rate_limited_session(config)
     destination = Path(supplemental_documents)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fetched = 0
-    with destination.open("a", encoding="utf-8") as sink:
-        for document_id in planned:
-            response = session.get(
-                _document_endpoint(config.index_url, document_id),
-                headers={
-                    "Accept": "application/json",
-                    **(
-                        {"Authorization": f"Bearer {config.api_token}"}
-                        if config.api_token
-                        else {}
-                    ),
-                },
-                timeout=30,
-                allow_redirects=False,
+    lock_path = destination.with_suffix(destination.suffix + ".lock")
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            # A contender may have completed records while this process waited.
+            supplemental_texts = _load_supplemental_document_records(
+                destination, eligible_docids=eligible_docids
             )
-            raw = response.content
-            if response.status_code == 429:
-                raise RemotePyseriniThrottled(None)
-            response.raise_for_status()
-            try:
-                payload: object = response.json()
-            except ValueError:
-                payload = raw.decode("utf-8", errors="replace")
-            text = extract_text(payload)
-            if not text.strip():
-                raise ValueError(f"document endpoint returned no text for document ID {document_id}")
-            row = {
-                "document_id": document_id,
-                "text": text,
-                "response_sha256": hashlib.sha256(raw).hexdigest(),
+            missing = missing_document_ids(
+                eligible_docids=eligible_docids,
+                available_docids=set(accepted_texts).union(supplemental_texts),
+            )
+            if not missing:
+                return {"fetched_count": 0, "remaining_missing_count": 0}
+            planned = missing if limit_documents is None else missing[:limit_documents]
+
+            repo_root = find_repo_root(Path(__file__))
+            load_repo_env(repo_root)
+            config = RemotePyseriniConfig.from_env()
+            if not config.api_token or not config.api_token.strip():
+                raise ValueError(
+                    "PYSERINI_API_TOKEN must be configured with a nonblank value"
+                )
+            session = rate_limited_session(config)
+            fetched = 0
+            with destination.open("a", encoding="utf-8") as sink:
+                for document_id in planned:
+                    response = session.get(
+                        _document_endpoint(config.index_url, document_id),
+                        headers={
+                            "Accept": "application/json",
+                            "Authorization": f"Bearer {config.api_token}",
+                        },
+                        timeout=30,
+                        allow_redirects=False,
+                    )
+                    raw = response.content
+                    if response.status_code == 429:
+                        raise RemotePyseriniThrottled(
+                            _retry_after_seconds(response.headers.get("Retry-After"))
+                        )
+                    response.raise_for_status()
+                    try:
+                        payload: object = response.json()
+                    except ValueError:
+                        payload = raw.decode("utf-8", errors="replace")
+                    text = extract_text(payload)
+                    if not text.strip():
+                        raise ValueError(
+                            "document endpoint returned no text for document ID "
+                            f"{document_id}"
+                        )
+                    row = {
+                        "document_id": document_id,
+                        "text": text,
+                        "response_sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                    sink.write(
+                        json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                    )
+                    sink.flush()
+                    os.fsync(sink.fileno())
+                    fetched += 1
+            return {
+                "fetched_count": fetched,
+                "remaining_missing_count": len(missing) - fetched,
             }
-            sink.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-            sink.flush()
-            os.fsync(sink.fileno())
-            fetched += 1
-    return {
-        "fetched_count": fetched,
-        "remaining_missing_count": len(missing) - fetched,
-    }
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _model_snapshot() -> Path:
