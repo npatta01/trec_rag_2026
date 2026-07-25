@@ -145,7 +145,7 @@ attributes are present, `scrollWidth === clientWidth`, and the browser reports
 no console errors. Also verify the print DOM retains the legend and text
 equivalent.
 
-- [ ] **Step 7: Commit the implementation**
+- [x] **Step 7: Commit the implementation**
 
 Commit only the report and smoke-test changes with a concise user-facing
 message after all checks pass.
