@@ -38,9 +38,14 @@ _DOCUMENT_KEYS = frozenset(
 _CREDENTIAL_KEY_RE = re.compile(
     r"(?:api[_-]?key|authorization|credential|cookie|password|secret|token)", re.IGNORECASE
 )
+_SENSITIVE_CREDENTIAL_VALUE_RE = re.compile(
+    r"\b(?:PYSERINI_API_TOKEN|api[_-]?key|authorization|credential|cookie|password|secret|token)"
+    r"\s*(?:[:=]\s*|\s+Bearer\s+)\S+|\bBearer\s+\S+",
+    re.IGNORECASE,
+)
 _POSIX_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/])/[^\s/]+(?:/[^\s/]+)*")
-_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
-_HOME_PATH_RE = re.compile(r"(?:^|[\s\"'])~[\\/]")
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/\\])[A-Za-z]:[\\/]")
+_HOME_PATH_RE = re.compile(r"(?<![A-Za-z0-9+.\-:/~])~[\\/]")
 
 
 @dataclass(frozen=True)
@@ -283,21 +288,24 @@ def _require_allowlisted_keys(
     return value
 
 
-def _reject_absolute_paths(value: object) -> None:
+def _reject_sensitive_values(value: object) -> None:
     if isinstance(value, Mapping):
         for child in value.values():
-            _reject_absolute_paths(child)
+            _reject_sensitive_values(child)
         return
     if isinstance(value, list):
         for child in value:
-            _reject_absolute_paths(child)
+            _reject_sensitive_values(child)
         return
-    if isinstance(value, str) and (
-        _POSIX_ABSOLUTE_PATH_RE.search(value)
-        or _WINDOWS_ABSOLUTE_PATH_RE.search(value)
-        or _HOME_PATH_RE.search(value)
-    ):
-        raise ValueError("handover contains an absolute filesystem path")
+    if isinstance(value, str):
+        if _SENSITIVE_CREDENTIAL_VALUE_RE.search(value):
+            raise ValueError("handover contains a sensitive credential value")
+        if (
+            _POSIX_ABSOLUTE_PATH_RE.search(value)
+            or _WINDOWS_ABSOLUTE_PATH_RE.search(value)
+            or _HOME_PATH_RE.search(value)
+        ):
+            raise ValueError("handover contains an absolute filesystem path")
 
 
 def _provenance_grades(
@@ -344,7 +352,7 @@ def validate_reviewed_handover(
     if handover.get("topic_id") != TOPIC_ID:
         raise ValueError("handover topic_id must be '213'")
     _required_string(handover.get("narrative"), "handover narrative")
-    _reject_absolute_paths(handover)
+    _reject_sensitive_values(handover)
     rows = handover.get("sub_narratives")
     if not isinstance(rows, list) or len(rows) != CANONICAL_SUB_NARRATIVE_COUNT:
         raise ValueError("handover must contain exactly 10 sub_narratives")

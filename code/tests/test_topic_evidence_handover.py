@@ -340,6 +340,36 @@ def test_handover_rejects_unallowlisted_content_and_absolute_paths(sample_handov
         validate_reviewed_handover(sample_handover, inputs=sample_inputs)
 
 
+@pytest.mark.parametrize(
+    ("target", "unsafe_value", "error"),
+    (
+        ("narrative", "PYSERINI_API_TOKEN=private-token", "sensitive credential value"),
+        ("claims", "Authorization: Bearer private-token", "sensitive credential value"),
+        ("claims", r"evidence=C:\private\raw.txt", "absolute filesystem path"),
+        ("review_rationale", "evidence=~/private/raw.txt", "absolute filesystem path"),
+    ),
+)
+def test_handover_rejects_sensitive_values_and_embedded_paths(
+    sample_handover,
+    sample_inputs,
+    target,
+    unsafe_value,
+    error,
+):
+    """Catches secrets and filesystem paths hidden in permitted string fields."""
+
+    document = sample_handover["sub_narratives"][0]["documents"][0]
+    if target == "narrative":
+        sample_handover["narrative"] = unsafe_value
+    elif target == "claims":
+        document["claims"] = [unsafe_value]
+    else:
+        document["review_rationale"] = unsafe_value
+
+    with pytest.raises(ValueError, match=error):
+        validate_reviewed_handover(sample_handover, inputs=sample_inputs)
+
+
 def test_render_handover_markdown_exposes_review_fields_without_document_text(sample_handover):
     """Catches a renderer that leaks source text instead of the reviewed claims."""
 
