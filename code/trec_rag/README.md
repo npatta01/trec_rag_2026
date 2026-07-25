@@ -91,10 +91,13 @@ Fetch only missing eligible document text:
 ```
 
 `fetch-missing` requires a nonblank `PYSERINI_API_TOKEN` only when records are
-actually absent. Before network access it requires exactly 173 eligible qrel
-documents and the exact ten released sub-narratives. A per-cache file lock and
-a second cache check prevent concurrent processes from fetching or appending
-the same document. Completed caches return without loading remote
+actually absent. Before network access it requires the exact ten released
+sub-narratives, the pinned sorted 173-document qrel ID/grade mapping, and the
+pinned 68 IDs initially absent from the authenticated accepted union. A
+portable `filelock.FileLock` is acquired before every supplemental cache read
+and held through fetch/write, preventing a reader from parsing a cooperating
+writer's partial append or fetching the same document. Completed caches return
+after the local lock/read without loading remote
 configuration, creating a session, or opening the supplemental file for
 append. Requests use the persistent rate limiter, disable automatic retries,
 and surface HTTP 429 as `RemotePyseriniThrottled` with `Retry-After` preserved.

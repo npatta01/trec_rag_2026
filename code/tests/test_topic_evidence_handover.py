@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 from itertools import pairwise
 import json
@@ -130,7 +129,7 @@ def deterministic_scorer(_sub_narrative: str, chunk_texts: list[str]) -> list[fl
 
 
 @pytest.fixture
-def canonical_fetch_paths(tmp_path: Path) -> dict[str, Path]:
+def canonical_fetch_paths(tmp_path: Path, monkeypatch) -> dict[str, Path]:
     topic_tsv = tmp_path / "topics.tsv"
     topic_tsv.write_text("213\tCanonical narrative\n", encoding="utf-8")
     nuggets_jsonl = tmp_path / "nuggets.jsonl"
@@ -166,6 +165,21 @@ def canonical_fetch_paths(tmp_path: Path) -> dict[str, Path]:
             for index in range(1, 173)
         ),
         encoding="utf-8",
+    )
+    mapping_bytes = "".join(
+        f"doc-{index:04d}\t2\n" for index in range(1, 174)
+    ).encode("utf-8")
+    monkeypatch.setattr(
+        handover_module,
+        "CANONICAL_ELIGIBLE_MAPPING_SHA256",
+        hashlib.sha256(mapping_bytes).hexdigest(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        handover_module,
+        "CANONICAL_INITIAL_MISSING_SHA256",
+        hashlib.sha256(b"doc-0173\n").hexdigest(),
+        raising=False,
     )
     return {
         "topic_tsv": topic_tsv,
@@ -267,17 +281,25 @@ def test_fetch_missing_uses_document_endpoint_and_writes_normalized_hashed_recor
 def test_fetch_missing_complete_cache_returns_before_env_session_or_output_open(
     canonical_fetch_paths, monkeypatch
 ):
-    with canonical_fetch_paths["accepted_union"].open("a", encoding="utf-8") as sink:
-        sink.write(
-            json.dumps(
-                {
-                    "topic_id": "213",
-                    "document_id": "doc-0173",
-                    "text": "complete text",
-                }
-            )
-            + "\n"
+    canonical_fetch_paths["supplemental_documents"].write_text(
+        json.dumps(
+            {
+                "document_id": "doc-0173",
+                "text": "complete text",
+                "response_sha256": "c" * 64,
+            }
         )
+        + "\n",
+        encoding="utf-8",
+    )
+    lock_entries: list[str] = []
+    real_file_lock = handover_module.FileLock
+
+    def recording_lock(path):
+        lock_entries.append(str(path))
+        return real_file_lock(path)
+
+    monkeypatch.setattr(handover_module, "FileLock", recording_lock)
     monkeypatch.setattr(
         handover_module,
         "load_repo_env",
@@ -293,7 +315,9 @@ def test_fetch_missing_complete_cache_returns_before_env_session_or_output_open(
         "fetched_count": 0,
         "remaining_missing_count": 0,
     }
-    assert not canonical_fetch_paths["supplemental_documents"].exists()
+    assert lock_entries == [
+        str(canonical_fetch_paths["supplemental_documents"]) + ".lock"
+    ]
 
 
 def test_fetch_missing_partial_resume_requests_only_uncached_id(
@@ -315,6 +339,11 @@ def test_fetch_missing_partial_resume_requests_only_uncached_id(
         + "\n",
         encoding="utf-8",
     )
+    monkeypatch.setattr(
+        handover_module,
+        "CANONICAL_INITIAL_MISSING_SHA256",
+        hashlib.sha256(b"doc-0172\ndoc-0173\n").hexdigest(),
+    )
     session = _Session(_Response(b'{"contents":"last text"}'))
     _install_remote(monkeypatch, session)
 
@@ -326,14 +355,20 @@ def test_fetch_missing_partial_resume_requests_only_uncached_id(
     ]
 
 
-def test_fetch_missing_rechecks_cache_after_exclusive_lock(
+def test_fetch_missing_locks_before_first_supplemental_read(
     canonical_fetch_paths, monkeypatch
 ):
-    lock_calls: list[int] = []
+    canonical_fetch_paths["supplemental_documents"].write_text(
+        '{"document_id":',
+        encoding="utf-8",
+    )
+    lock_entries: list[str] = []
 
-    def fill_cache_while_waiting(_descriptor, operation):
-        lock_calls.append(operation)
-        if operation == fcntl.LOCK_EX:
+    class CompletingWriterLock:
+        def __init__(self, path):
+            lock_entries.append(str(path))
+
+        def __enter__(self):
             canonical_fetch_paths["supplemental_documents"].write_text(
                 json.dumps(
                     {
@@ -345,8 +380,12 @@ def test_fetch_missing_rechecks_cache_after_exclusive_lock(
                 + "\n",
                 encoding="utf-8",
             )
+            return self
 
-    monkeypatch.setattr(handover_module.fcntl, "flock", fill_cache_while_waiting)
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(handover_module, "FileLock", CompletingWriterLock)
     monkeypatch.setattr(
         handover_module,
         "load_repo_env",
@@ -357,7 +396,9 @@ def test_fetch_missing_rechecks_cache_after_exclusive_lock(
         "fetched_count": 0,
         "remaining_missing_count": 0,
     }
-    assert lock_calls == [fcntl.LOCK_EX, fcntl.LOCK_UN]
+    assert lock_entries == [
+        str(canonical_fetch_paths["supplemental_documents"]) + ".lock"
+    ]
 
 
 @pytest.mark.parametrize("invalid_source", ("qrels", "sub_narratives"))
@@ -385,6 +426,38 @@ def test_fetch_missing_validates_canonical_inputs_before_network(
         handover_module,
         "load_repo_env",
         lambda _root: pytest.fail("invalid canonical source loaded environment"),
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        fetch_missing_documents(**canonical_fetch_paths)
+
+
+@pytest.mark.parametrize("substitution", ("eligible_mapping", "accepted_union"))
+def test_fetch_missing_rejects_same_count_identity_substitution(
+    canonical_fetch_paths, monkeypatch, substitution
+):
+    if substitution == "eligible_mapping":
+        qrels = canonical_fetch_paths["qrels"]
+        lines = qrels.read_text(encoding="utf-8").splitlines(keepends=True)
+        lines[-1] = "213 0 doc-9999 2\n"
+        qrels.write_text("".join(lines), encoding="utf-8")
+        expected = "eligible mapping identity"
+    else:
+        accepted = canonical_fetch_paths["accepted_union"]
+        rows = [
+            json.loads(line)
+            for line in accepted.read_text(encoding="utf-8").splitlines()
+        ]
+        rows[-1]["document_id"] = "doc-0173"
+        accepted.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        expected = "initial missing identity"
+    monkeypatch.setattr(
+        handover_module,
+        "load_repo_env",
+        lambda _root: pytest.fail("substituted identity loaded environment"),
     )
 
     with pytest.raises(ValueError, match=expected):
