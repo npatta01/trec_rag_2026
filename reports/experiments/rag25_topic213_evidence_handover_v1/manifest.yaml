@@ -132,8 +132,11 @@ review_input_hashes:
 artifact_hashes:
   hash_scope_note: manifest.yaml is excluded because a manifest cannot contain its own stable hash
   README.md:
-    sha256: 087a8805223e18abc5f6b86eb1f79acce85cfa0d301d973fc2e5e4e673450d35
-    bytes: 3299
+    sha256: 4a3f57c8105c278b3d701f02e11e6e6ca8ee70a4f805425ff49c9c7dc7e4c7f3
+    bytes: 3417
+  COLLEAGUE_TASK.md:
+    sha256: e610bf04300c6897345040af2f343181507a257cf112eb7785388a2907dd65eb
+    bytes: 3938
   handover.json:
     sha256: 065a3c917116fb127fe80f638f011de7ef4db626316c7baa23a50946103d5eb3
     bytes: 21830

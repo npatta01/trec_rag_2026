@@ -9,6 +9,8 @@ concise claims that each whole document supports.
 
 - `handover.json` is the canonical machine-readable mapping.
 - `handover.md` is a deterministic rendering of the same mapping.
+- `COLLEAGUE_TASK.md` defines the downstream passage-extraction,
+  summarization, and response-generation assignment.
 - `manifest.yaml` records source identity, population and review counts,
   scoring definitions, limitations, and artifact hashes.
 
