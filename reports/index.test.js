@@ -30,7 +30,6 @@ const requiredSignals = [
   "Use the 2025 writeups as the technique library",
   "reports/trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
-  "2025-promising-rag-architecture.html",
   "experiments/all_topic_tethered_facet_validation_v1/report.html",
   "../experiment.md",
   "class=\"topbar\"",
@@ -61,6 +60,7 @@ for (const signal of forbiddenSignals) {
 const linkedFiles = [
   "trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
+  "2025-promising-rag-architecture.html",
   "experiments/all_topic_tethered_facet_validation_v1/report.html",
   "../experiment.md",
 ];
