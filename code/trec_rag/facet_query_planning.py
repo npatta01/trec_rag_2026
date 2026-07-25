@@ -1,4 +1,4 @@
-"""Typed contracts and structural validation for narrative facet plans.
+"""Typed contracts, validation, and rendering for narrative facet plans.
 
 This module deliberately accepts only typed records.  It performs no plan
 generation, parsing, file access, or retrieval integration.
@@ -27,6 +27,10 @@ MAX_ANALYZED_WORDS_PER_EXPANSION = 3
 MAX_NEW_EXPANSION_TOKENS_PER_FACET = 6
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_BOOLEAN_OR_QUERY_OPERATOR_PATTERN = re.compile(
+    r'\b(?:AND|OR|NOT)\b|&&|\|\||[!(){}\[\]^~*?"\\\\]|(?:^|\s)[+-](?=\S)',
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -166,10 +170,99 @@ def validate_facet_plan(topic: Topic, plan: FacetPlan) -> _ValidatedFacetPlan:
 
     _validate_coverage_items(plan.coverage_items, tape)
     _validate_anchors(plan.anchors, coverage_ids, tape)
-    _validate_facets(plan.facets, coverage_ids, anchor_ids)
+    _validate_facets(
+        plan.facets,
+        coverage_ids,
+        anchor_ids,
+        plan.anchors,
+        plan.coverage_items,
+        tape,
+    )
     _validate_coverage_partition(plan.coverage_items, plan.facets)
 
     return _ValidatedFacetPlan(plan=plan, token_tape=tape)
+
+
+def render_facet_queries(topic: Topic, plan: FacetPlan) -> FacetPlanningResult:
+    """Render one deterministic structured query for every validated facet."""
+    try:
+        validated = validate_facet_plan(topic, plan)
+    except FacetPlanValidationError as exc:
+        return FacetPlanningResult(
+            queries=(
+                QueryVariant(
+                    topic_id=topic.id,
+                    variant_name="original",
+                    query_text=topic.narrative,
+                    source_type="original_topic",
+                ),
+            ),
+            used_fallback=True,
+            error=str(exc),
+        )
+    coverage_by_id = {
+        coverage.coverage_id: coverage for coverage in validated.plan.coverage_items
+    }
+    anchors = validated.plan.anchors
+
+    queries = tuple(
+        QueryVariant(
+            topic_id=topic.id,
+            variant_name=f"facet:{facet.facet_id}",
+            query_text=_render_facet_query(
+                facet,
+                coverage_by_id,
+                anchors,
+                validated.token_tape,
+            ),
+            source_type="structured_facet",
+        )
+        for facet in validated.plan.facets
+    )
+    return FacetPlanningResult(queries=queries, used_fallback=False, error=None)
+
+
+def _render_facet_query(
+    facet: Facet,
+    coverage_by_id: dict[str, CoverageItem],
+    anchors: tuple[Anchor, ...],
+    tape: NarrativeTokenTape,
+) -> str:
+    coverage = sorted(
+        (coverage_by_id[coverage_id] for coverage_id in facet.coverage_refs),
+        key=lambda item: (
+            min(source_range.start_token for source_range in item.source_ranges),
+            item.coverage_id,
+        ),
+    )
+    components = [
+        " ".join(
+            tape.resolve(source_range)
+            for source_range in _source_ranges_in_narrative_order(item)
+        )
+        for item in coverage
+    ]
+    components.extend(
+        tape.resolve(anchor.token_range)
+        for anchor in sorted(
+            _inherited_anchors(facet, anchors),
+            key=lambda anchor: (
+                anchor.token_range.start_token,
+                anchor.token_range.end_token,
+                anchor.anchor_id,
+            ),
+        )
+    )
+    components.extend(expansion.term for expansion in facet.expansions)
+
+    seen_components: set[str] = set()
+    rendered_components: list[str] = []
+    for component in components:
+        normalized = " ".join(component.split()).casefold()
+        if normalized and normalized not in seen_components:
+            seen_components.add(normalized)
+            rendered_components.append(" ".join(component.split()))
+    return " ".join(rendered_components)
 
 
 def _validate_collection(
@@ -262,8 +355,16 @@ def _validate_anchors(
 
 
 def _validate_facets(
-    facets: tuple[Facet, ...], coverage_ids: set[str], anchor_ids: set[str]
+    facets: tuple[Facet, ...],
+    coverage_ids: set[str],
+    anchor_ids: set[str],
+    anchors: tuple[Anchor, ...],
+    coverage_items: tuple[CoverageItem, ...],
+    tape: NarrativeTokenTape,
 ) -> None:
+    coverage_by_id = {
+        coverage_item.coverage_id: coverage_item for coverage_item in coverage_items
+    }
     for facet in facets:
         _validate_reference_tuple(facet.coverage_refs, coverage_ids, "coverage")
         if not facet.coverage_refs:
@@ -279,6 +380,105 @@ def _validate_facets(
             if not isinstance(expansion, Expansion):
                 raise FacetPlanValidationError("expansions must be Expansion records")
             _validate_reference_tuple(expansion.anchor_refs, anchor_ids, "anchor")
+        _validate_facet_expansions(facet, anchors, coverage_by_id, tape)
+
+
+def _validate_facet_expansions(
+    facet: Facet,
+    anchors: tuple[Anchor, ...],
+    coverage_by_id: dict[str, CoverageItem],
+    tape: NarrativeTokenTape,
+) -> None:
+    inherited_anchors = _inherited_anchors(facet, anchors)
+    inherited_anchor_ids = {anchor.anchor_id for anchor in inherited_anchors}
+    inherited_content_tokens = {
+        token.casefold()
+        for coverage_id in facet.coverage_refs
+        for source_range in _source_ranges_in_narrative_order(coverage_by_id[coverage_id])
+        for token in _analyzed_words(tape.resolve(source_range))
+    }
+    inherited_content_tokens.update(
+        token.casefold()
+        for anchor in inherited_anchors
+        for token in _analyzed_words(tape.resolve(anchor.token_range))
+    )
+    narrative_numeric_runs = set(_numeric_runs(tape.narrative))
+    expansion_content_tokens: set[str] = set()
+
+    for expansion in facet.expansions:
+        if not set(expansion.anchor_refs).issubset(inherited_anchor_ids):
+            raise FacetPlanValidationError("expansion references an anchor not inherited by its facet")
+        if expansion.relation != "related":
+            raise FacetPlanValidationError("unsupported expansion relation")
+        if not isinstance(expansion.term, str):
+            raise FacetPlanValidationError("expansion term must be a string")
+        if any(unicodedata.category(character) == "Cc" for character in expansion.term):
+            raise FacetPlanValidationError("expansion term contains a control character")
+        if ":" in expansion.term:
+            raise FacetPlanValidationError("expansion term contains field syntax")
+        if _BOOLEAN_OR_QUERY_OPERATOR_PATTERN.search(expansion.term):
+            raise FacetPlanValidationError("expansion term contains a query operator")
+        if not set(_numeric_runs(expansion.term)).issubset(narrative_numeric_runs):
+            raise FacetPlanValidationError("expansion term contains an absent numeric run")
+
+        analyzed_words = _analyzed_words(expansion.term)
+        if not 1 <= len(analyzed_words) <= MAX_ANALYZED_WORDS_PER_EXPANSION:
+            raise FacetPlanValidationError("expansion term has too many analyzed words")
+        expansion_content_tokens.update(word.casefold() for word in analyzed_words)
+
+    new_content_tokens = expansion_content_tokens - inherited_content_tokens
+    if len(new_content_tokens) > MAX_NEW_EXPANSION_TOKENS_PER_FACET:
+        raise FacetPlanValidationError("facet has too many new unique content tokens")
+
+
+def _inherited_anchors(facet: Facet, anchors: tuple[Anchor, ...]) -> tuple[Anchor, ...]:
+    facet_coverage = set(facet.coverage_refs)
+    return tuple(
+        anchor
+        for anchor in anchors
+        if anchor.scope == "global"
+        or set(anchor.coverage_refs).issubset(facet_coverage)
+    )
+
+
+def _source_ranges_in_narrative_order(coverage: CoverageItem) -> tuple[TokenRange, ...]:
+    return tuple(
+        sorted(
+            coverage.source_ranges,
+            key=lambda source_range: (
+                source_range.start_token,
+                source_range.end_token,
+            ),
+        )
+    )
+
+
+def _analyzed_words(text: str) -> tuple[str, ...]:
+    words: list[str] = []
+    current_word: list[str] = []
+    for character in text:
+        if unicodedata.category(character)[0] in {"L", "N"}:
+            current_word.append(character)
+        elif current_word:
+            words.append("".join(current_word))
+            current_word = []
+    if current_word:
+        words.append("".join(current_word))
+    return tuple(words)
+
+
+def _numeric_runs(text: str) -> tuple[str, ...]:
+    runs: list[str] = []
+    current_run: list[str] = []
+    for character in text:
+        if unicodedata.category(character)[0] == "N":
+            current_run.append(character)
+        elif current_run:
+            runs.append("".join(current_run))
+            current_run = []
+    if current_run:
+        runs.append("".join(current_run))
+    return tuple(runs)
 
 
 def _validate_coverage_partition(

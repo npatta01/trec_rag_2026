@@ -13,9 +13,11 @@ from trec_rag.facet_query_planning import (
     FacetPlan,
     FacetPlanValidationError,
     TokenRange,
+    render_facet_queries,
     tokenize_narrative,
     validate_facet_plan,
 )
+from trec_rag.pipeline_models import QueryVariant
 from trec_rag.topics import Topic
 
 
@@ -79,6 +81,155 @@ def _plan(
             ),
         ),
     )
+
+
+HOUSING_NARRATIVE = "Housing tenants compare rent increases and zoning changes."
+
+
+def _housing_topic() -> Topic:
+    return Topic(
+        id="housing-comparison",
+        title="Irrelevant title text must never enter a query",
+        narrative=HOUSING_NARRATIVE,
+    )
+
+
+def _housing_plan(*, facets: tuple[Facet, ...] | None = None) -> FacetPlan:
+    return _plan(
+        topic_id="housing-comparison",
+        narrative=HOUSING_NARRATIVE,
+        anchors=(
+            Anchor("housing", TokenRange(0, 2), "topic", "global", ()),
+            Anchor("comparison", TokenRange(2, 3), "context", "global", ()),
+            Anchor("rent", TokenRange(3, 5), "aspect", "coverage", ("rent",)),
+            Anchor("zoning", TokenRange(6, 8), "aspect", "coverage", ("zoning",)),
+        ),
+        coverage_items=(
+            CoverageItem("rent", (TokenRange(4, 5), TokenRange(3, 4))),
+            CoverageItem("zoning", (TokenRange(6, 8),)),
+        ),
+        facets=facets
+        if facets is not None
+        else (
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (
+                    Expansion("rent increases", "related", ("rent",)),
+                    Expansion("affordability", "related", ("rent",)),
+                    Expansion("lease costs", "related", ("rent",)),
+                ),
+            ),
+            Facet(
+                "zoning-effects",
+                ("zoning",),
+                (Expansion("land use", "related", ("zoning",)),),
+            ),
+        ),
+    )
+
+
+def test_rendering_uses_narrative_order_scoped_anchors_and_declared_expansions() -> None:
+    topic = _housing_topic()
+    plan = _housing_plan()
+
+    first_result = render_facet_queries(topic, plan)
+    second_result = render_facet_queries(topic, plan)
+
+    assert first_result == second_result
+    assert first_result.used_fallback is False
+    assert first_result.error is None
+    assert first_result.queries == (
+        QueryVariant(
+            topic_id="housing-comparison",
+            variant_name="facet:rent-effects",
+            query_text="rent increases Housing tenants compare affordability lease costs",
+            source_type="structured_facet",
+        ),
+        QueryVariant(
+            topic_id="housing-comparison",
+            variant_name="facet:zoning-effects",
+            query_text="zoning changes. Housing tenants compare land use",
+            source_type="structured_facet",
+        ),
+    )
+    assert all(topic.title not in query.query_text for query in first_result.queries)
+
+
+@pytest.mark.parametrize(
+    ("expansions", "description"),
+    [
+        ((Expansion("neighborhood", "related", ("zoning",)),), "inherited"),
+        ((Expansion("tenant burden", "synonym", ("rent",)),), "relation"),
+        ((Expansion("tenant\nburden", "related", ("rent",)),), "control"),
+        ((Expansion("title:rent", "related", ("rent",)),), "field"),
+        ((Expansion("rent AND zoning", "related", ("rent",)),), "operator"),
+        ((Expansion("rent || zoning", "related", ("rent",)),), "operator"),
+        ((Expansion("rent 2026", "related", ("rent",)),), "numeric"),
+        ((Expansion("rent ٢٠٢٦", "related", ("rent",)),), "numeric"),
+        ((Expansion("one two three four", "related", ("rent",)),), "analyzed words"),
+        (
+            (
+                Expansion("renters facing eviction", "related", ("rent",)),
+                Expansion("legal aid support", "related", ("rent",)),
+                Expansion("subsidy", "related", ("rent",)),
+            ),
+            "new unique content tokens",
+        ),
+        (
+            (
+                Expansion("tenant", "related", ("rent",)),
+                Expansion("burden", "related", ("rent",)),
+                Expansion("affordability", "related", ("rent",)),
+                Expansion("lease", "related", ("rent",)),
+            ),
+            "too many expansions",
+        ),
+    ],
+)
+def test_validation_rejects_unsafe_expansions(
+    expansions: tuple[Expansion, ...], description: str
+) -> None:
+    plan = _housing_plan(
+        facets=(
+            Facet("rent-effects", ("rent",), expansions),
+            Facet("zoning-effects", ("zoning",), ()),
+        )
+    )
+
+    with pytest.raises(FacetPlanValidationError, match=description):
+        validate_facet_plan(_housing_topic(), plan)
+
+
+def test_rendering_discards_every_facet_and_falls_back_when_a_late_facet_is_invalid() -> None:
+    topic = _housing_topic()
+    plan = _housing_plan(
+        facets=(
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (Expansion("affordability", "related", ("rent",)),),
+            ),
+            Facet(
+                "zoning-effects",
+                ("zoning",),
+                (Expansion("zoning AND permits", "related", ("zoning",)),),
+            ),
+        )
+    )
+
+    result = render_facet_queries(topic, plan)
+
+    assert result.queries == (
+        QueryVariant(
+            topic_id=topic.id,
+            variant_name="original",
+            query_text=topic.narrative,
+            source_type="original_topic",
+        ),
+    )
+    assert result.used_fallback is True
+    assert result.error == "expansion term contains a query operator"
 
 
 def test_token_tape_preserves_unicode_offsets_and_half_open_range_text() -> None:
