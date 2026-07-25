@@ -141,6 +141,61 @@ the reranked head. This keeps the runnable config aligned with the depth at
 which the coverage-aware formula was selected while retaining deeper candidate
 pool metrics.
 
+## Structured Facet Query Core
+
+`facet_query_planning.py` is a pure, reusable boundary for externally supplied
+structured facet plans. Its public typed records are the frozen dataclasses
+`TokenRange`, `Anchor`, `Expansion`, `CoverageItem`, `Facet`, `FacetPlan`, and
+`FacetPlanningResult`; `NarrativeToken` and `NarrativeTokenTape` describe the
+token tape. Invalid plans raise `FacetPlanValidationError` from
+`validate_facet_plan()`. `tokenize_narrative()` exposes the deterministic
+non-whitespace token tape used to resolve half-open token ranges. The public
+rendering entry point is:
+
+```python
+render_facet_queries(topic: Topic, plan: FacetPlan) -> FacetPlanningResult
+```
+
+Inputs are an existing `Topic` and a fully typed `FacetPlan` whose topic ID and
+SHA-256 match the topic narrative. The core renders only the official
+`Topic.narrative`: it never reads, copies, or synthesizes `Topic.title`. A
+successful result has one `QueryVariant` per validated facet with
+`source_type="structured_facet"`. Any `FacetPlanValidationError`, including a
+late invalid facet, returns exactly one untouched original query:
+
+```python
+QueryVariant(
+    topic_id=topic.id,
+    variant_name="original",
+    query_text=topic.narrative,
+    source_type="original_topic",
+)
+```
+
+Frozen validation limits are: at most 16 coverage items, 8 facets, 4 global
+anchors, 2 source ranges per coverage item, 2 coverage items per facet, and 8
+content tokens per anchor. Each facet accepts at most 3 expansions; each has
+1--3 analyzed words, and expansions may add at most 6 new unique content
+tokens per facet. Expansion relations are limited to `alias`, `acronym`,
+`technical_term`, `common_variant`, and `neutral_search_term`; their anchor
+scope, numeric runs, and query-syntax safety are mechanically checked.
+
+Validate the core and its existing topic/pipeline compatibility boundary with:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_facet_query_planning.py \
+  code/tests/test_topics.py \
+  code/tests/test_pipeline.py \
+  -q
+```
+
+This core establishes deterministic, auditable rendering safety, not generation
+quality or retrieval quality. No automatic facet-plan or answer-aspect generator
+is wired into the runtime pipeline. The next promotion gate is an offline,
+held-out retrieval experiment comparing externally supplied plans with the
+original narrative before considering any generator or runtime integration.
+
 ## BM25 Versus Reranker Comparison
 
 `pipeline_comparison.py` runs both configs, validates that they use the same

@@ -136,14 +136,14 @@ Expected: all tests pass after restoration.
 - Consumes: final public API and frozen limits
 - Produces: concise inputs, outputs, runtime limits, validation command, evidence boundary, and next experimental gate
 
-- [ ] **Step 1: Document the reusable core**
+- [x] **Step 1: Document the reusable core**
 
 Add a `Structured Facet Query Core` section naming the public records and entry
 point, official narrative-only behavior, exact fallback, fixed limits, and
 focused validation command. Explicitly state that generation quality remains
 experimental and no automatic generator is wired into runtime.
 
-- [ ] **Step 2: Run focused and compatibility tests**
+- [x] **Step 2: Run focused and compatibility tests**
 
 Run:
 
@@ -157,7 +157,7 @@ Run:
 
 Expected: all selected tests pass.
 
-- [ ] **Step 3: Run the artifact-independent regression suite**
+- [x] **Step 3: Run the artifact-independent regression suite**
 
 Run:
 
@@ -170,13 +170,51 @@ Run:
 Expected: all selected tests pass. Record separately that the full baseline has
 19 pre-existing failures caused by the absent ignored ranking/evaluation bundle.
 
-- [ ] **Step 4: Review scope, portability, and secrets**
+- [x] **Step 4: Review scope, portability, and secrets**
 
 Inspect `git diff --check`, changed paths, tracked file sizes, forbidden
 generator/model/prompt/response/SQLite terms, absolute paths, and likely secrets.
 Confirm the diff contains only the new core, tests, and concise design/docs.
 
-- [ ] **Step 5: Update this plan with verification evidence**
+- [x] **Step 5: Update this plan with verification evidence**
 
 Check completed steps and append exact commands/results. Do not claim automatic
 answer-aspect generation is ready.
+
+#### Task 3 verification evidence (2026-07-25)
+
+- Documentation records the typed inputs and results, narrative-only rendering,
+  exact all-or-nothing original-query fallback, frozen caps, and the absence of
+  runtime generation/integration. Generation and answer-aspect quality remain
+  experimental.
+- Focused compatibility command completed successfully:
+
+  ```bash
+  .venv/bin/python -m pytest \
+    code/tests/test_facet_query_planning.py \
+    code/tests/test_topics.py \
+    code/tests/test_pipeline.py \
+    -q
+  ```
+
+  Result: `102 passed in 0.21s`.
+- Artifact-independent regression command completed successfully:
+
+  ```bash
+  .venv/bin/python -m pytest -q \
+    --ignore=code/tests/test_all_topic_tethered_rank.py \
+    --ignore=code/tests/test_build_all_topic_tethered_report.py
+  ```
+
+  Result: `304 passed in 29.73s`.
+- Full-baseline caveat, recorded separately: the unignored baseline has 19
+  pre-existing failures from the absent ranking/evaluation artifact bundle
+  covered by the two ignored tests; this facet core does not create or depend
+  on those artifacts.
+- Scope/portability/secrets review: `git diff --check` was clean; changed paths
+  are limited to the new pure core, its tests, this concise README section, and
+  this plan. The code has no runtime generator/model/transport integration,
+  checked paths are repository-relative, and no likely credential or absolute
+  host-path additions were found. The next promotion experiment remains an
+  offline held-out retrieval comparison of externally supplied plans against
+  the original narrative; no automatic generator is ready for runtime use.
