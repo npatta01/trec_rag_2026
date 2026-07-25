@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A source-backed, accessible synthesis of promising TREC RAG 2025 architecture patterns.">
+  <title>The Most Promising TREC RAG 2025 Architecture</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%231a4557' d='M8 6h48v52H8z'/%3E%3Cpath fill='%23d8f0e8' d='M18 17h28v5H18zm0 12h28v5H18zm0 12h20v5H18z'/%3E%3C/svg%3E">
+  <style>
+    :root { color-scheme: light dark; --ink: #17272c; --muted: #4b6168; --paper: #fbfaf6; --surface: #fff; --line: #b9c9ca; --teal: #08666b; --teal-dark: #034b51; --warm: #f2e5c8; --verified: #d9f0e5; --inference: #f9ebc7; --unknown: #e9e4f1; --focus: #c54700; --shadow: 0 8px 24px rgb(18 45 54 / 12%); }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 1rem/1.6 ui-serif, Georgia, Cambria, "Times New Roman", serif; }
+    body.lightbox-open { overflow: hidden; }
+    a { color: var(--teal-dark); text-decoration-thickness: .09em; text-underline-offset: .17em; }
+    a:hover { color: var(--focus); }
+    a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+    .skip-link { position: fixed; z-index: 10; top: .6rem; left: .6rem; transform: translateY(-180%); padding: .6rem .85rem; color: #fff; background: var(--teal-dark); border-radius: .25rem; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .skip-link:focus { transform: translateY(0); }
+    .site-header { border-bottom: 1px solid var(--line); background: var(--surface); }
+    .masthead, main, .footer-inner { width: min(1120px, calc(100% - 3rem)); margin: 0 auto; }
+    .masthead { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center; padding: 1.1rem 0 .95rem; }
+    .eyebrow { margin: 0; color: var(--teal); font: 700 .76rem/1.2 ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; }
+    h1, h2, h3 { color: #123a42; line-height: 1.15; }
+    h1 { max-width: 17ch; margin: .25rem 0 0; font-size: clamp(1.6rem, 3.4vw, 2.7rem); }
+    h2 { margin: 0 0 1rem; font-size: clamp(1.45rem, 2.5vw, 2rem); }
+    h3 { margin: 1.7rem 0 .7rem; font-size: 1.26rem; }
+    nav ul { display: flex; flex-wrap: wrap; justify-content: end; gap: .35rem .75rem; margin: 0; padding: 0; list-style: none; font: 650 .86rem/1.3 ui-sans-serif, system-ui, sans-serif; }
+    nav a { white-space: nowrap; }
+    main { padding: 2rem 0 3rem; }
+    article { overflow-wrap: break-word; }
+    section { scroll-margin-top: 1rem; padding: 2.25rem 0; border-bottom: 1px solid var(--line); }
+    section:first-child { padding-top: 0; }
+    p, li { max-width: 79ch; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, .8fr); gap: 1.4rem; align-items: start; }
+    .hero-copy { padding: 1.45rem; background: var(--surface); border-left: .45rem solid var(--teal); box-shadow: var(--shadow); }
+    .hero-copy p { margin: .75rem 0 0; }
+    .status-note { margin: 0; padding: 1.1rem; background: var(--warm); border: 1px solid #d7b875; border-radius: .45rem; font: .94rem/1.5 ui-sans-serif, system-ui, sans-serif; }
+    .lede { font-size: 1.12rem; }
+    blockquote { margin: 1.2rem 0; padding: .8rem 1rem; border-left: .3rem solid var(--teal); background: #edf6f3; font-size: 1.08rem; }
+    .figure-wrap { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(230px, .75fr); gap: 1.4rem; align-items: start; margin: 1.4rem 0; }
+    figure { margin: 0; }
+    .architecture-figure { padding: .75rem; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+    .architecture-figure img { display: block; width: 100%; height: auto; border: 1px solid #d7dfdf; cursor: zoom-in; }
+    figcaption { margin-top: .65rem; color: var(--muted); font-size: .92rem; }
+    .button { display: inline-block; margin-top: .75rem; padding: .55rem .75rem; color: #fff; background: var(--teal-dark); border: 0; border-radius: .25rem; cursor: pointer; font: 650 .9rem/1.2 ui-sans-serif, system-ui, sans-serif; }
+    .button:hover { background: var(--focus); }
+    .js-only { display: none; }
+    .js .js-only { display: inline-block; }
+    .mini-panel, .callout { padding: 1rem 1.1rem; background: var(--surface); border: 1px solid var(--line); border-radius: .45rem; }
+    .mini-panel h3, .callout h3 { margin-top: 0; }
+    .pipeline { display: grid; gap: .65rem; padding: 0; list-style: none; counter-reset: steps; }
+    .pipeline li { position: relative; max-width: none; padding: .9rem 1rem .9rem 3.5rem; background: var(--surface); border: 1px solid var(--line); border-radius: .42rem; }
+    .pipeline li::before { content: counter(steps); counter-increment: steps; position: absolute; left: .8rem; top: .85rem; display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border-radius: 50%; color: #fff; background: var(--teal); font: 700 .9rem ui-sans-serif, system-ui, sans-serif; }
+    .pipeline strong { color: #123a42; }
+    .definitions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+    .definitions div { padding: .85rem; background: var(--surface); border-top: .25rem solid var(--teal); }
+    .definitions dt { font-weight: 700; color: #123a42; }
+    .definitions dd { margin: .35rem 0 0; }
+    .table-wrap { overflow-x: auto; margin: 1.2rem 0; border: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; min-width: 720px; background: var(--surface); }
+    th, td { padding: .75rem; vertical-align: top; text-align: left; border-bottom: 1px solid var(--line); }
+    th { background: #e5f0ee; color: #123a42; font-family: ui-sans-serif, system-ui, sans-serif; }
+    tr:last-child td { border-bottom: 0; }
+    details { margin: .9rem 0; padding: .1rem 1rem .9rem; background: var(--surface); border: 1px solid var(--line); border-radius: .42rem; }
+    summary { padding: .8rem 0; cursor: pointer; color: #123a42; font: 700 1.08rem/1.4 ui-sans-serif, system-ui, sans-serif; }
+    details[open] summary { border-bottom: 1px solid var(--line); margin-bottom: .6rem; }
+    .confidence-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+    .confidence-card { padding: 1rem; border: 1px solid var(--line); border-radius: .45rem; }
+    .confidence-card h3 { margin: 0 0 .45rem; }
+    .confidence-card.verified { background: var(--verified); border-color: #85bca3; }
+    .confidence-card.inference { background: var(--inference); border-color: #d3ae52; }
+    .confidence-card.unknown { background: var(--unknown); border-color: #b6a9cc; }
+    .sources { columns: 2 22rem; padding-left: 1.25rem; }
+    .sources li { break-inside: avoid; margin-bottom: .55rem; }
+    footer { color: var(--muted); background: #e7efed; border-top: 1px solid var(--line); }
+    .footer-inner { padding: 1.1rem 0; font-size: .88rem; }
+    .lightbox { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 1.2rem; background: rgb(7 29 34 / 82%); }
+    .lightbox[hidden] { display: none; }
+    .lightbox-panel { position: relative; max-width: min(1200px, 94vw); max-height: 93vh; padding: 2.8rem 1rem 1rem; background: var(--surface); overflow: auto; }
+    .lightbox-panel img { width: 100%; max-height: 78vh; object-fit: contain; }
+    .close { position: absolute; top: .65rem; right: .65rem; }
+    @media (max-width: 760px) { .masthead, main, .footer-inner { width: min(100% - 2rem, 1120px); } .masthead, .hero, .figure-wrap { grid-template-columns: 1fr; } nav ul { justify-content: start; } .confidence-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 520px) { body { font-size: .96rem; } main { padding-top: 1.25rem; } section { padding: 1.55rem 0; } .hero-copy { padding: 1rem; } .definitions { grid-template-columns: 1fr; } .sources { columns: 1; } .pipeline li { padding-left: 3.2rem; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+    @media (forced-colors: active) { .hero-copy, .mini-panel, .callout, .architecture-figure, details, .confidence-card, .pipeline li { border: 1px solid CanvasText; } .button, .skip-link { forced-color-adjust: none; } }
+    @media print { @page { margin: .55in; } body { background: #fff; color: #000; font-size: 10.5pt; } .site-header { border-bottom: 1px solid #000; } .skip-link, .button, .lightbox { display: none !important; } nav { display: none; } .masthead, main, .footer-inner { width: 100%; } section { break-inside: avoid; padding: 1rem 0; } details > * { display: block !important; } details { border: 1px solid #000; } a[href]::after { content: " (" attr(href) ")"; font-size: .78em; word-break: break-all; } a[href^="#"]::after, a[href^="data:"]::after { content: ""; } .confidence-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to report</a>
+  <header class="site-header">
+    <div class="masthead">
+      <div><p class="eyebrow">TREC RAG 2025 · source-backed architecture synthesis</p><h1>The Most Promising TREC RAG 2025 Architecture</h1></div>
+      <nav aria-label="Report sections"><ul><li><a href="#start">Answer</a></li><li><a href="#pipeline">Pipeline</a></li><li><a href="#team-evidence">Evidence</a></li><li><a href="#recommended-build">Build</a></li><li><a href="#sources">Sources</a></li></ul></nav>
+    </div>
+  </header>
+  <main id="main-content">
+    <article>
+      <section id="start" aria-labelledby="start-title">
+        <div class="hero">
+          <div class="hero-copy"><p class="eyebrow">Evidence synthesis</p><h2 id="start-title">Short answer</h2><p class="lede">The most promising <strong>architecture pattern</strong> from TREC RAG 2025 was the path from a long narrative to explicit coverage units, broad complementary retrieval, unit-level evidence selection, evidence-backed claims, and a final synthesis with separate coverage and support checks.</p><blockquote>Turn the narrative into explicit coverage units; retrieve broadly with complementary methods; rerank/select evidence per unit; draft only evidence-backed claims; then synthesize and verify the final answer.</blockquote></div>
+          <aside class="status-note"><strong>Important label: inference.</strong> This recommended MITLL/CFDA facet ledger and hierarchical generator, backed by UTokyo hybrid retrieval and a simple LAS-style controller, is not a submitted 2025 run. Its superiority was not directly measured.</aside>
+        </div>
+        <p>The strongest evidence is split. <strong>UTokyo-HitU</strong> supplied the best verified retrieval front end: query expansion + HyDE, BM25 + SPLADE + two dense retrievers, RRF, then sliding-window LLM reranking. Its <code>4method_merge</code> run led the official manually assessed retrieval table at nDCG@30 <strong>0.6934</strong>. <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official overview, PDF p. 10, Table 5</a>; <a href="trec-rag-2025-writeups/pdfs/13-utokyo-rag.pdf">UTokyo paper, pp. 1–4, §§2–3</a></p>
+        <p><strong>NC State LAS</strong> supplied the strongest documented full-RAG result in the fully manual nugget table: its <strong>single-agent</strong> run scored <strong>0.37</strong> strict-vital and <strong>0.65</strong> sub-narrative coverage, second overall behind an RMIT run for which this repository has no team paper. The richer LAS selector-agent workflow scored lower. <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official overview, PDF p. 11, Table 7</a>; <a href="trec-rag-2025-writeups/pdfs/12-ncsu-las-rag-ragtime.pdf">LAS paper, pp. 5–13, §§3–4</a></p>
+        <p><strong>MITLL</strong> supplied the clearest reproducible end-to-end blueprint: narrative → minimal spanning subquestions → SPLADE retrieval per subquestion → pointwise reranking → RRF → set-level evidence selection (SETR) → GPT-5 cited answer. <a href="trec-rag-2025-writeups/pdfs/10-mitll-rag.pdf">MITLL paper, pp. 1–4, §§1–3</a> <strong>CFDA</strong> supplied the clearest claim-controlled generator: subquery-specific evidence pools → one short supported answer per subquery → integrated paragraph with traceability → sentence-level support verification. <a href="trec-rag-2025-writeups/pdfs/01-cfdalab-rag.pdf">CFDA paper, pp. 2–5, §§3.1–3.3</a></p>
+      </section>
+
+      <section id="pipeline" aria-labelledby="pipeline-title">
+        <h2 id="pipeline-title">The path from narrative to final RAG</h2>
+        <div class="figure-wrap">
+          <figure class="architecture-figure"><img src="trec-rag-2025-writeups/figures/2025-promising-composite-architecture.png" alt="Seven-stage recommended RAG architecture: narrative contract, coverage plan, hybrid retrieval, rerank and set selection, evidence ledger, facet answers, and final coverage and support checks."><figcaption>Recommended composite architecture distilled from the TREC RAG 2025 systems. The original narrative remains the global contract throughout.</figcaption><button class="button js-only" id="open-figure" type="button">Expand architecture figure</button></figure>
+          <aside class="mini-panel"><h3>Global contract</h3><p>Preserve the original narrative as the global contract. Facets help search and auditing; they do not replace the intent, scope, or constraints of the narrative.</p><p>Use the figure without JavaScript as a normal, full-resolution local image. JavaScript only adds optional lightboxing.</p></aside>
+        </div>
+        <ol class="pipeline">
+          <li><strong>Long narrative → coverage plan.</strong> Create 5–10 non-redundant facets or subquestions, optionally marking likely vital facets, while carrying the original narrative with each facet.</li>
+          <li><strong>Retrieve broadly for each facet.</strong> Combine BM25 or keyword expansion, learned sparse retrieval (SPLADE), dense retrieval, and HyDE-enhanced dense retrieval.</li>
+          <li><strong>Fuse, rerank, and select a set.</strong> Use late fusion (RRF), reranking, then diversity or set selection rather than a single global top-k.</li>
+          <li><strong>Maintain an evidence ledger.</strong> For every facet, record <code>claims / nuggets + source IDs</code>, supporting segment IDs, support span, and confidence.</li>
+          <li><strong>Draft one short cited sub-answer per facet.</strong> A claim enters prose only from evidence assigned to its facet.</li>
+          <li><strong>Synthesize under the original narrative.</strong> Integrate facet answers without treating them as an excuse to lose coherence or readability.</li>
+          <li><strong>Run two separate checks.</strong> Coverage asks which facets or vital nuggets are missing; support asks whether every substantive sentence has proving evidence.</li>
+        </ol>
+      </section>
+
+      <section id="definitions" aria-labelledby="definitions-title">
+        <h2 id="definitions-title">Definitions and the organizer/runtime boundary</h2>
+        <dl class="definitions"><div><dt>Subquery</dt><dd>A search instruction derived from the narrative.</dd></div><div><dt>Nugget</dt><dd>An atomic fact or information unit that should be covered.</dd></div><div><dt>Claim</dt><dd>A sentence-level assertion the system actually proposes to put in the answer.</dd></div><div><dt>Citation</dt><dd>Acceptable only when its segment supports the claim, not merely when it is topically related.</dd></div></dl>
+        <p>Teams sometimes used the word “nugget” for a generated subquery or facet, so the terminology is not perfectly consistent across papers. CFDA explicitly calls its decomposed subqueries “nuggets,” while LAS uses nuggets for atomic content distilled from initially retrieved documents. <a href="trec-rag-2025-writeups/pdfs/01-cfdalab-rag.pdf">CFDA, PDF pp. 2–3, §3.1</a>; <a href="trec-rag-2025-writeups/pdfs/12-ncsu-las-rag-ragtime.pdf">LAS, PDF p. 8, §4.1.2</a></p>
+        <aside class="callout"><h3>Assessment artifacts are not participant inputs</h3><p>The official benchmark decomposed narratives into up to ten atomic, non-overlapping <strong>sub-narratives</strong> and later extracted evidence <strong>nuggets</strong> for evaluation. These were organizer-side assessment artifacts, not hidden runtime inputs that every team received or a mandatory participant architecture. <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official overview, PDF pp. 4, 7, §§3.1 and 4.1</a></p></aside>
+      </section>
+
+      <section id="team-evidence" aria-labelledby="team-evidence-title">
+        <h2 id="team-evidence-title">How the leading systems actually did it</h2>
+        <div class="table-wrap"><table aria-label="Cross-team architecture comparison"><thead><tr><th scope="col">Role</th><th scope="col">Team</th><th scope="col">Verified evidence</th><th scope="col">What to reuse</th></tr></thead><tbody><tr><td>Simple controller</td><td>NC State LAS</td><td>Single-agent full-RAG run: 0.37 strict-vital / 0.65 sub-narrative coverage; selector-agent scored lower.</td><td>Simple controller, explicit stopping reason, and caution about added roles.</td></tr><tr><td>Retrieval front end</td><td>UTokyo-HitU</td><td><code>4method_merge</code> led manual retrieval at nDCG@30 0.6934.</td><td>Query expansion, mixed HyDE vector, four-way RRF, sliding-window reranking.</td></tr><tr><td>Evidence blueprint</td><td>MITLL</td><td>Minimal spanning subquestions, parent narrative appended, SPLADE, pointwise reranking, RRF, SETR.</td><td>Facet coverage contract and set-level evidence selection.</td></tr><tr><td>Claim-controlled generator</td><td>CFDA</td><td>Subquery evidence pools, short supported answers, traceable integration, sentence support checks.</td><td>Evidence-first subanswers and final support verification.</td></tr><tr><td>Alternatives</td><td>Tokyo University of Science; WaterlooClarke; GenAIus</td><td>Retrieval-level fusion, answer portfolios, and provenance-preserving nugget ledgers.</td><td>Use diversity carefully; keep atomic evidence provenance.</td></tr></tbody></table></div>
+
+        <details><summary>1. NC State LAS: simplest agent won the best documented manual full-RAG result</summary><h3>Verified flow</h3><ol><li>An agent could decompose or rewrite the narrative and search BM25 and SPLADE tools.</li><li>It gathered retrieved context and wrote an answer with citations.</li><li><code>miniblame</code> assigned citations by sentence-level semantic similarity.</li><li>The submitted single-agent run beat LAS’s planner/researcher/writer/reviewer selector system.</li></ol><p>LAS also tested a separate retrieval-only feedback loop: retrieve with the original query, use GPT-4o to distill non-overlapping “vital” and “okay” nuggets from top documents, turn vital nuggets into new searches, and combine results. Its 2025 ablation found that simply concatenating decomposed subquestions into one SPLADE query was the “best bang for the buck”; the second nugget-driven search round improved top-rank precision but not recall enough to justify its cost. <a href="trec-rag-2025-writeups/pdfs/12-ncsu-las-rag-ragtime.pdf">LAS, PDF pp. 8, 11–13, §§4.1.2, 4.2.3–4.3</a></p><h3>What the scores establish</h3><p>The official fully manual table places <code>LAS-agentic-RAG-agent</code> at 0.37 strict-vital / 0.65 sub-narrative coverage and <code>LAS-agentic-RAG-selector</code> at 0.30 / 0.60. This is unusually valuable evidence that added agent roles did not automatically improve the final answer. <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official overview, PDF p. 11, Table 7</a></p><h3>Caveat</h3><p>The paper describes the agent’s available tools and general behavior more clearly than its exact stopping policy and intermediate data contract. It is a strong outcome, but a less inspectable implementation template than MITLL or CFDA.</p></details>
+
+        <details><summary>2. UTokyo-HitU: the strongest retrieval front end</summary><h3>Verified flow</h3><ol><li>GPT-4.1 generated keyword expansion for sparse retrieval and a roughly 150-word hypothetical answer for HyDE.</li><li>Sparse search used keyword-expanded BM25 and SPLADE.</li><li>Dense search used BGE-small and Qwen3 embeddings. Their “HyDE Vector Mix” retained both the original-query vector and hypothetical-answer vector rather than replacing the query.</li><li>The four top-1,000 lists were fused with RRF.</li><li>GPT-4.1-mini reranked up to 200 candidates with three sliding-window passes and saw title, URL, and segment text.</li><li>GPT-4.1/Ragnarok generated from the original query and top 20 segments, then segmented sentences and extracted citations.</li></ol><p><a href="trec-rag-2025-writeups/pdfs/13-utokyo-rag.pdf">UTokyo, PDF pp. 1–4, §§2.1–2.8</a></p><h3>What the scores establish</h3><p>The official manual retrieval table ranks <code>4method_merge</code> first at nDCG@30 0.6934, nDCG@100 0.6134, recall@100 0.2331. UTokyo’s paper reports recall@100 0.257; the official overview’s table is used here when values differ. <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official overview, PDF p. 10, Table 5</a></p><h3>Caveat</h3><p>UTokyo did not explicitly decompose the long narrative into coverage slots, and its final generator was comparatively direct. Its two-method RAG run scored better than its four-method RAG run on the team paper's official vital/coverage table (0.56 / 0.84 versus 0.53 / 0.79), and the authors report that more complex MMR, filtering, and multi-step generation did not beat direct Ragnarok generation. Its retrieval stack is the best front end, not proof that more stages always make the best final answer. <a href="trec-rag-2025-writeups/pdfs/13-utokyo-rag.pdf">UTokyo, PDF p. 4, Table 8 and discussion</a></p></details>
+
+        <details><summary>3. MITLL: best inspectable narrative-to-answer blueprint</summary><h3>Verified flow</h3><ol><li>Gemma 3 27B decomposed the narrative into a <strong>minimal spanning set of fully independent subquestions</strong>—about eight on average.</li><li>MITLL concatenated the parent narrative to each subquery because a subquery can lose meaning outside its original context.</li><li>Each expanded subquery went through SPLADEv3 retrieval and a Qwen3 or Gemma pointwise reranker.</li><li>RRF fused the per-subquery lists.</li><li>SETR selected a cohesive passage set intended to contain all information needed, rather than treating passage relevance as wholly independent.</li><li>GPT-5 generated the final answer, with 1–3 citations required per sentence.</li></ol><p><a href="trec-rag-2025-writeups/pdfs/10-mitll-rag.pdf">MITLL, PDF pp. 1–4, §§1–3</a></p><h3>What the ablation establishes</h3><p>MITLL’s team-reported official table shows the full pipeline at 0.47 strict-vital / 0.79 sub-coverage, while removing decomposition scored 0.50 / 0.77 and removing the reranker scored 0.48 / 0.77. Thus decomposition and reranking did not dominate on every metric; their clearest gain was coverage, while simpler variants slightly improved strict-vital. <a href="trec-rag-2025-writeups/pdfs/10-mitll-rag.pdf">MITLL, PDF p. 4, Tables 2–3</a></p><p>This is why the architecture is promising, not proven universally superior.</p></details>
+
+        <details><summary>4. CFDA: turn facets into verified claims before final prose</summary><h3>Verified flow</h3><ol><li>An LLM decomposed the original query into focused “nugget” subqueries, directly or with pseudo-relevance feedback.</li><li>BM25 and MiniLM retrieved broad lexical and semantic pools; RRF combined them.</li><li>Qwen3 embeddings and then MiniLM/ColBERT variants refined the list.</li><li>For each subquery, a cross-encoder selected a small evidence pool.</li><li>An LLM generated one concise answer of under roughly 35 words, with every factual claim constrained to that subquery’s evidence.</li><li>Another LLM integrated indexed sub-answers into a coherent final paragraph while preserving sentence-to-subanswer traceability.</li><li>For each final sentence, the union of supporting passages from its source subanswers was checked by a support-evaluation LLM.</li></ol><p><a href="trec-rag-2025-writeups/pdfs/01-cfdalab-rag.pdf">CFDA, PDF pp. 2–5, §§3.1–3.3 and Figure 2</a></p><h3>Why it matters</h3><p>This is the cleanest answer to “where do claims come from?” Claims are not extracted blindly from the narrative. Facets retrieve evidence; evidence produces small supported sub-answers; final sentences inherit their supporting evidence; then support is checked.</p><h3>Caveat</h3><p>CFDA’s final official scores were competitive rather than leading, so this is an architectural lesson, not a winner claim.</p></details>
+
+        <details><summary>5. TUS and WaterlooClarke: two useful alternatives</summary><p>TUS (Tokyo University of Science) decomposed the narrative into viewpoints and compared <strong>retrieval-level fusion</strong>: diversify or consolidate documents across decomposed queries, then generate once; and <strong>answer-level fusion</strong>: generate a partial answer for each decomposed query, then edit or integrate them.</p><p>Its <code>uema2lab_B4</code> retrieval-level-fusion run was third among systems with local writeups in the fully manual table (0.33 / 0.55), while the paper warns that subanswer fusion can introduce redundancy and lose readability. <a href="trec-rag-2025-writeups/pdfs/08-tus-rag.pdf">TUS, PDF pp. 2, 9–15, §§2–3</a>; <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">official overview, PDF p. 11, Table 7</a></p><p>WaterlooClarke generated a portfolio of answers: a nuggetizer pipeline that converted a cited answer into atomic nuggets and retained vital ones; GARE, which drafted an answer, extracted atomic claims, retrieved evidence for each, then validated or rewrote each claim; an explicit multi-step retrieval/generation plan; and a combined run pooling passages from all strategies before nuggetization.</p><p><code>combined</code> and <code>auto_selected</code> placed just behind TUS in the fully manual table. This supports portfolio diversity, but not a claim that answer-first factual reconstruction is safer than evidence-first generation. <a href="trec-rag-2025-writeups/pdfs/15-waterlooclarke-dragun-rag.pdf">WaterlooClarke, PDF pp. 1–3, §§2–7</a>; <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">official overview, PDF p. 11, Table 7</a></p></details>
+
+        <details><summary>6. GenAIus: the cleanest nugget-to-claim interface</summary><p>GenAIus worked in the fixed-retrieval AG task rather than end-to-end retrieval, but its intermediate representation is especially instructive:</p><ol><li>Take the supplied top 20 passages.</li><li>Extract query-conditioned atomic nuggets from each passage while retaining passage provenance.</li><li>Either generate directly from all nugget IDs or cluster nuggets by subtopic first.</li><li>Require each answer sentence to cite nugget IDs.</li></ol><p>Direct nugget generation modestly beat clustered generation in the team's results; the authors argue that clustering can lose atomic granularity. This is the clearest primary-source example of turning retrieved evidence into an auditable fact ledger before final claims. <a href="trec-rag-2025-writeups/pdfs/07-genaius-rag.pdf">GenAIus, PDF pp. 1–3, 6–8, §§2.1 and 4</a></p></details>
+      </section>
+
+      <section id="recommended-build" aria-labelledby="recommended-build-title">
+        <h2 id="recommended-build-title">What I would build from this evidence</h2>
+        <ol><li><strong>Coverage ledger first.</strong> Decompose the narrative into a minimal spanning set of facets, but always carry the original narrative with each facet (MITLL).</li><li><strong>Hybrid retrieval per facet.</strong> Use BM25, SPLADE, and dense retrieval; add a mixed original-query/HyDE vector; fuse with RRF (UTokyo).</li><li><strong>Rerank without destroying diversity.</strong> Rerank a broad pool, then select a set that collectively covers facets rather than taking only a global top-k (UTokyo + MITLL/TUS).</li><li><strong>Evidence ledger before prose.</strong> For every facet, store atomic claims/nuggets with source segment IDs and an actual support span (CFDA).</li><li><strong>Generate short facet answers.</strong> Draft one evidence-constrained answer per facet, then synthesize under the original narrative (CFDA).</li><li><strong>Use a simple controller first.</strong> Let one agent request another search only when a coverage slot lacks adequate evidence; log the stopping reason (LAS).</li><li><strong>Run two separate final gates.</strong><ul><li>Coverage gate: are any vital facets absent?</li><li>Support gate: does every substantive sentence have at least one segment that entails it?</li></ul></li></ol>
+        <p>The 2025 papers repeatedly show why these gates must be separate: a system can have highly supported sentences yet omit vital information, or broad coverage with weaker citation support. The official overview reports distinct nugget-coverage and support evaluations rather than one universal score. <a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official overview, PDF pp. 11–19, Tables 7–12</a></p>
+      </section>
+
+      <section id="confidence" aria-labelledby="confidence-title">
+        <h2 id="confidence-title">Facts, inference, and unknowns</h2>
+        <div class="confidence-grid"><section class="confidence-card verified" aria-labelledby="verified-title"><h3 id="verified-title">Verified</h3><ul><li>UTokyo led the official manually assessed retrieval table.</li><li>LAS’s single-agent run was the best full-RAG run with a team paper in this repository under the fully manual nugget table.</li><li>MITLL, CFDA, and TUS explicitly decomposed narratives and retained subquery-specific evidence or answers.</li><li>LAS’s more complex selector-agent submission did not beat its single agent.</li><li>Official evaluations disagree by assessment setting; rankings should not be flattened into one “winner.”</li></ul></section><section class="confidence-card inference" aria-labelledby="inference-title"><h3 id="inference-title">Inference</h3><ul><li>The most promising practical design is a <strong>facet-led, evidence-first, claim-verified pipeline</strong>, not an unconstrained autonomous agent.</li><li>UTokyo’s retriever and CFDA’s generator are complementary modules worth combining.</li><li>A coverage ledger is a better intermediate contract than a loose list of subqueries because it can drive retrieval, evidence selection, generation, and final auditing.</li></ul></section><section class="confidence-card unknown" aria-labelledby="unknown-title"><h3 id="unknown-title">Unknown</h3><ul><li>No 2025 submission tested the exact composite recommended here.</li><li>The repository has no paper for overall manual winner <code>Kun-Third</code> (RMIT-IR), so its architecture cannot be verified locally.</li><li>The official overview and some team papers report slightly different numbers or evaluation variants; the official overview tables take precedence for cross-team comparisons.</li></ul></section></div>
+      </section>
+
+      <section id="sources" aria-labelledby="sources-title">
+        <h2 id="sources-title">Primary sources</h2>
+        <p>All provenance links below are repository-relative local PDFs from the TREC RAG 2025 writeups.</p>
+        <ul class="sources"><li><a href="trec-rag-2025-writeups/pdfs/00-overview-rag.pdf">Official TREC 2025 RAG overview</a></li><li><a href="trec-rag-2025-writeups/pdfs/13-utokyo-rag.pdf">UTokyo-HitU team paper</a></li><li><a href="trec-rag-2025-writeups/pdfs/12-ncsu-las-rag-ragtime.pdf">NC State LAS team paper</a></li><li><a href="trec-rag-2025-writeups/pdfs/10-mitll-rag.pdf">MIT Lincoln Laboratory team paper</a></li><li><a href="trec-rag-2025-writeups/pdfs/01-cfdalab-rag.pdf">CFDA Lab team paper</a></li><li><a href="trec-rag-2025-writeups/pdfs/08-tus-rag.pdf">Tokyo University of Science team paper</a></li><li><a href="trec-rag-2025-writeups/pdfs/15-waterlooclarke-dragun-rag.pdf">WaterlooClarke team paper</a></li><li><a href="trec-rag-2025-writeups/pdfs/07-genaius-rag.pdf">GenAIus team paper</a></li></ul>
+      </section>
+    </article>
+  </main>
+  <footer><div class="footer-inner">Standalone local report. The architecture recommendation is an evidence-based inference; consult the linked local PDFs for full methods and evaluation context.</div></footer>
+  <div class="lightbox" id="figure-lightbox" hidden role="dialog" aria-modal="true" aria-labelledby="lightbox-title"><figure class="lightbox-panel"><button class="button close" id="close-figure" type="button">Close figure</button><img src="trec-rag-2025-writeups/figures/2025-promising-composite-architecture.png" alt="Seven-stage recommended RAG architecture: narrative contract, coverage plan, hybrid retrieval, rerank and set selection, evidence ledger, facet answers, and final coverage and support checks."><figcaption id="lightbox-title">Expanded recommended composite architecture.</figcaption></figure></div>
+  <script>
+    document.documentElement.classList.add("js");
+    const lightbox = document.getElementById("figure-lightbox");
+    const openFigure = document.getElementById("open-figure");
+    const closeFigure = document.getElementById("close-figure");
+
+    function setLightbox(open) {
+      lightbox.hidden = !open;
+      document.body.classList.toggle("lightbox-open", open);
+      if (open) closeFigure.focus();
+      else openFigure.focus();
+    }
+
+    openFigure.addEventListener("click", () => setLightbox(true));
+    closeFigure.addEventListener("click", () => setLightbox(false));
+    lightbox.addEventListener("click", (event) => {
+      if (event.target === lightbox) setLightbox(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !lightbox.hidden) setLightbox(false);
+    });
+  </script>
+</body>
+</html>
