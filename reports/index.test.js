@@ -17,8 +17,12 @@ const html = fs.readFileSync(htmlPath, "utf8");
 const requiredSignals = [
   "TREC RAG Reports",
   "Reports Home",
+  "Four report surfaces",
   "TREC RAG 2026 Briefing",
   "TREC RAG 2025 Writeups",
+  "Promising 2025 RAG Architecture",
+  "Narrative to verified answer",
+  "2025-promising-rag-architecture.html",
   "All-topic tethered-facet validation",
   "Experiment history",
   "reports-index",
@@ -56,6 +60,7 @@ for (const signal of forbiddenSignals) {
 const linkedFiles = [
   "trec-rag-briefing-report.html",
   "trec-rag-2025-writeups/interactive-writeup.html",
+  "2025-promising-rag-architecture.html",
   "experiments/all_topic_tethered_facet_validation_v1/report.html",
   "../experiment.md",
 ];

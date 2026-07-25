@@ -57,6 +57,24 @@ assert(html.includes("function enhanceTechnicalText"), "Team details should enha
 assert(html.includes("function openFigureLightbox"), "Official figures should open in an in-page lightbox");
 assert(html.includes("termDecoder"), "Team details should include a jargon decoder dictionary");
 assert(html.includes("architecture-panel"), "Missing architecture panel styles/markup");
+const visualStages = ["Narrative", "Plan", "Search", "Evidence", "Answer", "Check"];
+assert(html.includes('data-visual-stage="${escapeHTML(entry.stage)}"'), "Missing visual stage data attributes");
+assert(html.includes(`const teamVisualStageNames = ["${visualStages.join('", "')}"];`), "Six-stage vocabulary should be explicit and ordered");
+assert(html.includes("teamVisuals"), "Missing standardized visual data map");
+assert(html.includes("team-architecture-visual"), "Missing team visual renderer output");
+assert(html.includes("team-architecture-text"), "Missing text equivalent for team visual");
+assert(html.includes('role="img"'), "Team SVGs should have an accessible image role");
+assert(html.includes("All 15 teams use the same six stages"), "Missing visual legend");
+
+const requiredVisualTeams = [
+  "CFDA Lab", "NIT Agartala", "University of Glasgow Terrier", "WING-II",
+  "GRILL Lab", "IIUoT", "GenAIus", "Tokyo University of Science", "HLTCOE",
+  "MIT Lincoln Laboratory", "IDACCS", "NC State LAS", "UTokyo-HitU", "DUTH",
+  "WaterlooClarke",
+];
+for (const team of requiredVisualTeams) {
+  assert(html.includes(`"${team}":`), `Missing visual data for ${team}`);
+}
 assert(html.includes("official-figure"), "Missing official paper architecture figure styling");
 assert(html.includes("official-figure-button"), "Official figures should be clickable without right-clicking");
 assert(html.includes('id="figureLightbox"'), "Missing figure lightbox markup");

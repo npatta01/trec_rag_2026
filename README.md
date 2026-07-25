@@ -57,6 +57,7 @@ The current report smoke tests are:
 ```bash
 node reports/index.test.js
 node reports/trec-rag-briefing-report.test.js
+node reports/2025-promising-rag-architecture.test.js
 node reports/trec-rag-2025-writeups/interactive-writeup.test.js
 ```
 
