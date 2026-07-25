@@ -1166,11 +1166,11 @@
 
     .team-card.open .architecture-panel {
       display: block;
-      grid-column: 3;
-      grid-row: 1 / span 6;
+      grid-column: 1 / -1;
+      grid-row: 1;
       align-self: start;
-      position: sticky;
-      top: 84px;
+      position: static;
+      min-width: 0;
     }
 
     .architecture-panel h4 {
@@ -1184,6 +1184,120 @@
       margin: 8px 0 0;
       color: #4d5953;
       font-size: 0.9rem;
+    }
+
+    .team-architecture-visual {
+      min-width: 0;
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fbfa;
+    }
+
+    .team-architecture-legend {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+
+    .team-architecture-svg-wrap {
+      min-width: 0;
+      max-width: 100%;
+      width: 100%;
+      overflow-x: auto;
+      border-radius: 6px;
+      background: white;
+    }
+
+    .team-architecture-svg {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      height: auto;
+    }
+
+    .team-architecture-svg .stage-box {
+      stroke: #315c55;
+      stroke-width: 2;
+    }
+
+    .team-architecture-svg .stage-name {
+      fill: #1d423c;
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: 0.02em;
+    }
+
+    .team-architecture-svg .stage-label {
+      fill: #182923;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .team-architecture-svg .stage-detail {
+      fill: #4d5953;
+      font-size: 11px;
+    }
+
+    .team-architecture-svg .stage-arrow {
+      stroke: #557d75;
+      stroke-width: 2.5;
+      stroke-linecap: round;
+    }
+
+    .team-architecture-text,
+    .team-architecture-distinctive {
+      margin: 10px 0 0;
+      color: #33443e;
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }
+
+    .team-architecture-text strong,
+    .team-architecture-distinctive strong {
+      color: var(--ink);
+    }
+
+    @media (max-width: 680px) {
+      .team-architecture-visual {
+        padding: 10px;
+      }
+
+      .team-architecture-svg {
+        min-width: 920px;
+      }
+
+      .team-architecture-legend {
+        font-size: 0.76rem;
+      }
+    }
+
+    @media print {
+      .team-architecture-visual {
+        break-inside: avoid;
+        box-shadow: none;
+      }
+
+      .team-architecture-svg-wrap {
+        overflow: visible;
+      }
+
+      .team-architecture-svg {
+        min-width: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .team-architecture-visual *,
+      .team-architecture-visual *::before,
+      .team-architecture-visual *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
     }
 
     .architecture-label {
@@ -3641,6 +3755,110 @@
       }
     };
 
+    const teamVisualStageNames = ["Narrative", "Plan", "Search", "Evidence", "Answer", "Check"];
+    const buildTeamVisual = (summary, distinctive, labels, details) => ({
+      summary,
+      distinctive,
+      stages: teamVisualStageNames.map((stage, index) => ({
+        stage,
+        label: labels[index],
+        detail: details[index]
+      }))
+    });
+
+    const teamVisuals = {
+      "CFDA Lab": buildTeamVisual(
+        "Break the long narrative into subqueries, fuse complementary evidence, answer each facet, then verify sentence support.",
+        "Subanswers create an auditable bridge from retrieval to final prose.",
+        ["Long narrative", "Subqueries", "BM25 + embeddings", "RRF + rerank", "Subanswers → synthesis", "Sentence support"],
+        ["One information need", "Cover each facet", "Lexical + dense", "Fuse then order", "Join facet answers", "Check every claim"]
+      ),
+      "NIT Agartala": buildTeamVisual(
+        "Send the narrative directly to hybrid search, rerank passages, and have Falcon produce a cited answer.",
+        "A simple hybrid baseline keeps the whole flow easy to measure.",
+        ["Long narrative", "Direct query", "BM25 + DPR", "Hybrid + cross-encoder", "Falcon cited answer", "RAG metrics"],
+        ["One information need", "No split", "Sparse + dense", "Score candidates", "Write with sources", "Compare runs"]
+      ),
+      "University of Glasgow Terrier": buildTeamVisual(
+        "Write explicit subqueries, combine sparse and E5 retrieval, MonoT5-rerank each list, then merge subanswers.",
+        "The subquery set makes coverage gaps visible before generation.",
+        ["Long narrative", "Explicit subqueries", "Sparse + E5", "MonoT5 rerank", "Merge subanswers", "Coverage comparison"],
+        ["One information need", "Name each facet", "Lexical + dense", "Order passages", "Join facet text", "Check coverage"]
+      ),
+      "WING-II": buildTeamVisual(
+        "Start from fixed evidence, select a compact submodular set, turn it into evidence cards, and refine citation-first claims.",
+        "Evidence cards keep each claim attached to a small, inspectable source set.",
+        ["Fixed evidence", "No runtime plan", "Greedy submodular", "Evidence cards", "Citation-first claims", "Refiner + support"],
+        ["Given passages", "Plan is offline", "Maximize coverage", "Pack source facts", "Claim + citation", "Filter unsupported"]
+      ),
+      "GRILL Lab": buildTeamVisual(
+        "Ask subquestions, expand BM25 searches, fill evidence gaps with follow-up queries, and stop when new evidence saturates.",
+        "The stopping rule prevents an agent from searching forever.",
+        ["Long narrative", "Subquestions", "BM25 + expand", "Gap queries + RRF", "Agentic synthesis", "Saturation stop"],
+        ["One information need", "Generate facets", "Expand lexical search", "Search missing facts", "Draft grounded answer", "Stop at plateau"]
+      ),
+      "IIUoT": buildTeamVisual(
+        "Rewrite the narrative for BM25, rerank and diversify the pool, write reference-first claims, then filter unsupported text.",
+        "MMR and reference-first writing trade a little recall for cleaner evidence use.",
+        ["Long narrative", "Query rewrite", "BM25", "RankZephyr + MMR", "Reference-first claims", "Support filter"],
+        ["One information need", "Clarify wording", "Lexical search", "Order + diversify", "Cite before prose", "Remove weak claims"]
+      ),
+      "GenAIus": buildTeamVisual(
+        "Treat the supplied top-20 passages as the evidence set, extract atomic nuggets, and write claims tied to nugget IDs.",
+        "Nugget IDs make answer support explicit even when retrieval is fixed.",
+        ["Fixed passages", "No retrieval plan", "Top-20 input", "Atomic nuggets", "Nugget-ID claims", "RJ signals"],
+        ["Given passages", "Plan is offline", "Use top 20", "Extract small facts", "Claim + nugget", "Read relevance signals"]
+      ),
+      "Tokyo University of Science": buildTeamVisual(
+        "Create viewpoint queries, mix sparse and dense retrieval, fuse keystone documents, and report partial and final answers.",
+        "Keystones preserve viewpoint coverage while controlling redundancy.",
+        ["Long narrative", "Viewpoints", "Sparse + dense", "RRF + keystones", "Partial / final answer", "Coverage vs redundancy"],
+        ["One information need", "Name viewpoints", "Lexical + dense", "Fuse key sources", "Draft then finish", "Balance both"]
+      ),
+      "HLTCOE": buildTeamVisual(
+        "Start with retrieved documents, ideate nuggets, merge and filter their support, then write a nugget-grounded report.",
+        "Crucible writes only after candidate nuggets have support sentences.",
+        ["Retrieved documents", "Nugget ideation", "BM25 + PLAID-X", "Merge + filter", "Nugget-grounded report", "Citation + coverage"],
+        ["Candidate documents", "Propose facts", "Lexical + neural", "Keep supported facts", "Write from nuggets", "Check sources + facets"]
+      ),
+      "MIT Lincoln Laboratory": buildTeamVisual(
+        "Split the narrative only when useful, retrieve with SPLADEv3, rerank and select a compact set, then generate GPT-5 citations.",
+        "SETR makes the generator see a coherent evidence set instead of a raw top-k dump.",
+        ["Long narrative", "Minimal subquestions", "SPLADEv3", "Rerank + RRF + SETR", "GPT-5 citations", "Ablation metrics"],
+        ["One information need", "Keep splits small", "Learned sparse", "Order + select", "Write with sources", "Test each component"]
+      ),
+      "IDACCS": buildTeamVisual(
+        "Keep the long multilingual question intact, retrieve with PLAID-X, summarize and attribute evidence, then rewrite with GPT-4.1.",
+        "Blame attribution exposes which source span supports or fails each answer claim.",
+        ["Long / multilingual", "No decomposition", "PLAID-X", "mxbai + occams", "GPT-4.1 rewrite", "Blame attribution"],
+        ["Cross-language need", "No split", "Neural retrieval", "Compress + rank", "Rewrite grounded text", "Assign source blame"]
+      ),
+      "NC State LAS": buildTeamVisual(
+        "Let an agent create subquestions, retrieve with BM25 and SPLADE, feed nugget feedback back into search, and answer with citations.",
+        "Vital and sub-coverage feedback gives the agent a concrete reason to search again.",
+        ["Long narrative", "Agent / subquestions", "BM25 + SPLADE", "Nugget feedback", "Cited agent answer", "Vital / sub coverage"],
+        ["One information need", "Agent plans facets", "Sparse + learned", "Find missing nuggets", "Write with sources", "Check vital facets"]
+      ),
+      "UTokyo-HitU": buildTeamVisual(
+        "Combine keyword and HyDE views, retrieve with three families, fuse four lists plus an LLM signal, and cite Ragnarok output.",
+        "HyDE is mixed with the original query so expansion helps without replacing intent.",
+        ["Long narrative", "Keyword + HyDE", "BM25 + SPLADE + dense", "4-way RRF + LLM", "Ragnarok citations", "Retrieval + RAG scores"],
+        ["One information need", "Original + hypothetical", "Three retrievers", "Fuse four signals", "Generate with citations", "Score both layers"]
+      ),
+      "DUTH": buildTeamVisual(
+        "Turn query-passage pairs into relevance judgments with BM25 and ColBERT, label them, then calibrate against human qrels.",
+        "This is a judging pipeline: it measures evidence relevance rather than generating an answer.",
+        ["Query-passage pairs", "No answer plan", "BM25 + ColBERT", "Qwen / StableLM labels", "TREC qrels", "Human calibration"],
+        ["Evaluation inputs", "No generation", "Sparse + late-interaction", "Model judgments", "Export labels", "Compare with humans"]
+      ),
+      "WaterlooClarke": buildTeamVisual(
+        "Build a portfolio of retrieval-and-answer pipelines, attach support to claims, then pairwise-select the strongest response.",
+        "Portfolio selection lets different answer styles compete on the same narrative.",
+        ["Long narrative", "Portfolio plan", "BM25 + T5", "Claims + support", "GARE / nuggetizer", "Pairwise select"],
+        ["One information need", "Run variants", "Lexical + rerank", "Find claim support", "Draft and extract", "Choose winner"]
+      )
+    };
+
     const termDecoder = {
       "occams": "IDACCS's extractive summarization component. It compresses retrieved evidence into source-grounded text before an LLM rewrites it; it is not a vocabulary term.",
       "UMBRELA": "An automatic relevance/support scoring tool used in TREC-style evaluation. In these papers it often acts as a filter or proxy judge for passage usefulness.",
@@ -3696,35 +3914,89 @@
       }[char]));
     }
 
+    function renderTeamArchitectureVisual(teamName, visual) {
+      const slug = teamName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const titleId = `team-architecture-${slug}-title`;
+      const descId = `team-architecture-${slug}-desc`;
+      const markerId = `team-architecture-${slug}-arrow`;
+      const palette = ["#d8eee8", "#e6f0dc", "#f7ead1", "#f5dfdf", "#e6e0f4", "#dbe9f3"];
+      const stageBoxes = visual.stages.map((entry, index) => {
+        const x = 18 + index * 194;
+        const boxWidth = 170;
+        const labelWords = String(entry.label).split(/\s+/);
+        const labelLines = [];
+        let line = "";
+        labelWords.forEach((word) => {
+          const candidate = line ? `${line} ${word}` : word;
+          if (line && candidate.length > 21) {
+            labelLines.push(line);
+            line = word;
+          } else {
+            line = candidate;
+          }
+        });
+        if (line) labelLines.push(line);
+        const labelTspans = labelLines.map((labelLine, lineIndex) => (
+          `<tspan class="stage-label" x="${x + boxWidth / 2}" dy="${lineIndex ? 17 : 28}">${escapeHTML(labelLine)}</tspan>`
+        )).join("");
+        const arrow = index < visual.stages.length - 1
+          ? `<line class="stage-arrow" x1="${x + boxWidth + 7}" y1="122" x2="${x + 194 - 7}" y2="122" marker-end="url(#${markerId})" aria-hidden="true"></line>`
+          : "";
+        return `
+          <g class="team-architecture-stage" data-visual-stage="${escapeHTML(entry.stage)}">
+            <title>${escapeHTML(entry.stage)}: ${escapeHTML(entry.label)}. ${escapeHTML(entry.detail)}</title>
+            <rect class="stage-box" x="${x}" y="42" width="${boxWidth}" height="158" rx="12" fill="${palette[index]}"></rect>
+            <text x="${x + boxWidth / 2}" y="80" text-anchor="middle">
+              <tspan class="stage-name" x="${x + boxWidth / 2}">${escapeHTML(entry.stage)}</tspan>
+              ${labelTspans}
+              <tspan class="stage-detail" x="${x + boxWidth / 2}" dy="22">${escapeHTML(entry.detail)}</tspan>
+            </text>
+            ${arrow}
+          </g>
+        `;
+      }).join("");
+      const stageSummary = visual.stages
+        .map((entry) => `${entry.stage}: ${entry.label}`)
+        .join(" → ");
+      const legend = "All 15 teams use the same six stages: Narrative → Plan → Search → Evidence → Answer → Check.";
+
+      return `
+        <div class="team-architecture-visual" data-team-visual="${escapeHTML(teamName)}">
+          <p class="team-architecture-legend">${escapeHTML(legend)}</p>
+          <div class="team-architecture-svg-wrap">
+            <svg class="team-architecture-svg" viewBox="0 0 1200 246" role="img" aria-labelledby="${titleId} ${descId}">
+              <title id="${titleId}">${escapeHTML(teamName)} six-stage RAG architecture</title>
+              <desc id="${descId}">${escapeHTML(visual.summary)} Stages: ${escapeHTML(stageSummary)}.</desc>
+              <defs>
+                <marker id="${markerId}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L8,4 L0,8 z" fill="#557d75"></path>
+                </marker>
+              </defs>
+              ${stageBoxes}
+            </svg>
+          </div>
+          <p class="team-architecture-text"><strong>Plain-English flow:</strong> ${escapeHTML(visual.summary)} The labels above show the same six-stage vocabulary for this team: ${escapeHTML(stageSummary)}.</p>
+          <p class="team-architecture-distinctive"><strong>Distinctive move:</strong> ${escapeHTML(visual.distinctive)}</p>
+        </div>
+      `;
+    }
+
     function renderArchitecturePanels() {
       document.querySelectorAll(".team-card").forEach((card) => {
         const teamName = card.querySelector("h3")?.textContent.trim();
         const architecture = architecturePanels[teamName];
+        const visual = teamVisuals[teamName];
         const body = card.querySelector(".team-body");
-        if (!architecture || !body || body.querySelector(".architecture-panel")) {
+        if (!architecture || !visual || !body || body.querySelector(".architecture-panel")) {
           return;
         }
 
         const panel = document.createElement("aside");
         panel.className = "architecture-panel";
-        const stages = architecture.keyStages.map(([name, detail], index) => (
-          `<li class="architecture-step" data-step="${index + 1}"><div><strong>${escapeHTML(name)}</strong><span>${escapeHTML(detail)}</span></div></li>`
-        )).join("");
         const notes = architecture.notes.map((note) => (
           `<span class="architecture-note">${escapeHTML(note)}</span>`
         )).join("");
-        const figure = architecture.paperFigure ? `
-          <figure class="official-figure">
-            <button class="official-figure-button" type="button" aria-label="Open official paper figure for ${escapeHTML(teamName)}">
-              <span class="official-figure-frame">
-                <img src="${escapeHTML(architecture.paperFigure.src)}" alt="Official paper architecture or workflow figure for ${escapeHTML(teamName)}" loading="eager">
-                <span class="figure-open-hint">Open larger</span>
-              </span>
-            </button>
-            <figcaption>${escapeHTML(architecture.paperFigure.caption)}</figcaption>
-          </figure>
-        ` : "";
-        const decoderContext = `${card.textContent} ${architecture.notes.join(" ")} ${architecture.keyStages.flat().join(" ")}`.toLowerCase();
+        const decoderContext = `${card.textContent} ${architecture.notes.join(" ")} ${architecture.keyStages.flat().join(" ")} ${visual.summary} ${visual.stages.flatMap((entry) => [entry.label, entry.detail]).join(" ")}`.toLowerCase();
         const decoderItems = Object.entries(termDecoder)
           .filter(([term]) => decoderContext.includes(term.toLowerCase()))
           .map(([term, definition]) => (
@@ -3739,12 +4011,10 @@
         ` : "";
 
         panel.innerHTML = `
-          <span class="architecture-label">Architecture</span>
-          <h4>How This System Flows</h4>
-          <p>${escapeHTML(architecture.summary)}</p>
-          <ol class="architecture-flow">${stages}</ol>
+          <span class="architecture-label">Architecture visual</span>
+          <h4>Six-stage flow</h4>
+          ${renderTeamArchitectureVisual(teamName, visual)}
           <div class="architecture-notes">${notes}</div>
-          ${figure}
           ${decoder}
         `;
         body.prepend(panel);

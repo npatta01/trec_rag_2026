@@ -33,7 +33,7 @@
 - Consumes: the 15 existing `.team-card` elements and their team names.
 - Produces: one `team-architecture-visual` SVG/text equivalent per team, rendered by `renderArchitecturePanels()` from a `teamVisuals` map keyed by exact team name.
 
-- [ ] **Step 1: Extend the smoke test with failing visual contracts**
+- [x] **Step 1: Extend the smoke test with failing visual contracts**
 
 Add these assertions to `reports/trec-rag-2025-writeups/interactive-writeup.test.js`:
 
@@ -59,7 +59,7 @@ for (const team of requiredVisualTeams) {
 }
 ```
 
-- [ ] **Step 2: Run the focused test to verify it fails**
+- [x] **Step 2: Run the focused test to verify it fails**
 
 Run:
 
@@ -69,7 +69,7 @@ node reports/trec-rag-2025-writeups/interactive-writeup.test.js
 
 Expected: FAIL because the six-stage visual data/renderer signals are not yet present.
 
-- [ ] **Step 3: Add the shared visual data map**
+- [x] **Step 3: Add the shared visual data map**
 
 Add a `teamVisuals` object next to `architecturePanels`. Each entry must have:
 
@@ -108,7 +108,7 @@ DUTH: Query-passage pairs | No answer plan | BM25 + ColBERT | Qwen / StableLM la
 WaterlooClarke: Long narrative | Portfolio plan | BM25 + T5 | Claims + support | GARE / nuggetizer | Pairwise select
 ```
 
-- [ ] **Step 4: Add the shared SVG renderer and panel output**
+- [x] **Step 4: Add the shared SVG renderer and panel output**
 
 Implement `renderTeamArchitectureVisual(teamName, visual)` beside the existing
 architecture rendering helpers. It should:
@@ -127,7 +127,7 @@ Update `renderArchitecturePanels()` to render this visual for every team. Keep
 the existing evidence notes and decoder, but do not render paper figures inside
 the team architecture panel.
 
-- [ ] **Step 5: Add responsive and print styling**
+- [x] **Step 5: Add responsive and print styling**
 
 Add styles for `.team-architecture-visual`, `.team-architecture-svg`,
 `.team-architecture-text`, `.team-architecture-distinctive`, and
@@ -135,7 +135,7 @@ Add styles for `.team-architecture-visual`, `.team-architecture-svg`,
 cards, keep the SVG readable at 390px without horizontal page overflow, and
 provide print/reduced-motion rules. Do not use color as the only stage signal.
 
-- [ ] **Step 6: Run focused verification**
+- [x] **Step 6: Run focused verification**
 
 Run the focused smoke test, inspect the diff for duplicated or inconsistent
 stage names, and use the repository's headless Chrome helper at 1440×1000 and
@@ -158,3 +158,11 @@ reading the paper, each card uses the same vocabulary, labels remain legible,
 keyboard disclosure still works, and the text equivalent is available to screen
 readers. Fix any issues found, rerun the full report test suite, and record the
 verification evidence in the implementation handoff.
+
+**Verification evidence:** Node smoke tests passed for the interactive writeup,
+the promising-architecture report, and the reports index. Chrome CDP checks
+opened all 15 team cards and found one visual with all six stage attributes per
+card, no horizontal page overflow at 390px, no console warnings/errors, and
+print media retained the legend and text equivalent. A desktop and mobile
+screenshot review caught and fixed nested SVG label overlap and mobile grid
+min-content overflow.
