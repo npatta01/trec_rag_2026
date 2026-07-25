@@ -147,10 +147,11 @@ pool metrics.
 structured facet plans. Its public typed records are the frozen dataclasses
 `TokenRange`, `Anchor`, `Expansion`, `CoverageItem`, `Facet`, `FacetPlan`, and
 `FacetPlanningResult`; `NarrativeToken` and `NarrativeTokenTape` describe the
-token tape. Invalid plans raise `FacetPlanValidationError` from
-`validate_facet_plan()`. `tokenize_narrative()` exposes the deterministic
-non-whitespace token tape used to resolve half-open token ranges. The public
-rendering entry point is:
+token tape. `validate_facet_plan()` returns the public frozen
+`ValidatedFacetPlan`, which pairs the supplied plan with that token tape.
+Invalid plans raise `FacetPlanValidationError`. `tokenize_narrative()` exposes
+the deterministic non-whitespace token tape used to resolve half-open token
+ranges. The public rendering entry point is:
 
 ```python
 render_facet_queries(topic: Topic, plan: FacetPlan) -> FacetPlanningResult
@@ -178,13 +179,18 @@ success, `queries` is the rendered facet-query tuple, `used_fallback` is
 original query above, `used_fallback` is `True`, and `error` retains the
 validation-error message.
 
-Frozen validation limits are: at most 16 coverage items, 8 facets, 4 global
-anchors, 2 source ranges per coverage item, 2 coverage items per facet, and 8
-content tokens per anchor. Each facet accepts at most 3 expansions; each has
-1--3 analyzed words, and expansions may add at most 6 new unique content
-tokens per facet. Expansion relations are limited to `alias`, `acronym`,
-`technical_term`, `common_variant`, and `neutral_search_term`; their anchor
-scope, numeric runs, and query-syntax safety are mechanically checked.
+Frozen validation limits are: at most 16 coverage items, 8 facets, 20 total
+anchors (a budget sized for 4 global anchors plus one for each maximum coverage
+item) including at most 4 global anchors, 2 source ranges per coverage item, 2
+coverage items per facet, and 8 content tokens per anchor. Each facet accepts at
+most 3 expansions; each expansion term is at most 128 Unicode code points and
+has 1--3 analyzed words, while all expansions may add at most 6 new unique
+content tokens per facet. Expansion relations are limited to `alias`,
+`acronym`, `technical_term`, `common_variant`, and `neutral_search_term`; their
+anchor scope, numeric runs, and query-syntax safety are mechanically checked.
+Protected Lucene-like syntax includes field separators, Boolean words and
+operators, slash, backslash, grouping, wildcards, quoting, fuzzy/boost markers,
+and unary query operators.
 
 Validate the core and its existing topic/pipeline compatibility boundary with:
 

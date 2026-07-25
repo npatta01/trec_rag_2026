@@ -46,6 +46,8 @@ Create `trec_rag.facet_query_planning` with frozen records:
 - `Facet(facet_id, coverage_refs, expansions)`: one independently useful
   retrieval intent.
 - `FacetPlan(topic_id, narrative_sha256, anchors, coverage_items, facets)`.
+- `ValidatedFacetPlan(plan, token_tape)`: the public frozen view returned by
+  validation.
 - `FacetPlanningResult(queries, used_fallback, error)`.
 
 `render_facet_queries(topic, plan)` returns a result containing existing
@@ -76,8 +78,9 @@ Validation is fail-closed and precedes all rendering:
 - each facet has at most three optional expansions;
 - expansions use an allowed lexical relation, reference only anchors inherited
   by that facet, contain one to three analyzed words, introduce no absent
-  numeric run, control character, field syntax, or query operator, and add at
-  most six unique content tokens per facet.
+  numeric run, control character, field syntax, or protected Lucene-like query
+  operator (including slash), and add at most six unique content tokens per
+  facet.
 
 There is no partial success. Any validation or rendering error discards the
 whole plan and returns the original narrative.
@@ -86,7 +89,8 @@ whole plan and returns the original narrative.
 
 For each facet in declared order:
 
-1. resolve its coverage ranges and order them by position in the narrative;
+1. flatten every referenced coverage range and globally order them by
+   `(start_token, end_token, coverage_id)`;
 2. append global anchors and applicable coverage-scoped anchors in narrative
    order;
 3. append nonredundant expansion terms in declared order;
@@ -101,9 +105,11 @@ retrieved content, or generated answer text is available to the core.
 
 The core validates supplied plans in memory and performs no I/O, network calls,
 model loading, retrieval, or retries. Limits are 16 coverage items, 8 facets,
-4 global anchors, 2 ranges per coverage item, 2 coverage items per facet, 8
-content tokens per anchor, 3 expansions per facet, 3 analyzed words per
-expansion, and 6 new unique expansion tokens per facet.
+20 total anchors (sized for 4 globals plus one per maximum coverage item)
+including at most 4 global anchors, 2 ranges per coverage item, 2 coverage items
+per facet, 8 content tokens per anchor, 3 expansions per facet, 128 Unicode code
+points and 3 analyzed words per expansion, and 6 new unique expansion tokens
+per facet.
 
 Before runtime promotion, a separate experiment must generate plans for a
 frozen development set and untouched holdouts, pass every mechanical gate, then

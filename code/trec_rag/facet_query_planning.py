@@ -18,11 +18,13 @@ from trec_rag.topics import Topic
 
 MAX_COVERAGE_ITEMS = 16
 MAX_FACETS = 8
+MAX_ANCHORS = 20
 MAX_GLOBAL_ANCHORS = 4
 MAX_RANGES_PER_COVERAGE_ITEM = 2
 MAX_COVERAGE_ITEMS_PER_FACET = 2
 MAX_CONTENT_TOKENS_PER_ANCHOR = 8
 MAX_EXPANSIONS_PER_FACET = 3
+MAX_EXPANSION_TERM_CODEPOINTS = 128
 MAX_ANALYZED_WORDS_PER_EXPANSION = 3
 MAX_NEW_EXPANSION_TOKENS_PER_FACET = 6
 ALLOWED_LEXICAL_RELATIONS = frozenset(
@@ -37,7 +39,7 @@ ALLOWED_LEXICAL_RELATIONS = frozenset(
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _BOOLEAN_OR_QUERY_OPERATOR_PATTERN = re.compile(
-    r'\b(?:AND|OR|NOT)\b|&&|\|\||[!(){}\[\]^~*?"\\\\]|(?:^|\s)[+-](?=\S)',
+    r'\b(?:AND|OR|NOT)\b|&&|\|\||[!(){}\[\]^~*?"/\\\\]|(?:^|\s)[+-](?=\S)',
     flags=re.IGNORECASE,
 )
 
@@ -124,7 +126,9 @@ class NarrativeTokenTape:
 
 
 @dataclass(frozen=True)
-class _ValidatedFacetPlan:
+class ValidatedFacetPlan:
+    """A validated facet plan paired with its deterministic narrative token tape."""
+
     plan: FacetPlan
     token_tape: NarrativeTokenTape
 
@@ -146,10 +150,10 @@ def tokenize_narrative(narrative: str) -> NarrativeTokenTape:
     )
 
 
-def validate_facet_plan(topic: Topic, plan: FacetPlan) -> _ValidatedFacetPlan:
+def validate_facet_plan(topic: Topic, plan: FacetPlan) -> ValidatedFacetPlan:
     """Validate all mechanical plan invariants and return its tokenized view."""
     if not isinstance(topic, Topic):
-        raise FacetPlanValidationError("topic must be a Topic")
+        raise TypeError("topic must be a Topic")
     if not isinstance(plan, FacetPlan):
         raise FacetPlanValidationError("plan must be a FacetPlan")
     if plan.topic_id != topic.id:
@@ -164,7 +168,7 @@ def validate_facet_plan(topic: Topic, plan: FacetPlan) -> _ValidatedFacetPlan:
 
     _validate_collection(plan.coverage_items, "coverage items", minimum=1, maximum=MAX_COVERAGE_ITEMS)
     _validate_collection(plan.facets, "facets", minimum=1, maximum=MAX_FACETS)
-    _validate_collection(plan.anchors, "anchors", minimum=1)
+    _validate_collection(plan.anchors, "anchors", minimum=1, maximum=MAX_ANCHORS)
     _require_records(plan.coverage_items, CoverageItem, "coverage items")
     _require_records(plan.anchors, Anchor, "anchors")
     _require_records(plan.facets, Facet, "facets")
@@ -189,11 +193,13 @@ def validate_facet_plan(topic: Topic, plan: FacetPlan) -> _ValidatedFacetPlan:
     )
     _validate_coverage_partition(plan.coverage_items, plan.facets)
 
-    return _ValidatedFacetPlan(plan=plan, token_tape=tape)
+    return ValidatedFacetPlan(plan=plan, token_tape=tape)
 
 
 def render_facet_queries(topic: Topic, plan: FacetPlan) -> FacetPlanningResult:
     """Render one deterministic structured query for every validated facet."""
+    if not isinstance(topic, Topic):
+        raise TypeError("topic must be a Topic")
     try:
         validated = validate_facet_plan(topic, plan)
     except FacetPlanValidationError as exc:
@@ -237,20 +243,31 @@ def _render_facet_query(
     anchors: tuple[Anchor, ...],
     tape: NarrativeTokenTape,
 ) -> str:
-    coverage = sorted(
-        (coverage_by_id[coverage_id] for coverage_id in facet.coverage_refs),
-        key=lambda item: (
-            min(source_range.start_token for source_range in item.source_ranges),
-            item.coverage_id,
+    coverage_ranges = sorted(
+        (
+            (source_range, coverage_id)
+            for coverage_id in facet.coverage_refs
+            for source_range in coverage_by_id[coverage_id].source_ranges
+        ),
+        key=lambda referenced_range: (
+            referenced_range[0].start_token,
+            referenced_range[0].end_token,
+            referenced_range[1],
         ),
     )
     components = [
-        " ".join(
-            tape.resolve(source_range)
-            for source_range in _source_ranges_in_narrative_order(item)
-        )
-        for item in coverage
+        tape.resolve(source_range)
+        for source_range, _coverage_id in coverage_ranges
     ]
+    coverage_item_components = {
+        " ".join(
+            " ".join(tape.resolve(source_range).split())
+            for source_range in _source_ranges_in_narrative_order(
+                coverage_by_id[coverage_id]
+            )
+        ).casefold()
+        for coverage_id in facet.coverage_refs
+    }
     components.extend(
         tape.resolve(anchor.token_range)
         for anchor in sorted(
@@ -261,8 +278,15 @@ def _render_facet_query(
                 anchor.anchor_id,
             ),
         )
+        if " ".join(tape.resolve(anchor.token_range).split()).casefold()
+        not in coverage_item_components
     )
-    components.extend(expansion.term for expansion in facet.expansions)
+    components.extend(
+        expansion.term
+        for expansion in facet.expansions
+        if " ".join(expansion.term.split()).casefold()
+        not in coverage_item_components
+    )
 
     seen_components: set[str] = set()
     rendered_components: list[str] = []
@@ -426,6 +450,8 @@ def _validate_facet_expansions(
             raise FacetPlanValidationError("unsupported expansion relation")
         if not isinstance(expansion.term, str):
             raise FacetPlanValidationError("expansion term must be a string")
+        if len(expansion.term) > MAX_EXPANSION_TERM_CODEPOINTS:
+            raise FacetPlanValidationError("expansion term is too long")
         if any(unicodedata.category(character) == "Cc" for character in expansion.term):
             raise FacetPlanValidationError("expansion term contains a control character")
         if ":" in expansion.term:
@@ -471,7 +497,10 @@ def _analyzed_words(text: str) -> tuple[str, ...]:
     words: list[str] = []
     current_word: list[str] = []
     for character in text:
-        if unicodedata.category(character)[0] in {"L", "N"}:
+        category_group = unicodedata.category(character)[0]
+        if category_group in {"L", "N"} or (
+            category_group == "M" and current_word
+        ):
             current_word.append(character)
         elif current_word:
             words.append("".join(current_word))

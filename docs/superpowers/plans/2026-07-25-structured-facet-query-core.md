@@ -26,15 +26,15 @@
 
 **Interfaces:**
 - Consumes: `trec_rag.topics.Topic`, `trec_rag.pipeline_models.QueryVariant`
-- Produces: `TokenRange`, `Anchor`, `Expansion`, `CoverageItem`, `Facet`, `FacetPlan`, `FacetPlanValidationError`, `FacetPlanningResult`, `tokenize_narrative()`, `validate_facet_plan()`
+- Produces: `TokenRange`, `Anchor`, `Expansion`, `CoverageItem`, `Facet`, `FacetPlan`, `ValidatedFacetPlan`, `FacetPlanValidationError`, `FacetPlanningResult`, `tokenize_narrative()`, `validate_facet_plan()`
 
-- [ ] **Step 1: Write failing contract and range tests**
+- [x] **Step 1: Write failing contract and range tests**
 
 Add tests constructing frozen typed records and asserting that half-open token
 ranges preserve exact narrative text. Parameterize negative, empty, reversed,
 duplicate, and out-of-bounds ranges and require `FacetPlanValidationError`.
 
-- [ ] **Step 2: Run the focused tests and verify red**
+- [x] **Step 2: Run the focused tests and verify red**
 
 Run:
 
@@ -44,25 +44,26 @@ Run:
 
 Expected: collection fails because `trec_rag.facet_query_planning` does not exist.
 
-- [ ] **Step 3: Implement the minimal token tape and typed contracts**
+- [x] **Step 3: Implement the minimal token tape and typed contracts**
 
 Use frozen dataclasses, a deterministic non-whitespace token tape with Unicode
-code-point offsets, SHA-256 narrative identity, and exact range resolution.
-Define public count caps as module constants.
+code-point offsets, SHA-256 narrative identity, and exact range resolution. The
+public caps include 20 total anchors and 128 Unicode code points per expansion
+term alongside the narrower structural limits.
 
-- [ ] **Step 4: Add failing structural validation tests**
+- [x] **Step 4: Add failing structural validation tests**
 
 Cover topic/hash mismatch, duplicate IDs, dangling references, invalid global
 and coverage anchor scopes, missing topic/entity global anchor, empty facets,
 and coverage assigned zero or multiple times.
 
-- [ ] **Step 5: Implement complete structural validation**
+- [x] **Step 5: Implement complete structural validation**
 
 Validate all IDs, ranges, scopes, counts, content-bearing anchors/coverage, and
-the exact one-facet coverage partition before returning a validated internal
-view. Do not perform I/O or parse untyped JSON.
+the exact one-facet coverage partition before returning a public frozen
+`ValidatedFacetPlan` view. Do not perform I/O or parse untyped JSON.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run:
 
@@ -82,20 +83,21 @@ Expected: all Task 1 tests pass.
 - Consumes: validated `FacetPlan`
 - Produces: `render_facet_queries(topic: Topic, plan: FacetPlan) -> FacetPlanningResult`
 
-- [ ] **Step 1: Write failing scoped-rendering tests**
+- [x] **Step 1: Write failing scoped-rendering tests**
 
 Use a two-facet housing comparison. Assert narrative-ordered coverage, inherited
 global anchors, applicable coverage anchors without cross-facet leakage,
 declared-order expansions, deterministic repeated calls, and no title text.
 
-- [ ] **Step 2: Write failing expansion safety tests**
+- [x] **Step 2: Write failing expansion safety tests**
 
 Reject expansions with out-of-scope anchors, unsupported relations, control
-characters, `field:value`, Boolean/query operators, absent ASCII or Unicode
-numeric runs, more than three analyzed words, more than three expansion objects,
-or more than six new unique content tokens.
+characters, `field:value`, protected Lucene-like syntax including slash,
+Boolean/query operators, absent ASCII or Unicode numeric runs, more than 128
+Unicode code points, more than three analyzed words, more than three expansion
+objects, or more than six new unique content tokens.
 
-- [ ] **Step 3: Write failing all-or-nothing fallback tests**
+- [x] **Step 3: Write failing all-or-nothing fallback tests**
 
 Mutate one late facet to be invalid and assert the result contains no facet
 queries, `used_fallback is True`, a retained error string, and exactly:
@@ -109,13 +111,13 @@ QueryVariant(
 )
 ```
 
-- [ ] **Step 4: Implement validation, rendering, and fallback**
+- [x] **Step 4: Implement validation, rendering, and fallback**
 
 Derive inherited anchors from scope, retain only nonredundant safe expansions,
 de-duplicate identical normalized components, and join them deterministically.
 Catch only `FacetPlanValidationError` at the public fallback boundary.
 
-- [ ] **Step 5: Verify red-green behavior and focused suite**
+- [x] **Step 5: Verify red-green behavior and focused suite**
 
 Run the focused suite, temporarily reverse one expected rendered component to
 confirm the test fails, restore it, then rerun:
@@ -253,3 +255,80 @@ answer-aspect generation is ready.
   generator/model/transport integration. The next promotion experiment remains
   an offline held-out retrieval comparison of externally supplied plans against
   the original narrative; no automatic generator is ready for runtime use.
+
+### Task 4: Final review fix wave
+
+- [x] Flatten all coverage ranges referenced by a facet and globally order them
+  by `(start_token, end_token, coverage_id)`, with an interleaved two-item,
+  two-range regression.
+- [x] Bound plans to 20 total anchors and expansion terms to 128 Unicode code
+  points; cover exact acceptance boundaries and exact original-query fallback
+  above each boundary.
+- [x] Keep Unicode `M*` combining marks only as continuations of active analyzed
+  words, covering decomposed Latin, Hindi, and a leading-mark negative case.
+- [x] Reject slash with the protected Lucene-like expansion syntax.
+- [x] Reject a non-`Topic` with `TypeError` before entering plan fallback.
+- [x] Make `ValidatedFacetPlan` a documented public frozen return type.
+- [x] Reconcile the Task 1--2 checkboxes and refresh verification evidence.
+
+#### Final-fix verification evidence (2026-07-25)
+
+- TDD baseline:
+
+  ```bash
+  .venv/bin/python -m pytest code/tests/test_facet_query_planning.py -q
+  ```
+
+  Result before new tests: `54 passed in 0.03s`.
+- RED, after adding the final-review regression and boundary tests with no
+  production changes:
+
+  ```bash
+  .venv/bin/python -m pytest code/tests/test_facet_query_planning.py -q
+  ```
+
+  Result: `8 failed, 56 passed in 0.08s`. Every failure matched a requested
+  missing behavior; the exact 20-anchor/128-code-point boundary case passed.
+- GREEN, after the minimal fixes and coverage-component compatibility repair:
+
+  ```bash
+  .venv/bin/python -m pytest code/tests/test_facet_query_planning.py -q
+  ```
+
+  Result: `64 passed in 0.03s`.
+- Focused compatibility:
+
+  ```bash
+  .venv/bin/python -m pytest \
+    code/tests/test_facet_query_planning.py \
+    code/tests/test_topics.py \
+    code/tests/test_pipeline.py \
+    -q
+  ```
+
+  Result: `112 passed in 0.12s`.
+- Artifact-independent regression:
+
+  ```bash
+  .venv/bin/python -m pytest -q \
+    --ignore=code/tests/test_all_topic_tethered_rank.py \
+    --ignore=code/tests/test_build_all_topic_tethered_report.py
+  ```
+
+  Result: `314 passed in 20.30s`.
+- Compile and safety checks:
+
+  ```bash
+  .venv/bin/python -m compileall -q \
+    code/trec_rag/facet_query_planning.py \
+    code/tests/test_facet_query_planning.py
+  git diff --check ef34a98
+  git diff --check 0f0d051
+  ```
+
+  Result: all commands exited zero with no output.
+- The final-fix changed-path, excluded-path, implementation-boundary,
+  host-absolute-path, likely-secret, private-type, and tracked-binary scans
+  found no unexpected files or matches. The tracked final-fix scope is the core,
+  its focused tests, the adjacent README, this plan, and the design. No
+  generator, transport, retrieval, or runtime-pipeline integration was added.

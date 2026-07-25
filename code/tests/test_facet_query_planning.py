@@ -5,6 +5,7 @@ from hashlib import sha256
 
 import pytest
 
+import trec_rag.facet_query_planning as facet_query_planning
 from trec_rag.facet_query_planning import (
     Anchor,
     CoverageItem,
@@ -535,3 +536,173 @@ def test_validation_rejects_an_expansion_with_a_dangling_anchor_reference() -> N
 
     with pytest.raises(FacetPlanValidationError, match="unknown anchor reference"):
         validate_facet_plan(_topic(), plan)
+
+
+def test_rendering_globally_orders_interleaved_ranges_from_two_coverage_items() -> None:
+    narrative = "zero one two three four five six seven topic"
+    topic = _topic(topic_id="interleaved", narrative=narrative)
+    plan = _plan(
+        topic_id=topic.id,
+        narrative=narrative,
+        anchors=(Anchor("topic", TokenRange(8, 9), "topic", "global", ()),),
+        coverage_items=(
+            CoverageItem("later-ref", (TokenRange(2, 3), TokenRange(6, 7))),
+            CoverageItem("earlier-ref", (TokenRange(0, 1), TokenRange(4, 5))),
+        ),
+        facets=(
+            Facet("interleaved", ("later-ref", "earlier-ref"), ()),
+        ),
+    )
+
+    result = render_facet_queries(topic, plan)
+
+    assert result.queries == (
+        QueryVariant(
+            topic_id="interleaved",
+            variant_name="facet:interleaved",
+            query_text="zero two four six topic",
+            source_type="structured_facet",
+        ),
+    )
+    assert result.used_fallback is False
+    assert result.error is None
+
+
+def _anchors(count: int) -> tuple[Anchor, ...]:
+    return (
+        Anchor("global-subject", TokenRange(0, 1), "topic", "global", ()),
+        *(
+            Anchor(
+                f"coverage-anchor-{index:02d}",
+                TokenRange(3, 5),
+                "aspect",
+                "coverage",
+                ("rent",),
+            )
+            for index in range(1, count)
+        ),
+    )
+
+
+def test_validation_accepts_documented_anchor_and_expansion_size_boundaries() -> None:
+    expansion = Expansion(
+        term="a" * 128,
+        relation="neutral_search_term",
+        anchor_refs=("coverage-anchor-01",),
+    )
+    plan = _plan(
+        anchors=_anchors(20),
+        facets=(Facet("rent-effects", ("rent",), (expansion,)),),
+    )
+
+    validated = validate_facet_plan(_topic(), plan)
+
+    assert validated.plan == plan
+
+
+def test_rendering_falls_back_when_total_anchor_cap_is_exceeded() -> None:
+    topic = _topic()
+    plan = _plan(
+        anchors=_anchors(21),
+        facets=(Facet("rent-effects", ("rent",), ()),),
+    )
+
+    result = render_facet_queries(topic, plan)
+
+    assert result == facet_query_planning.FacetPlanningResult(
+        queries=(
+            QueryVariant(
+                topic_id=topic.id,
+                variant_name="original",
+                query_text=topic.narrative,
+                source_type="original_topic",
+            ),
+        ),
+        used_fallback=True,
+        error="plan has too many anchors",
+    )
+
+
+def test_rendering_falls_back_when_expansion_term_size_cap_is_exceeded() -> None:
+    topic = _topic()
+    plan = _plan(
+        facets=(
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (
+                    Expansion(
+                        term="a" * 129,
+                        relation="neutral_search_term",
+                        anchor_refs=("rent-anchor",),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    result = render_facet_queries(topic, plan)
+
+    assert result == facet_query_planning.FacetPlanningResult(
+        queries=(
+            QueryVariant(
+                topic_id=topic.id,
+                variant_name="original",
+                query_text=topic.narrative,
+                source_type="original_topic",
+            ),
+        ),
+        used_fallback=True,
+        error="expansion term is too long",
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Cafe\u0301", ("Cafe\u0301",)),
+        ("हिंदी", ("हिंदी",)),
+        ("\u0301Cafe", ("Cafe",)),
+    ],
+)
+def test_analyzed_words_keeps_combining_marks_only_inside_active_words(
+    text: str, expected: tuple[str, ...]
+) -> None:
+    assert facet_query_planning._analyzed_words(text) == expected
+
+
+def test_validation_rejects_forward_slash_query_syntax() -> None:
+    plan = _housing_plan(
+        facets=(
+            Facet(
+                "rent-effects",
+                ("rent",),
+                (
+                    Expansion(
+                        "rent/zoning",
+                        "neutral_search_term",
+                        ("rent",),
+                    ),
+                ),
+            ),
+            Facet("zoning-effects", ("zoning",), ()),
+        )
+    )
+
+    with pytest.raises(FacetPlanValidationError, match="query operator"):
+        validate_facet_plan(_housing_topic(), plan)
+
+
+def test_rendering_rejects_non_topic_before_entering_plan_fallback() -> None:
+    with pytest.raises(TypeError, match="topic must be a Topic"):
+        render_facet_queries(object(), _plan())  # type: ignore[arg-type]
+
+
+def test_public_validator_returns_a_public_frozen_validated_view() -> None:
+    validated = validate_facet_plan(_topic(), _plan())
+
+    public_type = facet_query_planning.ValidatedFacetPlan
+    assert isinstance(validated, public_type)
+    assert validated.plan == _plan()
+    with pytest.raises(FrozenInstanceError):
+        validated.plan = _plan(topic_id="other")  # type: ignore[misc]
