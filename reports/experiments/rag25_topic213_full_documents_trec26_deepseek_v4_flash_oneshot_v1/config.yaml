@@ -1,0 +1,52 @@
+experiment:
+  id: rag25_topic213_full_documents_trec26_deepseek_v4_flash_oneshot_v1
+  run_id: topic213_full_evidence_trec26_deepseek_v4_flash_oneshot_v1
+  team_id: issue19-openrouter
+  run_desc: One-shot DeepSeek V4 Flash synthesis from 42 supported full-evidence claims, independently audited and evaluated by local Qwen.
+  output_dir: outputs/rag25_topic213_full_documents_trec26_deepseek_v4_flash_oneshot_v1
+  report_dir: reports/experiments/rag25_topic213_full_documents_trec26_deepseek_v4_flash_oneshot_v1
+
+inputs:
+  source_generation: outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json
+  source_support_audit: outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl
+  nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  baseline_metrics: reports/experiments/rag25_topic213_full_documents_trec26_qwen_local_v1/metrics.json
+
+generation:
+  provider: OpenRouter
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: deepseek/deepseek-v4-flash
+  model_identity: deepseek/deepseek-v4-flash via OpenRouter
+  temperature: 0.0
+  expected_supported_claim_count: 42
+  maximum_sentences_per_section: 3
+  target_maximum_words: 900
+  max_tokens: 3500
+  timeout_seconds: 300
+  max_transport_attempts: 3
+  prior_failed_generation_api_call_count: 1
+  prior_failure_reason: Initial HTTP-success response used the model's default reasoning behavior and returned empty final content.
+
+audit:
+  provider: local LiteLLM
+  api_base_env: LITELLM_BASE_URL
+  api_base: http://localhost:4000/v1
+  api_key_env: LITELLM_API_KEY
+  api_key: none
+  model: qwen-local
+  model_identity: Qwen/Qwen3-4B-Instruct-2507
+  temperature: 0.0
+  max_tokens: 350
+  timeout_seconds: 240
+  http_max_attempts: 4
+  validation_attempts: 3
+
+evaluation:
+  evaluator_provider: local LiteLLM
+  evaluator_model: qwen-local
+  evaluator_model_identity: Qwen/Qwen3-4B-Instruct-2507
+  expected_nugget_count: 50
+  temperature: 0.0
+  max_tokens: 1400
+  validation_attempts: 3

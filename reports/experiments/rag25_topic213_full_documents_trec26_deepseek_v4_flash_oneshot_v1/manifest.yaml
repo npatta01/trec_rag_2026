@@ -1,0 +1,94 @@
+schema_version: topic213-experiment-manifest-v1
+created_at_utc: '2026-07-26T16:51:08.077513+00:00'
+experiment_id: rag25_topic213_full_documents_trec26_deepseek_v4_flash_oneshot_v1
+run_id: topic213_full_evidence_trec26_deepseek_v4_flash_oneshot_v1
+topic_id: '213'
+generation:
+  provider: OpenRouter
+  requested_model: deepseek/deepseek-v4-flash
+  response_model: deepseek/deepseek-v4-flash
+  successful_candidate_generation_request_count: 1
+  total_openrouter_generation_api_call_count: 2
+  successful_request_transport_attempt_count: 1
+  prior_failed_generation_api_call_count: 1
+  temperature: 0.0
+  reasoning:
+    enabled: false
+  llm_rewrite_or_repair_requests: 0
+audit_and_evaluation:
+  provider: local LiteLLM
+  model: qwen-local
+  model_identity: Qwen/Qwen3-4B-Instruct-2507
+data_firewall:
+  nuggets_loaded_after_generation_and_submission_freeze: true
+  frozen_generation_sha256: 8316fdcd848c48d7a8c826ec298482176f536d3c8d48e052e14e9974f2c6b413
+  frozen_submission_sha256: d3ffd171c924f0057849dacf03d2d65ec606545b2dd3dcc510f07154ffb3e083
+inputs:
+  source_generation:
+    path: outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json
+    bytes: 312796
+    sha256: 9d4260d1e89744dec00f9d664a9e5316608e2e13ad04e61dfc420add3ae8af90
+  source_support_audit:
+    path: outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl
+    bytes: 125907
+    sha256: 566e77205bf7b0109143bf0c076595b3e18af23edfa20765a760cbab20e9ee39
+  organizer_nuggets:
+    path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+    bytes: 241859
+    sha256: cbcdbea534f3d8aa1cebdfbb1e112df32146afe5599246a6f5fe4704d9fc8183
+  comparison_baseline_metrics:
+    path: reports/experiments/rag25_topic213_full_documents_trec26_qwen_local_v1/metrics.json
+    bytes: 4580
+    sha256: 0e1af55f32c7b946d428909c5b265b453390f68c4369ee373f0c0c62cd0860a3
+artifacts:
+  claim_support_audit.jsonl:
+    bytes: 33350
+    sha256: 99997712e8c1feb51a2db92ca96e69ae3361a5ea23afe666cf4bbbb0e1f3887c
+  config.resolved.json:
+    bytes: 2416
+    sha256: ecb49c4f9dbc40f2d780f58094bc7a1d2d57da4384f6add9e33f1505d6789081
+  config.yaml:
+    bytes: 2045
+    sha256: 49a4217f1ba950080e98a8d6549b5e5a2a0e426a0d6d3866ec408d23b9d138ed
+  deepseek_oneshot_response.json:
+    bytes: 8813
+    sha256: 88d7e5a54d18e26bf504b1394022a8d90e0b3e0fbd56a6578535b0aade857653
+  deepseek_raw_response.txt:
+    bytes: 7992
+    sha256: faaed642021f90757d0e6f828b4813a4ea49153193f8fc8840fcbe0928f0254f
+  evaluation_report.md:
+    bytes: 2409
+    sha256: d6e3c1dfe8732a4486a708eb79844e16aaec1b040c80d8f1efde35c7ee2a5faf
+  excluded_sentences.jsonl:
+    bytes: 11497
+    sha256: d5d7111890a5898502a02d561d37874932cddfb92d83abfd69f1f1257e57f458
+  generated_response.md:
+    bytes: 4569
+    sha256: c386151ac74ca660fba36d2e96ef3968c59cd43c1220a540d1201f16d9613afd
+  generation_input.json:
+    bytes: 11154
+    sha256: 9253554def0e32eff900c443f3f7618841be7b5d9c34f3f3d4fbe095e2ad8ccd
+  generation_support_audit.jsonl:
+    bytes: 41384
+    sha256: d7f37fca4a8604a1e20361dcd44de41203a14921ba519f688ce467445cbbae27
+  local_qwen_calls.jsonl:
+    bytes: 16586
+    sha256: e8d30e8c5607a8a27b6dae2c864da3b70b3451a8d86089930316a018af4ead81
+  metrics.json:
+    bytes: 5324
+    sha256: bb5191054b1f53fb681a741de74917fcf2bab0f58bf70eb0646d310f26d2556d
+  nugget_comparison.jsonl:
+    bytes: 112827
+    sha256: 487f2398f8a004ecb6161d970d921b9b9affbbb32530e5b9b0991776f7be7bc0
+  openrouter_generation_failures.jsonl:
+    bytes: 330
+    sha256: 2026914bd68d1817d6e751c6e6e90b87a75259528b4b560c8839f2f6aa3fca82
+  openrouter_generation_receipt.json:
+    bytes: 1524
+    sha256: ad7e5050719854089789286002ff4186c8df72ed3ea8ac90c509c1ea3feb30ab
+  rag_output_trec_rag_2026.jsonl:
+    bytes: 5822
+    sha256: d3ffd171c924f0057849dacf03d2d65ec606545b2dd3dcc510f07154ffb3e083
+  response_generation.json:
+    bytes: 100486
+    sha256: 8316fdcd848c48d7a8c826ec298482176f536d3c8d48e052e14e9974f2c6b413

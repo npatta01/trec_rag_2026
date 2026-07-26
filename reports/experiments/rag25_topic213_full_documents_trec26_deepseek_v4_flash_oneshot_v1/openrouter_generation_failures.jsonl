@@ -1,0 +1,1 @@
+{"candidate_was_created": false, "content_was_empty": true, "endpoint": "https://openrouter.ai/api/v1", "failure": "Initial HTTP-success response used the model's default reasoning behavior and returned empty final content.", "http_status": 200, "nuggets_had_been_loaded": false, "requested_model": "deepseek/deepseek-v4-flash"}

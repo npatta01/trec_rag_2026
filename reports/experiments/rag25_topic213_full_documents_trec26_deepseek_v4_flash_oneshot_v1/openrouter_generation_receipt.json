@@ -1,0 +1,44 @@
+{
+  "checkpoint_replay": false,
+  "elapsed_seconds": 495.813,
+  "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "max_tokens": 3500,
+  "prior_failed_generation_api_call_count": 1,
+  "prior_failure_reason": "Initial HTTP-success response used the model's default reasoning behavior and returned empty final content.",
+  "provider": "Io Net",
+  "raw_content_sha256": "12bef7bb6813e0de64d598f6f15d32a6fee11cc4dbfaca1952816e27a586edaf",
+  "reasoning": {
+    "enabled": false
+  },
+  "request_sha256": "281576153d7b1b9f0cadb966584b764fb738089a3312c1fced105b0426c7ec04",
+  "requested_model": "deepseek/deepseek-v4-flash",
+  "response_id": "gen-1785083839-PXOgroYcAH5yrWeSewTU",
+  "response_model": "deepseek/deepseek-v4-flash",
+  "semantic_generation_request_count": 1,
+  "temperature": 0.0,
+  "total_openrouter_generation_api_call_count": 2,
+  "transport_attempt_count": 1,
+  "usage": {
+    "completion_tokens": 1738,
+    "completion_tokens_details": {
+      "audio_tokens": 0,
+      "image_tokens": 0,
+      "reasoning_tokens": 0
+    },
+    "cost": 0.001162036,
+    "cost_details": {
+      "upstream_inference_completions_cost": 0.000658702,
+      "upstream_inference_cost": 0.001162036,
+      "upstream_inference_prompt_cost": 0.000503334
+    },
+    "is_byok": false,
+    "prompt_tokens": 2106,
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cache_write_tokens": 0,
+      "cached_tokens": 0,
+      "video_tokens": 0
+    },
+    "total_tokens": 3844
+  }
+}
