@@ -1,0 +1,50 @@
+{
+  "models": [
+    {
+      "generation_freeze_sha256": "7d6172c5914e8877d8c0c8377f1b4dac33c19e6da3a4d69b213b5969acfc6e27",
+      "model_key": "qwen_local"
+    },
+    {
+      "generation_freeze_sha256": "e5ce1b859e466cdab9326a3efca13fb429a7be8c6a01dcea8bd8e2c4d1291a13",
+      "model_key": "deepseek_v4_flash"
+    },
+    {
+      "generation_freeze_sha256": "4f8bdcbbc41afd033b262fdd9707c7dbd6704261bd95350decd4cce1513acb56",
+      "model_key": "gpt_5_6_sol"
+    }
+  ],
+  "organizer_nuggets_read": false,
+  "schema_version": "controlled-benchmark-aggregate-freeze-v1",
+  "shared_artifacts": [
+    {
+      "bytes": 2786,
+      "path": "config.yaml",
+      "sha256": "e78ed6f54a28404842097354fa7a679edb36d958ab4e17e304924d4404a27b50"
+    },
+    {
+      "bytes": 46681,
+      "path": "frozen_evidence_ledger.json",
+      "sha256": "dbf033601e61e98f65b051e189612d67d64846acdb626304f91ad6f41c30c802"
+    },
+    {
+      "bytes": 13212,
+      "path": "frozen_generation_payload.json",
+      "sha256": "4b424b86ebb9717e34cd8ba3dba75637c4328a93fe303e41c03e6e3b45f46a50"
+    },
+    {
+      "bytes": 561,
+      "path": "response_schema.json",
+      "sha256": "3f48a73a89d72d914cb3d5334c3daa059c7cd4224679df0b6e48db4173628fbc"
+    },
+    {
+      "bytes": 988,
+      "path": "generation_system_prompt.txt",
+      "sha256": "06814203151869a1f33cbecdad12550033a7942c2b0c958d7127fdc8ae779f94"
+    },
+    {
+      "bytes": 615,
+      "path": "semantic_contract.json",
+      "sha256": "2550a822748b0f6db4584f773c213523b679f7cf4d279031e40370b46dfc7516"
+    }
+  ]
+}

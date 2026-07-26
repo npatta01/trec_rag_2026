@@ -1,0 +1,143 @@
+{
+  "answer_claims": {
+    "citation_coverage": 1.0,
+    "contradicted_claim_count": 0,
+    "partially_supported": 6,
+    "supported": 42,
+    "total": 50,
+    "unsupported_claim_count": 2
+  },
+  "experiment_id": "rag25_topic213_full_documents_qwen_local_v1",
+  "frozen_generation_sha256": "9d4260d1e89744dec00f9d664a9e5316608e2e13ad04e61dfc420add3ae8af90",
+  "frozen_response_sha256": "e6e270433985cec75659aabdd9913a7c8f085df1c5c97d22b01f31c36f877797",
+  "nuggets": {
+    "all": {
+      "contradicted": 1,
+      "missing": 12,
+      "partial_credit_coverage": 0.63,
+      "partially_supported": 11,
+      "strict_coverage": 0.52,
+      "supported": 26,
+      "total": 50
+    },
+    "okay": {
+      "contradicted": 1,
+      "missing": 6,
+      "partial_credit_coverage": 0.5869565217391305,
+      "partially_supported": 5,
+      "strict_coverage": 0.4782608695652174,
+      "supported": 11,
+      "total": 23
+    },
+    "per_sub_narrative": {
+      "\"How did Cold War strategy influence US actions?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.9166666666666666,
+        "partially_supported": 1,
+        "strict_coverage": 0.8333333333333334,
+        "supported": 5,
+        "total": 6
+      },
+      "\"How did US presidents differ in their views on the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.5,
+        "partially_supported": 1,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 1
+      },
+      "\"How did the Korean War conclude?\"": {
+        "contradicted": 1,
+        "missing": 1,
+        "partial_credit_coverage": 0.75,
+        "partially_supported": 0,
+        "strict_coverage": 0.75,
+        "supported": 6,
+        "total": 8
+      },
+      "\"What impact did the Korean War have on US politics?\"": {
+        "contradicted": 0,
+        "missing": 7,
+        "partial_credit_coverage": 0.375,
+        "partially_supported": 1,
+        "strict_coverage": 0.3333333333333333,
+        "supported": 4,
+        "total": 12
+      },
+      "\"What major strategic or political mistakes were made during the war?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.8,
+        "partially_supported": 2,
+        "strict_coverage": 0.6,
+        "supported": 3,
+        "total": 5
+      },
+      "\"What motivated US involvement in the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 2,
+        "partial_credit_coverage": 0.5714285714285714,
+        "partially_supported": 2,
+        "strict_coverage": 0.42857142857142855,
+        "supported": 3,
+        "total": 7
+      },
+      "\"What triggered the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 1,
+        "partial_credit_coverage": 0.625,
+        "partially_supported": 1,
+        "strict_coverage": 0.5,
+        "supported": 2,
+        "total": 4
+      },
+      "New: How does the Korean War affect Korea": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.5,
+        "partially_supported": 1,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 1
+      },
+      "New: How does the Korean War affect UN": {
+        "contradicted": 0,
+        "missing": 1,
+        "partial_credit_coverage": 0.25,
+        "partially_supported": 1,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 2
+      },
+      "New: What motivated China involvement in te Korean War?": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.875,
+        "partially_supported": 1,
+        "strict_coverage": 0.75,
+        "supported": 3,
+        "total": 4
+      }
+    },
+    "vital": {
+      "contradicted": 0,
+      "missing": 6,
+      "partial_credit_coverage": 0.6666666666666666,
+      "partially_supported": 6,
+      "strict_coverage": 0.5555555555555556,
+      "supported": 15,
+      "total": 27
+    }
+  },
+  "response": {
+    "character_count": 11928,
+    "exact_duplicate_claim_count": 0,
+    "near_duplicate_claim_pair_count": 1,
+    "near_duplicate_jaccard_threshold": 0.8,
+    "word_count": 1883
+  },
+  "run_id": "qwen3_4b_full_passage_map_reduce_v1",
+  "topic_id": "213"
+}

@@ -1,0 +1,194 @@
+{
+  "aggregate_generation_freeze_sha256": "dbfee9dd073cf4a4818306ee8b1e11cdc2afdeec5912b3b519f9444245412bea",
+  "answer_claims": {
+    "citation_coverage": 1.0,
+    "contradicted_claim_count": 0,
+    "partially_supported": 0,
+    "supported": 35,
+    "total": 35,
+    "unsupported_claim_count": 0
+  },
+  "claim_retention": {
+    "candidate_source_claims": 42,
+    "retention_rate": 0.8333333333333334,
+    "submitted_source_claims": 35
+  },
+  "experiment_id": "rag25_topic213_controlled_generators_claim_preserving_v1",
+  "generation": {
+    "cost": 0.09345625,
+    "elapsed_seconds": 28.063,
+    "semantic_generation_request_count": 1,
+    "semantic_repair_request_count": 0,
+    "transport_attempt_count": 1,
+    "usage": {
+      "completion_tokens": 2602,
+      "completion_tokens_details": {
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "reasoning_tokens": 1034
+      },
+      "cost": 0.09345625,
+      "cost_details": {
+        "upstream_inference_completions_cost": 0.07806,
+        "upstream_inference_cost": 0.09345625,
+        "upstream_inference_prompt_cost": 0.01539625
+      },
+      "is_byok": false,
+      "prompt_tokens": 2464,
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cache_write_tokens": 2461,
+        "cached_tokens": 0,
+        "video_tokens": 0
+      },
+      "total_tokens": 5066
+    }
+  },
+  "model": {
+    "display_name": "GPT-5.6 Sol",
+    "identity": "openai/gpt-5.6-sol",
+    "key": "gpt_5_6_sol",
+    "provider": "OpenRouter/OpenAI"
+  },
+  "nuggets": {
+    "all": {
+      "contradicted": 0,
+      "missing": 21,
+      "partial_credit_coverage": 0.52,
+      "partially_supported": 6,
+      "strict_coverage": 0.46,
+      "supported": 23,
+      "total": 50
+    },
+    "okay": {
+      "contradicted": 0,
+      "missing": 9,
+      "partial_credit_coverage": 0.5434782608695652,
+      "partially_supported": 3,
+      "strict_coverage": 0.4782608695652174,
+      "supported": 11,
+      "total": 23
+    },
+    "per_sub_narrative": {
+      "\"How did Cold War strategy influence US actions?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.9166666666666666,
+        "partially_supported": 1,
+        "strict_coverage": 0.8333333333333334,
+        "supported": 5,
+        "total": 6
+      },
+      "\"How did US presidents differ in their views on the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.5,
+        "partially_supported": 1,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 1
+      },
+      "\"How did the Korean War conclude?\"": {
+        "contradicted": 0,
+        "missing": 2,
+        "partial_credit_coverage": 0.75,
+        "partially_supported": 0,
+        "strict_coverage": 0.75,
+        "supported": 6,
+        "total": 8
+      },
+      "\"What impact did the Korean War have on US politics?\"": {
+        "contradicted": 0,
+        "missing": 7,
+        "partial_credit_coverage": 0.3333333333333333,
+        "partially_supported": 2,
+        "strict_coverage": 0.25,
+        "supported": 3,
+        "total": 12
+      },
+      "\"What major strategic or political mistakes were made during the war?\"": {
+        "contradicted": 0,
+        "missing": 5,
+        "partial_credit_coverage": 0.0,
+        "partially_supported": 0,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 5
+      },
+      "\"What motivated US involvement in the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 4,
+        "partial_credit_coverage": 0.42857142857142855,
+        "partially_supported": 0,
+        "strict_coverage": 0.42857142857142855,
+        "supported": 3,
+        "total": 7
+      },
+      "\"What triggered the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 1,
+        "partial_credit_coverage": 0.75,
+        "partially_supported": 0,
+        "strict_coverage": 0.75,
+        "supported": 3,
+        "total": 4
+      },
+      "New: How does the Korean War affect Korea": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 1.0,
+        "partially_supported": 0,
+        "strict_coverage": 1.0,
+        "supported": 1,
+        "total": 1
+      },
+      "New: How does the Korean War affect UN": {
+        "contradicted": 0,
+        "missing": 1,
+        "partial_credit_coverage": 0.25,
+        "partially_supported": 1,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 2
+      },
+      "New: What motivated China involvement in te Korean War?": {
+        "contradicted": 0,
+        "missing": 1,
+        "partial_credit_coverage": 0.625,
+        "partially_supported": 1,
+        "strict_coverage": 0.5,
+        "supported": 2,
+        "total": 4
+      }
+    },
+    "vital": {
+      "contradicted": 0,
+      "missing": 12,
+      "partial_credit_coverage": 0.5,
+      "partially_supported": 3,
+      "strict_coverage": 0.4444444444444444,
+      "supported": 12,
+      "total": 27
+    }
+  },
+  "nuggets_loaded_after_all_generations_frozen": true,
+  "official_submission": {
+    "candidate_sentence_count": 42,
+    "candidate_word_count": 960,
+    "excluded_after_support_audit": 7,
+    "maximum_words": 1024,
+    "reference_count": 30,
+    "sentence_count": 35,
+    "word_count": 789
+  },
+  "response": {
+    "character_count": 6364,
+    "exact_duplicate_claim_count": 0,
+    "near_duplicate_claim_pair_count": 0,
+    "near_duplicate_jaccard_threshold": 0.8,
+    "word_count": 983
+  },
+  "run_id": "topic213-controlled-generators-claim-preserving-v1-gpt_5_6_sol",
+  "semantic_request_sha256": "1f0bad2c686fd21239c3d37a0133908188182d6805b5a21c584fef43d9f7e7ec",
+  "topic_id": "213"
+}

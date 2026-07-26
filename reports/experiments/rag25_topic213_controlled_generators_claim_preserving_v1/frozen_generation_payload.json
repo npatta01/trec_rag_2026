@@ -1,0 +1,311 @@
+{
+  "exact_total_sentence_count": 42,
+  "facets": [
+    {
+      "claims": [
+        {
+          "claim_id": "A001",
+          "position": 1,
+          "text": "The Korean War was triggered by the invasion of South Korea by North Korean forces on June 25, 1950."
+        },
+        {
+          "claim_id": "A002",
+          "position": 2,
+          "text": "North Korean forces crossed the 38th parallel during the invasion of South Korea on June 25, 1950."
+        },
+        {
+          "claim_id": "A003",
+          "position": 3,
+          "text": "The North Korean People's Army (NKPA) carried out the invasion of South Korea on June 25, 1950."
+        },
+        {
+          "claim_id": "A004",
+          "position": 4,
+          "text": "The North Korean invasion began with troops crossing the 38th parallel into South Korea."
+        },
+        {
+          "claim_id": "A005",
+          "position": 5,
+          "text": "The North Korean attack on June 25, 1950, was a surprise invasion that quickly captured Seoul, the capital of South Korea."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 1,
+      "sub_narrative": "\"What triggered the Korean War?\"",
+      "word_target": 85
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A006",
+          "position": 6,
+          "text": "The United States intervened in the Korean War to prevent the spread of communism, aligning with the Cold War strategy of containment."
+        },
+        {
+          "claim_id": "A007",
+          "position": 7,
+          "text": "The Korean War was the first major military conflict of the Cold War and served as a test of the containment doctrine."
+        },
+        {
+          "claim_id": "A008",
+          "position": 8,
+          "text": "The Korean War was the first test of the Cold War doctrine of containment, demonstrating the U.S. commitment to stopping communist expansion without triggering a global conflict."
+        },
+        {
+          "claim_id": "A009",
+          "position": 9,
+          "text": "General Douglas MacArthur proposed expanding the war into China and using nuclear weapons, prompting internal debates about containing communism versus risking a global conflict, ultimately leading to the war being confined to the Korean Peninsula."
+        },
+        {
+          "claim_id": "A010",
+          "position": 10,
+          "text": "The U.S. believed that if South Korea fell, communist leaders would be emboldened to threaten other nations closer to the West, reinforcing the rationale for intervention."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 2,
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "word_target": 130
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A011",
+          "position": 11,
+          "text": "The United States intervened in the Korean War to prevent the spread of communism, aligning with the Cold War policy of containment."
+        },
+        {
+          "claim_id": "A012",
+          "position": 12,
+          "text": "The North Korean invasion of South Korea on June 25, 1950, directly triggered U.S. military involvement."
+        },
+        {
+          "claim_id": "A014",
+          "position": 13,
+          "text": "The United States committed troops to defend South Korea following the North Korean invasion, with President Truman authorizing General Douglas MacArthur to provide air and naval support."
+        },
+        {
+          "claim_id": "A015",
+          "position": 14,
+          "text": "The United States led a United Nations coalition to defend South Korea after the North Korean invasion, with UN Security Council Resolution 83 authorizing military assistance."
+        }
+      ],
+      "exact_sentence_count": 4,
+      "facet_number": 3,
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "word_target": 90
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A016",
+          "position": 15,
+          "text": "The Korean War led to a significant increase in military spending, contributing to the development of a powerful military-industrial complex."
+        },
+        {
+          "claim_id": "A018",
+          "position": 16,
+          "text": "The dismissal of General Douglas MacArthur by President Truman triggered a political firestorm and significantly damaged Truman's approval ratings, contributing to the end of his presidency."
+        },
+        {
+          "claim_id": "A019",
+          "position": 17,
+          "text": "The firing of General Douglas MacArthur by President Truman for insubordination was highly unpopular and shocked the American political system."
+        },
+        {
+          "claim_id": "A020",
+          "position": 18,
+          "text": "The Korean War intensified public fear of communist subversion, leading to investigations by the House Un-American Activities Committee (HUAC) and a belief in widespread communist infiltration within American institutions."
+        }
+      ],
+      "exact_sentence_count": 4,
+      "facet_number": 4,
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "word_target": 95
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A021",
+          "position": 19,
+          "text": "The Korean War concluded with an armistice signed on July 27, 1953."
+        },
+        {
+          "claim_id": "A022",
+          "position": 20,
+          "text": "The armistice that ended the Korean War is not a peace treaty but a truce, and therefore the conflict remains technically ongoing."
+        },
+        {
+          "claim_id": "A023",
+          "position": 21,
+          "text": "No formal peace treaty was ever signed to end the Korean War, meaning the conflict remains officially unresolved and technically ongoing."
+        },
+        {
+          "claim_id": "A024",
+          "position": 22,
+          "text": "The fighting in the Korean War ended in a stalemate with no clear winner or loser."
+        },
+        {
+          "claim_id": "A025",
+          "position": 23,
+          "text": "The armistice restored the boundary along the 38th parallel and established the Demilitarized Zone (DMZ), which was set as a 2.5-mile-wide fortified buffer."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 5,
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "word_target": 95
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A026",
+          "position": 24,
+          "text": "The Korean War began on June 25, 1950, when North Korea invaded South Korea across the 38th parallel, aiming to reunite the peninsula under communist rule by force."
+        },
+        {
+          "claim_id": "A027",
+          "position": 25,
+          "text": "The Korean War ended with an armistice signed on July 27, 1953, not a formal peace treaty, leaving the two Koreas technically at war."
+        },
+        {
+          "claim_id": "A028",
+          "position": 26,
+          "text": "The Korean Peninsula remains divided along the 38th parallel, which has been maintained since the war and continues to serve as a boundary between North and South Korea."
+        },
+        {
+          "claim_id": "A029",
+          "position": 27,
+          "text": "The Korean War led to the creation of a demilitarized zone (DMZ) along the 38th parallel, which remains heavily fortified and actively monitored."
+        },
+        {
+          "claim_id": "A030",
+          "position": 28,
+          "text": "The Korean War caused massive civilian and military casualties, with estimates suggesting over two million Korean deaths and up to 20% of the population lost due to war or starvation."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 6,
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "word_target": 130
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A031",
+          "position": 29,
+          "text": "The United Nations Security Council passed Resolution 82 on June 25, 1950, authorizing member states to provide military assistance to South Korea in response to the North Korean invasion."
+        },
+        {
+          "claim_id": "A033",
+          "position": 30,
+          "text": "The United States led a UN coalition in the Korean War, with the majority of combat power coming from U.S. forces."
+        },
+        {
+          "claim_id": "A035",
+          "position": 31,
+          "text": "The Korean War ended with an armistice signed on July 27, 1953, by North Korea, South Korea, China, and the United Nations, but no formal peace treaty was ever ratified."
+        }
+      ],
+      "exact_sentence_count": 3,
+      "facet_number": 7,
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "word_target": 80
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A036",
+          "position": 32,
+          "text": "The U.S. defense strategy in January 1950 did not include Korea as part of its defensive perimeter, leaving it vulnerable to attack."
+        },
+        {
+          "claim_id": "A039",
+          "position": 33,
+          "text": "General MacArthur believed China would not enter the war and pushed U.N. forces beyond the 38th parallel, provoking a Chinese intervention."
+        }
+      ],
+      "exact_sentence_count": 2,
+      "facet_number": 8,
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "word_target": 45
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A041",
+          "position": 34,
+          "text": "China entered the Korean War to support North Korea against United Nations forces led by the United States."
+        },
+        {
+          "claim_id": "A042",
+          "position": 35,
+          "text": "China feared that UN advances, particularly toward the Yalu River, would lead to encirclement or regime change in North Korea, prompting its intervention."
+        },
+        {
+          "claim_id": "A043",
+          "position": 36,
+          "text": "China warned the United States through neutral diplomats that it would intervene to protect its national security if US forces advanced too close to its border."
+        },
+        {
+          "claim_id": "A044",
+          "position": 37,
+          "text": "Mao Zedong argued that allowing the US to occupy all of Korea would weaken Asian communist revolutionary power and allow American influence to spread negatively across the Far East."
+        },
+        {
+          "claim_id": "A045",
+          "position": 38,
+          "text": "China's initial goal in the Korean War was not the conquest of South Korea but the preservation of North Korea as a buffer state."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 9,
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "word_target": 120
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "A046",
+          "position": 39,
+          "text": "President Truman rejected General MacArthur's proposals to expand the Korean War into China and to use nuclear weapons against communist forces."
+        },
+        {
+          "claim_id": "A047",
+          "position": 40,
+          "text": "General MacArthur advocated for pushing North Korean forces beyond the 38th parallel and expanding the war into China, including the use of nuclear weapons."
+        },
+        {
+          "claim_id": "A048",
+          "position": 41,
+          "text": "President Truman viewed the use of nuclear weapons in Korea as a risk that could lead to a world war and opposed such actions."
+        },
+        {
+          "claim_id": "A049",
+          "position": 42,
+          "text": "President Eisenhower pledged to end the Korean War in an early and honorable manner and personally visited the Korean front to assess the situation."
+        }
+      ],
+      "exact_sentence_count": 4,
+      "facet_number": 10,
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "word_target": 90
+    }
+  ],
+  "narrative": "I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.",
+  "output_contract": {
+    "claim_order_must_match_input": true,
+    "item_keys": [
+      "claim_id",
+      "text"
+    ],
+    "one_item_per_claim": true,
+    "one_spacy_sentence_per_item": true,
+    "root_key": "sentences"
+  },
+  "task": "Rewrite every frozen supported claim into its matching output slot.",
+  "total_answer_word_band": {
+    "maximum": 1000,
+    "minimum": 900
+  }
+}

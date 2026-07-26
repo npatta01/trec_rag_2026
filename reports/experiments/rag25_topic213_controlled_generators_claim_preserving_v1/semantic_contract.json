@@ -1,0 +1,11 @@
+{
+  "max_tokens": 3500,
+  "model_identity_excluded_from_semantic_hash": true,
+  "payload_sha256": "05e691676ba8db55e39ccfa071bf168e6551a837d031732a17f549e174cb2afa",
+  "prompt_version": "claim-preserving-42-slot-generation-v1",
+  "response_schema_sha256": "84b7376b6055090506e3e3f087fe6fe558f915cea4668de7e6fd9a83a95615fe",
+  "schema_version": "topic213-controlled-generator-benchmark-v1",
+  "semantic_request_sha256": "1f0bad2c686fd21239c3d37a0133908188182d6805b5a21c584fef43d9f7e7ec",
+  "system_prompt_sha256": "34f086da233d7d4ac270485f4073109351503f36d8b9df6edd4ad4509716633a",
+  "temperature": 0.0
+}

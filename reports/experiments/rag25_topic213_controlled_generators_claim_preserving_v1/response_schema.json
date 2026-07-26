@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "sentences": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "claim_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "maxItems": 42,
+      "minItems": 42,
+      "type": "array"
+    }
+  },
+  "required": [
+    "sentences"
+  ],
+  "type": "object"
+}

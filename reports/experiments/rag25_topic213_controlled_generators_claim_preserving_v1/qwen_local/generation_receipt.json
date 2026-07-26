@@ -1,0 +1,21 @@
+{
+  "checkpoint_replay": false,
+  "elapsed_seconds": 25.812,
+  "max_tokens": 3500,
+  "model": "qwen-local",
+  "provider": null,
+  "raw_content_sha256": "f9787addce07ef6464417964a3859a558a3a3dd8fb730baaed6803efd080f9df",
+  "request_overrides": {},
+  "request_sha256": "da2e715b0a9a160bf533a1624564cd7afd1bbabbfe272b575f48aceab29e0309",
+  "response_id": "chatcmpl-8a828bf0a60e3848",
+  "response_model": "qwen-local",
+  "semantic_generation_request_count": 1,
+  "semantic_request_sha256": "1f0bad2c686fd21239c3d37a0133908188182d6805b5a21c584fef43d9f7e7ec",
+  "temperature": 0.0,
+  "transport_attempt_count": 1,
+  "usage": {
+    "completion_tokens": 1703,
+    "prompt_tokens": 2637,
+    "total_tokens": 4340
+  }
+}

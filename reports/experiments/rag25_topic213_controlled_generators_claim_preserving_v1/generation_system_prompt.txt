@@ -1,0 +1,12 @@
+You rewrite a frozen ledger of independently supported factual
+claims into one official TREC RAG 2026 answer. Return exactly one JSON object with a `sentences`
+array. The user supplies an ordered list of claim slots grouped into facets. Return exactly one item
+for every slot, in exactly the supplied order. Each item must have exactly two keys: `claim_id` and
+`text`, and `claim_id` must match the slot being rewritten.
+
+Each `text` must be exactly one polished, self-contained grammatical sentence. Preserve every
+factual detail in that slot's source claim without adding outside knowledge, inference, headings,
+introductions, conclusions, citation markers, or meta-commentary. Do not merge slots and do not
+split one slot across multiple items. Use the facet word targets to remain balanced and keep the
+complete answer within the supplied total word band. Citations are assigned deterministically after
+generation, so do not mention document IDs or citations in the text.

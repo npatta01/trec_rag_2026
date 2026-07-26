@@ -424,3 +424,41 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.rerank_cache_promotion promote \
 
 The Modal and local paths differ, but the artifact rows, cache keys, validation
 rules, and pipeline consumer interface are the same.
+
+# Controlled Topic 213 generator benchmark
+
+`topic213_controlled_generator_benchmark.py` compares local Qwen, DeepSeek V4 Flash, and GPT-5.6
+Sol using one frozen 42-claim evidence ledger. It enforces identical facet quotas, prompt content,
+claim order, and a 900-1,000-word candidate band; assigns the strongest supporting passage to each
+claim deterministically; freezes every audited organizer submission before loading nuggets; and
+writes a model comparison report.
+
+Inputs are the original full-document Topic 213 `response_generation.json` and
+`claim_support_audit.jsonl`. Outputs are written under `outputs/` and the publishable, hash-sealed
+artifacts are copied under `reports/experiments/`.
+
+```powershell
+$env:PYTHONPATH = "code"
+& C:\dev\trec_rag\.venv\Scripts\python.exe -m trec_rag.topic213_controlled_generator_benchmark `
+  --config configs/rag25_topic213_controlled_generators_claim_preserving_v1.yaml
+```
+
+# Answer Generation Studio
+
+`answer_generation_studio.py` runs the selected GPT-5.6 Sol approach for one nugget-blind frozen
+evidence ledger. It makes one semantic generation request, restores deterministic citations, audits
+each sentence through local Qwen, validates the organizer contract, and writes a hash-sealed JSONL
+bundle without loading development nuggets.
+
+`answer_generation_server.py` wraps that runner in a localhost-only operations console with service
+health, evidence upload, background progress, sentence and citation review, benchmark comparison,
+run history, and organizer JSONL download.
+
+```powershell
+$env:PYTHONPATH = "code"
+& C:\dev\trec_rag\.venv\Scripts\python.exe -m trec_rag.answer_generation_server `
+  --config configs/rag26_answer_generation_studio_gpt56_sol_v1.yaml
+```
+
+Open `http://127.0.0.1:8765`. The server loads endpoint credentials from the repository `.env` and
+never returns them through its API.

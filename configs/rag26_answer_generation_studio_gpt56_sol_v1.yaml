@@ -1,0 +1,40 @@
+experiment_id: rag26_answer_generation_studio_gpt56_sol_v1
+
+app:
+  host: 127.0.0.1
+  port: 8765
+  default_evidence: reports/experiments/rag25_topic213_controlled_generators_claim_preserving_v1/frozen_evidence_ledger.json
+  run_root: outputs/rag26_answer_generation_studio_gpt56_sol_v1
+  benchmark_report_dir: reports/experiments/rag25_topic213_controlled_generators_claim_preserving_v1
+  report_path: reports/experiments/rag25_topic213_controlled_generators_claim_preserving_v1/answer-generation-decision-report.html
+
+submission:
+  team_id: issue19-controlled
+  run_desc: Claim-preserving, facet-balanced generation with deterministic citations and a model-blind support gate.
+
+generation:
+  key: gpt_5_6_sol
+  display_name: GPT-5.6 Sol
+  provider: OpenRouter/OpenAI
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: openai/gpt-5.6-sol
+  model_identity: openai/gpt-5.6-sol
+  max_tokens: 3500
+  temperature: 0.0
+  timeout_seconds: 360
+  transport_max_attempts: 3
+  request_overrides: {}
+
+audit:
+  api_base_env: LITELLM_BASE_URL
+  api_base: http://localhost:4000/v1
+  api_key_env: LITELLM_API_KEY
+  api_key: none
+  model: qwen-local
+  model_identity: Qwen/Qwen3-4B-Instruct-2507
+  max_tokens: 350
+  temperature: 0.0
+  timeout_seconds: 240
+  http_max_attempts: 4
+  validation_attempts: 3

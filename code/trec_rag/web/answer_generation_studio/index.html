@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f4f6f5">
+  <title>Answer Generation Studio</title>
+  <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="#generate" data-view-link="generate" aria-label="Answer Generation Studio">
+        <img src="/mark.svg" alt="" width="34" height="34">
+        <span><strong>Answer Generation</strong><small>TREC RAG Studio</small></span>
+      </a>
+
+      <nav class="nav-list">
+        <button class="nav-item is-active" type="button" data-view-link="generate">
+          <span class="nav-icon" aria-hidden="true">&#9654;</span><span>Generate</span>
+        </button>
+        <button class="nav-item" type="button" data-view-link="benchmark">
+          <span class="nav-icon" aria-hidden="true">&#9638;</span><span>Benchmark</span>
+        </button>
+        <button class="nav-item" type="button" data-view-link="runs">
+          <span class="nav-icon" aria-hidden="true">&#8635;</span><span>Run history</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="service-line"><span id="generator-dot" class="status-dot"></span><span>GPT-5.6 Sol</span></div>
+        <div class="service-line"><span id="auditor-dot" class="status-dot"></span><span>Local support gate</span></div>
+        <a class="report-link" href="/report" target="_blank" rel="noreferrer">
+          <span aria-hidden="true">&#8599;</span><span>Decision report</span>
+        </a>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow" id="view-eyebrow">Competition output</p>
+          <h1 id="view-title">Generate answer</h1>
+        </div>
+        <div class="header-actions">
+          <span id="readiness-badge" class="readiness-badge is-checking">Checking services</span>
+          <button id="refresh-button" class="icon-button" type="button" title="Refresh service status" aria-label="Refresh service status">&#8635;</button>
+        </div>
+      </header>
+
+      <section id="generate-view" class="view is-active" data-view="generate">
+        <div class="evidence-band" aria-label="Frozen evidence summary">
+          <div class="evidence-topic">
+            <span class="data-label">Frozen evidence</span>
+            <strong id="topic-label">Loading topic</strong>
+            <span id="topic-narrative" class="evidence-narrative"></span>
+          </div>
+          <dl class="evidence-stats">
+            <div><dt>Facets</dt><dd id="facet-count">-</dd></div>
+            <div><dt>Claims</dt><dd id="claim-count">-</dd></div>
+            <div><dt>Source words</dt><dd id="source-word-count">-</dd></div>
+            <div><dt>Candidate band</dt><dd id="word-band">-</dd></div>
+          </dl>
+        </div>
+
+        <div class="generation-workspace">
+          <section class="control-pane" aria-labelledby="run-settings-heading">
+            <div class="pane-heading">
+              <div><span class="step-number">01</span><h2 id="run-settings-heading">Run settings</h2></div>
+              <span class="locked-badge">Method locked</span>
+            </div>
+
+            <div class="method-row">
+              <div class="model-mark" aria-hidden="true">S</div>
+              <div><strong>GPT-5.6 Sol</strong><span>OpenRouter / OpenAI</span></div>
+              <span class="winner-badge">Best controlled</span>
+            </div>
+
+            <form id="generation-form">
+              <label class="field-label" for="run-id">Run ID</label>
+              <input id="run-id" name="run_id" type="text" maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,79}" required>
+
+              <label class="field-label" for="team-id">Team ID</label>
+              <input id="team-id" name="team_id" type="text" maxlength="80" value="issue19-controlled" required>
+
+              <label class="field-label" for="run-desc">Run description</label>
+              <textarea id="run-desc" name="run_desc" rows="4" maxlength="500" required>Claim-preserving, facet-balanced generation with deterministic citations and a model-blind support gate.</textarea>
+
+              <div class="field-row">
+                <div>
+                  <span class="field-label">Evidence ledger</span>
+                  <span id="evidence-file-name" class="file-name">Default frozen ledger</span>
+                </div>
+                <label class="secondary-button file-button" title="Select a frozen evidence ledger">
+                  <span aria-hidden="true">&#8679;</span><span>Choose JSON</span>
+                  <input id="evidence-file" type="file" accept="application/json,.json">
+                </label>
+              </div>
+
+              <div class="contract-list" aria-label="Generation contract">
+                <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>One semantic generation request</span></div>
+                <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>Nuggets unavailable during generation</span></div>
+                <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>Sentence-level support audit</span></div>
+              </div>
+
+              <button id="generate-button" class="primary-button" type="submit">
+                <span aria-hidden="true">&#9654;</span><span>Generate organizer answer</span>
+              </button>
+            </form>
+
+            <div id="progress-panel" class="progress-panel" hidden aria-live="polite">
+              <div class="progress-heading"><strong id="progress-stage">Queued</strong><span id="progress-value">0%</span></div>
+              <progress id="progress-bar" max="100" value="0">0%</progress>
+              <p id="progress-message">Waiting to start</p>
+            </div>
+          </section>
+
+          <section class="output-pane" aria-labelledby="answer-heading">
+            <div class="pane-heading output-heading">
+              <div><span class="step-number">02</span><h2 id="answer-heading">Output answer</h2></div>
+              <div class="output-actions">
+                <button id="copy-button" class="icon-button" type="button" title="Copy organizer JSONL" aria-label="Copy organizer JSONL">&#9633;</button>
+                <button id="download-button" class="secondary-button" type="button">
+                  <span aria-hidden="true">&#8595;</span><span>JSONL</span>
+                </button>
+              </div>
+            </div>
+
+            <div id="answer-summary" class="answer-summary" aria-label="Answer validation summary">
+              <div><span>Words</span><strong id="answer-words">-</strong></div>
+              <div><span>Sentences</span><strong id="answer-sentences">-</strong></div>
+              <div><span>References</span><strong id="answer-references">-</strong></div>
+              <div><span>Status</span><strong id="answer-status">Loading</strong></div>
+            </div>
+
+            <div class="answer-toolbar">
+              <div class="tab-list" role="tablist" aria-label="Output views">
+                <button class="tab-button is-active" type="button" role="tab" aria-selected="true" data-answer-tab="answer">Answer</button>
+                <button class="tab-button" type="button" role="tab" aria-selected="false" data-answer-tab="validation">Validation</button>
+                <button class="tab-button" type="button" role="tab" aria-selected="false" data-answer-tab="json">JSONL</button>
+              </div>
+              <label class="facet-filter-label" for="facet-filter">Facet</label>
+              <select id="facet-filter"><option value="all">All facets</option></select>
+            </div>
+
+            <div id="answer-panel" class="answer-panel" role="tabpanel">
+              <div id="answer-source" class="answer-source">Benchmark preview</div>
+              <div id="sentence-list" class="sentence-list"></div>
+            </div>
+            <div id="validation-panel" class="validation-panel" role="tabpanel" hidden></div>
+            <pre id="json-panel" class="json-panel" role="tabpanel" tabindex="0" hidden></pre>
+          </section>
+        </div>
+      </section>
+
+      <section id="benchmark-view" class="view" data-view="benchmark" hidden>
+        <div class="benchmark-intro">
+          <div>
+            <span class="data-label">Controlled Topic 213 experiment</span>
+            <h2>Generator comparison</h2>
+            <p>One frozen evidence ledger, facet quotas, prompt, candidate word band, citation policy, support gate, and nugget evaluator.</p>
+          </div>
+          <a class="secondary-button" href="/report" target="_blank" rel="noreferrer"><span aria-hidden="true">&#8599;</span><span>Full report</span></a>
+        </div>
+        <div id="benchmark-chart" class="benchmark-chart" aria-label="Nugget coverage comparison"></div>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Generator metrics table">
+          <table>
+            <thead><tr><th>Generator</th><th>Strict</th><th>Partial</th><th>Vital strict</th><th>Candidate</th><th>Submitted</th><th>Excluded</th><th>Cost</th></tr></thead>
+            <tbody id="benchmark-table-body"></tbody>
+          </table>
+        </div>
+        <div class="decision-band">
+          <strong>Selected: GPT-5.6 Sol</strong>
+          <span>Highest controlled strict coverage at 0.460; the unconstrained local-Qwen baseline remains higher at 0.520.</span>
+        </div>
+      </section>
+
+      <section id="runs-view" class="view" data-view="runs" hidden>
+        <div class="runs-heading">
+          <div><span class="data-label">Current server session</span><h2>Run history</h2></div>
+          <button id="refresh-runs-button" class="secondary-button" type="button"><span aria-hidden="true">&#8635;</span><span>Refresh</span></button>
+        </div>
+        <div id="run-list" class="run-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

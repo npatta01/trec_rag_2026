@@ -1,0 +1,49 @@
+{
+  "checkpoint_replay": false,
+  "elapsed_seconds": 17.312,
+  "max_tokens": 3500,
+  "model": "deepseek/deepseek-v4-flash",
+  "provider": "Baidu",
+  "raw_content_sha256": "7a297ad2db1d2100d0dc35ca769d20b9cd78958cddfc35dd4f8ccee7abb115ec",
+  "request_overrides": {
+    "provider": {
+      "allow_fallbacks": false,
+      "order": [
+        "Baidu"
+      ]
+    },
+    "reasoning": {
+      "enabled": false
+    }
+  },
+  "request_sha256": "36583015690f9cba462bb8813ed87256c2f98102cf6b16644fc9c91cdcf8f397",
+  "response_id": "gen-1785096181-SJlM8K81arWLEPcs5Cid",
+  "response_model": "deepseek/deepseek-v4-flash",
+  "semantic_generation_request_count": 1,
+  "semantic_request_sha256": "1f0bad2c686fd21239c3d37a0133908188182d6805b5a21c584fef43d9f7e7ec",
+  "temperature": 0.0,
+  "transport_attempt_count": 1,
+  "usage": {
+    "completion_tokens": 1947,
+    "completion_tokens_details": {
+      "audio_tokens": 0,
+      "image_tokens": 0,
+      "reasoning_tokens": 0
+    },
+    "cost": 0.000581945,
+    "cost_details": {
+      "upstream_inference_completions_cost": 0.000354354,
+      "upstream_inference_cost": 0.000581945,
+      "upstream_inference_prompt_cost": 0.000227591
+    },
+    "is_byok": false,
+    "prompt_tokens": 2501,
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cache_write_tokens": 0,
+      "cached_tokens": 0,
+      "video_tokens": 0
+    },
+    "total_tokens": 4448
+  }
+}

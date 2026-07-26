@@ -10,6 +10,9 @@ dependencies = [
     "semantic-text-splitter",
 ]
 
+[project.scripts]
+trec-rag-answer-studio = "trec_rag.answer_generation_server:main"
+
 [dependency-groups]
 dev = [
     "pytest",
@@ -51,6 +54,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["code"]
+
+[tool.setuptools.package-data]
+trec_rag = ["web/answer_generation_studio/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["code"]
