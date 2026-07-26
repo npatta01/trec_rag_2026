@@ -1,0 +1,103 @@
+{
+  "artifact_count": 24,
+  "artifacts": [
+    {
+      "path": "generation_input_claims.json",
+      "sha256": "688814faa10fa1b4a97c85715f8afb46b2c4f17f22fed18e39666d540c56890e"
+    },
+    {
+      "path": "facet_extractions.jsonl",
+      "sha256": "c0623036a2affa67ef44f39e0c9259107a5cf0086372a49f8122ee84dd9f0b4b"
+    },
+    {
+      "path": "facet_extractions/facet_01.json",
+      "sha256": "5d386d55aef66163ce678ee5ebcdaff9098c0a458cbce3f76f995de8bd0c63c3"
+    },
+    {
+      "path": "facet_extractions/facet_02.json",
+      "sha256": "503853850667d0253775c1abb0c9225af3da4c730ee5a69294c4c917f7ab664d"
+    },
+    {
+      "path": "facet_extractions/facet_03.json",
+      "sha256": "4a8202fb67b60ff4378bca25aa4d3bea86737c692ca576760c62be7cbf32e35f"
+    },
+    {
+      "path": "facet_extractions/facet_04.json",
+      "sha256": "38dd178b54f8f1819de16a2981163b76ae58ca45f874acc78890910a87067717"
+    },
+    {
+      "path": "facet_extractions/facet_05.json",
+      "sha256": "6a0cae907d4c6306459bd1e927ae0627eedd88ca21d898f5e1dd02e4eac76f7e"
+    },
+    {
+      "path": "facet_extractions/facet_06.json",
+      "sha256": "4eb35d21363621c815487a32eba2e0ad7d1a40e96a99678b43bf2e902c524eca"
+    },
+    {
+      "path": "facet_extractions/facet_07.json",
+      "sha256": "72eca92927bea4fdfe1e2e75399a8a7739bebb68241778c80f0e0d1b23154837"
+    },
+    {
+      "path": "facet_extractions/facet_08.json",
+      "sha256": "8ca1ad2636cf27a333d2de787a0201181745205c520f662b7dbc7f938403cc88"
+    },
+    {
+      "path": "facet_extractions/facet_09.json",
+      "sha256": "72ed35c7eec94ac37df33ab9e8ceda890e40e0d4a15ec3015826e11dfe41b9fb"
+    },
+    {
+      "path": "facet_extractions/facet_10.json",
+      "sha256": "3648e7e8a705726b4d5059b4fce59666942b1131b895fe8c5bf41ff6711985bc"
+    },
+    {
+      "path": "deepseek_synthesis.json",
+      "sha256": "890e7cc792782a11b2f18fe512437bb72aa91411a644f7b5c8760b6dc735c46b"
+    },
+    {
+      "path": "candidate_response_generation.json",
+      "sha256": "fa2b512d62054692f68e044bef4245b80165de085a83c2d69ef4393f960d3494"
+    },
+    {
+      "path": "response_generation.json",
+      "sha256": "cb3fd05ea22b40ed465505365dff1730c97c8dcef8068a7985d91d01aac5ba1b"
+    },
+    {
+      "path": "generated_response.md",
+      "sha256": "69ff2851c0906e73ddf1bff1db29bfe30857be9316489e8b55b92634256783d3"
+    },
+    {
+      "path": "generation_support_audit.jsonl",
+      "sha256": "d1415d93bec2902c729dd1912fe5c501e0c30e71288525aa70128881dbf808a8"
+    },
+    {
+      "path": "claim_support_audit.jsonl",
+      "sha256": "32f4e39b42da892ec13e2b707081c5bc47e948402e683bf784fd40dc17bf6a2d"
+    },
+    {
+      "path": "excluded_sentences.jsonl",
+      "sha256": "5c051b63d76b0108e25dbdd13d781e3ca477d223c42e64dacd549145c5eb48db"
+    },
+    {
+      "path": "lineage.jsonl",
+      "sha256": "a5eecbfd76262bd3be1703534887075f7d38c61bd143dbcd5c1c04a408f555ae"
+    },
+    {
+      "path": "rag_output_trec_rag_2026.jsonl",
+      "sha256": "9991d2b9a3103481374375320a112e4d598150d5f1cf4fee29d5d946de1fc58e"
+    },
+    {
+      "path": "deepseek_calls.jsonl",
+      "sha256": "6579abc0f8bee93f517e56de1c1eb6de1a6de6525e322102f1a5223bdf838637"
+    },
+    {
+      "path": "deepseek_call_summary.json",
+      "sha256": "ae0694baad3a61d67efc156e6e41aa54999ab313c52c0e29e28476fafcb9cef6"
+    },
+    {
+      "path": "config.resolved.json",
+      "sha256": "fe86dfccdf7b1352700538f4787f3d096fc10e849103bfd5e58ab949fae24ae7"
+    }
+  ],
+  "organizer_nuggets_read": false,
+  "schema_version": "generation-freeze-v1"
+}

@@ -1,0 +1,58 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F09-001",
+      "source_claim_ids": [
+        "A041"
+      ],
+      "text": "China entered the Korean War to support North Korea against United Nations forces led by the United States."
+    },
+    {
+      "fact_id": "F09-002",
+      "source_claim_ids": [
+        "A042"
+      ],
+      "text": "China feared that UN advances, particularly toward the Yalu River, would lead to encirclement or regime change in North Korea, prompting its intervention."
+    },
+    {
+      "fact_id": "F09-003",
+      "source_claim_ids": [
+        "A043"
+      ],
+      "text": "China warned the United States through neutral diplomats that it would intervene to protect its national security if US forces advanced too close to its border."
+    },
+    {
+      "fact_id": "F09-004",
+      "source_claim_ids": [
+        "A044"
+      ],
+      "text": "Mao Zedong argued that allowing the US to occupy all of Korea would weaken Asian communist revolutionary power."
+    },
+    {
+      "fact_id": "F09-005",
+      "source_claim_ids": [
+        "A044"
+      ],
+      "text": "Mao Zedong argued that allowing the US to occupy all of Korea would allow American influence to spread negatively across the Far East."
+    },
+    {
+      "fact_id": "F09-006",
+      "source_claim_ids": [
+        "A045"
+      ],
+      "text": "China's initial goal in the Korean War was not the conquest of South Korea but the preservation of North Korea as a buffer state."
+    }
+  ],
+  "facet_number": 9,
+  "input_source_claim_ids": [
+    "A041",
+    "A042",
+    "A043",
+    "A044",
+    "A045"
+  ],
+  "model_candidate_fact_count": 6,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "New: What motivated China involvement in te Korean War?"
+}

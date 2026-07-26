@@ -1,0 +1,93 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F02-001",
+      "source_claim_ids": [
+        "A006"
+      ],
+      "text": "The United States intervened in the Korean War to prevent the spread of communism."
+    },
+    {
+      "fact_id": "F02-002",
+      "source_claim_ids": [
+        "A006"
+      ],
+      "text": "The U.S. intervention in the Korean War aligned with the Cold War strategy of containment."
+    },
+    {
+      "fact_id": "F02-003",
+      "source_claim_ids": [
+        "A007"
+      ],
+      "text": "The Korean War was the first major military conflict of the Cold War."
+    },
+    {
+      "fact_id": "F02-004",
+      "source_claim_ids": [
+        "A007"
+      ],
+      "text": "The Korean War served as a test of the containment doctrine."
+    },
+    {
+      "fact_id": "F02-005",
+      "source_claim_ids": [
+        "A008"
+      ],
+      "text": "The Korean War was the first test of the Cold War doctrine of containment."
+    },
+    {
+      "fact_id": "F02-006",
+      "source_claim_ids": [
+        "A008"
+      ],
+      "text": "The Korean War demonstrated the U.S. commitment to stopping communist expansion without triggering a global conflict."
+    },
+    {
+      "fact_id": "F02-007",
+      "source_claim_ids": [
+        "A009"
+      ],
+      "text": "General Douglas MacArthur proposed expanding the war into China and using nuclear weapons."
+    },
+    {
+      "fact_id": "F02-008",
+      "source_claim_ids": [
+        "A009"
+      ],
+      "text": "MacArthur's proposal prompted internal debates about containing communism versus risking a global conflict."
+    },
+    {
+      "fact_id": "F02-009",
+      "source_claim_ids": [
+        "A009"
+      ],
+      "text": "The internal debates ultimately led to the war being confined to the Korean Peninsula."
+    },
+    {
+      "fact_id": "F02-010",
+      "source_claim_ids": [
+        "A010"
+      ],
+      "text": "The U.S. believed that if South Korea fell, communist leaders would be emboldened to threaten other nations closer to the West."
+    },
+    {
+      "fact_id": "F02-011",
+      "source_claim_ids": [
+        "A010"
+      ],
+      "text": "The belief that South Korea's fall would embolden communist leaders reinforced the rationale for U.S. intervention."
+    }
+  ],
+  "facet_number": 2,
+  "input_source_claim_ids": [
+    "A006",
+    "A007",
+    "A008",
+    "A009",
+    "A010"
+  ],
+  "model_candidate_fact_count": 11,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"How did Cold War strategy influence US actions?\""
+}

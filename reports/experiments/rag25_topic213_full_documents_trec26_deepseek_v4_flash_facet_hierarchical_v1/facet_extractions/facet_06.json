@@ -1,0 +1,114 @@
+{
+  "candidate_fact_budget_exceeded": true,
+  "candidate_facts": [
+    {
+      "fact_id": "F06-001",
+      "source_claim_ids": [
+        "A026"
+      ],
+      "text": "The Korean War began on June 25, 1950."
+    },
+    {
+      "fact_id": "F06-002",
+      "source_claim_ids": [
+        "A026"
+      ],
+      "text": "North Korea invaded South Korea across the 38th parallel."
+    },
+    {
+      "fact_id": "F06-003",
+      "source_claim_ids": [
+        "A026"
+      ],
+      "text": "North Korea aimed to reunite the peninsula under communist rule by force."
+    },
+    {
+      "fact_id": "F06-004",
+      "source_claim_ids": [
+        "A027"
+      ],
+      "text": "The Korean War ended with an armistice signed on July 27, 1953."
+    },
+    {
+      "fact_id": "F06-005",
+      "source_claim_ids": [
+        "A027"
+      ],
+      "text": "The armistice was not a formal peace treaty."
+    },
+    {
+      "fact_id": "F06-006",
+      "source_claim_ids": [
+        "A027"
+      ],
+      "text": "The two Koreas remain technically at war."
+    },
+    {
+      "fact_id": "F06-007",
+      "source_claim_ids": [
+        "A028"
+      ],
+      "text": "The Korean Peninsula remains divided along the 38th parallel."
+    },
+    {
+      "fact_id": "F06-008",
+      "source_claim_ids": [
+        "A028"
+      ],
+      "text": "The 38th parallel has been maintained since the war."
+    },
+    {
+      "fact_id": "F06-009",
+      "source_claim_ids": [
+        "A028"
+      ],
+      "text": "The 38th parallel continues to serve as a boundary between North and South Korea."
+    },
+    {
+      "fact_id": "F06-010",
+      "source_claim_ids": [
+        "A029"
+      ],
+      "text": "The Korean War led to the creation of a demilitarized zone (DMZ) along the 38th parallel."
+    },
+    {
+      "fact_id": "F06-011",
+      "source_claim_ids": [
+        "A029"
+      ],
+      "text": "The DMZ remains heavily fortified and actively monitored."
+    },
+    {
+      "fact_id": "F06-012",
+      "source_claim_ids": [
+        "A030"
+      ],
+      "text": "The Korean War caused massive civilian and military casualties."
+    },
+    {
+      "fact_id": "F06-013",
+      "source_claim_ids": [
+        "A030"
+      ],
+      "text": "Estimates suggest over two million Korean deaths due to the Korean War."
+    },
+    {
+      "fact_id": "F06-014",
+      "source_claim_ids": [
+        "A030"
+      ],
+      "text": "Up to 20% of the Korean population was lost due to war or starvation."
+    }
+  ],
+  "facet_number": 6,
+  "input_source_claim_ids": [
+    "A026",
+    "A027",
+    "A028",
+    "A029",
+    "A030"
+  ],
+  "model_candidate_fact_count": 14,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "New: How does the Korean War affect Korea"
+}

@@ -1,0 +1,86 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F04-001",
+      "source_claim_ids": [
+        "A016"
+      ],
+      "text": "The Korean War led to a significant increase in military spending."
+    },
+    {
+      "fact_id": "F04-002",
+      "source_claim_ids": [
+        "A016"
+      ],
+      "text": "The Korean War contributed to the development of a powerful military-industrial complex."
+    },
+    {
+      "fact_id": "F04-003",
+      "source_claim_ids": [
+        "A018",
+        "A019"
+      ],
+      "text": "The dismissal of General Douglas MacArthur by President Truman triggered a political firestorm."
+    },
+    {
+      "fact_id": "F04-004",
+      "source_claim_ids": [
+        "A018"
+      ],
+      "text": "The dismissal of General Douglas MacArthur significantly damaged Truman's approval ratings."
+    },
+    {
+      "fact_id": "F04-005",
+      "source_claim_ids": [
+        "A018"
+      ],
+      "text": "The dismissal of General Douglas MacArthur contributed to the end of Truman's presidency."
+    },
+    {
+      "fact_id": "F04-006",
+      "source_claim_ids": [
+        "A019"
+      ],
+      "text": "The firing of General Douglas MacArthur by President Truman for insubordination was highly unpopular."
+    },
+    {
+      "fact_id": "F04-007",
+      "source_claim_ids": [
+        "A019"
+      ],
+      "text": "The firing of General Douglas MacArthur shocked the American political system."
+    },
+    {
+      "fact_id": "F04-008",
+      "source_claim_ids": [
+        "A020"
+      ],
+      "text": "The Korean War intensified public fear of communist subversion."
+    },
+    {
+      "fact_id": "F04-009",
+      "source_claim_ids": [
+        "A020"
+      ],
+      "text": "The Korean War led to investigations by the House Un-American Activities Committee (HUAC)."
+    },
+    {
+      "fact_id": "F04-010",
+      "source_claim_ids": [
+        "A020"
+      ],
+      "text": "The Korean War led to a belief in widespread communist infiltration within American institutions."
+    }
+  ],
+  "facet_number": 4,
+  "input_source_claim_ids": [
+    "A016",
+    "A018",
+    "A019",
+    "A020"
+  ],
+  "model_candidate_fact_count": 10,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"What impact did the Korean War have on US politics?\""
+}

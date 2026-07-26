@@ -1,0 +1,45 @@
+experiment:
+  id: rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1
+  run_id: topic213_deepseek_v4_flash_facet_hierarchical_v1
+  team_id: issue19-openrouter
+  run_desc: Ten independent supported-claim facet extractions followed by one DeepSeek V4 Flash synthesis and local-Qwen support filtering.
+  output_dir: outputs/rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1
+  report_dir: reports/experiments/rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1
+
+inputs:
+  source_generation: outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json
+  source_support_audit: outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl
+  nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  baseline_metrics: reports/experiments/rag25_topic213_full_documents_trec26_qwen_local_v1/metrics.json
+
+generation:
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: deepseek/deepseek-v4-flash
+  provider_order:
+    - Baidu
+  allow_provider_fallbacks: false
+  temperature: 0.0
+  expected_supported_source_claims: 42
+  maximum_facts_per_facet: 12
+  extraction_max_tokens: 1200
+  maximum_sentences_per_section: 4
+  target_maximum_words: 900
+  synthesis_max_tokens: 4000
+  timeout_seconds: 240
+
+audit:
+  api_base: http://localhost:4000/v1
+  api_key: none
+  model: qwen-local
+  model_identity: Qwen/Qwen3-4B-Instruct-2507
+  max_tokens: 350
+  timeout_seconds: 240
+  http_max_attempts: 4
+  validation_attempts: 3
+
+evaluation:
+  expected_nugget_count: 50
+  temperature: 0.0
+  max_tokens: 1400
+  validation_attempts: 3

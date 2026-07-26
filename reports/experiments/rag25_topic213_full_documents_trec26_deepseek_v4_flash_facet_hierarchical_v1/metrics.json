@@ -1,0 +1,556 @@
+{
+  "answer_claims": {
+    "citation_coverage": 1.0,
+    "contradicted_claim_count": 0,
+    "partially_supported": 0,
+    "supported": 27,
+    "total": 27,
+    "unsupported_claim_count": 0
+  },
+  "comparison_to_qwen_baseline": {
+    "baseline_experiment_id": "rag25_topic213_full_documents_trec26_qwen_local_v1",
+    "partial_credit_coverage_delta": -0.010000000000000009,
+    "strict_coverage_delta": 0.020000000000000018,
+    "vital_strict_coverage_delta": 0.0
+  },
+  "experiment_id": "rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1",
+  "frozen_extractions_sha256": "c0623036a2affa67ef44f39e0c9259107a5cf0086372a49f8122ee84dd9f0b4b",
+  "frozen_generation_sha256": "cb3fd05ea22b40ed465505365dff1730c97c8dcef8068a7985d91d01aac5ba1b",
+  "frozen_submission_sha256": "9991d2b9a3103481374375320a112e4d598150d5f1cf4fee29d5d946de1fc58e",
+  "generation_calls": {
+    "cache_hits_this_invocation": 11,
+    "calls": [
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "66edcc9f3a2aca7cecd57b0f44ba1e0cc1833fb359f92ea822e6d6860a4126d0",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_01",
+        "usage": {
+          "completion_tokens": 223,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 7.6167e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 4.0586e-05,
+            "upstream_inference_cost": 7.6167e-05,
+            "upstream_inference_prompt_cost": 3.5581e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 391,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 614
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "d280789dc96f587d26c354625b602a194c135d22174c734f056e85f883677594",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_02",
+        "usage": {
+          "completion_tokens": 420,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 0.000115024,
+          "cost_details": {
+            "upstream_inference_completions_cost": 7.644e-05,
+            "upstream_inference_cost": 0.000115024,
+            "upstream_inference_prompt_cost": 3.8584e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 424,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 844
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "8eca535e1cf94fb8a75f975b44d6bce910f267e164097b203ba87b2abe9c0541",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_03",
+        "usage": {
+          "completion_tokens": 272,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 8.3538e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 4.9504e-05,
+            "upstream_inference_cost": 8.3538e-05,
+            "upstream_inference_prompt_cost": 3.4034e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 374,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 646
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "5c55eaf0454d32881eeddf9fb30e37126c630db129e2e54ff1b0e9ec25e75224",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_04",
+        "usage": {
+          "completion_tokens": 359,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 9.9918e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 6.5338e-05,
+            "upstream_inference_cost": 9.9918e-05,
+            "upstream_inference_prompt_cost": 3.458e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 380,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 739
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "038e8fcf8251640c41fac006fde165ef0cabd31c9473468fc350b6f48947f812",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_05",
+        "usage": {
+          "completion_tokens": 274,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 8.6268e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 4.9868e-05,
+            "upstream_inference_cost": 8.6268e-05,
+            "upstream_inference_prompt_cost": 3.64e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 400,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 674
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "39912334b409bdb92650cb6f128d1f36005460139a7db201cf2850058e83dece",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_06",
+        "usage": {
+          "completion_tokens": 488,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 0.00012922,
+          "cost_details": {
+            "upstream_inference_completions_cost": 8.8816e-05,
+            "upstream_inference_cost": 0.00012922,
+            "upstream_inference_prompt_cost": 4.0404e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 444,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 932
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "28d3aa7211b5fa02790a74155f9efc4397553af174614179da592f7419479d00",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_07",
+        "usage": {
+          "completion_tokens": 295,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 8.6359e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 5.369e-05,
+            "upstream_inference_cost": 8.6359e-05,
+            "upstream_inference_prompt_cost": 3.2669e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 359,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 654
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "593b59d2551e4a4c435aadcf26c32400c8f9d70c468b9dc91104306231645e8d",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_08",
+        "usage": {
+          "completion_tokens": 193,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 6.2972e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 3.5126e-05,
+            "upstream_inference_cost": 6.2972e-05,
+            "upstream_inference_prompt_cost": 2.7846e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 306,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 499
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "a0825d7a5f20f1a815fdb9ee857829d7eccd0664da066a8b63f3eba171f7e088",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_09",
+        "usage": {
+          "completion_tokens": 282,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 8.8543e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 5.1324e-05,
+            "upstream_inference_cost": 8.8543e-05,
+            "upstream_inference_prompt_cost": 3.7219e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 409,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 691
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "eca6b76ba0496233fe309ad336b5b8a17b29bde0cc360899a571f35c3fef42ed",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_extract_facet_10",
+        "usage": {
+          "completion_tokens": 317,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 9.1455e-05,
+          "cost_details": {
+            "upstream_inference_completions_cost": 5.7694e-05,
+            "upstream_inference_cost": 9.1455e-05,
+            "upstream_inference_prompt_cost": 3.3761e-05
+          },
+          "is_byok": false,
+          "prompt_tokens": 371,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 688
+        }
+      },
+      {
+        "cache_hit": true,
+        "finish_reason": "stop",
+        "model": "deepseek/deepseek-v4-flash",
+        "network_request": false,
+        "provider": "Baidu",
+        "request_sha256": "9a5c5e87564b4d26f22a85ed9760a0a617d70f2d45d5747b746acac4072ad3bf",
+        "response_model": "deepseek/deepseek-v4-flash",
+        "stage": "deepseek_synthesize_all_facets",
+        "usage": {
+          "completion_tokens": 2387,
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0
+          },
+          "cost": 0.00067977,
+          "cost_details": {
+            "upstream_inference_completions_cost": 0.000434434,
+            "upstream_inference_cost": 0.00067977,
+            "upstream_inference_prompt_cost": 0.000245336
+          },
+          "is_byok": false,
+          "prompt_tokens": 2696,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "video_tokens": 0
+          },
+          "total_tokens": 5083
+        }
+      }
+    ],
+    "expected_logical_calls": 11,
+    "extraction_calls": 10,
+    "logical_calls": 11,
+    "network_requests_this_invocation": 0,
+    "originating_network_calls": 11,
+    "providers": [
+      "Baidu"
+    ],
+    "requested_model": "deepseek/deepseek-v4-flash",
+    "response_models": [
+      "deepseek/deepseek-v4-flash"
+    ],
+    "synthesis_calls": 1,
+    "usage_totals": {
+      "completion_tokens": 5510.0,
+      "cost": 0.0015992340000000002,
+      "prompt_tokens": 6554.0,
+      "total_tokens": 12064.0
+    }
+  },
+  "generation_freeze_sha256": "f3c71ccf772aa99be8c5c2a0ff1893f06bf5fc2a49f440bc1dc027e46f0d7126",
+  "hierarchy": {
+    "candidate_facts": 82,
+    "candidate_sentences": 35,
+    "source_claims_referenced_by_extractions": 42,
+    "submitted_sentences": 27,
+    "supported_source_claims": 42
+  },
+  "models": {
+    "audit_and_evaluation": "Qwen/Qwen3-4B-Instruct-2507",
+    "generation": "deepseek/deepseek-v4-flash"
+  },
+  "nuggets": {
+    "all": {
+      "contradicted": 1,
+      "missing": 22,
+      "partial_credit_coverage": 0.49,
+      "partially_supported": 5,
+      "strict_coverage": 0.44,
+      "supported": 22,
+      "total": 50
+    },
+    "okay": {
+      "contradicted": 1,
+      "missing": 11,
+      "partial_credit_coverage": 0.45652173913043476,
+      "partially_supported": 1,
+      "strict_coverage": 0.43478260869565216,
+      "supported": 10,
+      "total": 23
+    },
+    "per_sub_narrative": {
+      "\"How did Cold War strategy influence US actions?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 1.0,
+        "partially_supported": 0,
+        "strict_coverage": 1.0,
+        "supported": 6,
+        "total": 6
+      },
+      "\"How did US presidents differ in their views on the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 0.5,
+        "partially_supported": 1,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 1
+      },
+      "\"How did the Korean War conclude?\"": {
+        "contradicted": 0,
+        "missing": 2,
+        "partial_credit_coverage": 0.75,
+        "partially_supported": 0,
+        "strict_coverage": 0.75,
+        "supported": 6,
+        "total": 8
+      },
+      "\"What impact did the Korean War have on US politics?\"": {
+        "contradicted": 0,
+        "missing": 8,
+        "partial_credit_coverage": 0.25,
+        "partially_supported": 2,
+        "strict_coverage": 0.16666666666666666,
+        "supported": 2,
+        "total": 12
+      },
+      "\"What major strategic or political mistakes were made during the war?\"": {
+        "contradicted": 0,
+        "missing": 5,
+        "partial_credit_coverage": 0.0,
+        "partially_supported": 0,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 5
+      },
+      "\"What motivated US involvement in the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 3,
+        "partial_credit_coverage": 0.5,
+        "partially_supported": 1,
+        "strict_coverage": 0.42857142857142855,
+        "supported": 3,
+        "total": 7
+      },
+      "\"What triggered the Korean War?\"": {
+        "contradicted": 0,
+        "missing": 1,
+        "partial_credit_coverage": 0.625,
+        "partially_supported": 1,
+        "strict_coverage": 0.5,
+        "supported": 2,
+        "total": 4
+      },
+      "New: How does the Korean War affect Korea": {
+        "contradicted": 0,
+        "missing": 0,
+        "partial_credit_coverage": 1.0,
+        "partially_supported": 0,
+        "strict_coverage": 1.0,
+        "supported": 1,
+        "total": 1
+      },
+      "New: How does the Korean War affect UN": {
+        "contradicted": 0,
+        "missing": 2,
+        "partial_credit_coverage": 0.0,
+        "partially_supported": 0,
+        "strict_coverage": 0.0,
+        "supported": 0,
+        "total": 2
+      },
+      "New: What motivated China involvement in te Korean War?": {
+        "contradicted": 1,
+        "missing": 1,
+        "partial_credit_coverage": 0.5,
+        "partially_supported": 0,
+        "strict_coverage": 0.5,
+        "supported": 2,
+        "total": 4
+      }
+    },
+    "vital": {
+      "contradicted": 0,
+      "missing": 11,
+      "partial_credit_coverage": 0.5185185185185185,
+      "partially_supported": 4,
+      "strict_coverage": 0.4444444444444444,
+      "supported": 12,
+      "total": 27
+    }
+  },
+  "official_submission": {
+    "excluded_after_support_audit": 8,
+    "maximum_words": 1024,
+    "reference_count": 30,
+    "sentence_count": 27,
+    "word_count": 628
+  },
+  "response": {
+    "character_count": 5208,
+    "exact_duplicate_claim_count": 0,
+    "near_duplicate_claim_pair_count": 1,
+    "near_duplicate_jaccard_threshold": 0.8,
+    "word_count": 833
+  },
+  "run_id": "topic213_deepseek_v4_flash_facet_hierarchical_v1",
+  "topic_id": "213"
+}

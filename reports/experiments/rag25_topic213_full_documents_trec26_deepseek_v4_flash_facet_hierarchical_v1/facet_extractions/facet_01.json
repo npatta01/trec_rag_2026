@@ -1,0 +1,52 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F01-001",
+      "source_claim_ids": [
+        "A001"
+      ],
+      "text": "The Korean War was triggered by the invasion of South Korea by North Korean forces on June 25, 1950."
+    },
+    {
+      "fact_id": "F01-002",
+      "source_claim_ids": [
+        "A002",
+        "A004"
+      ],
+      "text": "North Korean forces crossed the 38th parallel during the invasion of South Korea on June 25, 1950."
+    },
+    {
+      "fact_id": "F01-003",
+      "source_claim_ids": [
+        "A003"
+      ],
+      "text": "The North Korean People's Army (NKPA) carried out the invasion of South Korea on June 25, 1950."
+    },
+    {
+      "fact_id": "F01-004",
+      "source_claim_ids": [
+        "A005"
+      ],
+      "text": "The North Korean attack on June 25, 1950, was a surprise invasion."
+    },
+    {
+      "fact_id": "F01-005",
+      "source_claim_ids": [
+        "A005"
+      ],
+      "text": "The North Korean attack quickly captured Seoul, the capital of South Korea."
+    }
+  ],
+  "facet_number": 1,
+  "input_source_claim_ids": [
+    "A001",
+    "A002",
+    "A003",
+    "A004",
+    "A005"
+  ],
+  "model_candidate_fact_count": 5,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"What triggered the Korean War?\""
+}

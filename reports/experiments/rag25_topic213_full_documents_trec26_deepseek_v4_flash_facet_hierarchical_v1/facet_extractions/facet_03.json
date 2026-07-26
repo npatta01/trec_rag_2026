@@ -1,0 +1,64 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F03-001",
+      "source_claim_ids": [
+        "A011"
+      ],
+      "text": "The United States intervened in the Korean War to prevent the spread of communism."
+    },
+    {
+      "fact_id": "F03-002",
+      "source_claim_ids": [
+        "A011"
+      ],
+      "text": "The United States' intervention in the Korean War aligned with the Cold War policy of containment."
+    },
+    {
+      "fact_id": "F03-003",
+      "source_claim_ids": [
+        "A012"
+      ],
+      "text": "The North Korean invasion of South Korea on June 25, 1950, directly triggered U.S. military involvement."
+    },
+    {
+      "fact_id": "F03-004",
+      "source_claim_ids": [
+        "A014"
+      ],
+      "text": "The United States committed troops to defend South Korea following the North Korean invasion."
+    },
+    {
+      "fact_id": "F03-005",
+      "source_claim_ids": [
+        "A014"
+      ],
+      "text": "President Truman authorized General Douglas MacArthur to provide air and naval support to South Korea."
+    },
+    {
+      "fact_id": "F03-006",
+      "source_claim_ids": [
+        "A015"
+      ],
+      "text": "The United States led a United Nations coalition to defend South Korea after the North Korean invasion."
+    },
+    {
+      "fact_id": "F03-007",
+      "source_claim_ids": [
+        "A015"
+      ],
+      "text": "UN Security Council Resolution 83 authorized military assistance to South Korea."
+    }
+  ],
+  "facet_number": 3,
+  "input_source_claim_ids": [
+    "A011",
+    "A012",
+    "A014",
+    "A015"
+  ],
+  "model_candidate_fact_count": 7,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"What motivated US involvement in the Korean War?\""
+}

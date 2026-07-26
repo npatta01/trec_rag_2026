@@ -1,0 +1,440 @@
+schema_version: topic213-experiment-manifest-v1
+experiment_id: rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1
+branch: codex/deepseek-facet-hierarchical
+source_inputs:
+- path: outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json
+  sha256: 9d4260d1e89744dec00f9d664a9e5316608e2e13ad04e61dfc420add3ae8af90
+- path: outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl
+  sha256: 566e77205bf7b0109143bf0c076595b3e18af23edfa20765a760cbab20e9ee39
+- path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  sha256: cbcdbea534f3d8aa1cebdfbb1e112df32146afe5599246a6f5fe4704d9fc8183
+- path: reports/experiments/rag25_topic213_full_documents_trec26_qwen_local_v1/metrics.json
+  sha256: 0e1af55f32c7b946d428909c5b265b453390f68c4369ee373f0c0c62cd0860a3
+artifacts:
+- path: generation_input_claims.json
+  sha256: 688814faa10fa1b4a97c85715f8afb46b2c4f17f22fed18e39666d540c56890e
+- path: facet_extractions.jsonl
+  sha256: c0623036a2affa67ef44f39e0c9259107a5cf0086372a49f8122ee84dd9f0b4b
+- path: facet_extractions/facet_01.json
+  sha256: 5d386d55aef66163ce678ee5ebcdaff9098c0a458cbce3f76f995de8bd0c63c3
+- path: facet_extractions/facet_02.json
+  sha256: 503853850667d0253775c1abb0c9225af3da4c730ee5a69294c4c917f7ab664d
+- path: facet_extractions/facet_03.json
+  sha256: 4a8202fb67b60ff4378bca25aa4d3bea86737c692ca576760c62be7cbf32e35f
+- path: facet_extractions/facet_04.json
+  sha256: 38dd178b54f8f1819de16a2981163b76ae58ca45f874acc78890910a87067717
+- path: facet_extractions/facet_05.json
+  sha256: 6a0cae907d4c6306459bd1e927ae0627eedd88ca21d898f5e1dd02e4eac76f7e
+- path: facet_extractions/facet_06.json
+  sha256: 4eb35d21363621c815487a32eba2e0ad7d1a40e96a99678b43bf2e902c524eca
+- path: facet_extractions/facet_07.json
+  sha256: 72eca92927bea4fdfe1e2e75399a8a7739bebb68241778c80f0e0d1b23154837
+- path: facet_extractions/facet_08.json
+  sha256: 8ca1ad2636cf27a333d2de787a0201181745205c520f662b7dbc7f938403cc88
+- path: facet_extractions/facet_09.json
+  sha256: 72ed35c7eec94ac37df33ab9e8ceda890e40e0d4a15ec3015826e11dfe41b9fb
+- path: facet_extractions/facet_10.json
+  sha256: 3648e7e8a705726b4d5059b4fce59666942b1131b895fe8c5bf41ff6711985bc
+- path: deepseek_synthesis.json
+  sha256: 890e7cc792782a11b2f18fe512437bb72aa91411a644f7b5c8760b6dc735c46b
+- path: candidate_response_generation.json
+  sha256: fa2b512d62054692f68e044bef4245b80165de085a83c2d69ef4393f960d3494
+- path: response_generation.json
+  sha256: cb3fd05ea22b40ed465505365dff1730c97c8dcef8068a7985d91d01aac5ba1b
+- path: generated_response.md
+  sha256: 69ff2851c0906e73ddf1bff1db29bfe30857be9316489e8b55b92634256783d3
+- path: generation_support_audit.jsonl
+  sha256: d1415d93bec2902c729dd1912fe5c501e0c30e71288525aa70128881dbf808a8
+- path: claim_support_audit.jsonl
+  sha256: 32f4e39b42da892ec13e2b707081c5bc47e948402e683bf784fd40dc17bf6a2d
+- path: excluded_sentences.jsonl
+  sha256: 5c051b63d76b0108e25dbdd13d781e3ca477d223c42e64dacd549145c5eb48db
+- path: lineage.jsonl
+  sha256: a5eecbfd76262bd3be1703534887075f7d38c61bd143dbcd5c1c04a408f555ae
+- path: rag_output_trec_rag_2026.jsonl
+  sha256: 9991d2b9a3103481374375320a112e4d598150d5f1cf4fee29d5d946de1fc58e
+- path: deepseek_calls.jsonl
+  sha256: 6579abc0f8bee93f517e56de1c1eb6de1a6de6525e322102f1a5223bdf838637
+- path: deepseek_call_summary.json
+  sha256: ae0694baad3a61d67efc156e6e41aa54999ab313c52c0e29e28476fafcb9cef6
+- path: config.resolved.json
+  sha256: fe86dfccdf7b1352700538f4787f3d096fc10e849103bfd5e58ab949fae24ae7
+- path: generation_freeze.json
+  sha256: f3c71ccf772aa99be8c5c2a0ff1893f06bf5fc2a49f440bc1dc027e46f0d7126
+- path: nugget_comparison.jsonl
+  sha256: 6b2f62f16e745f9d436829cdcf9a9d3b32b7d57fe8d25d54027cff18802469f4
+- path: metrics.json
+  sha256: 8b27ced8011a741bf2d961b277dedc3754e40b0937b8e97affc6b4ddf486f024
+- path: evaluation_report.md
+  sha256: 2b059fee961a533bb0beb2e211621865738c711eb0929e920e09ca014c7f70ab
+- path: qwen_calls.jsonl
+  sha256: 6d91762a3e1c695221f1ab0a7d65936c19aad790f09f4fa09c1bbc9fb66215f1
+generation_freeze:
+  schema_version: generation-freeze-v1
+  organizer_nuggets_read: false
+  artifact_count: 24
+  artifacts:
+  - path: generation_input_claims.json
+    sha256: 688814faa10fa1b4a97c85715f8afb46b2c4f17f22fed18e39666d540c56890e
+  - path: facet_extractions.jsonl
+    sha256: c0623036a2affa67ef44f39e0c9259107a5cf0086372a49f8122ee84dd9f0b4b
+  - path: facet_extractions/facet_01.json
+    sha256: 5d386d55aef66163ce678ee5ebcdaff9098c0a458cbce3f76f995de8bd0c63c3
+  - path: facet_extractions/facet_02.json
+    sha256: 503853850667d0253775c1abb0c9225af3da4c730ee5a69294c4c917f7ab664d
+  - path: facet_extractions/facet_03.json
+    sha256: 4a8202fb67b60ff4378bca25aa4d3bea86737c692ca576760c62be7cbf32e35f
+  - path: facet_extractions/facet_04.json
+    sha256: 38dd178b54f8f1819de16a2981163b76ae58ca45f874acc78890910a87067717
+  - path: facet_extractions/facet_05.json
+    sha256: 6a0cae907d4c6306459bd1e927ae0627eedd88ca21d898f5e1dd02e4eac76f7e
+  - path: facet_extractions/facet_06.json
+    sha256: 4eb35d21363621c815487a32eba2e0ad7d1a40e96a99678b43bf2e902c524eca
+  - path: facet_extractions/facet_07.json
+    sha256: 72eca92927bea4fdfe1e2e75399a8a7739bebb68241778c80f0e0d1b23154837
+  - path: facet_extractions/facet_08.json
+    sha256: 8ca1ad2636cf27a333d2de787a0201181745205c520f662b7dbc7f938403cc88
+  - path: facet_extractions/facet_09.json
+    sha256: 72ed35c7eec94ac37df33ab9e8ceda890e40e0d4a15ec3015826e11dfe41b9fb
+  - path: facet_extractions/facet_10.json
+    sha256: 3648e7e8a705726b4d5059b4fce59666942b1131b895fe8c5bf41ff6711985bc
+  - path: deepseek_synthesis.json
+    sha256: 890e7cc792782a11b2f18fe512437bb72aa91411a644f7b5c8760b6dc735c46b
+  - path: candidate_response_generation.json
+    sha256: fa2b512d62054692f68e044bef4245b80165de085a83c2d69ef4393f960d3494
+  - path: response_generation.json
+    sha256: cb3fd05ea22b40ed465505365dff1730c97c8dcef8068a7985d91d01aac5ba1b
+  - path: generated_response.md
+    sha256: 69ff2851c0906e73ddf1bff1db29bfe30857be9316489e8b55b92634256783d3
+  - path: generation_support_audit.jsonl
+    sha256: d1415d93bec2902c729dd1912fe5c501e0c30e71288525aa70128881dbf808a8
+  - path: claim_support_audit.jsonl
+    sha256: 32f4e39b42da892ec13e2b707081c5bc47e948402e683bf784fd40dc17bf6a2d
+  - path: excluded_sentences.jsonl
+    sha256: 5c051b63d76b0108e25dbdd13d781e3ca477d223c42e64dacd549145c5eb48db
+  - path: lineage.jsonl
+    sha256: a5eecbfd76262bd3be1703534887075f7d38c61bd143dbcd5c1c04a408f555ae
+  - path: rag_output_trec_rag_2026.jsonl
+    sha256: 9991d2b9a3103481374375320a112e4d598150d5f1cf4fee29d5d946de1fc58e
+  - path: deepseek_calls.jsonl
+    sha256: 6579abc0f8bee93f517e56de1c1eb6de1a6de6525e322102f1a5223bdf838637
+  - path: deepseek_call_summary.json
+    sha256: ae0694baad3a61d67efc156e6e41aa54999ab313c52c0e29e28476fafcb9cef6
+  - path: config.resolved.json
+    sha256: fe86dfccdf7b1352700538f4787f3d096fc10e849103bfd5e58ab949fae24ae7
+deepseek_generation_calls:
+  expected_logical_calls: 11
+  logical_calls: 11
+  extraction_calls: 10
+  synthesis_calls: 1
+  network_requests_this_invocation: 0
+  cache_hits_this_invocation: 11
+  originating_network_calls: 11
+  requested_model: deepseek/deepseek-v4-flash
+  response_models:
+  - deepseek/deepseek-v4-flash
+  providers:
+  - Baidu
+  usage_totals:
+    completion_tokens: 5510.0
+    cost: 0.0015992340000000002
+    prompt_tokens: 6554.0
+    total_tokens: 12064.0
+  calls:
+  - stage: deepseek_extract_facet_01
+    request_sha256: 66edcc9f3a2aca7cecd57b0f44ba1e0cc1833fb359f92ea822e6d6860a4126d0
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 223
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 7.6167e-05
+      cost_details:
+        upstream_inference_completions_cost: 4.0586e-05
+        upstream_inference_cost: 7.6167e-05
+        upstream_inference_prompt_cost: 3.5581e-05
+      is_byok: false
+      prompt_tokens: 391
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 614
+  - stage: deepseek_extract_facet_02
+    request_sha256: d280789dc96f587d26c354625b602a194c135d22174c734f056e85f883677594
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 420
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 0.000115024
+      cost_details:
+        upstream_inference_completions_cost: 7.644e-05
+        upstream_inference_cost: 0.000115024
+        upstream_inference_prompt_cost: 3.8584e-05
+      is_byok: false
+      prompt_tokens: 424
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 844
+  - stage: deepseek_extract_facet_03
+    request_sha256: 8eca535e1cf94fb8a75f975b44d6bce910f267e164097b203ba87b2abe9c0541
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 272
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 8.3538e-05
+      cost_details:
+        upstream_inference_completions_cost: 4.9504e-05
+        upstream_inference_cost: 8.3538e-05
+        upstream_inference_prompt_cost: 3.4034e-05
+      is_byok: false
+      prompt_tokens: 374
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 646
+  - stage: deepseek_extract_facet_04
+    request_sha256: 5c55eaf0454d32881eeddf9fb30e37126c630db129e2e54ff1b0e9ec25e75224
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 359
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 9.9918e-05
+      cost_details:
+        upstream_inference_completions_cost: 6.5338e-05
+        upstream_inference_cost: 9.9918e-05
+        upstream_inference_prompt_cost: 3.458e-05
+      is_byok: false
+      prompt_tokens: 380
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 739
+  - stage: deepseek_extract_facet_05
+    request_sha256: 038e8fcf8251640c41fac006fde165ef0cabd31c9473468fc350b6f48947f812
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 274
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 8.6268e-05
+      cost_details:
+        upstream_inference_completions_cost: 4.9868e-05
+        upstream_inference_cost: 8.6268e-05
+        upstream_inference_prompt_cost: 3.64e-05
+      is_byok: false
+      prompt_tokens: 400
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 674
+  - stage: deepseek_extract_facet_06
+    request_sha256: 39912334b409bdb92650cb6f128d1f36005460139a7db201cf2850058e83dece
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 488
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 0.00012922
+      cost_details:
+        upstream_inference_completions_cost: 8.8816e-05
+        upstream_inference_cost: 0.00012922
+        upstream_inference_prompt_cost: 4.0404e-05
+      is_byok: false
+      prompt_tokens: 444
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 932
+  - stage: deepseek_extract_facet_07
+    request_sha256: 28d3aa7211b5fa02790a74155f9efc4397553af174614179da592f7419479d00
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 295
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 8.6359e-05
+      cost_details:
+        upstream_inference_completions_cost: 5.369e-05
+        upstream_inference_cost: 8.6359e-05
+        upstream_inference_prompt_cost: 3.2669e-05
+      is_byok: false
+      prompt_tokens: 359
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 654
+  - stage: deepseek_extract_facet_08
+    request_sha256: 593b59d2551e4a4c435aadcf26c32400c8f9d70c468b9dc91104306231645e8d
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 193
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 6.2972e-05
+      cost_details:
+        upstream_inference_completions_cost: 3.5126e-05
+        upstream_inference_cost: 6.2972e-05
+        upstream_inference_prompt_cost: 2.7846e-05
+      is_byok: false
+      prompt_tokens: 306
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 499
+  - stage: deepseek_extract_facet_09
+    request_sha256: a0825d7a5f20f1a815fdb9ee857829d7eccd0664da066a8b63f3eba171f7e088
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 282
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 8.8543e-05
+      cost_details:
+        upstream_inference_completions_cost: 5.1324e-05
+        upstream_inference_cost: 8.8543e-05
+        upstream_inference_prompt_cost: 3.7219e-05
+      is_byok: false
+      prompt_tokens: 409
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 691
+  - stage: deepseek_extract_facet_10
+    request_sha256: eca6b76ba0496233fe309ad336b5b8a17b29bde0cc360899a571f35c3fef42ed
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 317
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 9.1455e-05
+      cost_details:
+        upstream_inference_completions_cost: 5.7694e-05
+        upstream_inference_cost: 9.1455e-05
+        upstream_inference_prompt_cost: 3.3761e-05
+      is_byok: false
+      prompt_tokens: 371
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 688
+  - stage: deepseek_synthesize_all_facets
+    request_sha256: 9a5c5e87564b4d26f22a85ed9760a0a617d70f2d45d5747b746acac4072ad3bf
+    cache_hit: true
+    network_request: false
+    model: deepseek/deepseek-v4-flash
+    response_model: deepseek/deepseek-v4-flash
+    provider: Baidu
+    finish_reason: stop
+    usage:
+      completion_tokens: 2387
+      completion_tokens_details:
+        audio_tokens: 0
+        image_tokens: 0
+        reasoning_tokens: 0
+      cost: 0.00067977
+      cost_details:
+        upstream_inference_completions_cost: 0.000434434
+        upstream_inference_cost: 0.00067977
+        upstream_inference_prompt_cost: 0.000245336
+      is_byok: false
+      prompt_tokens: 2696
+      prompt_tokens_details:
+        audio_tokens: 0
+        cache_write_tokens: 0
+        cached_tokens: 0
+        video_tokens: 0
+      total_tokens: 5083

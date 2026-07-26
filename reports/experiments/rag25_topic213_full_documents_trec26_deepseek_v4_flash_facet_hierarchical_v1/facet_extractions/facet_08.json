@@ -1,0 +1,48 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F08-001",
+      "source_claim_ids": [
+        "A036"
+      ],
+      "text": "The U.S. defense strategy in January 1950 did not include Korea as part of its defensive perimeter."
+    },
+    {
+      "fact_id": "F08-002",
+      "source_claim_ids": [
+        "A036"
+      ],
+      "text": "The exclusion of Korea from the U.S. defensive perimeter left it vulnerable to attack."
+    },
+    {
+      "fact_id": "F08-003",
+      "source_claim_ids": [
+        "A039"
+      ],
+      "text": "General MacArthur believed China would not enter the war."
+    },
+    {
+      "fact_id": "F08-004",
+      "source_claim_ids": [
+        "A039"
+      ],
+      "text": "General MacArthur pushed U.N. forces beyond the 38th parallel."
+    },
+    {
+      "fact_id": "F08-005",
+      "source_claim_ids": [
+        "A039"
+      ],
+      "text": "Pushing U.N. forces beyond the 38th parallel provoked a Chinese intervention."
+    }
+  ],
+  "facet_number": 8,
+  "input_source_claim_ids": [
+    "A036",
+    "A039"
+  ],
+  "model_candidate_fact_count": 5,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"What major strategic or political mistakes were made during the war?\""
+}

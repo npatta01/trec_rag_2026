@@ -1,0 +1,78 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F10-001",
+      "source_claim_ids": [
+        "A046"
+      ],
+      "text": "President Truman rejected General MacArthur's proposals to expand the Korean War into China."
+    },
+    {
+      "fact_id": "F10-002",
+      "source_claim_ids": [
+        "A046"
+      ],
+      "text": "President Truman rejected General MacArthur's proposals to use nuclear weapons against communist forces."
+    },
+    {
+      "fact_id": "F10-003",
+      "source_claim_ids": [
+        "A047"
+      ],
+      "text": "General MacArthur advocated for pushing North Korean forces beyond the 38th parallel."
+    },
+    {
+      "fact_id": "F10-004",
+      "source_claim_ids": [
+        "A047"
+      ],
+      "text": "General MacArthur advocated for expanding the war into China."
+    },
+    {
+      "fact_id": "F10-005",
+      "source_claim_ids": [
+        "A047"
+      ],
+      "text": "General MacArthur advocated for the use of nuclear weapons."
+    },
+    {
+      "fact_id": "F10-006",
+      "source_claim_ids": [
+        "A048"
+      ],
+      "text": "President Truman viewed the use of nuclear weapons in Korea as a risk that could lead to a world war."
+    },
+    {
+      "fact_id": "F10-007",
+      "source_claim_ids": [
+        "A048"
+      ],
+      "text": "President Truman opposed the use of nuclear weapons in Korea."
+    },
+    {
+      "fact_id": "F10-008",
+      "source_claim_ids": [
+        "A049"
+      ],
+      "text": "President Eisenhower pledged to end the Korean War in an early and honorable manner."
+    },
+    {
+      "fact_id": "F10-009",
+      "source_claim_ids": [
+        "A049"
+      ],
+      "text": "President Eisenhower personally visited the Korean front to assess the situation."
+    }
+  ],
+  "facet_number": 10,
+  "input_source_claim_ids": [
+    "A046",
+    "A047",
+    "A048",
+    "A049"
+  ],
+  "model_candidate_fact_count": 9,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\""
+}

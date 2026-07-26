@@ -202,6 +202,42 @@ Run all Python tests:
 .venv/bin/python -m pytest -q
 ```
 
+## Topic 213 DeepSeek Facet Hierarchy
+
+`topic213_deepseek_facet_hierarchical.py` runs the controlled TREC RAG 2026
+generation experiment configured by
+`configs/rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1.yaml`.
+
+Inputs:
+
+- the frozen full-evidence `response_generation.json`
+- its frozen `claim_support_audit.jsonl`; only rows marked `supported` enter generation
+- `OPENROUTER_API_KEY` from the worktree `.env`
+- the local `qwen-local` LiteLLM endpoint for support audit and evaluation
+
+The runner makes ten single-shot DeepSeek facet-extraction generations and one
+single-shot synthesis generation. It freezes the extraction ledger, final
+generation, lineage, support audit, exclusions, and organizer JSONL before
+loading organizer nuggets. Durable copies are written under
+`reports/experiments/<experiment-id>/` with a SHA-256 manifest.
+
+Run on Windows from the repository root:
+
+```powershell
+$env:PYTHONPATH = "code"
+C:\dev\trec_rag\.venv\Scripts\python.exe `
+  -m trec_rag.topic213_deepseek_facet_hierarchical `
+  --config configs\rag25_topic213_full_documents_trec26_deepseek_v4_flash_facet_hierarchical_v1.yaml
+```
+
+Validate the focused contract:
+
+```powershell
+$env:PYTHONPATH = "code"
+C:\dev\trec_rag\.venv\Scripts\python.exe -m pytest `
+  code\tests\test_topic213_deepseek_facet_hierarchical.py -q
+```
+
 ## Chunking Helpers
 
 Stable chunking contracts live in `chunking.py`. The public API is intentionally

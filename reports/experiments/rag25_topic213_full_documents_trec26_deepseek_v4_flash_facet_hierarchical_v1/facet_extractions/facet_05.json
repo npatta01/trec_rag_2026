@@ -1,0 +1,66 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F05-001",
+      "source_claim_ids": [
+        "A021"
+      ],
+      "text": "The Korean War concluded with an armistice signed on July 27, 1953."
+    },
+    {
+      "fact_id": "F05-002",
+      "source_claim_ids": [
+        "A022"
+      ],
+      "text": "The armistice that ended the Korean War is not a peace treaty but a truce."
+    },
+    {
+      "fact_id": "F05-003",
+      "source_claim_ids": [
+        "A022",
+        "A023"
+      ],
+      "text": "The conflict remains technically ongoing because no formal peace treaty was ever signed."
+    },
+    {
+      "fact_id": "F05-004",
+      "source_claim_ids": [
+        "A024"
+      ],
+      "text": "The fighting in the Korean War ended in a stalemate with no clear winner or loser."
+    },
+    {
+      "fact_id": "F05-005",
+      "source_claim_ids": [
+        "A025"
+      ],
+      "text": "The armistice restored the boundary along the 38th parallel."
+    },
+    {
+      "fact_id": "F05-006",
+      "source_claim_ids": [
+        "A025"
+      ],
+      "text": "The armistice established the Demilitarized Zone (DMZ)."
+    },
+    {
+      "fact_id": "F05-007",
+      "source_claim_ids": [
+        "A025"
+      ],
+      "text": "The DMZ was set as a 2.5-mile-wide fortified buffer."
+    }
+  ],
+  "facet_number": 5,
+  "input_source_claim_ids": [
+    "A021",
+    "A022",
+    "A023",
+    "A024",
+    "A025"
+  ],
+  "model_candidate_fact_count": 7,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "\"How did the Korean War conclude?\""
+}

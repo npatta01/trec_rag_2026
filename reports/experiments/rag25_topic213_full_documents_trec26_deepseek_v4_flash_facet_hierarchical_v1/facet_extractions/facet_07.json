@@ -1,0 +1,70 @@
+{
+  "candidate_fact_budget_exceeded": false,
+  "candidate_facts": [
+    {
+      "fact_id": "F07-001",
+      "source_claim_ids": [
+        "A031"
+      ],
+      "text": "The United Nations Security Council passed Resolution 82 on June 25, 1950."
+    },
+    {
+      "fact_id": "F07-002",
+      "source_claim_ids": [
+        "A031"
+      ],
+      "text": "Resolution 82 authorized member states to provide military assistance to South Korea."
+    },
+    {
+      "fact_id": "F07-003",
+      "source_claim_ids": [
+        "A031"
+      ],
+      "text": "The authorization was in response to the North Korean invasion."
+    },
+    {
+      "fact_id": "F07-004",
+      "source_claim_ids": [
+        "A033"
+      ],
+      "text": "The United States led a UN coalition in the Korean War."
+    },
+    {
+      "fact_id": "F07-005",
+      "source_claim_ids": [
+        "A033"
+      ],
+      "text": "The majority of combat power in the UN coalition came from U.S. forces."
+    },
+    {
+      "fact_id": "F07-006",
+      "source_claim_ids": [
+        "A035"
+      ],
+      "text": "The Korean War ended with an armistice signed on July 27, 1953."
+    },
+    {
+      "fact_id": "F07-007",
+      "source_claim_ids": [
+        "A035"
+      ],
+      "text": "The armistice was signed by North Korea, South Korea, China, and the United Nations."
+    },
+    {
+      "fact_id": "F07-008",
+      "source_claim_ids": [
+        "A035"
+      ],
+      "text": "No formal peace treaty was ever ratified after the Korean War."
+    }
+  ],
+  "facet_number": 7,
+  "input_source_claim_ids": [
+    "A031",
+    "A033",
+    "A035"
+  ],
+  "model_candidate_fact_count": 8,
+  "requested_maximum_candidate_facts": 12,
+  "sub_narrative": "New: How does the Korean War affect UN"
+}
