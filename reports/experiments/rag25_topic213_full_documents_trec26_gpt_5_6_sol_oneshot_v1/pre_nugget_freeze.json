@@ -1,0 +1,44 @@
+{
+  "experiment_id": "rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1",
+  "files": {
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/claim_support_audit.jsonl": {
+      "bytes": 14818,
+      "sha256": "15db4aff557684aaa2b55326b70e70de46d58d4626c95ce2ff3d785f51093de8"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/excluded_sentences.jsonl": {
+      "bytes": 14355,
+      "sha256": "b95bc2f9bdc81ee4c7e2bed7e10b5de3a56ba0dc55fb81a735453a0d827aad2a"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generated_response.md": {
+      "bytes": 2722,
+      "sha256": "c5532af1c76ba4bf656c37a21c62057844933dd31058657203664108c34e0bf6"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generation_request_summary.json": {
+      "bytes": 1239,
+      "sha256": "e7d14bf5b04af452c8cba88d9112cfc2ab80b7375edc08176966b96c9248a0b2"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generation_support_audit.jsonl": {
+      "bytes": 23743,
+      "sha256": "c56443a5ad256213e319071a73617ceb9ebab1ec9c27a9cf4c257ec404ad8ea6"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/openrouter_raw_response.json": {
+      "bytes": 5510,
+      "sha256": "478ad84e089362470a80578de7de5302332183d87e384561c96ff48146474e99"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/rag_output_trec_rag_2026.jsonl": {
+      "bytes": 3310,
+      "sha256": "81eb2f5cfc3811925eff00d1c55a237462dbb37b299ce27f0a0eaf30d2c3d455"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/response_generation.candidate.json": {
+      "bytes": 85093,
+      "sha256": "faab342fc600f07509bab345e4bf0036add5baac961236f5b711b552bf18583a"
+    },
+    "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/response_generation.json": {
+      "bytes": 63183,
+      "sha256": "6813b917ef055dec8e036b18f5344d77b379237d83c4bd654d7ae2b6e49d9a08"
+    }
+  },
+  "nuggets_loaded": false,
+  "root_sha256": "3627a1fb6bea4bc13da87d39a79f3fee9084051a929a2fd8bc931dbc5fab7f7a",
+  "schema_version": "pre-nugget-freeze-v1"
+}

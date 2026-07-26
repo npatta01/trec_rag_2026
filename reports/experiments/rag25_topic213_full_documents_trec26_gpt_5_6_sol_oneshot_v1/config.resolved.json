@@ -1,0 +1,50 @@
+{
+  "evaluation": {
+    "expected_nugget_count": 50,
+    "max_tokens": 1400,
+    "temperature": 0.0,
+    "validation_attempts": 3
+  },
+  "experiment": {
+    "id": "rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1",
+    "output_dir": "outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1",
+    "report_dir": "reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1",
+    "run_desc": "One-shot GPT-5.6 Sol synthesis from the 42 fully supported full-evidence Topic 213 claims, independently audited and evaluated by local Qwen.",
+    "run_id": "topic213_full_evidence_trec26_gpt_5_6_sol_oneshot_v1",
+    "team_id": "issue19-openrouter"
+  },
+  "generation": {
+    "api_base": "https://openrouter.ai/api/v1",
+    "api_key_env": "OPENROUTER_API_KEY",
+    "max_tokens": 6000,
+    "maximum_sentences_per_section": 4,
+    "model": "openai/gpt-5.6-sol",
+    "model_identity": "openai/gpt-5.6-sol",
+    "official_maximum_words": 1024,
+    "precompletion_rejected_http_attempts": 2,
+    "precompletion_rejection": "Initial strict schemas enumerated quoted sub-narrative labels; OpenAI and Azure rejected them before inference because quote characters are disallowed in strict string enums.",
+    "target_maximum_words": 900,
+    "temperature": 0.0,
+    "timeout_seconds": 600,
+    "transport_max_attempts": 3
+  },
+  "inputs": {
+    "nuggets": "trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl",
+    "source_generation": "outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json",
+    "source_support_audit": "outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl",
+    "trec26_qwen_baseline_metrics": "reports/experiments/rag25_topic213_full_documents_trec26_qwen_local_v1/metrics.json"
+  },
+  "judge": {
+    "api_base": "http://localhost:4000/v1",
+    "api_base_env": "LITELLM_BASE_URL",
+    "api_key": "none",
+    "api_key_env": "LITELLM_API_KEY",
+    "audit_max_tokens": 350,
+    "http_max_attempts": 4,
+    "model": "qwen-local",
+    "model_identity": "Qwen/Qwen3-4B-Instruct-2507",
+    "temperature": 0.0,
+    "timeout_seconds": 240,
+    "validation_attempts": 3
+  }
+}

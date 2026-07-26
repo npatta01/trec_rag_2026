@@ -1,0 +1,111 @@
+schema_version: topic213-experiment-manifest-v1
+experiment_id: rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1
+run_id: topic213_full_evidence_trec26_gpt_5_6_sol_oneshot_v1
+status: complete
+models:
+  generator: openai/gpt-5.6-sol
+  support_judge_and_nugget_evaluator: Qwen/Qwen3-4B-Instruct-2507
+generation_protocol:
+  semantic_request_count: 1
+  successful_request_http_attempt_count: 1
+  precompletion_rejected_http_attempt_count: 2
+  total_generation_endpoint_http_request_count: 3
+  temperature: 0.0
+  rewrite_or_repair_calls: 0
+data_firewall:
+  nuggets_loaded_after_pre_nugget_freeze: true
+  pre_nugget_freeze_sha256: fd057f0fafae76c6a5cbd4d3ca5c6ad3bf1a1435bd9d6ccd1f7724636acc8f2c
+files:
+  configs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1.yaml:
+    bytes: 1913
+    sha256: b8eac0dd33e78abd190ef7c90e0d7fdb3d897ad18b9cc8134516e424cea6a39e
+  outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json:
+    bytes: 312796
+    sha256: 9d4260d1e89744dec00f9d664a9e5316608e2e13ad04e61dfc420add3ae8af90
+  outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl:
+    bytes: 125907
+    sha256: 566e77205bf7b0109143bf0c076595b3e18af23edfa20765a760cbab20e9ee39
+  trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl:
+    bytes: 241859
+    sha256: cbcdbea534f3d8aa1cebdfbb1e112df32146afe5599246a6f5fe4704d9fc8183
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/openrouter_raw_response.json:
+    bytes: 5510
+    sha256: 478ad84e089362470a80578de7de5302332183d87e384561c96ff48146474e99
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generation_request_summary.json:
+    bytes: 1239
+    sha256: e7d14bf5b04af452c8cba88d9112cfc2ab80b7375edc08176966b96c9248a0b2
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/response_generation.candidate.json:
+    bytes: 85093
+    sha256: faab342fc600f07509bab345e4bf0036add5baac961236f5b711b552bf18583a
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/response_generation.json:
+    bytes: 63183
+    sha256: 6813b917ef055dec8e036b18f5344d77b379237d83c4bd654d7ae2b6e49d9a08
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generation_support_audit.jsonl:
+    bytes: 23743
+    sha256: c56443a5ad256213e319071a73617ceb9ebab1ec9c27a9cf4c257ec404ad8ea6
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/claim_support_audit.jsonl:
+    bytes: 14818
+    sha256: 15db4aff557684aaa2b55326b70e70de46d58d4626c95ce2ff3d785f51093de8
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/excluded_sentences.jsonl:
+    bytes: 14355
+    sha256: b95bc2f9bdc81ee4c7e2bed7e10b5de3a56ba0dc55fb81a735453a0d827aad2a
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generated_response.md:
+    bytes: 2722
+    sha256: c5532af1c76ba4bf656c37a21c62057844933dd31058657203664108c34e0bf6
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/rag_output_trec_rag_2026.jsonl:
+    bytes: 3310
+    sha256: 81eb2f5cfc3811925eff00d1c55a237462dbb37b299ce27f0a0eaf30d2c3d455
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/pre_nugget_freeze.json:
+    bytes: 2255
+    sha256: fd057f0fafae76c6a5cbd4d3ca5c6ad3bf1a1435bd9d6ccd1f7724636acc8f2c
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/nugget_comparison.jsonl:
+    bytes: 96422
+    sha256: d3d6b7e34669beeb7bcc846ca95bd3217bde6c3591e3d42bfe4c8a25f455ccd6
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/metrics.json:
+    bytes: 6239
+    sha256: 6f214c762480c544945a7b2cdbe5cd3eaf8ee41ee07aee559449aae8c0cad41d
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/evaluation_report.md:
+    bytes: 2289
+    sha256: f5ccb685019a0e94744c0e8e1085401d0202d3dfae239b727e2eeb43b10bc6b1
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/config.resolved.json:
+    bytes: 2244
+    sha256: d5a5506e208e9e33e31b1328aa95a97d65e6a698664cfcbddcf073c0eddf9c3c
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/openrouter_generation_calls.jsonl:
+    bytes: 2277
+    sha256: 5b589ffce553c508e5285489d868fb072aad9c7c569b0aa9118b432d974ee803
+  outputs/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/local_qwen_calls.jsonl:
+    bytes: 9112
+    sha256: e4189fee714ce1b615a616aaf2ab94b90f150f1c3677d2bf8432657857fe23a9
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/rag_output_trec_rag_2026.jsonl:
+    bytes: 3310
+    sha256: 81eb2f5cfc3811925eff00d1c55a237462dbb37b299ce27f0a0eaf30d2c3d455
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generated_response.md:
+    bytes: 2722
+    sha256: c5532af1c76ba4bf656c37a21c62057844933dd31058657203664108c34e0bf6
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/generation_support_audit.jsonl:
+    bytes: 23743
+    sha256: c56443a5ad256213e319071a73617ceb9ebab1ec9c27a9cf4c257ec404ad8ea6
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/excluded_sentences.jsonl:
+    bytes: 14355
+    sha256: b95bc2f9bdc81ee4c7e2bed7e10b5de3a56ba0dc55fb81a735453a0d827aad2a
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/nugget_comparison.jsonl:
+    bytes: 96422
+    sha256: d3d6b7e34669beeb7bcc846ca95bd3217bde6c3591e3d42bfe4c8a25f455ccd6
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/metrics.json:
+    bytes: 6239
+    sha256: 6f214c762480c544945a7b2cdbe5cd3eaf8ee41ee07aee559449aae8c0cad41d
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/evaluation_report.md:
+    bytes: 2289
+    sha256: f5ccb685019a0e94744c0e8e1085401d0202d3dfae239b727e2eeb43b10bc6b1
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/config.resolved.json:
+    bytes: 2244
+    sha256: d5a5506e208e9e33e31b1328aa95a97d65e6a698664cfcbddcf073c0eddf9c3c
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/pre_nugget_freeze.json:
+    bytes: 2255
+    sha256: fd057f0fafae76c6a5cbd4d3ca5c6ad3bf1a1435bd9d6ccd1f7724636acc8f2c
+  reports/experiments/rag25_topic213_full_documents_trec26_gpt_5_6_sol_oneshot_v1/config.yaml:
+    bytes: 1913
+    sha256: b8eac0dd33e78abd190ef7c90e0d7fdb3d897ad18b9cc8134516e424cea6a39e
+  reports/experiments/rag25_topic213_full_documents_trec26_qwen_local_v1/metrics.json:
+    bytes: 4580
+    sha256: 0e1af55f32c7b946d428909c5b265b453390f68c4369ee373f0c0c62cd0860a3

@@ -1,0 +1,33 @@
+experiment:
+  id: rag25_topic213_full_documents_trec26_qwen_local_v1
+  run_id: topic213_full_evidence_trec26_qwen_v1
+  team_id: issue19-local
+  run_desc: Full-evidence map/reduce claims consolidated into a support-audited TREC RAG 2026 sentence-level response.
+  output_dir: outputs/rag25_topic213_full_documents_trec26_qwen_local_v1
+
+inputs:
+  source_generation: outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json
+  source_support_audit: outputs/rag25_topic213_full_documents_qwen_local_v1/claim_support_audit.jsonl
+  nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+
+generation:
+  api_base_env: LITELLM_BASE_URL
+  model_env: LITELLM_MODEL
+  api_key_env: LITELLM_API_KEY
+  model: qwen-local
+  model_identity: Qwen/Qwen3-4B-Instruct-2507
+  temperature: 0.0
+  maximum_sentences_per_section: 3
+  target_maximum_words: 900
+  max_tokens: 1800
+  repair_max_tokens: 180
+  audit_max_tokens: 350
+  timeout_seconds: 240
+  http_max_attempts: 4
+  validation_attempts: 3
+
+evaluation:
+  expected_nugget_count: 50
+  temperature: 0.0
+  max_tokens: 1400
+  validation_attempts: 3
