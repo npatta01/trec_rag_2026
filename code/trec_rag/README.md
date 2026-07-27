@@ -147,31 +147,29 @@ pool metrics.
 JSONL. It accepts the same topic TSV, six-column TREC run, and JSONL/ZIP
 document shapes as the released Piika baseline. The command loads
 `OPENROUTER_API_KEY` from the repository `.env`, calls GPT Sol once per topic,
-and validates every row before publishing the consolidated output.
+and validates every row before publishing the consolidated output. All runtime
+settings live in one strict YAML file; unknown sections and fields are rejected.
 
 Run from Windows PowerShell:
 
 ```powershell
 $env:PYTHONPATH = "code"
 .venv\Scripts\python.exe -m trec_rag.competition_rag `
-  --queries trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv `
-  --run path/to/bm25.trec `
-  --documents path/to/bm25_with_text.jsonl.zip `
-  --output outputs/gpt_sol_bm25.jsonl `
-  --team-id castorini `
-  --run-id gpt_sol_bm25 `
-  --reasoning-effort medium
+  --config configs/rag26_competition_gpt_sol_bm25.example.yaml
 ```
 
-Omit `--top-k` to use every positive-ranked document in the TREC run. Add
-`--resume` after an interrupted run; valid per-topic rows are reused. Add
-`--overwrite` to replace an existing run deliberately.
+The config groups run identity/output mode, official submission metadata,
+input paths, retrieval depth/document cap, and OpenRouter generation settings.
+Set `retrieval.top_k: null` to use every positive-ranked document. Set
+`experiment.mode` to `resume` after an interruption or `overwrite` to replace
+an existing run deliberately. The experiment ID is the official `run_id`.
 
 The final JSONL has exactly `metadata`, `references`, and `answer` at the root.
 Answer citations are zero-based integer indexes into the unique raw ClimbMix
 docids in `references`; every answer object has one to three citations, every
 reference is used, and the complete answer is at most 1,024 words. Provider
-responses and resumable rows stay beside the output in `<output-stem>.work/`.
+responses and resumable rows are written under `<experiment.output_dir>/work/`;
+the consolidated file is `<experiment.output_dir>/rag_output_trec_rag_2026.jsonl`.
 
 Validate the runner without making API calls:
 

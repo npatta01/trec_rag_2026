@@ -13,6 +13,7 @@ import asyncio
 import csv
 import io
 import json
+import math
 import os
 import re
 import time
@@ -24,8 +25,9 @@ from pathlib import Path
 from typing import Any, Iterator, Protocol, TextIO
 
 import requests
+import yaml
 
-from trec_rag.repo_env import find_repo_root, load_repo_env
+from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_root
 
 
 SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
@@ -158,6 +160,220 @@ class RagGenerationConfig:
         return self.work_dir or self.output_path.with_name(
             self.output_path.stem + ".work"
         )
+
+
+def _config_mapping(value: object, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping")
+    return value
+
+
+def _config_section(
+    config: dict[str, Any], name: str, allowed_fields: set[str]
+) -> dict[str, Any]:
+    section = _config_mapping(config.get(name), name)
+    unknown = sorted(set(section) - allowed_fields)
+    if unknown:
+        raise ValueError(f"unknown {name} field(s): {', '.join(unknown)}")
+    return section
+
+
+def _config_text(
+    mapping: dict[str, Any], key: str, owner: str, default: str | None = None
+) -> str:
+    value = mapping.get(key, default)
+    if value is None or not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{owner}.{key} must be nonempty text")
+    return value.strip()
+
+
+def _optional_config_text(
+    mapping: dict[str, Any], key: str, owner: str
+) -> str | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{owner}.{key} must be nonempty text or null")
+    return value.strip()
+
+
+def _positive_config_int(
+    mapping: dict[str, Any], key: str, owner: str, default: int
+) -> int:
+    value = mapping.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{owner}.{key} must be a positive integer")
+    return value
+
+
+def _positive_config_float(
+    mapping: dict[str, Any], key: str, owner: str, default: float
+) -> float:
+    value = mapping.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{owner}.{key} must be a positive number")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{owner}.{key} must be a positive number")
+    return parsed
+
+
+def _resolve_config_input(root_dir: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    active_path = root_dir / path
+    if active_path.exists():
+        return active_path
+    shared_root = shared_checkout_root(root_dir)
+    if shared_root:
+        shared_path = shared_root / path
+        if shared_path.exists():
+            return shared_path
+    return active_path
+
+
+def _resolve_config_output(root_dir: Path, value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root_dir / path
+
+
+def load_rag_generation_config(path: Path) -> RagGenerationConfig:
+    """Load one strict competition answer-generation YAML file."""
+    config_path = path.resolve()
+    root_dir = find_repo_root(config_path.parent)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    config = _config_mapping(raw, "config")
+    expected_sections = {
+        "experiment",
+        "submission",
+        "inputs",
+        "retrieval",
+        "generation",
+    }
+    unknown_sections = sorted(set(config) - expected_sections)
+    missing_sections = sorted(expected_sections - set(config))
+    if unknown_sections:
+        raise ValueError(f"unknown config section(s): {', '.join(unknown_sections)}")
+    if missing_sections:
+        raise ValueError(f"missing config section(s): {', '.join(missing_sections)}")
+
+    experiment = _config_section(
+        config, "experiment", {"id", "output_dir", "mode"}
+    )
+    experiment_id = _config_text(experiment, "id", "experiment")
+    output_dir = _resolve_config_output(
+        root_dir,
+        experiment.get("output_dir") or Path("outputs") / experiment_id,
+    )
+    mode = _config_text(experiment, "mode", "experiment", "create").lower()
+    if mode not in {"create", "resume", "overwrite"}:
+        raise ValueError("experiment.mode must be create, resume, or overwrite")
+
+    submission = _config_section(config, "submission", {"team_id", "run_desc"})
+    inputs = _config_section(
+        config, "inputs", {"queries", "run", "documents", "archive_member"}
+    )
+    retrieval = _config_section(
+        config, "retrieval", {"top_k", "max_document_words"}
+    )
+    generation = _config_section(
+        config,
+        "generation",
+        {
+            "type",
+            "api_base",
+            "api_key_env",
+            "model",
+            "reasoning_effort",
+            "temperature",
+            "max_tokens",
+            "timeout_seconds",
+            "transport_max_attempts",
+            "concurrency",
+        },
+    )
+    generation_type = _config_text(
+        generation, "type", "generation", "openrouter"
+    ).lower()
+    if generation_type != "openrouter":
+        raise ValueError("generation.type must be openrouter")
+
+    top_k = retrieval.get("top_k")
+    if top_k is not None and (
+        isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0
+    ):
+        raise ValueError("retrieval.top_k must be a positive integer or null")
+    temperature = generation.get("temperature", 0.0)
+    if isinstance(temperature, bool) or not isinstance(temperature, int | float):
+        raise ValueError("generation.temperature must be a finite number")
+    temperature = float(temperature)
+    if not math.isfinite(temperature):
+        raise ValueError("generation.temperature must be a finite number")
+    reasoning_effort = _config_text(
+        generation, "reasoning_effort", "generation", "medium"
+    ).lower()
+    if reasoning_effort not in {
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    }:
+        raise ValueError("generation.reasoning_effort is unsupported")
+
+    return RagGenerationConfig(
+        queries_path=_resolve_config_input(
+            root_dir, _config_text(inputs, "queries", "inputs")
+        ),
+        run_path=_resolve_config_input(
+            root_dir, _config_text(inputs, "run", "inputs")
+        ),
+        documents_path=_resolve_config_input(
+            root_dir, _config_text(inputs, "documents", "inputs")
+        ),
+        output_path=output_dir / "rag_output_trec_rag_2026.jsonl",
+        work_dir=output_dir / "work",
+        archive_member=_optional_config_text(inputs, "archive_member", "inputs"),
+        top_k=top_k,
+        max_document_words=_positive_config_int(
+            retrieval, "max_document_words", "retrieval", 1000
+        ),
+        team_id=_config_text(submission, "team_id", "submission"),
+        run_id=experiment_id,
+        run_desc=_config_text(submission, "run_desc", "submission"),
+        api_base=_config_text(
+            generation,
+            "api_base",
+            "generation",
+            "https://openrouter.ai/api/v1",
+        ),
+        api_key_env=_config_text(
+            generation, "api_key_env", "generation", "OPENROUTER_API_KEY"
+        ),
+        model=_config_text(
+            generation, "model", "generation", "openai/gpt-5.6-sol"
+        ),
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        max_tokens=_positive_config_int(
+            generation, "max_tokens", "generation", 6000
+        ),
+        timeout_seconds=_positive_config_float(
+            generation, "timeout_seconds", "generation", 900.0
+        ),
+        transport_max_attempts=_positive_config_int(
+            generation, "transport_max_attempts", "generation", 3
+        ),
+        concurrency=_positive_config_int(
+            generation, "concurrency", "generation", 4
+        ),
+        resume=mode == "resume",
+        overwrite=mode == "overwrite",
+    )
 
 
 class JsonGenerator(Protocol):
@@ -793,75 +1009,17 @@ async def run_generation(
     )
 
 
-def arguments(argv: list[str] | None = None) -> RagGenerationConfig:
+def arguments(argv: list[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--queries", type=Path, required=True, help="Two-column TSV.")
-    parser.add_argument("--run", type=Path, required=True, help="Six-column TREC run.")
-    parser.add_argument(
-        "--documents", type=Path, required=True, help="JSONL or ZIP containing JSONL."
-    )
-    parser.add_argument("--archive-member", help="JSONL member for ambiguous ZIP input.")
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--work-dir", type=Path, help="Defaults beside --output.")
-    parser.add_argument("--top-k", type=int, help="Use only the top K retrieved documents.")
-    parser.add_argument("--max-document-words", type=int, default=1000)
-    parser.add_argument("--team-id", default="castorini")
-    parser.add_argument("--run-id", help="Defaults to the output filename stem.")
-    parser.add_argument("--run-desc")
-    parser.add_argument("--api-base", default="https://openrouter.ai/api/v1")
-    parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
-    parser.add_argument("--model", default="openai/gpt-5.6-sol")
-    parser.add_argument(
-        "--reasoning-effort",
-        choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
-        default="medium",
-    )
-    parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--max-tokens", type=int, default=6000)
-    parser.add_argument("--timeout", type=float, default=900.0)
-    parser.add_argument("--transport-max-attempts", type=int, default=3)
-    parser.add_argument("--concurrency", type=int, default=4)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--resume", action="store_true")
-    mode.add_argument("--overwrite", action="store_true")
-    values = parser.parse_args(argv)
-
-    run_id = values.run_id or values.output.stem
-    depth = f"Top-{values.top_k}" if values.top_k is not None else "All available"
-    run_desc = values.run_desc or (
-        f"{depth} fixed TREC retrieval with {values.model} "
-        "evidence-grounded answer generation."
-    )
-    return RagGenerationConfig(
-        queries_path=values.queries,
-        run_path=values.run,
-        documents_path=values.documents,
-        output_path=values.output,
-        work_dir=values.work_dir,
-        archive_member=values.archive_member,
-        top_k=values.top_k,
-        max_document_words=values.max_document_words,
-        team_id=values.team_id,
-        run_id=run_id,
-        run_desc=run_desc,
-        api_base=values.api_base,
-        api_key_env=values.api_key_env,
-        model=values.model,
-        reasoning_effort=values.reasoning_effort,
-        temperature=values.temperature,
-        max_tokens=values.max_tokens,
-        timeout_seconds=values.timeout,
-        transport_max_attempts=values.transport_max_attempts,
-        concurrency=values.concurrency,
-        resume=values.resume,
-        overwrite=values.overwrite,
-    )
+    parser.add_argument("--config", type=Path, required=True, help="Competition RAG YAML.")
+    return parser.parse_args(argv).config
 
 
 def main() -> None:
     try:
-        config = arguments()
-        load_repo_env(find_repo_root())
+        config_path = arguments()
+        load_repo_env(find_repo_root(config_path.resolve().parent))
+        config = load_rag_generation_config(config_path)
         api_key = os.environ.get(config.api_key_env, "")
         generator = OpenRouterJsonGenerator(
             api_base=config.api_base,

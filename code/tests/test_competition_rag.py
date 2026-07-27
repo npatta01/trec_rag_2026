@@ -14,9 +14,11 @@ import trec_rag.competition_rag as competition_rag
 from trec_rag.competition_rag import (
     OpenRouterJsonGenerator,
     RagGenerationConfig,
+    arguments,
     build_submission_record,
     load_documents,
     load_queries,
+    load_rag_generation_config,
     load_trec_run,
     parse_generated_json,
     run_generation,
@@ -473,3 +475,99 @@ def test_transient_retries_repeat_the_identical_request(
 
     assert len(bodies) == 2
     assert bodies[0] == bodies[1]
+
+
+def _write_generation_config(tmp_path: Path, extra_generation: str = "") -> Path:
+    config_path = tmp_path / "competition.yaml"
+    config_path.write_text(
+        """experiment:
+  id: rag26_gpt_sol_bm25
+  output_dir: generated/rag26_gpt_sol_bm25
+  mode: resume
+
+submission:
+  team_id: castorini
+  run_desc: Full fixed BM25 retrieval with GPT Sol answer generation.
+
+inputs:
+  queries: inputs/topics.tsv
+  run: inputs/bm25.trec
+  documents: inputs/documents.zip
+  archive_member: documents.jsonl
+
+retrieval:
+  top_k: 100
+  max_document_words: 750
+
+generation:
+  type: openrouter
+  api_base: https://openrouter.example/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: openai/gpt-5.6-sol
+  reasoning_effort: high
+  temperature: 0.0
+  max_tokens: 7000
+  timeout_seconds: 120
+  transport_max_attempts: 2
+  concurrency: 3
+"""
+        + extra_generation,
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_loads_strict_yaml_generation_config(tmp_path: Path) -> None:
+    config_path = _write_generation_config(tmp_path)
+
+    config = load_rag_generation_config(config_path)
+
+    assert config.queries_path == tmp_path / "inputs/topics.tsv"
+    assert config.run_path == tmp_path / "inputs/bm25.trec"
+    assert config.documents_path == tmp_path / "inputs/documents.zip"
+    assert config.archive_member == "documents.jsonl"
+    assert config.output_path == (
+        tmp_path / "generated/rag26_gpt_sol_bm25/rag_output_trec_rag_2026.jsonl"
+    )
+    assert config.work_dir == tmp_path / "generated/rag26_gpt_sol_bm25/work"
+    assert config.run_id == "rag26_gpt_sol_bm25"
+    assert config.team_id == "castorini"
+    assert config.top_k == 100
+    assert config.max_document_words == 750
+    assert config.model == "openai/gpt-5.6-sol"
+    assert config.reasoning_effort == "high"
+    assert config.max_tokens == 7000
+    assert config.timeout_seconds == 120
+    assert config.transport_max_attempts == 2
+    assert config.concurrency == 3
+    assert config.resume is True
+    assert config.overwrite is False
+
+
+def test_config_rejects_unknown_fields(tmp_path: Path) -> None:
+    config_path = _write_generation_config(tmp_path, "  surprise: true\n")
+
+    with pytest.raises(ValueError, match="unknown generation field.*surprise"):
+        load_rag_generation_config(config_path)
+
+
+def test_cli_accepts_only_a_config_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "competition.yaml"
+
+    assert arguments(["--config", str(config_path)]) == config_path
+    with pytest.raises(SystemExit):
+        arguments(["--config", str(config_path), "--model", "another-model"])
+
+
+def test_checked_in_example_config_stays_loadable() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+
+    config = load_rag_generation_config(
+        repo_root / "configs/rag26_competition_gpt_sol_bm25.example.yaml"
+    )
+
+    assert config.run_id == "rag26_competition_gpt_sol_bm25_v1"
+    assert config.output_path.name == "rag_output_trec_rag_2026.jsonl"
+    assert config.top_k is None
+    assert config.resume is False
+    assert config.overwrite is False

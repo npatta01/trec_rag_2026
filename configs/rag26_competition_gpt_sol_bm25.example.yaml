@@ -1,0 +1,33 @@
+experiment:
+  id: rag26_competition_gpt_sol_bm25_v1
+  output_dir: outputs/rag26_competition_gpt_sol_bm25_v1
+  # create refuses existing artifacts; resume reuses valid topic rows.
+  mode: create
+
+submission:
+  team_id: castorini
+  run_desc: Full fixed BM25 retrieval with GPT-5.6 Sol medium answer generation.
+
+inputs:
+  queries: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+  run: outputs/your_bm25_run/r_output_trec_rag_2026.tsv
+  documents: outputs/your_bm25_run/documents.jsonl.zip
+  # Set this only when a ZIP contains more than one JSONL/JSON member.
+  archive_member: null
+
+retrieval:
+  # null uses every positive-ranked document; the archive must contain them all.
+  top_k: null
+  max_document_words: 1000
+
+generation:
+  type: openrouter
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: openai/gpt-5.6-sol
+  reasoning_effort: medium
+  temperature: 0.0
+  max_tokens: 6000
+  timeout_seconds: 900
+  transport_max_attempts: 3
+  concurrency: 4
