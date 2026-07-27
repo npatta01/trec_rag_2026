@@ -15,7 +15,6 @@ from pathlib import Path
 import yaml
 
 from trec_rag.topic213_controlled_generator_benchmark import (
-    GENERATION_SYSTEM_PROMPT,
     GeneratorClient,
     SingleCandidateJsonClient,
     _make_judge_client,
@@ -23,10 +22,18 @@ from trec_rag.topic213_controlled_generator_benchmark import (
     build_generation_payload,
     build_official_entry,
     build_response_schema,
-    filter_supported_generation,
     semantic_request_sha256,
     validate_generation_response,
     validate_official_entry,
+)
+from trec_rag.topic213_coverage_repair_experiment import (
+    GENERATION_SYSTEM_PROMPT,
+    GENERATION_REPAIR_SYSTEM_PROMPT,
+    _generation_with_texts,
+    _repair_generation_payload,
+    _source_fallback_texts,
+    _validate_generation_repairs,
+    apply_audited_repairs,
 )
 from trec_rag.topic213_ragnarok_experiment import SpacySentenceTokenizer
 from trec_rag.topic213_response_experiment import (
@@ -196,6 +203,11 @@ def _safe_config(config: Mapping[str, object]) -> dict[str, object]:
             "model_identity": generation["model_identity"],
             "temperature": float(generation.get("temperature", 0.0)),
             "max_tokens": int(generation.get("max_tokens", 3500)),
+            "repair_max_tokens": int(generation.get("repair_max_tokens", 1800)),
+            "minimum_final_words": int(generation.get("minimum_final_words", 1)),
+            "require_full_retention": bool(
+                generation.get("require_full_retention", True)
+            ),
         },
         "audit": {
             "model_identity": audit.get("model_identity", "qwen-local"),
@@ -208,7 +220,10 @@ def _safe_config(config: Mapping[str, object]) -> dict[str, object]:
 
 
 def _generator_client(
-    *, output_dir: Path, config: Mapping[str, object]
+    *,
+    output_dir: Path,
+    config: Mapping[str, object],
+    checkpoint_name: str = "generation_checkpoint.json",
 ) -> SingleCandidateJsonClient:
     env_name = str(config.get("api_key_env", "OPENROUTER_API_KEY"))
     api_key = os.environ.get(env_name, str(config.get("api_key", ""))).strip()
@@ -223,12 +238,41 @@ def _generator_client(
         api_base=api_base,
         model=str(config["model"]),
         api_key=api_key,
-        checkpoint_path=output_dir / "generation_checkpoint.json",
+        checkpoint_path=output_dir / checkpoint_name,
         call_log_path=output_dir / "generation_calls.jsonl",
         timeout_seconds=float(config.get("timeout_seconds", 360)),
         transport_max_attempts=int(config.get("transport_max_attempts", 3)),
         request_overrides=config.get("request_overrides", {}),
     )
+
+
+def _audit_selected_generation(
+    generation: Mapping[str, object],
+    *,
+    judge: JsonCompletionClient,
+    audit_config: Mapping[str, object],
+    claim_ids: set[str],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for section in generation["sections"]:
+        claims = [
+            claim
+            for claim in section["claims"]
+            if str(claim["claim_id"]) in claim_ids
+        ]
+        if not claims:
+            continue
+        rows.extend(
+            _audit_section(
+                judge,
+                sub_narrative=str(section["sub_narrative"]),
+                claims=claims,
+                max_tokens=int(audit_config.get("max_tokens", 350)),
+                temperature=float(audit_config.get("temperature", 0.0)),
+                validation_attempts=int(audit_config.get("validation_attempts", 3)),
+            )
+        )
+    return rows
 
 
 def run_best_answer_generation(
@@ -240,6 +284,7 @@ def run_best_answer_generation(
     run_desc: str,
     config: Mapping[str, object],
     generator_client: GeneratorClient | None = None,
+    repair_client: GeneratorClient | None = None,
     judge_client: JsonCompletionClient | None = None,
     progress: ProgressCallback | None = None,
 ) -> GenerationRunResult:
@@ -277,7 +322,7 @@ def run_best_answer_generation(
         GENERATION_SYSTEM_PROMPT + "\n", encoding="utf-8"
     )
 
-    _emit(progress, stage="generation", message="Generating one claim-preserving candidate")
+    _emit(progress, stage="generation", message="Generating one coverage-balanced candidate")
     active_generator = generator_client or _generator_client(
         output_dir=output_dir, config=generation_config
     )
@@ -310,6 +355,12 @@ def run_best_answer_generation(
         experiment_id=str(config["experiment_id"]),
         run_id=run_id,
     )
+    candidate["context_policy"].update(
+        {
+            "kind": "full-map-diverse-atomic-claims-with-audit-repair",
+            "llm_rewrite_or_repair_requests": 0,
+        }
+    )
 
     active_judge = judge_client or _make_judge_client(
         output_dir=output_dir, config=audit_config, purpose="support_audit"
@@ -335,13 +386,100 @@ def run_best_answer_generation(
             total=len(sections),
         )
 
-    final, kept_audits, excluded = filter_supported_generation(candidate, audit_rows)
+    rejected = [row for row in audit_rows if row["status"] != "supported"]
+    repair_texts: dict[str, str] = {}
+    repair_audits: list[dict[str, object]] = []
+    repair_completion = None
+    if rejected:
+        _emit(
+            progress,
+            stage="repair",
+            message=f"Repairing {len(rejected)} rejected sentence slots",
+        )
+        repair_payload = _repair_generation_payload(candidate, rejected)
+        repair_max_tokens = int(generation_config.get("repair_max_tokens", 1800))
+        repair_hash = semantic_request_sha256(
+            system_prompt=GENERATION_REPAIR_SYSTEM_PROMPT,
+            payload=repair_payload,
+            max_tokens=repair_max_tokens,
+            temperature=0.0,
+        )
+        active_repair_generator = repair_client
+        if active_repair_generator is None:
+            active_repair_generator = (
+                generator_client
+                if generator_client is not None
+                else _generator_client(
+                    output_dir=output_dir,
+                    config=generation_config,
+                    checkpoint_name=f"repair_checkpoint__{repair_hash}.json",
+                )
+            )
+        repair_completion = active_repair_generator.complete_once(
+            system_prompt=GENERATION_REPAIR_SYSTEM_PROMPT,
+            payload=repair_payload,
+            max_tokens=repair_max_tokens,
+            temperature=0.0,
+        )
+        if repair_completion.receipt.get("semantic_request_sha256") != repair_hash:
+            raise ValueError("repair receipt does not match the frozen semantic request")
+        repair_texts = _validate_generation_repairs(
+            repair_completion.parsed, payload=repair_payload, tokenizer=tokenizer
+        )
+        repaired_generation = _generation_with_texts(candidate, repair_texts)
+        repair_audits = _audit_selected_generation(
+            repaired_generation,
+            judge=active_judge,
+            audit_config=audit_config,
+            claim_ids=set(repair_texts),
+        )
+        failed_repair_ids = {
+            str(row["claim_id"])
+            for row in repair_audits
+            if row["status"] != "supported"
+        }
+        if failed_repair_ids:
+            fallback_texts = _source_fallback_texts(candidate, failed_repair_ids)
+            fallback_generation = _generation_with_texts(candidate, fallback_texts)
+            fallback_audits = _audit_selected_generation(
+                fallback_generation,
+                judge=active_judge,
+                audit_config=audit_config,
+                claim_ids=failed_repair_ids,
+            )
+            fallback_by_id = {
+                str(row["claim_id"]): row for row in fallback_audits
+            }
+            repair_audits = [
+                fallback_by_id.get(str(row["claim_id"]), row)
+                for row in repair_audits
+            ]
+            repair_texts.update(fallback_texts)
+
+    final, kept_audits, excluded = apply_audited_repairs(
+        candidate,
+        initial_audits=audit_rows,
+        repair_text_by_claim_id=repair_texts,
+        repair_audits=repair_audits,
+    )
+    if excluded and bool(generation_config.get("require_full_retention", True)):
+        raise RuntimeError(f"{len(excluded)} sentence slots failed after repair")
+    final["context_policy"]["llm_rewrite_or_repair_requests"] = 1 if rejected else 0
     official = build_official_entry(
         generation=final,
         team_id=team_id,
         run_desc=f"{run_desc} Generator: {generation_config['model_identity']}.",
     )
     official_words = validate_official_entry(official, tokenizer=tokenizer)
+    minimum_final_words = int(
+        generation_config.get(
+            "minimum_final_words", validated_frozen["word_band"]["minimum"]
+        )
+    )
+    if official_words < minimum_final_words:
+        raise ValueError(
+            f"repaired answer has {official_words} words; minimum is {minimum_final_words}"
+        )
     markdown = _render_markdown(final)
     candidate_words = sum(
         len(str(claim["text"]).split())
@@ -354,9 +492,16 @@ def run_best_answer_generation(
         completion.raw_content, encoding="utf-8"
     )
     _write_json(output_dir / "generation_receipt.json", completion.receipt)
+    if repair_completion is not None:
+        _write_json(output_dir / "raw_repair_generation.json", repair_completion.parsed)
+        (output_dir / "raw_repair_generation.txt").write_text(
+            repair_completion.raw_content, encoding="utf-8"
+        )
+        _write_json(output_dir / "repair_receipt.json", repair_completion.receipt)
     _write_json(output_dir / "response_generation.candidate.json", candidate)
     _write_json(output_dir / "response_generation.json", final)
     _write_jsonl(output_dir / "generation_support_audit.jsonl", audit_rows)
+    _write_jsonl(output_dir / "repair_support_audit.jsonl", repair_audits)
     _write_jsonl(output_dir / "claim_support_audit.jsonl", kept_audits)
     _write_jsonl(output_dir / "excluded_sentences.jsonl", excluded)
     _write_jsonl(output_dir / "rag_output_trec_rag_2026.jsonl", [official])
@@ -388,12 +533,21 @@ def run_best_answer_generation(
         "response_generation.candidate.json",
         "response_generation.json",
         "generation_support_audit.jsonl",
+        "repair_support_audit.jsonl",
         "claim_support_audit.jsonl",
         "excluded_sentences.jsonl",
         "rag_output_trec_rag_2026.jsonl",
         "generated_response.md",
         "lineage.jsonl",
     ]
+    if repair_completion is not None:
+        frozen_names.extend(
+            [
+                "raw_repair_generation.json",
+                "raw_repair_generation.txt",
+                "repair_receipt.json",
+            ]
+        )
     freeze = {
         "schema_version": "competition-answer-generation-freeze-v1",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -402,12 +556,14 @@ def run_best_answer_generation(
         "artifacts": [_artifact_row(output_dir, name) for name in frozen_names],
     }
     _write_json(output_dir / "generation_freeze.json", freeze)
-    receipt_usage = completion.receipt.get("usage", {})
-    cost = (
-        float(receipt_usage.get("cost", 0.0))
-        if isinstance(receipt_usage, Mapping)
-        and isinstance(receipt_usage.get("cost", 0.0), (int, float))
-        else 0.0
+    receipts = [completion.receipt]
+    if repair_completion is not None:
+        receipts.append(repair_completion.receipt)
+    cost = sum(
+        float(usage.get("cost", 0.0))
+        for receipt in receipts
+        if isinstance((usage := receipt.get("usage", {})), Mapping)
+        and isinstance(usage.get("cost", 0.0), (int, float))
     )
     summary = {
         "schema_version": STUDIO_SCHEMA_VERSION,
@@ -425,6 +581,10 @@ def run_best_answer_generation(
         "candidate_sentence_count": len(normalized),
         "submitted_sentence_count": len(kept_audits),
         "excluded_sentence_count": len(excluded),
+        "initially_rejected_sentence_count": len(rejected),
+        "repaired_and_retained_sentence_count": final["support_filter"][
+            "repair_retained_count"
+        ],
         "candidate_word_count": candidate_words,
         "submitted_word_count": official_words,
         "reference_count": len(official["references"]),

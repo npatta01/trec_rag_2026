@@ -445,10 +445,24 @@ $env:PYTHONPATH = "code"
 
 # Answer Generation Studio
 
-`answer_generation_studio.py` runs the selected GPT-5.6 Sol approach for one nugget-blind frozen
-evidence ledger. It makes one semantic generation request, restores deterministic citations, audits
-each sentence through local Qwen, validates the organizer contract, and writes a hash-sealed JSONL
-bundle without loading development nuggets.
+`topic213_coverage_repair_experiment.py` rebuilds the Topic 213 evidence ledger from the complete
+1,478-passage map-stage pool. It suppresses paraphrases, applies facet-specific quotas, expands each
+claim to as many as three covering citations, repairs weak evidence claims before generation, and
+repairs rejected answer sentences instead of dropping them. The checked-in GPT-5.6 Sol run reached
+0.540 strict, 0.630 partial-credit, and 0.630 vital-strict nugget coverage with 48/48 supported
+submitted sentences.
+
+```powershell
+$env:PYTHONPATH = "code"
+& C:\dev\trec_rag\.venv\Scripts\python.exe -m trec_rag.topic213_coverage_repair_experiment `
+  --config configs/rag25_topic213_gpt56_sol_coverage_repair_v2.yaml
+```
+
+`answer_generation_studio.py` runs that selected GPT-5.6 Sol approach for one nugget-blind frozen
+evidence ledger. It makes one primary semantic generation request, restores deterministic citations,
+audits each sentence through local Qwen, runs at most one bounded repair request for rejected slots,
+validates the organizer contract, and writes a hash-sealed JSONL bundle without loading development
+nuggets.
 
 `answer_generation_server.py` wraps that runner in a localhost-only operations console with service
 health, evidence upload, background progress, sentence and citation review, benchmark comparison,

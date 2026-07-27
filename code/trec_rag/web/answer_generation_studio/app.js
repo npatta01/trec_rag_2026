@@ -227,9 +227,12 @@ function renderValidation(summary) {
     validationItem("Organizer schema", summary.official_format_valid ? "Valid JSONL entry" : "Validation unavailable"),
     validationItem("Word limit", `${textOrDash(summary.submitted_word_count)} / 1,024 words`),
     validationItem("Sentence citations", `${percentMetric(summary.citation_coverage)} coverage`),
-    validationItem("Support gate", `${textOrDash(summary.excluded_sentence_count)} candidate sentences excluded`),
+    validationItem(
+      "Support gate",
+      `${textOrDash(summary.repaired_and_retained_sentence_count ?? 0)} repaired, ${textOrDash(summary.excluded_sentence_count)} excluded`
+    ),
     validationItem("Nugget isolation", "No organizer nuggets read"),
-    validationItem("Generator request", "One semantic completion")
+    validationItem("Generator requests", "One primary completion, up to one repair")
   );
   panel.replaceChildren(grid);
 }
@@ -362,6 +365,7 @@ function jobProgressPercent(progress) {
     const portion = progress.total ? progress.completed / progress.total : 0;
     return Math.round(28 + portion * 68);
   }
+  if (progress.stage === "repair") return 97;
   return 3;
 }
 

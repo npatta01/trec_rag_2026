@@ -1,0 +1,21 @@
+{
+  "candidate_count": 554,
+  "candidate_count_by_facet": {
+    "\"How did Cold War strategy influence US actions?\"": 81,
+    "\"How did US presidents differ in their views on the Korean War?\"": 16,
+    "\"How did the Korean War conclude?\"": 75,
+    "\"What impact did the Korean War have on US politics?\"": 31,
+    "\"What major strategic or political mistakes were made during the war?\"": 40,
+    "\"What motivated US involvement in the Korean War?\"": 71,
+    "\"What triggered the Korean War?\"": 63,
+    "New: How does the Korean War affect Korea": 105,
+    "New: How does the Korean War affect UN": 48,
+    "New: What motivated China involvement in te Korean War?": 24
+  },
+  "checkpoint_aggregate_sha256": "2acc7605d53341d7916a9cc73a8590c8b41601861c212c8891debd2d5fc4e283",
+  "checkpoint_file_count": 71,
+  "organizer_nuggets_available": false,
+  "passages_path": "C:\\dev\\trec_rag\\tmp\\topic213-evidence-handover-v1\\passages.jsonl",
+  "passages_processed": 1478,
+  "passages_sha256": "4a2d91d4dd697823ccbcff01654673f4b7a2fdd77e3267dc4f029b9528845637"
+}

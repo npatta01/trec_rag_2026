@@ -1,0 +1,2340 @@
+{
+  "context_policy": {
+    "exact_total_sentence_count": 48,
+    "kind": "full-map-diverse-atomic-claims-with-audit-repair",
+    "llm_rewrite_or_repair_requests": 1,
+    "organizer_nuggets_available": false,
+    "semantic_generation_request_count": 1,
+    "semantic_request_sha256": "f5ba21c94bf2089291c57faaeda6d00d603a0dfaa83fd60f46cdc97a1f38e0dd",
+    "source_experiment_id": "rag25_topic213_full_documents_qwen_local_v1",
+    "supported_source_claim_count": 48,
+    "word_band": {
+      "maximum": 1000,
+      "minimum": 930
+    }
+  },
+  "evidence_ledger": [
+    {
+      "claim_id": "M15A1DF8DDC6E565",
+      "document_ids": [
+        "shard_01905_84775",
+        "shard_05351_5394"
+      ],
+      "sub_narrative": "\"What triggered the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01905_84775",
+          "passage_id": "P000390",
+          "text": "Secretary of State Dean Acheson Speech on the Far East National Press Club 12 January 1950 Source 67 Korean War June 25, 1950 - (July 27, 1953) June 25, 1950 North Korean forces crossed 38th parallel 100,000 troops supported by tanks and aircraft 68 Korean War North Korea Attacks 25 June 1950 http// xt.html 69 Korean War June 25, 1950 - (July 27, 1953) UN Security Council voting to use military force in Korea June 27,1950 USSR absent (boycotting UN) 70 Parallels Korea and Gulf War Both were declared non-vital to US These were the only two time the UN authorized military force (up to 1991) 71 Korean War June 25, 1950 - (July 27, 1953) General of the Army Douglas MacArthur Placed in command of UN forces 72 Korean War Pusan Perimeter July-August 1950 73 Korean War Inchon Landing 15 September 1950 74 Inchon Landing September 15, 1950 Operation Chromite MacArthur proposed bold strategic stroke in enemy rear 75 Inchon Landing September 15, 1950 Operation Chromite Inchon 10 miles from Seoul and lightly defended 76 Inchon Landing September 15, 1950 Problem 30 foot tides 77 Inchon Landing September 15, 1950 Operation Chromite 78 Inchon Landing September 15, 1950 Operation Chromite 79 Korean War Approaching the Yalu River October-November 1950 80 Korean War Memory of this haunted presidents during the Vietnam War China Enters the War November 1950 - January 1951 81 Truman MacArthur"
+        },
+        {
+          "document_id": "shard_05351_5394",
+          "passage_id": "P001167",
+          "text": "Section 1: Background – Postwar Tension and Origins of the Korean War Following Japan's unconditional surrender in August 1945, Allied forces occupied the Korean peninsula along the 38th parallel - the US controlled the south while the Soviet Union administered the north. These occupation zones were intended to be temporary; however, ideological differences soon prevented any progress towards reunification. By June 1950, North Korea had invaded South Korea under orders from Kim Il Sung, initiating the three-year Korean War."
+        }
+      ],
+      "text": "North Korean forces crossed the 38th parallel on June 25, 1950, initiating the Korean War."
+    },
+    {
+      "claim_id": "M9325D190D82EDBE",
+      "document_ids": [
+        "shard_04112_27787",
+        "shard_05363_83603"
+      ],
+      "sub_narrative": "\"What triggered the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04112_27787",
+          "passage_id": "P000868",
+          "text": "Over time, ideological differences led to tensions between the two sides, eventually erupting into war in June 1950. North Korea (supported by China and the Soviet Union) invaded South Korea (backed by the United Nations, primarily consisting of U.S. troops)."
+        },
+        {
+          "document_id": "shard_05363_83603",
+          "passage_id": "P001176",
+          "text": "So in 1950, North Korea invaded South Korea triggering the Korean War."
+        }
+      ],
+      "text": "North Korea invaded South Korea on June 25, 1950, triggering the Korean War."
+    },
+    {
+      "claim_id": "MFB0F06D420DE094",
+      "document_ids": [
+        "shard_06492_41861",
+        "shard_06031_32421"
+      ],
+      "sub_narrative": "\"What triggered the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06492_41861",
+          "passage_id": "P001441",
+          "text": "Following years of political tension, military buildup, and border skirmishes, full-scale war broke out in June 1950 when North Korean forces invaded their southern neighbor."
+        },
+        {
+          "document_id": "shard_06031_32421",
+          "passage_id": "P001343",
+          "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's"
+        }
+      ],
+      "text": "The Korean War began after years of political tension, border skirmishes, and military buildup in the region."
+    },
+    {
+      "claim_id": "M4465DC745718B83",
+      "document_ids": [
+        "shard_01905_84775",
+        "shard_01648_76475",
+        "shard_02044_903"
+      ],
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01905_84775",
+          "passage_id": "P000391",
+          "text": "Soviet Nuclear Test (US code name Joe 1) August 29, 1949 61 NSC-68 April 14, 1950 Classified National Security Council document Full analysis of US-USSR relationship Defined initial US Cold War strategy Containment Implemented the Truman Doctrine 62 1 Oct 49 7 Oct 49 12 Jan 50 14 Feb 50 25 Jun 50 27 Jun 50 Mao Zedong declares Peoples Republic of China German Democratic Republic created from Eastern Zone Sec State Acheson speech omits Korea as US interest area USSR PRC sign mutual defense pact North Korea (PDRK) invades South Korea (ROK) United Nations votes to use military force to assist ROK 63 Korea War 64 Korea Annexed by Japan in 1910 Big 3 pledged independence for Korea at Potsdam Divided into zones of occupation at 38th parallel after WW II USSR occupied north, US the south 65 Korea Ignored strategically by US after WW II From the standpoint of military security, the United States has little strategic interest in maintaining the present troops and bases in Korea."
+        },
+        {
+          "document_id": "shard_01648_76475",
+          "passage_id": "P000338",
+          "text": "In its report, known as \"NSC 68,\" the Council recommended heavy increases in military funding to help contain the Soviets."
+        },
+        {
+          "document_id": "shard_02044_903",
+          "passage_id": "P000463",
+          "text": "NSC-68 Policy Document: Issued in April 1950, this classified document outlined a new approach toward containing Soviet expansionism, emphasizing increased defense spending and preparedness. The Korean War served as a catalyst for implementing this policy."
+        }
+      ],
+      "text": "NSC-68, a 1950 National Security Council document, recommended heavy military spending to contain Soviet expansionism and defined the U.S. Cold War strategy of containment."
+    },
+    {
+      "claim_id": "M4245120811DF380",
+      "document_ids": [
+        "shard_03682_83132",
+        "shard_05974_40666",
+        "shard_01076_15403"
+      ],
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03682_83132",
+          "passage_id": "P000774",
+          "text": "The American policy of containment accepted the fact that Eastern Europe was under Communist control, but sought to prevent Communist governments from forming elsewhere in the world. The Truman Doctrine, which applied the principles of containment, stated that the United States would support free peoples who resist attempted conquest."
+        },
+        {
+          "document_id": "shard_05974_40666",
+          "passage_id": "P001313",
+          "text": "Truman Doctrine: to support free peoples who are resisting attempted subjugation by armed minorities or by outside pressures Global containment against USSR anywhere 5."
+        },
+        {
+          "document_id": "shard_01076_15403",
+          "passage_id": "P000178",
+          "text": "Fearful of Communist expansion, President Harry S. Truman quickly committed U.S. military support to help defend South Korea."
+        }
+      ],
+      "text": "The Truman Doctrine and the policy of containment committed the U.S. to supporting free peoples resisting communist conquest."
+    },
+    {
+      "claim_id": "MDB72C55B385193C",
+      "document_ids": [
+        "shard_04368_42125",
+        "shard_06361_56440"
+      ],
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04368_42125",
+          "passage_id": "P000957",
+          "text": "involvement in the war was part of its broader strategy to contain communism during the Cold War."
+        },
+        {
+          "document_id": "shard_06361_56440",
+          "passage_id": "P001425",
+          "text": "Truman ultimately decided to commit American troops, citing the need to contain the spread of communism under the recently articulated doctrine of 'containment.' In doing so, Truman circumvented Congress and acted under the auspices of the newly formed United Nations Security Council, thereby internationalizing the conflict. Analyzing Truman's decision within the broader geopolitical landscape of the early Cold War period reveals how fears of Communist expansion influenced American foreign policy decisions."
+        }
+      ],
+      "text": "The U.S. involvement in Korea was part of a broader Cold War strategy to contain the spread of communism."
+    },
+    {
+      "claim_id": "M76B00B1B6BF9D60",
+      "document_ids": [
+        "shard_06300_76499",
+        "shard_00774_4703",
+        "shard_01905_84775"
+      ],
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06300_76499",
+          "passage_id": "P001407",
+          "text": "Truman, viewing the invasion as a test of American will, ordered U.S. forces to help South Korea repel the invaders."
+        },
+        {
+          "document_id": "shard_00774_4703",
+          "passage_id": "P000120",
+          "text": "I felt certain that if South Korea was allowed to fall, Communist leaders would be emboldened to override nations closer to our own shores.\" – President Harry Truman Sixty years ago this month, the North Korean People's Army invaded South Korea, challenging the resolve of a fledgling United Nations and prompting President Harry Truman to declare that the United States would fight its \"unprovoked aggression.\" By crossing the 38th parallel, the North's forces started a three-year ground war that, today, is widely considered the first battle in a decades-long Cold War between communist powers and the West."
+        },
+        {
+          "document_id": "shard_01905_84775",
+          "passage_id": "P000391",
+          "text": "Soviet Nuclear Test (US code name Joe 1) August 29, 1949 61 NSC-68 April 14, 1950 Classified National Security Council document Full analysis of US-USSR relationship Defined initial US Cold War strategy Containment Implemented the Truman Doctrine 62 1 Oct 49 7 Oct 49 12 Jan 50 14 Feb 50 25 Jun 50 27 Jun 50 Mao Zedong declares Peoples Republic of China German Democratic Republic created from Eastern Zone Sec State Acheson speech omits Korea as US interest area USSR PRC sign mutual defense pact North Korea (PDRK) invades South Korea (ROK) United Nations votes to use military force to assist ROK 63 Korea War 64 Korea Annexed by Japan in 1910 Big 3 pledged independence for Korea at Potsdam Divided into zones of occupation at 38th parallel after WW II USSR occupied north, US the south 65 Korea Ignored strategically by US after WW II From the standpoint of military security, the United States has little strategic interest in maintaining the present troops and bases in Korea."
+        }
+      ],
+      "text": "President Truman ordered U.S. forces to assist South Korea, viewing the invasion as a test of American resolve."
+    },
+    {
+      "claim_id": "M76396FC76AB41E2",
+      "document_ids": [
+        "shard_06292_54287"
+      ],
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06292_54287",
+          "passage_id": "P001400",
+          "text": "The Korean War marked the first major military engagement of the Cold War era and demonstrated America's commitment to containing the spread of communism."
+        }
+      ],
+      "text": "The Korean War marked the first major military engagement of the Cold War era and demonstrated U.S. commitment to containing communism."
+    },
+    {
+      "claim_id": "MF29C6C2D0F17419",
+      "document_ids": [
+        "shard_04204_72809",
+        "shard_00774_4703",
+        "shard_01408_73258"
+      ],
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04204_72809",
+          "passage_id": "P000902",
+          "text": "Recognizing the gravity of the situation in South Korea, and the very real prospect of the country's complete collapse, Truman wasted no time in committing U.S. ground forces to the Korean peninsula to halt the NKPA and preserve South Korea as a Western outpost on the Asian mainland."
+        },
+        {
+          "document_id": "shard_00774_4703",
+          "passage_id": "P000121",
+          "text": "I felt certain that if South Korea was allowed to fall, Communist leaders would be emboldened to override nations closer to our own shores.\" – President Harry Truman Sixty years ago this month, the North Korean People's Army invaded South Korea, challenging the resolve of a fledgling United Nations and prompting President Harry Truman to declare that the United States would fight its \"unprovoked aggression.\" By crossing the 38th parallel, the North's forces started a three-year ground war that, today, is widely considered the first battle in a decades-long Cold War between communist powers and the West."
+        },
+        {
+          "document_id": "shard_01408_73258",
+          "passage_id": "P000260",
+          "text": "Faced with the prospect of communist expansion throughout East Asia, President Harry S. Truman committed American troops to defend South Korea, thus setting the stage for direct U.S."
+        }
+      ],
+      "text": "President Truman committed U.S. ground forces to South Korea to halt the North Korean People's Army and preserve South Korea as a Western outpost in Asia."
+    },
+    {
+      "claim_id": "M93B14ACD4EC3C81",
+      "document_ids": [
+        "shard_01637_77654"
+      ],
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01637_77654",
+          "passage_id": "P000331",
+          "text": "Initially reluctant to engage militarily in another overseas conflict following WWII, President Truman decided otherwise upon learning of the invasion of South Korea by North Korean forces backed by China and the USSR. On June 27, 1950, he committed American troops to defend South Korea under the auspices of the newly formed United Nations Command (UNC). By doing so, Truman framed the intervention as necessary to contain the spread of communism rather than merely defending South Korean territory."
+        }
+      ],
+      "text": "Truman committed American troops to the Korean War to contain the spread of communism."
+    },
+    {
+      "claim_id": "MD290940F2075F44",
+      "document_ids": [
+        "shard_04570_14502",
+        "shard_06031_32421",
+        "shard_04810_73050"
+      ],
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04570_14502",
+          "passage_id": "P001008",
+          "text": "President Harry Truman decided to intervene militarily without seeking formal approval from Congress, citing his authority under the UN Charter."
+        },
+        {
+          "document_id": "shard_06031_32421",
+          "passage_id": "P001344",
+          "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's"
+        },
+        {
+          "document_id": "shard_04810_73050",
+          "passage_id": "P001069",
+          "text": "Truman swiftly decided to intervene militarily to defend South Korea. He justified his decision based on the United Nations Charter, which called for collective security against aggression. Truman believed that if North Korea were allowed to succeed, it would set a dangerous precedent for other communist regimes seeking to expand their territories through force."
+        }
+      ],
+      "text": "Truman intervened militarily in June 1950 without formal congressional approval, citing his authority under the UN Charter to defend South Korea against communist aggression."
+    },
+    {
+      "claim_id": "M1B35A5762BD6C6C",
+      "document_ids": [
+        "shard_03937_82571",
+        "shard_04128_70325"
+      ],
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03937_82571",
+          "passage_id": "P000812",
+          "text": "It was the first test of Western adherence to the Cold War doctrine of containment, a strategy to stem the forced spread of Communism worldwide."
+        },
+        {
+          "document_id": "shard_04128_70325",
+          "passage_id": "P000874",
+          "text": "other study tools..The Korean War was the first major conflict following the end of World War II and the first war of the Cold War between the United States and Soviet Union.The war ended with little resolution.When someone mentions the Korean War, everyone knows that it was a civil war between the North and the South Korea.The Korean War was both a civil and an international war.The main reason the United States got involved in Korea was the purpose of doing everything possible to keep communism from spreading around world mobilization for the war did or did not make Korea a societal focus in light of these distractions.Learn vocabulary, terms, and more with flashcards, games, and other study tools..It is estimated that two million Koreans perished, majority of who were northerners The Korean War (1950-1953) was the first military action of the Cold War.Sandwiched in between the popular war, World War II, and an unpopular war, The Vietnam War, The Korean conflict was not the measure of hardware and military might which occurred in WWII.Soon after the Soviet takeover of Eastern Europe, China became Communist in 1949.A war considered as an embarrassment for the international community, many lives were harvested and it did started and ended with accomplishing nothing from the unifying Korean War Essay.The palyers of this war not only China,Nort.The Korean War was also not the"
+        }
+      ],
+      "text": "The Korean War was the first major conflict of the Cold War and served as a test of the U.S. adherence to the containment strategy."
+    },
+    {
+      "claim_id": "MC09CB804CB7F843",
+      "document_ids": [
+        "shard_03477_77362",
+        "shard_03940_21748"
+      ],
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03477_77362",
+          "passage_id": "P000750",
+          "text": "after WWII, the Russians left after putting in place a communist regime supported by a strong Soviet equipped army and the US left the southern half under the anti-Communist government of Syngman Rhee with a small military that Rhee used primarily to suppress internal opposition, on June 24, 1950 the armies of North Korea poured over its southern border invading South Korea, within days they had occupied much of South Korea 66 The Korean War 1950-1953 67 The Korean War Truman's Response to the invasion on June 27, 1950 ordered limited American military assistance to South Korea, appealed to the United Nations to intervene, Douglas MacArthur would command the UN operations there - effort not simply at containment but at liberation 68 The Korean War Intervention in Korea was the first expression of the newly expansive American foreign policy outlined in NSC-68, UN aimed to create a unified, independent and democratic Korea, for several weeks the invasion went smoothly, UN forces captured Pyongyang and victory seemed close until the communist government in China intervened."
+        },
+        {
+          "document_id": "shard_03940_21748",
+          "passage_id": "P000820",
+          "text": "During the 1950s, the Korean War was tremendously significant as it marked the first concrete war against communism as well as revealing inconsistencies in American foreign policy."
+        }
+      ],
+      "text": "The Korean War was the first expression of the U.S. foreign policy outlined in NSC-68, which emphasized the containment of communism."
+    },
+    {
+      "claim_id": "MD99082350110C4C",
+      "document_ids": [
+        "shard_02598_21130",
+        "shard_06292_54287"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_02598_21130",
+          "passage_id": "P000562",
+          "text": "In the United States, a wave of anti-Communism swept across the country through the rise of McCarthyism and Orientalist bigotry, preventing Americans from understanding Koreans beyond the stereotype of the Asian as a representative image of the enemy and unknown “other.” Anti-Communism partnered with military repression and racist bigotry to prevent mutual and comprehensive understanding between the two countries."
+        },
+        {
+          "document_id": "shard_06292_54287",
+          "passage_id": "P001402",
+          "text": "Domestically, the Korean War contributed to increased anti-communist sentiment during the early years of the Cold War. The conflict coincided with McCarthyism, a period characterized by widespread fear of Communist influence and subsequent political repression. Additionally, the war resulted in substantial economic growth due to wartime production demands, fueling the post-war boom experienced by the United States."
+        }
+      ],
+      "text": "The Korean War contributed to the rise of McCarthyism and a wave of anti-communism in the United States."
+    },
+    {
+      "claim_id": "M99CC13A2CEABD5B",
+      "document_ids": [
+        "shard_03477_77362",
+        "shard_06292_54287",
+        "shard_00839_47882"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03477_77362",
+          "passage_id": "P000751",
+          "text": "72 The Korean War On April 11, 1951 Truman relieved MacArthur of his command, 69 of the American public supported MacArthur, Old soldiers never die, they just fade away, negotiations between the opposing forces dragged on until 1953 73 The Korean War Office of Defense Mobilization was instituted to fight inflation by holding down prices and discouraging high union wage demands, railroad workers walked off the job in 1952, Truman ordered the government to seize control of the railroads, a nationwide steel strike followed in 1952 and Truman seized the steel mills as well 74 The Korean War The Supreme Court ruled 6 3 that the president had exceeded his authority when he seized control of the steel mills and Truman was forced to relent 75 The Korean War The Korean War gave a significant boost to economic growth by pumping new government funds into the economy at a point when many believed a recession would began 76 The Korean War Many began to think there was something deeply wrong not only in North Korea but the US as well since the US seemed unable to conclude what many Americans thought as a minor border skirmish in a small country. 77 Crusade Against Subversion Communism was not an imagined enemy in the 1950s, it had a tangible shape in Joseph Stalin and the Soviet Union, America had suffered setbacks in its battle against communism, the Korean War stalemate, the loss of China, and the Soviet development of the atomic bomb, many Americans were looking for someone to blame and many Americans were attracted to the idea of a communist conspiracy within American borders 78 The Crusade Against Subversion House Un-American Activities Committee (HUAC) held a widely publicized investigation to prove that, under Democratic rule, the government had tolerated communist subversion, they argued communists had infiltrated Hollywood and tainted America with propaganda."
+        },
+        {
+          "document_id": "shard_06292_54287",
+          "passage_id": "P001402",
+          "text": "Domestically, the Korean War contributed to increased anti-communist sentiment during the early years of the Cold War. The conflict coincided with McCarthyism, a period characterized by widespread fear of Communist influence and subsequent political repression. Additionally, the war resulted in substantial economic growth due to wartime production demands, fueling the post-war boom experienced by the United States."
+        },
+        {
+          "document_id": "shard_00839_47882",
+          "passage_id": "P000142",
+          "text": "Eisenhower who was wining commander of worldwar II was able to get popular belief of American people that his wining the presidental election would bring end to the Korean stalemate."
+        }
+      ],
+      "text": "The war intensified public fear of communist subversion, leading to investigations by the House Un-American Activities Committee (HUAC) and a belief in widespread communist infiltration within American institutions."
+    },
+    {
+      "claim_id": "MCC72FD82028A1B0",
+      "document_ids": [
+        "shard_06292_54287",
+        "shard_04810_73050",
+        "shard_04570_14502"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06292_54287",
+          "passage_id": "P001402",
+          "text": "Domestically, the Korean War contributed to increased anti-communist sentiment during the early years of the Cold War. The conflict coincided with McCarthyism, a period characterized by widespread fear of Communist influence and subsequent political repression. Additionally, the war resulted in substantial economic growth due to wartime production demands, fueling the post-war boom experienced by the United States."
+        },
+        {
+          "document_id": "shard_04810_73050",
+          "passage_id": "P001070",
+          "text": "Initially, there was strong bipartisan support for intervention; however, as casualties mounted and the war dragged on without clear victory, criticism grew. Anti-communism became a potent political weapon, fueling Senator Joseph McCarthy's crusade against perceived internal subversion. The Korean War also marked the birth of the military-industrial complex, highlighting the intertwined relationship between defense industries, government, and the military."
+        },
+        {
+          "document_id": "shard_04570_14502",
+          "passage_id": "P001010",
+          "text": "Secondly, the conflict marked a turning point in civil rights within the United States; African Americans who served overseas returned home demanding equal treatment and opportunities, contributing to the broader Civil Rights Movement of the 1950s and 1960s."
+        }
+      ],
+      "text": "The Korean War intensified anti-communist sentiment in the U.S., coinciding with the rise of McCarthyism and contributing to political repression and a broader cultural fear of internal subversion."
+    },
+    {
+      "claim_id": "ME821C6A2A983566",
+      "document_ids": [
+        "shard_03891_42736",
+        "shard_02701_45655",
+        "shard_01836_84885"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03891_42736",
+          "passage_id": "P000800",
+          "text": "This hopeful climate was destroyed by the starting convulsions of the Korean War, and by the wave of bitter anti-Communism that swept the USA as a result. American military spending began to sharply increase every year after the end of the Korean War."
+        },
+        {
+          "document_id": "shard_02701_45655",
+          "passage_id": "P000585",
+          "text": "The US Congress, meanwhile, supported military intervention without significant dissent and approved $12 billion to pay for the military expenses."
+        },
+        {
+          "document_id": "shard_01836_84885",
+          "passage_id": "P000377",
+          "text": "High cost of war led Americans to reject democratic party."
+        }
+      ],
+      "text": "The Korean War led to a significant increase in U.S. military spending after its end."
+    },
+    {
+      "claim_id": "M68D23E580095C1D",
+      "document_ids": [
+        "shard_04365_21209",
+        "shard_03373_19479"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04365_21209",
+          "passage_id": "P000950",
+          "text": "As a result, the percentage of Congress's annual budget spent on defense soared throughout the following years, hovering at roughly 50 percent under the Eisenhower administration."
+        },
+        {
+          "document_id": "shard_03373_19479",
+          "passage_id": "P000702",
+          "text": "Nevertheless, the Korean War helped define the Cold War, established a precedent for keeping peripheral wars limited, and boosted defense spending that contributed to the postwar economic boom in the United States."
+        }
+      ],
+      "text": "Defense spending as a percentage of the federal budget hovered at roughly 50 percent under the Eisenhower administration."
+    },
+    {
+      "claim_id": "M4ED932AEF24B058",
+      "document_ids": [
+        "shard_02115_21943",
+        "shard_02368_83818",
+        "shard_01936_23328"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_02115_21943",
+          "passage_id": "P000485",
+          "text": "A public dispute broke out, and eventually, the President fired MacArthur for insubordination. This move surprised the American political system and shocked the world."
+        },
+        {
+          "document_id": "shard_02368_83818",
+          "passage_id": "P000531",
+          "text": "It was called a :Police Action: General MacArthur was fired by President Truman for disobeying orders which was very unpopular at the time."
+        },
+        {
+          "document_id": "shard_01936_23328",
+          "passage_id": "P000419",
+          "text": "MacArthur Fired Truman's firing of General Douglas MacArthur was the beginning of a decline in the President's popularity."
+        }
+      ],
+      "text": "The firing of General Douglas MacArthur by President Truman for insubordination was highly unpopular and shocked the American political system."
+    },
+    {
+      "claim_id": "MF7515C4D17F8786",
+      "document_ids": [
+        "shard_05855_21542",
+        "shard_04204_72809",
+        "shard_00295_69587"
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_05855_21542",
+          "passage_id": "P001263",
+          "text": "In defiance of Truman and the Joint Chiefs of Staff, MacArthur called for attacks into China unless a peace settlement was reached. Truman fired MacArthur on April 9 and replaced him with Ridgway."
+        },
+        {
+          "document_id": "shard_04204_72809",
+          "passage_id": "P000907",
+          "text": "Truman's dismissal of the overly aggressive General Douglas MacArthur in April 1951 further signaled the president's less ambitious approach to the conflict."
+        },
+        {
+          "document_id": "shard_00295_69587",
+          "passage_id": "P000052",
+          "text": "During the Korean War, President Harry Truman and his advisors believed that American involvement in the war required economic mobilization at home. President Truman committed American troops without Congress approval created a model for future wars."
+        }
+      ],
+      "text": "General Douglas MacArthur's push for attacks into China without a peace settlement led to his dismissal by President Truman in April 1951."
+    },
+    {
+      "claim_id": "M622D383284BBEE6",
+      "document_ids": [
+        "shard_06013_13419",
+        "shard_03461_23898"
+      ],
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06013_13419",
+          "passage_id": "P001338",
+          "text": "The Korean War has also infamously never officially ended; to this day it remains only a negotiated truce, and North Korea remains a stubborn thorn in the side of the United States, and a threat to the peace and stability of the whole of Asia that could still end up sparking the start of World War II."
+        },
+        {
+          "document_id": "shard_03461_23898",
+          "passage_id": "P000738",
+          "text": "Despite numerous obstacles, the Armistice Negotiations eventually culminated in a formal truce on July 27, 1953. Signed by North Korea, China, and the United Nations Command, the agreement brought an uneasy halt to hostilities, creating a buffer zone known as the Demilitarized Zone (DMZ) along the 38th parallel. Since then, there has been no official peace treaty, leaving the two Koreas technically still at war."
+        }
+      ],
+      "text": "The Korean War remains a negotiated truce to this day, with no official end despite the 1953 armistice."
+    },
+    {
+      "claim_id": "MF0B460CA6A4EF6E",
+      "document_ids": [
+        "shard_00898_17145",
+        "shard_00839_47882"
+      ],
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_00898_17145",
+          "passage_id": "P000147",
+          "text": "The war ended in an armistice rather than a formal peace treaty, leaving the two Koreas technically still at war."
+        },
+        {
+          "document_id": "shard_00839_47882",
+          "passage_id": "P000143",
+          "text": "Technically, the Korean War did not end. The fighting stopped when North Korea, China and the United States reached an armistice in 1953. But South Korea did not agree to the armistice, and no formal peace treaty was ever signed."
+        }
+      ],
+      "text": "The Korean War did not end with a formal peace treaty, leaving the two Koreas technically at war."
+    },
+    {
+      "claim_id": "M64786E70043D24B",
+      "document_ids": [
+        "shard_06006_6344",
+        "shard_05943_39544"
+      ],
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06006_6344",
+          "passage_id": "P001325",
+          "text": "Even though the armistice officially stopped hostilities between North and South Korea, it's not a permanent peace treaty. The armistice agreement suspended open hostilities and withdrew all military forces."
+        },
+        {
+          "document_id": "shard_05943_39544",
+          "passage_id": "P001283",
+          "text": "The armistice established a ceasefire and created the Demilitarized Zone (DMZ), a buffer area that bisects the Korean Peninsula, effectively putting an end to the open hostilities."
+        }
+      ],
+      "text": "The armistice suspended open hostilities and withdrew all military forces from the Korean Peninsula."
+    },
+    {
+      "claim_id": "M4CBCD441CA285F5",
+      "document_ids": [
+        "shard_02380_54302",
+        "shard_02011_43116"
+      ],
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_02380_54302",
+          "passage_id": "P000539",
+          "text": "That agreement established the Demilitarized Zone (DMZ), a buffer area around the 38th parallel, to prevent any future conflicts."
+        },
+        {
+          "document_id": "shard_02011_43116",
+          "passage_id": "P000435",
+          "text": "Ultimately, the armistice resulted in restoring the prewar boundary along the 38th parallel, creating a demilitarized zone (DMZ) between the two Koreas. Although no peace treaty was ever signed, the armistice effectively ended hostilities and remains in place today."
+        }
+      ],
+      "text": "The armistice established the Demilitarized Zone (DMZ) along the 38th parallel to prevent future conflicts."
+    },
+    {
+      "claim_id": "M484A65D0C6FE3A3",
+      "document_ids": [
+        "shard_01515_64558",
+        "shard_01637_77654",
+        "shard_02139_77072"
+      ],
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01515_64558",
+          "passage_id": "P000288",
+          "text": "Despite initial optimism surrounding peace talks initiated in July 1951, negotiations dragged on for two years due to disagreements over repatriation of prisoners of war (POWs) and demarcation lines."
+        },
+        {
+          "document_id": "shard_01637_77654",
+          "passage_id": "P000334",
+          "text": "While fighting continued throughout the negotiations, progress was slow due to disagreements regarding repatriation of prisoners of war and demilitarization. Eventually, an agreement was reached, signing the Armistice Agreement on July 27, 1953. Although technically still in effect today, no formal peace treaty has ever been signed between North and South Korea."
+        },
+        {
+          "document_id": "shard_02139_77072",
+          "passage_id": "P000495",
+          "text": "Yet the end of the war hinged on successfully negotiating the fate of POWs on both sides. Those negotiations resulted in two massive prisoner exchanges that marked the war's end."
+        }
+      ],
+      "text": "Negotiations for the armistice were prolonged due to disagreements over prisoner of war repatriation and demarcation lines."
+    },
+    {
+      "claim_id": "MAF6965B2FCF735D",
+      "document_ids": [
+        "shard_06031_32421",
+        "shard_05351_5394"
+      ],
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06031_32421",
+          "passage_id": "P001348",
+          "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's tactics and broke the tradition of Generals being uncritical of their leaders, being replaced by General Matthew Ridgeway for his actions The war front settled close to the original North-South border November 1951: peace talks took place in Panmunjom 1953: Eisenhower suggested that he would cross Chinese borders and use nuclear weapons, in order to push a peace agreement Stalin's death lead to a truce and the establishment of a De-Militarised Zone along the 38th Parallel, re-establishing a North-South border In total, 2,500,000 people died in the war, including 33,000 Americans East-West Relations in the 50s 1953: Stalin was succeeded by Nikita Khrushchev 1956: Khrushchev announced plans to co-exist peacefully with the West Anti-communist protests in the UUSR's satellite states increased but Khrushchev's government relied on the support of these satellite governments so quickly crushed these protests The US accepted that the East of Europe was under Soviet rule and would not intervene in Eastern affairs Eisenhower was eager to negotiate with the Soviets instead of fighting 1957: The launch of Sputnik I, Russia and the World's first satellite, lead to criticism of Eisenhower for allowing a \"missile gap\" to develop 1960: Eisenhower's policies were further damaged when an American spy plane was spotted and shot out of the sky over the USSR Second Berlin Crisis: 1960 - 1961 West"
+        },
+        {
+          "document_id": "shard_05351_5394",
+          "passage_id": "P001173",
+          "text": "Section 1: Background – Postwar Tension and Origins of the Korean War Following Japan's unconditional surrender in August 1945, Allied forces occupied the Korean peninsula along the 38th parallel - the US controlled the south while the Soviet Union administered the north. These occupation zones were intended to be temporary; however, ideological differences soon prevented any progress towards reunification. By June 1950, North Korea had invaded South Korea under orders from Kim Il Sung, initiating the three-year Korean War."
+        }
+      ],
+      "text": "The Korean War began in 1950 when North Korea invaded South Korea under the orders of Kim Il Sung."
+    },
+    {
+      "claim_id": "MFB3122B34BB71E4",
+      "document_ids": [
+        "shard_03682_83132",
+        "shard_05958_47285",
+        "shard_03484_77279"
+      ],
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03682_83132",
+          "passage_id": "P000780",
+          "text": "A truce signed in 1953 left Korea again divided near the thirty eighth parallel."
+        },
+        {
+          "document_id": "shard_05958_47285",
+          "passage_id": "P001294",
+          "text": "It ended with an armistice agreement that brought relative peace along the 38th parallel separating North and South Korea. However, this armistice has never been replaced with a permanent peace treaty, leaving both nations technically at war even today."
+        },
+        {
+          "document_id": "shard_03484_77279",
+          "passage_id": "P000760",
+          "text": "But, as the host Josée Thibeault of Téléjournal pointed out that day,the two countries are still technically at war, as no peace treaty has been ratified by the belligerents."
+        }
+      ],
+      "text": "A truce was signed in 1953, leaving Korea divided near the 38th parallel, with no peace treaty ratified by the belligerents."
+    },
+    {
+      "claim_id": "MD59CAF168ADC80D",
+      "document_ids": [
+        "shard_03423_69502",
+        "shard_02854_6140"
+      ],
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03423_69502",
+          "passage_id": "P000735",
+          "text": "On the Korean Peninsula, the armistice signed in July 1953 established the Demilitarized Zone (DMZ) between North and South Korea, effectively freezing the division of the country. While the DMZ remains one of the most heavily fortified borders in the world today, occasional skirmishes and threats of renewed hostilities serve as stark reminders of lingering animosities."
+        },
+        {
+          "document_id": "shard_02854_6140",
+          "passage_id": "P000661",
+          "text": "An armistice was signed in July 1953, effectively ending hostilities and establishing a demilitarized zone (DMZ) between North and South Korea. Although technically still at war, both countries have maintained an uneasy peace ever since."
+        }
+      ],
+      "text": "An armistice was signed in July 1953, establishing the Demilitarized Zone (DMZ) between North and South Korea, which remains one of the most heavily fortified borders in the world."
+    },
+    {
+      "claim_id": "M9A49CF2E4DDFF9F",
+      "document_ids": [
+        "shard_05215_66447"
+      ],
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "supporting_passages": [
+        {
+          "document_id": "shard_05215_66447",
+          "passage_id": "P001127",
+          "text": "The United States suffered 33,686 casualties during the conflict, while South Korea suffered over two million casualties."
+        }
+      ],
+      "text": "The United States suffered 33,686 casualties, while South Korea suffered over two million casualties during the conflict."
+    },
+    {
+      "claim_id": "M8683AB3AA5B3407",
+      "document_ids": [
+        "shard_05971_76579",
+        "shard_05264_15774",
+        "shard_00276_43322"
+      ],
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "supporting_passages": [
+        {
+          "document_id": "shard_05971_76579",
+          "passage_id": "P001306",
+          "text": "As part of the terms of the armistice, the two Koreas agreed to establish a four-kilometer wide buffer zone along the front line, known as the Korean Demilitarized Zone (DMZ), demarcated by the Military Demarcation Line (MDL)."
+        },
+        {
+          "document_id": "shard_05264_15774",
+          "passage_id": "P001141",
+          "text": "While technically, North and South Korea remain in a state of war, the agreement reduced direct armed hostilities and enabled the establishment of a heavily militarized buffer zone called the Demilitarized Zone (DMZ)."
+        },
+        {
+          "document_id": "shard_00276_43322",
+          "passage_id": "P000040",
+          "text": "Section 4: Armistice and Aftermath An armistice signed in July 1953 ended hostilities between North and South Korea. It resulted in restoring the original boundary near the 38th parallel, creating a demilitarized zone known as the DMZ."
+        }
+      ],
+      "text": "The Korean War resulted in the establishment of a four-kilometer-wide buffer zone known as the Korean Demilitarized Zone (DMZ), demarcated by the Military Demarcation Line (MDL)."
+    },
+    {
+      "claim_id": "M385BA5E07B3E0FF",
+      "document_ids": [
+        "shard_06198_79583",
+        "shard_05351_5394"
+      ],
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06198_79583",
+          "passage_id": "P001385",
+          "text": "James Bond (Pierce Brosnan) is assigned to a rendezvous with a North Korean Army officer, Colonel Moon (Will Yun Lee), in his investigation of a North Korean terrorist, Zao (Rick Yune), but the mission is betrayed and despite a spectacular escape attempt, Bond is captured and subjected to vicious North Korean torture, before being released in an exchange of prisoners The Korean War from 1950 to 1953 was the most severe test the United Nations had to face since its inception in 1945. As part of the whole Cold War scenario, the Korean War was a complicated issue with which the United Nations had to successfully deal with or lose credibility just five years after it had come into being North Korea remains one of the most repressive authoritarian states in the world, ruled for seven decades by the Kim family and the Worker's Party of Korea."
+        },
+        {
+          "document_id": "shard_05351_5394",
+          "passage_id": "P001174",
+          "text": "As part of the United Nations Command, the United States played a leading role in defending South Korea against Communist aggression. Section 2: Military Strategy – Defeat at the Battle of Pusan Perimeter By late summer 1950, UN troops faced severe challenges due to their limited numbers and resources compared to those available to the enemy."
+        }
+      ],
+      "text": "The Korean War was the most severe test the United Nations faced since its inception in 1945."
+    },
+    {
+      "claim_id": "M7EC382F8FDD1BEF",
+      "document_ids": [
+        "shard_04371_12269",
+        "shard_05943_39544",
+        "shard_00935_37962"
+      ],
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04371_12269",
+          "passage_id": "P000979",
+          "text": "The United Nations, led by the United States, came to the aid of South Korea, marking the first major military confrontation of the Cold War era."
+        },
+        {
+          "document_id": "shard_05943_39544",
+          "passage_id": "P001287",
+          "text": "The UN's involvement in the Korean War marked its first major military action since its establishment in 1945."
+        },
+        {
+          "document_id": "shard_00935_37962",
+          "passage_id": "P000160",
+          "text": "The United Nations met to discuss this problem, and they decided to support South Korea against the attacking North."
+        }
+      ],
+      "text": "The Korean War marked the first major military confrontation of the Cold War era, with the UN, led by the United States, intervening to support South Korea."
+    },
+    {
+      "claim_id": "M6079ABF010ECC6E",
+      "document_ids": [
+        "shard_05971_76579"
+      ],
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "supporting_passages": [
+        {
+          "document_id": "shard_05971_76579",
+          "passage_id": "P001310",
+          "text": "On July 27, 1953, representatives from North Korea, China, and the United Nations signed the Korean Armistice Agreement, effectively ending hostilities."
+        }
+      ],
+      "text": "Representatives from North Korea, China, and the United Nations Command signed the Korean Armistice Agreement on July 27, 1953, effectively ending hostilities."
+    },
+    {
+      "claim_id": "M3AF6221C79280A7",
+      "document_ids": [
+        "shard_06292_54287"
+      ],
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06292_54287",
+          "passage_id": "P001405",
+          "text": "Furthermore, the conflict set an important precedent for multinational cooperation within the framework of the UN."
+        }
+      ],
+      "text": "The Korean War set an important precedent for multinational cooperation within the UN framework."
+    },
+    {
+      "claim_id": "M8501ECA541096DD",
+      "document_ids": [
+        "shard_01653_26636"
+      ],
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01653_26636",
+          "passage_id": "P000349",
+          "text": "Then his decision in September to send US/UN forces across the 38th parallel to destroy or punish the North Korean regime, and to unify North and South Korea by military means, escalated the war from containment to 'rollback'."
+        }
+      ],
+      "text": "The US decision to send forces across the 38th parallel escalated the war from containment to rollback."
+    },
+    {
+      "claim_id": "M69D314908EEEB02",
+      "document_ids": [
+        "shard_06361_56440",
+        "shard_01637_77654"
+      ],
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06361_56440",
+          "passage_id": "P001427",
+          "text": "However, MacArthur pressed on towards the Yalu River, the border between North Korea and China, ignoring warnings from Chinese leader Mao Zedong. Consequently, hundreds of thousands of Chinese soldiers crossed the border, forcing UN troops into a grueling retreat."
+        },
+        {
+          "document_id": "shard_01637_77654",
+          "passage_id": "P000332",
+          "text": "Encouraged by early victories, MacArthur proposed expanding operations into North Korea, aiming to reunify the peninsula once and for all. Despite initial reservations, Washington approved his plan, leading to a disastrous turn of events.\n\nAs UN forces approached the Yalu River bordering China, Chinese volunteers crossed the frontier, launching a massive counteroffensive against ill-prepared US soldiers."
+        }
+      ],
+      "text": "MacArthur pressed UN forces toward the Yalu River despite warnings from the Chinese, leading to a counteroffensive by Chinese forces involving hundreds of thousands of soldiers."
+    },
+    {
+      "claim_id": "MDCEF2C48B976715",
+      "document_ids": [
+        "shard_01610_35909"
+      ],
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01610_35909",
+          "passage_id": "P000307",
+          "text": "In September of 1950, MacArthur, confident of success, ignored warnings and led a risky assault to recapture Seoul, the capital of South Korea. The Inchon landing, his full-scale invasion on North Korea, was thwarted by Chinese intervention that led to a humiliating defeat and withdrawal."
+        }
+      ],
+      "text": "MacArthur ignored warnings and led a risky assault to recapture Seoul in September 1950."
+    },
+    {
+      "claim_id": "MAC7DBBC1D6216B7",
+      "document_ids": [
+        "shard_01470_77393",
+        "shard_04570_70896"
+      ],
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01470_77393",
+          "passage_id": "P000278",
+          "text": "Underestimating Chinese capabilities and intent, General MacArthur pressed ahead with his offensive until encountering fierce resistance at the Chosin Reservoir in November 1950."
+        },
+        {
+          "document_id": "shard_04570_70896",
+          "passage_id": "P001019",
+          "text": "MacArthur and his sources of information underestimated the size of the Chinese armies."
+        }
+      ],
+      "text": "General MacArthur underestimated Chinese capabilities and intent, leading to fierce resistance at the Chosin Reservoir in November 1950."
+    },
+    {
+      "claim_id": "M7048D40CE900194",
+      "document_ids": [
+        "shard_01400_83904"
+      ],
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01400_83904",
+          "passage_id": "P000242",
+          "text": ".For a time, US troops fought under a \"shoot-first-ask-questions-later\" policy against every civilian-refugee approaching US battlefield positions;[citation needed] an unwise tactical carte blanche that led US Soldiers to indiscriminately kill some 400 civilians at No Gun Ri (26–29 July 1950), in central Korea.^US Soldiers firing machine-guns."
+        }
+      ],
+      "text": "U.S. troops fought under a 'shoot-first-ask-questions-later' policy and killed some 400 civilians at No Gun Ri."
+    },
+    {
+      "claim_id": "MCC3B836C2DE515A",
+      "document_ids": [
+        "shard_06503_11120"
+      ],
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06503_11120",
+          "passage_id": "P001452",
+          "text": "Fearful of having an American ally on its doorstep, China intervened in October 1950, sending hundreds of thousands of troops across the border."
+        }
+      ],
+      "text": "China intervened in the Korean War in October 1950."
+    },
+    {
+      "claim_id": "MA69954C47BE63AC",
+      "document_ids": [
+        "shard_05059_13192",
+        "shard_04810_73050"
+      ],
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "supporting_passages": [
+        {
+          "document_id": "shard_05059_13192",
+          "passage_id": "P001118",
+          "text": "Section 3: China's Entry into the Conflict\nOne of the most critical junctures of the Korean War occurred when Chinese troops entered the fray in October 1950 following General Douglas MacArthur's ill-fated advance towards the Yalu River. With Beijing perceiving the US-led coalition as a direct threat to its security interests, thousands of Chinese soldiers poured across the border, shifting the balance of power and prolonging the conflict."
+        },
+        {
+          "document_id": "shard_04810_73050",
+          "passage_id": "P001078",
+          "text": "However, after achieving initial success with the amphibious landing at Incheon, MacArthur pressed ahead towards the Yalu River, intending to reunify Korea under UN auspices. His offensive prompted China to enter the war, resulting in a protracted stalemate near the original boundary."
+        }
+      ],
+      "text": "General MacArthur's advance toward the Yalu River prompted China's entry into the war."
+    },
+    {
+      "claim_id": "M9FC1ECBE1DD69CD",
+      "document_ids": [
+        "shard_00627_41410",
+        "shard_02056_68087"
+      ],
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "supporting_passages": [
+        {
+          "document_id": "shard_00627_41410",
+          "passage_id": "P000101",
+          "text": "Answer: To support North Korea against the United Nations forces led by the United States."
+        },
+        {
+          "document_id": "shard_02056_68087",
+          "passage_id": "P000481",
+          "text": "Afraid that the US was interested in taking North Korea as a base for operations against Manchuria, the People's Republic of China entered the war sending an army to support the NKPA."
+        }
+      ],
+      "text": "China entered the Korean War to support North Korea against United Nations forces led by the United States."
+    },
+    {
+      "claim_id": "MCA4CE0E345BFAC9",
+      "document_ids": [
+        "shard_06506_54950",
+        "shard_06503_11120",
+        "shard_05482_22468"
+      ],
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "supporting_passages": [
+        {
+          "document_id": "shard_06506_54950",
+          "passage_id": "P001457",
+          "text": "Chinese Intervention and Stalemate\nAs UN forces advanced towards the Yalu River bordering China, Mao Zedong's newly established Communist government perceived a direct threat to its security. Fearing American encroachment, China entered the war in October 1950, sending hundreds of thousands of \"volunteer\" troops to aid North Korea."
+        },
+        {
+          "document_id": "shard_06503_11120",
+          "passage_id": "P001453",
+          "text": "Domestically, Mao aimed to consolidate his regime and strengthen his authority; therefore, he perceived any foreign presence near his borders as threatening. Internationally, China felt isolated due to being excluded from the newly formed North Atlantic Treaty Organization (NATO), reinforcing its belief that only through force could it deter further American expansionism."
+        },
+        {
+          "document_id": "shard_05482_22468",
+          "passage_id": "P001187",
+          "text": "Fearful that the UN soldiers intended to invade China, another communist nation, Chinese military forces crossed the Chinese-North Korean border and launched an attack against the United Nations troops."
+        }
+      ],
+      "text": "Mao Zedong's government viewed the presence of US military forces near its border as a threat to its regime and sovereignty."
+    },
+    {
+      "claim_id": "ME27138018296685",
+      "document_ids": [
+        "shard_04204_72809",
+        "shard_04810_73050",
+        "shard_06031_32421"
+      ],
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_04204_72809",
+          "passage_id": "P000913",
+          "text": "Truman's dismissal of the overly aggressive General Douglas MacArthur in April 1951 further signaled the president's less ambitious approach to the conflict."
+        },
+        {
+          "document_id": "shard_04810_73050",
+          "passage_id": "P001072",
+          "text": "President Truman faced growing domestic pressure to adopt a more aggressive stance, culminating in his dismissal of MacArthur when he publicly criticized the administration's containment policy."
+        },
+        {
+          "document_id": "shard_06031_32421",
+          "passage_id": "P001347",
+          "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's tactics and broke the tradition of Generals being uncritical of their leaders, being replaced by General Matthew Ridgeway for his actions The war front settled close to the original North-South border November 1951: peace talks took place in Panmunjom 1953: Eisenhower suggested that he would cross Chinese borders and use nuclear weapons, in order to push a peace agreement Stalin's death lead to a truce and the establishment of a De-Militarised Zone along the 38th Parallel, re-establishing a North-South border In total, 2,500,000 people died in the war, including 33,000 Americans East-West Relations in the 50s 1953: Stalin was succeeded by Nikita Khrushchev 1956: Khrushchev announced plans to co-exist peacefully with the West Anti-communist protests in the UUSR's satellite states increased but Khrushchev's government relied on the support of these satellite governments so quickly crushed these protests The US accepted that the East of Europe was under Soviet rule and would not intervene in Eastern affairs Eisenhower was eager to negotiate with the Soviets instead of fighting 1957: The launch of Sputnik I, Russia and the World's first satellite, lead to criticism of Eisenhower for allowing a \"missile gap\" to develop 1960: Eisenhower's policies were further damaged when an American spy plane was spotted and shot out of the sky over the USSR Second Berlin Crisis: 1960 - 1961 West"
+        }
+      ],
+      "text": "Truman dismissed General Douglas MacArthur in April 1951 due to his overly aggressive stance and criticism of the administration's containment policy."
+    },
+    {
+      "claim_id": "ME0EEC82CEB6175E",
+      "document_ids": [
+        "shard_02013_219",
+        "shard_01905_84775",
+        "shard_02701_45655"
+      ],
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_02013_219",
+          "passage_id": "P000453",
+          "text": "Truman disagreed strongly with MacArthur, and in April of 1951, fired the General."
+        },
+        {
+          "document_id": "shard_01905_84775",
+          "passage_id": "P000396",
+          "text": "Truman Statement on MacArthur April 6, 1951 84 Korean War US Battle Deaths36,940 Stalemate January 1951 - 27 July 1953 85 Korean War June 25, 1950 - (July 27, 1953) November 1952 Dwight Eisenhower elected president Visited Korea as president-elect Hinted at use of nuclear weapons to end war Chinese got serious about negotiations Cease fire signed July 27, 1953 86 Next Lesson 24 Cold War Living on the Brink 87 Lesson Objectives Build a foundation for understanding the genesis, issues, and strategies of the Cold War."
+        },
+        {
+          "document_id": "shard_02701_45655",
+          "passage_id": "P000591",
+          "text": "On April 11 Truman, having reached the opinion that MacArthur's independence amounted to insubordination, had relieved the general of all his commands and recalled him to the United States."
+        }
+      ],
+      "text": "President Truman fired General MacArthur in April 1951 for insubordination and disagreement over the war's scope and strategy."
+    },
+    {
+      "claim_id": "M5C5F8BF952365CE",
+      "document_ids": [
+        "shard_01934_52375",
+        "shard_03169_55857",
+        "shard_02013_219"
+      ],
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_01934_52375",
+          "passage_id": "P000407",
+          "text": "MacArthur push North Korean forces to the Yalu River The Chinese (backed by USSR) push the UN forces back south of Seoul and eventually settle near the 38 th parallel MacArthur suggested taking on China and even using nuclear weapons against them. Truman denied that request (WWIII?) and eventually fired MacArthur due to insubordination An armistice was finally signed on July 27, 1953 (The two sides are still officially at war with one another)"
+        },
+        {
+          "document_id": "shard_03169_55857",
+          "passage_id": "P000681",
+          "text": "The Americans landed more troops and drove the Chinese back to the 38th parallel, where Truman ordered General MacArthur to stop and sacked him when he disagreed. The war went on as border clashes until 1953 when America's new president, Eisenhower, offered peace, but threatened to use the atomic bomb if China did not accept the offer."
+        },
+        {
+          "document_id": "shard_02013_219",
+          "passage_id": "P000452",
+          "text": "MacArthur wanted to push North again and to expand the war against communist China and the Soviet Union."
+        }
+      ],
+      "text": "President Truman rejected General MacArthur's proposals to expand the Korean War into China and to use nuclear weapons against communist forces."
+    },
+    {
+      "claim_id": "M6C24A6CF5334DB1",
+      "document_ids": [
+        "shard_03397_70489"
+      ],
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03397_70489",
+          "passage_id": "P000714",
+          "text": "MacArthur wanted to use nuclear weapons to invade China, but Truman opposed this expansion of the war."
+        }
+      ],
+      "text": "Truman opposed MacArthur's proposal to use nuclear weapons to invade China during the Korean War."
+    },
+    {
+      "claim_id": "M6E2D9B78261CC4D",
+      "document_ids": [
+        "shard_03169_55857",
+        "shard_06031_32421",
+        "shard_04204_72809"
+      ],
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "supporting_passages": [
+        {
+          "document_id": "shard_03169_55857",
+          "passage_id": "P000681",
+          "text": "The Americans landed more troops and drove the Chinese back to the 38th parallel, where Truman ordered General MacArthur to stop and sacked him when he disagreed. The war went on as border clashes until 1953 when America's new president, Eisenhower, offered peace, but threatened to use the atomic bomb if China did not accept the offer."
+        },
+        {
+          "document_id": "shard_06031_32421",
+          "passage_id": "P001347",
+          "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's tactics and broke the tradition of Generals being uncritical of their leaders, being replaced by General Matthew Ridgeway for his actions The war front settled close to the original North-South border November 1951: peace talks took place in Panmunjom 1953: Eisenhower suggested that he would cross Chinese borders and use nuclear weapons, in order to push a peace agreement Stalin's death lead to a truce and the establishment of a De-Militarised Zone along the 38th Parallel, re-establishing a North-South border In total, 2,500,000 people died in the war, including 33,000 Americans East-West Relations in the 50s 1953: Stalin was succeeded by Nikita Khrushchev 1956: Khrushchev announced plans to co-exist peacefully with the West Anti-communist protests in the UUSR's satellite states increased but Khrushchev's government relied on the support of these satellite governments so quickly crushed these protests The US accepted that the East of Europe was under Soviet rule and would not intervene in Eastern affairs Eisenhower was eager to negotiate with the Soviets instead of fighting 1957: The launch of Sputnik I, Russia and the World's first satellite, lead to criticism of Eisenhower for allowing a \"missile gap\" to develop 1960: Eisenhower's policies were further damaged when an American spy plane was spotted and shot out of the sky over the USSR Second Berlin Crisis: 1960 - 1961 West"
+        },
+        {
+          "document_id": "shard_04204_72809",
+          "passage_id": "P000914",
+          "text": "For example, in 1953, the Eisenhower administration warned China that unless it ended the war in Korea and accepted the 38th parallel as the demarcation line between the two Koreas, he would order the atomic bombing of China's major urban centers."
+        }
+      ],
+      "text": "Eisenhower's administration threatened to use atomic bombs against China if it did not end the war and accept the 38th parallel as the border between North and South Korea."
+    }
+  ],
+  "experiment_id": "rag25_topic213_gpt56_sol_coverage_repair_v2",
+  "input_accounting": {
+    "document_calls_attempted": 173,
+    "documents_eligible": 173,
+    "documents_processed": 171,
+    "documents_unavailable": 2,
+    "evidence_assignments_processed": 1011,
+    "failed_document_ids": [
+      "shard_00001_10555",
+      "shard_00004_63642"
+    ],
+    "map_candidate_count": 554,
+    "passages_processed": 1478,
+    "sub_narratives_processed": 10
+  },
+  "model": "openai/gpt-5.6-sol",
+  "model_key": "gpt_5_6_sol",
+  "narrative": "I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.",
+  "prompt_version": "claim-preserving-42-slot-generation-v1",
+  "prompts": {
+    "generation_system": "You rewrite a frozen ledger of independently supported factual\nclaims into one official TREC RAG 2026 answer. Return exactly one JSON object with a `sentences`\narray. The user supplies an ordered list of claim slots grouped into facets. Return exactly one item\nfor every slot, in exactly the supplied order. Each item must have exactly two keys: `claim_id` and\n`text`, and `claim_id` must match the slot being rewritten.\n\nEach `text` must be exactly one polished, self-contained grammatical sentence. Preserve every\nfactual detail in that slot's source claim without adding outside knowledge, inference, headings,\nintroductions, conclusions, citation markers, or meta-commentary. Do not merge slots and do not\nsplit one slot across multiple items. Use the facet word targets to remain balanced and keep the\ncomplete answer within the supplied total word band. Citations are assigned deterministically after\ngeneration, so do not mention document IDs or citations in the text."
+  },
+  "run_id": "topic213-gpt56-sol-coverage-repair-v2",
+  "schema_version": "topic213-controlled-generator-benchmark-v1",
+  "sections": [
+    {
+      "claims": [
+        {
+          "claim_id": "S001",
+          "document_ids": [
+            "shard_01905_84775",
+            "shard_05351_5394"
+          ],
+          "evidence_claim_ids": [
+            "M15A1DF8DDC6E565"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01905_84775",
+              "passage_id": "P000390",
+              "text": "Secretary of State Dean Acheson Speech on the Far East National Press Club 12 January 1950 Source 67 Korean War June 25, 1950 - (July 27, 1953) June 25, 1950 North Korean forces crossed 38th parallel 100,000 troops supported by tanks and aircraft 68 Korean War North Korea Attacks 25 June 1950 http// xt.html 69 Korean War June 25, 1950 - (July 27, 1953) UN Security Council voting to use military force in Korea June 27,1950 USSR absent (boycotting UN) 70 Parallels Korea and Gulf War Both were declared non-vital to US These were the only two time the UN authorized military force (up to 1991) 71 Korean War June 25, 1950 - (July 27, 1953) General of the Army Douglas MacArthur Placed in command of UN forces 72 Korean War Pusan Perimeter July-August 1950 73 Korean War Inchon Landing 15 September 1950 74 Inchon Landing September 15, 1950 Operation Chromite MacArthur proposed bold strategic stroke in enemy rear 75 Inchon Landing September 15, 1950 Operation Chromite Inchon 10 miles from Seoul and lightly defended 76 Inchon Landing September 15, 1950 Problem 30 foot tides 77 Inchon Landing September 15, 1950 Operation Chromite 78 Inchon Landing September 15, 1950 Operation Chromite 79 Korean War Approaching the Yalu River October-November 1950 80 Korean War Memory of this haunted presidents during the Vietnam War China Enters the War November 1950 - January 1951 81 Truman MacArthur"
+            },
+            {
+              "document_id": "shard_05351_5394",
+              "passage_id": "P001167",
+              "text": "Section 1: Background – Postwar Tension and Origins of the Korean War Following Japan's unconditional surrender in August 1945, Allied forces occupied the Korean peninsula along the 38th parallel - the US controlled the south while the Soviet Union administered the north. These occupation zones were intended to be temporary; however, ideological differences soon prevented any progress towards reunification. By June 1950, North Korea had invaded South Korea under orders from Kim Il Sung, initiating the three-year Korean War."
+            }
+          ],
+          "text": "On June 25, 1950, North Korean forces crossed the 38th parallel, initiating the conflict that became the Korean War."
+        },
+        {
+          "claim_id": "S002",
+          "document_ids": [
+            "shard_04112_27787",
+            "shard_05363_83603"
+          ],
+          "evidence_claim_ids": [
+            "M9325D190D82EDBE"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04112_27787",
+              "passage_id": "P000868",
+              "text": "Over time, ideological differences led to tensions between the two sides, eventually erupting into war in June 1950. North Korea (supported by China and the Soviet Union) invaded South Korea (backed by the United Nations, primarily consisting of U.S. troops)."
+            },
+            {
+              "document_id": "shard_05363_83603",
+              "passage_id": "P001176",
+              "text": "So in 1950, North Korea invaded South Korea triggering the Korean War."
+            }
+          ],
+          "text": "North Korea’s invasion of South Korea on June 25, 1950, was the direct event that triggered the Korean War."
+        },
+        {
+          "claim_id": "S003",
+          "document_ids": [
+            "shard_06492_41861",
+            "shard_06031_32421"
+          ],
+          "evidence_claim_ids": [
+            "MFB0F06D420DE094"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06492_41861",
+              "passage_id": "P001441",
+              "text": "Following years of political tension, military buildup, and border skirmishes, full-scale war broke out in June 1950 when North Korean forces invaded their southern neighbor."
+            },
+            {
+              "document_id": "shard_06031_32421",
+              "passage_id": "P001343",
+              "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's"
+            }
+          ],
+          "text": "The Korean War began after years of political tension, repeated border skirmishes, and sustained military buildup throughout the surrounding region."
+        }
+      ],
+      "sub_narrative": "\"What triggered the Korean War?\""
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S004",
+          "document_ids": [
+            "shard_01905_84775",
+            "shard_01648_76475",
+            "shard_02044_903"
+          ],
+          "evidence_claim_ids": [
+            "M4465DC745718B83"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01905_84775",
+              "passage_id": "P000391",
+              "text": "Soviet Nuclear Test (US code name Joe 1) August 29, 1949 61 NSC-68 April 14, 1950 Classified National Security Council document Full analysis of US-USSR relationship Defined initial US Cold War strategy Containment Implemented the Truman Doctrine 62 1 Oct 49 7 Oct 49 12 Jan 50 14 Feb 50 25 Jun 50 27 Jun 50 Mao Zedong declares Peoples Republic of China German Democratic Republic created from Eastern Zone Sec State Acheson speech omits Korea as US interest area USSR PRC sign mutual defense pact North Korea (PDRK) invades South Korea (ROK) United Nations votes to use military force to assist ROK 63 Korea War 64 Korea Annexed by Japan in 1910 Big 3 pledged independence for Korea at Potsdam Divided into zones of occupation at 38th parallel after WW II USSR occupied north, US the south 65 Korea Ignored strategically by US after WW II From the standpoint of military security, the United States has little strategic interest in maintaining the present troops and bases in Korea."
+            },
+            {
+              "document_id": "shard_01648_76475",
+              "passage_id": "P000338",
+              "text": "In its report, known as \"NSC 68,\" the Council recommended heavy increases in military funding to help contain the Soviets."
+            },
+            {
+              "document_id": "shard_02044_903",
+              "passage_id": "P000463",
+              "text": "NSC-68 Policy Document: Issued in April 1950, this classified document outlined a new approach toward containing Soviet expansionism, emphasizing increased defense spending and preparedness. The Korean War served as a catalyst for implementing this policy."
+            }
+          ],
+          "text": "NSC-68, a 1950 National Security Council document, recommended heavy military spending to contain Soviet expansionism and defined the U.S. Cold War containment strategy."
+        },
+        {
+          "claim_id": "S005",
+          "document_ids": [
+            "shard_03682_83132",
+            "shard_05974_40666",
+            "shard_01076_15403"
+          ],
+          "evidence_claim_ids": [
+            "M4245120811DF380"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03682_83132",
+              "passage_id": "P000774",
+              "text": "The American policy of containment accepted the fact that Eastern Europe was under Communist control, but sought to prevent Communist governments from forming elsewhere in the world. The Truman Doctrine, which applied the principles of containment, stated that the United States would support free peoples who resist attempted conquest."
+            },
+            {
+              "document_id": "shard_05974_40666",
+              "passage_id": "P001313",
+              "text": "Truman Doctrine: to support free peoples who are resisting attempted subjugation by armed minorities or by outside pressures Global containment against USSR anywhere 5."
+            },
+            {
+              "document_id": "shard_01076_15403",
+              "passage_id": "P000178",
+              "text": "Fearful of Communist expansion, President Harry S. Truman quickly committed U.S. military support to help defend South Korea."
+            }
+          ],
+          "text": "The Truman Doctrine and containment policy committed the United States to supporting free peoples resisting communist conquest."
+        },
+        {
+          "claim_id": "S006",
+          "document_ids": [
+            "shard_04368_42125",
+            "shard_06361_56440"
+          ],
+          "evidence_claim_ids": [
+            "MDB72C55B385193C"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04368_42125",
+              "passage_id": "P000957",
+              "text": "involvement in the war was part of its broader strategy to contain communism during the Cold War."
+            },
+            {
+              "document_id": "shard_06361_56440",
+              "passage_id": "P001425",
+              "text": "Truman ultimately decided to commit American troops, citing the need to contain the spread of communism under the recently articulated doctrine of 'containment.' In doing so, Truman circumvented Congress and acted under the auspices of the newly formed United Nations Security Council, thereby internationalizing the conflict. Analyzing Truman's decision within the broader geopolitical landscape of the early Cold War period reveals how fears of Communist expansion influenced American foreign policy decisions."
+            }
+          ],
+          "text": "American involvement in Korea formed part of the broader Cold War strategy designed to contain the spread of communism worldwide."
+        },
+        {
+          "claim_id": "S007",
+          "document_ids": [
+            "shard_06300_76499",
+            "shard_00774_4703",
+            "shard_01905_84775"
+          ],
+          "evidence_claim_ids": [
+            "M76B00B1B6BF9D60"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06300_76499",
+              "passage_id": "P001407",
+              "text": "Truman, viewing the invasion as a test of American will, ordered U.S. forces to help South Korea repel the invaders."
+            },
+            {
+              "document_id": "shard_00774_4703",
+              "passage_id": "P000120",
+              "text": "I felt certain that if South Korea was allowed to fall, Communist leaders would be emboldened to override nations closer to our own shores.\" – President Harry Truman Sixty years ago this month, the North Korean People's Army invaded South Korea, challenging the resolve of a fledgling United Nations and prompting President Harry Truman to declare that the United States would fight its \"unprovoked aggression.\" By crossing the 38th parallel, the North's forces started a three-year ground war that, today, is widely considered the first battle in a decades-long Cold War between communist powers and the West."
+            },
+            {
+              "document_id": "shard_01905_84775",
+              "passage_id": "P000391",
+              "text": "Soviet Nuclear Test (US code name Joe 1) August 29, 1949 61 NSC-68 April 14, 1950 Classified National Security Council document Full analysis of US-USSR relationship Defined initial US Cold War strategy Containment Implemented the Truman Doctrine 62 1 Oct 49 7 Oct 49 12 Jan 50 14 Feb 50 25 Jun 50 27 Jun 50 Mao Zedong declares Peoples Republic of China German Democratic Republic created from Eastern Zone Sec State Acheson speech omits Korea as US interest area USSR PRC sign mutual defense pact North Korea (PDRK) invades South Korea (ROK) United Nations votes to use military force to assist ROK 63 Korea War 64 Korea Annexed by Japan in 1910 Big 3 pledged independence for Korea at Potsdam Divided into zones of occupation at 38th parallel after WW II USSR occupied north, US the south 65 Korea Ignored strategically by US after WW II From the standpoint of military security, the United States has little strategic interest in maintaining the present troops and bases in Korea."
+            }
+          ],
+          "text": "President Truman ordered U.S. forces to assist South Korea because he viewed the invasion as a test of American resolve."
+        },
+        {
+          "claim_id": "S008",
+          "document_ids": [
+            "shard_06292_54287"
+          ],
+          "evidence_claim_ids": [
+            "M76396FC76AB41E2"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06292_54287",
+              "passage_id": "P001400",
+              "text": "The Korean War marked the first major military engagement of the Cold War era and demonstrated America's commitment to containing the spread of communism."
+            }
+          ],
+          "text": "The Korean War became the first major military engagement of the Cold War era and demonstrated U.S. commitment to containing communism."
+        }
+      ],
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\""
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S009",
+          "document_ids": [
+            "shard_04204_72809",
+            "shard_00774_4703",
+            "shard_01408_73258"
+          ],
+          "evidence_claim_ids": [
+            "MF29C6C2D0F17419"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04204_72809",
+              "passage_id": "P000902",
+              "text": "Recognizing the gravity of the situation in South Korea, and the very real prospect of the country's complete collapse, Truman wasted no time in committing U.S. ground forces to the Korean peninsula to halt the NKPA and preserve South Korea as a Western outpost on the Asian mainland."
+            },
+            {
+              "document_id": "shard_00774_4703",
+              "passage_id": "P000121",
+              "text": "I felt certain that if South Korea was allowed to fall, Communist leaders would be emboldened to override nations closer to our own shores.\" – President Harry Truman Sixty years ago this month, the North Korean People's Army invaded South Korea, challenging the resolve of a fledgling United Nations and prompting President Harry Truman to declare that the United States would fight its \"unprovoked aggression.\" By crossing the 38th parallel, the North's forces started a three-year ground war that, today, is widely considered the first battle in a decades-long Cold War between communist powers and the West."
+            },
+            {
+              "document_id": "shard_01408_73258",
+              "passage_id": "P000260",
+              "text": "Faced with the prospect of communist expansion throughout East Asia, President Harry S. Truman committed American troops to defend South Korea, thus setting the stage for direct U.S."
+            }
+          ],
+          "text": "President Truman committed U.S. ground forces to South Korea to halt the North Korean People’s Army and preserve South Korea as a Western outpost in Asia."
+        },
+        {
+          "claim_id": "S010",
+          "document_ids": [
+            "shard_01637_77654"
+          ],
+          "evidence_claim_ids": [
+            "M93B14ACD4EC3C81"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01637_77654",
+              "passage_id": "P000331",
+              "text": "Initially reluctant to engage militarily in another overseas conflict following WWII, President Truman decided otherwise upon learning of the invasion of South Korea by North Korean forces backed by China and the USSR. On June 27, 1950, he committed American troops to defend South Korea under the auspices of the newly formed United Nations Command (UNC). By doing so, Truman framed the intervention as necessary to contain the spread of communism rather than merely defending South Korean territory."
+            }
+          ],
+          "text": "Truman committed American troops to fight in the Korean War as part of the effort to contain communism’s spread."
+        },
+        {
+          "claim_id": "S011",
+          "document_ids": [
+            "shard_04570_14502",
+            "shard_06031_32421",
+            "shard_04810_73050"
+          ],
+          "evidence_claim_ids": [
+            "MD290940F2075F44"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04570_14502",
+              "passage_id": "P001008",
+              "text": "President Harry Truman decided to intervene militarily without seeking formal approval from Congress, citing his authority under the UN Charter."
+            },
+            {
+              "document_id": "shard_06031_32421",
+              "passage_id": "P001344",
+              "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's"
+            },
+            {
+              "document_id": "shard_04810_73050",
+              "passage_id": "P001069",
+              "text": "Truman swiftly decided to intervene militarily to defend South Korea. He justified his decision based on the United Nations Charter, which called for collective security against aggression. Truman believed that if North Korea were allowed to succeed, it would set a dangerous precedent for other communist regimes seeking to expand their territories through force."
+            }
+          ],
+          "text": "Truman intervened militarily in June 1950 without formal congressional approval, citing his authority under the UN Charter to defend South Korea from communist aggression."
+        },
+        {
+          "claim_id": "S012",
+          "document_ids": [
+            "shard_03937_82571",
+            "shard_04128_70325"
+          ],
+          "evidence_claim_ids": [
+            "M1B35A5762BD6C6C"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03937_82571",
+              "passage_id": "P000812",
+              "text": "It was the first test of Western adherence to the Cold War doctrine of containment, a strategy to stem the forced spread of Communism worldwide."
+            },
+            {
+              "document_id": "shard_04128_70325",
+              "passage_id": "P000874",
+              "text": "other study tools..The Korean War was the first major conflict following the end of World War II and the first war of the Cold War between the United States and Soviet Union.The war ended with little resolution.When someone mentions the Korean War, everyone knows that it was a civil war between the North and the South Korea.The Korean War was both a civil and an international war.The main reason the United States got involved in Korea was the purpose of doing everything possible to keep communism from spreading around world mobilization for the war did or did not make Korea a societal focus in light of these distractions.Learn vocabulary, terms, and more with flashcards, games, and other study tools..It is estimated that two million Koreans perished, majority of who were northerners The Korean War (1950-1953) was the first military action of the Cold War.Sandwiched in between the popular war, World War II, and an unpopular war, The Vietnam War, The Korean conflict was not the measure of hardware and military might which occurred in WWII.Soon after the Soviet takeover of Eastern Europe, China became Communist in 1949.A war considered as an embarrassment for the international community, many lives were harvested and it did started and ended with accomplishing nothing from the unifying Korean War Essay.The palyers of this war not only China,Nort.The Korean War was also not the"
+            }
+          ],
+          "text": "As the Cold War’s first major conflict, the Korean War tested whether the United States would adhere to its containment strategy."
+        },
+        {
+          "claim_id": "S013",
+          "document_ids": [
+            "shard_03477_77362",
+            "shard_03940_21748"
+          ],
+          "evidence_claim_ids": [
+            "MC09CB804CB7F843"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03477_77362",
+              "passage_id": "P000750",
+              "text": "after WWII, the Russians left after putting in place a communist regime supported by a strong Soviet equipped army and the US left the southern half under the anti-Communist government of Syngman Rhee with a small military that Rhee used primarily to suppress internal opposition, on June 24, 1950 the armies of North Korea poured over its southern border invading South Korea, within days they had occupied much of South Korea 66 The Korean War 1950-1953 67 The Korean War Truman's Response to the invasion on June 27, 1950 ordered limited American military assistance to South Korea, appealed to the United Nations to intervene, Douglas MacArthur would command the UN operations there - effort not simply at containment but at liberation 68 The Korean War Intervention in Korea was the first expression of the newly expansive American foreign policy outlined in NSC-68, UN aimed to create a unified, independent and democratic Korea, for several weeks the invasion went smoothly, UN forces captured Pyongyang and victory seemed close until the communist government in China intervened."
+            },
+            {
+              "document_id": "shard_03940_21748",
+              "passage_id": "P000820",
+              "text": "During the 1950s, the Korean War was tremendously significant as it marked the first concrete war against communism as well as revealing inconsistencies in American foreign policy."
+            }
+          ],
+          "text": "The Korean War was the first expression of the U.S. foreign policy outlined in NSC-68, which emphasized containing communism."
+        }
+      ],
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\""
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S014",
+          "document_ids": [
+            "shard_02598_21130",
+            "shard_06292_54287"
+          ],
+          "evidence_claim_ids": [
+            "MD99082350110C4C"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_02598_21130",
+              "passage_id": "P000562",
+              "text": "In the United States, a wave of anti-Communism swept across the country through the rise of McCarthyism and Orientalist bigotry, preventing Americans from understanding Koreans beyond the stereotype of the Asian as a representative image of the enemy and unknown “other.” Anti-Communism partnered with military repression and racist bigotry to prevent mutual and comprehensive understanding between the two countries."
+            },
+            {
+              "document_id": "shard_06292_54287",
+              "passage_id": "P001402",
+              "text": "Domestically, the Korean War contributed to increased anti-communist sentiment during the early years of the Cold War. The conflict coincided with McCarthyism, a period characterized by widespread fear of Communist influence and subsequent political repression. Additionally, the war resulted in substantial economic growth due to wartime production demands, fueling the post-war boom experienced by the United States."
+            }
+          ],
+          "text": "The Korean War contributed to both the rise of McCarthyism and a broader wave of anti-communism across the United States."
+        },
+        {
+          "claim_id": "S015",
+          "document_ids": [
+            "shard_03477_77362",
+            "shard_06292_54287",
+            "shard_00839_47882"
+          ],
+          "evidence_claim_ids": [
+            "M99CC13A2CEABD5B"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03477_77362",
+              "passage_id": "P000751",
+              "text": "72 The Korean War On April 11, 1951 Truman relieved MacArthur of his command, 69 of the American public supported MacArthur, Old soldiers never die, they just fade away, negotiations between the opposing forces dragged on until 1953 73 The Korean War Office of Defense Mobilization was instituted to fight inflation by holding down prices and discouraging high union wage demands, railroad workers walked off the job in 1952, Truman ordered the government to seize control of the railroads, a nationwide steel strike followed in 1952 and Truman seized the steel mills as well 74 The Korean War The Supreme Court ruled 6 3 that the president had exceeded his authority when he seized control of the steel mills and Truman was forced to relent 75 The Korean War The Korean War gave a significant boost to economic growth by pumping new government funds into the economy at a point when many believed a recession would began 76 The Korean War Many began to think there was something deeply wrong not only in North Korea but the US as well since the US seemed unable to conclude what many Americans thought as a minor border skirmish in a small country. 77 Crusade Against Subversion Communism was not an imagined enemy in the 1950s, it had a tangible shape in Joseph Stalin and the Soviet Union, America had suffered setbacks in its battle against communism, the Korean War stalemate, the loss of China, and the Soviet development of the atomic bomb, many Americans were looking for someone to blame and many Americans were attracted to the idea of a communist conspiracy within American borders 78 The Crusade Against Subversion House Un-American Activities Committee (HUAC) held a widely publicized investigation to prove that, under Democratic rule, the government had tolerated communist subversion, they argued communists had infiltrated Hollywood and tainted America with propaganda."
+            },
+            {
+              "document_id": "shard_06292_54287",
+              "passage_id": "P001402",
+              "text": "Domestically, the Korean War contributed to increased anti-communist sentiment during the early years of the Cold War. The conflict coincided with McCarthyism, a period characterized by widespread fear of Communist influence and subsequent political repression. Additionally, the war resulted in substantial economic growth due to wartime production demands, fueling the post-war boom experienced by the United States."
+            },
+            {
+              "document_id": "shard_00839_47882",
+              "passage_id": "P000142",
+              "text": "Eisenhower who was wining commander of worldwar II was able to get popular belief of American people that his wining the presidental election would bring end to the Korean stalemate."
+            }
+          ],
+          "text": "The war intensified fears of communist subversion, prompting House Un-American Activities Committee investigations and beliefs that communists had widely infiltrated American institutions."
+        },
+        {
+          "claim_id": "S016",
+          "document_ids": [
+            "shard_06292_54287",
+            "shard_04810_73050",
+            "shard_04570_14502"
+          ],
+          "evidence_claim_ids": [
+            "MCC72FD82028A1B0"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06292_54287",
+              "passage_id": "P001402",
+              "text": "Domestically, the Korean War contributed to increased anti-communist sentiment during the early years of the Cold War. The conflict coincided with McCarthyism, a period characterized by widespread fear of Communist influence and subsequent political repression. Additionally, the war resulted in substantial economic growth due to wartime production demands, fueling the post-war boom experienced by the United States."
+            },
+            {
+              "document_id": "shard_04810_73050",
+              "passage_id": "P001070",
+              "text": "Initially, there was strong bipartisan support for intervention; however, as casualties mounted and the war dragged on without clear victory, criticism grew. Anti-communism became a potent political weapon, fueling Senator Joseph McCarthy's crusade against perceived internal subversion. The Korean War also marked the birth of the military-industrial complex, highlighting the intertwined relationship between defense industries, government, and the military."
+            },
+            {
+              "document_id": "shard_04570_14502",
+              "passage_id": "P001010",
+              "text": "Secondly, the conflict marked a turning point in civil rights within the United States; African Americans who served overseas returned home demanding equal treatment and opportunities, contributing to the broader Civil Rights Movement of the 1950s and 1960s."
+            }
+          ],
+          "text": "The Korean War intensified American anti-communist sentiment, coinciding with McCarthyism and contributing to political repression and cultural fears of internal subversion."
+        },
+        {
+          "claim_id": "S017",
+          "document_ids": [
+            "shard_03891_42736",
+            "shard_02701_45655",
+            "shard_01836_84885"
+          ],
+          "evidence_claim_ids": [
+            "ME821C6A2A983566"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03891_42736",
+              "passage_id": "P000800",
+              "text": "This hopeful climate was destroyed by the starting convulsions of the Korean War, and by the wave of bitter anti-Communism that swept the USA as a result. American military spending began to sharply increase every year after the end of the Korean War."
+            },
+            {
+              "document_id": "shard_02701_45655",
+              "passage_id": "P000585",
+              "text": "The US Congress, meanwhile, supported military intervention without significant dissent and approved $12 billion to pay for the military expenses."
+            },
+            {
+              "document_id": "shard_01836_84885",
+              "passage_id": "P000377",
+              "text": "High cost of war led Americans to reject democratic party."
+            }
+          ],
+          "text": "After the Korean War ended, it produced a significant increase in the level of United States military spending."
+        },
+        {
+          "claim_id": "S018",
+          "document_ids": [
+            "shard_04365_21209",
+            "shard_03373_19479"
+          ],
+          "evidence_claim_ids": [
+            "M68D23E580095C1D"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04365_21209",
+              "passage_id": "P000950",
+              "text": "As a result, the percentage of Congress's annual budget spent on defense soared throughout the following years, hovering at roughly 50 percent under the Eisenhower administration."
+            },
+            {
+              "document_id": "shard_03373_19479",
+              "passage_id": "P000702",
+              "text": "Nevertheless, the Korean War helped define the Cold War, established a precedent for keeping peripheral wars limited, and boosted defense spending that contributed to the postwar economic boom in the United States."
+            }
+          ],
+          "text": "During the Eisenhower administration, defense spending remained at roughly 50 percent of the total federal budget."
+        },
+        {
+          "claim_id": "S019",
+          "document_ids": [
+            "shard_02115_21943",
+            "shard_02368_83818",
+            "shard_01936_23328"
+          ],
+          "evidence_claim_ids": [
+            "M4ED932AEF24B058"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_02115_21943",
+              "passage_id": "P000485",
+              "text": "A public dispute broke out, and eventually, the President fired MacArthur for insubordination. This move surprised the American political system and shocked the world."
+            },
+            {
+              "document_id": "shard_02368_83818",
+              "passage_id": "P000531",
+              "text": "It was called a :Police Action: General MacArthur was fired by President Truman for disobeying orders which was very unpopular at the time."
+            },
+            {
+              "document_id": "shard_01936_23328",
+              "passage_id": "P000419",
+              "text": "MacArthur Fired Truman's firing of General Douglas MacArthur was the beginning of a decline in the President's popularity."
+            }
+          ],
+          "text": "President Truman’s firing of General Douglas MacArthur for insubordination was highly unpopular and shocked the American political system."
+        },
+        {
+          "claim_id": "S020",
+          "document_ids": [
+            "shard_05855_21542",
+            "shard_04204_72809",
+            "shard_00295_69587"
+          ],
+          "evidence_claim_ids": [
+            "MF7515C4D17F8786"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_05855_21542",
+              "passage_id": "P001263",
+              "text": "In defiance of Truman and the Joint Chiefs of Staff, MacArthur called for attacks into China unless a peace settlement was reached. Truman fired MacArthur on April 9 and replaced him with Ridgway."
+            },
+            {
+              "document_id": "shard_04204_72809",
+              "passage_id": "P000907",
+              "text": "Truman's dismissal of the overly aggressive General Douglas MacArthur in April 1951 further signaled the president's less ambitious approach to the conflict."
+            },
+            {
+              "document_id": "shard_00295_69587",
+              "passage_id": "P000052",
+              "text": "During the Korean War, President Harry Truman and his advisors believed that American involvement in the war required economic mobilization at home. President Truman committed American troops without Congress approval created a model for future wars."
+            }
+          ],
+          "text": "General Douglas MacArthur’s push for attacks into China without a peace settlement led President Truman to dismiss him in April 1951."
+        }
+      ],
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\""
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S021",
+          "document_ids": [
+            "shard_06013_13419",
+            "shard_03461_23898"
+          ],
+          "evidence_claim_ids": [
+            "M622D383284BBEE6"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06013_13419",
+              "passage_id": "P001338",
+              "text": "The Korean War has also infamously never officially ended; to this day it remains only a negotiated truce, and North Korea remains a stubborn thorn in the side of the United States, and a threat to the peace and stability of the whole of Asia that could still end up sparking the start of World War II."
+            },
+            {
+              "document_id": "shard_03461_23898",
+              "passage_id": "P000738",
+              "text": "Despite numerous obstacles, the Armistice Negotiations eventually culminated in a formal truce on July 27, 1953. Signed by North Korea, China, and the United Nations Command, the agreement brought an uneasy halt to hostilities, creating a buffer zone known as the Demilitarized Zone (DMZ) along the 38th parallel. Since then, there has been no official peace treaty, leaving the two Koreas technically still at war."
+            }
+          ],
+          "text": "Despite the 1953 armistice, the Korean War remains a negotiated truce to this day and has never officially ended."
+        },
+        {
+          "claim_id": "S022",
+          "document_ids": [
+            "shard_00898_17145",
+            "shard_00839_47882"
+          ],
+          "evidence_claim_ids": [
+            "MF0B460CA6A4EF6E"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_00898_17145",
+              "passage_id": "P000147",
+              "text": "The war ended in an armistice rather than a formal peace treaty, leaving the two Koreas technically still at war."
+            },
+            {
+              "document_id": "shard_00839_47882",
+              "passage_id": "P000143",
+              "text": "Technically, the Korean War did not end. The fighting stopped when North Korea, China and the United States reached an armistice in 1953. But South Korea did not agree to the armistice, and no formal peace treaty was ever signed."
+            }
+          ],
+          "text": "Because the Korean War ended without a formal peace treaty, North Korea and South Korea technically remain at war."
+        },
+        {
+          "claim_id": "S023",
+          "document_ids": [
+            "shard_06006_6344",
+            "shard_05943_39544"
+          ],
+          "evidence_claim_ids": [
+            "M64786E70043D24B"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06006_6344",
+              "passage_id": "P001325",
+              "text": "Even though the armistice officially stopped hostilities between North and South Korea, it's not a permanent peace treaty. The armistice agreement suspended open hostilities and withdrew all military forces."
+            },
+            {
+              "document_id": "shard_05943_39544",
+              "passage_id": "P001283",
+              "text": "The armistice established a ceasefire and created the Demilitarized Zone (DMZ), a buffer area that bisects the Korean Peninsula, effectively putting an end to the open hostilities."
+            }
+          ],
+          "text": "The armistice suspended open hostilities in the Korean War and withdrew all military forces from the Korean Peninsula."
+        },
+        {
+          "claim_id": "S024",
+          "document_ids": [
+            "shard_02380_54302",
+            "shard_02011_43116"
+          ],
+          "evidence_claim_ids": [
+            "M4CBCD441CA285F5"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_02380_54302",
+              "passage_id": "P000539",
+              "text": "That agreement established the Demilitarized Zone (DMZ), a buffer area around the 38th parallel, to prevent any future conflicts."
+            },
+            {
+              "document_id": "shard_02011_43116",
+              "passage_id": "P000435",
+              "text": "Ultimately, the armistice resulted in restoring the prewar boundary along the 38th parallel, creating a demilitarized zone (DMZ) between the two Koreas. Although no peace treaty was ever signed, the armistice effectively ended hostilities and remains in place today."
+            }
+          ],
+          "text": "The armistice established the Demilitarized Zone along the 38th parallel as a measure intended to prevent future conflicts."
+        },
+        {
+          "claim_id": "S025",
+          "document_ids": [
+            "shard_01515_64558",
+            "shard_01637_77654",
+            "shard_02139_77072"
+          ],
+          "evidence_claim_ids": [
+            "M484A65D0C6FE3A3"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01515_64558",
+              "passage_id": "P000288",
+              "text": "Despite initial optimism surrounding peace talks initiated in July 1951, negotiations dragged on for two years due to disagreements over repatriation of prisoners of war (POWs) and demarcation lines."
+            },
+            {
+              "document_id": "shard_01637_77654",
+              "passage_id": "P000334",
+              "text": "While fighting continued throughout the negotiations, progress was slow due to disagreements regarding repatriation of prisoners of war and demilitarization. Eventually, an agreement was reached, signing the Armistice Agreement on July 27, 1953. Although technically still in effect today, no formal peace treaty has ever been signed between North and South Korea."
+            },
+            {
+              "document_id": "shard_02139_77072",
+              "passage_id": "P000495",
+              "text": "Yet the end of the war hinged on successfully negotiating the fate of POWs on both sides. Those negotiations resulted in two massive prisoner exchanges that marked the war's end."
+            }
+          ],
+          "text": "Armistice negotiations became prolonged because the parties disagreed over prisoner-of-war repatriation and the placement of demarcation lines."
+        }
+      ],
+      "sub_narrative": "\"How did the Korean War conclude?\""
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S026",
+          "document_ids": [
+            "shard_06031_32421",
+            "shard_05351_5394"
+          ],
+          "evidence_claim_ids": [
+            "MAF6965B2FCF735D"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06031_32421",
+              "passage_id": "P001348",
+              "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's tactics and broke the tradition of Generals being uncritical of their leaders, being replaced by General Matthew Ridgeway for his actions The war front settled close to the original North-South border November 1951: peace talks took place in Panmunjom 1953: Eisenhower suggested that he would cross Chinese borders and use nuclear weapons, in order to push a peace agreement Stalin's death lead to a truce and the establishment of a De-Militarised Zone along the 38th Parallel, re-establishing a North-South border In total, 2,500,000 people died in the war, including 33,000 Americans East-West Relations in the 50s 1953: Stalin was succeeded by Nikita Khrushchev 1956: Khrushchev announced plans to co-exist peacefully with the West Anti-communist protests in the UUSR's satellite states increased but Khrushchev's government relied on the support of these satellite governments so quickly crushed these protests The US accepted that the East of Europe was under Soviet rule and would not intervene in Eastern affairs Eisenhower was eager to negotiate with the Soviets instead of fighting 1957: The launch of Sputnik I, Russia and the World's first satellite, lead to criticism of Eisenhower for allowing a \"missile gap\" to develop 1960: Eisenhower's policies were further damaged when an American spy plane was spotted and shot out of the sky over the USSR Second Berlin Crisis: 1960 - 1961 West"
+            },
+            {
+              "document_id": "shard_05351_5394",
+              "passage_id": "P001173",
+              "text": "Section 1: Background – Postwar Tension and Origins of the Korean War Following Japan's unconditional surrender in August 1945, Allied forces occupied the Korean peninsula along the 38th parallel - the US controlled the south while the Soviet Union administered the north. These occupation zones were intended to be temporary; however, ideological differences soon prevented any progress towards reunification. By June 1950, North Korea had invaded South Korea under orders from Kim Il Sung, initiating the three-year Korean War."
+            }
+          ],
+          "text": "The Korean War began in 1950 when North Korea invaded South Korea under orders issued by Kim Il Sung."
+        },
+        {
+          "claim_id": "S027",
+          "document_ids": [
+            "shard_03682_83132",
+            "shard_05958_47285",
+            "shard_03484_77279"
+          ],
+          "evidence_claim_ids": [
+            "MFB3122B34BB71E4"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03682_83132",
+              "passage_id": "P000780",
+              "text": "A truce signed in 1953 left Korea again divided near the thirty eighth parallel."
+            },
+            {
+              "document_id": "shard_05958_47285",
+              "passage_id": "P001294",
+              "text": "It ended with an armistice agreement that brought relative peace along the 38th parallel separating North and South Korea. However, this armistice has never been replaced with a permanent peace treaty, leaving both nations technically at war even today."
+            },
+            {
+              "document_id": "shard_03484_77279",
+              "passage_id": "P000760",
+              "text": "But, as the host Josée Thibeault of Téléjournal pointed out that day,the two countries are still technically at war, as no peace treaty has been ratified by the belligerents."
+            }
+          ],
+          "text": "A truce signed in 1953 left Korea divided near the 38th parallel, without a peace treaty ratified by the belligerents."
+        },
+        {
+          "claim_id": "S028",
+          "document_ids": [
+            "shard_03423_69502",
+            "shard_02854_6140"
+          ],
+          "evidence_claim_ids": [
+            "MD59CAF168ADC80D"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03423_69502",
+              "passage_id": "P000735",
+              "text": "On the Korean Peninsula, the armistice signed in July 1953 established the Demilitarized Zone (DMZ) between North and South Korea, effectively freezing the division of the country. While the DMZ remains one of the most heavily fortified borders in the world today, occasional skirmishes and threats of renewed hostilities serve as stark reminders of lingering animosities."
+            },
+            {
+              "document_id": "shard_02854_6140",
+              "passage_id": "P000661",
+              "text": "An armistice was signed in July 1953, effectively ending hostilities and establishing a demilitarized zone (DMZ) between North and South Korea. Although technically still at war, both countries have maintained an uneasy peace ever since."
+            }
+          ],
+          "text": "The July 1953 armistice established the Demilitarized Zone between North and South Korea, which remains among the world’s most heavily fortified borders."
+        },
+        {
+          "claim_id": "S029",
+          "document_ids": [
+            "shard_05215_66447"
+          ],
+          "evidence_claim_ids": [
+            "M9A49CF2E4DDFF9F"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_05215_66447",
+              "passage_id": "P001127",
+              "text": "The United States suffered 33,686 casualties during the conflict, while South Korea suffered over two million casualties."
+            }
+          ],
+          "text": "The United States suffered 33,686 casualties during the conflict, while South Korea suffered more than two million casualties."
+        },
+        {
+          "claim_id": "S030",
+          "document_ids": [
+            "shard_05971_76579",
+            "shard_05264_15774",
+            "shard_00276_43322"
+          ],
+          "evidence_claim_ids": [
+            "M8683AB3AA5B3407"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_05971_76579",
+              "passage_id": "P001306",
+              "text": "As part of the terms of the armistice, the two Koreas agreed to establish a four-kilometer wide buffer zone along the front line, known as the Korean Demilitarized Zone (DMZ), demarcated by the Military Demarcation Line (MDL)."
+            },
+            {
+              "document_id": "shard_05264_15774",
+              "passage_id": "P001141",
+              "text": "While technically, North and South Korea remain in a state of war, the agreement reduced direct armed hostilities and enabled the establishment of a heavily militarized buffer zone called the Demilitarized Zone (DMZ)."
+            },
+            {
+              "document_id": "shard_00276_43322",
+              "passage_id": "P000040",
+              "text": "Section 4: Armistice and Aftermath An armistice signed in July 1953 ended hostilities between North and South Korea. It resulted in restoring the original boundary near the 38th parallel, creating a demilitarized zone known as the DMZ."
+            }
+          ],
+          "text": "The Korean War created a four-kilometer-wide buffer called the Korean Demilitarized Zone, which is demarcated by the Military Demarcation Line."
+        }
+      ],
+      "sub_narrative": "New: How does the Korean War affect Korea"
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S031",
+          "document_ids": [
+            "shard_06198_79583",
+            "shard_05351_5394"
+          ],
+          "evidence_claim_ids": [
+            "M385BA5E07B3E0FF"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06198_79583",
+              "passage_id": "P001385",
+              "text": "James Bond (Pierce Brosnan) is assigned to a rendezvous with a North Korean Army officer, Colonel Moon (Will Yun Lee), in his investigation of a North Korean terrorist, Zao (Rick Yune), but the mission is betrayed and despite a spectacular escape attempt, Bond is captured and subjected to vicious North Korean torture, before being released in an exchange of prisoners The Korean War from 1950 to 1953 was the most severe test the United Nations had to face since its inception in 1945. As part of the whole Cold War scenario, the Korean War was a complicated issue with which the United Nations had to successfully deal with or lose credibility just five years after it had come into being North Korea remains one of the most repressive authoritarian states in the world, ruled for seven decades by the Kim family and the Worker's Party of Korea."
+            },
+            {
+              "document_id": "shard_05351_5394",
+              "passage_id": "P001174",
+              "text": "As part of the United Nations Command, the United States played a leading role in defending South Korea against Communist aggression. Section 2: Military Strategy – Defeat at the Battle of Pusan Perimeter By late summer 1950, UN troops faced severe challenges due to their limited numbers and resources compared to those available to the enemy."
+            }
+          ],
+          "text": "The Korean War represented the most severe test faced by the United Nations since the organization’s inception in 1945."
+        },
+        {
+          "claim_id": "S032",
+          "document_ids": [
+            "shard_04371_12269",
+            "shard_05943_39544",
+            "shard_00935_37962"
+          ],
+          "evidence_claim_ids": [
+            "M7EC382F8FDD1BEF"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04371_12269",
+              "passage_id": "P000979",
+              "text": "The United Nations, led by the United States, came to the aid of South Korea, marking the first major military confrontation of the Cold War era."
+            },
+            {
+              "document_id": "shard_05943_39544",
+              "passage_id": "P001287",
+              "text": "The UN's involvement in the Korean War marked its first major military action since its establishment in 1945."
+            },
+            {
+              "document_id": "shard_00935_37962",
+              "passage_id": "P000160",
+              "text": "The United Nations met to discuss this problem, and they decided to support South Korea against the attacking North."
+            }
+          ],
+          "text": "The Cold War era’s first major military confrontation saw the United Nations, led by the United States, intervene to support South Korea."
+        },
+        {
+          "claim_id": "S033",
+          "document_ids": [
+            "shard_05971_76579"
+          ],
+          "evidence_claim_ids": [
+            "M6079ABF010ECC6E"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_05971_76579",
+              "passage_id": "P001310",
+              "text": "On July 27, 1953, representatives from North Korea, China, and the United Nations signed the Korean Armistice Agreement, effectively ending hostilities."
+            }
+          ],
+          "text": "Representatives of North Korea, China, and the United Nations Command signed the Korean Armistice Agreement on July 27, 1953, effectively ending hostilities."
+        },
+        {
+          "claim_id": "S034",
+          "document_ids": [
+            "shard_06292_54287"
+          ],
+          "evidence_claim_ids": [
+            "M3AF6221C79280A7"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06292_54287",
+              "passage_id": "P001405",
+              "text": "Furthermore, the conflict set an important precedent for multinational cooperation within the framework of the UN."
+            }
+          ],
+          "text": "The Korean War established an important precedent for countries undertaking multinational cooperation through the institutional framework of the United Nations."
+        }
+      ],
+      "sub_narrative": "New: How does the Korean War affect UN"
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S035",
+          "document_ids": [
+            "shard_01653_26636"
+          ],
+          "evidence_claim_ids": [
+            "M8501ECA541096DD"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01653_26636",
+              "passage_id": "P000349",
+              "text": "Then his decision in September to send US/UN forces across the 38th parallel to destroy or punish the North Korean regime, and to unify North and South Korea by military means, escalated the war from containment to 'rollback'."
+            }
+          ],
+          "text": "The United States decision to send forces across the 38th parallel escalated the war beyond containment and toward rollback."
+        },
+        {
+          "claim_id": "S036",
+          "document_ids": [
+            "shard_06361_56440",
+            "shard_01637_77654"
+          ],
+          "evidence_claim_ids": [
+            "M69D314908EEEB02"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06361_56440",
+              "passage_id": "P001427",
+              "text": "However, MacArthur pressed on towards the Yalu River, the border between North Korea and China, ignoring warnings from Chinese leader Mao Zedong. Consequently, hundreds of thousands of Chinese soldiers crossed the border, forcing UN troops into a grueling retreat."
+            },
+            {
+              "document_id": "shard_01637_77654",
+              "passage_id": "P000332",
+              "text": "Encouraged by early victories, MacArthur proposed expanding operations into North Korea, aiming to reunify the peninsula once and for all. Despite initial reservations, Washington approved his plan, leading to a disastrous turn of events.\n\nAs UN forces approached the Yalu River bordering China, Chinese volunteers crossed the frontier, launching a massive counteroffensive against ill-prepared US soldiers."
+            }
+          ],
+          "text": "MacArthur pressed United Nations forces toward the Yalu River despite Chinese warnings, provoking a counteroffensive involving hundreds of thousands of Chinese soldiers."
+        },
+        {
+          "claim_id": "S037",
+          "document_ids": [
+            "shard_01610_35909"
+          ],
+          "evidence_claim_ids": [
+            "MDCEF2C48B976715"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01610_35909",
+              "passage_id": "P000307",
+              "text": "In September of 1950, MacArthur, confident of success, ignored warnings and led a risky assault to recapture Seoul, the capital of South Korea. The Inchon landing, his full-scale invasion on North Korea, was thwarted by Chinese intervention that led to a humiliating defeat and withdrawal."
+            }
+          ],
+          "text": "MacArthur disregarded warnings and led a risky assault intended to recapture Seoul in September 1950."
+        },
+        {
+          "claim_id": "S038",
+          "document_ids": [
+            "shard_01470_77393",
+            "shard_04570_70896"
+          ],
+          "evidence_claim_ids": [
+            "MAC7DBBC1D6216B7"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01470_77393",
+              "passage_id": "P000278",
+              "text": "Underestimating Chinese capabilities and intent, General MacArthur pressed ahead with his offensive until encountering fierce resistance at the Chosin Reservoir in November 1950."
+            },
+            {
+              "document_id": "shard_04570_70896",
+              "passage_id": "P001019",
+              "text": "MacArthur and his sources of information underestimated the size of the Chinese armies."
+            }
+          ],
+          "text": "General MacArthur underestimated China’s capabilities and intentions, leading to fierce resistance at the Chosin Reservoir in November 1950."
+        },
+        {
+          "claim_id": "S039",
+          "document_ids": [
+            "shard_01400_83904"
+          ],
+          "evidence_claim_ids": [
+            "M7048D40CE900194"
+          ],
+          "repair": {
+            "applied": true,
+            "initial_notes": "The cited passage acknowledges that U.S. troops fought under a 'shoot-first-ask-questions-later' policy and that this led to the killing of 'some 400 civilians' at No Gun Ri. However, the claim states 'killed approximately 400 civilians' with absolute precision, while the passage uses 'some 400'—a vaguer, less precise quantification. Additionally, the passage includes '[citation needed]' indicating the claim is not fully substantiated by a verifiable source. Therefore, while the core event and policy are mentioned, the specific number and the absence of direct citation weaken the support. The claim is not fully supported but is not contradicted.",
+            "initial_status": "partially_supported"
+          },
+          "supporting_passages": [
+            {
+              "document_id": "shard_01400_83904",
+              "passage_id": "P000242",
+              "text": ".For a time, US troops fought under a \"shoot-first-ask-questions-later\" policy against every civilian-refugee approaching US battlefield positions;[citation needed] an unwise tactical carte blanche that led US Soldiers to indiscriminately kill some 400 civilians at No Gun Ri (26–29 July 1950), in central Korea.^US Soldiers firing machine-guns."
+            }
+          ],
+          "text": "U.S. troops fought under a 'shoot-first-ask-questions-later' policy and killed some 400 civilians at No Gun Ri."
+        }
+      ],
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\""
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S040",
+          "document_ids": [
+            "shard_06503_11120"
+          ],
+          "evidence_claim_ids": [
+            "MCC3B836C2DE515A"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06503_11120",
+              "passage_id": "P001452",
+              "text": "Fearful of having an American ally on its doorstep, China intervened in October 1950, sending hundreds of thousands of troops across the border."
+            }
+          ],
+          "text": "China entered the Korean War through a military intervention undertaken in October 1950."
+        },
+        {
+          "claim_id": "S041",
+          "document_ids": [
+            "shard_05059_13192",
+            "shard_04810_73050"
+          ],
+          "evidence_claim_ids": [
+            "MA69954C47BE63AC"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_05059_13192",
+              "passage_id": "P001118",
+              "text": "Section 3: China's Entry into the Conflict\nOne of the most critical junctures of the Korean War occurred when Chinese troops entered the fray in October 1950 following General Douglas MacArthur's ill-fated advance towards the Yalu River. With Beijing perceiving the US-led coalition as a direct threat to its security interests, thousands of Chinese soldiers poured across the border, shifting the balance of power and prolonging the conflict."
+            },
+            {
+              "document_id": "shard_04810_73050",
+              "passage_id": "P001078",
+              "text": "However, after achieving initial success with the amphibious landing at Incheon, MacArthur pressed ahead towards the Yalu River, intending to reunify Korea under UN auspices. His offensive prompted China to enter the war, resulting in a protracted stalemate near the original boundary."
+            }
+          ],
+          "text": "General MacArthur’s advance toward the Yalu River prompted China to enter the Korean War."
+        },
+        {
+          "claim_id": "S042",
+          "document_ids": [
+            "shard_00627_41410",
+            "shard_02056_68087"
+          ],
+          "evidence_claim_ids": [
+            "M9FC1ECBE1DD69CD"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_00627_41410",
+              "passage_id": "P000101",
+              "text": "Answer: To support North Korea against the United Nations forces led by the United States."
+            },
+            {
+              "document_id": "shard_02056_68087",
+              "passage_id": "P000481",
+              "text": "Afraid that the US was interested in taking North Korea as a base for operations against Manchuria, the People's Republic of China entered the war sending an army to support the NKPA."
+            }
+          ],
+          "text": "China entered the Korean War to support North Korea in its fight against United Nations forces led by the United States."
+        },
+        {
+          "claim_id": "S043",
+          "document_ids": [
+            "shard_06506_54950",
+            "shard_06503_11120",
+            "shard_05482_22468"
+          ],
+          "evidence_claim_ids": [
+            "MCA4CE0E345BFAC9"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_06506_54950",
+              "passage_id": "P001457",
+              "text": "Chinese Intervention and Stalemate\nAs UN forces advanced towards the Yalu River bordering China, Mao Zedong's newly established Communist government perceived a direct threat to its security. Fearing American encroachment, China entered the war in October 1950, sending hundreds of thousands of \"volunteer\" troops to aid North Korea."
+            },
+            {
+              "document_id": "shard_06503_11120",
+              "passage_id": "P001453",
+              "text": "Domestically, Mao aimed to consolidate his regime and strengthen his authority; therefore, he perceived any foreign presence near his borders as threatening. Internationally, China felt isolated due to being excluded from the newly formed North Atlantic Treaty Organization (NATO), reinforcing its belief that only through force could it deter further American expansionism."
+            },
+            {
+              "document_id": "shard_05482_22468",
+              "passage_id": "P001187",
+              "text": "Fearful that the UN soldiers intended to invade China, another communist nation, Chinese military forces crossed the Chinese-North Korean border and launched an attack against the United Nations troops."
+            }
+          ],
+          "text": "Mao Zedong’s government viewed the presence of U.S. military forces near China’s border as a threat to both its regime and national sovereignty."
+        }
+      ],
+      "sub_narrative": "New: What motivated China involvement in te Korean War?"
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "S044",
+          "document_ids": [
+            "shard_04204_72809",
+            "shard_04810_73050",
+            "shard_06031_32421"
+          ],
+          "evidence_claim_ids": [
+            "ME27138018296685"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_04204_72809",
+              "passage_id": "P000913",
+              "text": "Truman's dismissal of the overly aggressive General Douglas MacArthur in April 1951 further signaled the president's less ambitious approach to the conflict."
+            },
+            {
+              "document_id": "shard_04810_73050",
+              "passage_id": "P001072",
+              "text": "President Truman faced growing domestic pressure to adopt a more aggressive stance, culminating in his dismissal of MacArthur when he publicly criticized the administration's containment policy."
+            },
+            {
+              "document_id": "shard_06031_32421",
+              "passage_id": "P001347",
+              "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's tactics and broke the tradition of Generals being uncritical of their leaders, being replaced by General Matthew Ridgeway for his actions The war front settled close to the original North-South border November 1951: peace talks took place in Panmunjom 1953: Eisenhower suggested that he would cross Chinese borders and use nuclear weapons, in order to push a peace agreement Stalin's death lead to a truce and the establishment of a De-Militarised Zone along the 38th Parallel, re-establishing a North-South border In total, 2,500,000 people died in the war, including 33,000 Americans East-West Relations in the 50s 1953: Stalin was succeeded by Nikita Khrushchev 1956: Khrushchev announced plans to co-exist peacefully with the West Anti-communist protests in the UUSR's satellite states increased but Khrushchev's government relied on the support of these satellite governments so quickly crushed these protests The US accepted that the East of Europe was under Soviet rule and would not intervene in Eastern affairs Eisenhower was eager to negotiate with the Soviets instead of fighting 1957: The launch of Sputnik I, Russia and the World's first satellite, lead to criticism of Eisenhower for allowing a \"missile gap\" to develop 1960: Eisenhower's policies were further damaged when an American spy plane was spotted and shot out of the sky over the USSR Second Berlin Crisis: 1960 - 1961 West"
+            }
+          ],
+          "text": "Truman dismissed General Douglas MacArthur in April 1951 because of his overly aggressive stance and criticism of the administration’s containment policy."
+        },
+        {
+          "claim_id": "S045",
+          "document_ids": [
+            "shard_02013_219",
+            "shard_01905_84775",
+            "shard_02701_45655"
+          ],
+          "evidence_claim_ids": [
+            "ME0EEC82CEB6175E"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_02013_219",
+              "passage_id": "P000453",
+              "text": "Truman disagreed strongly with MacArthur, and in April of 1951, fired the General."
+            },
+            {
+              "document_id": "shard_01905_84775",
+              "passage_id": "P000396",
+              "text": "Truman Statement on MacArthur April 6, 1951 84 Korean War US Battle Deaths36,940 Stalemate January 1951 - 27 July 1953 85 Korean War June 25, 1950 - (July 27, 1953) November 1952 Dwight Eisenhower elected president Visited Korea as president-elect Hinted at use of nuclear weapons to end war Chinese got serious about negotiations Cease fire signed July 27, 1953 86 Next Lesson 24 Cold War Living on the Brink 87 Lesson Objectives Build a foundation for understanding the genesis, issues, and strategies of the Cold War."
+            },
+            {
+              "document_id": "shard_02701_45655",
+              "passage_id": "P000591",
+              "text": "On April 11 Truman, having reached the opinion that MacArthur's independence amounted to insubordination, had relieved the general of all his commands and recalled him to the United States."
+            }
+          ],
+          "text": "President Truman fired General MacArthur in April 1951 for insubordination and disagreements regarding the proper scope and strategy of the war."
+        },
+        {
+          "claim_id": "S046",
+          "document_ids": [
+            "shard_01934_52375",
+            "shard_03169_55857",
+            "shard_02013_219"
+          ],
+          "evidence_claim_ids": [
+            "M5C5F8BF952365CE"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_01934_52375",
+              "passage_id": "P000407",
+              "text": "MacArthur push North Korean forces to the Yalu River The Chinese (backed by USSR) push the UN forces back south of Seoul and eventually settle near the 38 th parallel MacArthur suggested taking on China and even using nuclear weapons against them. Truman denied that request (WWIII?) and eventually fired MacArthur due to insubordination An armistice was finally signed on July 27, 1953 (The two sides are still officially at war with one another)"
+            },
+            {
+              "document_id": "shard_03169_55857",
+              "passage_id": "P000681",
+              "text": "The Americans landed more troops and drove the Chinese back to the 38th parallel, where Truman ordered General MacArthur to stop and sacked him when he disagreed. The war went on as border clashes until 1953 when America's new president, Eisenhower, offered peace, but threatened to use the atomic bomb if China did not accept the offer."
+            },
+            {
+              "document_id": "shard_02013_219",
+              "passage_id": "P000452",
+              "text": "MacArthur wanted to push North again and to expand the war against communist China and the Soviet Union."
+            }
+          ],
+          "text": "President Truman rejected General MacArthur’s proposals to expand the Korean War into China and use nuclear weapons against communist forces."
+        },
+        {
+          "claim_id": "S047",
+          "document_ids": [
+            "shard_03397_70489"
+          ],
+          "evidence_claim_ids": [
+            "M6C24A6CF5334DB1"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03397_70489",
+              "passage_id": "P000714",
+              "text": "MacArthur wanted to use nuclear weapons to invade China, but Truman opposed this expansion of the war."
+            }
+          ],
+          "text": "During the Korean War, Truman opposed MacArthur’s proposal to use nuclear weapons as part of an invasion of China."
+        },
+        {
+          "claim_id": "S048",
+          "document_ids": [
+            "shard_03169_55857",
+            "shard_06031_32421",
+            "shard_04204_72809"
+          ],
+          "evidence_claim_ids": [
+            "M6E2D9B78261CC4D"
+          ],
+          "supporting_passages": [
+            {
+              "document_id": "shard_03169_55857",
+              "passage_id": "P000681",
+              "text": "The Americans landed more troops and drove the Chinese back to the 38th parallel, where Truman ordered General MacArthur to stop and sacked him when he disagreed. The war went on as border clashes until 1953 when America's new president, Eisenhower, offered peace, but threatened to use the atomic bomb if China did not accept the offer."
+            },
+            {
+              "document_id": "shard_06031_32421",
+              "passage_id": "P001347",
+              "text": "communism greatly and used the media to his advantage People accused by McCarthy lost their jobs, regardless of whether they were actually innocent, and companies risked being blacklisted if they refused to fire suspects McCarthy gained support but also countless enemies 1954: McCarthy overstepped boundaries and accused the army of hiding communists McCarthy was investigated, the Senate censured him(criticised him) and the Republican party withdrew their support, ending his career The Korean War: 1950 - 53 1945: Korea was a Japanese colony that was divided along the 38th parallel after WW2 between the USSR (north) and the US (south) The south became the Republic of Korea and the north became the Communist People's Republic of Korea under Kim Il Sung June 1950: North Korea invaded the South The US believed that Stalin was behind the invasion although it was likely the North acting on their own The UN Security Council condemned the display of aggression The UN sent a military force to defend South Korea, most men were from the US, under American General Douglas McArthur The troops landed at Inchon behind North Korean lines The UN troops moved quickly towards the Chinese border but were warned by the Chinese to come no closer to the Yalu River The UN pushed forwards and the Chinese retaliated with 300,000 men, driving the UN back into Korea MacArthur began criticising Truman's tactics and broke the tradition of Generals being uncritical of their leaders, being replaced by General Matthew Ridgeway for his actions The war front settled close to the original North-South border November 1951: peace talks took place in Panmunjom 1953: Eisenhower suggested that he would cross Chinese borders and use nuclear weapons, in order to push a peace agreement Stalin's death lead to a truce and the establishment of a De-Militarised Zone along the 38th Parallel, re-establishing a North-South border In total, 2,500,000 people died in the war, including 33,000 Americans East-West Relations in the 50s 1953: Stalin was succeeded by Nikita Khrushchev 1956: Khrushchev announced plans to co-exist peacefully with the West Anti-communist protests in the UUSR's satellite states increased but Khrushchev's government relied on the support of these satellite governments so quickly crushed these protests The US accepted that the East of Europe was under Soviet rule and would not intervene in Eastern affairs Eisenhower was eager to negotiate with the Soviets instead of fighting 1957: The launch of Sputnik I, Russia and the World's first satellite, lead to criticism of Eisenhower for allowing a \"missile gap\" to develop 1960: Eisenhower's policies were further damaged when an American spy plane was spotted and shot out of the sky over the USSR Second Berlin Crisis: 1960 - 1961 West"
+            },
+            {
+              "document_id": "shard_04204_72809",
+              "passage_id": "P000914",
+              "text": "For example, in 1953, the Eisenhower administration warned China that unless it ended the war in Korea and accepted the 38th parallel as the demarcation line between the two Koreas, he would order the atomic bombing of China's major urban centers."
+            }
+          ],
+          "text": "The Eisenhower administration threatened atomic attacks against China unless it ended the war and accepted the 38th parallel as the inter-Korean border."
+        }
+      ],
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\""
+    }
+  ],
+  "source_metadata": {
+    "map_checkpoint_aggregate_sha256": "2acc7605d53341d7916a9cc73a8590c8b41601861c212c8891debd2d5fc4e283",
+    "nuggets_path": "trec-rag-data\\trec-rag-2026\\development-data\\rag25-dev-nuggets\\rag25-dev-nuggets.jsonl",
+    "nuggets_sha256": "cbcdbea534f3d8aa1cebdfbb1e112df32146afe5599246a6f5fe4704d9fc8183",
+    "passages_path": "tmp\\topic213-evidence-handover-v1\\passages.jsonl",
+    "passages_release_url": "https://github.com/npatta01/trec_rag_2026/releases/download/rag25-topic213-evidence-handover-v1/passages.jsonl",
+    "passages_sha256": "4a2d91d4dd697823ccbcff01654673f4b7a2fdd77e3267dc4f029b9528845637",
+    "release_manifest_path": "tmp\\topic213-evidence-handover-v1\\manifest.yaml",
+    "release_manifest_sha256": "d93fbfd14ded43d428abd9e15936f45015ecd808afa6ccd126c3ac1a928e8201",
+    "topics_path": "trec-rag-data\\trec-rag-2026\\development-data\\topics\\rag25-topics-dev.tsv",
+    "topics_sha256": "9585a1d0be718dcc8bcca7a7e8ce53b94e110e3dd260221b1d970bf1c8187ad4"
+  },
+  "support_filter": {
+    "candidate_sentence_count": 48,
+    "excluded_sentence_count": 0,
+    "repair_attempted_count": 1,
+    "repair_retained_count": 1,
+    "submitted_sentence_count": 48
+  },
+  "temperature": 0.0,
+  "topic_id": "213"
+}

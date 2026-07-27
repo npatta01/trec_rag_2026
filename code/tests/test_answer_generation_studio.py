@@ -83,13 +83,18 @@ class FakeGenerator:
     model = "openai/gpt-5.6-sol"
 
     def complete_once(self, *, system_prompt, payload, max_tokens, temperature):
-        parsed = {
-            "sentences": [
+        if "facets" in payload:
+            sentences = [
                 {"claim_id": claim["claim_id"], "text": claim["text"]}
                 for facet in payload["facets"]
                 for claim in facet["claims"]
             ]
-        }
+        else:
+            sentences = [
+                {"claim_id": claim["claim_id"], "text": claim["source_claim"]}
+                for claim in payload["sentences"]
+            ]
+        parsed = {"sentences": sentences}
         semantic_hash = semantic_request_sha256(
             system_prompt=system_prompt,
             payload=payload,
@@ -112,13 +117,18 @@ class FakeGenerator:
 class FakeJudge:
     model = "qwen-local"
 
+    def __init__(self):
+        self.seen_claim_ids: set[str] = set()
+
     def complete_json(self, *, stage, system_prompt, payload, max_tokens, temperature):
         claim = payload["claims"][0]
+        reject = claim["claim_id"] == "S002" and claim["claim_id"] not in self.seen_claim_ids
+        self.seen_claim_ids.add(claim["claim_id"])
         return {
             "assessments": [
                 {
                     "claim_id": claim["claim_id"],
-                    "status": "unsupported" if claim["claim_id"] == "S002" else "supported",
+                    "status": "unsupported" if reject else "supported",
                     "notes": "fixture decision",
                 }
             ]
@@ -180,8 +190,10 @@ def test_best_answer_generation_writes_valid_frozen_bundle(tmp_path: Path):
 
     assert isinstance(result, GenerationRunResult)
     assert result.summary["candidate_sentence_count"] == 4
-    assert result.summary["submitted_sentence_count"] == 3
-    assert result.summary["excluded_sentence_count"] == 1
+    assert result.summary["submitted_sentence_count"] == 4
+    assert result.summary["excluded_sentence_count"] == 0
+    assert result.summary["initially_rejected_sentence_count"] == 1
+    assert result.summary["repaired_and_retained_sentence_count"] == 1
     assert result.summary["citation_coverage"] == 1.0
     assert result.summary["organizer_nuggets_read"] is False
     assert result.summary["official_format_valid"] is True
@@ -193,8 +205,9 @@ def test_best_answer_generation_writes_valid_frozen_bundle(tmp_path: Path):
     ).splitlines()
     assert len(submission_lines) == 1
     submission = json.loads(submission_lines[0])
-    assert len(submission["answer"]) == 3
+    assert len(submission["answer"]) == 4
     assert all(len(item["citations"]) == 1 for item in submission["answer"])
+    assert (run_dir / "repair_receipt.json").is_file()
 
     freeze = json.loads((run_dir / "generation_freeze.json").read_text(encoding="utf-8"))
     assert freeze["organizer_nuggets_read"] is False
@@ -230,30 +243,67 @@ def test_evidence_summary_exposes_facets_without_passage_text():
     assert "passage" not in json.dumps(summary).casefold()
 
 
-def test_http_app_runs_background_job_and_serves_submission(tmp_path: Path):
+@pytest.mark.parametrize("benchmark_layout", ["comparison", "coverage_repair"])
+def test_http_app_runs_background_job_and_serves_submission(
+    tmp_path: Path, benchmark_layout: str
+):
     evidence_path = tmp_path / "evidence.json"
     evidence_path.write_text(json.dumps(_frozen_fixture()), encoding="utf-8")
     benchmark_dir = tmp_path / "benchmark"
     benchmark_dir.mkdir()
-    (benchmark_dir / "comparison_metrics.json").write_text(
-        json.dumps(
-            {
-                "models": [
-                    {
-                        "model_key": "gpt_5_6_sol",
+    if benchmark_layout == "comparison":
+        (benchmark_dir / "comparison_metrics.json").write_text(
+            json.dumps(
+                {
+                    "models": [
+                        {
+                            "model_key": "gpt_5_6_sol",
+                            "display_name": "GPT-5.6 Sol",
+                            "strict_coverage": 0.46,
+                            "partial_credit_coverage": 0.52,
+                            "vital_strict_coverage": 0.444,
+                        }
+                    ],
+                    "winner": {"model_key": "gpt_5_6_sol"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        preview_dir = benchmark_dir / "gpt_5_6_sol"
+        preview_dir.mkdir()
+    else:
+        (benchmark_dir / "metrics.json").write_text(
+            json.dumps(
+                {
+                    "model": {
+                        "key": "gpt_5_6_sol",
                         "display_name": "GPT-5.6 Sol",
-                        "strict_coverage": 0.46,
-                        "partial_credit_coverage": 0.52,
-                        "vital_strict_coverage": 0.444,
-                    }
-                ],
-                "winner": {"model_key": "gpt_5_6_sol"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    preview_dir = benchmark_dir / "gpt_5_6_sol"
-    preview_dir.mkdir()
+                        "identity": "openai/gpt-5.6-sol",
+                    },
+                    "nuggets": {
+                        "all": {
+                            "strict_coverage": 0.54,
+                            "partial_credit_coverage": 0.63,
+                        },
+                        "vital": {"strict_coverage": 0.63},
+                    },
+                    "official_submission": {
+                        "candidate_word_count": 940,
+                        "word_count": 941,
+                        "sentence_count": 48,
+                        "excluded_after_repair": 0,
+                    },
+                    "answer_claims": {
+                        "citation_coverage": 1.0,
+                        "unsupported_claim_count": 0,
+                    },
+                    "generation": {"cost": 0.1279},
+                    "generation_freeze_sha256": "fixture-freeze",
+                }
+            ),
+            encoding="utf-8",
+        )
+        preview_dir = benchmark_dir
     preview_entry = {
         "metadata": {"narrative_id": "demo-1", "run_id": "preview"},
         "references": ["shard_00001_1"],
@@ -282,10 +332,13 @@ def test_http_app_runs_background_job_and_serves_submission(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    (preview_dir / "metrics.json").write_text(
-        json.dumps({"official_submission": {"word_count": 2, "sentence_count": 1}}),
-        encoding="utf-8",
-    )
+    if benchmark_layout == "comparison":
+        (preview_dir / "metrics.json").write_text(
+            json.dumps(
+                {"official_submission": {"word_count": 2, "sentence_count": 1}}
+            ),
+            encoding="utf-8",
+        )
     (tmp_path / "report.html").write_text(
         "<!doctype html><title>Decision report</title>", encoding="utf-8"
     )

@@ -1,0 +1,1 @@
+{"sentences":[{"claim_id":"S039","text":"For a time, U.S. troops operated under a “shoot-first-ask-questions-later” policy that led soldiers to indiscriminately kill some 400 civilians at No Gun Ri from July 26 to 29, 1950."}]}

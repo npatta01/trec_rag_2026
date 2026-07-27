@@ -1,0 +1,39 @@
+{
+  "checkpoint_replay": false,
+  "elapsed_seconds": 40.391,
+  "max_tokens": 4500,
+  "model": "openai/gpt-5.6-sol",
+  "provider": "OpenAI",
+  "raw_content_sha256": "be0e75a7524bfb9539f0560ae01bf6bda577b1946e05d1893fd02eb11a15b98a",
+  "request_overrides": {},
+  "request_sha256": "4c3630fd394fa0d5697ac2880ed2ce0e2c26df151ac70bc980bd5d09867f252b",
+  "response_id": "gen-1785118328-pnwTLKa79iypE1ifGAjD",
+  "response_model": "openai/gpt-5.6-sol",
+  "semantic_generation_request_count": 1,
+  "semantic_request_sha256": "f5ba21c94bf2089291c57faaeda6d00d603a0dfaa83fd60f46cdc97a1f38e0dd",
+  "temperature": 0.0,
+  "transport_attempt_count": 1,
+  "usage": {
+    "completion_tokens": 3507,
+    "completion_tokens_details": {
+      "audio_tokens": 0,
+      "image_tokens": 0,
+      "reasoning_tokens": 1482
+    },
+    "cost": 0.12339375,
+    "cost_details": {
+      "upstream_inference_completions_cost": 0.10521,
+      "upstream_inference_cost": 0.12339375,
+      "upstream_inference_prompt_cost": 0.01818375
+    },
+    "is_byok": false,
+    "prompt_tokens": 2910,
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cache_write_tokens": 2907,
+      "cached_tokens": 0,
+      "video_tokens": 0
+    },
+    "total_tokens": 6417
+  }
+}

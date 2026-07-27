@@ -171,7 +171,8 @@ class StudioApplication:
                 "maximum_words": 1024,
                 "maximum_citations_per_sentence": 3,
                 "nugget_blind": True,
-                "semantic_generation_requests": 1,
+                "primary_semantic_generation_requests": 1,
+                "maximum_semantic_repair_requests": 1,
             },
         }
 
@@ -180,10 +181,9 @@ class StudioApplication:
 
     def benchmark(self) -> dict[str, object]:
         metrics_path = self.benchmark_dir / "comparison_metrics.json"
-        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-        rows = []
-        for row in metrics.get("models", []):
-            rows.append(
+        if metrics_path.is_file():
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            rows = [
                 {
                     key: row.get(key)
                     for key in [
@@ -201,9 +201,45 @@ class StudioApplication:
                         "cost",
                     ]
                 }
+                for row in metrics.get("models", [])
+            ]
+            winner_key = metrics.get("winner", {}).get("model_key")
+            baselines = metrics.get("baselines", {})
+            semantic_hash = metrics.get("semantic_request_sha256")
+            freeze_hash = metrics.get("aggregate_generation_freeze_sha256")
+        else:
+            metrics = json.loads(
+                (self.benchmark_dir / "metrics.json").read_text(encoding="utf-8")
             )
-        winner = metrics.get("winner", {})
-        baselines = metrics.get("baselines", {})
+            model = metrics["model"]
+            nuggets = metrics["nuggets"]
+            official = metrics["official_submission"]
+            answer_claims = metrics["answer_claims"]
+            model_key = str(model["key"])
+            rows = [
+                {
+                    "model_key": model_key,
+                    "display_name": model["display_name"],
+                    "strict_coverage": nuggets["all"]["strict_coverage"],
+                    "partial_credit_coverage": nuggets["all"][
+                        "partial_credit_coverage"
+                    ],
+                    "vital_strict_coverage": nuggets["vital"]["strict_coverage"],
+                    "candidate_words": official["candidate_word_count"],
+                    "submitted_words": official["word_count"],
+                    "submitted_claims": official["sentence_count"],
+                    "excluded": official["excluded_after_repair"],
+                    "citation_coverage": answer_claims["citation_coverage"],
+                    "unsupported_submitted": answer_claims[
+                        "unsupported_claim_count"
+                    ],
+                    "cost": metrics["generation"]["cost"],
+                }
+            ]
+            winner_key = model_key
+            baselines = {}
+            semantic_hash = None
+            freeze_hash = metrics.get("generation_freeze_sha256")
 
         def baseline_summary(name: str) -> dict[str, object] | None:
             value = baselines.get(name)
@@ -220,7 +256,7 @@ class StudioApplication:
             }
 
         return {
-            "winner": winner.get("model_key"),
+            "winner": winner_key,
             "models": rows,
             "baselines": {
                 "original_qwen": baseline_summary("original_qwen"),
@@ -228,15 +264,17 @@ class StudioApplication:
                     "organizer_compliant_qwen"
                 ),
             },
-            "semantic_request_sha256": metrics.get("semantic_request_sha256"),
-            "aggregate_generation_freeze_sha256": metrics.get(
-                "aggregate_generation_freeze_sha256"
-            ),
+            "semantic_request_sha256": semantic_hash,
+            "aggregate_generation_freeze_sha256": freeze_hash,
             "report_url": "/report",
         }
 
     def preview(self) -> dict[str, object]:
-        model_dir = self.benchmark_dir / "gpt_5_6_sol"
+        comparison = self.benchmark()
+        winner_key = str(comparison["winner"])
+        model_dir = self.benchmark_dir / winner_key
+        if not model_dir.is_dir():
+            model_dir = self.benchmark_dir
         official_lines = [
             line
             for line in (model_dir / "rag_output_trec_rag_2026.jsonl")
@@ -248,15 +286,23 @@ class StudioApplication:
         generation = json.loads(
             (model_dir / "response_generation.json").read_text(encoding="utf-8")
         )
-        comparison = self.benchmark()
         winner_row = next(
-            row for row in comparison["models"] if row["model_key"] == "gpt_5_6_sol"
+            row
+            for row in comparison["models"]
+            if row["model_key"] == winner_key
         )
+        model_identity = "openai/gpt-5.6-sol"
+        run_metrics_path = model_dir / "metrics.json"
+        if run_metrics_path.is_file():
+            run_metrics = json.loads(run_metrics_path.read_text(encoding="utf-8"))
+            model_identity = str(
+                run_metrics.get("model", {}).get("identity", model_identity)
+            )
         summary = {
             "status": "valid",
             "topic_id": generation["topic_id"],
             "run_id": official.get("metadata", {}).get("run_id"),
-            "generator": "openai/gpt-5.6-sol",
+            "generator": model_identity,
             "candidate_word_count": winner_row.get("candidate_words"),
             "submitted_word_count": winner_row.get("submitted_words"),
             "submitted_sentence_count": winner_row.get("submitted_claims"),

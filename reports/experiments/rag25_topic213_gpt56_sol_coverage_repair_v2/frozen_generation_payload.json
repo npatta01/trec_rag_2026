@@ -1,0 +1,341 @@
+{
+  "exact_total_sentence_count": 48,
+  "facets": [
+    {
+      "claims": [
+        {
+          "claim_id": "M15A1DF8DDC6E565",
+          "position": 1,
+          "text": "North Korean forces crossed the 38th parallel on June 25, 1950, initiating the Korean War."
+        },
+        {
+          "claim_id": "M9325D190D82EDBE",
+          "position": 2,
+          "text": "North Korea invaded South Korea on June 25, 1950, triggering the Korean War."
+        },
+        {
+          "claim_id": "MFB0F06D420DE094",
+          "position": 3,
+          "text": "The Korean War began after years of political tension, border skirmishes, and military buildup in the region."
+        }
+      ],
+      "exact_sentence_count": 3,
+      "facet_number": 1,
+      "sub_narrative": "\"What triggered the Korean War?\"",
+      "word_target": 55
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "M4465DC745718B83",
+          "position": 4,
+          "text": "NSC-68, a 1950 National Security Council document, recommended heavy military spending to contain Soviet expansionism and defined the U.S. Cold War strategy of containment."
+        },
+        {
+          "claim_id": "M4245120811DF380",
+          "position": 5,
+          "text": "The Truman Doctrine and the policy of containment committed the U.S. to supporting free peoples resisting communist conquest."
+        },
+        {
+          "claim_id": "MDB72C55B385193C",
+          "position": 6,
+          "text": "The U.S. involvement in Korea was part of a broader Cold War strategy to contain the spread of communism."
+        },
+        {
+          "claim_id": "M76B00B1B6BF9D60",
+          "position": 7,
+          "text": "President Truman ordered U.S. forces to assist South Korea, viewing the invasion as a test of American resolve."
+        },
+        {
+          "claim_id": "M76396FC76AB41E2",
+          "position": 8,
+          "text": "The Korean War marked the first major military engagement of the Cold War era and demonstrated U.S. commitment to containing communism."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 2,
+      "sub_narrative": "\"How did Cold War strategy influence US actions?\"",
+      "word_target": 100
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "MF29C6C2D0F17419",
+          "position": 9,
+          "text": "President Truman committed U.S. ground forces to South Korea to halt the North Korean People's Army and preserve South Korea as a Western outpost in Asia."
+        },
+        {
+          "claim_id": "M93B14ACD4EC3C81",
+          "position": 10,
+          "text": "Truman committed American troops to the Korean War to contain the spread of communism."
+        },
+        {
+          "claim_id": "MD290940F2075F44",
+          "position": 11,
+          "text": "Truman intervened militarily in June 1950 without formal congressional approval, citing his authority under the UN Charter to defend South Korea against communist aggression."
+        },
+        {
+          "claim_id": "M1B35A5762BD6C6C",
+          "position": 12,
+          "text": "The Korean War was the first major conflict of the Cold War and served as a test of the U.S. adherence to the containment strategy."
+        },
+        {
+          "claim_id": "MC09CB804CB7F843",
+          "position": 13,
+          "text": "The Korean War was the first expression of the U.S. foreign policy outlined in NSC-68, which emphasized the containment of communism."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 3,
+      "sub_narrative": "\"What motivated US involvement in the Korean War?\"",
+      "word_target": 100
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "MD99082350110C4C",
+          "position": 14,
+          "text": "The Korean War contributed to the rise of McCarthyism and a wave of anti-communism in the United States."
+        },
+        {
+          "claim_id": "M99CC13A2CEABD5B",
+          "position": 15,
+          "text": "The war intensified public fear of communist subversion, leading to investigations by the House Un-American Activities Committee (HUAC) and a belief in widespread communist infiltration within American institutions."
+        },
+        {
+          "claim_id": "MCC72FD82028A1B0",
+          "position": 16,
+          "text": "The Korean War intensified anti-communist sentiment in the U.S., coinciding with the rise of McCarthyism and contributing to political repression and a broader cultural fear of internal subversion."
+        },
+        {
+          "claim_id": "ME821C6A2A983566",
+          "position": 17,
+          "text": "The Korean War led to a significant increase in U.S. military spending after its end."
+        },
+        {
+          "claim_id": "M68D23E580095C1D",
+          "position": 18,
+          "text": "Defense spending as a percentage of the federal budget hovered at roughly 50 percent under the Eisenhower administration."
+        },
+        {
+          "claim_id": "M4ED932AEF24B058",
+          "position": 19,
+          "text": "The firing of General Douglas MacArthur by President Truman for insubordination was highly unpopular and shocked the American political system."
+        },
+        {
+          "claim_id": "MF7515C4D17F8786",
+          "position": 20,
+          "text": "General Douglas MacArthur's push for attacks into China without a peace settlement led to his dismissal by President Truman in April 1951."
+        }
+      ],
+      "exact_sentence_count": 7,
+      "facet_number": 4,
+      "sub_narrative": "\"What impact did the Korean War have on US politics?\"",
+      "word_target": 145
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "M622D383284BBEE6",
+          "position": 21,
+          "text": "The Korean War remains a negotiated truce to this day, with no official end despite the 1953 armistice."
+        },
+        {
+          "claim_id": "MF0B460CA6A4EF6E",
+          "position": 22,
+          "text": "The Korean War did not end with a formal peace treaty, leaving the two Koreas technically at war."
+        },
+        {
+          "claim_id": "M64786E70043D24B",
+          "position": 23,
+          "text": "The armistice suspended open hostilities and withdrew all military forces from the Korean Peninsula."
+        },
+        {
+          "claim_id": "M4CBCD441CA285F5",
+          "position": 24,
+          "text": "The armistice established the Demilitarized Zone (DMZ) along the 38th parallel to prevent future conflicts."
+        },
+        {
+          "claim_id": "M484A65D0C6FE3A3",
+          "position": 25,
+          "text": "Negotiations for the armistice were prolonged due to disagreements over prisoner of war repatriation and demarcation lines."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 5,
+      "sub_narrative": "\"How did the Korean War conclude?\"",
+      "word_target": 95
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "MAF6965B2FCF735D",
+          "position": 26,
+          "text": "The Korean War began in 1950 when North Korea invaded South Korea under the orders of Kim Il Sung."
+        },
+        {
+          "claim_id": "MFB3122B34BB71E4",
+          "position": 27,
+          "text": "A truce was signed in 1953, leaving Korea divided near the 38th parallel, with no peace treaty ratified by the belligerents."
+        },
+        {
+          "claim_id": "MD59CAF168ADC80D",
+          "position": 28,
+          "text": "An armistice was signed in July 1953, establishing the Demilitarized Zone (DMZ) between North and South Korea, which remains one of the most heavily fortified borders in the world."
+        },
+        {
+          "claim_id": "M9A49CF2E4DDFF9F",
+          "position": 29,
+          "text": "The United States suffered 33,686 casualties, while South Korea suffered over two million casualties during the conflict."
+        },
+        {
+          "claim_id": "M8683AB3AA5B3407",
+          "position": 30,
+          "text": "The Korean War resulted in the establishment of a four-kilometer-wide buffer zone known as the Korean Demilitarized Zone (DMZ), demarcated by the Military Demarcation Line (MDL)."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 6,
+      "sub_narrative": "New: How does the Korean War affect Korea",
+      "word_target": 100
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "M385BA5E07B3E0FF",
+          "position": 31,
+          "text": "The Korean War was the most severe test the United Nations faced since its inception in 1945."
+        },
+        {
+          "claim_id": "M7EC382F8FDD1BEF",
+          "position": 32,
+          "text": "The Korean War marked the first major military confrontation of the Cold War era, with the UN, led by the United States, intervening to support South Korea."
+        },
+        {
+          "claim_id": "M6079ABF010ECC6E",
+          "position": 33,
+          "text": "Representatives from North Korea, China, and the United Nations Command signed the Korean Armistice Agreement on July 27, 1953, effectively ending hostilities."
+        },
+        {
+          "claim_id": "M3AF6221C79280A7",
+          "position": 34,
+          "text": "The Korean War set an important precedent for multinational cooperation within the UN framework."
+        }
+      ],
+      "exact_sentence_count": 4,
+      "facet_number": 7,
+      "sub_narrative": "New: How does the Korean War affect UN",
+      "word_target": 80
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "M8501ECA541096DD",
+          "position": 35,
+          "text": "The US decision to send forces across the 38th parallel escalated the war from containment to rollback."
+        },
+        {
+          "claim_id": "M69D314908EEEB02",
+          "position": 36,
+          "text": "MacArthur pressed UN forces toward the Yalu River despite warnings from the Chinese, leading to a counteroffensive by Chinese forces involving hundreds of thousands of soldiers."
+        },
+        {
+          "claim_id": "MDCEF2C48B976715",
+          "position": 37,
+          "text": "MacArthur ignored warnings and led a risky assault to recapture Seoul in September 1950."
+        },
+        {
+          "claim_id": "MAC7DBBC1D6216B7",
+          "position": 38,
+          "text": "General MacArthur underestimated Chinese capabilities and intent, leading to fierce resistance at the Chosin Reservoir in November 1950."
+        },
+        {
+          "claim_id": "M7048D40CE900194",
+          "position": 39,
+          "text": "U.S. troops fought under a 'shoot-first-ask-questions-later' policy and killed some 400 civilians at No Gun Ri."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 8,
+      "sub_narrative": "\"What major strategic or political mistakes were made during the war?\"",
+      "word_target": 110
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "MCC3B836C2DE515A",
+          "position": 40,
+          "text": "China intervened in the Korean War in October 1950."
+        },
+        {
+          "claim_id": "MA69954C47BE63AC",
+          "position": 41,
+          "text": "General MacArthur's advance toward the Yalu River prompted China's entry into the war."
+        },
+        {
+          "claim_id": "M9FC1ECBE1DD69CD",
+          "position": 42,
+          "text": "China entered the Korean War to support North Korea against United Nations forces led by the United States."
+        },
+        {
+          "claim_id": "MCA4CE0E345BFAC9",
+          "position": 43,
+          "text": "Mao Zedong's government viewed the presence of US military forces near its border as a threat to its regime and sovereignty."
+        }
+      ],
+      "exact_sentence_count": 4,
+      "facet_number": 9,
+      "sub_narrative": "New: What motivated China involvement in te Korean War?",
+      "word_target": 80
+    },
+    {
+      "claims": [
+        {
+          "claim_id": "ME27138018296685",
+          "position": 44,
+          "text": "Truman dismissed General Douglas MacArthur in April 1951 due to his overly aggressive stance and criticism of the administration's containment policy."
+        },
+        {
+          "claim_id": "ME0EEC82CEB6175E",
+          "position": 45,
+          "text": "President Truman fired General MacArthur in April 1951 for insubordination and disagreement over the war's scope and strategy."
+        },
+        {
+          "claim_id": "M5C5F8BF952365CE",
+          "position": 46,
+          "text": "President Truman rejected General MacArthur's proposals to expand the Korean War into China and to use nuclear weapons against communist forces."
+        },
+        {
+          "claim_id": "M6C24A6CF5334DB1",
+          "position": 47,
+          "text": "Truman opposed MacArthur's proposal to use nuclear weapons to invade China during the Korean War."
+        },
+        {
+          "claim_id": "M6E2D9B78261CC4D",
+          "position": 48,
+          "text": "Eisenhower's administration threatened to use atomic bombs against China if it did not end the war and accept the 38th parallel as the border between North and South Korea."
+        }
+      ],
+      "exact_sentence_count": 5,
+      "facet_number": 10,
+      "sub_narrative": "\"How did US presidents differ in their views on the Korean War?\"",
+      "word_target": 105
+    }
+  ],
+  "narrative": "I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.",
+  "output_contract": {
+    "claim_order_must_match_input": true,
+    "item_keys": [
+      "claim_id",
+      "text"
+    ],
+    "one_item_per_claim": true,
+    "one_spacy_sentence_per_item": true,
+    "root_key": "sentences"
+  },
+  "task": "Rewrite every frozen supported claim into its matching output slot.",
+  "total_answer_word_band": {
+    "maximum": 1000,
+    "minimum": 930
+  }
+}

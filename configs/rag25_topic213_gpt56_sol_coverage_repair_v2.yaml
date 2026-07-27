@@ -1,0 +1,89 @@
+experiment:
+  id: rag25_topic213_gpt56_sol_coverage_repair_v2
+  run_id: topic213-gpt56-sol-coverage-repair-v2
+  team_id: issue19-coverage-repair
+  run_desc: Full-map, diversity-balanced GPT-5.6 Sol generation with citation-grounded audit repair.
+  output_dir: outputs/rag25_topic213_gpt56_sol_coverage_repair_v2
+  report_dir: reports/experiments/rag25_topic213_gpt56_sol_coverage_repair_v2
+
+inputs:
+  source_generation: outputs/rag25_topic213_full_documents_qwen_local_v1/response_generation.json
+  map_checkpoint_dir: outputs/rag25_topic213_full_documents_qwen_local_v1/checkpoints
+  passages: tmp/topic213-evidence-handover-v1/passages.jsonl
+  nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  baseline_metrics: reports/experiments/rag25_topic213_controlled_generators_claim_preserving_v1/gpt_5_6_sol/metrics.json
+
+selection:
+  reserve_count: 12
+  duplicate_threshold: 0.68
+  minimum_candidate_words: 930
+  maximum_candidate_words: 1000
+  minimum_final_words: 900
+  require_full_retention: true
+  facets:
+    - label: '"What triggered the Korean War?"'
+      sentence_quota: 3
+      word_target: 55
+    - label: '"How did Cold War strategy influence US actions?"'
+      sentence_quota: 5
+      word_target: 100
+    - label: '"What motivated US involvement in the Korean War?"'
+      sentence_quota: 5
+      word_target: 100
+    - label: '"What impact did the Korean War have on US politics?"'
+      sentence_quota: 7
+      word_target: 145
+    - label: '"How did the Korean War conclude?"'
+      sentence_quota: 5
+      word_target: 95
+    - label: 'New: How does the Korean War affect Korea'
+      sentence_quota: 5
+      word_target: 100
+    - label: 'New: How does the Korean War affect UN'
+      sentence_quota: 4
+      word_target: 80
+    - label: '"What major strategic or political mistakes were made during the war?"'
+      sentence_quota: 5
+      word_target: 110
+    - label: 'New: What motivated China involvement in te Korean War?'
+      sentence_quota: 4
+      word_target: 80
+    - label: '"How did US presidents differ in their views on the Korean War?"'
+      sentence_quota: 5
+      word_target: 105
+
+generation:
+  key: gpt_5_6_sol
+  display_name: GPT-5.6 Sol
+  provider: OpenRouter/OpenAI
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: openai/gpt-5.6-sol
+  model_identity: openai/gpt-5.6-sol
+  max_tokens: 4500
+  repair_max_tokens: 1800
+  temperature: 0.0
+  timeout_seconds: 360
+  transport_max_attempts: 3
+  request_overrides: {}
+
+audit:
+  api_base_env: LITELLM_BASE_URL
+  api_base: http://localhost:4000/v1
+  api_key_env: LITELLM_API_KEY
+  api_key: none
+  model: qwen-local
+  model_identity: Qwen/Qwen3-4B-Instruct-2507
+  temperature: 0.0
+  max_tokens: 350
+  repair_max_tokens: 180
+  planner_max_tokens: 800
+  timeout_seconds: 240
+  http_max_attempts: 4
+  validation_attempts: 3
+
+evaluation:
+  expected_nugget_count: 50
+  temperature: 0.0
+  max_tokens: 1400
+  validation_attempts: 3

@@ -1,0 +1,112 @@
+{
+  "artifacts": [
+    {
+      "bytes": 2990,
+      "path": "config.yaml",
+      "sha256": "3ef5705c665fe76b47858ced7ef5ea8926625edf37ec82190c27745a7686d84e"
+    },
+    {
+      "bytes": 1090,
+      "path": "candidate_pool_summary.json",
+      "sha256": "8f8a2a38725ecd9c8ff919d45ebf973d937350fbbfad6d518d289e9d7c60f03e"
+    },
+    {
+      "bytes": 21389,
+      "path": "evidence_selection.jsonl",
+      "sha256": "ecac0e837b0513554f71bea5b969de24165d62e68b71ebd47b833833fcfdc158"
+    },
+    {
+      "bytes": 138117,
+      "path": "ledger_support_audit.jsonl",
+      "sha256": "ec1b1fba05a6f75e1b34881d5c1268506d021a6bad816468890b3d715411f2f4"
+    },
+    {
+      "bytes": 93302,
+      "path": "frozen_evidence_ledger.json",
+      "sha256": "49cceb5d21bfbb5be068a7b52e1357f3a6e85f1a0893f46ddbfb123ae9126dbc"
+    },
+    {
+      "bytes": 14361,
+      "path": "frozen_generation_payload.json",
+      "sha256": "acac02d67fa2f7796104ae86b00cf4431e763b173e23f18463adc96a58aca047"
+    },
+    {
+      "bytes": 873,
+      "path": "generation_system_prompt.txt",
+      "sha256": "792cc4ae2dc2141a6ba9738a58e4cf5d4c28678dc10697e686f0d629f28dab54"
+    },
+    {
+      "bytes": 9865,
+      "path": "raw_generation.json",
+      "sha256": "44790519ae862e86e9c84932df484c19a3886341d93f761969cb3aa864d869e3"
+    },
+    {
+      "bytes": 8412,
+      "path": "raw_generation.txt",
+      "sha256": "be0e75a7524bfb9539f0560ae01bf6bda577b1946e05d1893fd02eb11a15b98a"
+    },
+    {
+      "bytes": 1274,
+      "path": "generation_receipt.json",
+      "sha256": "6baddad85e30a0642d9912d319d42482cfe2b7cf3f880086f33bbc72d6ef40e9"
+    },
+    {
+      "bytes": 161255,
+      "path": "response_generation.candidate.json",
+      "sha256": "98ba04303b1a7dab71425fafa5d128ef26317182abee7e2d4325501261c9e69f"
+    },
+    {
+      "bytes": 100065,
+      "path": "generation_support_audit.jsonl",
+      "sha256": "a6e07fb317afe09b9606619c5b1a3587d06b17240e1db58fe1509a734815626d"
+    },
+    {
+      "bytes": 1259,
+      "path": "repair_support_audit.jsonl",
+      "sha256": "1a13d16a3234b4c7be6ca47be096d86bff5ded003b3f032ec0bf61acdd3c05a9"
+    },
+    {
+      "bytes": 162255,
+      "path": "response_generation.json",
+      "sha256": "543f50459cc3a370a861c4d85a466f13414f2eb9716fe0bd66bb17c32f84aec1"
+    },
+    {
+      "bytes": 99878,
+      "path": "claim_support_audit.jsonl",
+      "sha256": "04d5fe1058c6469385e41a172489f587de7ab17ff4a9a960ea00d05657b5fa62"
+    },
+    {
+      "bytes": 0,
+      "path": "excluded_sentences.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 12130,
+      "path": "rag_output_trec_rag_2026.jsonl",
+      "sha256": "b46733ef81a73eeb7a39b525f84210d1cf02d1c823bdd110472bb66d05967600"
+    },
+    {
+      "bytes": 9142,
+      "path": "generated_response.md",
+      "sha256": "a1b71472d7b34add0c3741273496b159024f9c1101f6140dd5ecf974f89727a4"
+    },
+    {
+      "bytes": 274,
+      "path": "raw_repair_generation.json",
+      "sha256": "93750d7b8a6c56946d5f61db251e252b2b3988185bd0290dc179f483c573b6ea"
+    },
+    {
+      "bytes": 231,
+      "path": "raw_repair_generation.txt",
+      "sha256": "64d0ecbb4639f793d49bd1bfb103947aa9a6c69de1d135b0b60f340dab86b92a"
+    },
+    {
+      "bytes": 1257,
+      "path": "repair_receipt.json",
+      "sha256": "ba5cc74b45bc2b63114cea3384a76fae69cabaa50c101b3907518d5e3e5ed4ba"
+    }
+  ],
+  "frozen_at": "2026-07-27T02:16:34.786444+00:00",
+  "organizer_nuggets_read": false,
+  "schema_version": "coverage-repair-generation-freeze-v2"
+}

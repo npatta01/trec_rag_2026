@@ -84,10 +84,10 @@
               <input id="run-id" name="run_id" type="text" maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,79}" required>
 
               <label class="field-label" for="team-id">Team ID</label>
-              <input id="team-id" name="team_id" type="text" maxlength="80" value="issue19-controlled" required>
+              <input id="team-id" name="team_id" type="text" maxlength="80" value="issue19-coverage-repair" required>
 
               <label class="field-label" for="run-desc">Run description</label>
-              <textarea id="run-desc" name="run_desc" rows="4" maxlength="500" required>Claim-preserving, facet-balanced generation with deterministic citations and a model-blind support gate.</textarea>
+              <textarea id="run-desc" name="run_desc" rows="4" maxlength="500" required>Full-map, diversity-balanced generation with deterministic citations and bounded support repair.</textarea>
 
               <div class="field-row">
                 <div>
@@ -101,7 +101,7 @@
               </div>
 
               <div class="contract-list" aria-label="Generation contract">
-                <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>One semantic generation request</span></div>
+                <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>One primary generation with bounded repair</span></div>
                 <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>Nuggets unavailable during generation</span></div>
                 <div><span class="check-mark" aria-hidden="true">&#10003;</span><span>Sentence-level support audit</span></div>
               </div>
@@ -174,7 +174,7 @@
         </div>
         <div class="decision-band">
           <strong>Selected: GPT-5.6 Sol</strong>
-          <span>Highest controlled strict coverage at 0.460; the unconstrained local-Qwen baseline remains higher at 0.520.</span>
+          <span>Coverage-repair strict coverage is 0.540, up 0.080 over the previous controlled GPT run and 0.020 over the original unconstrained Qwen run.</span>
         </div>
       </section>
 
