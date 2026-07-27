@@ -131,7 +131,7 @@ class RagGenerationConfig:
     api_key_env: str = "OPENROUTER_API_KEY"
     model: str = "openai/gpt-5.6-sol"
     reasoning_effort: str = "medium"
-    temperature: float = 0.0
+    temperature: float | None = None
     max_tokens: int = 6000
     timeout_seconds: float = 900.0
     transport_max_attempts: int = 3
@@ -305,12 +305,13 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0
     ):
         raise ValueError("retrieval.top_k must be a positive integer or null")
-    temperature = generation.get("temperature", 0.0)
-    if isinstance(temperature, bool) or not isinstance(temperature, int | float):
-        raise ValueError("generation.temperature must be a finite number")
-    temperature = float(temperature)
-    if not math.isfinite(temperature):
-        raise ValueError("generation.temperature must be a finite number")
+    temperature = generation.get("temperature")
+    if temperature is not None:
+        if isinstance(temperature, bool) or not isinstance(temperature, int | float):
+            raise ValueError("generation.temperature must be a finite number or null")
+        temperature = float(temperature)
+        if not math.isfinite(temperature):
+            raise ValueError("generation.temperature must be a finite number or null")
     reasoning_effort = _config_text(
         generation, "reasoning_effort", "generation", "medium"
     ).lower()
@@ -406,7 +407,7 @@ class OpenRouterJsonGenerator:
         api_key: str,
         model: str,
         reasoning_effort: str,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int,
         timeout_seconds: float,
         transport_max_attempts: int,
@@ -437,7 +438,6 @@ class OpenRouterJsonGenerator:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "reasoning": {"effort": self.reasoning_effort, "exclude": True},
             "provider": {"require_parameters": True},
@@ -450,6 +450,8 @@ class OpenRouterJsonGenerator:
                 },
             },
         }
+        if self.temperature is not None:
+            request_body["temperature"] = self.temperature
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",

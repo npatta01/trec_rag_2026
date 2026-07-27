@@ -352,7 +352,7 @@ def _openrouter_generator() -> OpenRouterJsonGenerator:
         api_key="secret",
         model="openai/gpt-5.6-sol",
         reasoning_effort="medium",
-        temperature=0.0,
+        temperature=None,
         max_tokens=6000,
         timeout_seconds=30,
         transport_max_attempts=3,
@@ -400,6 +400,7 @@ def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
     assert captured["json"]["reasoning"] == {"effort": "medium", "exclude": True}
     assert captured["json"]["provider"] == {"require_parameters": True}
     assert captured["json"]["response_format"]["type"] == "json_schema"
+    assert "temperature" not in captured["json"]
     assert captured["headers"]["Authorization"] == "Bearer secret"
     assert generated["answer"][0]["citations"] == [0]
     assert raw["id"] == "response-1"
@@ -569,5 +570,6 @@ def test_checked_in_example_config_stays_loadable() -> None:
     assert config.run_id == "rag26_competition_gpt_sol_bm25_v1"
     assert config.output_path.name == "rag_output_trec_rag_2026.jsonl"
     assert config.top_k is None
+    assert config.temperature is None
     assert config.resume is False
     assert config.overwrite is False
