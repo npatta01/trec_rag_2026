@@ -2,6 +2,84 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
+## Experimental facet official run
+
+`trec_rag.official_run` is the only supported interface for the
+organizer-compatible facet experiment. Run it with the strict checked-in
+configuration:
+
+```bash
+.venv/bin/python -m trec_rag.official_run configs/facet_pilot_v1.yaml
+```
+
+The command runs all official topics by default. Repeat `--topic ID` for an
+explicit set or use `--topic-subset FILE.csv`, whose required `topic_id`
+column is restored to official source order. The two selector forms cannot be
+combined.
+
+The runner executes five internal stages:
+
+1. **Planning:** DeepSeek produces a bounded structured decomposition while the
+   untouched narrative remains the first retrieval lane. Saved BM25 suggestions
+   are validated historical metadata, not active lanes.
+2. **Retrieval and reranking:** Pyserini retrieves the original narrative plus
+   one full-text lane per admitted subnarrative. Mixedbread reranks only the
+   configured head of each lane, followed by deterministic round-robin
+   selection.
+3. **Extractive evidence:** exact source spans are scored within their own
+   subnarrative, deduplicated, diversity-clustered, and selected under the
+   configured budget. Raw logits are ranking values, not calibrated
+   probabilities or a portable cutoff.
+4. **Canonicalization:** at most one hosted call per non-empty subnarrative
+   returns bounded claims tied to exact evidence aliases.
+5. **Organizer export:** validated topic checkpoints are exported once in
+   official topic order.
+
+The YAML has five operational blocks. `experiment.id` fixes both
+`outputs/<experiment.id>/` and the run ID; `topics.path` identifies the
+narrative-only source; and `retrieval`, `reranking`, and `nuggets` fix
+cache locations, model/index identities, depths, selection policy, evidence
+budget, claim limit, and supporting-document limit. Output paths and run tags
+are conventions, not configuration knobs.
+
+A completed run publishes these six conventional files beneath the experiment
+directory:
+
+- `r_output_trec_rag_2026.tsv`: the variable-depth official evidence run;
+- `retrieval_candidate_pool.trec`: a broader diagnostic pool;
+- `retrieval_with_text.jsonl.zip`: the mandatory full-text archive;
+- `retrieval_provenance.jsonl`: source and selection provenance;
+- `resolved_config.yaml`: normalized non-secret settings and topic-source hash;
+- `retrieval_export_manifest.json`: the manifest-last export seal.
+
+Per-topic stages are also sealed by hashes through
+`<topic-id>/canonical/complete.json`. Resume revalidates checkpoint schemas,
+source bytes, configured identities, and the hash chain rather than trusting
+file existence. Compatible sealed topics are skipped, request/content-addressed
+caches retain their existing reuse rules, and the export is regenerated and
+re-read. A tracked-dirty worktree is rejected before runtime dependencies are
+constructed; changing `experiment.id` starts a separate checkpoint tree.
+
+Planning transport, parsing, schema, or semantic failure retains exactly the
+untouched original-narrative retrieval lane and produces empty downstream
+evidence/canonical ledgers without a hosted canonical call. Canonical transport
+or admission failure uses deterministic exact extractive evidence instead of an
+unsupported model claim. Hosted calls are one-shot, and cached replies are
+revalidated before reuse.
+
+Runtime inputs are only official topic IDs and untouched narratives. Topic
+titles, organizer subnarratives, organizer nuggets, and qrels are excluded from
+planning, retrieval, evidence, and canonicalization; they belong only in
+post-seal evaluation. Outputs include source text and generated claims, so keep
+`outputs/` ignored and private.
+
+**Model quality is not validated.** The two-topic pilot verifies mechanics,
+provenance, fallback, and byte-stable resume behavior, but it does not establish
+that generated decompositions improve retrieval or that canonical claims are
+entailed. Promotion requires a frozen, held-out topic evaluation measuring
+retrieval coverage, evidence quality, claim grounding, redundancy, and failure
+rate.
+
 ## Remote Pyserini Helpers
 
 Stable notebook imports come from `remote_pyserini.py`. Implementation is split

@@ -96,6 +96,63 @@ def load_topics(
     return topics
 
 
+def load_narrative_topics(path: Path) -> list[Topic]:
+    """Load exact topic narratives without requiring or synthesizing titles."""
+    path = Path(path)
+    topics: list[Topic] = []
+    seen: set[str] = set()
+    is_tsv = path.suffix.casefold() == ".tsv"
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, raw_line in enumerate(source, start=1):
+            line = raw_line.removesuffix("\n").removesuffix("\r")
+            if not line.strip():
+                continue
+            if is_tsv:
+                if "\t" not in line:
+                    raise ValueError(f"line {line_number}: expected qid<TAB>narrative")
+                topic_id, narrative = line.split("\t", 1)
+            else:
+                record = _strict_narrative_record(line, line_number)
+                topic_id = record["id"]
+                narrative = record["narrative"]
+                if "title" in record and not isinstance(record["title"], str):
+                    raise ValueError(f"line {line_number}: optional title must be text")
+            if not isinstance(topic_id, str) or not topic_id:
+                raise ValueError(f"line {line_number}: topic ID must be non-empty text")
+            if not isinstance(narrative, str) or not narrative.strip():
+                raise ValueError(f"line {line_number}: narrative must be non-empty text")
+            if topic_id in seen:
+                raise ValueError(f"line {line_number}: duplicate topic ID {topic_id!r}")
+            seen.add(topic_id)
+            topics.append(Topic(topic_id, "", narrative))
+    if not topics:
+        raise ValueError(f"{path} did not contain any topics")
+    return topics
+
+
+def _strict_narrative_record(line: str, line_number: int) -> dict[str, object]:
+    def no_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"line {line_number}: duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        record = json.loads(line, object_pairs_hook=no_duplicates)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"line {line_number}: invalid strict JSON topic record") from exc
+    if not isinstance(record, dict) or set(record) not in (
+        {"id", "narrative"},
+        {"id", "title", "narrative"},
+    ):
+        raise ValueError(
+            f"line {line_number}: topic requires id and narrative; title is optional"
+        )
+    return record
+
+
 def write_topics_jsonl(topics: Iterable[Topic], path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
