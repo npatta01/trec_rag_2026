@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from typing import Any
 
-from trec_rag.canonical_nuggets import run_canonical_stage
+from trec_rag.canonical_nuggets import PROMPT_VERSION, run_canonical_stage
 from trec_rag.evidence_store import (
     generate_candidate_artifacts,
     materialize_candidate_inputs,
@@ -55,7 +55,7 @@ from trec_rag.facet_retrieval import (
     score_selected_documents,
 )
 from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate, jsonable
-from trec_rag.repo_env import load_repo_env
+from trec_rag.repo_env import load_repo_env, repo_cache_root
 from trec_rag.retrieval_export import (
     RetrievalExportReceipt,
     export_retrieval_run,
@@ -840,7 +840,7 @@ def _canonical_topic(
         ),
         output_path=canonical_root / "canonical-nuggets.jsonl",
         manifest_path=canonical_root / "canonical-nugget-manifest.json",
-        cache_dir=canonical_root / "response-cache",
+        cache_dir=canonical_response_cache_dir(config.root_dir),
         backend_factory=dependencies.canonical_backend_factory,
         cache_ignore_checker=dependencies.cache_ignore_checker,
     )
@@ -860,6 +860,11 @@ def _topics_sha256(topics: Sequence[Topic]) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     )
+
+
+def canonical_response_cache_dir(root_dir: Path) -> Path:
+    """Return the shared, prompt-versioned response cache for canonical calls."""
+    return repo_cache_root(root_dir) / "canonical" / PROMPT_VERSION
 
 
 def _tracked_worktree_is_dirty(repo: Path) -> bool:

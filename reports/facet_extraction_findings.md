@@ -233,17 +233,33 @@ policy. Neither budget is established as a production optimum.
 
 ## Cross-encoder score calibration conclusion
 
-The pinned Mixedbread value named `raw_logits` is the unactivated difference
+**Provenance.** The [pinned reranker config](../configs/rag25_bm25_mixedbread_rerank_v1.yaml)
+fixes `mixedbread-ai/mxbai-rerank-base-v2` at revision
+[`3ea9d4dffa7d12a4f366be8e275c349de9fc9865`](https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2/tree/3ea9d4dffa7d12a4f366be8e275c349de9fc9865),
+Sentence-Transformers `5.6.0`, and `raw_logits`; the [comparison manifest](experiments/bm25_mixedbread_config_comparison_v1/manifest.yaml)
+binds those settings to the retained score artifacts. The immutable model
+[`LogitScore` configuration](https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2/blob/3ea9d4dffa7d12a4f366be8e275c349de9fc9865/1_LogitScore/config.json)
+selects token IDs 16 and 15, whose immutable
+[`vocabulary`](https://huggingface.co/mixedbread-ai/mxbai-rerank-base-v2/blob/3ea9d4dffa7d12a4f366be8e275c349de9fc9865/vocab.json)
+maps them to `"1"` and `"0"`; the pinned
+[Sentence-Transformers implementation](https://github.com/UKPLab/sentence-transformers/blob/v5.6.0/sentence_transformers/cross_encoder/modules/logit_score.py)
+defines their difference, and the local [score-cache runner](../code/trec_rag/rerank_score_cache.py)
+passes an identity activation for `raw_logits`.
+
+The pinned value is therefore the unactivated difference
 
 ```text
-score(query, sentence) = logit("1") - logit("0")
+score(query, text) = logit("1") - logit("0")
 ```
 
 It is an unbounded ranking score, not a calibrated probability. Upstream
-evidence supports ordering candidates within a query but does not establish a
-portable absolute cutoff across generated subnarratives or the local
-sentence-level distribution. A sigmoid changes the numeric range, not the
-calibration evidence.
+evidence in this repository is ranking evidence: the [retained comparison
+record](experiments/bm25_mixedbread_config_comparison_v1/manifest.yaml) is a
+22-topic development nDCG@10 evaluation. It records no labeled,
+topic-split sentence/subnarrative calibration set or validation procedure, so
+it does not establish a portable absolute cutoff across generated
+subnarratives or the local sentence-level distribution. A sigmoid changes the
+numeric range, not the missing calibration evidence.
 
 The actionable policy is therefore:
 
@@ -258,11 +274,6 @@ The actionable policy is therefore:
 - compare a query-local normalized relevance term with cosine novelty before
   revising MMR, because reciprocal rank quickly becomes much smaller than the
   novelty term.
-
-The observed pilot range was `-10.94` to `12.31`. High scores still included
-a question at `11.31`, a fragment at `10.88`, and a heading at `9.56`,
-which directly demonstrates why a universal raw cutoff is not an
-evidence-quality rule.
 
 ## Next held-out evaluation
 
@@ -280,11 +291,18 @@ Promotion remains blocked on a precommitted, topic-split experiment:
 No metric from the current two-topic, development-tuned pilot should be used as
 unbiased promotion evidence.
 
-## Human-reviewed references (evaluation-only)
+## Independently reviewed facet references (evaluation-only)
 
-These qrels-blind references are useful for judging granularity after a model
-run. They are not prompt material, runtime inputs, or a target vocabulary for
-new topics.
+The exact strings below are copied from the frozen
+[`reports/experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json`](experiments/all_topic_tethered_facet_validation_v1/facet_manifest.json).
+Its accompanying [independent content review](experiments/all_topic_tethered_facet_validation_v1/facet_review.md)
+states that the reviewer inspected the narratives, prompt, proposed manifest,
+and validation design without opening qrels, nuggets, retrieved documents,
+candidate results, metrics, model output, or web sources. The tracked record
+does not identify the reviewer as human, so these are independently reviewed
+references rather than human labels. They are useful for judging granularity
+after a model run, but are not prompt material, runtime inputs, or a target
+vocabulary for new topics.
 
 | Topic | Representative reviewed facets |
 | ---: | --- |

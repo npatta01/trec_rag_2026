@@ -11,7 +11,7 @@ from typing import Any, Sequence
 
 import yaml
 
-from trec_rag.repo_env import find_repo_root, shared_checkout_root
+from trec_rag.repo_env import find_repo_root, repo_cache_root, shared_checkout_root
 from trec_rag.topics import Topic, load_narrative_topics
 
 
@@ -155,7 +155,7 @@ def load_facet_pilot_config(path: Path) -> FacetPilotConfig:
     candidate_depth = _positive_int(retrieval_raw, "candidate_depth_per_query", "retrieval")
     retrieval = RetrievalSettings(
         index=_require_text(retrieval_raw, "index", "retrieval"),
-        cache_dir=_resolve_repo_path(root_dir, _require_text(retrieval_raw, "cache_dir", "retrieval")),
+        cache_dir=_resolve_cache_path(root_dir, _require_text(retrieval_raw, "cache_dir", "retrieval")),
         query_sources=query_sources,
         candidate_depth_per_query=candidate_depth,
     )
@@ -174,7 +174,7 @@ def load_facet_pilot_config(path: Path) -> FacetPilotConfig:
         raise ValueError("reranking.candidate_pool_depth must not exceed reranking.rerank_depth_per_query")
     reranking = RerankingSettings(
         model=_RERANKER_MODEL,
-        score_cache_dir=_resolve_repo_path(root_dir, _require_text(reranking_raw, "score_cache_dir", "reranking")),
+        score_cache_dir=_resolve_cache_path(root_dir, _require_text(reranking_raw, "score_cache_dir", "reranking")),
         device=_require_text(reranking_raw, "device", "reranking"),
         rerank_depth_per_query=rerank_depth,
         candidate_pool_depth=candidate_pool_depth,
@@ -279,6 +279,21 @@ def _resolve_repo_path(root_dir: Path, value: str) -> Path:
         if shared_path.exists():
             return shared_path
     return active_path
+
+
+def _resolve_cache_path(root_dir: Path, value: str) -> Path:
+    path = Path(value)
+    cache_root = repo_cache_root(root_dir).resolve()
+    if path.is_absolute():
+        resolved_path = path.resolve()
+    else:
+        relative_path = path.relative_to("cache") if path.parts[:1] == ("cache",) else path
+        resolved_path = (cache_root / relative_path).resolve()
+    try:
+        resolved_path.relative_to(cache_root)
+    except ValueError as exc:
+        raise ValueError("cache paths must remain beneath the repository cache") from exc
+    return resolved_path
 
 
 def _read_subset_ids(path: Path | None) -> tuple[str, ...]:

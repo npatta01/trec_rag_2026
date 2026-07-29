@@ -82,6 +82,39 @@ def test_config_uses_conventional_identity_and_binds_topic_source(tmp_path: Path
     }
 
 
+def test_config_routes_relative_reusable_caches_to_shared_checkout(
+    tmp_path: Path,
+) -> None:
+    shared = tmp_path / "shared"
+    worktree = tmp_path / "worktree"
+    git_dir = shared / ".git" / "worktrees" / "facet-pilot"
+    git_dir.mkdir(parents=True)
+    worktree.mkdir()
+    (worktree / "AGENTS.md").write_text("# instructions\n", encoding="utf-8")
+    (worktree / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+    (worktree / "cache" / "retrieval").mkdir(parents=True)
+    (worktree / "cache" / "reranker").mkdir(parents=True)
+
+    config = load_facet_pilot_config(_write_config(worktree))
+
+    assert config.retrieval.cache_dir == shared / "cache" / "retrieval"
+    assert config.reranking.score_cache_dir == shared / "cache" / "reranker"
+
+
+def test_config_rejects_reusable_cache_outside_shared_cache(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "cache_dir: cache/retrieval",
+            f"cache_dir: {tmp_path / 'outputs' / 'response-cache'}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="beneath the repository cache"):
+        load_facet_pilot_config(config_path)
+
+
 @pytest.mark.parametrize(
     ("selector", "expected"),
     (
@@ -605,6 +638,13 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
         assert evidence[0]["candidate_nugget_id"]
         assert evidence[0]["docid"]
     assert (output / "housing-1" / "canonical" / "complete.json").is_file()
+    assert (
+        tmp_path
+        / "cache"
+        / "canonical"
+        / canonical_nuggets.PROMPT_VERSION
+    ).is_dir()
+    assert not (output / "housing-1" / "canonical" / "response-cache").exists()
     assert first.retrieval_export.official_run.read_text().startswith("housing-1 Q0 ")
 
 
