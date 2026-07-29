@@ -40,7 +40,7 @@ from trec_rag.facet_extraction import (
 
 
 CANONICAL_NUGGET_SCHEMA_VERSION = "canonical_nuggets_v1"
-PROMPT_VERSION = "canonical_nuggetizer_v3"
+PROMPT_VERSION = "canonical_nuggetizer_v4"
 MAX_CANONICAL_NUGGETS = 20
 MAX_EVIDENCE_ALIASES_PER_CLAIM = 3
 MAX_SUPPORTING_DOCUMENTS_PER_CLAIM = 3
@@ -51,19 +51,6 @@ RESULT_SCHEMA_VERSION = "canonical_nugget_result_v1"
 MANIFEST_SCHEMA_VERSION = "canonical_nugget_manifest_v2"
 RAW_CACHE_SCHEMA_VERSION = "canonical_nugget_raw_cache_v1"
 VALIDATED_CACHE_SCHEMA_VERSION = "canonical_nugget_validated_cache_v2"
-
-
-def _system_prompt(max_claims: int, max_supporting_documents: int) -> str:
-    return f"""Use only the supplied exact evidence quotations to write canonical claims for the one supplied subnarrative.
-Return zero to {max_claims} atomic, independently checkable claims that directly respond to that subnarrative. Fewer claims are better than padding.
-You may paraphrase evidence into a claim, but do not copy, alter, or return evidence text. Return only each claim and one to three supplied evidence aliases.
-Every cited alias must directly support the claim. Multiple aliases may come from one document when multiple exact sentences are needed; together they can represent no more than {max_supporting_documents} supporting documents. Do not infer unsupported details or invent identifiers."""
-
-
-SYSTEM_PROMPT = _system_prompt(
-    MAX_CANONICAL_NUGGETS,
-    MAX_SUPPORTING_DOCUMENTS_PER_CLAIM,
-)
 
 _SAFE_METADATA_FIELDS = frozenset({
     "requested_model", "response_model", "provider", "finish_reason", "usage",
@@ -403,11 +390,14 @@ def run_canonical_stage(
                     validated_writes += 1
             else:
                 if live_backend is None:
-                    factory = (
-                        OpenRouterCanonicalNuggetBackend
-                        if backend_factory is None
-                        else backend_factory
-                    )
+                    if backend_factory is None:
+                        from trec_rag.nuggetizer_adapter import (
+                            NuggetizerCanonicalNuggetBackend,
+                        )
+
+                        factory = NuggetizerCanonicalNuggetBackend
+                    else:
+                        factory = backend_factory
                     live_backend = factory()
                 caching_backend = _RawCachingBackend(
                     live_backend,

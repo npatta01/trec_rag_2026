@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
+import trec_rag.nuggetizer_adapter as nuggetizer_adapter
 import trec_rag.official_run as official_run
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_pilot_config import load_facet_pilot_config
@@ -527,16 +529,33 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
     candidate_scorer = _CandidateScorer()
     similarity = _Similarity()
     canonical = _CanonicalBackend()
+    wrapper_factories: list[bool] = []
+
+    def wrapper_factory() -> _CanonicalBackend:
+        wrapper_factories.append(True)
+        return canonical
+
     monkeypatch.setattr(official_run, "_tracked_worktree_is_dirty", lambda _repo: False)
     monkeypatch.setattr(
         official_run,
         "_production_dependencies",
         lambda: _local_dependencies(candidate_scorer, similarity),
     )
+    monkeypatch.setattr(
+        canonical_nuggets,
+        "OpenRouterCanonicalNuggetBackend",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("the native canonical backend must not be the default")
+        ),
+    )
+    monkeypatch.setattr(
+        nuggetizer_adapter,
+        "NuggetizerCanonicalNuggetBackend",
+        wrapper_factory,
+    )
     adapters = ExternalAdapters(
         planning_backend=planning,
         retriever=retriever,
-        canonical_backend_factory=lambda: canonical,
     )
 
     first = run_official(config, external=adapters)
@@ -557,7 +576,34 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
     assert second.resumed_topic_ids == ("housing-1",)
     assert before == after
     assert len(planning.calls) == 1
+    assert wrapper_factories == [True]
     assert len(canonical.requests) == 2
+    canonical_rows = [
+        json.loads(line)
+        for line in (
+            output / "housing-1" / "canonical" / "canonical-nuggets.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    assert {row["subnarrative_id"] for row in canonical_rows} == {
+        "subnarrative-1",
+        "subnarrative-2",
+    }
+    for row in canonical_rows:
+        assert row["state"] == "complete"
+        assert len(row["nuggets"]) == 1
+        evidence = row["nuggets"][0]["evidence"]
+        assert len(evidence) == 1
+        assert set(evidence[0]) == {
+            "candidate_nugget_id",
+            "candidate_kind",
+            "text",
+            "text_sha256",
+            "docid",
+            "document_sha256",
+            "cluster_id",
+        }
+        assert evidence[0]["candidate_nugget_id"]
+        assert evidence[0]["docid"]
     assert (output / "housing-1" / "canonical" / "complete.json").is_file()
     assert first.retrieval_export.official_run.read_text().startswith("housing-1 Q0 ")
 

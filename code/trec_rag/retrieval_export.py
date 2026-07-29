@@ -946,7 +946,7 @@ def _validate_canonical_nugget_manifest(
         "selection_manifest_file": "selection-manifest.json",
         "canonical_nugget_file": "canonical-nuggets.jsonl",
         "model": "deepseek/deepseek-v4-flash-20260423",
-        "prompt_version": "canonical_nuggetizer_v3",
+        "prompt_version": "canonical_nuggetizer_v4",
     }
     if (
         set(value) != _CANONICAL_NUGGET_MANIFEST_FIELDS

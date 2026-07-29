@@ -30,8 +30,13 @@ The runner executes five internal stages:
    subnarrative, deduplicated, diversity-clustered, and selected under the
    configured budget. Raw logits are ranking values, not calibrated
    probabilities or a portable cutoff.
-4. **Canonicalization:** at most one hosted call per non-empty subnarrative
-   returns bounded claims tied to exact evidence aliases.
+4. **Canonicalization:** the Nuggetizer package is wrapped for at most one
+   hosted call per non-empty subnarrative. All selected passages are sent once
+   for that subnarrative, with `candidate_nugget_id` retained as the upstream
+   document ID and join key. Package scoring and assignment calls are
+   deliberately bypassed; exact evidence admission and extractive fallback
+   remain local. Generation quality is still experimental, and the adapter can
+   be replaced behind the existing canonical-backend seam.
 5. **Organizer export:** validated topic checkpoints are exported once in
    official topic order.
 

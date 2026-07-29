@@ -515,7 +515,7 @@ def _write_canonical_nugget_manifest(
             else request_sha256s
         ),
         "model": "deepseek/deepseek-v4-flash-20260423",
-        "prompt_version": "canonical_nuggetizer_v3",
+        "prompt_version": "canonical_nuggetizer_v4",
         "hosted_llm_calls": 0,
         "validated_cache_hits": 0,
         "raw_cache_writes": 0,
