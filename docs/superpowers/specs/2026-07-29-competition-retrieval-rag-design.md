@@ -13,7 +13,7 @@ chaining.
 Retrieval has one public module and one versioned configuration:
 
 ```bash
-.venv/bin/python -m trec_rag.competition_retrieval \
+uv run --no-sync python -m trec_rag.competition_retrieval \
   configs/rag26_competition_retrieval_v1.yaml
 ```
 
@@ -25,13 +25,28 @@ RAG answer generation remains a separate command with a strict, versioned
 configuration:
 
 ```bash
-.venv/bin/python -m trec_rag.competition_rag \
+uv run --no-sync python -m trec_rag.competition_rag \
   --config configs/rag26_competition_rag_gpt_sol_v1.yaml
 ```
 
 Neither command invokes the other. A user may run retrieval alone, generate
 answers from any compatible frozen retrieval export, or run both commands in
 sequence.
+
+## Environment and command convention
+
+Environment creation and dependency synchronization use the repository's uv
+workflow:
+
+```bash
+code/tools/setup_env.sh
+```
+
+The setup script selects the standard dependency set or the ROCm dependency
+group for the active host. Subsequent commands use `uv run --no-sync python` so
+uv executes inside that prepared `.venv` without replacing the hardware-aware
+dependency selection. Documentation and verification commands use this form
+consistently rather than calling `.venv/bin/python` directly.
 
 ## Configuration convention
 
