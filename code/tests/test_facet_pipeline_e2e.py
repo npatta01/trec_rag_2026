@@ -142,6 +142,17 @@ def test_config_selects_all_ids_or_csv_in_official_order(
     assert tuple(topic.id for topic in selected) == expected
 
 
+def test_config_normalizes_programmatic_topic_id_whitespace(tmp_path: Path) -> None:
+    config = load_facet_pilot_config(_write_config(tmp_path))
+
+    selected = facet_pilot_config.select_configured_topics(
+        config,
+        topic_ids=(" topic-1 ", "\ttopic-2\n"),
+    )
+
+    assert tuple(topic.id for topic in selected) == ("topic-2", "topic-1")
+
+
 def test_config_rejects_duplicate_unknown_and_mixed_topic_selectors(
     tmp_path: Path,
 ) -> None:
@@ -406,7 +417,7 @@ class _PlanningBackend:
     def extract(self, topic: Topic) -> object:
         self.calls.append(topic)
         if self.reject:
-            raise ValueError("fake model rejected the plan")
+            raise RuntimeError()
         return _plan(topic.id)
 
 
@@ -678,7 +689,18 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
     )
 
     canonical_root = tmp_path / "outputs" / "public-e2e" / "housing-1" / "canonical"
+    decomposition = json.loads(
+        (
+            tmp_path
+            / "outputs"
+            / "public-e2e"
+            / "housing-1"
+            / "decomposition"
+            / "result.json"
+        ).read_text(encoding="utf-8")
+    )
     exported = receipt.retrieval_export
+    assert decomposition["error"] == "RuntimeError"
     assert receipt.selected_topic_ids == ("housing-1",)
     assert all(
         path.is_file()

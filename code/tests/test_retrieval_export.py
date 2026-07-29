@@ -34,7 +34,11 @@ from trec_rag.official_run import (
     load_validated_decomposition,
 )
 from trec_rag.pipeline_models import RetrievedCandidate, jsonable
-from trec_rag.retrieval_export import export_retrieval_run
+from trec_rag.retrieval_export import (
+    RetrievalExportReceipt,
+    export_retrieval_run,
+    read_retrieval_export_receipt,
+)
 from trec_rag.topics import Topic
 
 
@@ -56,6 +60,19 @@ def _receipt(topic_root: Path, relative_path: str) -> dict[str, object]:
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_bytes().splitlines()]
+
+
+def _root_artifact_bodies(receipt: RetrievalExportReceipt) -> dict[str, bytes]:
+    return {
+        path.name: path.read_bytes()
+        for path in (
+            receipt.official_run,
+            receipt.candidate_pool_run,
+            receipt.with_text_archive,
+            receipt.provenance,
+            receipt.resolved_config,
+        )
+    }
 
 
 def _normal_plan(topic: Topic):
@@ -351,6 +368,7 @@ def _write_sealed_topic(
     selected: Sequence[str],
     supported: Sequence[str],
     source_commit: str,
+    official_topics: Sequence[Topic] | None = None,
 ) -> None:
     topic_root = output_dir / topic.id
     scoring = topic_root / "scoring"
@@ -435,7 +453,12 @@ def _write_sealed_topic(
         path.write_bytes(_canonical_json({"fixture": relative}))
     official_topics_sha256 = sha256(
         json.dumps(
-            [{"id": topic.id, "narrative": topic.narrative}],
+            [
+                {"id": official.id, "narrative": official.narrative}
+                for official in (
+                    (topic,) if official_topics is None else official_topics
+                )
+            ],
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -1244,6 +1267,103 @@ def test_export_replaces_valid_manifest_across_exporter_revisions(tmp_path: Path
     manifest = json.loads(receipt.manifest.read_bytes())
     assert manifest["export_code_commit"] == "c" * 40
     assert manifest["source_code_commits"] == ["a" * 40]
+
+
+def test_export_replaces_valid_export_for_changed_topic_selection(
+    tmp_path: Path,
+) -> None:
+    config, original_topics = _config_and_topics(tmp_path)
+    topics = (
+        original_topics[0],
+        Topic("rag2026-1", "", "Explain a second demonstrated topic."),
+    )
+    config.topics_path.write_text(
+        "".join(f"{topic.id}\t{topic.narrative}\n" for topic in topics),
+        encoding="utf-8",
+    )
+    for topic, docid in zip(topics, ("doc-a", "doc-b"), strict=True):
+        _write_sealed_topic(
+            config.output_dir,
+            topic,
+            selected=(docid,),
+            supported=(docid,),
+            source_commit="a" * 40,
+            official_topics=topics,
+        )
+
+    first = export_retrieval_run(config, topics[:1], code_commit="b" * 40)
+    first_artifacts = _root_artifact_bodies(first)
+
+    replaced = export_retrieval_run(config, topics, code_commit="b" * 40)
+
+    manifest = json.loads(replaced.manifest.read_bytes())
+    assert manifest["selected_topic_ids"] == [topic.id for topic in topics]
+    assert set(manifest["topic_depths"]) == {topic.id for topic in topics}
+    assert set(manifest["source_seals"]) == {topic.id for topic in topics}
+    assert all(
+        body != first_artifacts[name]
+        for name, body in _root_artifact_bodies(replaced).items()
+    )
+    assert read_retrieval_export_receipt(config, topics) == replaced
+    with pytest.raises(ValueError, match="existing export manifest identity changed"):
+        read_retrieval_export_receipt(config, topics[:1])
+
+
+def test_export_selection_replacement_still_rejects_run_id_mismatch_before_write(
+    tmp_path: Path,
+) -> None:
+    config, topics = _config_and_topics(tmp_path)
+    _write_sealed_topic(
+        config.output_dir,
+        topics[0],
+        selected=("doc-a",),
+        supported=("doc-a",),
+        source_commit="a" * 40,
+    )
+    receipt = export_retrieval_run(config, topics, code_commit="b" * 40)
+    original_artifacts = _root_artifact_bodies(receipt)
+    _rewrite_manifest(receipt.manifest, run_id="different-run")
+
+    with pytest.raises(ValueError, match="existing export manifest identity changed"):
+        export_retrieval_run(config, topics, code_commit="b" * 40)
+
+    assert json.loads(receipt.manifest.read_bytes())["run_id"] == "different-run"
+    assert _root_artifact_bodies(receipt) == original_artifacts
+
+
+def test_export_rejects_tampered_existing_topic_order_before_replacement(
+    tmp_path: Path,
+) -> None:
+    config, original_topics = _config_and_topics(tmp_path)
+    topics = (
+        original_topics[0],
+        Topic("rag2026-1", "", "Explain a second demonstrated topic."),
+    )
+    config.topics_path.write_text(
+        "".join(f"{topic.id}\t{topic.narrative}\n" for topic in topics),
+        encoding="utf-8",
+    )
+    for topic, docid in zip(topics, ("doc-a", "doc-b"), strict=True):
+        _write_sealed_topic(
+            config.output_dir,
+            topic,
+            selected=(docid,),
+            supported=(docid,),
+            source_commit="a" * 40,
+            official_topics=topics,
+        )
+    receipt = export_retrieval_run(config, topics, code_commit="b" * 40)
+    original_artifacts = _root_artifact_bodies(receipt)
+    manifest = json.loads(receipt.manifest.read_bytes())
+    manifest["selected_topic_ids"].reverse()
+    receipt.manifest.write_bytes(_canonical_json(manifest))
+    tampered_manifest = receipt.manifest.read_bytes()
+
+    with pytest.raises(ValueError, match="existing export manifest identity changed"):
+        export_retrieval_run(config, topics[:1], code_commit="b" * 40)
+
+    assert receipt.manifest.read_bytes() == tampered_manifest
+    assert _root_artifact_bodies(receipt) == original_artifacts
 
 
 def test_export_failure_mid_replacement_unseals_and_next_rerun_recovers(

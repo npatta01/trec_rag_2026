@@ -529,7 +529,8 @@ def extract_facets(topic: Topic, backend: StructuredFacetBackend) -> FacetPlanni
     try:
         payload = backend.extract(topic)
     except Exception as exc:
-        return _fallback(topic, str(exc))
+        message = str(exc)
+        return _fallback(topic, message if message.strip() else type(exc).__name__)
     return plan_facet_queries(topic, payload)
 
 

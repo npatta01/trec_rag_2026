@@ -248,6 +248,11 @@ class NuggetizerCanonicalNuggetBackend:
             environ=environ, transport=transport
         )
 
+    @property
+    def transport_invocation_count(self) -> int:
+        """Return exact calls made by the wrapped hosted transport."""
+        return self._openrouter.transport_invocation_count
+
     def complete(self, request: CanonicalNuggetRequest) -> BackendReply:
         from nuggetizer.models.nuggetizer import Nuggetizer
 

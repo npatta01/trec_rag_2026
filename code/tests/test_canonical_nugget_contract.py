@@ -666,3 +666,60 @@ def test_nuggetizer_adapter_fails_closed_without_a_package_retry(
     assert tuple(nugget.claim_text for nugget in result.nuggets) == tuple(
         row.text for row in request.fallback_evidence
     )
+
+
+@pytest.mark.parametrize(
+    ("failure", "response", "expected_hosted_calls"),
+    (
+        ("package", None, 0),
+        ("malformed", '{"claims":', 1),
+        (
+            "success",
+            '{"claims":[{"claim":"The center opened in 2020.",'
+            '"evidence_aliases":["e001"]}]}',
+            1,
+        ),
+    ),
+)
+def test_stage_manifest_counts_actual_nuggetizer_transport_invocations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str,
+    response: str | None,
+    expected_hosted_calls: int,
+) -> None:
+    """Catches backend attempts being reported as hosted transport calls."""
+    from nuggetizer.models.nuggetizer import Nuggetizer
+
+    selections, selection_manifest = _write_inputs(tmp_path)
+    original_create = Nuggetizer.create
+
+    def fail_before_transport(self: object, package_request: object) -> object:
+        if failure == "package":
+            raise RuntimeError("package create failed")
+        return original_create(self, package_request)
+
+    monkeypatch.setattr(Nuggetizer, "create", fail_before_transport)
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def send(self, _sent: object) -> FacetResponse:
+            self.calls += 1
+            assert response is not None
+            return FacetResponse(200, _openrouter_envelope(response))
+
+    transport = _Transport()
+    artifacts = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: NuggetizerCanonicalNuggetBackend(
+            environ={"OPENROUTER_API_KEY": "test-key"}, transport=transport
+        ),
+    )
+
+    manifest = json.loads(artifacts.manifest_path.read_bytes())
+    assert transport.calls == expected_hosted_calls
+    assert manifest["hosted_llm_calls"] == expected_hosted_calls

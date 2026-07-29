@@ -211,7 +211,10 @@ def select_configured_topics(
         requested_ids = ()
     if not requested_ids:
         return official_topics
-    _validate_topic_ids(requested_ids, {topic.id for topic in official_topics})
+    requested_ids = _validate_topic_ids(
+        requested_ids,
+        {topic.id for topic in official_topics},
+    )
     wanted = set(requested_ids)
     return tuple(topic for topic in official_topics if topic.id in wanted)
 
@@ -308,8 +311,12 @@ def _read_subset_ids(path: Path | None) -> tuple[str, ...]:
         raise ValueError("invalid subset CSV") from exc
 
 
-def _validate_topic_ids(topic_ids: Sequence[str], available: set[str]) -> None:
+def _validate_topic_ids(
+    topic_ids: Sequence[str],
+    available: set[str],
+) -> tuple[str, ...]:
     seen: set[str] = set()
+    normalized_ids: list[str] = []
     for topic_id in topic_ids:
         if not isinstance(topic_id, str) or not topic_id.strip():
             raise ValueError("topic IDs must be non-empty text")
@@ -319,6 +326,8 @@ def _validate_topic_ids(topic_ids: Sequence[str], available: set[str]) -> None:
         if normalized not in available:
             raise ValueError(f"unknown topic ID: {normalized}")
         seen.add(normalized)
+        normalized_ids.append(normalized)
+    return tuple(normalized_ids)
 
 
 def _portable_path(root_dir: Path, path: Path) -> str:

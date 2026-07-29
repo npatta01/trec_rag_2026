@@ -246,7 +246,7 @@ def export_retrieval_run(
     _validate_existing_export(
         config.output_dir,
         run_id=config.run_id,
-        topic_ids=tuple(topic.id for topic in selected_topics),
+        required_topic_ids=None,
     )
 
     projections = tuple(_load_topic_projection(config, topic) for topic in selected_topics)
@@ -429,7 +429,7 @@ def read_retrieval_export_receipt(
     _validate_existing_export(
         config.output_dir,
         run_id=config.run_id,
-        topic_ids=tuple(topic.id for topic in selected_topics),
+        required_topic_ids=tuple(topic.id for topic in selected_topics),
     )
     return RetrievalExportReceipt(
         official_run=config.output_dir / "r_output_trec_rag_2026.tsv",
@@ -479,7 +479,7 @@ def _validate_existing_export(
     output_dir: Path,
     *,
     run_id: str,
-    topic_ids: tuple[str, ...],
+    required_topic_ids: tuple[str, ...] | None,
 ) -> None:
     manifest_path = output_dir / "retrieval_export_manifest.json"
     if not manifest_path.exists():
@@ -501,10 +501,31 @@ def _validate_existing_export(
         "candidate_pool_row_count",
         "artifacts",
     }
+    recorded_topic_ids = manifest.get("selected_topic_ids")
+    topic_depths = manifest.get("topic_depths")
+    source_seals = manifest.get("source_seals")
     if (
         set(manifest) != expected_fields
         or manifest.get("run_id") != run_id
-        or manifest.get("selected_topic_ids") != list(topic_ids)
+        or not isinstance(recorded_topic_ids, list)
+        or not recorded_topic_ids
+        or any(
+            not isinstance(topic_id, str)
+            or not topic_id
+            or topic_id in {".", ".."}
+            or Path(topic_id).name != topic_id
+            or any(character.isspace() for character in topic_id)
+            for topic_id in recorded_topic_ids
+        )
+        or len(set(recorded_topic_ids)) != len(recorded_topic_ids)
+        or not isinstance(topic_depths, dict)
+        or set(topic_depths) != set(recorded_topic_ids)
+        or not isinstance(source_seals, dict)
+        or set(source_seals) != set(recorded_topic_ids)
+        or (
+            required_topic_ids is not None
+            and recorded_topic_ids != list(required_topic_ids)
+        )
         or manifest.get("score_semantics") != "ordinal_selection_order"
     ):
         raise ValueError("existing export manifest identity changed")
@@ -529,6 +550,7 @@ def _validate_existing_export(
     }
     if not isinstance(artifacts, dict) or set(artifacts) != expected_names:
         raise ValueError("existing export artifact receipts changed")
+    resolved_config_body: bytes | None = None
     for name in sorted(expected_names):
         receipt = artifacts[name]
         if (
@@ -546,6 +568,26 @@ def _validate_existing_export(
             or sha256(body).hexdigest() != receipt["sha256"]
         ):
             raise ValueError("existing export artifact hash changed")
+        if name == "resolved_config.yaml":
+            resolved_config_body = body
+    if resolved_config_body is None:
+        raise ValueError("existing export resolved config is missing")
+    try:
+        resolved_config = yaml.safe_load(resolved_config_body.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ValueError("existing export resolved config changed") from exc
+    resolved_topics = (
+        resolved_config.get("topics")
+        if isinstance(resolved_config, dict)
+        else None
+    )
+    if (
+        manifest.get("resolved_config_sha256")
+        != sha256(resolved_config_body).hexdigest()
+        or not isinstance(resolved_topics, dict)
+        or resolved_topics.get("selected_topic_ids") != recorded_topic_ids
+    ):
+        raise ValueError("existing export manifest identity changed")
 
 
 def _load_topic_projection(

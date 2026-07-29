@@ -28,7 +28,6 @@ from trec_rag.facet_extraction import (
     BackendReply,
     FacetRequest,
     FacetResponse,
-    MAX_COMPLETION_TOKENS,
     MAX_RESPONSE_BYTES,
     OPENROUTER_BASE_URL,
     OPENROUTER_DEEPSEEK_MODEL,
@@ -185,6 +184,12 @@ class OpenRouterCanonicalNuggetBackend:
             raise ValueError("OPENROUTER_API_KEY must be set to non-empty text")
         self._key = key
         self._transport = _UrllibFacetTransport() if transport is None else transport
+        self._transport_invocation_count = 0
+
+    @property
+    def transport_invocation_count(self) -> int:
+        """Return exact calls made through the hosted transport boundary."""
+        return self._transport_invocation_count
 
     def complete(self, request: CanonicalNuggetRequest) -> BackendReply:
         if not isinstance(request, CanonicalNuggetRequest):
@@ -204,6 +209,7 @@ class OpenRouterCanonicalNuggetBackend:
             send = getattr(self._transport, "send", None)
             if not callable(send):
                 raise TypeError("transport must provide send(request)")
+            self._transport_invocation_count += 1
             response = send(sent)
             if not isinstance(response, FacetResponse):
                 raise TypeError("transport must return FacetResponse")
@@ -404,8 +410,17 @@ def run_canonical_stage(
                     raw_path,
                     request.request_sha256,
                 )
+                transport_calls_before = _transport_invocation_count(live_backend)
                 result = canonicalize_subnarrative(request, caching_backend)
-                hosted_calls += result.backend_attempts
+                transport_calls_after = _transport_invocation_count(live_backend)
+                if (
+                    transport_calls_before is not None
+                    and transport_calls_after is not None
+                    and transport_calls_after >= transport_calls_before
+                ):
+                    hosted_calls += transport_calls_after - transport_calls_before
+                else:
+                    hosted_calls += result.backend_attempts
                 raw_writes += int(caching_backend.wrote_raw)
                 if result.state == "complete" and caching_backend.reply is not None:
                     _write_validated(validated_path, request, caching_backend.reply)
@@ -1418,6 +1433,15 @@ class _RawCachingBackend:
         self.reply = reply
         self.wrote_raw = True
         return reply
+
+
+def _transport_invocation_count(backend: object) -> int | None:
+    """Read an optional exact hosted-transport counter without constraining backends."""
+    try:
+        value = getattr(backend, "transport_invocation_count", None)
+    except Exception:
+        return None
+    return value if type(value) is int and value >= 0 else None
 
 
 def _write_validated(

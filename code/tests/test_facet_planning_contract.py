@@ -179,6 +179,18 @@ def test_malformed_schema_and_semantic_plan_failures_return_exact_original(
     assert result.error == expected_error
 
 
+def test_empty_backend_exception_uses_nonempty_safe_fallback_error() -> None:
+    class EmptyMessageBackend:
+        def extract(self, topic: Topic) -> object:
+            raise RuntimeError()
+
+    result = extract_facets(_topic(), EmptyMessageBackend())
+
+    assert result.used_fallback is True
+    assert result.queries == _original(_topic())
+    assert result.error == "RuntimeError"
+
+
 @pytest.mark.parametrize(
     ("body", "expected_error"),
     [
