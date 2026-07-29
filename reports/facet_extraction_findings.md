@@ -41,7 +41,7 @@ results. LLM means large language model.
 Use the single official interface:
 
 ```bash
-.venv/bin/python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
 ```
 
 The strict configuration fixes the experiment/run identity, topic source,

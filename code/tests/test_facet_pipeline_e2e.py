@@ -10,7 +10,7 @@ import pytest
 import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
 import trec_rag.nuggetizer_adapter as nuggetizer_adapter
-import trec_rag.competition_retrieval as official_run
+import trec_rag.competition_retrieval as competition_retrieval
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
@@ -100,9 +100,9 @@ def test_cli_passes_repeated_topics_to_run_official_in_argument_order(
             )
         )
 
-    monkeypatch.setattr(official_run, "run_official", run)
+    monkeypatch.setattr(competition_retrieval, "run_official", run)
 
-    assert official_run.main(
+    assert competition_retrieval.main(
         [str(config_path), "--topic", "rag2026-1", "--topic", "rag2026-0"]
     ) == 0
 
@@ -238,7 +238,7 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
     planning_backend = object()
     retriever = object()
     canonical_factory = lambda: object()
-    local = official_run._RuntimeDependencies(
+    local = competition_retrieval._RuntimeDependencies(
         code_commit="a" * 40,
         document_scorer=object(),
         candidate_scorer=object(),
@@ -248,8 +248,12 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
     calls: list[tuple[object, object, object, object]] = []
     export_events: list[str] = []
 
-    monkeypatch.setattr(official_run, "_production_dependencies", lambda: local)
-    monkeypatch.setattr(official_run, "_tracked_worktree_is_dirty", lambda _repo: False)
+    monkeypatch.setattr(
+        competition_retrieval, "_production_dependencies", lambda: local
+    )
+    monkeypatch.setattr(
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
+    )
 
     def run_topic(topic, config, identity, dependencies):
         calls.append((topic, config, identity, dependencies))
@@ -261,7 +265,7 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
             "{}",
             encoding="utf-8",
         )
-        return official_run.TopicPhaseOutcome(
+        return competition_retrieval.TopicPhaseOutcome(
             topic.id,
             "canonical",
             config.output_dir / topic.id / "canonical" / "complete.json",
@@ -298,9 +302,11 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         export_events.append("validated")
         return validated_export
 
-    monkeypatch.setattr(official_run, "_run_topic", run_topic)
-    monkeypatch.setattr(official_run, "export_retrieval_run", export)
-    monkeypatch.setattr(official_run, "read_retrieval_export_receipt", read_export)
+    monkeypatch.setattr(competition_retrieval, "_run_topic", run_topic)
+    monkeypatch.setattr(competition_retrieval, "export_retrieval_run", export)
+    monkeypatch.setattr(
+        competition_retrieval, "read_retrieval_export_receipt", read_export
+    )
 
     receipt = run_official(
         config_path,
@@ -357,8 +363,12 @@ def test_run_official_rejects_corrupt_resumed_seal_before_dependencies(
     def dependencies():
         raise AssertionError("corrupt seals must fail before dependency construction")
 
-    monkeypatch.setattr(official_run, "_production_dependencies", dependencies)
-    monkeypatch.setattr(official_run, "_tracked_worktree_is_dirty", lambda _repo: False)
+    monkeypatch.setattr(
+        competition_retrieval, "_production_dependencies", dependencies
+    )
+    monkeypatch.setattr(
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
+    )
 
     with pytest.raises(ValueError):
         run_official(config_path, topic_ids=("topic-2",))
@@ -374,12 +384,16 @@ def test_run_official_rejects_dirty_tree_before_corrupt_resumed_seal(
     corrupt.mkdir(parents=True)
     (corrupt / "complete.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(official_run, "_tracked_worktree_is_dirty", lambda _repo: True)
+    monkeypatch.setattr(
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: True
+    )
 
     def dependencies():
         raise AssertionError("dirty trees must fail before runtime dependencies")
 
-    monkeypatch.setattr(official_run, "_production_dependencies", dependencies)
+    monkeypatch.setattr(
+        competition_retrieval, "_production_dependencies", dependencies
+    )
 
     with pytest.raises(RuntimeError, match="tracked changes"):
         run_official(config_path, topic_ids=("topic-2",))
@@ -580,8 +594,8 @@ class _CanonicalBackend:
 def _local_dependencies(
     candidate_scorer: _CandidateScorer,
     similarity: _Similarity,
-) -> official_run._RuntimeDependencies:
-    return official_run._RuntimeDependencies(
+) -> competition_retrieval._RuntimeDependencies:
+    return competition_retrieval._RuntimeDependencies(
         code_commit="f" * 40,
         document_scorer=_DocumentScorer(),
         candidate_scorer=candidate_scorer,
@@ -607,9 +621,11 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
         wrapper_factories.append(True)
         return canonical
 
-    monkeypatch.setattr(official_run, "_tracked_worktree_is_dirty", lambda _repo: False)
     monkeypatch.setattr(
-        official_run,
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
         "_production_dependencies",
         lambda: _local_dependencies(candidate_scorer, similarity),
     )
@@ -700,9 +716,11 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
     candidate_scorer = _CandidateScorer()
     similarity = _Similarity()
     canonical_factories: list[bool] = []
-    monkeypatch.setattr(official_run, "_tracked_worktree_is_dirty", lambda _repo: False)
     monkeypatch.setattr(
-        official_run,
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
         "_production_dependencies",
         lambda: _local_dependencies(candidate_scorer, similarity),
     )

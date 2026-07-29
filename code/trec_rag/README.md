@@ -9,7 +9,7 @@ organizer-compatible facet experiment. Run it with the strict checked-in
 configuration:
 
 ```bash
-.venv/bin/python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
 ```
 
 The command runs all official topics by default. Repeat `--topic ID` for an
