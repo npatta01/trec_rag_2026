@@ -713,9 +713,12 @@ def _http_failure(response: requests.Response, api_key: str) -> dict[str, Any]:
             "envelope": envelope,
         }
     except ValueError:
+        body_bytes = response.text.encode("utf-8")
         failure = {
             "http_status": response.status_code,
-            "body": response.text,
+            "body_omitted": True,
+            "body_utf8_byte_length": len(body_bytes),
+            "body_utf8_sha256": sha256(body_bytes).hexdigest(),
         }
     return _redact(failure, (api_key,))
 
