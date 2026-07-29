@@ -2,13 +2,21 @@
 
 ## Bottom line
 
-The facet pipeline is ready as a **mechanics experiment**, not as a validated
-retrieval or nugget-quality method. The supported runner preserves narrative-only
-inputs, exact fallback, source provenance, deterministic artifact bytes, sealed
-resume, and organizer-compatible export. Two development topics showed that
-model-generated or paraphrased subnarratives can discover additional
-known-relevant documents, but individual lanes were uneven and many documents
-were unjudged.
+The facet pipeline is useful as a **mechanics and retrieval experiment**, but
+the current two-topic command is not yet operationally end to end. A live run
+of the active Nuggetizer wrapper completed planning, BM25 retrieval, local
+reranking, extractive evidence, and canonicalization for development Topics 224
+and 300. It produced nine faithful subnarratives and 165 provenance-linked
+claims. The final organizer exporter did not complete because it reloaded and
+revalidated 14.3 GB of candidate JSON for more than 48 minutes after both topic
+checkpoints were already sealed.
+
+Retrieval quality was budget-dependent. The original narrative was strongest
+at 100 documents, while a fixed-total original-plus-subnarrative round-robin
+was stronger at 500 and 1,000 documents for both topics under all three qrel
+judges. Semantic quality remained mixed: 23/27 sampled claims were strongly
+supported and 25/27 were atomic, but only 16/27 were sufficiently specific,
+in-scope, useful, and nonredundant. This is not a production-ready nugget method.
 
 The first canonical pilot produced 149 model claims across ten subnarratives
 plus one 20-sentence extractive fallback after a timeout. An independent Codex
@@ -53,6 +61,105 @@ evidence/canonical ledgers without a canonical model call. Canonical failure
 retains deterministic exact extractive evidence. Resume revalidates the full
 hash chain rather than trusting file existence, and the six conventional export
 files are published under `outputs/<experiment.id>/`.
+
+## Live active-wrapper evaluation (2026-07-29)
+
+The current branch was run once on official development narratives 224 and 300
+under the ignored experiment ID `facet-dev-224-300-nuggetizer-v4`. The
+checked-in production config points to the 119 new `rag2026-*` test topics,
+which have no released qrels; the ignored evaluation config changed only the
+topic source, experiment ID, and retrieval-cache namespace. Qrels were opened
+only after the retrieval and canonical checkpoints existed. Organizer
+subnarratives and nuggets were never used.
+
+The active DeepSeek planning call admitted these decompositions:
+
+| Topic | Generated or paraphrased subnarratives |
+| ---: | --- |
+| 224 | reasons for immigration or refugee displacement; challenges immigrants and refugees face; how laws and groups shape policy; country and religious views; options for migrant workers |
+| 300 | effective climate strategies; Antarctica-specific actions; global measures; costs of action versus costs of impacts |
+
+All nine definitions covered their source narrative without adding an
+unsupported named event or date. Topic 300's umbrella-strategy and
+global-measures lanes substantially overlapped, and Topic 224's reasons lane
+still bundled voluntary migration with forced displacement.
+
+### Deeper mixed retrieval added known-relevant coverage
+
+Recall is the fraction of qrel documents scored at least 2 that appear in the
+ranked set; unjudged documents remain unknown. `O` is original-narrative BM25.
+`A` is a deduplicated round-robin over the original and every subnarrative under
+one fixed total document budget. `U` is the union of an original arm and a
+facet-only round-robin arm, each run to the stated depth, so it uses up to
+roughly twice the documents. The table shows Codex-judge qrels; Ministral and
+Qwen produced the same directional conclusion.
+
+| Topic | O@100 | A@100 | O@500 | A@500 | O@1000 | A@1000 | U@1000 / documents |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 224 | **13.5%** | 7.0% | 21.0% | **28.5%** | 26.6% | **39.2%** | 48.5% / 1,823 |
+| 300 | **11.7%** | 5.2% | 17.8% | **23.9%** | 21.6% | **26.6%** | 32.8% / 1,932 |
+
+Across the three judges, fixed-total `A@1000` was 31.1–39.2% for Topic 224
+versus 21.0–26.6% for `O@1000`; Topic 300 was 22.4–26.6% versus 15.9–21.6%.
+The full all-lane unions reached 47.1–58.7% recall over 5,309 documents for
+Topic 224 and 31.4–36.9% over 4,741 documents for Topic 300. Subnarratives are
+therefore complementary at depth, but uniform round-robin is too aggressive
+near the top and full union is expensive.
+
+The actual cross-encoder-selected 100-document pools recovered 7.8% and 6.1%
+of Codex-judged relevant documents for Topics 224 and 300. Only 55 and 54 of
+those 100 documents were judged; the remaining 45 and 46 are unknown, not
+irrelevant. Because the development pool judged original-query results but not
+these newly generated lanes, top-100 precision comparisons are biased toward
+the original query.
+
+### The wrapper worked, but admission quality remains the bottleneck
+
+| Topic | Subnarratives | Selected documents | Exact candidates | Candidate bytes | Selected evidence | Claims | Canonical states |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 224 | 5 | 100 | 47,090 | 5.30 GB | 200 | 90 | 5/5 complete |
+| 300 | 4 | 100 | 70,772 | 8.99 GB | 160 | 75 | 4/4 complete |
+| **Total** | **9** | **200** | **117,862** | **14.29 GB** | **360** | **165** | **9/9 complete** |
+
+The nine one-shot canonical calls used 18,739 prompt tokens and 4,527
+completion tokens for recorded cost `$0.004341233`. All 165 claim IDs were
+unique, all 196 evidence links matched their selected source text, document ID,
+and document hash, and no result used extractive fallback.
+
+A balanced manual audit checked the first, middle, and last claim from each
+subnarrative, or 27 claim/evidence pairs, after scanning all 165 claim texts:
+
+| Quality check | Result | Interpretation |
+| --- | ---: | --- |
+| Strong, self-contained evidence support | 23/27 | Usually grounded, but unresolved antecedents and one direction-changing rewrite remain. |
+| Reasonably atomic | 25/27 | Atomicity is not the main problem. |
+| Specific, in-scope, useful, and nonredundant | 16/27 | Admission relevance and deduplication are the main weaknesses. |
+
+The clearest regression case was Topic 300's Antarctica lane: only 9/20 claims
+or their evidence contained an explicit Antarctica, Southern Ocean, glacier,
+ice-sheet, or refugia anchor. Eleven were generic, one changed evidence saying
+collective action *had reached* a remote region into an instruction to *reach*
+remote regions, and another cited malformed thesis/proposal text. Topic 224's
+worker-options lane also admitted actions for supporters, such as volunteering
+at nonprofits, rather than options available to migrant workers themselves.
+
+### Final export exposed a blocking representation cost
+
+The two topic checkpoints completed after roughly 26 minutes. Final export
+then spent more than 48 additional minutes without publishing a root artifact
+and reached approximately 16.6 GB observed RSS before it was interrupted. The
+interrupt stack was inside
+`retrieval_export._load_allowed_canonical_evidence`, which reads every candidate
+again and calls `validate_extractive_candidate_source`; sentence splitting then
+repeatedly slices and regex-scans paragraph prefixes in `_word_before`.
+
+No partial export was left because publication is manifest-last. The topic
+checkpoints, raw/validated response caches, deterministic recall evaluation,
+and semantic audit remain complete under the ignored experiment directory.
+The next engineering fix is streaming selected-candidate validation with
+precomputed sentence boundaries; the next quality fix is subnarrative-specific
+admission plus context-aware entailment and semantic deduplication. Topic 300
+should be the first regression rerun.
 
 ## Observed model-generated decompositions
 
@@ -355,8 +462,30 @@ did not justify global fusion or a final selector.
 
 ## Provenance
 
-The two-topic evidence remains in the ignored local experiment tree. Relative
-paths below are from the repository root; hashes identify the exact files:
+The current wrapper evaluation remains in the ignored local experiment tree.
+Relative paths below are from the repository root; hashes identify the exact
+compact evidence files without committing raw documents or model responses:
+
+- `outputs/facet-dev-224-300-nuggetizer-v4/evaluation/metrics.json`
+  SHA-256:
+  `572a25771699d771a91a89a7d584667cabe192005b745a18f3a47a265a3bd0a8`;
+- `outputs/facet-dev-224-300-nuggetizer-v4/evaluation/semantic_quality_review.md`
+  SHA-256:
+  `53123b98a954519cf021c41b055bca33caaafb3eed73b140680fde50460b0f08`;
+- `outputs/facet-dev-224-300-nuggetizer-v4/evaluation/run_observations.md`
+  SHA-256:
+  `11237015ba9f98f288d9571c9dc2620b8fa2667a6e0a20672ad5c8fbb7f11ae8`;
+- Topic 224 decomposition and canonical output SHA-256 values:
+  `c31ed8fc46dd1bb43cc4bbb2e82d4c837ac3c060f40ff7fd7089ea6f196ad09a`
+  and
+  `645f33d61f4f29fd77ff9a169568e896a9b99c9208c7fc17bcabe7b6298a3319`;
+- Topic 300 decomposition and canonical output SHA-256 values:
+  `5ecb64f7d7c6d26b6e3c96ad367c5bfa7da1acc2c12761d5abe8d10e6ab7b2a5`
+  and
+  `968335b33946c25d3713b9cc1d78fc90011b918ddb50857585b703e4a0d8bdc2`.
+
+The earlier two-topic evidence also remains in the ignored local experiment
+tree:
 
 - `outputs/subnarrative-bm25-224-300-v1/recall-eval-v1/bm25_metrics.json`
   SHA-256:
