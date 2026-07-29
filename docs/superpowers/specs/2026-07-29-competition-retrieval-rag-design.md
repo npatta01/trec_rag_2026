@@ -6,7 +6,24 @@ Integrate the answer-generation runner from PR #24 with the current
 `origin/master` retrieval pipeline while keeping retrieval and answer generation
 as two independently runnable competition paths. The paths communicate only
 through the retrieval export files, not through Python imports or subprocess
-chaining.
+chaining. Every external boundary uses the current organizer-released TREC RAG
+2026 formats rather than a repository-invented substitute.
+
+## Organizer contract authority
+
+The implementation is pinned to the organizer sources reviewed on 2026-07-29:
+
+- `TREC-RAG/trec-rag-data@a6255c1`, containing the released test narratives,
+  retrieval baselines, full-text retrieval archive, fixed-retrieval generator,
+  and completed RAG outputs.
+- `TREC-RAG/trec-rag-skills@f281e88` (`v0.6.0`), containing the current task
+  guidance.
+
+The superproject advances both submodule pointers to those revisions. This is
+necessary because the currently pinned `trec-rag-skills` revision describes a
+stale pre-release JSONL topic schema that conflicts with the released TSV.
+Detailed provenance and the organizer-source comparison are recorded in
+`docs/superpowers/research/2026-07-29-organizer-data-contracts.md`.
 
 ## Public commands
 
@@ -67,15 +84,30 @@ reject unknown sections, unknown fields, duplicate keys, missing required
 values, invalid types, and unsupported schema versions. Its input paths point
 to `outputs/facet-deepseek-b40-v1/` rather than placeholder filenames.
 
-## File contract between paths
+## Organizer-compatible file contracts
 
-RAG generation consumes exactly two retrieval artifacts plus the official topic
-file:
+Both commands read the organizer's canonical shared input directly:
+
+- `trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv`: 119
+  headerless UTF-8 rows containing exactly
+  `narrative_id<TAB>narrative`. Neither path converts this to JSONL, invents a
+  title, normalizes narrative text, or changes official order.
+
+Retrieval publishes the organizer submission artifact:
 
 - `r_output_trec_rag_2026.tsv`: six-column TREC run in official topic order.
+
+It also publishes the full-text sidecar consumed by generation:
+
 - `retrieval_with_text.jsonl.zip`: one query record per topic with candidate
   objects containing raw `docid` and document text.
-- `trec_rag_2026_queries.tsv`: authoritative topic ID and narrative source.
+
+The sidecar is not submitted to TREC. Its required core is structurally
+compatible with the organizer-published
+`bm25_climbmix_top1000_with_text.jsonl.zip` and the released
+`ragnarok_style_ag.py` reader: `query.qid`, `candidates[].docid`, and
+`candidates[].doc`. Local `query.text`, `rank`, `score`, `index`, and `stage`
+fields are permitted extensions and ignored by consumers that do not need them.
 
 The generation loader validates that every selected topic exists in the TREC
 run, ranks and document IDs are unique, every selected document is present in
@@ -83,6 +115,25 @@ the full-text archive, and only selected run documents can appear in the final
 references. The existing retrieval export remains the producer of the TSV and
 ZIP; answer generation does not depend on retrieval manifests or internal
 checkpoint layouts.
+
+Generation publishes `rag_output_trec_rag_2026.jsonl` in the strict profile
+demonstrated by the organizer's released 119-record outputs and reference
+validator:
+
+- exactly `metadata`, `references`, and `answer` at the root;
+- exactly `team_id`, `narrative_id`, `narrative`, `run_id`, and `run_desc` in
+  metadata, with narrative ID/text copied from the TSV;
+- unique ClimbMix document IDs in `references`, all selected from the configured
+  TREC run and all cited;
+- nonempty answer objects with opaque nonempty text and one to three unique,
+  zero-based integer citation positions;
+- at most 1,024 total answer words using Python `str.split()` counting.
+
+The newer organizer guideline permits a broader set of valid submissions,
+including extra metadata, direct-docid citations, empty citation arrays, and
+uncited references. The generated-run policy intentionally emits the stricter
+released-baseline subset. Documentation describes it as this system's strict
+output profile, not as the only theoretically organizer-valid representation.
 
 ## Generation behavior
 
@@ -137,7 +188,10 @@ Implementation is test-driven and includes:
 - strict generation-config tests, including schema version and duplicate YAML
   keys;
 - a contract test feeding retrieval-shaped TREC and ZIP artifacts into RAG
-  generation;
+  generation, using the exact required fields accepted by the organizer's
+  released reference runner;
+- fixture tests for the released two-column narrative TSV, six-column TREC run,
+  query-bundled full-text archive, and five-field RAG metadata contract;
 - a regression test proving malformed model objects with extra fields fail;
 - a regression test covering overwrite, failed replacement, then resume;
 - the existing competition-generation tests from PR #24;
