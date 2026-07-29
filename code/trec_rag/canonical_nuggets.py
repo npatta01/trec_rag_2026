@@ -520,62 +520,16 @@ def build_canonical_nugget_request(
         )
         fallbacks.append(representative)
 
-    response_schema = _response_schema(
-        tuple(row.alias for row in evidence),
+    from trec_rag.nuggetizer_adapter import render_nuggetizer_request_body
+
+    request_body = render_nuggetizer_request_body(
+        topic_id=selection.context.topic_id,
+        subnarrative_id=selection.context.subnarrative_id,
+        subnarrative_text=selection.context.subnarrative_text,
+        evidence=tuple(evidence),
         max_canonical_claims=max_canonical_claims,
+        max_supporting_documents_per_claim=max_supporting_documents_per_claim,
     )
-    user_message = {
-        "prompt_version": PROMPT_VERSION,
-        "topic_id": selection.context.topic_id,
-        "official_narrative_context": selection.context.official_narrative,
-        "subnarrative": {
-            "id": selection.context.subnarrative_id,
-            "text": selection.context.subnarrative_text,
-        },
-        "limits": {
-            "max_canonical_claims": max_canonical_claims,
-            "max_evidence_aliases_per_claim": MAX_EVIDENCE_ALIASES_PER_CLAIM,
-            "max_supporting_documents_per_claim": max_supporting_documents_per_claim,
-        },
-        "evidence": [
-            {
-                "alias": row.alias,
-                "cluster_alias": row.cluster_alias,
-                "quotation": row.text,
-                "quotation_sha256": row.text_sha256,
-                "document_sha256": row.document_sha256,
-            }
-            for row in evidence
-        ],
-    }
-    payload = {
-        "model": OPENROUTER_DEEPSEEK_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": _system_prompt(
-                    max_canonical_claims,
-                    max_supporting_documents_per_claim,
-                ),
-            },
-            {"role": "user", "content": _canonical_json(user_message).decode("utf-8")},
-        ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": CANONICAL_NUGGET_SCHEMA_VERSION,
-                "strict": True,
-                "schema": response_schema,
-            },
-        },
-        "provider": {"require_parameters": True, "data_collection": "deny"},
-        "reasoning": {"enabled": False},
-        "temperature": 0,
-        "seed": 0,
-        "max_tokens": MAX_COMPLETION_TOKENS,
-        "stream": False,
-    }
-    request_body = _canonical_json(payload)
     if len(request_body) > max_request_bytes:
         raise ValueError("canonical nugget request exceeds configured byte limit")
     return CanonicalNuggetRequest(

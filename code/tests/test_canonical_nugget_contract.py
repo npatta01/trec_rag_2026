@@ -14,6 +14,7 @@ from trec_rag.canonical_nuggets import (
     canonicalize_subnarrative,
     run_canonical_stage,
 )
+from trec_rag.nuggetizer_adapter import NuggetizerCanonicalNuggetBackend
 from trec_rag.evidence_store import _selection_json
 from trec_rag.facet_evidence import (
     BudgetSnapshot,
@@ -214,8 +215,8 @@ def test_stage_keeps_claims_evidence_bound_and_binds_configured_limits(
     assert request.max_canonical_claims == 1
     assert request.max_supporting_documents_per_claim == 1
     payload = json.loads(request.request_body)
-    prompt_limits = json.loads(payload["messages"][1]["content"])["limits"]
-    assert prompt_limits["max_canonical_claims"] == 1
+    prompt_limits = json.loads(payload["messages"][-1]["content"])["output"]
+    assert prompt_limits["max_claims"] == 1
     assert prompt_limits["max_supporting_documents_per_claim"] == 1
     result = json.loads(artifacts.nuggets_path.read_bytes())
     assert result["nuggets"][0]["claim_text"] == "The center opened in 2020."
@@ -499,3 +500,169 @@ def test_empty_request_never_calls_backend() -> None:
 
     assert result.state == "empty"
     assert result.backend_attempts == 0
+
+
+def _openrouter_envelope(content: str) -> bytes:
+    return _canonical(
+        {
+            "id": "generation-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": OPENROUTER_DEEPSEEK_MODEL,
+            "provider": "test-provider",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+    )
+
+
+def test_nuggetizer_adapter_sends_one_grounded_creator_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches loss or reordering of sealed evidence at the package boundary."""
+    from nuggetizer.models.nuggetizer import Nuggetizer
+
+    request = build_canonical_nugget_request(_selection(), 1)
+    captured_requests: list[object] = []
+    original_create = Nuggetizer.create
+
+    def capture_create(self: object, package_request: object) -> object:
+        captured_requests.append(package_request)
+        return original_create(self, package_request)
+
+    monkeypatch.setattr(Nuggetizer, "create", capture_create)
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def send(self, sent: object) -> FacetResponse:
+            self.requests.append(sent)
+            return FacetResponse(
+                200,
+                _openrouter_envelope(
+                    '{"claims":[{"claim":"The center opened in 2020.",'
+                    '"evidence_aliases":["e001"]}]}'
+                ),
+            )
+
+    transport = _Transport()
+    result = canonicalize_subnarrative(
+        request,
+        NuggetizerCanonicalNuggetBackend(
+            environ={"OPENROUTER_API_KEY": "test-key"}, transport=transport
+        ),
+    )
+
+    assert len(captured_requests) == 1
+    package_request = captured_requests[0]
+    assert package_request.query.text == "Coastal safety aspect 1"
+    assert [document.docid for document in package_request.documents] == ["n1-a", "n1-b"]
+    assert [document.title for document in package_request.documents] == [None, None]
+    assert [document.segment for document in package_request.documents] == [
+        "e001: Exact evidence 1 opened the center in 2020.",
+        "e002: Exact evidence 1 recorded ten shelters.",
+    ]
+    assert len(transport.requests) == 1
+    assert transport.requests[0].body == request.request_body
+    assert result.state == "complete"
+    assert result.nuggets[0].claim_text == "The center opened in 2020."
+    assert result.nuggets[0].evidence[0].candidate_nugget_id == "n1-a"
+
+
+def test_nuggetizer_adapter_translates_the_package_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches bypassing the package result after the creator response is valid."""
+    from nuggetizer.models.nuggetizer import Nuggetizer
+
+    request = build_canonical_nugget_request(_selection(), 1)
+    original_create = Nuggetizer.create
+
+    def discard_created_nuggets(self: object, package_request: object) -> object:
+        original_create(self, package_request)
+        return []
+
+    monkeypatch.setattr(Nuggetizer, "create", discard_created_nuggets)
+
+    class _Transport:
+        def send(self, _sent: object) -> FacetResponse:
+            return FacetResponse(
+                200,
+                _openrouter_envelope(
+                    '{"claims":[{"claim":"The center opened in 2020.",'
+                    '"evidence_aliases":["e001"]}]}'
+                ),
+            )
+
+    result = canonicalize_subnarrative(
+        request,
+        NuggetizerCanonicalNuggetBackend(
+            environ={"OPENROUTER_API_KEY": "test-key"}, transport=_Transport()
+        ),
+    )
+
+    assert result.state == "fallback_extractive"
+    assert tuple(nugget.claim_text for nugget in result.nuggets) == tuple(
+        row.text for row in request.fallback_evidence
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure", "response", "wire_calls"),
+    (
+        ("package", None, 0),
+        ("unknown_alias", '{"claims":[{"claim":"Unsupported.","evidence_aliases":["e999"]}]}', 1),
+        ("malformed", '{"claims":', 1),
+    ),
+)
+def test_nuggetizer_adapter_fails_closed_without_a_package_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    response: str | None,
+    wire_calls: int,
+) -> None:
+    """Catches hidden package failures being accepted as an empty model result."""
+    from nuggetizer.models.nuggetizer import Nuggetizer
+
+    request = build_canonical_nugget_request(_selection(), 1)
+    package_calls: list[object] = []
+    original_create = Nuggetizer.create
+
+    def capture_create(self: object, package_request: object) -> object:
+        package_calls.append(package_request)
+        if failure == "package":
+            raise RuntimeError("package create failed")
+        return original_create(self, package_request)
+
+    monkeypatch.setattr(Nuggetizer, "create", capture_create)
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def send(self, _sent: object) -> FacetResponse:
+            self.calls += 1
+            assert response is not None
+            return FacetResponse(200, _openrouter_envelope(response))
+
+    transport = _Transport()
+    result = canonicalize_subnarrative(
+        request,
+        NuggetizerCanonicalNuggetBackend(
+            environ={"OPENROUTER_API_KEY": "test-key"}, transport=transport
+        ),
+    )
+
+    assert len(package_calls) == 1
+    assert transport.calls == wire_calls
+    assert result.state == "fallback_extractive"
+    assert tuple(nugget.claim_text for nugget in result.nuggets) == tuple(
+        row.text for row in request.fallback_evidence
+    )
