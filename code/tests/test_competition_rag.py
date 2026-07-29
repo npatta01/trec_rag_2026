@@ -1135,6 +1135,82 @@ def test_http_failures_persist_sanitized_status_body_and_envelope(
     assert api_key not in failed_raw.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "escaped_key",
+    [
+        r"\u0073ecret-token",
+        "".join(f"\\u{ord(character):04X}" for character in "secret-token"),
+    ],
+)
+def test_http_json_failure_omits_body_with_decodable_escaped_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escaped_key: str
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
+    api_key = "secret-token"
+    monkeypatch.setenv(config.api_key_env, api_key)
+    response = FakeHttpResponse(
+        400,
+        {"error": {"message": f"rejected bearer {api_key}"}},
+    )
+    response.text = '{"error":{"message":"rejected bearer ' + escaped_key + '"}}'
+    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
+    generator = OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key=api_key,
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError, match="1 topic"):
+        asyncio.run(run_generation(config, generator))
+
+    failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
+    raw = json.loads(failed_raw.read_text(encoding="utf-8"))
+    assert raw == {
+        "http_status": 400,
+        "envelope": {"error": {"message": "rejected bearer [REDACTED]"}},
+    }
+    assert api_key not in json.dumps(raw)
+
+
+def test_http_non_json_failure_redacts_decodable_escaped_api_key_from_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
+    api_key = "secret-token"
+    monkeypatch.setenv(config.api_key_env, api_key)
+
+    class NonJsonResponse(FakeHttpResponse):
+        def json(self) -> object:
+            raise ValueError("not JSON")
+
+    response = NonJsonResponse(400, None)
+    response.text = r"gateway rejected \u0073ecret-token"
+    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
+    generator = OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key=api_key,
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError, match="1 topic"):
+        asyncio.run(run_generation(config, generator))
+
+    failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
+    raw = json.loads(failed_raw.read_text(encoding="utf-8"))
+    assert raw == {"http_status": 400, "body": "gateway rejected [REDACTED]"}
+    assert api_key not in json.loads(json.dumps(raw))["body"]
+
+
 def test_cli_validates_topic_selection_before_env_or_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

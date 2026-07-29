@@ -708,16 +708,16 @@ class OpenRouterJsonGenerator:
 def _http_failure(response: requests.Response, api_key: str) -> dict[str, Any]:
     try:
         envelope = response.json()
+        failure: dict[str, Any] = {
+            "http_status": response.status_code,
+            "envelope": envelope,
+        }
     except ValueError:
-        envelope = None
-    return _redact(
-        {
+        failure = {
             "http_status": response.status_code,
             "body": response.text,
-            "envelope": envelope,
-        },
-        (api_key,),
-    )
+        }
+    return _redact(failure, (api_key,))
 
 
 def _retry_delay(retry_after: str | None, attempt: int) -> float:
@@ -874,9 +874,7 @@ def _safe_topic_name(topic_id: str) -> str:
 def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
     active = tuple(secret for secret in secrets if secret)
     if isinstance(value, str):
-        for secret in active:
-            value = value.replace(secret, "[REDACTED]")
-        return value
+        return _redact_text(value, active)
     if isinstance(value, list):
         return [_redact(item, active) for item in value]
     if isinstance(value, tuple):
@@ -886,6 +884,46 @@ def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
             _redact(key, active) if isinstance(key, str) else key: _redact(item, active)
             for key, item in value.items()
         }
+    return value
+
+
+def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
+    for secret in secrets:
+        value = value.replace(secret, "[REDACTED]")
+        while True:
+            decoded: list[str] = []
+            spans: list[tuple[int, int]] = []
+            offset = 0
+            while offset < len(value):
+                match = re.match(r"\\u([0-9A-Fa-f]{4})", value[offset:])
+                if match is None:
+                    decoded.append(value[offset])
+                    spans.append((offset, offset + 1))
+                    offset += 1
+                    continue
+                codepoint = int(match.group(1), 16)
+                end = offset + 6
+                if 0xD800 <= codepoint <= 0xDBFF:
+                    low = re.match(r"\\u([0-9A-Fa-f]{4})", value[end:])
+                    if low is not None:
+                        low_codepoint = int(low.group(1), 16)
+                        if 0xDC00 <= low_codepoint <= 0xDFFF:
+                            codepoint = (
+                                0x10000
+                                + ((codepoint - 0xD800) << 10)
+                                + (low_codepoint - 0xDC00)
+                            )
+                            end += 6
+                decoded.append(chr(codepoint))
+                spans.append((offset, end))
+                offset = end
+            decoded_value = "".join(decoded)
+            secret_offset = decoded_value.find(secret)
+            if secret_offset < 0:
+                break
+            source_start = spans[secret_offset][0]
+            source_end = spans[secret_offset + len(secret) - 1][1]
+            value = value[:source_start] + "[REDACTED]" + value[source_end:]
     return value
 
 
