@@ -29,6 +29,10 @@ from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_roo
 _SCHEMA_VERSION = "competition_rag_config_v1"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+# Omit non-JSON text when a later decoding pass could reveal different characters.
+_AMBIGUOUS_BODY_ENCODING = re.compile(
+    r"\\\S|%[0-9A-Fa-f]{2}|&(?:#[xX]?[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);|=[0-9A-Fa-f]{2}"
+)
 
 SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
 provided reference documents and the user's task instructions. Do not invent evidence,
@@ -665,33 +669,31 @@ class OpenRouterJsonGenerator:
                     raise RuntimeError("OpenRouter generation transport failed") from exc
                 time.sleep(min(2 ** (attempt - 1), 8))
                 continue
+            response_is_json, envelope, safe_response = _safe_http_response(
+                response, self._api_key
+            )
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt == self.transport_max_attempts:
                     raise SemanticCompletionError(
                         f"OpenRouter HTTP {response.status_code}; no repair call was made",
-                        _http_failure(response, self._api_key),
+                        safe_response,
                     )
                 time.sleep(_retry_delay(response.headers.get("Retry-After"), attempt))
                 continue
             if response.status_code >= 400:
                 raise SemanticCompletionError(
                     f"OpenRouter HTTP {response.status_code}; no repair call was made",
-                    _http_failure(response, self._api_key),
+                    safe_response,
                 )
-            try:
-                envelope = response.json()
-            except ValueError as exc:
+            if not response_is_json:
                 raise SemanticCompletionError(
                     "OpenRouter returned a non-JSON response; no repair call was made",
-                    _redact(
-                        {"http_status": response.status_code, "body": response.text},
-                        (self._api_key,),
-                    ),
-                ) from exc
+                    safe_response,
+                )
             if not isinstance(envelope, dict):
                 raise SemanticCompletionError(
                     "OpenRouter response must be a JSON object; no repair call was made",
-                    _redact(envelope, (self._api_key,)),
+                    safe_response,
                 )
             try:
                 message = envelope["choices"][0]["message"]
@@ -699,28 +701,41 @@ class OpenRouterJsonGenerator:
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise SemanticCompletionError(
                     "OpenRouter returned a malformed semantic completion; no repair call was made",
-                    _redact(envelope, (self._api_key,)),
+                    safe_response,
                 ) from exc
-            return generated, _redact(envelope, (self._api_key,))
+            return generated, safe_response
         raise AssertionError("unreachable OpenRouter retry state")
 
 
-def _http_failure(response: requests.Response, api_key: str) -> dict[str, Any]:
+def _safe_http_response(
+    response: requests.Response, api_key: str
+) -> tuple[bool, object | None, object]:
     try:
         envelope = response.json()
-        failure: dict[str, Any] = {
-            "http_status": response.status_code,
-            "envelope": envelope,
-        }
     except ValueError:
-        body_bytes = response.text.encode("utf-8")
-        failure = {
+        body_text = response.text
+        body_bytes = body_text.encode("utf-8")
+        if _AMBIGUOUS_BODY_ENCODING.search(body_text):
+            safe_response: dict[str, Any] = {
+                "http_status": response.status_code,
+                "body_omitted": True,
+                "body_utf8_byte_length": len(body_bytes),
+                "body_utf8_sha256": sha256(body_bytes).hexdigest(),
+            }
+        else:
+            safe_response = {
+                "http_status": response.status_code,
+                "body": _redact_text(body_text, (api_key,)),
+            }
+        return False, None, safe_response
+
+    safe_envelope = _redact(envelope, (api_key,))
+    if response.status_code >= 400:
+        return True, envelope, {
             "http_status": response.status_code,
-            "body_omitted": True,
-            "body_utf8_byte_length": len(body_bytes),
-            "body_utf8_sha256": sha256(body_bytes).hexdigest(),
+            "envelope": safe_envelope,
         }
-    return _redact(failure, (api_key,))
+    return True, envelope, safe_envelope
 
 
 def _retry_delay(retry_after: str | None, attempt: int) -> float:
