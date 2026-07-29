@@ -8,6 +8,7 @@ dependencies = [
     "requests==2.32.5",
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
+    "nuggetizer==0.0.5",
 ]
 
 [dependency-groups]

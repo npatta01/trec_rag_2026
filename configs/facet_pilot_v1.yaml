@@ -1,0 +1,26 @@
+schema_version: facet_pilot_config_v1
+
+experiment:
+  id: facet-deepseek-b40-v1
+
+topics:
+  path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+
+retrieval:
+  index: climbmix-400b
+  cache_dir: cache/retrieval/pyserini_remote
+  query_sources: [original, subnarrative]
+  candidate_depth_per_query: 1000
+
+reranking:
+  model: mixedbread-ai/mxbai-rerank-base-v2
+  score_cache_dir: cache/reranker
+  device: auto
+  rerank_depth_per_query: 100
+  candidate_pool_depth: 100
+  selection_policy: round_robin_subnarrative_coverage
+
+nuggets:
+  evidence_budget_per_subnarrative: 40
+  maximum_claims_per_subnarrative: 20
+  maximum_supporting_documents_per_claim: 3

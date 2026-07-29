@@ -1,0 +1,81 @@
+{
+  "schema_version": "facet_live_evaluation_metrics_v1",
+  "experiment_id": "facet-dev-224-300-nuggetizer-v4",
+  "metric_definition": {
+    "relevance_threshold": 2,
+    "unjudged_policy": "unknown",
+    "qrel_kind": "pooled_llm_judgments_not_exhaustive_gold",
+    "O": "original-narrative BM25 top N",
+    "S": "subnarrative-only deterministic round-robin deduplicated to N",
+    "U": "union of O_N and S_N, using up to approximately 2N documents",
+    "A": "original plus subnarratives under one fixed total N-document round-robin budget"
+  },
+  "runtime": {
+    "topics": 2,
+    "subnarratives": 9,
+    "selected_documents": 200,
+    "extractive_candidates": 117862,
+    "candidate_bytes": 14291536895,
+    "selected_evidence": 360,
+    "canonical_claims": 165,
+    "canonical_complete": 9,
+    "canonical_fallback": 0,
+    "canonical_calls": 9,
+    "canonical_prompt_tokens": 18739,
+    "canonical_completion_tokens": 4527,
+    "canonical_recorded_cost_usd": 0.004341233,
+    "final_export_complete": false,
+    "final_export_additional_minutes_before_interrupt": 48,
+    "final_export_observed_rss_gb": 16.6
+  },
+  "topics": {
+    "224": {
+      "subnarratives": 5,
+      "selected_documents": 100,
+      "extractive_candidates": 47090,
+      "candidate_bytes": 5300768568,
+      "selected_evidence": 200,
+      "canonical_claims": 90,
+      "canonical_states": "5/5 complete",
+      "fixed_budget_recall": {
+        "codex": {"relevant": 653, "O@100": 0.135, "A@100": 0.070, "O@500": 0.210, "A@500": 0.285, "O@1000": 0.266, "A@1000": 0.392},
+        "ministral": {"relevant": 972, "O@100": 0.101, "A@100": 0.052, "O@500": 0.160, "A@500": 0.222, "O@1000": 0.210, "A@1000": 0.311},
+        "qwen": {"relevant": 753, "O@100": 0.117, "A@100": 0.062, "O@500": 0.186, "A@500": 0.263, "O@1000": 0.242, "A@1000": 0.372}
+      },
+      "selected_100": {
+        "codex": {"recall": 0.078, "hits": 51, "relevant": 653, "judged": 55, "unjudged": 45},
+        "ministral": {"recall": 0.057, "hits": 55, "relevant": 972, "judged": 55, "unjudged": 45},
+        "qwen": {"recall": 0.069, "hits": 52, "relevant": 753, "judged": 55, "unjudged": 45}
+      }
+    },
+    "300": {
+      "subnarratives": 4,
+      "selected_documents": 100,
+      "extractive_candidates": 70772,
+      "candidate_bytes": 8990768327,
+      "selected_evidence": 160,
+      "canonical_claims": 75,
+      "canonical_states": "4/4 complete",
+      "fixed_budget_recall": {
+        "codex": {"relevant": 635, "O@100": 0.117, "A@100": 0.052, "O@500": 0.178, "A@500": 0.239, "O@1000": 0.216, "A@1000": 0.266},
+        "ministral": {"relevant": 1106, "O@100": 0.088, "A@100": 0.042, "O@500": 0.131, "A@500": 0.200, "O@1000": 0.159, "A@1000": 0.224},
+        "qwen": {"relevant": 686, "O@100": 0.089, "A@100": 0.050, "O@500": 0.138, "A@500": 0.223, "O@1000": 0.168, "A@1000": 0.255}
+      },
+      "selected_100": {
+        "codex": {"recall": 0.061, "hits": 39, "relevant": 635, "judged": 54, "unjudged": 46},
+        "ministral": {"recall": 0.048, "hits": 53, "relevant": 1106, "judged": 54, "unjudged": 46},
+        "qwen": {"recall": 0.057, "hits": 39, "relevant": 686, "judged": 54, "unjudged": 46}
+      }
+    }
+  },
+  "semantic_audit": {
+    "subnarratives_reviewed": 9,
+    "claim_texts_scanned": 165,
+    "claim_evidence_pairs_manually_reviewed": 27,
+    "evidence_links_structurally_checked": 196,
+    "strong_self_contained_support": {"count": 23, "denominator": 27},
+    "reasonably_atomic": {"count": 25, "denominator": 27},
+    "specific_in_scope_useful_nonredundant": {"count": 16, "denominator": 27},
+    "topic_300_antarctica_explicitly_anchored": {"count": 9, "denominator": 20}
+  }
+}
