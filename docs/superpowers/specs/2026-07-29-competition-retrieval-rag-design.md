@@ -83,6 +83,10 @@ The generation configuration gains the explicit schema version
 reject unknown sections, unknown fields, duplicate keys, missing required
 values, invalid types, and unsupported schema versions. Its input paths point
 to `outputs/facet-deepseek-b40-v1/` rather than placeholder filenames.
+An optional `inputs.topic_ids` list selects a bounded run from the canonical
+organizer TSV while preserving that file's order and exact narratives. Omitting
+the field selects all official topics. Unknown, empty, or duplicate IDs fail
+before retrieval artifacts or provider credentials are accessed.
 
 ## Organizer-compatible file contracts
 
