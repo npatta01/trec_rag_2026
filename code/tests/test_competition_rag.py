@@ -636,6 +636,119 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     assert "[2] docid: climbmix-b" in topic_one_prompt
 
 
+def test_generation_consumes_the_retrieval_export_file_contract(
+    tmp_path: Path,
+) -> None:
+    """Catch generation drifting from the public TSV-and-ZIP handoff."""
+    (tmp_path / "official").mkdir()
+    (tmp_path / "official/topics.tsv").write_text(
+        "rag2026-9\tUnselected official question\n"
+        "rag2026-3\tSecond selected official question\n"
+        "rag2026-4\tFirst selected official question\n",
+        encoding="utf-8",
+    )
+    retrieval = tmp_path / "outputs/facet-deepseek-b40-v1"
+    retrieval.mkdir(parents=True)
+    (retrieval / "r_output_trec_rag_2026.tsv").write_text(
+        "rag2026-3 Q0 climbmix-3a 1 2 facet-deepseek-b40-v1\n"
+        "rag2026-3 Q0 climbmix-3b 2 1 facet-deepseek-b40-v1\n"
+        "rag2026-4 Q0 climbmix-4a 1 1 facet-deepseek-b40-v1\n",
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(retrieval / "retrieval_with_text.jsonl.zip", "w") as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            "".join(
+                json.dumps(row) + "\n"
+                for row in [
+                    {
+                        "query": {
+                            "qid": "rag2026-3",
+                            "text": "Second selected official question",
+                        },
+                        "candidates": [
+                            {
+                                "docid": "climbmix-3a",
+                                "rank": 1,
+                                "score": 2,
+                                "doc": "First selected document.",
+                                "index": "climbmix-400b",
+                                "stage": "canonical_supported",
+                            },
+                            {
+                                "docid": "climbmix-3b",
+                                "rank": 2,
+                                "score": 1,
+                                "doc": "Second selected document.",
+                                "index": "climbmix-400b",
+                                "stage": "canonical_supported",
+                            },
+                        ],
+                    },
+                    {
+                        "query": {
+                            "qid": "rag2026-4",
+                            "text": "First selected official question",
+                        },
+                        "candidates": [
+                            {
+                                "docid": "climbmix-4a",
+                                "rank": 1,
+                                "score": 1,
+                                "doc": "Third selected document.",
+                                "index": "climbmix-400b",
+                                "stage": "canonical_supported",
+                            }
+                        ],
+                    },
+                ]
+            ),
+        )
+    config = load_rag_generation_config(
+        _write_config(
+            tmp_path,
+            _config_text(
+                inputs_extra="  topic_ids: [rag2026-4, rag2026-3]\n",
+            ),
+        )
+    )
+    generator = FakeGenerator(
+        {
+            "rag2026-3": _topic_output(
+                ["climbmix-3a", "climbmix-3b"], "Both selected documents support it."
+            ),
+            "rag2026-4": _topic_output(
+                ["climbmix-4a"], "The selected document supports it."
+            ),
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    assert config.output_path.name == "rag_output_trec_rag_2026.jsonl"
+    rows = [
+        json.loads(line)
+        for line in config.output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["metadata"]["narrative_id"] for row in rows] == [
+        "rag2026-3",
+        "rag2026-4",
+    ]
+    assert [list(row) for row in rows] == [
+        ["metadata", "references", "answer"],
+        ["metadata", "references", "answer"],
+    ]
+    assert [list(row["metadata"]) for row in rows] == [
+        ["team_id", "narrative_id", "narrative", "run_id", "run_desc"],
+        ["team_id", "narrative_id", "narrative", "run_id", "run_desc"],
+    ]
+    assert [row["references"] for row in rows] == [
+        ["climbmix-3a", "climbmix-3b"],
+        ["climbmix-4a"],
+    ]
+    assert [row["answer"][0]["citations"] for row in rows] == [[0, 1], [0]]
+
+
 def test_resume_reuses_valid_rows_without_model_calls(tmp_path: Path) -> None:
     config = _pipeline_config(tmp_path)
     first = FakeGenerator(

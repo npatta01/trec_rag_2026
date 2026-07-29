@@ -98,8 +98,47 @@ canonical topics and joins these three files:
 - `outputs/facet-deepseek-b40-v1/retrieval_with_text.jsonl.zip`, whose required
   core is `query.qid`, `candidates[].docid`, and `candidates[].doc`.
 
-The deterministic generation destination is
+The ZIP is a generation sidecar, not a TREC submission. Retrieval submits only
+`r_output_trec_rag_2026.tsv`; generation submits only its final JSONL. The
+deterministic generation destination is
 `outputs/rag26_competition_rag_gpt_sol_v1/rag_output_trec_rag_2026.jsonl`.
+
+Set up the environment once, then run the two paths independently with their
+canonical configurations. Generation consumes the three files above after
+retrieval has published its TSV and ZIP; it never reads retrieval manifests or
+per-topic checkpoints.
+
+```bash
+code/tools/setup_env.sh
+
+# Publish the full retrieval TSV and full-text ZIP.
+uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+
+# Generate the full organizer JSONL from those files.
+uv run --no-sync python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+```
+
+For a two-topic smoke run, keep the checked-in configurations unchanged. Run
+retrieval with its repeated selectors, then copy the generation YAML to an
+ignored local path, set a separate `experiment.output_dir`, and add the
+following under `inputs` (the configured TSV restores canonical source order):
+
+```yaml
+  topic_ids: [rag2026-0, rag2026-1]
+```
+
+```bash
+uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml --topic rag2026-0 --topic rag2026-1
+uv run --no-sync python -m trec_rag.competition_rag --config /tmp/rag26-two-topic.yaml
+```
+
+`experiment.mode: create` refuses an existing generation output or work tree.
+For an interrupted generation, switch the local config to `resume`; valid
+per-topic rows are reused and missing rows are generated. To replace a
+generation result, use `overwrite`: it removes only that generation JSONL and
+its dedicated `work/` directory before starting again, never the retrieval TSV
+or ZIP inputs.
+
 Raw provider responses are retained only when safely available: parsed JSON is
 stored as a recursively sanitized structured envelope with no duplicate raw
 body. Opaque non-JSON bodies are never persisted, for any HTTP status including
