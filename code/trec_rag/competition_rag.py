@@ -290,25 +290,37 @@ def load_trec_run(
 
 @contextmanager
 def _document_lines(path: Path, archive_member: str | None) -> Iterator[TextIO]:
-    if not zipfile.is_zipfile(path):
+    document_path = Path(path)
+    expects_zip = document_path.suffix.lower() == ".zip"
+    if not expects_zip and not zipfile.is_zipfile(document_path):
         if archive_member is not None:
             raise ValueError("archive_member requires a ZIP document input")
-        with Path(path).open(encoding="utf-8") as handle:
+        with document_path.open(encoding="utf-8") as handle:
             yield handle
         return
-    with zipfile.ZipFile(path) as archive:
-        candidates = [
-            name for name in archive.namelist() if name.lower().endswith((".jsonl", ".json"))
-        ]
-        member = archive_member or (candidates[0] if len(candidates) == 1 else None)
-        if member is None or member not in candidates:
-            raise ValueError(
-                f"{path}: choose one JSONL ZIP member with archive_member; "
-                f"found {candidates}"
-            )
-        with archive.open(member) as raw:
-            with io.TextIOWrapper(raw, encoding="utf-8") as handle:
-                yield handle
+    try:
+        with zipfile.ZipFile(document_path) as archive:
+            candidates = [
+                name
+                for name in archive.namelist()
+                if name.lower().endswith((".jsonl", ".json"))
+            ]
+            member = archive_member or (candidates[0] if len(candidates) == 1 else None)
+            if member is None or member not in candidates:
+                raise ValueError(
+                    f"{document_path}: choose one JSONL ZIP member with archive_member; "
+                    f"found {candidates}"
+                )
+            with archive.open(member) as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8") as handle:
+                    try:
+                        yield handle
+                    except UnicodeDecodeError as exc:
+                        raise ValueError(
+                            f"{document_path}: selected document member is not valid UTF-8"
+                        ) from exc
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"{document_path}: invalid ZIP document archive") from exc
 
 
 def load_documents(

@@ -308,6 +308,29 @@ def test_document_zip_rejects_malformed_json_with_line_context(tmp_path: Path) -
         load_documents(archive_path, None, {"climbmix-a"}, 100)
 
 
+def test_document_zip_normalizes_corrupt_archive_failure(tmp_path: Path) -> None:
+    archive_path = tmp_path / "corrupt-documents.zip"
+    archive_path.write_bytes(b"this is not a ZIP archive")
+
+    with pytest.raises(
+        ValueError,
+        match=r"corrupt-documents\.zip: invalid ZIP document archive",
+    ):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
+
+
+def test_document_zip_normalizes_non_utf8_member_failure(tmp_path: Path) -> None:
+    archive_path = tmp_path / "non-utf8-documents.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("retrieval_with_text.jsonl", b"\xff\xfe\x80")
+
+    with pytest.raises(
+        ValueError,
+        match=r"non-utf8-documents\.zip: selected document member is not valid UTF-8",
+    ):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
+
+
 @pytest.mark.parametrize(
     "row",
     [
