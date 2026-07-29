@@ -1218,7 +1218,7 @@ def test_http_non_json_failure_omits_body_and_keeps_non_reversible_diagnostics(
     }
 
 
-def test_http_non_json_failure_retains_plain_redacted_body(
+def test_http_non_json_failure_omits_plain_body_and_keeps_non_reversible_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
@@ -1230,7 +1230,8 @@ def test_http_non_json_failure_retains_plain_redacted_body(
             raise ValueError("not JSON")
 
     response = NonJsonResponse(400, None)
-    response.text = f"gateway rejected bearer {api_key}"
+    body_text = f"gateway rejected bearer {api_key}"
+    response.text = body_text
     monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
     generator = OpenRouterJsonGenerator(
         api_base="https://openrouter.example/v1",
@@ -1248,11 +1249,15 @@ def test_http_non_json_failure_retains_plain_redacted_body(
 
     failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
     persisted = failed_raw.read_text(encoding="utf-8")
+    body_bytes = body_text.encode("utf-8")
     assert json.loads(persisted) == {
         "http_status": 400,
-        "body": "gateway rejected bearer [REDACTED]",
+        "body_omitted": True,
+        "body_utf8_byte_length": len(body_bytes),
+        "body_utf8_sha256": sha256(body_bytes).hexdigest(),
     }
     assert api_key not in persisted
+    assert body_text not in persisted
 
 
 def test_http_non_json_success_never_persists_nested_decodable_api_key(
@@ -1304,6 +1309,10 @@ def test_http_non_json_success_never_persists_nested_decodable_api_key(
         "gateway reflected secret%2Dtoken",
         "gateway reflected secret&#45;token",
         "gateway reflected secret=2Dtoken",
+        pytest.param(
+            "gateway reflected secret&#38#45token",
+            id="nested-semicolonless-html-entity",
+        ),
     ],
 )
 def test_http_non_json_failure_never_persists_encoded_api_key(

@@ -29,10 +29,6 @@ from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_roo
 _SCHEMA_VERSION = "competition_rag_config_v1"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
-# Omit non-JSON text when a later decoding pass could reveal different characters.
-_AMBIGUOUS_BODY_ENCODING = re.compile(
-    r"\\\S|%[0-9A-Fa-f]{2}|&(?:#[xX]?[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);|=[0-9A-Fa-f]{2}"
-)
 
 SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
 provided reference documents and the user's task instructions. Do not invent evidence,
@@ -715,19 +711,12 @@ def _safe_http_response(
     except ValueError:
         body_text = response.text
         body_bytes = body_text.encode("utf-8")
-        if _AMBIGUOUS_BODY_ENCODING.search(body_text):
-            safe_response: dict[str, Any] = {
-                "http_status": response.status_code,
-                "body_omitted": True,
-                "body_utf8_byte_length": len(body_bytes),
-                "body_utf8_sha256": sha256(body_bytes).hexdigest(),
-            }
-        else:
-            safe_response = {
-                "http_status": response.status_code,
-                "body": _redact_text(body_text, (api_key,)),
-            }
-        return False, None, safe_response
+        return False, None, {
+            "http_status": response.status_code,
+            "body_omitted": True,
+            "body_utf8_byte_length": len(body_bytes),
+            "body_utf8_sha256": sha256(body_bytes).hexdigest(),
+        }
 
     safe_envelope = _redact(envelope, (api_key,))
     if response.status_code >= 400:

@@ -150,7 +150,8 @@ PR #24's fixed-retrieval GPT Sol runner is applied on top of current
 - bounded concurrency and identical-request transport retries;
 - exact organizer `metadata`, `references`, and `answer` JSONL output;
 - zero-based integer citations and the 1,024-word limit;
-- per-topic raw responses, validated resumable rows, and atomic final output.
+- per-topic sanitized provider envelopes or opaque-body diagnostics, validated
+  resumable rows, and atomic final output.
 
 Two review findings are part of the integration rather than deferred work:
 
@@ -168,10 +169,15 @@ Resume mode reuses only rows that still validate against the configured topic,
 narrative, retrieval document IDs, and submission identity. Overwrite mode
 starts with no reusable rows from an earlier run.
 
-A topic failure records its error and, when available, the raw provider
-response. The consolidated submission is published only after every official
-topic has one valid row. Transport retries repeat the same request; malformed or
-semantically invalid completions do not trigger a model repair call.
+A topic failure records its error and retains a raw provider response only when
+safely available: parsed JSON is retained as a recursively sanitized structured
+envelope without a duplicate raw body. Opaque non-JSON bodies are never
+persisted, for any HTTP status including a 2xx semantic failure; the artifact
+records the status when available, an omission marker, UTF-8 byte length, and
+SHA-256 instead. The consolidated submission is published only after every
+official topic has one valid row. Transport retries repeat the same request;
+malformed or semantically invalid completions do not trigger a model repair
+call.
 
 ## Compatibility and migration
 

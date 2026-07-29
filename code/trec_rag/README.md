@@ -100,9 +100,12 @@ canonical topics and joins these three files:
 
 The deterministic generation destination is
 `outputs/rag26_competition_rag_gpt_sol_v1/rag_output_trec_rag_2026.jsonl`.
-Generation execution is added separately; the current module validates and
-normalizes its configuration and organizer inputs. Run its targeted contract
-suite with the repository environment already set up:
+Raw provider responses are retained only when safely available: parsed JSON is
+stored as a recursively sanitized structured envelope with no duplicate raw
+body. Opaque non-JSON bodies are never persisted, for any HTTP status including
+a 2xx semantic failure; their artifacts contain only the status when available,
+an omission marker, UTF-8 byte length, and SHA-256. Run the module's targeted
+contract suite with the repository environment already set up:
 
 ```bash
 uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q
