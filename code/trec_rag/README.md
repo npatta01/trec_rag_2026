@@ -118,19 +118,58 @@ uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competit
 uv run --no-sync python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
 ```
 
-For a two-topic smoke run, keep the checked-in configurations unchanged. Run
-retrieval with its repeated selectors, then copy the generation YAML to an
-ignored local path, set a separate `experiment.output_dir`, and add the
-following under `inputs` (the configured TSV restores canonical source order):
+For a two-topic smoke run, keep the checked-in configurations and their full
+exports unchanged. Repository-relative paths are resolved from the checkout
+containing the config, so put local variants under the ignored
+`configs/local/` directory, not `/tmp`:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_retrieval_v1.yaml configs/local/rag26_competition_retrieval_two_topic_smoke.yaml
+cp configs/rag26_competition_rag_gpt_sol_v1.yaml configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+```
+
+In `configs/local/rag26_competition_retrieval_two_topic_smoke.yaml`, replace
+the complete `experiment` block with this distinct retrieval namespace; leave
+all other blocks identical to the checked-in retrieval config:
 
 ```yaml
+experiment:
+  id: facet-deepseek-b40-v1-two-topic-smoke
+```
+
+In `configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml`, replace
+the complete `experiment` and `inputs` blocks with the following. The generation
+output and both retrieval inputs now point to smoke-only directories, while
+`inputs.topic_ids` restores the requested IDs to canonical TSV order:
+
+```yaml
+experiment:
+  id: rag26-competition-rag-gpt-sol-two-topic-smoke
+  output_dir: outputs/rag26-competition-rag-gpt-sol-two-topic-smoke
+  mode: create
+
+inputs:
+  queries: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+  run: outputs/facet-deepseek-b40-v1-two-topic-smoke/r_output_trec_rag_2026.tsv
+  documents: outputs/facet-deepseek-b40-v1-two-topic-smoke/retrieval_with_text.jsonl.zip
+  archive_member: null
   topic_ids: [rag2026-0, rag2026-1]
 ```
 
+Run the two paths with those local configs. The repeated retrieval selectors
+bound the expensive retrieval work; the generation config independently bounds
+the downstream join:
+
 ```bash
-uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml --topic rag2026-0 --topic rag2026-1
-uv run --no-sync python -m trec_rag.competition_rag --config /tmp/rag26-two-topic.yaml
+uv run --no-sync python -m trec_rag.competition_retrieval configs/local/rag26_competition_retrieval_two_topic_smoke.yaml --topic rag2026-0 --topic rag2026-1
+uv run --no-sync python -m trec_rag.competition_rag --config configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
 ```
+
+These commands publish only under
+`outputs/facet-deepseek-b40-v1-two-topic-smoke/` and
+`outputs/rag26-competition-rag-gpt-sol-two-topic-smoke/`; they never replace
+the full canonical exports.
 
 `experiment.mode: create` refuses an existing generation output or work tree.
 For an interrupted generation, switch the local config to `resume`; valid

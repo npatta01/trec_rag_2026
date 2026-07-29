@@ -7,6 +7,7 @@
 tmp/
 outputs/
 cache/
+/configs/local/
 node_modules/
 __pycache__/
 *.pyc
