@@ -1,25 +1,50 @@
-"""Strict configuration and organizer-compatible inputs for competition RAG."""
+"""Generate organizer-format TREC RAG answers from a fixed retrieval run."""
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import io
 import json
 import math
+import os
 import re
+import shutil
+import time
 import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
-from typing import Any, Iterator, Sequence, TextIO
+from typing import Any, Iterator, Protocol, Sequence, TextIO
 
+import requests
 import yaml
 
-from trec_rag.repo_env import find_repo_root, shared_checkout_root
+from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_root
 
 
 _SCHEMA_VERSION = "competition_rag_config_v1"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
+provided reference documents and the user's task instructions. Do not invent evidence,
+document identifiers, references, or source-specific claims."""
+
+USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every numbered reference document before writing. Cover answer-relevant evidence,
+tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
+1,024 whitespace-separated words. Each answer object must have one to three unique zero-based
+citation indexes into references. Include each cited raw ClimbMix docid once in references, and
+cite every reference. Return one JSON object with exactly references and answer; no Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -519,3 +544,509 @@ def _output_path(root_dir: Path, value: str) -> Path:
 
 def _nonempty_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def output_schema() -> dict[str, Any]:
+    """Return the provider-safe schema; cross-field rules are validated locally."""
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["references", "answer"],
+        "properties": {
+            "references": {"type": "array", "items": {"type": "string"}},
+            "answer": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["text", "citations"],
+                    "properties": {
+                        "text": {"type": "string"},
+                        "citations": {"type": "array", "items": {"type": "integer"}},
+                    },
+                },
+            },
+        },
+    }
+
+
+class JsonGenerator(Protocol):
+    def complete_json(
+        self,
+        *,
+        topic_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return one parsed completion and its raw provider response."""
+
+
+class SemanticCompletionError(ValueError):
+    """A successful provider response that cannot be accepted without repair."""
+
+    def __init__(self, message: str, raw_response: object) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class OpenRouterJsonGenerator:
+    """One-completion OpenRouter client with retries only for transient transport."""
+
+    def __init__(
+        self,
+        *,
+        api_base: str,
+        api_key: str,
+        model: str,
+        reasoning_effort: str,
+        temperature: float | None,
+        max_tokens: int,
+        timeout_seconds: float,
+        transport_max_attempts: int,
+    ) -> None:
+        if not api_key:
+            raise ValueError("OpenRouter API key is missing or empty")
+        self.api_base = api_base.rstrip("/")
+        self._api_key = api_key
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.timeout_seconds = timeout_seconds
+        self.transport_max_attempts = transport_max_attempts
+
+    def complete_json(
+        self,
+        *,
+        topic_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        del topic_id
+        request_body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": self.max_tokens,
+            "reasoning": {"effort": self.reasoning_effort, "exclude": True},
+            "provider": {"require_parameters": True},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "trec_rag_2026_answer",
+                    "strict": True,
+                    "schema": response_schema,
+                },
+            },
+        }
+        if self.temperature is not None:
+            request_body["temperature"] = self.temperature
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.api_base}/chat/completions"
+        for attempt in range(1, self.transport_max_attempts + 1):
+            try:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=request_body,
+                    timeout=(15, self.timeout_seconds),
+                )
+            except requests.RequestException as exc:
+                if attempt == self.transport_max_attempts:
+                    raise RuntimeError("OpenRouter generation transport failed") from exc
+                time.sleep(min(2 ** (attempt - 1), 8))
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt == self.transport_max_attempts:
+                    response.raise_for_status()
+                time.sleep(_retry_delay(response.headers.get("Retry-After"), attempt))
+                continue
+            if response.status_code >= 400:
+                try:
+                    detail = json.dumps(response.json(), ensure_ascii=False)
+                except ValueError:
+                    detail = response.text
+                raise RuntimeError(
+                    f"OpenRouter rejected generation with HTTP {response.status_code}: {detail[:2000]}"
+                )
+            try:
+                envelope = response.json()
+            except ValueError as exc:
+                raise SemanticCompletionError(
+                    "OpenRouter returned a non-JSON response; no repair call was made",
+                    {"http_status": response.status_code, "body": response.text},
+                ) from exc
+            if not isinstance(envelope, dict):
+                raise SemanticCompletionError(
+                    "OpenRouter response must be a JSON object; no repair call was made",
+                    envelope,
+                )
+            try:
+                message = envelope["choices"][0]["message"]
+                generated = parse_generated_json(_message_text(message.get("content")))
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise SemanticCompletionError(
+                    "OpenRouter returned a malformed semantic completion; no repair call was made",
+                    envelope,
+                ) from exc
+            return generated, envelope
+        raise AssertionError("unreachable OpenRouter retry state")
+
+
+def _retry_delay(retry_after: str | None, attempt: int) -> float:
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), 30.0)
+        except ValueError:
+            pass
+    return float(min(2 ** (attempt - 1), 8))
+
+
+def _message_text(content: object) -> str:
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            item["text"]
+            for item in content
+            if isinstance(item, dict)
+            and item.get("type") in {"text", "output_text"}
+            and isinstance(item.get("text"), str)
+        ]
+        if parts:
+            return "\n".join(parts).strip()
+    raise ValueError("completion content is not nonempty text")
+
+
+def render_prompt(
+    narrative: str, ranked_docids: list[str], documents: dict[str, str]
+) -> str:
+    context = "\n\n".join(
+        f"[{index}] docid: {docid}\n{documents[docid]}"
+        for index, docid in enumerate(ranked_docids, 1)
+    )
+    return USER_PROMPT.format(documents=context, question=narrative)
+
+
+def parse_generated_json(text: str) -> dict[str, Any]:
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text.strip(), re.DOTALL)
+    try:
+        value = json.loads(fence.group(1) if fence else text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("generation is not one JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError("generation is not one JSON object")
+    return value
+
+
+def _metadata(
+    *,
+    topic_id: str,
+    narrative: str,
+    team_id: str,
+    run_id: str,
+    run_desc: str,
+) -> dict[str, str]:
+    return {
+        "team_id": team_id,
+        "narrative_id": topic_id,
+        "narrative": narrative,
+        "run_id": run_id,
+        "run_desc": run_desc,
+    }
+
+
+def build_submission_record(
+    generated: dict[str, Any],
+    *,
+    topic_id: str,
+    narrative: str,
+    team_id: str,
+    run_id: str,
+    run_desc: str,
+) -> dict[str, Any]:
+    if set(generated) != {"references", "answer"}:
+        raise ValueError(f"{topic_id}: generated root must contain exactly references and answer")
+    return {
+        "metadata": _metadata(
+            topic_id=topic_id,
+            narrative=narrative,
+            team_id=team_id,
+            run_id=run_id,
+            run_desc=run_desc,
+        ),
+        "references": generated["references"],
+        "answer": generated["answer"],
+    }
+
+
+def validate_submission_record(
+    record: dict[str, Any],
+    *,
+    topic_id: str,
+    narrative: str,
+    allowed_docids: list[str],
+    team_id: str,
+    run_id: str,
+    run_desc: str,
+) -> None:
+    expected_metadata = _metadata(
+        topic_id=topic_id,
+        narrative=narrative,
+        team_id=team_id,
+        run_id=run_id,
+        run_desc=run_desc,
+    )
+    if set(record) != {"metadata", "references", "answer"} or record.get("metadata") != expected_metadata:
+        raise ValueError(f"{topic_id}: invalid root object or metadata")
+    references = record.get("references")
+    if (
+        not isinstance(references, list)
+        or not references
+        or not all(isinstance(docid, str) and docid.strip() and docid == docid.strip() for docid in references)
+    ):
+        raise ValueError(f"{topic_id}: references must be nonempty docid strings")
+    if len(references) != len(set(references)) or not set(references) <= set(allowed_docids):
+        raise ValueError(f"{topic_id}: references are duplicated or outside selected TREC rows")
+    answer = record.get("answer")
+    if not isinstance(answer, list) or not answer:
+        raise ValueError(f"{topic_id}: answer must be a nonempty list")
+    used: set[int] = set()
+    words = 0
+    for index, item in enumerate(answer):
+        if not isinstance(item, dict) or set(item) != {"text", "citations"}:
+            raise ValueError(f"{topic_id}: answer[{index}] has invalid fields")
+        text = item.get("text")
+        citations = item.get("citations")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"{topic_id}: answer[{index}] has empty text")
+        words += len(text.split())
+        if not isinstance(citations, list) or not 1 <= len(citations) <= 3:
+            raise ValueError(f"{topic_id}: answer[{index}] must have 1-3 unique citations")
+        if any(type(citation) is not int for citation in citations):
+            raise ValueError(f"{topic_id}: answer[{index}] has an invalid citation")
+        if len(citations) != len(set(citations)):
+            raise ValueError(f"{topic_id}: answer[{index}] must have 1-3 unique citations")
+        if any(not 0 <= citation < len(references) for citation in citations):
+            raise ValueError(f"{topic_id}: answer[{index}] has an invalid citation")
+        used.update(citations)
+    if words > 1024:
+        raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
+    if used != set(range(len(references))):
+        raise ValueError(f"{topic_id}: answer has uncited references")
+
+
+def _safe_topic_name(topic_id: str) -> str:
+    prefix = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in topic_id
+    )
+    return f"{prefix}-{sha256(topic_id.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _write_json(path: Path, value: object, *, compact: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    if compact:
+        contents = json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
+    else:
+        contents = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    temporary.write_text(contents, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _saved_record(
+    path: Path,
+    *,
+    topic_id: str,
+    narrative: str,
+    allowed_docids: list[str],
+    config: RagGenerationConfig,
+) -> dict[str, Any] | None:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            return None
+        validate_submission_record(
+            record,
+            topic_id=topic_id,
+            narrative=narrative,
+            allowed_docids=allowed_docids,
+            team_id=config.team_id,
+            run_id=config.run_id,
+            run_desc=config.run_desc,
+        )
+        return record
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+async def _generate_topic(
+    *,
+    topic_id: str,
+    narrative: str,
+    ranked_docids: list[str],
+    documents: dict[str, str],
+    generator: JsonGenerator,
+    config: RagGenerationConfig,
+    semaphore: asyncio.Semaphore,
+) -> tuple[str, str | None]:
+    work_dir = config.resolved_work_dir
+    topic_name = _safe_topic_name(topic_id)
+    try:
+        async with semaphore:
+            generated, raw_response = await asyncio.to_thread(
+                generator.complete_json,
+                topic_id=topic_id,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=render_prompt(narrative, ranked_docids, documents),
+                response_schema=output_schema(),
+            )
+        _write_json(work_dir / "raw" / f"{topic_name}.json", raw_response)
+        record = build_submission_record(
+            generated,
+            topic_id=topic_id,
+            narrative=narrative,
+            team_id=config.team_id,
+            run_id=config.run_id,
+            run_desc=config.run_desc,
+        )
+        validate_submission_record(
+            record,
+            topic_id=topic_id,
+            narrative=narrative,
+            allowed_docids=ranked_docids,
+            team_id=config.team_id,
+            run_id=config.run_id,
+            run_desc=config.run_desc,
+        )
+        _write_json(work_dir / "rows" / f"{topic_name}.json", record, compact=True)
+        return topic_id, None
+    except Exception as exc:
+        if isinstance(exc, SemanticCompletionError):
+            _write_json(work_dir / "raw" / f"{topic_name}.failed.json", exc.raw_response)
+        error_path = work_dir / "errors" / f"{topic_name}.txt"
+        error_path.parent.mkdir(parents=True, exist_ok=True)
+        error_path.write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
+        return topic_id, f"{type(exc).__name__}: {exc}"
+
+
+async def run_generation(config: RagGenerationConfig, generator: JsonGenerator) -> None:
+    """Generate missing topic rows and atomically publish the organizer JSONL."""
+    topics = select_queries(load_queries(config.queries_path), config.topic_ids)
+    ranked = load_trec_run(config.run_path, {topic_id for topic_id, _ in topics}, config.top_k)
+    wanted_docids = {docid for docids in ranked.values() for docid in docids}
+    documents = load_documents(
+        config.documents_path,
+        config.archive_member,
+        wanted_docids,
+        config.max_document_words,
+    )
+    work_dir = config.resolved_work_dir
+    rows_dir = work_dir / "rows"
+    if config.overwrite:
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        if config.output_path.exists():
+            config.output_path.unlink()
+    existing_rows = list(rows_dir.glob("*.json")) if rows_dir.exists() else []
+    if not config.resume and not config.overwrite and (config.output_path.exists() or existing_rows):
+        raise ValueError("generation artifacts exist; use --resume or --overwrite")
+
+    pending: list[tuple[str, str]] = []
+    for topic_id, narrative in topics:
+        row_path = rows_dir / f"{_safe_topic_name(topic_id)}.json"
+        saved = (
+            _saved_record(
+                row_path,
+                topic_id=topic_id,
+                narrative=narrative,
+                allowed_docids=ranked[topic_id],
+                config=config,
+            )
+            if config.resume
+            else None
+        )
+        if saved is None:
+            pending.append((topic_id, narrative))
+    semaphore = asyncio.Semaphore(config.concurrency)
+    results = await asyncio.gather(
+        *[
+            _generate_topic(
+                topic_id=topic_id,
+                narrative=narrative,
+                ranked_docids=ranked[topic_id],
+                documents=documents,
+                generator=generator,
+                config=config,
+                semaphore=semaphore,
+            )
+            for topic_id, narrative in pending
+        ]
+    )
+    failures = [(topic_id, error) for topic_id, error in results if error]
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} topic(s) failed; inspect {work_dir / 'errors'} and rerun with --resume"
+        )
+    final_records: list[dict[str, Any]] = []
+    for topic_id, narrative in topics:
+        record = _saved_record(
+            rows_dir / f"{_safe_topic_name(topic_id)}.json",
+            topic_id=topic_id,
+            narrative=narrative,
+            allowed_docids=ranked[topic_id],
+            config=config,
+        )
+        if record is None:
+            raise RuntimeError(f"missing valid generated row for {topic_id}")
+        final_records.append(record)
+    config.output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = config.output_path.with_name(config.output_path.name + ".tmp")
+    temporary.write_text(
+        "".join(
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for record in final_records
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(config.output_path)
+
+
+def arguments(argv: list[str] | None = None) -> Path:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True, help="Competition RAG YAML.")
+    return parser.parse_args(argv).config
+
+
+def main() -> None:
+    try:
+        config_path = arguments()
+        load_repo_env(find_repo_root(config_path.resolve().parent))
+        config = load_rag_generation_config(config_path)
+        generator = OpenRouterJsonGenerator(
+            api_base=config.api_base,
+            api_key=os.environ.get(config.api_key_env, ""),
+            model=config.model,
+            reasoning_effort=config.reasoning_effort,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            timeout_seconds=config.timeout_seconds,
+            transport_max_attempts=config.transport_max_attempts,
+        )
+        asyncio.run(run_generation(config, generator))
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as exc:
+        raise SystemExit(f"error: {type(exc).__name__}: {exc}") from exc
+
+
+if __name__ == "__main__":
+    main()

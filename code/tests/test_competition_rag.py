@@ -1,17 +1,31 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import zipfile
+import asyncio
+import copy
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import trec_rag.competition_rag as competition_rag
 from trec_rag.competition_rag import (
+    OpenRouterJsonGenerator,
+    RagGenerationConfig,
+    arguments,
+    build_submission_record,
     load_documents,
     load_queries,
     load_rag_generation_config,
     load_trec_run,
+    parse_generated_json,
+    run_generation,
     select_queries,
+    validate_submission_record,
 )
 
 
@@ -403,3 +417,433 @@ def test_checked_in_competition_config_selects_every_official_topic() -> None:
     assert config.run_path == repo_root / "outputs/facet-deepseek-b40-v1/r_output_trec_rag_2026.tsv"
     assert config.documents_path == repo_root / "outputs/facet-deepseek-b40-v1/retrieval_with_text.jsonl.zip"
     assert len(select_queries(queries, config.topic_ids)) == 119
+
+
+def _generated_record() -> dict[str, Any]:
+    return {
+        "references": ["climbmix-a", "climbmix-b"],
+        "answer": [
+            {"text": "The first source supports the finding.", "citations": [0]},
+            {"text": "The second source adds a limitation.", "citations": [1]},
+        ],
+    }
+
+
+def _submission_record() -> dict[str, Any]:
+    return {
+        "metadata": {
+            "team_id": "castorini",
+            "narrative_id": "rag2026-0",
+            "narrative": "Official question",
+            "run_id": "rag26_competition_rag_gpt_sol_v1",
+            "run_desc": "Fixed retrieval with GPT-5.6 Sol answer generation.",
+        },
+        **_generated_record(),
+    }
+
+
+def _validate_submission(record: dict[str, Any]) -> None:
+    validate_submission_record(
+        record,
+        topic_id="rag2026-0",
+        narrative="Official question",
+        allowed_docids=["climbmix-a", "climbmix-b", "climbmix-c"],
+        team_id="castorini",
+        run_id="rag26_competition_rag_gpt_sol_v1",
+        run_desc="Fixed retrieval with GPT-5.6 Sol answer generation.",
+    )
+
+
+def test_validates_organizer_shaped_submission_record() -> None:
+    _validate_submission(_submission_record())
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda row: row.update({"extra": True}), "root object or metadata"),
+        (lambda row: row["metadata"].update({"model": "gpt"}), "root object or metadata"),
+        (lambda row: row["references"].append("climbmix-a"), "duplicated or outside"),
+        (lambda row: row["references"].append("not-selected"), "duplicated or outside"),
+        (lambda row: row["answer"][0].update({"citations": [True]}), "citation"),
+        (lambda row: row["answer"][0].update({"citations": [0, 0]}), "unique citations"),
+        (lambda row: row["answer"][0].update({"citations": [2]}), "citation"),
+        (lambda row: row["answer"][0].update({"heading": "Finding"}), "invalid fields"),
+        (lambda row: row.update({"answer": row["answer"][:1]}), "uncited references"),
+    ],
+)
+def test_rejects_submission_records_outside_the_organizer_contract(
+    mutate: Any, message: str
+) -> None:
+    record = copy.deepcopy(_submission_record())
+    mutate(record)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_submission(record)
+
+
+def test_rejects_answer_over_1024_whitespace_words() -> None:
+    record = _submission_record()
+    record["references"] = ["climbmix-a"]
+    record["answer"] = [{"text": "word " * 1025, "citations": [0]}]
+
+    with pytest.raises(ValueError, match="1,024 words"):
+        _validate_submission(record)
+
+
+@pytest.mark.parametrize("extra_key", ["metadata", "model_note", "unexpected"])
+def test_generated_root_must_contain_exactly_references_and_answer(
+    extra_key: str,
+) -> None:
+    generated = _generated_record()
+    generated[extra_key] = {"ignored": "must be rejected before metadata injection"}
+
+    with pytest.raises(ValueError, match="generated root"):
+        build_submission_record(
+            generated,
+            topic_id="rag2026-0",
+            narrative="Official question",
+            team_id="castorini",
+            run_id="rag26_competition_rag_gpt_sol_v1",
+            run_desc="Fixed retrieval with GPT-5.6 Sol answer generation.",
+        )
+
+
+def test_build_submission_record_injects_exact_official_metadata() -> None:
+    record = build_submission_record(
+        _generated_record(),
+        topic_id="rag2026-0",
+        narrative="Official question",
+        team_id="castorini",
+        run_id="rag26_competition_rag_gpt_sol_v1",
+        run_desc="Fixed retrieval with GPT-5.6 Sol answer generation.",
+    )
+
+    assert list(record) == ["metadata", "references", "answer"]
+    assert list(record["metadata"]) == [
+        "team_id",
+        "narrative_id",
+        "narrative",
+        "run_id",
+        "run_desc",
+    ]
+
+
+def test_parses_only_one_plain_or_fenced_json_object() -> None:
+    assert parse_generated_json('{"references": [], "answer": []}') == {
+        "references": [],
+        "answer": [],
+    }
+    assert parse_generated_json('```json\n{"references": [], "answer": []}\n```') == {
+        "references": [],
+        "answer": [],
+    }
+    with pytest.raises(ValueError, match="one JSON object"):
+        parse_generated_json('before {"answer": []} after')
+
+
+class FakeGenerator:
+    def __init__(self, outputs: dict[str, dict[str, Any]]) -> None:
+        self.outputs = outputs
+        self.calls: list[dict[str, Any]] = []
+
+    def complete_json(
+        self,
+        *,
+        topic_id: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        self.calls.append(
+            {
+                "topic_id": topic_id,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "response_schema": response_schema,
+            }
+        )
+        return copy.deepcopy(self.outputs[topic_id]), {"id": f"fake-{topic_id}"}
+
+
+def _pipeline_config(tmp_path: Path) -> RagGenerationConfig:
+    (tmp_path / "official").mkdir()
+    (tmp_path / "official/topics.tsv").write_text(
+        "rag2026-2\tQuestion two\nrag2026-1\tQuestion one\n",
+        encoding="utf-8",
+    )
+    inputs = tmp_path / "outputs/facet-deepseek-b40-v1"
+    inputs.mkdir(parents=True)
+    (inputs / "r_output_trec_rag_2026.tsv").write_text(
+        "rag2026-1 Q0 climbmix-a 1 9.0 bm25\n"
+        "rag2026-1 Q0 climbmix-b 2 8.0 bm25\n"
+        "rag2026-2 Q0 climbmix-c 1 7.0 bm25\n",
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(inputs / "retrieval_with_text.jsonl.zip", "w") as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            json.dumps(
+                {
+                    "query": {"qid": "rag2026-1"},
+                    "candidates": [
+                        {"docid": "climbmix-a", "doc": "Evidence A."},
+                        {"docid": "climbmix-b", "doc": "Evidence B."},
+                    ],
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "query": {"qid": "rag2026-2"},
+                    "candidates": [{"docid": "climbmix-c", "doc": "Evidence C."}],
+                }
+            )
+            + "\n",
+        )
+    return load_rag_generation_config(_write_config(tmp_path, _config_text()))
+
+
+def _topic_output(docids: list[str], text: str) -> dict[str, Any]:
+    return {
+        "references": docids,
+        "answer": [{"text": text, "citations": list(range(len(docids)))}],
+    }
+
+
+def test_runs_generation_in_official_query_order_and_atomically_consolidates(
+    tmp_path: Path,
+) -> None:
+    config = _pipeline_config(tmp_path)
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a", "climbmix-b"], "A and B support it."),
+            "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    rows = [json.loads(line) for line in config.output_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["metadata"]["narrative_id"] for row in rows] == ["rag2026-2", "rag2026-1"]
+    assert rows[0]["answer"][0]["citations"] == [0]
+    assert {call["topic_id"] for call in generator.calls} == {"rag2026-1", "rag2026-2"}
+    topic_one_prompt = next(call["user_prompt"] for call in generator.calls if call["topic_id"] == "rag2026-1")
+    assert "[1] docid: climbmix-a" in topic_one_prompt
+    assert "[2] docid: climbmix-b" in topic_one_prompt
+
+
+def test_resume_reuses_valid_rows_without_model_calls(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path)
+    first = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "A supports it."),
+            "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+        }
+    )
+    asyncio.run(run_generation(config, first))
+
+    resumed = FakeGenerator({})
+    asyncio.run(run_generation(replace(config, resume=True), resumed))
+
+    assert resumed.calls == []
+    assert config.output_path.exists()
+
+
+def test_generation_limits_parallel_model_calls_to_configured_concurrency(
+    tmp_path: Path,
+) -> None:
+    config = replace(_pipeline_config(tmp_path), concurrency=1)
+
+    class CountingGenerator(FakeGenerator):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    "rag2026-1": _topic_output(["climbmix-a"], "A supports it."),
+                    "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+                }
+            )
+            self._lock = threading.Lock()
+            self.active = 0
+            self.maximum_active = 0
+
+        def complete_json(self, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+            with self._lock:
+                self.active += 1
+                self.maximum_active = max(self.maximum_active, self.active)
+            try:
+                time.sleep(0.02)
+                return super().complete_json(**kwargs)
+            finally:
+                with self._lock:
+                    self.active -= 1
+
+    generator = CountingGenerator()
+    asyncio.run(run_generation(config, generator))
+
+    assert generator.maximum_active == 1
+
+
+def test_overwrite_clears_only_generation_state_before_failure_then_resume_regenerates(
+    tmp_path: Path,
+) -> None:
+    config = _pipeline_config(tmp_path)
+    initial = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "Old one."),
+            "rag2026-2": _topic_output(["climbmix-c"], "Old two."),
+        }
+    )
+    asyncio.run(run_generation(config, initial))
+    retrieval_bytes = config.run_path.read_bytes()
+    documents_bytes = config.documents_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="2 topic"):
+        asyncio.run(run_generation(replace(config, overwrite=True), FakeGenerator({})))
+
+    assert not config.output_path.exists()
+    assert retrieval_bytes == config.run_path.read_bytes()
+    assert documents_bytes == config.documents_path.read_bytes()
+
+    resumed = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "Fresh one."),
+            "rag2026-2": _topic_output(["climbmix-c"], "Fresh two."),
+        }
+    )
+    asyncio.run(run_generation(replace(config, resume=True), resumed))
+
+    assert {call["topic_id"] for call in resumed.calls} == {"rag2026-1", "rag2026-2"}
+    assert "Old one." not in config.output_path.read_text(encoding="utf-8")
+    assert "Fresh one." in config.output_path.read_text(encoding="utf-8")
+
+
+def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path)
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["not-retrieved"], "Unsupported."),
+            "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="1 topic"):
+        asyncio.run(run_generation(config, generator))
+
+    assert not config.output_path.exists()
+    assert list((config.work_dir / "errors").glob("*.txt"))
+
+
+class FakeHttpResponse:
+    def __init__(self, status_code: int, payload: object) -> None:
+        self.status_code = status_code
+        self.payload = payload
+        self.headers: dict[str, str] = {}
+        self.text = json.dumps(payload)
+
+    def json(self) -> object:
+        return self.payload
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def _openrouter_generator() -> OpenRouterJsonGenerator:
+    return OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key="secret",
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=3,
+    )
+
+
+def _provider_success() -> FakeHttpResponse:
+    return FakeHttpResponse(
+        200,
+        {
+            "id": "response-1",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(_topic_output(["climbmix-a"], "Supported."))
+                    }
+                }
+            ],
+        },
+    )
+
+
+def test_openrouter_request_uses_strict_schema_and_medium_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeHttpResponse:
+        captured.update({"url": url, **kwargs})
+        return _provider_success()
+
+    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
+    generated, raw = _openrouter_generator().complete_json(
+        topic_id="rag2026-1", system_prompt="system", user_prompt="user", response_schema={"type": "object"}
+    )
+
+    assert captured["url"] == "https://openrouter.example/v1/chat/completions"
+    assert captured["json"]["reasoning"] == {"effort": "medium", "exclude": True}
+    assert captured["json"]["provider"] == {"require_parameters": True}
+    assert captured["json"]["response_format"]["type"] == "json_schema"
+    assert captured["json"]["response_format"]["json_schema"]["strict"] is True
+    assert "temperature" not in captured["json"]
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+    assert generated["answer"][0]["citations"] == [0]
+    assert raw["id"] == "response-1"
+
+
+def test_malformed_semantic_completion_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fake_post(url: str, **kwargs: Any) -> FakeHttpResponse:
+        nonlocal calls
+        del url, kwargs
+        calls += 1
+        return FakeHttpResponse(200, {"choices": [{"message": {"content": "not JSON"}}]})
+
+    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
+    with pytest.raises(ValueError, match="no repair call") as error:
+        _openrouter_generator().complete_json(
+            topic_id="rag2026-1", system_prompt="system", user_prompt="user", response_schema={"type": "object"}
+        )
+
+    assert calls == 1
+    assert error.value.raw_response["choices"][0]["message"]["content"] == "not JSON"
+
+
+def test_transient_retries_repeat_the_identical_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    bodies: list[dict[str, Any]] = []
+    responses = [FakeHttpResponse(500, {"error": "temporary"}), _provider_success()]
+
+    def fake_post(url: str, **kwargs: Any) -> FakeHttpResponse:
+        del url
+        bodies.append(copy.deepcopy(kwargs["json"]))
+        return responses.pop(0)
+
+    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
+    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+    _openrouter_generator().complete_json(
+        topic_id="rag2026-1", system_prompt="system", user_prompt="user", response_schema={"type": "object"}
+    )
+
+    assert len(bodies) == 2
+    assert bodies[0] == bodies[1]
+
+
+def test_cli_accepts_only_config_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "competition.yaml"
+
+    assert arguments(["--config", str(config_path)]) == config_path
+    with pytest.raises(SystemExit):
+        arguments(["--config", str(config_path), "--model", "other"])
