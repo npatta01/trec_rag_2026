@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from hashlib import sha256
 
 import pytest
@@ -46,7 +47,24 @@ def test_write_topic_tsv_writes_one_row_with_untouched_narrative(tmp_path):
     )
 
     assert output == tmp_path / "one.tsv"
-    assert output.read_bytes() == b"rag2026-1\tline one\tline two\n"
+    with output.open(encoding="utf-8", newline="") as source:
+        assert list(csv.reader(source, delimiter="\t")) == [
+            ["rag2026-1", "line one\tline two"]
+        ]
+
+
+def test_write_topic_tsv_rejects_a_valid_quoted_multiline_narrative(tmp_path):
+    source = tmp_path / "queries.tsv"
+    output = tmp_path / "one.tsv"
+    source.write_text('rag2026-1\t"line one\nline two\twith tab"\n', encoding="utf-8")
+    output.write_bytes(b"existing output\n")
+
+    topic = select_topic(source, "rag2026-1")
+
+    with pytest.raises(ValueError, match="line breaks"):
+        write_topic_tsv(topic, output)
+
+    assert output.read_bytes() == b"existing output\n"
 
 
 def test_write_topic_run_keeps_rank_order_and_exactly_expected_depth(tmp_path):

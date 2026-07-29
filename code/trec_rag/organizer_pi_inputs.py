@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from hashlib import sha256
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -44,7 +45,13 @@ def _atomic_write(path: Path, body: bytes) -> Path:
 
 def write_topic_tsv(topic: OrganizerTopic, path: Path) -> Path:
     """Write an organizer query TSV containing exactly one selected topic."""
-    return _atomic_write(Path(path), f"{topic.topic_id}\t{topic.narrative}\n".encode("utf-8"))
+    if "\r" in topic.topic_id or "\n" in topic.topic_id or "\r" in topic.narrative or "\n" in topic.narrative:
+        raise ValueError("organizer topic TSV does not permit line breaks")
+    destination = io.StringIO(newline="")
+    csv.writer(destination, delimiter="\t", lineterminator="\n").writerow(
+        [topic.topic_id, topic.narrative]
+    )
+    return _atomic_write(Path(path), destination.getvalue().encode("utf-8"))
 
 
 def write_topic_run(

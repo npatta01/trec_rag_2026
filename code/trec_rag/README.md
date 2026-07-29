@@ -7,9 +7,10 @@ Reusable Python helpers for repository notebooks and experiments.
 `trec_rag.organizer_pi_inputs` prepares byte-faithful inputs for comparing both
 organizer Pi paths on one selected topic. It selects one narrative into a
 one-row topic TSV and filters a fixed-retrieval TREC run to the required 100
-ranked rows; source SHA-256 hashes are checked before either source is
-filtered. The helper validates the selected topic and run ranks strictly, then
-atomically replaces its outputs. It does not copy or transform document text.
+ranked rows. Callers must use `sha256_file` to verify published source digests
+before invoking either filtering function. The helper validates the selected
+topic and run ranks strictly, then atomically replaces its outputs. It does not
+copy or transform document text.
 
 ## Experimental facet official run
 
