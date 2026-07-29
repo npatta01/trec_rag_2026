@@ -85,6 +85,29 @@ entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
 
+## Competition fixed-retrieval RAG inputs
+
+`trec_rag.competition_rag` strictly loads the organizer-facing inputs for fixed
+retrieval answer generation. Its checked-in configuration is
+`configs/rag26_competition_rag_gpt_sol_v1.yaml`. By default it selects all 119
+canonical topics and joins these three files:
+
+- the headerless `narrative_id<TAB>narrative` organizer topic TSV;
+- `outputs/facet-deepseek-b40-v1/r_output_trec_rag_2026.tsv`, a six-field TREC
+  run; and
+- `outputs/facet-deepseek-b40-v1/retrieval_with_text.jsonl.zip`, whose required
+  core is `query.qid`, `candidates[].docid`, and `candidates[].doc`.
+
+The deterministic generation destination is
+`outputs/rag26_competition_rag_gpt_sol_v1/rag_output_trec_rag_2026.jsonl`.
+Generation execution is added separately; the current module validates and
+normalizes its configuration and organizer inputs. Run its targeted contract
+suite with the repository environment already set up:
+
+```bash
+uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q
+```
+
 ## Remote Pyserini Helpers
 
 Stable notebook imports come from `remote_pyserini.py`. Implementation is split

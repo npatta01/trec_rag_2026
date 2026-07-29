@@ -182,10 +182,13 @@ def load_queries(path: Path) -> list[tuple[str, str]]:
         fields = raw_line.split("\t")
         if len(fields) != 2:
             raise ValueError(f"{path}:{line_number}: expected exactly two TSV fields")
-        topic_id, narrative = (field.strip() for field in fields)
+        raw_topic_id, narrative = fields
+        topic_id = raw_topic_id.strip()
         if line_number == 1 and topic_id.lower() in {"qid", "query_id", "topic_id", "narrative_id"}:
             raise ValueError(f"{path}:{line_number}: topic TSV must not have a header")
-        if not topic_id or not narrative:
+        if raw_topic_id != topic_id:
+            raise ValueError(f"{path}:{line_number}: topic id must not have surrounding whitespace")
+        if not topic_id or not narrative.strip():
             raise ValueError(f"{path}:{line_number}: empty topic id or narrative")
         queries.append((topic_id, narrative))
     if not queries:
@@ -263,16 +266,17 @@ def load_trec_run(
 
     ranked: dict[str, list[str]] = {}
     for topic_id, rows in grouped.items():
-        ordered = sorted(rows)
-        ranks = [rank for rank, _, _ in ordered]
-        docids = [docid for _, _, docid in ordered]
+        ranks = [rank for rank, _, _ in rows]
+        docids = [docid for _, _, docid in rows]
         if len(ranks) != len(set(ranks)):
             raise ValueError(f"{path}: {topic_id} contains duplicate rank")
+        if ranks != sorted(ranks):
+            raise ValueError(f"{path}: {topic_id} rows are out of rank order")
         if ranks[0] != 1:
             raise ValueError(f"{path}: {topic_id} ranks must start at 1")
         if len(docids) != len(set(docids)):
             raise ValueError(f"{path}: {topic_id} contains duplicate docid")
-        scores = [score for _, score, _ in ordered]
+        scores = [score for _, score, _ in rows]
         if any(previous < current for previous, current in zip(scores, scores[1:])):
             raise ValueError(f"{path}: {topic_id} scores must be non-increasing by rank")
         if topic_id in topic_ids:
@@ -298,7 +302,10 @@ def _document_lines(path: Path, archive_member: str | None) -> Iterator[TextIO]:
         ]
         member = archive_member or (candidates[0] if len(candidates) == 1 else None)
         if member is None or member not in candidates:
-            raise ValueError("choose one JSONL ZIP member with archive_member")
+            raise ValueError(
+                f"{path}: choose one JSONL ZIP member with archive_member; "
+                f"found {candidates}"
+            )
         with archive.open(member) as raw:
             with io.TextIOWrapper(raw, encoding="utf-8") as handle:
                 yield handle
@@ -328,7 +335,7 @@ def load_documents(
                 raise ValueError(f"{path}:{line_number}: expected a JSON object")
             query = record.get("query")
             candidates = record.get("candidates")
-            if not isinstance(query, dict) or not _nonempty_text(query.get("qid")) or not _nonempty_text(query.get("text")):
+            if not isinstance(query, dict) or not _nonempty_text(query.get("qid")):
                 raise ValueError(f"{path}:{line_number}: organizer query core is invalid")
             if not isinstance(candidates, list):
                 raise ValueError(f"{path}:{line_number}: organizer candidates core is invalid")
@@ -485,7 +492,17 @@ def _input_path(root_dir: Path, value: str) -> Path:
 
 def _output_path(root_dir: Path, value: str) -> Path:
     path = Path(value)
-    return path if path.is_absolute() else root_dir / path
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(
+            "experiment.output_dir must be a relative dedicated child of outputs/"
+        )
+    outputs_root = (root_dir / "outputs").resolve()
+    resolved = (root_dir / path).resolve()
+    if resolved == outputs_root or outputs_root not in resolved.parents:
+        raise ValueError(
+            "experiment.output_dir must be a relative dedicated child of outputs/"
+        )
+    return resolved
 
 
 def _nonempty_text(value: object) -> bool:

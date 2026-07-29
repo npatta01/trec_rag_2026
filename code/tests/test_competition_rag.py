@@ -71,6 +71,27 @@ def test_loads_strict_generation_config_and_resolves_inputs_from_checkout(
 
 
 @pytest.mark.parametrize(
+    "output_dir",
+    [
+        "/tmp/competition-rag-output",
+        "../competition-rag-output",
+        "outputs/../competition-rag-output",
+        "outputs",
+    ],
+)
+def test_config_rejects_output_directories_outside_a_dedicated_outputs_child(
+    tmp_path: Path, output_dir: str
+) -> None:
+    content = _config_text().replace(
+        "  output_dir: outputs/rag26_competition_rag_gpt_sol_v1\n",
+        f"  output_dir: {output_dir}\n",
+    )
+
+    with pytest.raises(ValueError, match="experiment.output_dir"):
+        load_rag_generation_config(_write_config(tmp_path, content))
+
+
+@pytest.mark.parametrize(
     ("content", "message"),
     [
         (_config_text().replace("schema_version: competition_rag_config_v1\n", ""), "schema_version"),
@@ -130,6 +151,23 @@ def test_topics_are_exactly_two_headerless_tsv_fields(
         load_queries(path)
 
 
+def test_topic_narrative_preserves_exact_tsv_field_content(tmp_path: Path) -> None:
+    path = tmp_path / "topics.tsv"
+    path.write_text("rag2026-0\t  Exact narrative field content  \n", encoding="utf-8")
+
+    assert load_queries(path) == [
+        ("rag2026-0", "  Exact narrative field content  ")
+    ]
+
+
+def test_topic_ids_reject_noncanonical_surrounding_whitespace(tmp_path: Path) -> None:
+    path = tmp_path / "topics.tsv"
+    path.write_text(" rag2026-0\tExact narrative\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="topic id"):
+        load_queries(path)
+
+
 def test_trec_run_requires_organizer_six_field_ranked_rows(tmp_path: Path) -> None:
     path = tmp_path / "run.tsv"
     path.write_text(
@@ -143,6 +181,31 @@ def test_trec_run_requires_organizer_six_field_ranked_rows(tmp_path: Path) -> No
         "rag2026-0": ["climbmix-a"],
         "rag2026-1": ["climbmix-c"],
     }
+
+
+def test_trec_run_accepts_increasing_noncontiguous_variable_depth(tmp_path: Path) -> None:
+    path = tmp_path / "run.tsv"
+    path.write_text(
+        "rag2026-0 Q0 climbmix-a 1 9.25 facet-deepseek-b40-v1\n"
+        "rag2026-0 Q0 climbmix-b 3 8.75 facet-deepseek-b40-v1\n",
+        encoding="utf-8",
+    )
+
+    assert load_trec_run(path, {"rag2026-0"}, top_k=None) == {
+        "rag2026-0": ["climbmix-a", "climbmix-b"]
+    }
+
+
+def test_trec_run_rejects_rows_out_of_raw_rank_order(tmp_path: Path) -> None:
+    path = tmp_path / "run.tsv"
+    path.write_text(
+        "rag2026-0 Q0 climbmix-b 2 8.75 facet-deepseek-b40-v1\n"
+        "rag2026-0 Q0 climbmix-a 1 9.25 facet-deepseek-b40-v1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="order"):
+        load_trec_run(path, {"rag2026-0"}, top_k=None)
 
 
 @pytest.mark.parametrize(
@@ -194,6 +257,116 @@ def test_loads_organizer_document_zip_with_local_extension_fields(tmp_path: Path
         wanted_docids={"climbmix-a", "climbmix-b"},
         max_words=2,
     ) == {"climbmix-a": "First document", "climbmix-b": "Second document"}
+
+
+def test_loads_qid_only_organizer_query_core(tmp_path: Path) -> None:
+    archive_path = tmp_path / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            json.dumps(
+                {
+                    "query": {"qid": "rag2026-0"},
+                    "candidates": [{"docid": "climbmix-a", "doc": "Document text."}],
+                }
+            )
+            + "\n",
+        )
+
+    assert load_documents(
+        archive_path,
+        archive_member=None,
+        wanted_docids={"climbmix-a"},
+        max_words=100,
+    ) == {"climbmix-a": "Document text."}
+
+
+def test_document_zip_rejects_missing_or_wrong_archive_member(tmp_path: Path) -> None:
+    archive_path = tmp_path / "retrieval_with_text.jsonl.zip"
+    row = json.dumps(
+        {
+            "query": {"qid": "rag2026-0"},
+            "candidates": [{"docid": "climbmix-a", "doc": "Document text."}],
+        }
+    )
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("first.jsonl", row + "\n")
+        archive.writestr("second.jsonl", row + "\n")
+
+    with pytest.raises(ValueError, match="archive_member"):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
+    with pytest.raises(ValueError, match="archive_member"):
+        load_documents(archive_path, "missing.jsonl", {"climbmix-a"}, 100)
+
+
+def test_document_zip_rejects_malformed_json_with_line_context(tmp_path: Path) -> None:
+    archive_path = tmp_path / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("retrieval_with_text.jsonl", "{not-json}\n")
+
+    with pytest.raises(ValueError, match=r"retrieval_with_text.*:1: invalid JSON"):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"candidates": [{"docid": "climbmix-a", "doc": "Document text."}]},
+        {"query": {}, "candidates": [{"docid": "climbmix-a", "doc": "Document text."}]},
+        {"query": {"qid": "rag2026-0"}},
+        {"query": {"qid": "rag2026-0"}, "candidates": [{"doc": "Document text."}]},
+        {"query": {"qid": "rag2026-0"}, "candidates": [{"docid": "climbmix-a"}]},
+    ],
+)
+def test_document_zip_rejects_missing_required_organizer_core_fields(
+    tmp_path: Path, row: dict[str, object]
+) -> None:
+    archive_path = tmp_path / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("retrieval_with_text.jsonl", json.dumps(row) + "\n")
+
+    with pytest.raises(ValueError, match="organizer|candidate"):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
+
+
+def test_document_zip_rejects_conflicting_duplicate_document_text(tmp_path: Path) -> None:
+    archive_path = tmp_path / "retrieval_with_text.jsonl.zip"
+    rows = [
+        {
+            "query": {"qid": "rag2026-0"},
+            "candidates": [{"docid": "climbmix-a", "doc": "First text."}],
+        },
+        {
+            "query": {"qid": "rag2026-1"},
+            "candidates": [{"docid": "climbmix-a", "doc": "Conflicting text."}],
+        },
+    ]
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            "".join(json.dumps(row) + "\n" for row in rows),
+        )
+
+    with pytest.raises(ValueError, match="conflicting duplicate document climbmix-a"):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
+
+
+def test_document_zip_rejects_missing_wanted_docids(tmp_path: Path) -> None:
+    archive_path = tmp_path / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            json.dumps(
+                {
+                    "query": {"qid": "rag2026-0"},
+                    "candidates": [{"docid": "climbmix-other", "doc": "Other text."}],
+                }
+            )
+            + "\n",
+        )
+
+    with pytest.raises(ValueError, match="missing 1 ranked documents.*climbmix-a"):
+        load_documents(archive_path, None, {"climbmix-a"}, 100)
 
 
 def test_checked_in_competition_config_selects_every_official_topic() -> None:
