@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import threading
 import time
 import zipfile
@@ -718,6 +720,187 @@ def test_overwrite_clears_only_generation_state_before_failure_then_resume_regen
     assert "Fresh one." in config.output_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "overlap",
+    [
+        "queries_equal_output",
+        "run_inside_work",
+        "documents_contains_work",
+        "documents_contains_output",
+    ],
+)
+def test_overwrite_rejects_input_and_deletion_target_overlap_before_deleting(
+    tmp_path: Path, overlap: str
+) -> None:
+    config = _pipeline_config(tmp_path)
+    config.output_path.parent.mkdir(parents=True, exist_ok=True)
+    config.output_path.write_text("old output\n", encoding="utf-8")
+    config.work_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = config.work_dir / "old-row.json"
+    sentinel.write_text("old row\n", encoding="utf-8")
+    original_queries = config.queries_path.read_bytes()
+    original_run = config.run_path.read_bytes()
+
+    if overlap == "queries_equal_output":
+        config = replace(config, output_path=config.queries_path, overwrite=True)
+    elif overlap == "run_inside_work":
+        nested_run = config.work_dir / "run.trec"
+        nested_run.write_bytes(original_run)
+        config = replace(config, run_path=nested_run, overwrite=True)
+    elif overlap == "documents_contains_work":
+        container = tmp_path / "input-container"
+        container.mkdir()
+        nested_work = container / "work"
+        nested_work.mkdir()
+        (nested_work / "old-row.json").write_text("old row\n", encoding="utf-8")
+        config = replace(config, documents_path=container, work_dir=nested_work, overwrite=True)
+        sentinel = nested_work / "old-row.json"
+    else:
+        container = tmp_path / "input-container"
+        container.mkdir()
+        nested_output = container / "submission.jsonl"
+        nested_output.write_text("old output\n", encoding="utf-8")
+        config = replace(config, documents_path=container, output_path=nested_output, overwrite=True)
+
+    with pytest.raises(ValueError, match="overlap"):
+        asyncio.run(run_generation(config, FakeGenerator({})))
+
+    assert sentinel.read_text(encoding="utf-8") == "old row\n"
+    assert config.queries_path.read_bytes() == original_queries
+    if overlap != "run_inside_work":
+        assert config.run_path.read_bytes() == original_run
+
+
+def test_overwrite_clears_old_state_before_fallible_input_loading(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path)
+    initial = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "Old one."),
+            "rag2026-2": _topic_output(["climbmix-c"], "Old two."),
+        }
+    )
+    asyncio.run(run_generation(config, initial))
+    valid_run = config.run_path.read_text(encoding="utf-8")
+    config.run_path.write_text("not a six-field TREC row\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="six TREC fields"):
+        asyncio.run(run_generation(replace(config, overwrite=True), FakeGenerator({})))
+
+    assert not config.output_path.exists()
+    assert not config.work_dir.exists()
+    config.run_path.write_text(valid_run, encoding="utf-8")
+    resumed = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "Fresh one."),
+            "rag2026-2": _topic_output(["climbmix-c"], "Fresh two."),
+        }
+    )
+    asyncio.run(run_generation(replace(config, resume=True), resumed))
+
+    assert {call["topic_id"] for call in resumed.calls} == {"rag2026-1", "rag2026-2"}
+    assert "Old one." not in config.output_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("artifact", ["raw/response.json", "errors/topic.txt", "scratch.bin"])
+def test_create_rejects_any_existing_work_artifact(tmp_path: Path, artifact: str) -> None:
+    config = _pipeline_config(tmp_path)
+    path = config.work_dir / artifact
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("existing artifact\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="artifacts exist"):
+        asyncio.run(run_generation(config, FakeGenerator({})))
+
+    assert path.read_text(encoding="utf-8") == "existing artifact\n"
+
+
+def test_final_publication_does_not_reuse_predictable_temp_name(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path)
+    config.output_path.parent.mkdir(parents=True, exist_ok=True)
+    old_shared_temp = config.output_path.with_name(config.output_path.name + ".tmp")
+    old_shared_temp.write_text("unrelated sentinel\n", encoding="utf-8")
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "A supports it."),
+            "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    assert old_shared_temp.read_text(encoding="utf-8") == "unrelated sentinel\n"
+
+
+def test_atomic_publication_fsyncs_file_and_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _pipeline_config(tmp_path)
+    synced_kinds: list[str] = []
+    real_fsync = os.fsync
+
+    def observing_fsync(file_descriptor: int) -> None:
+        mode = os.fstat(file_descriptor).st_mode
+        synced_kinds.append("directory" if stat.S_ISDIR(mode) else "file")
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr(competition_rag.os, "fsync", observing_fsync)
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "A supports it."),
+            "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    assert "file" in synced_kinds
+    assert "directory" in synced_kinds
+
+
+def test_second_process_cannot_mutate_same_generation_artifacts(tmp_path: Path) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
+    entered = threading.Event()
+    release = threading.Event()
+    first_errors: list[BaseException] = []
+
+    class BlockingGenerator(FakeGenerator):
+        def complete_json(self, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test release timed out")
+            return super().complete_json(**kwargs)
+
+    first = BlockingGenerator(
+        {"rag2026-2": _topic_output(["climbmix-c"], "First process.")}
+    )
+
+    def run_first() -> None:
+        try:
+            asyncio.run(run_generation(config, first))
+        except BaseException as exc:
+            first_errors.append(exc)
+
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    assert entered.wait(timeout=5)
+    try:
+        with pytest.raises(RuntimeError, match="already active"):
+            asyncio.run(
+                run_generation(
+                    config,
+                    FakeGenerator(
+                        {"rag2026-2": _topic_output(["climbmix-c"], "Second process.")}
+                    ),
+                )
+            )
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert first_errors == []
+
+
 def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> None:
     config = _pipeline_config(tmp_path)
     generator = FakeGenerator(
@@ -732,6 +915,81 @@ def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> N
 
     assert not config.output_path.exists()
     assert list((config.work_dir / "errors").glob("*.txt"))
+
+
+def test_persisted_raw_responses_and_errors_redact_configured_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _pipeline_config(tmp_path)
+    api_key = "reflected-secret-token"
+    monkeypatch.setenv(config.api_key_env, api_key)
+
+    class ReflectingGenerator:
+        def complete_json(
+            self, *, topic_id: str, **kwargs: Any
+        ) -> tuple[dict[str, Any], dict[str, Any]]:
+            del kwargs
+            if topic_id == "rag2026-1":
+                return (
+                    _topic_output(["climbmix-a"], "A supports it."),
+                    {
+                        "authorization": f"Bearer {api_key}",
+                        "nested": [f"prefix-{api_key}-suffix"],
+                    },
+                )
+            raise ValueError(f"provider reflected {api_key} in an error")
+
+    with pytest.raises(RuntimeError, match="1 topic"):
+        asyncio.run(run_generation(config, ReflectingGenerator()))
+
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in config.work_dir.rglob("*")
+        if path.is_file()
+    )
+    assert api_key not in persisted
+    assert "[REDACTED]" in persisted
+
+
+def test_openrouter_redacts_its_key_from_persisted_success_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
+    api_key = "client-only-secret-token"
+    monkeypatch.delenv(config.api_key_env, raising=False)
+    response = FakeHttpResponse(
+        200,
+        {
+            "id": f"provider-reflected-{api_key}",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            _topic_output(["climbmix-c"], "C supports it.")
+                        )
+                    }
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
+    generator = OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key=api_key,
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=2,
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    raw_path = next((config.work_dir / "raw").glob("*.json"))
+    persisted = raw_path.read_text(encoding="utf-8")
+    assert api_key not in persisted
+    assert "provider-reflected-[REDACTED]" in persisted
 
 
 class FakeHttpResponse:
@@ -839,6 +1097,65 @@ def test_transient_retries_repeat_the_identical_request(monkeypatch: pytest.Monk
 
     assert len(bodies) == 2
     assert bodies[0] == bodies[1]
+
+
+@pytest.mark.parametrize("status_code", [400, 429, 503])
+def test_http_failures_persist_sanitized_status_body_and_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
+    api_key = "reflected-secret-token"
+    monkeypatch.setenv(config.api_key_env, api_key)
+    payload = {"error": {"message": f"rejected bearer {api_key}"}}
+
+    def fake_post(url: str, **kwargs: Any) -> FakeHttpResponse:
+        del url, kwargs
+        return FakeHttpResponse(status_code, payload)
+
+    monkeypatch.setattr(competition_rag.requests, "post", fake_post)
+    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+    generator = OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key=api_key,
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError, match="1 topic"):
+        asyncio.run(run_generation(config, generator))
+
+    failed_raw = next((config.work_dir / "raw").glob("*.failed.json"))
+    raw = json.loads(failed_raw.read_text(encoding="utf-8"))
+    assert raw["http_status"] == status_code
+    assert raw["envelope"] == {"error": {"message": "rejected bearer [REDACTED]"}}
+    assert api_key not in failed_raw.read_text(encoding="utf-8")
+
+
+def test_cli_validates_topic_selection_before_env_or_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("not-an-official-topic",))
+    config_path = tmp_path / "competition-rag.yaml"
+    events: list[str] = []
+
+    class GuardedEnvironment(dict[str, str]):
+        def get(self, key: str, default: str = "") -> str:
+            events.append(f"credential:{key}")
+            return super().get(key, default)
+
+    monkeypatch.setattr(competition_rag, "arguments", lambda: config_path)
+    monkeypatch.setattr(competition_rag, "load_rag_generation_config", lambda _: config)
+    monkeypatch.setattr(competition_rag, "load_repo_env", lambda _: events.append("env"))
+    monkeypatch.setattr(competition_rag.os, "environ", GuardedEnvironment())
+
+    with pytest.raises(SystemExit, match="unknown topic ID"):
+        competition_rag.main()
+
+    assert events == []
 
 
 def test_cli_accepts_only_config_path(tmp_path: Path) -> None:

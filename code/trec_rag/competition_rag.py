@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import time
 import zipfile
 from contextlib import contextmanager
@@ -20,6 +21,7 @@ from typing import Any, Iterator, Protocol, Sequence, TextIO
 
 import requests
 import yaml
+from filelock import FileLock, Timeout as FileLockTimeout
 
 from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_root
 
@@ -665,28 +667,31 @@ class OpenRouterJsonGenerator:
                 continue
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt == self.transport_max_attempts:
-                    response.raise_for_status()
+                    raise SemanticCompletionError(
+                        f"OpenRouter HTTP {response.status_code}; no repair call was made",
+                        _http_failure(response, self._api_key),
+                    )
                 time.sleep(_retry_delay(response.headers.get("Retry-After"), attempt))
                 continue
             if response.status_code >= 400:
-                try:
-                    detail = json.dumps(response.json(), ensure_ascii=False)
-                except ValueError:
-                    detail = response.text
-                raise RuntimeError(
-                    f"OpenRouter rejected generation with HTTP {response.status_code}: {detail[:2000]}"
+                raise SemanticCompletionError(
+                    f"OpenRouter HTTP {response.status_code}; no repair call was made",
+                    _http_failure(response, self._api_key),
                 )
             try:
                 envelope = response.json()
             except ValueError as exc:
                 raise SemanticCompletionError(
                     "OpenRouter returned a non-JSON response; no repair call was made",
-                    {"http_status": response.status_code, "body": response.text},
+                    _redact(
+                        {"http_status": response.status_code, "body": response.text},
+                        (self._api_key,),
+                    ),
                 ) from exc
             if not isinstance(envelope, dict):
                 raise SemanticCompletionError(
                     "OpenRouter response must be a JSON object; no repair call was made",
-                    envelope,
+                    _redact(envelope, (self._api_key,)),
                 )
             try:
                 message = envelope["choices"][0]["message"]
@@ -694,10 +699,25 @@ class OpenRouterJsonGenerator:
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise SemanticCompletionError(
                     "OpenRouter returned a malformed semantic completion; no repair call was made",
-                    envelope,
+                    _redact(envelope, (self._api_key,)),
                 ) from exc
-            return generated, envelope
+            return generated, _redact(envelope, (self._api_key,))
         raise AssertionError("unreachable OpenRouter retry state")
+
+
+def _http_failure(response: requests.Response, api_key: str) -> dict[str, Any]:
+    try:
+        envelope = response.json()
+    except ValueError:
+        envelope = None
+    return _redact(
+        {
+            "http_status": response.status_code,
+            "body": response.text,
+            "envelope": envelope,
+        },
+        (api_key,),
+    )
 
 
 def _retry_delay(retry_after: str | None, attempt: int) -> float:
@@ -851,15 +871,62 @@ def _safe_topic_name(topic_id: str) -> str:
     return f"{prefix}-{sha256(topic_id.encode('utf-8')).hexdigest()[:8]}"
 
 
-def _write_json(path: Path, value: object, *, compact: bool = False) -> None:
+def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
+    active = tuple(secret for secret in secrets if secret)
+    if isinstance(value, str):
+        for secret in active:
+            value = value.replace(secret, "[REDACTED]")
+        return value
+    if isinstance(value, list):
+        return [_redact(item, active) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact(item, active) for item in value)
+    if isinstance(value, dict):
+        return {
+            _redact(key, active) if isinstance(key, str) else key: _redact(item, active)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_text(path: Path, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(contents)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        temporary_path.replace(path)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _write_json(path: Path, value: object, *, compact: bool = False) -> None:
     if compact:
         contents = json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
     else:
         contents = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
-    temporary.write_text(contents, encoding="utf-8")
-    temporary.replace(path)
+    _atomic_write_text(path, contents)
 
 
 def _saved_record(
@@ -900,6 +967,7 @@ async def _generate_topic(
 ) -> tuple[str, str | None]:
     work_dir = config.resolved_work_dir
     topic_name = _safe_topic_name(topic_id)
+    secrets = (os.environ.get(config.api_key_env, ""),)
     try:
         async with semaphore:
             generated, raw_response = await asyncio.to_thread(
@@ -909,7 +977,10 @@ async def _generate_topic(
                 user_prompt=render_prompt(narrative, ranked_docids, documents),
                 response_schema=output_schema(),
             )
-        _write_json(work_dir / "raw" / f"{topic_name}.json", raw_response)
+        _write_json(
+            work_dir / "raw" / f"{topic_name}.json",
+            _redact(raw_response, secrets),
+        )
         record = build_submission_record(
             generated,
             topic_id=topic_id,
@@ -931,15 +1002,72 @@ async def _generate_topic(
         return topic_id, None
     except Exception as exc:
         if isinstance(exc, SemanticCompletionError):
-            _write_json(work_dir / "raw" / f"{topic_name}.failed.json", exc.raw_response)
+            _write_json(
+                work_dir / "raw" / f"{topic_name}.failed.json",
+                _redact(exc.raw_response, secrets),
+            )
         error_path = work_dir / "errors" / f"{topic_name}.txt"
-        error_path.parent.mkdir(parents=True, exist_ok=True)
-        error_path.write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
-        return topic_id, f"{type(exc).__name__}: {exc}"
+        sanitized_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+        _atomic_write_text(error_path, f"{sanitized_error}\n")
+        return topic_id, sanitized_error
 
 
-async def run_generation(config: RagGenerationConfig, generator: JsonGenerator) -> None:
-    """Generate missing topic rows and atomically publish the organizer JSONL."""
+def _paths_overlap(first: Path, second: Path) -> bool:
+    first = first.resolve(strict=False)
+    second = second.resolve(strict=False)
+    return first == second or first in second.parents or second in first.parents
+
+
+def _validate_artifact_paths(config: RagGenerationConfig) -> None:
+    inputs = {
+        "queries_path": config.queries_path,
+        "run_path": config.run_path,
+        "documents_path": config.documents_path,
+    }
+    targets = {
+        "output_path": config.output_path,
+        "resolved_work_dir": config.resolved_work_dir,
+    }
+    for input_name, input_path in inputs.items():
+        for target_name, target_path in targets.items():
+            if _paths_overlap(input_path, target_path):
+                raise ValueError(
+                    f"generation input/output paths overlap: {input_name} and {target_name}"
+                )
+    if _paths_overlap(config.output_path, config.resolved_work_dir):
+        raise ValueError("generation output and work paths overlap")
+
+
+def _work_has_artifacts(work_dir: Path) -> bool:
+    if work_dir.is_symlink() or (work_dir.exists() and not work_dir.is_dir()):
+        return True
+    return work_dir.is_dir() and next(work_dir.iterdir(), None) is not None
+
+
+def _clear_generation_artifacts(config: RagGenerationConfig) -> None:
+    work_dir = config.resolved_work_dir
+    if work_dir.is_symlink() or (work_dir.exists() and not work_dir.is_dir()):
+        work_dir.unlink()
+        _fsync_directory(work_dir.parent)
+    elif work_dir.exists():
+        shutil.rmtree(work_dir)
+        _fsync_directory(work_dir.parent)
+    if config.output_path.exists() or config.output_path.is_symlink():
+        config.output_path.unlink()
+        _fsync_directory(config.output_path.parent)
+
+
+async def _run_generation_locked(
+    config: RagGenerationConfig, generator: JsonGenerator
+) -> None:
+    work_dir = config.resolved_work_dir
+    if config.overwrite:
+        _clear_generation_artifacts(config)
+    elif not config.resume and (
+        config.output_path.exists() or _work_has_artifacts(work_dir)
+    ):
+        raise ValueError("generation artifacts exist; use --resume or --overwrite")
+
     topics = select_queries(load_queries(config.queries_path), config.topic_ids)
     ranked = load_trec_run(config.run_path, {topic_id for topic_id, _ in topics}, config.top_k)
     wanted_docids = {docid for docids in ranked.values() for docid in docids}
@@ -949,17 +1077,7 @@ async def run_generation(config: RagGenerationConfig, generator: JsonGenerator) 
         wanted_docids,
         config.max_document_words,
     )
-    work_dir = config.resolved_work_dir
     rows_dir = work_dir / "rows"
-    if config.overwrite:
-        if work_dir.exists():
-            shutil.rmtree(work_dir)
-        if config.output_path.exists():
-            config.output_path.unlink()
-    existing_rows = list(rows_dir.glob("*.json")) if rows_dir.exists() else []
-    if not config.resume and not config.overwrite and (config.output_path.exists() or existing_rows):
-        raise ValueError("generation artifacts exist; use --resume or --overwrite")
-
     pending: list[tuple[str, str]] = []
     for topic_id, narrative in topics:
         row_path = rows_dir / f"{_safe_topic_name(topic_id)}.json"
@@ -1008,16 +1126,27 @@ async def run_generation(config: RagGenerationConfig, generator: JsonGenerator) 
         if record is None:
             raise RuntimeError(f"missing valid generated row for {topic_id}")
         final_records.append(record)
-    config.output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = config.output_path.with_name(config.output_path.name + ".tmp")
-    temporary.write_text(
+    _atomic_write_text(
+        config.output_path,
         "".join(
             json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
             for record in final_records
         ),
-        encoding="utf-8",
     )
-    temporary.replace(config.output_path)
+
+
+async def run_generation(config: RagGenerationConfig, generator: JsonGenerator) -> None:
+    """Generate missing topic rows and atomically publish the organizer JSONL."""
+    _validate_artifact_paths(config)
+    lock_path = config.output_path.with_name(f".{config.output_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with FileLock(lock_path, timeout=0):
+            await _run_generation_locked(config, generator)
+    except FileLockTimeout as exc:
+        raise RuntimeError(
+            f"generation is already active for {config.output_path}"
+        ) from exc
 
 
 def arguments(argv: list[str] | None = None) -> Path:
@@ -1029,8 +1158,9 @@ def arguments(argv: list[str] | None = None) -> Path:
 def main() -> None:
     try:
         config_path = arguments()
-        load_repo_env(find_repo_root(config_path.resolve().parent))
         config = load_rag_generation_config(config_path)
+        select_queries(load_queries(config.queries_path), config.topic_ids)
+        load_repo_env(find_repo_root(config_path.resolve().parent))
         generator = OpenRouterJsonGenerator(
             api_base=config.api_base,
             api_key=os.environ.get(config.api_key_env, ""),
