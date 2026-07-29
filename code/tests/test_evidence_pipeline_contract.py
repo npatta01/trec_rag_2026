@@ -25,7 +25,7 @@ from trec_rag.evidence_store import (
     write_candidate_jsonl,
 )
 from trec_rag.facet_extraction import FacetPlanningResult, plan_facet_queries
-from trec_rag.official_run import ValidatedDecomposition
+from trec_rag.competition_retrieval import ValidatedDecomposition
 from trec_rag.pipeline_models import QueryVariant
 from trec_rag.topics import Topic
 

@@ -652,7 +652,7 @@ def _load_topic_projection(
     lane_scores = _load_lane_scores(
         topic_root / "scoring" / "lane_scores.jsonl", topic.id
     )
-    from trec_rag.official_run import validate_scoring_selection
+    from trec_rag.competition_retrieval import validate_scoring_selection
 
     memberships = validate_scoring_selection(
         (topic_root / "scoring" / "selection.json").read_bytes(),
@@ -865,7 +865,7 @@ def _validate_retrieval_source_chain(
     if _validate_receipts(topic_root, retrieval) != _RETRIEVAL_ARTIFACTS:
         raise ValueError("retrieval checkpoint artifact set changed")
 
-    from trec_rag.official_run import (
+    from trec_rag.competition_retrieval import (
         decode_retrieval_audit,
         decode_retrieval_decomposition,
         load_validated_decomposition,

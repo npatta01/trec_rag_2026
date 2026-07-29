@@ -27,7 +27,7 @@ from trec_rag.facet_evidence import (
 )
 from trec_rag.facet_extraction import BackendReply, plan_facet_queries
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
-from trec_rag.official_run import (
+from trec_rag.competition_retrieval import (
     _plan_payload,
     _retrieve_topic,
     _score_topic,

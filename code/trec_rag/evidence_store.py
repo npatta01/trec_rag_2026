@@ -55,7 +55,7 @@ from trec_rag.facet_evidence import (
 from trec_rag.topics import Topic
 
 if TYPE_CHECKING:
-    from trec_rag.official_run import ValidatedDecomposition
+    from trec_rag.competition_retrieval import ValidatedDecomposition
 
 
 REQUEST_SCHEMA_VERSION = "extractive_candidate_request_v1"

@@ -3,17 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
 import trec_rag.nuggetizer_adapter as nuggetizer_adapter
-import trec_rag.official_run as official_run
+import trec_rag.competition_retrieval as official_run
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
-from trec_rag.official_run import ExternalAdapters, RunReceipt, run_official
+from trec_rag.competition_retrieval import ExternalAdapters, RunReceipt, run_official
 from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
 from trec_rag.retrieval_export import RetrievalExportReceipt
 from trec_rag.topics import Topic
@@ -80,6 +81,33 @@ def test_config_uses_conventional_identity_and_binds_topic_source(tmp_path: Path
         ).hexdigest(),
         "selected_topic_ids": ["topic-1"],
     }
+
+
+def test_cli_passes_repeated_topics_to_run_official_in_argument_order(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Catches CLI selector reordering or loss before the retrieval run starts."""
+    calls: list[tuple[Path, tuple[str, ...] | None, Path | None]] = []
+    config_path = tmp_path / "competition.yaml"
+
+    def run(config, *, topic_ids, topic_subset):
+        calls.append((config, topic_ids, topic_subset))
+        return SimpleNamespace(
+            retrieval_export=SimpleNamespace(
+                manifest=tmp_path / "outputs" / "retrieval_export_manifest.json"
+            )
+        )
+
+    monkeypatch.setattr(official_run, "run_official", run)
+
+    assert official_run.main(
+        [str(config_path), "--topic", "rag2026-1", "--topic", "rag2026-0"]
+    ) == 0
+
+    assert calls == [(config_path, ("rag2026-1", "rag2026-0"), None)]
+    assert capsys.readouterr().out == f"output={tmp_path / 'outputs'}\n"
 
 
 def test_config_routes_relative_reusable_caches_to_shared_checkout(
