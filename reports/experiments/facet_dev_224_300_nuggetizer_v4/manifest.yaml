@@ -1,0 +1,73 @@
+experiment:
+  id: facet-dev-224-300-nuggetizer-v4
+  run_date: 2026-07-29
+  split: development
+  status: canonical_complete_export_incomplete
+  description: Live two-topic evaluation of the active facet and Nuggetizer wrapper.
+
+code:
+  branch: codex/facet-extraction-clean
+  run_revision: b9578529f1f0af50aeb131b50a98be4dcd86ec73
+
+config:
+  retriever: pyserini_remote
+  index: climbmix-400b
+  query_source: original_narrative_plus_full_subnarratives
+  hits: 1000_per_lane
+  ranking: mixedbread_per_lane_then_round_robin_100
+
+runtime:
+  topic_ids: ["224", "300"]
+  topic_input: official_id_and_untouched_narrative_only
+  organizer_subnarratives_at_runtime: false
+  organizer_nuggets_at_runtime: false
+  qrels_at_runtime: false
+  planner_model: deepseek/deepseek-v4-flash-20260423
+  canonical_model: deepseek/deepseek-v4-flash-20260423
+  canonical_prompt: canonical_nuggetizer_v4
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 2
+  relevance_threshold: 2
+  unjudged_policy: unknown
+  qrel_kind: pooled_llm_judgments_not_exhaustive_gold
+  qrels: three_pooled_umbrela_qrel_files
+  qrel_receipts:
+    codex:
+      path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+      sha256: 42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37
+    ministral:
+      path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-ministral-3-14b-instruct-2512-v2.qrels
+      sha256: 7cc10477832a546664779b415eb15bb387138757e4ec0d609c98986181e9a3ad
+    qwen:
+      path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-qwen3.5-9b-v2.qrels
+      sha256: 7b05789905066730f99dac4e17cb292d71d4091a3762c5f12f17ce00ff4366dd
+
+tracked_record_files:
+  config: config.yaml
+  metrics: metrics.json
+  recall_table: recall-table.md
+  notes: notes.md
+
+source_receipts:
+  ignored_config_sha256: 94f46830d0e45075175cdcfbf3a78fbb6c3c085b0add9b0aa8b53f2bbf02ba2a
+  evaluator_sha256: f1a4beb8e974d8fb5bff906989cbcfcd3ad6718d0ce93a5107f35756af8a1b60
+  original_metrics_sha256: 572a25771699d771a91a89a7d584667cabe192005b745a18f3a47a265a3bd0a8
+  original_recall_table_sha256: 04511f9d4c377955f5f1d9fb612d9598d5ed01a89df7456f724917afc9842c85
+  semantic_review_sha256: 53123b98a954519cf021c41b055bca33caaafb3eed73b140680fde50460b0f08
+  run_observations_sha256: 11237015ba9f98f288d9571c9dc2620b8fa2667a6e0a20672ad5c8fbb7f11ae8
+  topic_224_decomposition_sha256: c31ed8fc46dd1bb43cc4bbb2e82d4c837ac3c060f40ff7fd7089ea6f196ad09a
+  topic_224_canonical_sha256: 645f33d61f4f29fd77ff9a169568e896a9b99c9208c7fc17bcabe7b6298a3319
+  topic_300_decomposition_sha256: 5ecb64f7d7c6d26b6e3c96ad367c5bfa7da1acc2c12761d5abe8d10e6ab7b2a5
+  topic_300_canonical_sha256: 968335b33946c25d3713b9cc1d78fc90011b918ddb50857585b703e4a0d8bdc2
+
+local_artifacts:
+  root: outputs/facet-dev-224-300-nuggetizer-v4
+  output_dir: outputs/facet-dev-224-300-nuggetizer-v4
+  cache_dir: cache/retrieval/facet-dev-224-300-nuggetizer-v4
+  committed_raw_documents: false
+  committed_model_responses: false
+  note: Large sealed checkpoints and raw responses remain ignored; the tracked record contains only aggregate metrics, audit methodology, and cryptographic receipts.
+
+notes: Canonicalization completed; final organizer export remained incomplete at real scale. See notes.md and issue 25.

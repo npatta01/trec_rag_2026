@@ -462,9 +462,16 @@ did not justify global fusion or a final selector.
 
 ## Provenance
 
-The current wrapper evaluation remains in the ignored local experiment tree.
-Relative paths below are from the repository root; hashes identify the exact
-compact evidence files without committing raw documents or model responses:
+The sanitized current-wrapper experiment record is tracked under
+[`reports/experiments/facet_dev_224_300_nuggetizer_v4/`](experiments/facet_dev_224_300_nuggetizer_v4/).
+Its manifest pins the run revision, configuration, qrels, evaluator, sealed
+decomposition/canonical outputs, and the local audit receipts. The tracked
+metrics, complete recall table, and audit notes contain no raw document text or
+model response.
+
+The large current wrapper evaluation remains in the ignored local experiment
+tree. Relative paths below are from the repository root; hashes identify its
+exact compact evidence files:
 
 - `outputs/facet-dev-224-300-nuggetizer-v4/evaluation/metrics.json`
   SHA-256:
