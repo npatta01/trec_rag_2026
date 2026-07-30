@@ -1979,6 +1979,29 @@ def test_standard_rag_config_loads_validated_answers_and_resolved_citations(
     assert "citation 0 → doc-original" in rendered
 
 
+def test_rag_report_provider_comes_from_the_validated_generation_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hard-coding the report provider instead of propagating config must fail."""
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, _output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+    load_config = debug_report.load_rag_generation_config
+
+    def load_config_with_distinct_provider(path: Path):  # type: ignore[no-untyped-def]
+        return replace(load_config(path), provider="validated-fixture-provider")
+
+    monkeypatch.setattr(
+        debug_report,
+        "load_rag_generation_config",
+        load_config_with_distinct_provider,
+    )
+
+    rag = load_debug_report_data(config_path, rag_config_path=rag_config).topics[0].rag_output
+
+    assert rag is not None
+    assert rag.provider == "validated-fixture-provider"
+
+
 @pytest.mark.parametrize("mismatch", ("run_path", "topic_narrative"))
 def test_rag_compatibility_errors_before_output_is_written(
     tmp_path: Path, mismatch: str

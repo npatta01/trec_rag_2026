@@ -436,7 +436,7 @@ def _attach_rag_outputs(
             answer_items=answer_items,
             run_id=metadata["run_id"],
             run_desc=metadata["run_desc"],
-            provider="openrouter",
+            provider=config.provider,
             model=config.model,
             word_count=sum(len(item.text.split()) for item in answer_items),
             output_sha256=output_sha256,

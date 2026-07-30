@@ -96,6 +96,7 @@ class RagGenerationConfig:
     concurrency: int
     resume: bool
     overwrite: bool
+    provider: str
     api_base: str
     api_key_env: str
     model: str
@@ -189,6 +190,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         concurrency=_positive_int(generation, "concurrency", "generation"),
         resume=mode == "resume",
         overwrite=mode == "overwrite",
+        provider=_text(generation, "type", "generation").lower(),
         api_base=_text(generation, "api_base", "generation"),
         api_key_env=_text(generation, "api_key_env", "generation"),
         model=_text(generation, "model", "generation"),
