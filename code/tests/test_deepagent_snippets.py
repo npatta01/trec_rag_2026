@@ -1,23 +1,35 @@
 from __future__ import annotations
 
+import base64
+from concurrent.futures import ThreadPoolExecutor
 import json
-from collections.abc import Sequence
+import multiprocessing
+import os
+from queue import Empty
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from threading import Barrier, BrokenBarrierError, Lock
+from typing import Any
+
 import pytest
+from filelock import FileLock
 
 import trec_rag.deepagent_snippets as deepagent_snippets
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk
 from trec_rag.deepagent_snippets import (
     DEFAULT_SNIPPET_MODEL,
     DEFAULT_SNIPPET_MODEL_REVISION,
+    InvalidSnippetCursorError,
     LocalMixedbreadSnippetRanker,
+    RelevantSnippet,
     RelevantSnippetExtractor,
     ScoredTextChunk,
     SmallLLMSnippetRanker,
     SnippetCacheIntegrityError,
     SnippetExtractionConfig,
+    SnippetPage,
     SnippetResultCache,
     create_default_snippet_extractor,
 )
@@ -81,6 +93,42 @@ class CountingRanker:
         )
 
 
+class _ProcessRecordingRanker(CountingRanker):
+    def __init__(self, calls: Any, rendezvous: Any) -> None:
+        super().__init__()
+        self._calls = calls
+        self._rendezvous = rendezvous
+
+    def rank(
+        self, focus_query: str, chunks: Sequence[TextChunk]
+    ) -> tuple[ScoredTextChunk, ...]:
+        with self._calls.get_lock():
+            self._calls.value += 1
+        try:
+            self._rendezvous.wait()
+        except BrokenBarrierError:
+            pass
+        return super().rank(focus_query, chunks)
+
+
+class _ProcessCrossEncoder:
+    def __init__(self, score: float, calls: Any, rendezvous: Any) -> None:
+        self._score = score
+        self._calls = calls
+        self._rendezvous = rendezvous
+
+    def predict(
+        self, pairs: Sequence[tuple[str, str]], **_kwargs: object
+    ) -> list[float]:
+        with self._calls.get_lock():
+            self._calls.value += 1
+        try:
+            self._rendezvous.wait()
+        except BrokenBarrierError:
+            pass
+        return [self._score for _pair in pairs]
+
+
 def _chunks(*texts: str) -> tuple[TextChunk, ...]:
     offset = 0
     rows: list[TextChunk] = []
@@ -106,6 +154,134 @@ LONG_CHUNKS = _chunks(
 LONG_DOCUMENT = "\n".join(chunk.text for chunk in LONG_CHUNKS)
 
 
+def _extract_in_process(
+    cache_root: str,
+    start_barrier: Any,
+    rank_barrier: Any,
+    rank_calls: Any,
+    results: Any,
+) -> None:
+    extractor = RelevantSnippetExtractor(
+        ranker=_ProcessRecordingRanker(rank_calls, rank_barrier),
+        chunker=FixedChunker(LONG_CHUNKS),
+        result_cache=SnippetResultCache(Path(cache_root)),
+    )
+    try:
+        start_barrier.wait()
+        result = extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    except Exception as exc:  # pragma: no cover - reported to the parent process
+        results.put(("error", type(exc).__name__, str(exc)))
+    else:
+        results.put(("ok", result.cache_status))
+
+
+def _rank_local_in_process(
+    cache_root: str,
+    score: float,
+    start_barrier: Any,
+    predict_barrier: Any,
+    predict_calls: Any,
+    results: Any,
+) -> None:
+    model = _ProcessCrossEncoder(score, predict_calls, predict_barrier)
+    ranker = LocalMixedbreadSnippetRanker(
+        score_cache_root=Path(cache_root),
+        model_loader=lambda **_kwargs: model,
+        device="cpu",
+    )
+    try:
+        start_barrier.wait()
+        ranked = ranker.rank("query", ADAPTER_CHUNKS[:1])
+    except Exception as exc:  # pragma: no cover - reported to the parent process
+        results.put(("error", type(exc).__name__, str(exc)))
+    else:
+        results.put(("ok", ranked[0].relevance_score))
+
+
+def _load_cached_score_in_process(
+    cache_root: str,
+    about_to_construct: Any,
+    results: Any,
+) -> None:
+    about_to_construct.put(True)
+
+    def fail_loader(**_kwargs: object) -> object:
+        raise AssertionError("cached score unexpectedly invoked the model loader")
+
+    try:
+        ranker = LocalMixedbreadSnippetRanker(
+            score_cache_root=Path(cache_root),
+            model_loader=fail_loader,
+            device="cpu",
+        )
+        score = ranker.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score
+    except Exception as exc:  # pragma: no cover - reported to the parent process
+        results.put(("error", type(exc).__name__, str(exc)))
+    else:
+        results.put(("ok", score))
+
+
+def _thread_result_cache_probe(cache_root: str, results: Any) -> None:
+    calls: list[str] = []
+    calls_lock = Lock()
+    rank_barrier = Barrier(2, timeout=0.5)
+
+    class RendezvousRanker(CountingRanker):
+        def rank(
+            self, focus_query: str, chunks: Sequence[TextChunk]
+        ) -> tuple[ScoredTextChunk, ...]:
+            with calls_lock:
+                calls.append(focus_query)
+            try:
+                rank_barrier.wait()
+            except BrokenBarrierError:
+                pass
+            return super().rank(focus_query, chunks)
+
+    extractors = tuple(
+        RelevantSnippetExtractor(
+            ranker=RendezvousRanker(),
+            chunker=FixedChunker(LONG_CHUNKS),
+            result_cache=SnippetResultCache(Path(cache_root)),
+        )
+        for _ in range(2)
+    )
+    start_barrier = Barrier(3, timeout=5)
+    executor = ThreadPoolExecutor(max_workers=2)
+
+    def extract(extractor: RelevantSnippetExtractor) -> str:
+        start_barrier.wait()
+        return extractor.extract(
+            "doc-a", LONG_DOCUMENT, "target passage"
+        ).cache_status
+
+    try:
+        futures = [executor.submit(extract, item) for item in extractors]
+        start_barrier.wait()
+        statuses = [future.result(timeout=5) for future in futures]
+        executor.shutdown(wait=True)
+    except Exception as exc:  # pragma: no cover - reported to the parent process
+        executor.shutdown(wait=False, cancel_futures=True)
+        results.put(("error", type(exc).__name__, str(exc)))
+    else:
+        results.put(("ok", sorted(statuses), calls))
+
+
+def _stop_processes(processes: Sequence[Any]) -> None:
+    started = [process for process in processes if process.pid is not None]
+    for process in started:
+        process.join(timeout=0.1)
+    for process in started:
+        if process.is_alive():
+            process.terminate()
+    for process in started:
+        process.join(timeout=2)
+    for process in started:
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=2)
+
+
 def _extractor(
     tmp_path: Path,
     chunks: Sequence[TextChunk] = LONG_CHUNKS,
@@ -122,6 +298,11 @@ def _extractor(
         ),
         ranker,
     )
+
+
+def _cache_file(root: Path) -> Path:
+    schema_dir = root / f"schema_v{deepagent_snippets.RESULT_SCHEMA_VERSION}"
+    return next(schema_dir.glob("*/*.json"))
 
 
 def test_relevant_passage_near_document_end_leads_first_ten_item_page(tmp_path: Path) -> None:
@@ -212,10 +393,54 @@ def test_extract_rejects_blank_query_and_invalid_cursor(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="focus_query"):
         extractor.extract("doc-a", LONG_DOCUMENT, " \n ")
-    with pytest.raises(ValueError, match="cursor"):
+    with pytest.raises(InvalidSnippetCursorError, match="cursor"):
         extractor.extract("doc-a", LONG_DOCUMENT, "target passage", "not-a-cursor")
-    with pytest.raises(ValueError, match="^invalid cursor$"):
+    with pytest.raises(InvalidSnippetCursorError, match="^invalid cursor$"):
         extractor.extract("doc-a", LONG_DOCUMENT, "target passage", "snowman-☃")
+
+
+def test_invalid_cursor_is_classified_before_any_cache_entry(
+    tmp_path: Path,
+) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    cursor = "not-a-cursor"
+    identity = extractor._result_identity(
+        "doc-a", LONG_DOCUMENT, "target passage", cursor
+    )
+    cache_file = extractor._result_cache._path(identity)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text('{"broken":true}', encoding="utf-8")
+
+    with pytest.raises(InvalidSnippetCursorError, match="^invalid cursor$"):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage", cursor)
+
+
+def test_cursor_offset_edits_are_rejected_but_identical_instances_can_resume(
+    tmp_path: Path,
+) -> None:
+    first_extractor, _ranker = _extractor(tmp_path / "first")
+    first = first_extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    assert first.page.next_cursor is not None
+    encoded = first.page.next_cursor
+    decoded = json.loads(
+        base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+    )
+    decoded["next_offset"] += 1
+    edited = base64.urlsafe_b64encode(
+        json.dumps(decoded, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+
+    with pytest.raises(InvalidSnippetCursorError, match="^invalid cursor$"):
+        first_extractor.extract("doc-a", LONG_DOCUMENT, "target passage", edited)
+
+    second_extractor, _ranker = _extractor(tmp_path / "second")
+    resumed = second_extractor.extract(
+        "doc-a", LONG_DOCUMENT, "target passage", first.page.next_cursor
+    )
+    assert resumed.page_offset == 10
+    assert "doc-a" not in encoded
+    assert "target passage" not in encoded
+    assert str(tmp_path) not in encoded
 
 
 @pytest.mark.parametrize(
@@ -247,7 +472,10 @@ def test_config_and_ranker_scores_are_validated(tmp_path: Path) -> None:
 
     class NonFiniteRanker(CountingRanker):
         def rank(self, focus_query: str, chunks: Sequence[TextChunk]) -> tuple[ScoredTextChunk, ...]:
-            return (ScoredTextChunk(chunks[0], float("nan")),)
+            return tuple(
+                ScoredTextChunk(chunk, float("nan") if index == 0 else 0.0)
+                for index, chunk in enumerate(chunks)
+            )
 
     extractor = RelevantSnippetExtractor(
         ranker=NonFiniteRanker(),
@@ -256,6 +484,76 @@ def test_config_and_ranker_scores_are_validated(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="finite"):
         extractor.extract("doc-a", LONG_DOCUMENT, "target")
+
+
+def test_live_chunker_rejects_oversized_complete_document_but_allows_bounded_short_one(
+    tmp_path: Path,
+) -> None:
+    maximum = 20
+    config = SnippetExtractionConfig(
+        chunk_max_characters=maximum,
+        chunk_overlap_characters=0,
+    )
+    long_document = "L" * (maximum + 1)
+    long_chunk = TextChunk(
+        "doc-a", "doc-a:0000", long_document, 0, len(long_document)
+    )
+    long_extractor = RelevantSnippetExtractor(
+        ranker=CountingRanker(),
+        chunker=FixedChunker((long_chunk,)),
+        result_cache=SnippetResultCache(tmp_path / "long-pages"),
+        config=config,
+    )
+
+    with pytest.raises(ValueError, match="chunker returned an invalid text chunk"):
+        long_extractor.extract("doc-a", long_document, "focus")
+
+    short_document = "S" * maximum
+    short_chunk = TextChunk(
+        "doc-a", "doc-a:0000", short_document, 0, len(short_document)
+    )
+    short_extractor = RelevantSnippetExtractor(
+        ranker=CountingRanker(),
+        chunker=FixedChunker((short_chunk,)),
+        result_cache=SnippetResultCache(tmp_path / "short-pages"),
+        config=config,
+    )
+    short_page = short_extractor.extract("doc-a", short_document, "focus").page
+
+    assert [snippet.text for snippet in short_page.snippets] == [short_document]
+
+
+@pytest.mark.parametrize("failure", ["missing", "duplicate", "foreign"])
+def test_ranker_must_score_every_input_chunk_exactly_once(
+    tmp_path: Path, failure: str
+) -> None:
+    chunks = _chunks("first", "second")
+    document = "\n".join(chunk.text for chunk in chunks)
+
+    class InvalidCoverageRanker(CountingRanker):
+        def rank(
+            self, focus_query: str, rows: Sequence[TextChunk]
+        ) -> tuple[ScoredTextChunk, ...]:
+            first = ScoredTextChunk(rows[0], 1.0)
+            if failure == "missing":
+                return (first,)
+            if failure == "foreign":
+                foreign = TextChunk(
+                    "doc-a", "doc-a:9999", "foreign", 0, len("foreign")
+                )
+                return (first, ScoredTextChunk(foreign, 0.5))
+            return (first, first)
+
+    extractor = RelevantSnippetExtractor(
+        ranker=InvalidCoverageRanker(),
+        chunker=FixedChunker(chunks),
+        result_cache=SnippetResultCache(tmp_path / failure),
+    )
+
+    with pytest.raises(
+        ValueError, match="exactly one score per input chunk|unknown text chunk"
+    ):
+        extractor.extract("doc-a", document, "focus")
 
 
 def test_cache_first_pages_use_every_tool_argument(tmp_path: Path) -> None:
@@ -275,6 +573,30 @@ def test_cache_first_pages_use_every_tool_argument(tmp_path: Path) -> None:
         == "miss"
     )
     assert extractor.extract("doc-a", LONG_DOCUMENT + " revised", "target passage", None).cache_status == "miss"
+
+
+def test_cache_hit_validates_stored_chunk_manifest_without_rechunking(
+    tmp_path: Path,
+) -> None:
+    class CountingChunker(FixedChunker):
+        def __init__(self, chunks: Sequence[TextChunk]) -> None:
+            super().__init__(chunks)
+            self.calls = 0
+
+        def split_text(self, text: str, *, document_id: str) -> list[TextChunk]:
+            self.calls += 1
+            return super().split_text(text, document_id=document_id)
+
+    chunker = CountingChunker(LONG_CHUNKS)
+    extractor = RelevantSnippetExtractor(
+        ranker=CountingRanker(),
+        chunker=chunker,
+        result_cache=SnippetResultCache(tmp_path / "pages"),
+    )
+
+    assert extractor.extract("doc-a", LONG_DOCUMENT, "target passage").cache_status == "miss"
+    assert extractor.extract("doc-a", LONG_DOCUMENT, "target passage").cache_status == "hit"
+    assert chunker.calls == 1
 
 
 def test_cache_identity_distinguishes_injected_chunker_implementations(tmp_path: Path) -> None:
@@ -337,10 +659,26 @@ def _rewrite_cache_response(cache_file: Path, *, next_cursor: object) -> None:
     cache_file.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _rewrite_checksum_consistent_cache_response(
+    cache_file: Path, mutate: Callable[[dict[str, object]], None]
+) -> None:
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    mutate(payload["response"])
+    encoded_response = json.dumps(
+        payload["response"],
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    payload["response_sha256"] = sha256(encoded_response).hexdigest()
+    cache_file.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_cache_rejects_semantically_invalid_next_cursor(tmp_path: Path) -> None:
     extractor, _ranker = _extractor(tmp_path)
     extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
-    cache_file = next((tmp_path / "pages").glob("schema_v1/*/*.json"))
+    cache_file = _cache_file(tmp_path / "pages")
     _rewrite_cache_response(cache_file, next_cursor="snowman-☃")
 
     with pytest.raises(SnippetCacheIntegrityError, match="^invalid snippet cache entry$"):
@@ -350,7 +688,7 @@ def test_cache_rejects_semantically_invalid_next_cursor(tmp_path: Path) -> None:
 def test_cache_rejects_next_cursor_that_disagrees_with_page_offset(tmp_path: Path) -> None:
     extractor, _ranker = _extractor(tmp_path)
     extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
-    cache_file = next((tmp_path / "pages").glob("schema_v1/*/*.json"))
+    cache_file = _cache_file(tmp_path / "pages")
     payload = json.loads(cache_file.read_text(encoding="utf-8"))
     payload["page_offset"] = 1
     cache_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -362,11 +700,219 @@ def test_cache_rejects_next_cursor_that_disagrees_with_page_offset(tmp_path: Pat
 def test_cache_rejects_malformed_entries_without_returning_them(tmp_path: Path) -> None:
     extractor, _ranker = _extractor(tmp_path)
     extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
-    cache_file = next((tmp_path / "pages").glob("schema_v1/*/*.json"))
+    cache_file = _cache_file(tmp_path / "pages")
     cache_file.write_text(json.dumps({"broken": True}), encoding="utf-8")
 
     with pytest.raises(SnippetCacheIntegrityError):
         extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["page_size", "duplicate", "offset", "text", "document_chunk_identity"],
+)
+def test_cache_rejects_checksum_consistent_semantically_invalid_pages(
+    tmp_path: Path, mutation: str
+) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = _cache_file(tmp_path / "pages")
+
+    def mutate(response: dict[str, object]) -> None:
+        snippets = response["snippets"]
+        assert isinstance(snippets, list)
+        if mutation == "page_size":
+            source = LONG_CHUNKS[8]
+            snippets.append(
+                {
+                    "chunk_id": source.chunk_id,
+                    "start_char": source.start_char,
+                    "end_char": source.end_char,
+                    "text": source.text,
+                    "relevance_score": 0.0,
+                }
+            )
+            response["next_cursor"] = None
+        elif mutation == "duplicate":
+            snippets[1] = dict(snippets[0])
+        elif mutation == "offset":
+            snippets[0]["start_char"] += 1
+        elif mutation == "text":
+            snippets[0]["text"] += "!"
+        else:
+            snippets[0]["chunk_id"] = "doc-a:9999"
+
+    _rewrite_checksum_consistent_cache_response(cache_file, mutate)
+
+    with pytest.raises(
+        SnippetCacheIntegrityError, match="^invalid snippet cache entry$"
+    ):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+def test_cache_rejects_checksum_consistent_duplicate_source_chunk_identity(
+    tmp_path: Path,
+) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = _cache_file(tmp_path / "pages")
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    source_chunks = payload["source_chunks"]
+    assert isinstance(source_chunks, list)
+    duplicate_id = dict(source_chunks[1])
+    duplicate_id["chunk_id"] = source_chunks[0]["chunk_id"]
+    source_chunks[1] = duplicate_id
+    payload["source_chunks_sha256"] = sha256(
+        json.dumps(
+            source_chunks,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    cache_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        SnippetCacheIntegrityError, match="^invalid snippet cache entry$"
+    ):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+def test_cache_rejects_nonprogressing_empty_continuation_page(
+    tmp_path: Path,
+) -> None:
+    cache = SnippetResultCache(tmp_path / "pages")
+    extractor = RelevantSnippetExtractor(
+        ranker=CountingRanker(),
+        chunker=FixedChunker(()),
+        result_cache=cache,
+    )
+    identity = extractor._result_identity("doc-a", "", "focus", None)
+    binding_identity = extractor._identity_without_cursor(identity)
+    cache.put(
+        identity,
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="focus",
+            snippets=(),
+            next_cursor=extractor._encode_cursor(binding_identity, 0),
+        ),
+        page_offset=0,
+    )
+
+    with pytest.raises(
+        SnippetCacheIntegrityError, match="^invalid snippet cache entry$"
+    ):
+        extractor.extract("doc-a", "", "focus")
+
+
+def test_cache_rejects_complete_long_document_even_with_consistent_checksum(
+    tmp_path: Path,
+) -> None:
+    maximum = 20
+    document = "L" * (maximum + 1)
+    cache = SnippetResultCache(tmp_path / "pages")
+    extractor = RelevantSnippetExtractor(
+        ranker=CountingRanker(),
+        chunker=FixedChunker(()),
+        result_cache=cache,
+        config=SnippetExtractionConfig(
+            chunk_max_characters=maximum,
+            chunk_overlap_characters=0,
+        ),
+    )
+    identity = extractor._result_identity("doc-a", document, "focus", None)
+    cache.put(
+        identity,
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="focus",
+            snippets=(
+                RelevantSnippet(
+                    chunk_id="doc-a:0000",
+                    start_char=0,
+                    end_char=len(document),
+                    text=document,
+                    relevance_score=1.0,
+                ),
+            ),
+            next_cursor=None,
+        ),
+        page_offset=0,
+    )
+
+    with pytest.raises(
+        SnippetCacheIntegrityError, match="^invalid snippet cache entry$"
+    ):
+        extractor.extract("doc-a", document, "focus")
+
+
+def test_identical_threaded_result_cache_misses_are_single_flight(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    process = context.Process(
+        target=_thread_result_cache_probe,
+        args=(str(tmp_path / "pages"), results),
+    )
+    try:
+        process.start()
+        process.join(timeout=10)
+        assert not process.is_alive(), "threaded cache probe deadlocked"
+        assert process.exitcode == 0
+        assert results.get(timeout=2) == (
+            "ok",
+            ["hit", "miss"],
+            ["target passage"],
+        )
+    finally:
+        _stop_processes((process,))
+        results.close()
+        results.join_thread()
+
+
+def test_identical_process_result_cache_misses_are_single_flight(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    start_barrier = context.Barrier(3, timeout=5)
+    rank_barrier = context.Barrier(2, timeout=0.5)
+    rank_calls = context.Value("i", 0)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_extract_in_process,
+            args=(
+                str(tmp_path / "pages"),
+                start_barrier,
+                rank_barrier,
+                rank_calls,
+                results,
+            ),
+        )
+        for _ in range(2)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        start_barrier.wait()
+        for process in processes:
+            process.join(timeout=10)
+        assert not any(process.is_alive() for process in processes), (
+            "process cache probe deadlocked"
+        )
+        assert [process.exitcode for process in processes] == [0, 0]
+        outcomes = [results.get(timeout=2) for _ in processes]
+        assert sorted(outcomes) == [("ok", "hit"), ("ok", "miss")]
+        assert rank_calls.value == 1
+    finally:
+        start_barrier.abort()
+        rank_barrier.abort()
+        _stop_processes(processes)
+        results.close()
+        results.join_thread()
 
 
 class FakeCrossEncoder:
@@ -526,8 +1072,162 @@ def test_local_ranker_score_cache_partitions_resolved_auto_device(
     assert second_model.predict_calls == 1
 
 
+def test_local_ranker_lazy_model_initialization_is_thread_safe(tmp_path: Path) -> None:
+    model = object()
+    loader_calls: list[str] = []
+    loader_lock = Lock()
+    loader_barrier = Barrier(2, timeout=0.5)
+
+    def load_model(**_kwargs: object) -> object:
+        with loader_lock:
+            loader_calls.append("load")
+        try:
+            loader_barrier.wait()
+        except BrokenBarrierError:
+            pass
+        return model
+
+    ranker = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=load_model,
+        device="cpu",
+    )
+    start_barrier = Barrier(3, timeout=5)
+
+    def get_model() -> object:
+        start_barrier.wait()
+        return ranker._get_model()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(get_model) for _index in range(2)]
+        start_barrier.wait()
+        loaded_models = [future.result(timeout=5) for future in futures]
+
+    assert loaded_models == [model, model]
+    assert loader_calls == ["load"]
+
+
+def test_local_score_cache_spawned_process_misses_are_single_flight(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    start_barrier = context.Barrier(3, timeout=5)
+    predict_barrier = context.Barrier(2, timeout=0.5)
+    predict_calls = context.Value("i", 0)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_rank_local_in_process,
+            args=(
+                str(tmp_path),
+                score,
+                start_barrier,
+                predict_barrier,
+                predict_calls,
+                results,
+            ),
+        )
+        for score in (0.8, 0.2)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        start_barrier.wait()
+        for process in processes:
+            process.join(timeout=10)
+        assert not any(process.is_alive() for process in processes), (
+            "score-cache process probe deadlocked"
+        )
+        assert [process.exitcode for process in processes] == [0, 0]
+        outcomes = [results.get(timeout=2) for _process in processes]
+        assert all(outcome[0] == "ok" for outcome in outcomes), outcomes
+        scores = [outcome[1] for outcome in outcomes]
+        assert scores[0] == scores[1]
+        assert predict_calls.value == 1
+        score_files = list(tmp_path.rglob("*.jsonl"))
+        assert len(score_files) == 1
+        rows = score_files[0].read_text(encoding="utf-8").splitlines()
+        assert len(rows) == 1
+        json.loads(rows[0])
+
+        reloaded_model = FakeCrossEncoder([])
+        reloaded = LocalMixedbreadSnippetRanker(
+            score_cache_root=tmp_path,
+            model_loader=lambda **_kwargs: reloaded_model,
+            device="cpu",
+        )
+        assert (
+            reloaded.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score
+            == scores[0]
+        )
+        assert reloaded_model.predict_calls == 0
+    finally:
+        start_barrier.abort()
+        predict_barrier.abort()
+        _stop_processes(processes)
+        results.close()
+        results.join_thread()
+
+
+def test_local_score_cache_constructor_waits_for_locked_complete_jsonl(
+    tmp_path: Path,
+) -> None:
+    seeded_model = FakeCrossEncoder([[0.8]])
+    seeded = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: seeded_model,
+        device="cpu",
+    )
+    assert seeded.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.8
+    score_path = seeded._score_cache.path
+    original = score_path.read_bytes()
+    lock = FileLock(str(score_path.with_suffix(score_path.suffix + ".lock")))
+    context = multiprocessing.get_context("spawn")
+    about_to_construct = context.Queue()
+    results = context.Queue()
+    process = context.Process(
+        target=_load_cached_score_in_process,
+        args=(str(tmp_path), about_to_construct, results),
+    )
+    try:
+        lock.acquire(timeout=2)
+        try:
+            with score_path.open("ab") as sink:
+                sink.write(b'{"partial":')
+                sink.flush()
+                os.fsync(sink.fileno())
+            process.start()
+            assert about_to_construct.get(timeout=2) is True
+            with pytest.raises(Empty):
+                results.get(timeout=0.5)
+        finally:
+            try:
+                with score_path.open("wb") as sink:
+                    sink.write(original)
+                    sink.flush()
+                    os.fsync(sink.fileno())
+            finally:
+                lock.release()
+
+        process.join(timeout=10)
+        assert not process.is_alive(), "score-cache constructor probe deadlocked"
+        assert process.exitcode == 0
+        assert results.get(timeout=2) == ("ok", 0.8)
+    finally:
+        _stop_processes((process,))
+        about_to_construct.close()
+        about_to_construct.join_thread()
+        results.close()
+        results.join_thread()
+
+
 def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: Path) -> None:
-    chat = FakeChatModel(['{"scores":[{"chunk_id":"doc-a:0000","score":0.2},{"chunk_id":"doc-a:0001","score":0.8}]}'])
+    chat = FakeChatModel(
+        [
+            '{"scores":[{"chunk_id":"doc-a:0000","score":0.2}]}',
+            '{"scores":[{"chunk_id":"doc-a:0001","score":0.8}]}',
+        ]
+    )
     ranker = SmallLLMSnippetRanker(
         chat_model=chat,
         score_cache_root=tmp_path,
@@ -544,7 +1244,7 @@ def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: 
         "model_revision": "test-revision",
         "score_representation": "json_scalar",
         "batch_size": 2,
-        "implementation_version": 1,
+        "implementation_version": 2,
     }
     assert [row.chunk.chunk_id for row in ranker.rank("query", ADAPTER_CHUNKS)] == [
         "doc-a:0001",
@@ -558,11 +1258,12 @@ def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: 
     assert [json.loads(prompt.rsplit("\n", 1)[1]) for prompt in chat.prompts] == [
         {
             "focus_query": "query",
-            "chunks": [
-                {"chunk_id": "doc-a:0000", "text": "first evidence"},
-                {"chunk_id": "doc-a:0001", "text": "second evidence"},
-            ],
-        }
+            "chunks": [{"chunk_id": "doc-a:0000", "text": "first evidence"}],
+        },
+        {
+            "focus_query": "query",
+            "chunks": [{"chunk_id": "doc-a:0001", "text": "second evidence"}],
+        },
     ]
 
 
@@ -572,10 +1273,8 @@ def test_small_llm_ranker_sends_every_uncached_duplicate_text_chunk_id(
     duplicate_text_chunks = _chunks("same evidence", "same evidence")
     chat = FakeChatModel(
         [
-            '{"scores":['
-            '{"chunk_id":"doc-a:0000","score":0.6},'
-            '{"chunk_id":"doc-a:0001","score":0.6}'
-            "]}"
+            '{"scores":[{"chunk_id":"doc-a:0000","score":0.6}]}',
+            '{"scores":[{"chunk_id":"doc-a:0001","score":0.6}]}',
         ]
     )
     ranker = SmallLLMSnippetRanker(
@@ -588,21 +1287,21 @@ def test_small_llm_ranker_sends_every_uncached_duplicate_text_chunk_id(
         "doc-a:0000",
         "doc-a:0001",
     ]
-    prompt_data = json.loads(chat.prompts[0].rsplit("\n", 1)[1])
-    assert [chunk["chunk_id"] for chunk in prompt_data["chunks"]] == [
+    prompt_data = [json.loads(prompt.rsplit("\n", 1)[1]) for prompt in chat.prompts]
+    assert [batch["chunks"][0]["chunk_id"] for batch in prompt_data] == [
         "doc-a:0000",
         "doc-a:0001",
     ]
 
 
-def test_small_llm_ranker_rejects_conflicting_duplicate_text_scores(tmp_path: Path) -> None:
+def test_small_llm_ranker_keeps_same_text_scores_distinct_by_chunk_id(
+    tmp_path: Path,
+) -> None:
     duplicate_text_chunks = _chunks("same evidence", "same evidence")
     chat = FakeChatModel(
         [
-            '{"scores":['
-            '{"chunk_id":"doc-a:0000","score":0.6},'
-            '{"chunk_id":"doc-a:0001","score":0.4}'
-            "]}"
+            '{"scores":[{"chunk_id":"doc-a:0000","score":0.6}]}',
+            '{"scores":[{"chunk_id":"doc-a:0001","score":0.4}]}',
         ]
     )
     ranker = SmallLLMSnippetRanker(
@@ -611,46 +1310,85 @@ def test_small_llm_ranker_rejects_conflicting_duplicate_text_scores(tmp_path: Pa
         model_name="test-small-llm",
     )
 
-    with pytest.raises(ValueError, match="conflicting scores for identical chunk text"):
-        ranker.rank("query", duplicate_text_chunks)
+    ranked = ranker.rank("query", duplicate_text_chunks)
+
+    assert [(row.chunk.chunk_id, row.relevance_score) for row in ranked] == [
+        ("doc-a:0000", 0.6),
+        ("doc-a:0001", 0.4),
+    ]
 
 
-def test_small_llm_ranker_does_not_cache_a_cross_batch_duplicate_conflict(
+def test_small_llm_ranker_cache_includes_complete_peer_batch_context(
     tmp_path: Path,
 ) -> None:
-    duplicate_text_chunks = _chunks("same evidence", "same evidence")
-    conflicting = SmallLLMSnippetRanker(
+    three_chunks = _chunks("first", "second", "third")
+    first = SmallLLMSnippetRanker(
         chat_model=FakeChatModel(
             [
-                '{"scores":[{"chunk_id":"doc-a:0000","score":0.6}]}',
-                '{"scores":[{"chunk_id":"doc-a:0001","score":0.4}]}',
+                '{"scores":['
+                '{"chunk_id":"doc-a:0000","score":0.6},'
+                '{"chunk_id":"doc-a:0001","score":0.4}'
+                "]}",
+                '{"scores":[{"chunk_id":"doc-a:0002","score":0.2}]}',
             ]
         ),
         score_cache_root=tmp_path,
         model_name="test-small-llm",
-        batch_size=1,
+        batch_size=2,
     )
-    with pytest.raises(ValueError, match="conflicting scores for identical chunk text"):
-        conflicting.rank("query", duplicate_text_chunks)
+    first.rank("query", three_chunks)
 
     retry_chat = FakeChatModel(
         [
-            '{"scores":[{"chunk_id":"doc-a:0000","score":0.2}]}',
-            '{"scores":[{"chunk_id":"doc-a:0001","score":0.2}]}',
+            '{"scores":[{"chunk_id":"doc-a:0000","score":0.3}]}',
+            '{"scores":[{"chunk_id":"doc-a:0001","score":0.1}]}',
         ]
     )
     retry = SmallLLMSnippetRanker(
         chat_model=retry_chat,
         score_cache_root=tmp_path,
         model_name="test-small-llm",
-        batch_size=1,
+        batch_size=2,
     )
 
-    assert [row.relevance_score for row in retry.rank("query", duplicate_text_chunks)] == [
-        0.2,
-        0.2,
+    assert [row.relevance_score for row in retry.rank("query", three_chunks[:2])] == [
+        0.3,
+        0.1,
     ]
     assert len(retry_chat.prompts) == 2
+
+
+def test_small_llm_ranker_cache_includes_chunk_id_for_identical_text(
+    tmp_path: Path,
+) -> None:
+    first_chunk = _chunks("same evidence")[0]
+    first = SmallLLMSnippetRanker(
+        chat_model=FakeChatModel(
+            ['{"scores":[{"chunk_id":"doc-a:0000","score":0.8}]}']
+        ),
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+    )
+    assert first.rank("query", (first_chunk,))[0].relevance_score == 0.8
+
+    other_id = TextChunk(
+        document_id="doc-a",
+        chunk_id="doc-a:0099",
+        text=first_chunk.text,
+        start_char=first_chunk.start_char,
+        end_char=first_chunk.end_char,
+    )
+    second_chat = FakeChatModel(
+        ['{"scores":[{"chunk_id":"doc-a:0099","score":0.2}]}']
+    )
+    second = SmallLLMSnippetRanker(
+        chat_model=second_chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+    )
+
+    assert second.rank("query", (other_id,))[0].relevance_score == 0.2
+    assert len(second_chat.prompts) == 1
 
 
 def test_small_llm_ranker_score_cache_partitions_batch_size(tmp_path: Path) -> None:
@@ -681,12 +1419,12 @@ def test_small_llm_ranker_score_cache_partitions_batch_size(tmp_path: Path) -> N
 @pytest.mark.parametrize(
     "response",
     [
-        '{"scores":[{"chunk_id":"doc-a:0000","score":0.8}]}',
+        '{"scores":[]}',
         '{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"doc-a:0000","score":0.2}]}',
-        '{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"unknown","score":0.2}]}',
-        '{"scores":[{"chunk_id":"doc-a:0000","score":true},{"chunk_id":"doc-a:0001","score":0.2}]}',
-        '{"scores":[{"chunk_id":"doc-a:0000","score":NaN},{"chunk_id":"doc-a:0001","score":0.2}]}',
-        '{"scores":[],"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"doc-a:0001","score":0.2}]}',
+        '{"scores":[{"chunk_id":"unknown","score":0.2}]}',
+        '{"scores":[{"chunk_id":"doc-a:0000","score":true}]}',
+        '{"scores":[{"chunk_id":"doc-a:0000","score":NaN}]}',
+        '{"scores":[],"scores":[{"chunk_id":"doc-a:0000","score":0.8}]}',
     ],
 )
 def test_small_llm_ranker_rejects_invalid_score_sets(tmp_path: Path, response: str) -> None:
@@ -697,7 +1435,7 @@ def test_small_llm_ranker_rejects_invalid_score_sets(tmp_path: Path, response: s
     )
 
     with pytest.raises(ValueError, match="small-LLM score response"):
-        ranker.rank("query", ADAPTER_CHUNKS)
+        ranker.rank("query", ADAPTER_CHUNKS[:1])
 
 
 def test_default_extractor_constructs_lazy_local_ranker(tmp_path: Path) -> None:

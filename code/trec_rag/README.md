@@ -227,6 +227,10 @@ document text, focus query, and optional cursor. It returns a typed
 internal cache status, ranker backend, and page offset used by tracing. Its
 default factory uses the repository cache roots; experiments can instead inject
 an explicit extractor or ranker without changing the agent-facing tool schema.
+The default Mixedbread adapter loads with `local_files_only=True`, so the pinned
+`mixedbread-ai/mxbai-rerank-base-v2` revision
+`3ea9d4dffa7d12a4f366be8e275c349de9fc9865` must already be present in the
+local Hugging Face cache before the first uncached snippet-ranking call.
 
 The reusable layer validates its boundary before returning or caching a page:
 
@@ -239,9 +243,11 @@ The reusable layer validates its boundary before returning or caching a page:
   non-negative and smaller than the chunk maximum, and the duplicate-overlap
   ratio must be a finite value from zero through one;
 - chunk IDs/ranges/text must match the source document, ranker outputs must
-  reference known chunks, and every relevance score must be finite;
-- cached identities, response digests and bindings, page fields, snippet
-  records, offsets, and continuation cursors are validated before reuse.
+  cover every known chunk exactly once, and every relevance score must be
+  finite;
+- cached identities, response and private source-manifest digests and bindings,
+  page fields, snippet records, offsets, and continuation cursors are validated
+  before reuse.
 
 Malformed or identity-mismatched cache data raises the constant,
 non-disclosing `invalid snippet cache entry` integrity error. At the agent tool
@@ -272,10 +278,13 @@ Phoenix tracing is optional. Search spans contain document lengths rather than
 document text. Snippet-page spans contain bounded IDs, offsets, relevance
 scores, backend/cache metadata, and snippet text only when `trace_content=True`;
 with `trace_content=False`, narrative, query, and snippet text use a redacted
-marker. Spans never include credentials, authorization headers, raw provider
+marker. Automatically instrumented LangChain spans always hide generic input
+and output values, structured message text, and invocation parameters;
+purpose-specific manual spans are the only content-bearing surface. Spans never
+include credentials, authorization headers, raw provider
 responses, continuation-ticket values, cursors, scratch paths, or local cache
-paths. Keep provider credentials in ignored local environment files rather than
-source or notebooks. Tracing configuration is process-global and idempotent:
+paths. Keep provider credentials in ignored local environment files rather
+than source or notebooks. Tracing configuration is process-global and idempotent:
 identical normalized live setup reuses its provider/exporter, while a
 conflicting endpoint, project, credential, injected provider, or content mode
 raises a constant non-disclosing configuration error instead of silently
@@ -286,6 +295,7 @@ Validate the isolated SDK and its existing transport boundaries with:
 ```bash
 .venv/bin/python -m pytest \
   code/tests/test_topics.py \
+  code/tests/test_deepagent_snippets.py \
   code/tests/test_deepagent_tracing.py \
   code/tests/test_deepagent_retrieval.py \
   code/tests/test_pipeline.py \

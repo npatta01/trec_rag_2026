@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version
@@ -12,7 +13,8 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from threading import Lock
+from typing import Any, Iterator, Literal, Protocol
 from uuid import uuid4
 
 from filelock import FileLock
@@ -27,9 +29,9 @@ from trec_rag.rerank_score_cache import (
 from trec_rag.repo_env import repo_cache_root
 
 
-CURSOR_SCHEMA_VERSION = 1
-RESULT_SCHEMA_VERSION = 1
-IMPLEMENTATION_VERSION = 2
+CURSOR_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 2
+IMPLEMENTATION_VERSION = 3
 DEFAULT_SNIPPET_MODEL = "mixedbread-ai/mxbai-rerank-base-v2"
 DEFAULT_SNIPPET_MODEL_REVISION = "3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
 _SNIPPET_MAX_LENGTH = 512
@@ -37,10 +39,41 @@ _SNIPPET_BATCH_SIZE = 32
 _SNIPPET_SCORE_KIND = "snippet_relevance_v1"
 _SMALL_LLM_SCORE_REPRESENTATION = "json_scalar"
 _SMALL_LLM_MAX_LENGTH = 0
+_PATH_LOCKS: dict[str, Lock] = {}
+_PATH_LOCKS_GUARD = Lock()
 
 
 class SnippetCacheIntegrityError(RuntimeError):
     """Raised when a cached snippet response is malformed or cannot be trusted."""
+
+
+class InvalidSnippetCursorError(ValueError):
+    """Raised only when a snippet cursor fails request validation."""
+
+
+def _thread_lock_for(path: Path) -> Lock:
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, Lock())
+
+
+@contextmanager
+def _locked_score_cache(cache: GlobalScoreCache) -> Iterator[GlobalScoreCache]:
+    lock_path = cache.path.with_suffix(cache.path.suffix + ".lock")
+    with _thread_lock_for(lock_path), FileLock(str(lock_path)):
+        cache.scores = cache._load()
+        yield cache
+
+
+def _create_score_cache(
+    root_dir: Path, context: ScoreCacheContext
+) -> GlobalScoreCache:
+    root_dir = Path(root_dir)
+    cache_path = root_dir.joinpath(*context.path_parts)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = cache_path.with_suffix(cache_path.suffix + ".lock")
+    with _thread_lock_for(lock_path), FileLock(str(lock_path)):
+        return GlobalScoreCache(root_dir, context)
 
 
 @dataclass(frozen=True)
@@ -218,7 +251,8 @@ class LocalMixedbreadSnippetRanker:
         self._device = _choose_device(device)
         self._model_loader = model_loader
         self._model: Any | None = None
-        self._score_cache = GlobalScoreCache(
+        self._model_lock = Lock()
+        self._score_cache = _create_score_cache(
             Path(score_cache_root),
             ScoreCacheContext(
                 backend="sentence_transformers_cross_encoder",
@@ -254,50 +288,65 @@ class LocalMixedbreadSnippetRanker:
         self, focus_query: str, chunks: Sequence[TextChunk]
     ) -> tuple[ScoredTextChunk, ...]:
         rows = tuple(chunks)
-        missing: dict[str, TextChunk] = {}
-        scores: dict[str, float] = {}
-        for chunk in rows:
-            key = self._score_cache.cache_key(query_text=focus_query, text=chunk.text)
-            cached = self._score_cache.get(query_text=focus_query, text=chunk.text)
-            if cached is None:
-                missing.setdefault(key, chunk)
-            else:
-                scores[key] = _finite_score(cached, source="cached local")
-        pending = tuple(missing.values())
-        for offset in range(0, len(pending), self._batch_size):
-            batch = pending[offset : offset + self._batch_size]
-            model = self._get_model()
-            predicted = _model_scores(
-                model.predict(
-                    [(focus_query, chunk.text) for chunk in batch],
-                    batch_size=self._batch_size,
-                    show_progress_bar=False,
-                    convert_to_tensor=True,
-                    activation_fn=_identity_activation,
-                ),
-                expected_count=len(batch),
-            )
-            self._score_cache.add_many(
-                (focus_query, chunk.text, score)
-                for chunk, score in zip(batch, predicted, strict=True)
-            )
-            scores.update(
-                (
-                    self._score_cache.cache_key(query_text=focus_query, text=chunk.text),
-                    score,
+        with _locked_score_cache(self._score_cache):
+            missing: dict[str, TextChunk] = {}
+            scores: dict[str, float] = {}
+            for chunk in rows:
+                key = self._score_cache.cache_key(
+                    query_text=focus_query, text=chunk.text
                 )
-                for chunk, score in zip(batch, predicted, strict=True)
+                cached = self._score_cache.get(
+                    query_text=focus_query, text=chunk.text
+                )
+                if cached is None:
+                    missing.setdefault(key, chunk)
+                else:
+                    scores[key] = _finite_score(cached, source="cached local")
+            pending = tuple(missing.values())
+            for offset in range(0, len(pending), self._batch_size):
+                batch = pending[offset : offset + self._batch_size]
+                model = self._get_model()
+                predicted = _model_scores(
+                    model.predict(
+                        [(focus_query, chunk.text) for chunk in batch],
+                        batch_size=self._batch_size,
+                        show_progress_bar=False,
+                        convert_to_tensor=True,
+                        activation_fn=_identity_activation,
+                    ),
+                    expected_count=len(batch),
+                )
+                self._score_cache.add_many(
+                    (focus_query, chunk.text, score)
+                    for chunk, score in zip(batch, predicted, strict=True)
+                )
+                scores.update(
+                    (
+                        self._score_cache.cache_key(
+                            query_text=focus_query, text=chunk.text
+                        ),
+                        score,
+                    )
+                    for chunk, score in zip(batch, predicted, strict=True)
+                )
+            return tuple(
+                ScoredTextChunk(
+                    chunk,
+                    scores[
+                        self._score_cache.cache_key(
+                            query_text=focus_query, text=chunk.text
+                        )
+                    ],
+                )
+                for chunk in rows
             )
-        return tuple(
-            ScoredTextChunk(
-                chunk,
-                scores[self._score_cache.cache_key(query_text=focus_query, text=chunk.text)],
-            )
-            for chunk in rows
-        )
 
     def _get_model(self) -> Any:
-        if self._model is None:
+        if self._model is not None:
+            return self._model
+        with self._model_lock:
+            if self._model is not None:
+                return self._model
             if self._model_loader is _load_local_cross_encoder:
                 try:
                     installed_backend_version = version("sentence-transformers")
@@ -344,7 +393,7 @@ class SmallLLMSnippetRanker:
         self._model_revision = model_revision
         self._backend_version = backend_version
         self._batch_size = batch_size
-        self._score_cache = GlobalScoreCache(
+        self._score_cache = _create_score_cache(
             Path(score_cache_root),
             ScoreCacheContext(
                 backend="small_llm_json",
@@ -355,7 +404,7 @@ class SmallLLMSnippetRanker:
                 score_kind=_SNIPPET_SCORE_KIND,
                 score_representation=_SMALL_LLM_SCORE_REPRESENTATION,
                 input_policy=_score_cache_input_policy(
-                    "focus_query_chunk_id_json_batch_v1",
+                    "exact_prompt_chunk_record_v2",
                     batch_size=self._batch_size,
                 ),
             ),
@@ -370,7 +419,7 @@ class SmallLLMSnippetRanker:
             "model_revision": self._model_revision,
             "score_representation": _SMALL_LLM_SCORE_REPRESENTATION,
             "batch_size": self._batch_size,
-            "implementation_version": 1,
+            "implementation_version": 2,
         }
 
     def rank(
@@ -379,55 +428,71 @@ class SmallLLMSnippetRanker:
         rows = tuple(chunks)
         if len({chunk.chunk_id for chunk in rows}) != len(rows):
             raise ValueError("small-LLM ranking requires unique chunk IDs")
-        missing: list[TextChunk] = []
         scores: dict[str, float] = {}
-        for chunk in rows:
-            key = self._score_cache.cache_key(query_text=focus_query, text=chunk.text)
-            cached = self._score_cache.get(query_text=focus_query, text=chunk.text)
-            if cached is None:
-                missing.append(chunk)
-            else:
-                scores[key] = _finite_score(cached, source="cached small-LLM")
-        pending = tuple(missing)
-        pending_scores: list[tuple[TextChunk, float]] = []
-        for offset in range(0, len(pending), self._batch_size):
-            batch = pending[offset : offset + self._batch_size]
-            returned_scores = self._invoke_scores(focus_query, batch)
-            for chunk in batch:
-                score = returned_scores[chunk.chunk_id]
-                key = self._score_cache.cache_key(
-                    query_text=focus_query, text=chunk.text
-                )
-                if key in scores and scores[key] != score:
-                    raise ValueError(
-                        "small-LLM returned conflicting scores for identical chunk text"
+        with _locked_score_cache(self._score_cache):
+            for batch in self._prompt_batches(rows):
+                prompt = self._prompt(focus_query, batch)
+                records = {
+                    chunk.chunk_id: _canonical_json(
+                        {"chunk_id": chunk.chunk_id, "text": chunk.text}
                     )
-                scores[key] = score
-                pending_scores.append((chunk, score))
-        self._score_cache.add_many(
-            (focus_query, chunk.text, score) for chunk, score in pending_scores
-        )
+                    for chunk in batch
+                }
+                cached_batch: dict[str, float] = {}
+                for chunk in batch:
+                    cached = self._score_cache.get(
+                        query_text=prompt,
+                        text=records[chunk.chunk_id],
+                    )
+                    if cached is not None:
+                        cached_batch[chunk.chunk_id] = _finite_score(
+                            cached, source="cached small-LLM"
+                        )
+                if len(cached_batch) == len(batch):
+                    scores.update(cached_batch)
+                    continue
+
+                returned_scores = self._invoke_scores(prompt, batch)
+                self._score_cache.add_many(
+                    (
+                        prompt,
+                        records[chunk.chunk_id],
+                        returned_scores[chunk.chunk_id],
+                    )
+                    for chunk in batch
+                )
+                scores.update(returned_scores)
         return tuple(
             sorted(
                 (
-                    ScoredTextChunk(
-                        chunk,
-                        scores[
-                            self._score_cache.cache_key(
-                                query_text=focus_query, text=chunk.text
-                            )
-                        ],
-                    )
+                    ScoredTextChunk(chunk, scores[chunk.chunk_id])
                     for chunk in rows
                 ),
                 key=lambda row: (-row.relevance_score, row.chunk.chunk_id),
             )
         )
 
-    def _invoke_scores(self, focus_query: str, chunks: Sequence[TextChunk]) -> dict[str, float]:
-        prompt = (
+    def _prompt_batches(
+        self, chunks: Sequence[TextChunk]
+    ) -> tuple[tuple[TextChunk, ...], ...]:
+        by_document: dict[str, list[TextChunk]] = {}
+        for chunk in chunks:
+            by_document.setdefault(chunk.document_id, []).append(chunk)
+        batches: list[tuple[TextChunk, ...]] = []
+        for document_chunks in by_document.values():
+            maximum = self._batch_size
+            if len(document_chunks) > 1:
+                maximum = min(maximum, (len(document_chunks) + 1) // 2)
+            for offset in range(0, len(document_chunks), maximum):
+                batches.append(tuple(document_chunks[offset : offset + maximum]))
+        return tuple(batches)
+
+    @staticmethod
+    def _prompt(focus_query: str, chunks: Sequence[TextChunk]) -> str:
+        return (
             "Score each chunk's relevance to the focus query. Return only strict JSON "
-            'matching {"scores":[{"chunk_id":"...","score":0.0}]}.\n'
+            'matching {"scores":[{"chunk_id":"...","score":0.0}]}.'
+            "\n"
             + json.dumps(
                 {
                     "focus_query": focus_query,
@@ -440,6 +505,10 @@ class SmallLLMSnippetRanker:
                 separators=(",", ":"),
             )
         )
+
+    def _invoke_scores(
+        self, prompt: str, chunks: Sequence[TextChunk]
+    ) -> dict[str, float]:
         reply = self._chat_model.invoke(prompt)
         content = reply if isinstance(reply, str) else getattr(reply, "content", None)
         if not isinstance(content, str):
@@ -488,6 +557,48 @@ def _sha256_text(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
 
 
+def _source_chunk_record(chunk: TextChunk) -> dict[str, object]:
+    return {
+        "document_id": chunk.document_id,
+        "chunk_id": chunk.chunk_id,
+        "start_char": chunk.start_char,
+        "end_char": chunk.end_char,
+        "text_sha256": _sha256_text(chunk.text),
+    }
+
+
+def _source_chunk_tuple(value: object) -> tuple[str, str, int, int, str]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "document_id",
+        "chunk_id",
+        "start_char",
+        "end_char",
+        "text_sha256",
+    }:
+        raise ValueError("invalid source chunk record")
+    document_id = value["document_id"]
+    chunk_id = value["chunk_id"]
+    start_char = value["start_char"]
+    end_char = value["end_char"]
+    text_sha256 = value["text_sha256"]
+    if (
+        not isinstance(document_id, str)
+        or not document_id.strip()
+        or not isinstance(chunk_id, str)
+        or not chunk_id.strip()
+        or isinstance(start_char, bool)
+        or not isinstance(start_char, int)
+        or isinstance(end_char, bool)
+        or not isinstance(end_char, int)
+        or start_char < 0
+        or end_char <= start_char
+        or not isinstance(text_sha256, str)
+        or len(text_sha256) != 64
+    ):
+        raise ValueError("invalid source chunk record")
+    return document_id, chunk_id, start_char, end_char, text_sha256
+
+
 class SnippetResultCache:
     """Content-addressed persistent cache for complete, model-visible pages."""
 
@@ -507,54 +618,126 @@ class SnippetResultCache:
     def _lock_path(path: Path) -> Path:
         return path.with_suffix(path.suffix + ".lock")
 
-    def get(self, identity: Mapping[str, object]) -> tuple[SnippetPage, int] | None:
+    @contextmanager
+    def locked(self, identity: Mapping[str, object]) -> Iterator[None]:
         path = self._path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with FileLock(str(self._lock_path(path))):
-            if not path.exists():
-                return None
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(payload, dict) or payload.get("identity") != dict(identity):
-                    raise ValueError("identity mismatch")
-                response = payload.get("response")
-                if not isinstance(response, dict):
-                    raise ValueError("missing response")
-                if payload.get("response_sha256") != _sha256_text(_canonical_json(response)):
-                    raise ValueError("response digest mismatch")
-                page = self._page_from_response(response)
-                if (
-                    page.document_id != identity.get("document_id")
-                    or page.focus_query != identity.get("focus_query")
-                ):
-                    raise ValueError("response binding mismatch")
-                page_offset = self._valid_page_offset(payload.get("page_offset"))
-                return page, page_offset
-            except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise SnippetCacheIntegrityError("invalid snippet cache entry") from exc
+        lock_path = self._lock_path(path)
+        with _thread_lock_for(lock_path), FileLock(str(lock_path)):
+            yield
 
-    def put(self, identity: Mapping[str, object], page: SnippetPage, *, page_offset: int) -> None:
+    def get(
+        self, identity: Mapping[str, object]
+    ) -> tuple[SnippetPage, int, tuple[tuple[str, str, int, int, str], ...]] | None:
+        with self.locked(identity):
+            return self._get_locked(identity)
+
+    def _get_locked(
+        self, identity: Mapping[str, object]
+    ) -> tuple[SnippetPage, int, tuple[tuple[str, str, int, int, str], ...]] | None:
+        path = self._path(identity)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or set(payload) != {
+                "identity",
+                "response",
+                "page_offset",
+                "response_sha256",
+                "source_chunks",
+                "source_chunks_sha256",
+            }:
+                raise ValueError("unexpected cache fields")
+            if payload.get("identity") != dict(identity):
+                raise ValueError("identity mismatch")
+            response = payload.get("response")
+            if not isinstance(response, dict):
+                raise ValueError("missing response")
+            if payload.get("response_sha256") != _sha256_text(_canonical_json(response)):
+                raise ValueError("response digest mismatch")
+            source_chunks = payload.get("source_chunks")
+            if not isinstance(source_chunks, list):
+                raise ValueError("missing source chunks")
+            if payload.get("source_chunks_sha256") != _sha256_text(
+                _canonical_json(source_chunks)
+            ):
+                raise ValueError("source chunk digest mismatch")
+            source_chunk_records = tuple(
+                _source_chunk_tuple(record) for record in source_chunks
+            )
+            page = self._page_from_response(response)
+            if (
+                page.document_id != identity.get("document_id")
+                or page.focus_query != identity.get("focus_query")
+            ):
+                raise ValueError("response binding mismatch")
+            page_offset = self._valid_page_offset(payload.get("page_offset"))
+            return page, page_offset, source_chunk_records
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SnippetCacheIntegrityError("invalid snippet cache entry") from exc
+
+    def put(
+        self,
+        identity: Mapping[str, object],
+        page: SnippetPage,
+        *,
+        page_offset: int,
+        source_chunks: Sequence[TextChunk] | None = None,
+    ) -> None:
+        with self.locked(identity):
+            self._put_locked(
+                identity,
+                page,
+                page_offset=page_offset,
+                source_chunks=source_chunks,
+            )
+
+    def _put_locked(
+        self,
+        identity: Mapping[str, object],
+        page: SnippetPage,
+        *,
+        page_offset: int,
+        source_chunks: Sequence[TextChunk] | None = None,
+    ) -> None:
         page_offset = self._valid_page_offset(page_offset)
         response = page.as_dict()
+        if source_chunks is None:
+            source_chunks = tuple(
+                TextChunk(
+                    document_id=page.document_id,
+                    chunk_id=snippet.chunk_id,
+                    text=snippet.text,
+                    start_char=snippet.start_char,
+                    end_char=snippet.end_char,
+                )
+                for snippet in page.snippets
+            )
+        source_chunk_records = [
+            _source_chunk_record(chunk) for chunk in source_chunks
+        ]
         payload = {
             "identity": dict(identity),
             "response": response,
             "page_offset": page_offset,
             "response_sha256": _sha256_text(_canonical_json(response)),
+            "source_chunks": source_chunk_records,
+            "source_chunks_sha256": _sha256_text(
+                _canonical_json(source_chunk_records)
+            ),
         }
         path = self._path(identity)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with FileLock(str(self._lock_path(path))):
-            temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-            try:
-                temporary_path.write_text(
-                    _canonical_json(payload) + "\n", encoding="utf-8"
-                )
-                with temporary_path.open("rb") as handle:
-                    os.fsync(handle.fileno())
-                os.replace(temporary_path, path)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+        temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(
+                _canonical_json(payload) + "\n", encoding="utf-8"
+            )
+            with temporary_path.open("rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     @staticmethod
     def _valid_page_offset(value: object) -> int:
@@ -686,39 +869,53 @@ class RelevantSnippetExtractor:
     ) -> SnippetExtractionResult:
         self._validate_request(document_id, document_text, focus_query, cursor)
         identity = self._result_identity(document_id, document_text, focus_query, cursor)
-        cached = self._result_cache.get(identity)
-        if cached is not None:
-            cached_page, cached_offset = cached
-            self._validate_cached_page(
-                cached_page,
-                cached_offset,
-                cursor,
-                self._identity_without_cursor(identity),
-            )
-            return SnippetExtractionResult(
-                cached_page,
-                "hit",
-                str(self._ranker_identity["backend"]),
-                cached_offset,
-            )
-
         binding_identity = self._identity_without_cursor(identity)
         offset = self._decode_and_validate_cursor(cursor, binding_identity)
-        chunks = tuple(self._chunker.split_text(document_text, document_id=document_id))
-        self._validate_chunks(chunks, document_id, document_text)
-        ranked = sorted(
-            self._validated_scored_chunks(self._ranker.rank(focus_query, chunks), chunks),
-            key=lambda row: (-row.relevance_score, row.chunk.chunk_id),
-        )
-        deduplicated = self._deduplicate(ranked)
-        page = self._page(document_id, focus_query, deduplicated, offset, binding_identity)
-        self._result_cache.put(identity, page, page_offset=offset)
-        return SnippetExtractionResult(
-            page,
-            "miss",
-            str(self._ranker_identity["backend"]),
-            offset,
-        )
+        with self._result_cache.locked(identity):
+            cached = self._result_cache._get_locked(identity)
+            if cached is not None:
+                cached_page, cached_offset, source_chunk_records = cached
+                self._validate_cached_page(
+                    cached_page,
+                    cached_offset,
+                    offset,
+                    binding_identity,
+                    document_text,
+                    source_chunk_records,
+                )
+                return SnippetExtractionResult(
+                    cached_page,
+                    "hit",
+                    str(self._ranker_identity["backend"]),
+                    cached_offset,
+                )
+
+            chunks = tuple(
+                self._chunker.split_text(document_text, document_id=document_id)
+            )
+            self._validate_chunks(chunks, document_id, document_text)
+            ranked = sorted(
+                self._validated_scored_chunks(
+                    self._ranker.rank(focus_query, chunks), chunks
+                ),
+                key=lambda row: (-row.relevance_score, row.chunk.chunk_id),
+            )
+            deduplicated = self._deduplicate(ranked)
+            page = self._page(
+                document_id, focus_query, deduplicated, offset, binding_identity
+            )
+            self._result_cache._put_locked(
+                identity,
+                page,
+                page_offset=offset,
+                source_chunks=chunks,
+            )
+            return SnippetExtractionResult(
+                page,
+                "miss",
+                str(self._ranker_identity["backend"]),
+                offset,
+            )
 
     def _result_identity(
         self, document_id: str, document_text: str, focus_query: str, cursor: str | None
@@ -754,36 +951,56 @@ class RelevantSnippetExtractor:
         if not isinstance(focus_query, str) or not focus_query.strip():
             raise ValueError("focus_query is required")
         if cursor is not None and not isinstance(cursor, str):
-            raise ValueError("cursor must be a string or None")
+            raise InvalidSnippetCursorError("invalid cursor")
 
-    @staticmethod
     def _validate_chunks(
-        chunks: Sequence[TextChunk], document_id: str, document_text: str
+        self, chunks: Sequence[TextChunk], document_id: str, document_text: str
     ) -> None:
+        chunk_ids: set[str] = set()
         for chunk in chunks:
+            if not isinstance(chunk, TextChunk):
+                raise ValueError("chunker returned an invalid text chunk")
             if (
                 chunk.document_id != document_id
+                or not isinstance(chunk.chunk_id, str)
                 or not chunk.chunk_id.strip()
+                or not chunk.chunk_id.startswith(f"{document_id}:")
+                or chunk.chunk_id in chunk_ids
+                or not isinstance(chunk.text, str)
+                or isinstance(chunk.start_char, bool)
+                or not isinstance(chunk.start_char, int)
+                or isinstance(chunk.end_char, bool)
+                or not isinstance(chunk.end_char, int)
                 or chunk.start_char < 0
                 or chunk.end_char <= chunk.start_char
                 or chunk.end_char > len(document_text)
                 or document_text[chunk.start_char : chunk.end_char] != chunk.text
+                or len(chunk.text) > self.config.chunk_max_characters
             ):
                 raise ValueError("chunker returned an invalid text chunk")
+            chunk_ids.add(chunk.chunk_id)
 
     @staticmethod
     def _validated_scored_chunks(
         scored: Sequence[ScoredTextChunk], chunks: Sequence[TextChunk]
     ) -> tuple[ScoredTextChunk, ...]:
         valid_chunks = set(chunks)
+        if len(scored) != len(chunks):
+            raise ValueError("ranker must return exactly one score per input chunk")
+        seen_chunks: set[TextChunk] = set()
         rows: list[ScoredTextChunk] = []
         for row in scored:
             if not isinstance(row, ScoredTextChunk) or row.chunk not in valid_chunks:
                 raise ValueError("ranker returned an unknown text chunk")
+            if row.chunk in seen_chunks:
+                raise ValueError("ranker must return exactly one score per input chunk")
             score = row.relevance_score
             if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
                 raise ValueError("ranker relevance scores must be finite")
             rows.append(ScoredTextChunk(row.chunk, float(score)))
+            seen_chunks.add(row.chunk)
+        if seen_chunks != valid_chunks:
+            raise ValueError("ranker must return exactly one score per input chunk")
         return tuple(rows)
 
     def _deduplicate(self, ranked: Sequence[ScoredTextChunk]) -> tuple[ScoredTextChunk, ...]:
@@ -832,13 +1049,24 @@ class RelevantSnippetExtractor:
         return SnippetPage(document_id, focus_query, snippets, next_cursor)
 
     @staticmethod
-    def _cursor_binding_digest(binding_identity: Mapping[str, object]) -> str:
-        return _sha256_text(_canonical_json(binding_identity))
+    def _cursor_binding_digest(
+        binding_identity: Mapping[str, object], next_offset: int
+    ) -> str:
+        return _sha256_text(
+            _canonical_json(
+                {
+                    "binding_identity": dict(binding_identity),
+                    "next_offset": next_offset,
+                }
+            )
+        )
 
     def _encode_cursor(self, binding_identity: Mapping[str, object], next_offset: int) -> str:
         payload = {
             "schema_version": CURSOR_SCHEMA_VERSION,
-            "binding_digest": self._cursor_binding_digest(binding_identity),
+            "binding_digest": self._cursor_binding_digest(
+                binding_identity, next_offset
+            ),
             "next_offset": next_offset,
         }
         return base64.urlsafe_b64encode(_canonical_json(payload).encode("utf-8")).decode("ascii").rstrip("=")
@@ -852,7 +1080,7 @@ class RelevantSnippetExtractor:
         try:
             encoded_cursor = padded.encode("ascii")
         except UnicodeEncodeError as exc:
-            raise ValueError("invalid cursor") from exc
+            raise InvalidSnippetCursorError("invalid cursor") from exc
         try:
             decoded = base64.b64decode(encoded_cursor, altchars=b"-_", validate=True)
             payload = json.loads(decoded.decode("utf-8"))
@@ -864,27 +1092,90 @@ class RelevantSnippetExtractor:
                 raise ValueError("invalid cursor fields")
             if payload["schema_version"] != CURSOR_SCHEMA_VERSION:
                 raise ValueError("wrong cursor schema")
-            if payload["binding_digest"] != self._cursor_binding_digest(binding_identity):
+            next_offset = SnippetResultCache._valid_page_offset(
+                payload["next_offset"]
+            )
+            if payload["binding_digest"] != self._cursor_binding_digest(
+                binding_identity, next_offset
+            ):
                 raise ValueError("wrong cursor binding")
-            return SnippetResultCache._valid_page_offset(payload["next_offset"])
+            return next_offset
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError, binascii.Error) as exc:
-            raise ValueError("invalid cursor") from exc
+            raise InvalidSnippetCursorError("invalid cursor") from exc
 
     def _validate_cached_page(
         self,
         page: SnippetPage,
         page_offset: int,
-        request_cursor: str | None,
+        request_offset: int,
         binding_identity: Mapping[str, object],
+        document_text: str,
+        source_chunk_records: Sequence[tuple[str, str, int, int, str]],
     ) -> None:
         try:
-            if self._decode_and_validate_cursor(request_cursor, binding_identity) != page_offset:
+            if request_offset != page_offset:
                 raise ValueError("cached page offset does not match request cursor")
+            if len(page.snippets) > self.config.snippets_per_page:
+                raise ValueError("cached page exceeds configured page size")
+            valid_source_chunks: set[tuple[str, str, int, int, str]] = set()
+            source_chunk_ids: set[str] = set()
+            for record in source_chunk_records:
+                document_id, chunk_id, start_char, end_char, text_sha256 = record
+                if (
+                    document_id != page.document_id
+                    or not chunk_id.startswith(f"{page.document_id}:")
+                    or chunk_id in source_chunk_ids
+                    or record in valid_source_chunks
+                    or end_char > len(document_text)
+                    or end_char - start_char > self.config.chunk_max_characters
+                    or _sha256_text(document_text[start_char:end_char])
+                    != text_sha256
+                ):
+                    raise ValueError("cached source chunks do not match document")
+                valid_source_chunks.add(record)
+                source_chunk_ids.add(chunk_id)
+            chunk_ids: set[str] = set()
+            records: set[tuple[int, int, str]] = set()
+            for snippet in page.snippets:
+                record = (snippet.start_char, snippet.end_char, snippet.text)
+                source_record = (
+                    page.document_id,
+                    snippet.chunk_id,
+                    snippet.start_char,
+                    snippet.end_char,
+                    _sha256_text(snippet.text),
+                )
+                if (
+                    not snippet.chunk_id.startswith(f"{page.document_id}:")
+                    or snippet.chunk_id in chunk_ids
+                    or record in records
+                    or source_record not in valid_source_chunks
+                    or snippet.end_char > len(document_text)
+                    or snippet.end_char - snippet.start_char != len(snippet.text)
+                    or document_text[snippet.start_char : snippet.end_char]
+                    != snippet.text
+                    or len(snippet.text) > self.config.chunk_max_characters
+                    or not math.isfinite(snippet.relevance_score)
+                ):
+                    raise ValueError("cached snippet does not match source document")
+                if (
+                    snippet.start_char == 0
+                    and snippet.end_char == len(document_text)
+                    and len(document_text) > self.config.chunk_max_characters
+                ):
+                    raise ValueError("cached complete document exceeds chunk maximum")
+                chunk_ids.add(snippet.chunk_id)
+                records.add(record)
             if page.next_cursor is not None:
                 next_offset = self._decode_and_validate_cursor(
                     page.next_cursor, binding_identity
                 )
-                if next_offset != page_offset + len(page.snippets):
+                if (
+                    not page.snippets
+                    or len(page.snippets) != self.config.snippets_per_page
+                    or next_offset <= page_offset
+                    or next_offset != page_offset + len(page.snippets)
+                ):
                     raise ValueError("cached next cursor does not follow page")
         except ValueError as exc:
             raise SnippetCacheIntegrityError("invalid snippet cache entry") from exc

@@ -16,6 +16,7 @@ from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from trec_rag.deepagent_snippets import (
+    InvalidSnippetCursorError,
     RelevantSnippetExtractor,
     SnippetExtractionResult,
     create_default_snippet_extractor,
@@ -613,7 +614,7 @@ class DeepAgentRetriever:
                 searches.append(search)
                 return json.dumps(
                     {
-                        "candidates": _candidate_metadata(
+                        "documents": _candidate_metadata(
                             search.candidates, limit=self._hits_per_search
                         ),
                         "remaining_budget": self._max_followup_searches
@@ -689,13 +690,8 @@ class DeepAgentRetriever:
                             )
                         except Exception:
                             pass
-            except ValueError:
-                error = (
-                    "invalid cursor"
-                    if cursor is not None
-                    else "snippet extraction failed"
-                )
-                return json.dumps({"error": error}, sort_keys=True)
+            except InvalidSnippetCursorError:
+                return json.dumps({"error": "invalid cursor"}, sort_keys=True)
             except Exception:
                 return json.dumps(
                     {"error": "snippet extraction failed"}, sort_keys=True

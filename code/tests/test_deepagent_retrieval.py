@@ -35,6 +35,7 @@ from trec_rag.deepagent_retrieval import (
     reciprocal_rank_fuse,
 )
 from trec_rag.deepagent_snippets import (
+    InvalidSnippetCursorError,
     RelevantSnippet,
     SnippetExtractionResult,
     SnippetPage,
@@ -178,7 +179,9 @@ class RecordingSnippetExtractor:
     ) -> SnippetExtractionResult:
         self.calls.append((document_id, document_text, focus_query, cursor))
         if cursor == "invalid-cursor":
-            raise ValueError("cursor leaked /private/cache/path")
+            raise InvalidSnippetCursorError("cursor leaked /private/cache/path")
+        if focus_query == "ranker value failure":
+            raise ValueError("ranker leaked /private/model/path")
         if focus_query == "extractor failure":
             raise RuntimeError("ranker leaked /private/model/path")
         snippet_text = document_text[-40:]
@@ -499,8 +502,8 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
                 json.loads(snippet_tool("original-doc-1", "original focus", None))
             )
             followup = json.loads(search_tool("targeted query"))
-            followup_candidates.extend(followup["candidates"])
-            followup_docid = str(followup["candidates"][0]["docid"])
+            followup_candidates.extend(followup["documents"])
+            followup_docid = str(followup["documents"][0]["docid"])
             snippet_payloads.append(
                 json.loads(snippet_tool(followup_docid, "followup focus", None))
             )
@@ -553,6 +556,9 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
                     snippet_tool("unknown-doc", "focus", None),
                     snippet_tool("original-doc-1", "   ", None),
                     snippet_tool("original-doc-1", "focus", "invalid-cursor"),
+                    snippet_tool(
+                        "original-doc-1", "ranker value failure", "valid-cursor"
+                    ),
                     snippet_tool("original-doc-1", "extractor failure", None),
                 )
             )
@@ -568,6 +574,7 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
         {"error": "unknown document_id"},
         {"error": "focus_query must be non-empty text"},
         {"error": "invalid cursor"},
+        {"error": "snippet extraction failed"},
         {"error": "snippet extraction failed"},
     ]
     assert "/private/" not in json.dumps(tool_payloads)
@@ -1393,10 +1400,10 @@ def test_tool_returns_bounded_metadata_but_result_retains_all_candidates() -> No
 
     result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
 
-    assert len(tool_payloads[0]["candidates"]) == 10
+    assert len(tool_payloads[0]["documents"]) == 10
     assert all(
         set(candidate) == {"docid", "rank", "score", "text_length"}
-        for candidate in tool_payloads[0]["candidates"]
+        for candidate in tool_payloads[0]["documents"]
     )
     assert len(result.searches[1].candidates) == 11
     assert tool_payloads[0]["remaining_budget"] == 2
@@ -1433,7 +1440,7 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
 
     assert len(fake_retriever.queries) == 2
     assert "original-doc-3" not in json.dumps(initial_payloads[0], sort_keys=True)
-    assert len(tool_payloads[0]["candidates"]) == 2
+    assert len(tool_payloads[0]["documents"]) == 2
     assert tool_payloads[0]["remaining_budget"] == 0
     assert tool_payloads[1] == {"error": "search budget exhausted"}
     assert result.stopping_reason == "search_budget_exhausted"

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+import textwrap
 from unittest.mock import patch
 
 import pytest
@@ -219,6 +223,122 @@ def test_metadata_only_masks_manual_span_content(
     ]
 
 
+@pytest.mark.parametrize("trace_content", [False, True])
+def test_real_langchain_instrumentation_respects_content_mode_in_fresh_process(
+    trace_content: bool,
+) -> None:
+    script = textwrap.dedent(
+        """
+        import json
+        import sys
+
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+        from langchain_core.messages import HumanMessage
+        from langchain_core.runnables import RunnableLambda
+        from langchain_core.tools import tool
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        from trec_rag.deepagent_tracing import create_retrieval_tracing
+
+        trace_content = sys.argv[1] == "true"
+        sentinels = {
+            "narrative": "PRIVATE-NARRATIVE-f0ef50",
+            "cursor": "PRIVATE-CURSOR-a741b9",
+            "snippet": "PRIVATE-SNIPPET-9a6cd2",
+            "scratch": "/scratch/PRIVATE-NOTE-44d172.txt",
+        }
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracing = create_retrieval_tracing(
+            environ={}, tracer_provider=provider, trace_content=trace_content
+        )
+
+        @tool
+        def inspect_document(payload: str) -> str:
+            \"\"\"Inspect one retrieved document.\"\"\"
+            return sentinels["snippet"] + " " + sentinels["scratch"]
+
+        chain = (
+            RunnableLambda(
+                lambda narrative: {
+                    "narrative": narrative,
+                    "cursor": sentinels["cursor"],
+                }
+            ).with_config(run_name="agent")
+            | RunnableLambda(
+                lambda payload: inspect_document.invoke(json.dumps(payload))
+            ).with_config(run_name="scratch")
+        )
+        chain.invoke(sentinels["narrative"])
+        FakeListChatModel(
+            responses=[sentinels["snippet"] + " " + sentinels["scratch"]]
+        ).invoke(
+            [
+                HumanMessage(
+                    content=sentinels["narrative"] + " " + sentinels["cursor"]
+                )
+            ]
+        )
+        with tracing.agent_span(sentinels["narrative"]):
+            pass
+        with tracing.snippet_span("doc-a", "safe focus query") as span:
+            span.record_page(
+                chunk_ids=("doc-a:0000",),
+                start_chars=(0,),
+                end_chars=(len(sentinels["snippet"]),),
+                relevance_scores=(1.0,),
+                texts=(sentinels["snippet"],),
+                cache_status="miss",
+                ranker_backend="test",
+                latency_ms=1.0,
+                page_offset=0,
+                has_next_page=False,
+            )
+        spans = [
+            {
+                "attributes": dict(span.attributes),
+                "events": [
+                    {
+                        "name": event.name,
+                        "attributes": dict(event.attributes),
+                    }
+                    for event in span.events
+                ],
+            }
+            for span in exporter.get_finished_spans()
+        ]
+        print(json.dumps({"sentinels": sentinels, "spans": spans}, sort_keys=True))
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(trace_content).lower()],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    exported = json.loads(completed.stdout)
+    serialized_spans = json.dumps(exported["spans"], sort_keys=True)
+
+    assert exported["spans"]
+    assert all(
+        exported["sentinels"][key] not in serialized_spans
+        for key in ("cursor", "scratch")
+    ), serialized_spans
+    if trace_content:
+        assert all(
+            exported["sentinels"][key] in serialized_spans
+            for key in ("narrative", "snippet")
+        )
+    else:
+        assert all(
+            value not in serialized_spans for value in exported["sentinels"].values()
+        )
+
+
 @pytest.mark.parametrize("span_factory", ["agent_span", "retriever_span"])
 @pytest.mark.parametrize("trace_content", [False, True])
 def test_span_facade_has_no_generic_attribute_mutation_path(
@@ -320,8 +440,11 @@ def test_instrumentation_is_idempotent_per_provider_identity(provider: TracerPro
     assert instrument.call_count == 1
     assert instrument.call_args.kwargs["tracer_provider"] is provider
     config = instrument.call_args.kwargs["config"]
-    assert config.hide_input_text is False
-    assert config.hide_output_text is False
+    assert config.hide_llm_invocation_parameters is True
+    assert config.hide_inputs is True
+    assert config.hide_outputs is True
+    assert config.hide_input_text is True
+    assert config.hide_output_text is True
 
 
 def test_equivalent_live_setup_reuses_registration_and_real_instrumentation(
