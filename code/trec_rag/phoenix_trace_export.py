@@ -67,11 +67,9 @@ def _normalize_endpoint(value: str) -> str:
     path = parsed.path.rstrip("/")
     if (
         parsed.hostname.lower() == "app.phoenix.arize.com"
-        and _WORKSPACE_PATH.fullmatch(parsed.path)
+        and (not path or _WORKSPACE_PATH.fullmatch(path))
     ):
-        path = ""
-    elif path.endswith("/v1/traces"):
-        path = path[: -len("/v1/traces")]
+        path = f"{path}/v1/traces"
     normalized = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
     return normalized.rstrip("/")
 

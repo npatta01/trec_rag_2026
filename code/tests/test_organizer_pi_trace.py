@@ -354,6 +354,16 @@ def test_fixed_build_rejects_native_user_prompt_mismatch(tmp_path):
     assert not (tmp_path / "fixed-trace.json").exists()
 
 
+def test_fixed_build_accepts_pi_file_envelope_around_exact_native_prompt(tmp_path):
+    args = _fixed_args(tmp_path)
+    _, _, _, rendered = _fixed_inputs(tmp_path)
+    wrapped = f'<file name="/tmp/ragnarok-random/prompt.txt">\n{rendered}\n</file>\n'
+    _write_events(tmp_path / "fixed-events.jsonl", user_prompt=wrapped)
+
+    assert main(args, ignored_checker=_ignored) == 0
+    assert (tmp_path / "fixed-trace.json").is_file()
+
+
 def test_build_rejects_non_ignored_bundle_target(tmp_path):
     assert main(_piika_args(tmp_path), ignored_checker=lambda _path: False) == 1
     assert not (tmp_path / "trace.json").exists()

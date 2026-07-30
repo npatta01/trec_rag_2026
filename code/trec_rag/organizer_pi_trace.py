@@ -286,7 +286,19 @@ def _verify_native_user_prompt(events: Sequence[Mapping[str, object]], rendered:
         text = _message_text(message)
         if text is not None:
             native_prompts.append(text)
-    if native_prompts and rendered not in native_prompts:
+    def matches(native: str) -> bool:
+        if native == rendered:
+            return True
+        header, separator, body = native.partition(">\n")
+        return (
+            separator == ">\n"
+            and header.startswith('<file name="')
+            and header.endswith('/prompt.txt"')
+            and "\n" not in header
+            and body == f"{rendered}\n</file>\n"
+        )
+
+    if native_prompts and not any(matches(native) for native in native_prompts):
         raise ValueError("rendered organizer prompt does not match native Pi user event")
 
 

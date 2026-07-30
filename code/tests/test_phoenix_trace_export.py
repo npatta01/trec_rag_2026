@@ -89,11 +89,15 @@ def test_settings_fail_closed_when_a_required_environment_value_is_missing(
     [
         (
             "https://app.phoenix.arize.com/s/npatta01",
-            "https://app.phoenix.arize.com",
+            "https://app.phoenix.arize.com/s/npatta01/v1/traces",
         ),
         (
             "https://app.phoenix.arize.com/v1/traces/",
+            "https://app.phoenix.arize.com/v1/traces",
+        ),
+        (
             "https://app.phoenix.arize.com",
+            "https://app.phoenix.arize.com/v1/traces",
         ),
         ("https://phoenix.example.test/custom", "https://phoenix.example.test/custom"),
         (
@@ -347,7 +351,7 @@ def test_export_recursively_preserves_trace_semantics_and_returns_public_ids():
     assert factory.calls == [
         {
             "project_name": "trace-project",
-            "endpoint": "https://app.phoenix.arize.com",
+            "endpoint": "https://app.phoenix.arize.com/v1/traces",
             "api_key": SYNTHETIC_KEY,
             "batch": False,
             "verbose": False,
