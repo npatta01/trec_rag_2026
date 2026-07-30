@@ -2171,8 +2171,8 @@ def test_best_stored_passage_has_an_explicit_missing_state(tmp_path: Path) -> No
     assert debug_report._best_stored_passage(without_document_passages, document.docid) is None
 
 
-def test_selected_documents_render_as_ordered_evidence_cards(tmp_path: Path) -> None:
-    """Wide rows or unexplained selections must fail the readable evidence contract."""
+def test_selected_documents_render_as_ordered_evidence_disclosures(tmp_path: Path) -> None:
+    """Replacing compact disclosures with open cards must fail the reading-path contract."""
     config_path, _output = _write_debug_run(tmp_path)
     loaded = load_debug_report_data(config_path)
     topic = loaded.topics[0]
@@ -2185,7 +2185,7 @@ def test_selected_documents_render_as_ordered_evidence_cards(tmp_path: Path) -> 
     )[0]
 
     assert '<ol class="selected-document-list">' in section
-    assert section.count('<article class="selected-document-card"') == len(
+    assert section.count('<details class="selected-document-disclosure"') == len(
         topic.selected_documents
     )
     assert "Selected pool in stored selection order" not in section
@@ -2209,10 +2209,10 @@ def test_selected_documents_render_as_ordered_evidence_cards(tmp_path: Path) -> 
     without_passage = render_debug_report(
         replace(loaded, topics=(no_passage_topic,))
     )
-    first_card = without_passage.split(
+    first_disclosure = without_passage.split(
         'id="selected-document-literal-rag2026-0-1"', 1
-    )[1].split("</article>", 1)[0]
-    assert "No stored passage ranking is available for this selected document." in first_card
+    )[1].split("</details>", 1)[0]
+    assert "No stored passage ranking is available for this selected document." in first_disclosure
 
 
 def test_selected_document_cards_summarize_membership_before_technical_scores(
@@ -2235,10 +2235,10 @@ def test_selected_document_cards_summarize_membership_before_technical_scores(
     rendered = render_debug_report(
         replace(loaded, topics=(replace(topic, selected_documents=(combined,)),))
     )
-    card = rendered.split(
+    disclosure = rendered.split(
         'id="selected-document-literal-rag2026-0-1"', 1
-    )[1].split("</article>", 1)[0]
-    visible, technical = card.split(
+    )[1].split("</details>", 1)[0]
+    visible, technical = disclosure.split(
         '<details class="technical-provenance">', 1
     )
 
@@ -2247,6 +2247,81 @@ def test_selected_document_cards_summarize_membership_before_technical_scores(
     assert "bm25_score" not in visible
     assert "aggregate_score" in technical
     assert "bm25_score" in technical
+
+
+def test_compact_selected_document_disclosures_keep_all_diagnostics_available(
+    tmp_path: Path,
+) -> None:
+    """Moving diagnostics into summaries or dropping remainder rows must fail."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    original, facet = topic.selected_documents
+    selected = tuple(
+        replace(
+            original if rank % 2 else facet,
+            docid=original.docid if rank == 1 else f"selected-document-{rank}",
+            selection_rank=rank,
+            selection_rationale=(
+                f"Long selection rationale retained for selected document {rank}."
+            ),
+            text=f"Stored selected-document text retained for rank {rank}.",
+            text_sha256=f"{rank:064x}",
+        )
+        for rank in range(1, 13)
+    )
+    rendered = render_debug_report(
+        replace(loaded, topics=(replace(topic, selected_documents=selected),))
+    )
+    section = rendered.split(
+        '<section id="stage-literal-rag2026-0-selected-documents"', 1
+    )[1].split(
+        '<section id="stage-literal-rag2026-0-top-passages"', 1
+    )[0]
+    direct, remainder = section.split(
+        '<details class="selected-document-remainder">', 1
+    )
+
+    assert direct.count('<details class="selected-document-disclosure"') == 10
+    assert '<summary>Show remaining 2 selected documents</summary>' in remainder
+    assert '<details class="selected-document-remainder" open>' not in section
+    assert [
+        f'id="selected-document-literal-rag2026-0-{rank}"'
+        for rank in range(1, 13)
+    ] == [
+        match.group(0)
+        for match in re.finditer(
+            r'id="selected-document-literal-rag2026-0-\d+"', section
+        )
+    ]
+
+    first = selected[0]
+    first_disclosure = section.split(
+        '<details class="selected-document-disclosure" '
+        'id="selected-document-literal-rag2026-0-1">',
+        1,
+    )[1]
+    summary, detail = first_disclosure.split("</summary>", 1)
+    best = debug_report._best_stored_passage(topic, first.docid)
+
+    assert "#1" in summary
+    assert first.docid in summary
+    assert "Original member" in summary
+    assert "Selected lane: <code>original</code>" in summary
+    assert "Lane rank: 1" in summary
+    assert debug_report._selected_document_reason(first) not in summary
+    assert "aggregate_score" not in summary
+    assert "bm25_score" not in summary
+    assert first.text_sha256 not in summary
+    assert best is not None
+    assert html.escape(debug_report._bounded_excerpt(best.passage.text), quote=True) not in summary
+
+    assert debug_report._selected_document_reason(first) in detail
+    assert "aggregate_score" in detail
+    assert "bm25_score" in detail
+    assert first.text_sha256 in detail
+    assert first.selection_rationale in detail
+    assert html.escape(debug_report._bounded_excerpt(best.passage.text), quote=True) in detail
 
 
 def test_membership_coverage_counts_valid_nonstandard_lanes_truthfully() -> None:

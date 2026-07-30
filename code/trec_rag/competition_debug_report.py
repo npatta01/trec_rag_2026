@@ -62,6 +62,7 @@ _CANONICAL_STATES = {"complete", "empty", "fallback_extractive"}
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _REPORT_SCHEMA_VERSION = "competition_debug_report_v1"
 _DOCUMENT_EXCERPT_CHARACTERS = 500
+_INITIAL_SELECTED_DOCUMENTS = 10
 
 
 @dataclass(frozen=True)
@@ -2314,7 +2315,7 @@ summary {{ min-height: 44px; display: list-item; padding-block: .6rem; cursor: p
 .status-empty {{ color: #735400; background: #fff0bd; }}
 .status-fallback-extractive {{ color: #7a2300; background: #ffe0d2; }}
 .subnarrative-list, .new-document-list, .selected-document-list, .retrieval-document-list, .rag-answer-list, .rag-reference-list {{ display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }}
-.subnarrative-card, .new-document-card, .selected-document-card, .retrieval-document-card, .rag-answer-item, .rag-reference-card {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
+.subnarrative-card, .new-document-card, .retrieval-document-card, .rag-answer-item, .rag-reference-card, .selected-document-disclosure, .selected-document-remainder {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
 .subnarrative-card h3, .new-document-card h4, .retrieval-document-card h3 {{ margin-top: 0; }}
 .funnel-counts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .75rem; margin: 1rem 0; padding: 0; list-style: none; }}
 .funnel-count {{ min-width: 0; padding: .8rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
@@ -2326,6 +2327,8 @@ summary {{ min-height: 44px; display: list-item; padding-block: .6rem; cursor: p
 .new-document-lane, .passage-ranking-disclosure, .canonical-cluster-diagnostics, .canonical-result {{ margin-block: 1rem; border: 1px solid var(--line); border-inline-start-width: .25rem; border-radius: .65rem; background: var(--surface-soft); }}
 .new-document-lane > summary, .passage-ranking-disclosure > summary, .canonical-cluster-diagnostics > summary, .canonical-result > summary {{ padding-inline: .5rem; }}
 .new-document-lane > .new-document-list, .passage-ranking-disclosure > .passage-diagnostics, .canonical-cluster-diagnostics > .table-wrap, .canonical-result > .canonical-result-detail {{ margin: .5rem; }}
+.selected-document-disclosure > summary, .selected-document-remainder > summary {{ padding-inline: .5rem; }}
+.selected-document-detail, .selected-document-remainder > .selected-document-list {{ margin: .5rem; }}
 .card-heading {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem .75rem; margin: 0 0 .75rem; }}
 .card-rank, .citation-chip {{ display: inline-flex; min-height: 2rem; align-items: center; padding: .2rem .65rem; border-radius: 999px; font-weight: 750; }}
 .card-rank {{ color: var(--accent-ink); background: var(--accent); }}
@@ -2691,10 +2694,23 @@ def _render_new_document_card(item: NewDocumentReport) -> str:
 
 
 def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
+    visible = topic.selected_documents[:_INITIAL_SELECTED_DOCUMENTS]
     cards = "".join(
-        _render_selected_document_card(topic, item)
-        for item in topic.selected_documents
+        _render_selected_document_disclosure(topic, item)
+        for item in visible
     )
+    remainder = topic.selected_documents[_INITIAL_SELECTED_DOCUMENTS:]
+    if remainder:
+        cards += (
+            '<li><details class="selected-document-remainder">'
+            f"<summary>Show remaining {len(remainder)} selected documents</summary>"
+            '<ol class="selected-document-list">'
+            + "".join(
+                _render_selected_document_disclosure(topic, item)
+                for item in remainder
+            )
+            + "</ol></details></li>"
+        )
     return _stage(
         prefix,
         "selected-documents",
@@ -2709,7 +2725,7 @@ def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
     )
 
 
-def _render_selected_document_card(
+def _render_selected_document_disclosure(
     topic: TopicReport, item: SelectedDocumentReport
 ) -> str:
     best = _best_stored_passage(topic, item.docid)
@@ -2732,11 +2748,15 @@ def _render_selected_document_card(
             "</dl></div>"
         )
     return (
-        '<li><article class="selected-document-card" '
+        '<li><details class="selected-document-disclosure" '
         f'id="selected-document-{_topic_anchor(topic.topic_id)}-{_html(item.selection_rank)}">'
-        '<h3 class="card-heading">'
+        '<summary>'
         f'<span class="card-rank">#{_html(item.selection_rank)}</span>'
-        f'<code>{_html(item.docid)}</code></h3>'
+        f'<code>{_html(item.docid)}</code>'
+        f'<span>{_html(status)}</span>'
+        f'<span>Selected lane: <code>{_html(item.selected_from_lane)}</code></span>'
+        f'<span>Lane rank: {_html(item.selected_from_lane_rank)}</span>'
+        '</summary><div class="selected-document-detail">'
         f'<p class="selection-reason">{_html(_selected_document_reason(item))}</p>'
         '<dl class="card-metadata">'
         f'<div><dt>Status</dt><dd>{_html(status)}</dd></div>'
@@ -2748,7 +2768,7 @@ def _render_selected_document_card(
         f'<dt>Text SHA-256</dt><dd><code>{_html(item.text_sha256)}</code></dd>'
         f'<dt>Memberships and selection rationale</dt><dd class="break">{_html(memberships)}. {_html(item.selection_rationale)}</dd>'
         f'<dt>Document excerpt (first {_DOCUMENT_EXCERPT_CHARACTERS} characters)</dt><dd class="break">{_html(_bounded_excerpt(item.text))}</dd>'
-        "</dl></details></article></li>"
+        "</dl></details></div></details></li>"
     )
 
 
