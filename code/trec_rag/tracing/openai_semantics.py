@@ -7,7 +7,7 @@ import json
 
 from openinference.semconv.trace import SpanAttributes
 
-from trec_rag.pi_trace_models import SpanSpec
+from trec_rag.tracing.models import SpanSpec
 
 
 def _json_string(value: object) -> str:

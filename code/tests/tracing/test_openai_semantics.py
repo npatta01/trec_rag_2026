@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 
-from trec_rag.openai_trace_semantics import (
+from trec_rag.tracing.openai_semantics import (
     openai_llm_attributes,
     openai_request_envelope,
     openai_response_envelope,
     piika_tool_schemas,
 )
-from trec_rag.pi_trace_models import SpanSpec
+from trec_rag.tracing.models import SpanSpec
 
 
 def _llm_span(*, input_value, output_value):

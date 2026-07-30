@@ -4,15 +4,15 @@ import json
 
 import pytest
 
-from trec_rag.phoenix_trace_export import (
+from trec_rag.tracing.phoenix_export import (
     ExportReceipt,
     PhoenixSettings,
     SecretStr,
     assert_no_secrets,
-    export_trace,
+    export_trace_bundle,
     _semantic_attributes,
 )
-from trec_rag.pi_trace_models import SpanSpec, TraceBundle
+from trec_rag.tracing.models import SpanSpec, TraceBundle
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace import Span
@@ -358,7 +358,7 @@ def test_export_recursively_preserves_trace_semantics_and_returns_public_ids():
     provider = _FakeProvider()
     factory = _ProviderFactory(provider)
 
-    receipt = export_trace(_bundle(root), _settings(), provider_factory=factory)
+    receipt = export_trace_bundle(_bundle(root), _settings(), provider_factory=factory)
 
     assert factory.calls == [
         {
@@ -441,7 +441,7 @@ def test_export_adds_openinference_chat_attributes_for_fixed_generation():
     )
     provider = _FakeProvider()
 
-    export_trace(
+    export_trace_bundle(
         _bundle(_span(children=(generation,))),
         _settings(),
         provider_factory=_ProviderFactory(provider),
@@ -534,7 +534,7 @@ def test_export_separates_reasoning_children_without_changing_native_llm_payload
     )
     provider = _FakeProvider()
 
-    export_trace(
+    export_trace_bundle(
         _bundle(_span(children=(generation,))),
         _settings(),
         provider_factory=_ProviderFactory(provider),
@@ -579,7 +579,7 @@ def test_export_normalizes_native_tool_result_role_without_losing_raw_payload():
     )
     provider = _FakeProvider()
 
-    export_trace(
+    export_trace_bundle(
         _bundle(_span(children=(generation,))),
         _settings(),
         provider_factory=_ProviderFactory(provider),
@@ -605,7 +605,7 @@ def test_export_adds_openinference_retrieval_document_attributes():
     )
     provider = _FakeProvider()
 
-    export_trace(
+    export_trace_bundle(
         _bundle(_span(children=(retrieval,))),
         _settings(),
         provider_factory=_ProviderFactory(provider),
@@ -646,7 +646,7 @@ def test_export_maps_native_pi_usage_tokens_cache_and_costs():
     )
     provider = _FakeProvider()
 
-    export_trace(
+    export_trace_bundle(
         _bundle(_span(children=(generation,))),
         _settings(),
         provider_factory=_ProviderFactory(provider),
@@ -682,7 +682,7 @@ def test_export_adds_openinference_tool_attributes_without_inventing_documents()
     )
     provider = _FakeProvider()
 
-    export_trace(
+    export_trace_bundle(
         _bundle(_span(children=(tool, search))),
         _settings(),
         provider_factory=_ProviderFactory(provider),
@@ -739,7 +739,7 @@ def test_export_rejects_secret_content_before_constructing_provider():
     bundle = _bundle(_span(input_value={"leak": f"prefix-{SYNTHETIC_KEY}"}))
 
     with pytest.raises(ValueError, match="credential-like value"):
-        export_trace(bundle, _settings(), provider_factory=factory)
+        export_trace_bundle(bundle, _settings(), provider_factory=factory)
 
     assert factory.calls == []
 
@@ -750,7 +750,7 @@ def test_export_ends_open_spans_flushes_and_shuts_down_after_export_error():
     provider = _FakeProvider(fail_name="fails")
 
     with pytest.raises(RuntimeError, match="synthetic span failure"):
-        export_trace(bundle, _settings(), provider_factory=_ProviderFactory(provider))
+        export_trace_bundle(bundle, _settings(), provider_factory=_ProviderFactory(provider))
 
     root_span, failed_span = provider.tracer.spans
     assert root_span.end_time == 40
@@ -763,7 +763,7 @@ def test_export_rejects_a_failed_synchronous_export_result_and_shuts_down():
     provider = _FakeProvider(export_result=SpanExportResult.FAILURE)
 
     with pytest.raises(RuntimeError, match="Phoenix export did not complete"):
-        export_trace(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
+        export_trace_bundle(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
 
     assert provider.flush_calls == 1
     assert provider.shutdown_calls == 1
@@ -773,7 +773,7 @@ def test_export_rejects_a_false_flush_result_and_shuts_down():
     provider = _FakeProvider(flush_result=False)
 
     with pytest.raises(RuntimeError, match="Phoenix export did not complete"):
-        export_trace(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
+        export_trace_bundle(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
 
     assert provider.flush_calls == 1
     assert provider.shutdown_calls == 1
@@ -783,7 +783,7 @@ def test_export_rejects_when_sampling_suppresses_every_export_call():
     provider = _FakeProvider(suppress_export=True)
 
     with pytest.raises(RuntimeError, match="Phoenix export did not complete"):
-        export_trace(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
+        export_trace_bundle(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
 
     assert provider.exporter.calls == []
     assert provider.flush_calls == 1
@@ -795,7 +795,7 @@ def test_export_rejects_an_unverifiable_provider_and_still_cleans_it_up():
     del provider._active_span_processor
 
     with pytest.raises(RuntimeError, match="result verification is unavailable"):
-        export_trace(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
+        export_trace_bundle(_bundle(), _settings(), provider_factory=_ProviderFactory(provider))
 
     assert provider.tracer.spans == []
     assert provider.flush_calls == 1

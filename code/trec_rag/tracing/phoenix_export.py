@@ -15,8 +15,8 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace.status import Status, StatusCode
 
-from trec_rag.pi_trace_models import SpanSpec, TraceBundle
-from trec_rag.openai_trace_semantics import (
+from trec_rag.tracing.models import SpanSpec, TraceBundle
+from trec_rag.tracing.openai_semantics import (
     openai_llm_attributes,
     openai_request_envelope,
     openai_response_envelope,
@@ -493,7 +493,7 @@ def _export_span(
     return span, exported_count
 
 
-def export_trace(
+def export_trace_bundle(
     bundle: TraceBundle,
     settings: PhoenixSettings,
     *,
@@ -562,5 +562,5 @@ __all__ = [
     "PhoenixSettings",
     "SecretStr",
     "assert_no_secrets",
-    "export_trace",
+    "export_trace_bundle",
 ]
