@@ -8,6 +8,25 @@
 
 **Constraints:** Do not alter retrieval, RAG generation, organizer artifacts, submission formats, or the organizer repository. Do not add network dependencies. Keep the rendered copy private on the already-authorized tailnet-only portal.
 
+## Status
+
+Completed on 2026-07-30.
+
+- Post-run CLI regenerated the existing two-topic report without rerunning
+  retrieval or generation and revalidated 25 bounded source receipts.
+- Full repository suite: 651 passed.
+- Real headless-Chrome desktop/mobile checks: exactly one visible topic, one
+  selected topic control, zero broken citation targets, no horizontal overflow,
+  preserved descendant fragments, and citation navigation within topic 2.
+- Independent final review: pass after the remaining-stage, lossless-diagnostic,
+  and disclosure-affordance remediations.
+- Generated source, rendered copy, and live HTTPS response share SHA-256
+  `63207fbc322963fca688ed4e4abc903dcc2eb1b7da101c852f1d20819a1c87e8`.
+- Private report URL:
+  `https://npatta01-framework.tail481212.ts.net/plans/trec-rag-2026-competition-debug-report.html`
+- Tailscale Serve remains tailnet-only; no Funnel, public deployment, organizer
+  repository change, push, or pull request was created.
+
 ---
 
 ## Task 1: Project human-readable selected-document evidence and RAG provenance
