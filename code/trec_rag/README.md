@@ -148,6 +148,78 @@ Run validation:
 .venv/bin/python -m pytest code/tests/test_remote_pyserini.py -q
 ```
 
+## Experimental Deep Agent retrieval SDK
+
+`trec_rag.deepagent_retrieval` is a small, narrative-only experimental SDK. It
+is not wired into `run_pipeline`, `official_run`, organizer exports, sealed
+artifacts, or the ranking semantics of the official pipeline.
+
+Pass the narrative you already have directly; the first search uses that exact
+string without rewriting it:
+
+```python
+from trec_rag.deepagent_retrieval import DeepAgentRetriever
+
+result = DeepAgentRetriever.from_env().retrieve(provided_narrative)
+for candidate in result.candidates:
+    print(candidate.rank, candidate.docid, candidate.score)
+```
+
+Topic-file lookup remains deliberately separate and always requires an
+explicit path. It is a convenience for experiments, not a second SDK input:
+
+```python
+from pathlib import Path
+
+from trec_rag.topics import load_topic_narrative
+
+provided_narrative = load_topic_narrative(
+    "224",
+    Path("trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv"),
+)
+```
+
+Inputs and configuration:
+
+- Required: `OPENROUTER_API_KEY`, `INDEX_URL`, and `PYSERINI_API_TOKEN`.
+  `PHOENIX_COLLECTOR_ENDPOINT` is also required when exporting Phoenix traces;
+  omit it to disable tracing.
+- Optional: `PHOENIX_API_KEY` is required by Phoenix Cloud endpoints, and
+  `PHOENIX_PROJECT_NAME` overrides the default
+  `trec-rag-deepagent-retrieval` project. `DEEPAGENT_MODEL` overrides the
+  default `openrouter:deepseek/deepseek-v4-flash` model.
+- The model specification must be `openrouter:<model-id>`. The SDK constructs
+  the OpenRouter client with `max_retries=0`; it does not silently retry model,
+  Pyserini, or Phoenix calls.
+
+The SDK first retrieves the untouched narrative, then gives the agent at most
+three targeted follow-up searches. Each search returns at most ten ClimbMix
+candidates. Results are document-ID deduplicated with deterministic reciprocal
+rank fusion (RRF, `k=60`) and return at most twenty candidates; raw BM25 scores
+from different queries are never compared. `AgentRetrievalResult` contains the
+input `narrative`, completed `searches` (`AgentSearch` records), fused
+`candidates` (`RankedCandidate` records with per-search provenance), the
+agent's `rationale`, and a `stopping_reason`.
+
+Phoenix tracing is optional. When configured, spans can contain the supplied
+narrative, targeted follow-up queries, and bounded result excerpts. They never
+include credentials, authorization headers, raw provider responses,
+continuation-ticket values, or local cache paths. For metadata-only tracing,
+construct tracing with `trace_content=False`; narrative/query/excerpt content
+is replaced with a redacted marker. Keep provider credentials in ignored local
+environment files rather than source or notebooks.
+
+Validate the isolated SDK and its existing transport boundaries with:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_topics.py \
+  code/tests/test_deepagent_tracing.py \
+  code/tests/test_deepagent_retrieval.py \
+  code/tests/test_pipeline.py \
+  code/tests/test_remote_pyserini.py -q
+```
+
 ## Config-Driven RAG Pipeline
 
 The pipeline is the preferred path for experiments. It keeps query
