@@ -2389,21 +2389,39 @@ def test_answer_precedes_provenance_and_referenced_documents(tmp_path: Path) -> 
     assert '<details class="rag-references" open' not in section
 
 
+def _two_subnarrative_topic(
+    topic: debug_report.TopicReport,
+) -> debug_report.TopicReport:
+    first = topic.subnarratives[0]
+    second = replace(
+        first,
+        subnarrative_id="subnarrative-2",
+        text="Second facet text",
+        bm25_queries=("second literal facet query",),
+        semantic_query_sha256="b" * 64,
+        bm25_query_sha256s=("c" * 64,),
+    )
+    return replace(topic, subnarratives=(first, second))
+
+
 def test_concise_subnarrative_keeps_queries_and_seals_collapsed(
     tmp_path: Path,
 ) -> None:
     """Literal query text must not crowd the default decomposition reading path."""
     config_path, _output = _write_debug_run(tmp_path)
     loaded = load_debug_report_data(config_path)
-    rendered = render_debug_report(loaded)
+    topic = _two_subnarrative_topic(loaded.topics[0])
+    rendered = render_debug_report(replace(loaded, topics=(topic,)))
     section = rendered.split(
         '<section id="stage-literal-rag2026-0-subnarratives"', 1
     )[1].split('<section id="stage-literal-rag2026-0-final-rag"', 1)[0]
+    cards = [
+        card.split("</article>", 1)[0]
+        for card in section.split('<article class="subnarrative-card">')[1:]
+    ]
+    assert len(cards) == len(topic.subnarratives)
 
-    for item in loaded.topics[0].subnarratives:
-        card = section.split('<article class="subnarrative-card">', 1)[1].split(
-            "</article>", 1
-        )[0]
+    for item, card in zip(topic.subnarratives, cards, strict=True):
         visible, technical = card.split(
             '<details class="technical-provenance"><summary>'
             'Retrieval query and seal details</summary>',
@@ -2468,27 +2486,26 @@ def test_subnarratives_render_as_readable_cards_without_a_default_table(
     """Decomposition text and queries should be readable before technical seals."""
     config_path, _output = _write_debug_run(tmp_path)
     loaded = load_debug_report_data(config_path)
-    topic = loaded.topics[0]
+    topic = _two_subnarrative_topic(loaded.topics[0])
 
-    section = render_debug_report(loaded).split(
+    section = render_debug_report(replace(loaded, topics=(topic,))).split(
         '<section id="stage-literal-rag2026-0-subnarratives"', 1
     )[1].split('<section id="stage-literal-rag2026-0-final-rag"', 1)[0]
+    cards = [
+        card.split("</article>", 1)[0]
+        for card in section.split('<article class="subnarrative-card">')[1:]
+    ]
 
     assert '<ol class="subnarrative-list">' in section
-    assert section.count('<article class="subnarrative-card"') == len(
-        topic.subnarratives
-    )
+    assert len(cards) == len(topic.subnarratives)
     assert "<table" not in section
-    for item in topic.subnarratives:
-        assert html.escape(item.text, quote=True) in section
-        card = section.split('<article class="subnarrative-card">', 1)[1].split(
-            "</article>", 1
-        )[0]
+    for item, card in zip(topic.subnarratives, cards, strict=True):
         visible, technical = card.split(
             '<details class="technical-provenance"><summary>'
             'Retrieval query and seal details</summary>',
             1,
         )
+        assert html.escape(item.text, quote=True) in visible
         assert html.escape(item.bm25_queries[0], quote=True) not in visible
         assert html.escape(item.bm25_queries[0], quote=True) in technical
         assert item.semantic_query_sha256 in technical
