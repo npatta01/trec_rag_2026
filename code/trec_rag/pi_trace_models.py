@@ -18,6 +18,13 @@ AttributeValue: TypeAlias = AttributeScalar | tuple[AttributeScalar, ...]
 DEFAULT_BUNDLE_MAX_BYTES = 256 * 1024 * 1024
 
 
+def _require_non_empty_string(value: object, label: str) -> None:
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a string")
+    if not value:
+        raise ValueError(f"{label} must be non-empty")
+
+
 def _immutable(*args: object, **kwargs: object) -> None:
     raise TypeError("trace payloads are immutable")
 
@@ -89,15 +96,15 @@ class SpanSpec:
     children: tuple["SpanSpec", ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.name or not self.kind:
-            raise ValueError("span name and kind must be non-empty")
+        _require_non_empty_string(self.name, "span name")
+        _require_non_empty_string(self.kind, "span kind")
         if isinstance(self.start_ns, bool) or not isinstance(self.start_ns, int):
             raise TypeError("span start_ns must be an integer")
         if isinstance(self.end_ns, bool) or not isinstance(self.end_ns, int):
             raise TypeError("span end_ns must be an integer")
         if self.end_ns < self.start_ns:
             raise ValueError("span end_ns must not precede start_ns")
-        if self.status not in {"OK", "ERROR"}:
+        if not isinstance(self.status, str) or self.status not in {"OK", "ERROR"}:
             raise ValueError(f"unsupported span status: {self.status!r}")
         if self.status_message is not None and not isinstance(self.status_message, str):
             raise TypeError("span status_message must be a string or None")
@@ -123,9 +130,13 @@ class TraceBundle:
     root: SpanSpec
 
     def __post_init__(self) -> None:
-        if not self.project_name or not self.session_id or not self.topic_id:
-            raise ValueError("trace project, session, and topic identifiers must be non-empty")
-        if self.baseline not in {"piika-agentic", "ragnarok-fixed"}:
+        _require_non_empty_string(self.project_name, "trace project_name")
+        _require_non_empty_string(self.session_id, "trace session_id")
+        _require_non_empty_string(self.topic_id, "trace topic_id")
+        if not isinstance(self.baseline, str) or self.baseline not in {
+            "piika-agentic",
+            "ragnarok-fixed",
+        }:
             raise ValueError(f"unsupported trace baseline: {self.baseline!r}")
         if not isinstance(self.root, SpanSpec):
             raise TypeError("trace root must be a SpanSpec")

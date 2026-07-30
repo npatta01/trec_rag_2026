@@ -120,6 +120,51 @@ def test_piika_events_become_ordered_full_content_spans(tmp_path):
     assert bundle.root.attributes["trace.timing_reconstructed"] is True
 
 
+def test_piika_trace_preserves_prompt_bearing_native_events(tmp_path):
+    agent_start = {
+        "type": "agent_start",
+        "systemPrompt": "full native system prompt",
+        "prompt": "full native agent prompt",
+    }
+    user_message = {
+        "role": "user",
+        "content": [{"type": "text", "text": "full native user prompt"}],
+        "timestamp": 1_800_000_000_000,
+    }
+    assistant = _assistant("answer", 1_800_000_000_100)
+    user_start = {"type": "message_start", "message": user_message}
+    user_end = {"type": "message_end", "message": user_message}
+    events = load_pi_events(
+        _write_jsonl(
+            tmp_path / "prompt-events.jsonl",
+            [
+                agent_start,
+                user_start,
+                user_end,
+                {"type": "message_start", "message": assistant},
+                {"type": "message_end", "message": assistant},
+            ],
+        )
+    )
+
+    bundle = build_piika_trace(
+        topic=OrganizerTopic("rag2026-1", "official narrative"),
+        events=events,
+        run_record={"status": "completed"},
+        session_id="session",
+    )
+
+    assert [child.kind for child in bundle.root.children] == ["CHAIN", "LLM", "CHAIN"]
+    prompts = bundle.root.children[0]
+    assert prompts.name == "Pi prompt construction"
+    assert prompts.attributes["pi.prompt.event_count"] == 3
+    assert prompts.input_value == {
+        "topic_id": "rag2026-1",
+        "narrative": "official narrative",
+        "events": [agent_start, user_start, user_end],
+    }
+
+
 def test_failed_tool_event_becomes_error_span_with_diagnostic(tmp_path):
     event_path = _write_jsonl(
         tmp_path / "failed.jsonl",
@@ -285,10 +330,78 @@ def test_fixed_trace_nests_native_failures_under_generation(tmp_path):
     assert generation.output_value == final
     assert generation.status == "ERROR"
     assert generation.status_message == "fixed extension failed"
-    assert len(generation.children) == 1
-    assert generation.children[0].name == "Pi extension_error"
-    assert generation.children[0].output_value["error"] == "fixed extension failed"
+    assert len(generation.children) == 2
+    assert generation.children[0].output_value == final
+    assert generation.children[1].name == "Pi extension_error"
+    assert generation.children[1].output_value["error"] == "fixed extension failed"
     assert bundle.root.status == "ERROR"
+
+
+def test_fixed_trace_retains_every_assistant_attempt_and_final_output(tmp_path):
+    aborted = _assistant(
+        "partial assistant attempt", 1_800_000_000_000, stop_reason="aborted"
+    )
+    aborted["errorMessage"] = "first attempt aborted"
+    final = _assistant("successful final output", 1_800_000_000_100)
+    events = load_pi_events(
+        _write_jsonl(
+            tmp_path / "fixed-attempts.jsonl",
+            [
+                {"type": "message_end", "message": aborted},
+                {"type": "message_end", "message": final},
+            ],
+        )
+    )
+
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=events,
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    generation = bundle.root.children[2]
+    assert generation.output_value == final
+    assert [child.output_value for child in generation.children] == [aborted, final]
+    assert [child.status for child in generation.children] == ["ERROR", "OK"]
+    assert generation.children[0].status_message == "first attempt aborted"
+    assert generation.status == "ERROR"
+    assert generation.status_message == "first attempt aborted"
+
+
+def test_fixed_generation_timing_encloses_all_native_children(tmp_path):
+    final = _assistant("final output", 1_800_000_000_100)
+    events = load_pi_events(
+        _write_jsonl(
+            tmp_path / "fixed-hierarchy.jsonl",
+            [
+                {
+                    "type": "extension_error",
+                    "timestamp": 1_800_000_000_000,
+                    "error": "early extension failure",
+                },
+                {"type": "message_end", "message": final},
+            ],
+        )
+    )
+
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=events,
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    generation = bundle.root.children[2]
+    assert generation.children[0].status_message == "early extension failure"
+    assert generation.start_ns <= min(child.start_ns for child in generation.children)
+    assert generation.end_ns >= max(child.end_ns for child in generation.children)
 
 
 @pytest.mark.parametrize(
@@ -453,3 +566,56 @@ def test_trace_bundle_is_immutable_and_strict_json_round_trips_atomically(tmp_pa
     with pytest.raises(ValueError):
         write_trace_bundle(bundle, path)
     assert path.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("project_name", 17),
+        ("session_id", ["session"]),
+        ("topic_id", {"topic": "rag2026-1"}),
+        ("baseline", ["piika-agentic"]),
+        ("root.name", 17),
+        ("root.kind", ["CHAIN"]),
+        ("root.status", 17),
+        ("root.status_message", {"message": "bad"}),
+    ],
+    ids=[
+        "project-name",
+        "session-id",
+        "topic-id",
+        "baseline",
+        "span-name",
+        "span-kind",
+        "span-status",
+        "span-status-message",
+    ],
+)
+def test_read_trace_bundle_rejects_non_string_contract_fields(
+    tmp_path, field, invalid_value
+):
+    final = _assistant("final", 1_800_000_000_000)
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=load_pi_events(
+            _write_jsonl(
+                tmp_path / "strict-events.jsonl",
+                [{"type": "message_end", "message": final}],
+            )
+        ),
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+    path = write_trace_bundle(bundle, tmp_path / "invalid-contract.json")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if field.startswith("root."):
+        record["root"][field.removeprefix("root.")] = invalid_value
+    else:
+        record[field] = invalid_value
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid (trace bundle|span value)"):
+        read_trace_bundle(path)

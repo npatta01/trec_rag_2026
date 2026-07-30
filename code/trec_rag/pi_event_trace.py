@@ -40,7 +40,6 @@ _KNOWN_EVENT_TYPES = {
     "extension_error",
 }
 
-
 class LoadedPiEvents(tuple):
     """Ordered native event records plus loader-derived timing metadata."""
 
@@ -229,6 +228,15 @@ def _message_role(event: Mapping[str, object]) -> object:
     return message.get("role") if isinstance(message, Mapping) else None
 
 
+def _is_prompt_event(event: Mapping[str, object]) -> bool:
+    event_type = event.get("type")
+    if event_type == "agent_start":
+        return bool(set(event) - {"type", "timestamp"})
+    return event_type in {"message_start", "message_end"} and _message_role(
+        event
+    ) in {"user", "system"}
+
+
 def _message_error(message: Mapping[str, object]) -> str | None:
     stop_reason = message.get("stopReason")
     if stop_reason not in {"error", "aborted"}:
@@ -289,6 +297,35 @@ def _failure_event_span(
         output_value=dict(event),
         status="ERROR",
         status_message=diagnostic,
+    )
+
+
+def _prompt_span(
+    *,
+    topic: OrganizerTopic,
+    events: Sequence[tuple[int, Mapping[str, object], int]],
+) -> SpanSpec:
+    start_ns = events[0][2]
+    end_ns = max(start_ns + 1, events[-1][2])
+    native_events = [dict(event) for _, event, _ in events]
+    return SpanSpec(
+        name="Pi prompt construction",
+        kind="CHAIN",
+        start_ns=start_ns,
+        end_ns=end_ns,
+        attributes={
+            "pi.prompt.event_count": len(events),
+            "pi.prompt.event_types": tuple(
+                str(event.get("type", "unknown")) for _, event, _ in events
+            ),
+        },
+        input_value={
+            "topic_id": topic.topic_id,
+            "narrative": topic.narrative,
+            "events": native_events,
+        },
+        output_value=None,
+        status="OK",
     )
 
 
@@ -397,10 +434,13 @@ def _native_spans(
     records, timestamps, reconstructed = _events_with_timing(events)
     starts: dict[object, tuple[int, Mapping[str, object], int]] = {}
     assistant_start: tuple[int, Mapping[str, object], int] | None = None
+    prompt_events: list[tuple[int, Mapping[str, object], int]] = []
     spans: list[tuple[int, SpanSpec]] = []
 
     for index, (event, timestamp_ns) in enumerate(zip(records, timestamps)):
         event_type = event.get("type")
+        if _is_prompt_event(event):
+            prompt_events.append((index, event, timestamp_ns))
         if event_type == "message_start" and _message_role(event) == "assistant":
             assistant_start = (index, event, timestamp_ns)
         elif event_type == "message_end" and _message_role(event) == "assistant":
@@ -458,6 +498,10 @@ def _native_spans(
                 start_index,
                 _tool_span(start_event, None, start_ns, last_timestamp + 1),
             )
+        )
+    if prompt_events:
+        spans.append(
+            (prompt_events[0][0], _prompt_span(topic=topic, events=prompt_events))
         )
     spans.sort(key=lambda item: item[0])
     unknown_count = sum(event.get("type") not in _KNOWN_EVENT_TYPES for event in records)
@@ -545,29 +589,32 @@ def build_fixed_trace(
         topic=topic, events=events
     )
     assistant_spans = [span for _, span in native_spans if span.kind == "LLM"]
-    failure_spans = [
+    generation_children = [
         span
         for _, span in native_spans
-        if span.kind != "LLM" and span.status == "ERROR"
+        if span.kind == "LLM" or span.status == "ERROR"
     ]
     base_ns = timestamps[0] if timestamps else time.time_ns()
-    generation_start = assistant_spans[-1].start_ns if assistant_spans else base_ns + 2
-    generation_end = assistant_spans[-1].end_ns if assistant_spans else generation_start + 1
+    generation_start = min(
+        (span.start_ns for span in generation_children), default=base_ns + 2
+    )
     generation_end = max(
-        generation_end,
-        max((span.end_ns for span in failure_spans), default=generation_end),
+        (span.end_ns for span in generation_children), default=generation_start + 1
     )
     generation_message = assistant_spans[-1].output_value if assistant_spans else None
-    generation_failed = failure_spans or (
-        assistant_spans and assistant_spans[-1].status == "ERROR"
-    )
+    failed_generation_children = [
+        span for span in generation_children if span.status == "ERROR"
+    ]
+    generation_failed = bool(failed_generation_children)
     generation_status = "ERROR" if generation_failed or not assistant_spans else "OK"
-    if failure_spans:
-        generation_diagnostic = failure_spans[0].status_message
-    elif assistant_spans:
-        generation_diagnostic = assistant_spans[-1].status_message
+    if failed_generation_children:
+        generation_diagnostic = failed_generation_children[0].status_message
     else:
-        generation_diagnostic = "native Pi events contain no final assistant message"
+        generation_diagnostic = (
+            None
+            if assistant_spans
+            else "native Pi events contain no final assistant message"
+        )
 
     evidence_start = min(base_ns, generation_start) - 2
     evidence = SpanSpec(
@@ -595,12 +642,15 @@ def build_fixed_trace(
         kind="LLM",
         start_ns=max(prompts.end_ns, generation_start),
         end_ns=max(prompts.end_ns + 1, generation_end),
-        attributes={"pi.event.end_type": "message_end"},
+        attributes={
+            "pi.event.end_type": "message_end",
+            "pi.assistant.attempt_count": len(assistant_spans),
+        },
         input_value={"system_prompt": system_prompt, "user_prompt": user_prompt},
         output_value=generation_message,
         status=generation_status,
         status_message=generation_diagnostic,
-        children=tuple(failure_spans),
+        children=tuple(generation_children),
     )
     validation = _validation_span(
         topic=topic, run_record=run_record, timestamp_ns=generation.end_ns + 1
