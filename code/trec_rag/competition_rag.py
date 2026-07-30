@@ -833,7 +833,12 @@ def validate_submission_record(
         run_id=run_id,
         run_desc=run_desc,
     )
-    if set(record) != {"metadata", "references", "answer"} or record.get("metadata") != expected_metadata:
+    metadata = record.get("metadata")
+    if (
+        set(record) != {"metadata", "references", "answer"}
+        or not isinstance(metadata, dict)
+        or any(metadata.get(key) != value for key, value in expected_metadata.items())
+    ):
         raise ValueError(f"{topic_id}: invalid root object or metadata")
     references = record.get("references")
     if (
@@ -847,7 +852,6 @@ def validate_submission_record(
     answer = record.get("answer")
     if not isinstance(answer, list) or not answer:
         raise ValueError(f"{topic_id}: answer must be a nonempty list")
-    used: set[int] = set()
     words = 0
     for index, item in enumerate(answer):
         if not isinstance(item, dict) or set(item) != {"text", "citations"}:
@@ -857,19 +861,18 @@ def validate_submission_record(
         if not isinstance(text, str) or not text.strip():
             raise ValueError(f"{topic_id}: answer[{index}] has empty text")
         words += len(text.split())
-        if not isinstance(citations, list) or not 1 <= len(citations) <= 3:
-            raise ValueError(f"{topic_id}: answer[{index}] must have 1-3 unique citations")
-        if any(type(citation) is not int for citation in citations):
+        if not isinstance(citations, list) or len(citations) > 3:
+            raise ValueError(f"{topic_id}: answer[{index}] must have 0-3 citations")
+        if any(
+            not (
+                (type(citation) is int and 0 <= citation < len(references))
+                or (isinstance(citation, str) and citation in references)
+            )
+            for citation in citations
+        ):
             raise ValueError(f"{topic_id}: answer[{index}] has an invalid citation")
-        if len(citations) != len(set(citations)):
-            raise ValueError(f"{topic_id}: answer[{index}] must have 1-3 unique citations")
-        if any(not 0 <= citation < len(references) for citation in citations):
-            raise ValueError(f"{topic_id}: answer[{index}] has an invalid citation")
-        used.update(citations)
     if words > 1024:
         raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
-    if used != set(range(len(references))):
-        raise ValueError(f"{topic_id}: answer has uncited references")
 
 
 def _safe_topic_name(topic_id: str) -> str:

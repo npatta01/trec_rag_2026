@@ -206,7 +206,7 @@ class RetrievalOutputReport:
 @dataclass(frozen=True)
 class RagAnswerItemReport:
     text: str
-    citations: tuple[int, ...]
+    citations: tuple[int | str, ...]
     citation_docids: tuple[str, ...]
 
 
@@ -492,7 +492,12 @@ def _attach_rag_outputs(
             RagAnswerItemReport(
                 text=item["text"],
                 citations=tuple(item["citations"]),
-                citation_docids=tuple(references[index] for index in item["citations"]),
+                citation_docids=tuple(
+                    references[citation]
+                    if type(citation) is int
+                    else citation
+                    for citation in item["citations"]
+                ),
             )
             for item in row["answer"]
         )
@@ -626,6 +631,9 @@ def _load_topic_report(
         topic,
         subnarratives,
         selected,
+        canonical_manifest_sha256=_canonical_manifest_seal(
+            retrieval_artifacts, topic
+        ),
         original_only_fallback=original_only_fallback,
     )
     retrieval_output = _decode_retrieval_output(
@@ -1066,6 +1074,7 @@ def _load_canonical_projection(
     subnarratives: Sequence[SubnarrativeReport],
     selected: Sequence[SelectedDocumentReport],
     *,
+    canonical_manifest_sha256: str,
     original_only_fallback: bool = False,
 ) -> tuple[
     tuple[EvidenceClusterReport, ...],
@@ -1073,15 +1082,75 @@ def _load_canonical_projection(
     tuple[CanonicalResultReport, ...],
 ]:
     selection_path = _safe_file(topic_root / "canonical" / "subnarrative-selections.jsonl", output_dir)
+    selection_manifest_path = _safe_file(
+        topic_root / "canonical" / "selection-manifest.json", output_dir
+    )
     nugget_path = _safe_file(topic_root / "canonical" / "canonical-nuggets.jsonl", output_dir)
     manifest_path = _safe_file(topic_root / "canonical" / "canonical-nugget-manifest.json", output_dir)
-    for path in (selection_path, nugget_path, manifest_path):
-        maximum = _MAX_JSON_BYTES if path == manifest_path else _MAX_JSONL_BYTES
-        receipts[_portable_label(output_dir, path)] = _sha256_file(
-            path,
-            maximum,
-            allow_empty=original_only_fallback and path != manifest_path,
+    checkpoint_path = _safe_file(
+        topic_root / "canonical" / "complete.json", output_dir
+    )
+    checkpoint_receipt = {
+        "bytes": _bounded_size(checkpoint_path, _MAX_JSON_BYTES),
+        "sha256": canonical_manifest_sha256,
+    }
+    try:
+        with _open_receipted_file(
+            checkpoint_path,
+            checkpoint_receipt,
+            label="canonical checkpoint manifest",
+        ) as (checkpoint_source, checkpoint_digest):
+            receipts[_portable_label(output_dir, checkpoint_path)] = checkpoint_digest
+            checkpoint = _decode_json_object(
+                checkpoint_source.read(_MAX_JSON_BYTES + 1),
+                "canonical checkpoint manifest",
+            )
+    except ValueError as exc:
+        if str(exc) == "canonical checkpoint manifest receipt differs from stored artifact":
+            raise ValueError(
+                "canonical manifest differs from retrieval provenance seal"
+            ) from exc
+        raise
+    artifact_rows = checkpoint.get("artifacts")
+    if (
+        checkpoint.get("schema_version") != "facet_pilot_v2"
+        or checkpoint.get("phase") != "canonical"
+        or checkpoint.get("topic_id") != topic.id
+        or not isinstance(artifact_rows, list)
+    ):
+        raise ValueError("canonical checkpoint manifest identity or artifacts are invalid")
+    expected_artifacts = {
+        "canonical/subnarrative-selections.jsonl": selection_path,
+        "canonical/selection-manifest.json": selection_manifest_path,
+        "canonical/canonical-nuggets.jsonl": nugget_path,
+        "canonical/canonical-nugget-manifest.json": manifest_path,
+    }
+    for relative_path, path in expected_artifacts.items():
+        matches = [
+            row
+            for row in artifact_rows
+            if isinstance(row, Mapping)
+            and row.get("relative_path") == relative_path
+        ]
+        if len(matches) != 1:
+            raise ValueError("canonical checkpoint artifact receipt is missing or duplicated")
+        artifact_receipt = matches[0]
+        if (
+            set(artifact_receipt) != {"relative_path", "bytes", "sha256"}
+            or type(artifact_receipt.get("bytes")) is not int
+            or artifact_receipt["bytes"] < 0
+            or not _is_sha256(artifact_receipt.get("sha256"))
+        ):
+            raise ValueError("canonical checkpoint artifact receipt is invalid")
+        maximum = (
+            _MAX_JSON_BYTES
+            if path in {selection_manifest_path, manifest_path}
+            else _MAX_JSONL_BYTES
         )
+        if artifact_receipt["bytes"] > maximum:
+            raise ValueError("canonical checkpoint artifact receipt exceeds report bound")
+        observed = _sha256_receipted_file(path, artifact_receipt)
+        receipts[_portable_label(output_dir, path)] = observed
     manifest = _read_json_object(manifest_path, "canonical nugget manifest")
     budget = config.nuggets.evidence_budget_per_subnarrative
     maximum_claims = config.nuggets.maximum_claims_per_subnarrative
@@ -1099,6 +1168,10 @@ def _load_canonical_projection(
         or manifest.get("max_supporting_documents_per_claim") != maximum_supporting
         or manifest.get("result_count") != len(nugget_rows)
         or manifest.get("selection_count") != len(subnarratives)
+        or manifest.get("selections_sha256")
+        != receipts[_portable_label(output_dir, selection_path)]
+        or manifest.get("selection_manifest_sha256")
+        != receipts[_portable_label(output_dir, selection_manifest_path)]
         or manifest.get("canonical_nuggets_sha256") != receipts[_portable_label(output_dir, nugget_path)]
         or not isinstance(request_sha256s, list)
         or len(request_sha256s) != len(nugget_rows)
@@ -1736,6 +1809,28 @@ def _valid_membership(value: Mapping[str, Any], selected: Mapping[str, SelectedD
         if name == document.selected_from_lane and lane["aggregate_rank"] == document.selected_from_lane_rank:
             origin_matches = True
     return origin_matches
+
+
+def _canonical_manifest_seal(
+    retrieval_artifacts: _RootRetrievalArtifacts,
+    topic: Topic,
+) -> str:
+    sealed_manifest_digests: set[str] = set()
+    for (topic_id, _docid), row in retrieval_artifacts.provenance.items():
+        if topic_id != topic.id:
+            continue
+        seals = row.get("source_seals")
+        digest = (
+            seals.get("canonical_manifest_sha256")
+            if isinstance(seals, Mapping)
+            else None
+        )
+        if not _is_sha256(digest):
+            raise ValueError("retrieval provenance canonical manifest seal is invalid")
+        sealed_manifest_digests.add(digest)
+    if len(sealed_manifest_digests) != 1:
+        raise ValueError("canonical manifest differs from retrieval provenance seal")
+    return next(iter(sealed_manifest_digests))
 
 
 def _load_lane_score_provenance(
@@ -3241,7 +3336,7 @@ def _resolve_report_output(data: DebugReportData, output_path: Path | None) -> P
         )
     if target.exists() and not target.is_file():
         raise ValueError("report output must be a regular file path")
-    if output_path is not None and target.exists() and target != default_target.resolve():
+    if target.exists():
         with target.open("rb") as existing:
             prefix = existing.read(4096)
         if (

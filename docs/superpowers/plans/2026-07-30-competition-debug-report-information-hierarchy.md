@@ -94,6 +94,23 @@ and the evidence commit:**
   and `f281e88f61252662033c681df8b1ed2d0ceda97e`, and the official input hashes
   remained unchanged.
 
+### Final-review compatibility and seal hardening
+
+- Final review found and fixed three bounded correctness gaps: organizer-valid
+  RAG metadata/citation forms are accepted and rendered, every existing report
+  destination receives generated-report marker protection, and canonical
+  selection artifacts are authenticated through the producer-sealed
+  `canonical/complete.json` checkpoint plus its artifact receipts.
+- Strict RED evidence was recorded before production edits for each gap. The
+  focused GREEN checks passed with `1`, `1`, `1`, and `3` tests respectively;
+  the affected RAG and debug-report modules then passed with `96` and `94`
+  tests respectively.
+- The existing sealed two-topic retrieval and RAG artifacts loaded read-only as
+  `rag2026-0` and `rag2026-1`, with `10` and `11` answer items. Retrieval and
+  generation were not rerun, and no portal, submodule, push, or PR state was
+  changed.
+- Fresh full repository verification passed: `664 passed in 29.09s`.
+
 ---
 
 ### Task 1: Add deterministic funnel projections and the funnel stage

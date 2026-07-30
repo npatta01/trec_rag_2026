@@ -461,18 +461,30 @@ def test_validates_organizer_shaped_submission_record() -> None:
     _validate_submission(_submission_record())
 
 
+def test_validates_all_organizer_allowed_rag_citation_forms_and_metadata() -> None:
+    record = _submission_record()
+    record["metadata"]["participant_note"] = "extra metadata is organizer-valid"
+    record["references"] = ["climbmix-a", "climbmix-b", "climbmix-c"]
+    record["answer"] = [
+        {"text": "This heading is intentionally uncited.", "citations": []},
+        {"text": "This claim uses a reference index.", "citations": [0]},
+        {"text": "This claim uses a direct document ID.", "citations": ["climbmix-b"]},
+    ]
+
+    _validate_submission(record)
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (lambda row: row.update({"extra": True}), "root object or metadata"),
-        (lambda row: row["metadata"].update({"model": "gpt"}), "root object or metadata"),
         (lambda row: row["references"].append("climbmix-a"), "duplicated or outside"),
         (lambda row: row["references"].append("not-selected"), "duplicated or outside"),
         (lambda row: row["answer"][0].update({"citations": [True]}), "citation"),
-        (lambda row: row["answer"][0].update({"citations": [0, 0]}), "unique citations"),
         (lambda row: row["answer"][0].update({"citations": [2]}), "citation"),
+        (lambda row: row["answer"][0].update({"citations": ["not-selected"]}), "citation"),
+        (lambda row: row["answer"][0].update({"citations": [0, 1, 0, 1]}), "0-3"),
         (lambda row: row["answer"][0].update({"heading": "Finding"}), "invalid fields"),
-        (lambda row: row.update({"answer": row["answer"][:1]}), "uncited references"),
     ],
 )
 def test_rejects_submission_records_outside_the_organizer_contract(

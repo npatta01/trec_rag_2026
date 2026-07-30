@@ -43,6 +43,14 @@ def _file_receipt(path: Path) -> dict[str, int | str]:
     return {"bytes": size, "sha256": digest.hexdigest()}
 
 
+def _generated_report_bytes(label: str = "fixture") -> bytes:
+    return (
+        "<!doctype html>\n<html><head>"
+        "<title>Competition retrieval debug report</title>"
+        f"</head><body>{label}</body></html>\n"
+    ).encode()
+
+
 def _write_debug_run(tmp_path: Path) -> tuple[Path, Path]:
     """Write a deliberately small sealed export with hostile stored source text."""
     (tmp_path / "AGENTS.md").write_text("fixture root\n", encoding="utf-8")
@@ -427,8 +435,23 @@ def _add_second_debug_topic(tmp_path: Path, output: Path) -> None:
     nuggets_path = target_root / "canonical" / "canonical-nuggets.jsonl"
     nugget_manifest_path = nuggets_path.with_name("canonical-nugget-manifest.json")
     nugget_manifest = json.loads(nugget_manifest_path.read_text(encoding="utf-8"))
+    selection_path = target_root / "canonical" / "subnarrative-selections.jsonl"
+    selection_manifest_path = target_root / "canonical" / "selection-manifest.json"
+    nugget_manifest["selections_sha256"] = sha256(selection_path.read_bytes()).hexdigest()
+    nugget_manifest["selection_manifest_sha256"] = sha256(
+        selection_manifest_path.read_bytes()
+    ).hexdigest()
     nugget_manifest["canonical_nuggets_sha256"] = sha256(nuggets_path.read_bytes()).hexdigest()
     nugget_manifest_path.write_bytes(_json_bytes(nugget_manifest))
+    target_checkpoint_path = target_root / "canonical" / "complete.json"
+    target_checkpoint = json.loads(target_checkpoint_path.read_text(encoding="utf-8"))
+    for artifact in target_checkpoint["artifacts"]:
+        artifact_path = target_root / artifact["relative_path"]
+        artifact.update(_file_receipt(artifact_path))
+    target_checkpoint_path.write_bytes(_json_bytes(target_checkpoint))
+    target_canonical_manifest_sha256 = sha256(
+        target_checkpoint_path.read_bytes()
+    ).hexdigest()
 
     run_path = output / "r_output_trec_rag_2026.tsv"
     run_path.write_bytes(
@@ -440,6 +463,9 @@ def _add_second_debug_topic(tmp_path: Path, output: Path) -> None:
     second_provenance["source_seals"][
         "scoring_manifest_sha256"
     ] = target_scoring_sha256
+    second_provenance["source_seals"][
+        "canonical_manifest_sha256"
+    ] = target_canonical_manifest_sha256
     provenance_path.write_bytes(
         _json_bytes(first_provenance) + _json_bytes(second_provenance)
     )
@@ -467,6 +493,45 @@ def _add_second_debug_topic(tmp_path: Path, output: Path) -> None:
             "sha256": sha256(body).hexdigest(),
         }
     manifest_path.write_bytes(_json_bytes(manifest))
+
+
+def _reseal_canonical_checkpoint(output: Path, topic_id: str = "rag2026-0") -> str:
+    canonical = output / topic_id / "canonical"
+    checkpoint_path = canonical / "complete.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    for artifact in checkpoint["artifacts"]:
+        artifact.update(_file_receipt(output / topic_id / artifact["relative_path"]))
+    checkpoint_path.write_bytes(_json_bytes(checkpoint))
+    digest = sha256(checkpoint_path.read_bytes()).hexdigest()
+
+    provenance_path = output / "retrieval_provenance.jsonl"
+    rows = [
+        json.loads(line)
+        for line in provenance_path.read_text(encoding="utf-8").splitlines()
+    ]
+    for row in rows:
+        if row.get("topic_id") == topic_id:
+            row["source_seals"]["canonical_manifest_sha256"] = digest
+    provenance_path.write_bytes(b"".join(_json_bytes(row) for row in rows))
+    _rewrite_export_artifact_receipt(output, provenance_path.name)
+    return digest
+
+
+def _reseal_canonical_artifacts(output: Path, topic_id: str = "rag2026-0") -> str:
+    canonical = output / topic_id / "canonical"
+    manifest_path = canonical / "canonical-nugget-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["selections_sha256"] = sha256(
+        (canonical / "subnarrative-selections.jsonl").read_bytes()
+    ).hexdigest()
+    manifest["selection_manifest_sha256"] = sha256(
+        (canonical / "selection-manifest.json").read_bytes()
+    ).hexdigest()
+    manifest["canonical_nuggets_sha256"] = sha256(
+        (canonical / "canonical-nuggets.jsonl").read_bytes()
+    ).hexdigest()
+    manifest_path.write_bytes(_json_bytes(manifest))
+    return _reseal_canonical_checkpoint(output, topic_id)
 
 
 def _extend_rag_run_with_forged_second_narrative(
@@ -591,7 +656,10 @@ def _write_task_2_artifacts(
     }
     canonical = topic_root / "canonical"
     canonical.mkdir()
-    (canonical / "subnarrative-selections.jsonl").write_bytes(_json_bytes(selection))
+    selections_path = canonical / "subnarrative-selections.jsonl"
+    selections_path.write_bytes(_json_bytes(selection))
+    selection_manifest_path = canonical / "selection-manifest.json"
+    selection_manifest_path.write_bytes(_json_bytes({"fixture": "selection manifest"}))
     canonical_result = {
         "schema_version": "canonical_nugget_result_v1",
         "topic_id": "rag2026-0",
@@ -622,7 +690,8 @@ def _write_task_2_artifacts(
     }
     nuggets_body = _json_bytes(canonical_result)
     (canonical / "canonical-nuggets.jsonl").write_bytes(nuggets_body)
-    (canonical / "canonical-nugget-manifest.json").write_bytes(
+    canonical_manifest_path = canonical / "canonical-nugget-manifest.json"
+    canonical_manifest_path.write_bytes(
         _json_bytes(
             {
                 "schema_version": "canonical_nugget_manifest_v2",
@@ -633,10 +702,40 @@ def _write_task_2_artifacts(
                 "max_canonical_claims": 2,
                 "max_supporting_documents_per_claim": 1,
                 "request_sha256s": ["b" * 64],
+                "selections_sha256": sha256(selections_path.read_bytes()).hexdigest(),
+                "selection_manifest_sha256": sha256(
+                    selection_manifest_path.read_bytes()
+                ).hexdigest(),
                 "canonical_nuggets_sha256": sha256(nuggets_body).hexdigest(),
             }
         )
     )
+    canonical_artifact_paths = (
+        selections_path,
+        selection_manifest_path,
+        canonical / "canonical-nuggets.jsonl",
+        canonical_manifest_path,
+    )
+    canonical_checkpoint_path = canonical / "complete.json"
+    canonical_checkpoint_path.write_bytes(
+        _json_bytes(
+            {
+                "schema_version": "facet_pilot_v2",
+                "phase": "canonical",
+                "topic_id": "rag2026-0",
+                "artifacts": [
+                    {
+                        "relative_path": f"canonical/{path.name}",
+                        **_file_receipt(path),
+                    }
+                    for path in canonical_artifact_paths
+                ],
+            }
+        )
+    )
+    canonical_manifest_sha256 = sha256(
+        canonical_checkpoint_path.read_bytes()
+    ).hexdigest()
 
     run_body = b"rag2026-0 Q0 doc-original 1 1 debug-fixture\n"
     provenance_body = _json_bytes(
@@ -651,7 +750,7 @@ def _write_task_2_artifacts(
             "memberships": [{"lane_name": "original", "aggregate_rank": 1, "aggregate_score": 9.0, "bm25_rank": 1, "bm25_score": 8.0}],
             "subnarrative_scores": [scores[1]],
             "nuggets": [{"canonical_nugget_id": "canonical-1", "subnarrative_id": "subnarrative-1"}],
-            "source_seals": {"scoring_manifest_sha256": scoring_manifest_sha256, "canonical_manifest_sha256": "d" * 64},
+            "source_seals": {"scoring_manifest_sha256": scoring_manifest_sha256, "canonical_manifest_sha256": canonical_manifest_sha256},
         }
     )
     (output / "r_output_trec_rag_2026.tsv").write_bytes(run_body)
@@ -1484,6 +1583,7 @@ def test_empty_canonical_result_retains_state_budget_caps_and_zero_claims(
         }
     )
     manifest_path.write_bytes(_json_bytes(manifest))
+    canonical_manifest_sha256 = _reseal_canonical_artifacts(output)
 
     config = debug_report.load_facet_pilot_config(config_path)
     topic = debug_report.select_configured_topics(config)[0]
@@ -1495,6 +1595,7 @@ def test_empty_canonical_result_retains_state_budget_caps_and_zero_claims(
         topic,
         report_topic.subnarratives,
         report_topic.selected_documents,
+        canonical_manifest_sha256=canonical_manifest_sha256,
     )
 
     assert clusters == ()
@@ -1598,6 +1699,7 @@ def test_canonical_nugget_preserves_distinct_same_document_evidence_aliases(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["canonical_nuggets_sha256"] = sha256(nuggets_body).hexdigest()
     manifest_path.write_bytes(_json_bytes(manifest))
+    _reseal_canonical_artifacts(output)
 
     nugget = load_debug_report_data(config_path).topics[0].canonical_nuggets[0]
 
@@ -1690,6 +1792,7 @@ def _rewrite_canonical_result(
     manifest["canonical_nuggets_sha256"] = sha256(body).hexdigest()
     manifest["state_counts"] = {row["state"]: 1}
     manifest_path.write_bytes(_json_bytes(manifest))
+    _reseal_canonical_artifacts(output)
 
 
 @pytest.mark.parametrize("case", ("empty_with_nuggets", "complete_with_error", "wrong_kind"))
@@ -1721,6 +1824,32 @@ def test_canonical_request_identity_must_match_manifest_order(tmp_path: Path) ->
     _rewrite_canonical_result(output, mutate)
 
     with pytest.raises(ValueError, match="canonical nugget.*request"):
+        load_debug_report_data(config_path)
+
+
+@pytest.mark.parametrize(
+    "seal",
+    ("selections_sha256", "selection_manifest_sha256", "canonical_manifest_sha256"),
+)
+def test_canonical_projection_rejects_stale_or_tampered_producer_seals(
+    tmp_path: Path, seal: str
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    canonical = output / "rag2026-0" / "canonical"
+    if seal in {"selections_sha256", "selection_manifest_sha256"}:
+        manifest_path = canonical / "canonical-nugget-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[seal] = "e" * 64
+        manifest_path.write_bytes(_json_bytes(manifest))
+        _reseal_canonical_checkpoint(output)
+    else:
+        provenance_path = output / "retrieval_provenance.jsonl"
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        provenance["source_seals"][seal] = "e" * 64
+        provenance_path.write_bytes(_json_bytes(provenance))
+        _rewrite_export_artifact_receipt(output, provenance_path.name)
+
+    with pytest.raises(ValueError, match="canonical.*(?:manifest|seal|artifact)"):
         load_debug_report_data(config_path)
 
 
@@ -2937,6 +3066,37 @@ def test_standard_rag_config_loads_validated_answers_and_resolved_citations(
     assert "citation 0 → doc-original" in rendered
 
 
+def test_rag_report_resolves_index_direct_docid_and_empty_citations(
+    tmp_path: Path,
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, rag_output, _output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+    record = json.loads(rag_output.read_text(encoding="utf-8"))
+    record["metadata"]["participant_note"] = "organizer-valid extra metadata"
+    record["answer"] = [
+        {"text": "Uncited heading", "citations": []},
+        {"text": "Indexed evidence", "citations": [0]},
+        {"text": "Direct evidence", "citations": ["doc-original"]},
+    ]
+    rag_output.write_bytes(_json_bytes(record))
+
+    rag = load_debug_report_data(
+        config_path, rag_config_path=rag_config
+    ).topics[0].rag_output
+
+    assert rag is not None
+    assert [item.citation_docids for item in rag.answer_items] == [
+        (),
+        ("doc-original",),
+        ("doc-original",),
+    ]
+    assert [item.citations for item in rag.answer_items] == [
+        (),
+        (0,),
+        ("doc-original",),
+    ]
+
+
 def test_rag_report_provider_comes_from_the_validated_generation_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3029,7 +3189,8 @@ def test_atomic_build_preserves_existing_output_when_rendering_fails(
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     target = retrieval_output / "competition_debug_report.html"
-    target.write_text("existing report\n", encoding="utf-8")
+    previous = _generated_report_bytes("existing report")
+    target.write_bytes(previous)
 
     def fail_render(_data: object) -> str:
         raise RuntimeError("forced render failure")
@@ -3039,7 +3200,7 @@ def test_atomic_build_preserves_existing_output_when_rendering_fails(
     with pytest.raises(RuntimeError, match="forced render failure"):
         debug_report.build_debug_report(config_path)
 
-    assert target.read_text(encoding="utf-8") == "existing report\n"
+    assert target.read_bytes() == previous
     assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
 
 
@@ -3048,7 +3209,7 @@ def test_atomic_build_restores_existing_output_when_directory_fsync_fails_after_
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     target = retrieval_output / "competition_debug_report.html"
-    previous = b"exact previous report bytes\n"
+    previous = _generated_report_bytes("exact previous report bytes")
     target.write_bytes(previous)
     real_fsync_directory = debug_report._fsync_directory
     failed = False
@@ -3076,7 +3237,7 @@ def test_atomic_build_preserves_named_recovery_when_rollback_replace_fails(
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     target = retrieval_output / "competition_debug_report.html"
-    previous = b"exact recovery bytes\n"
+    previous = _generated_report_bytes("exact recovery bytes")
     target.write_bytes(previous)
     real_fsync_directory = debug_report._fsync_directory
     real_replace = debug_report.os.replace
@@ -3120,7 +3281,7 @@ def test_atomic_success_directory_fsyncs_after_backup_unlink(
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     target = retrieval_output / "competition_debug_report.html"
-    previous = b"previous report\n"
+    previous = _generated_report_bytes("previous report")
     target.write_bytes(previous)
     real_fsync_directory = debug_report._fsync_directory
     synced_after_cleanup = False
@@ -3147,7 +3308,7 @@ def test_atomic_cleanup_preserves_recovery_when_first_recovery_copy_fsync_fails(
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     target = retrieval_output / "competition_debug_report.html"
-    previous = b"old bytes held through cleanup recovery\n"
+    previous = _generated_report_bytes("old bytes held through cleanup recovery")
     target.write_bytes(previous)
     real_fsync_directory = debug_report._fsync_directory
     real_fsync = debug_report.os.fsync
@@ -3197,7 +3358,7 @@ def test_atomic_build_restores_existing_output_when_backup_unlink_fails(
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     target = retrieval_output / "competition_debug_report.html"
-    previous = b"previous report before unlink failure\n"
+    previous = _generated_report_bytes("previous report before unlink failure")
     target.write_bytes(previous)
     real_unlink = Path.unlink
     failed = False
@@ -3227,6 +3388,20 @@ def test_build_defaults_to_retrieval_output_directory(tmp_path: Path) -> None:
 
     assert receipt.output_path == (retrieval_output / "competition_debug_report.html").resolve()
     assert receipt.rag_included is False
+
+
+def test_default_report_target_cannot_replace_an_unrelated_existing_html(
+    tmp_path: Path,
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    unrelated = b"<!doctype html>\n<title>Unrelated user artifact</title>\n"
+    target.write_bytes(unrelated)
+
+    with pytest.raises(ValueError, match="existing non-report artifact"):
+        debug_report.build_debug_report(config_path)
+
+    assert target.read_bytes() == unrelated
 
 
 def test_linked_worktree_output_accepts_default_and_explicit_report_targets(
