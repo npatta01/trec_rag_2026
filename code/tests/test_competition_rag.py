@@ -154,11 +154,10 @@ def test_topic_selection_is_unique_known_and_in_canonical_tsv_order(tmp_path: Pa
     ("contents", "message"),
     [
         ("qid\tnarrative\nrag2026-0\tQuestion\n", "header"),
-        ("rag2026-0\tQuestion\tUnexpected third field\n", "exactly two"),
-        ("rag2026-0\n", "exactly two"),
+        ("rag2026-0\n", "expected qid<TAB>narrative"),
     ],
 )
-def test_topics_are_exactly_two_headerless_tsv_fields(
+def test_topics_reject_headers_and_missing_narratives(
     tmp_path: Path, contents: str, message: str
 ) -> None:
     path = tmp_path / "topics.tsv"
@@ -166,6 +165,16 @@ def test_topics_are_exactly_two_headerless_tsv_fields(
 
     with pytest.raises(ValueError, match=message):
         load_queries(path)
+
+
+def test_canonical_topic_parser_preserves_extra_tabs_and_unicode_line_separators(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "topics.tsv"
+    narrative = "Question with an extra\ttab and a Unicode line separator\u2028inside."
+    path.write_text(f"rag2026-0\t{narrative}\n", encoding="utf-8")
+
+    assert load_queries(path) == [("rag2026-0", narrative)]
 
 
 def test_topic_narrative_preserves_exact_tsv_field_content(tmp_path: Path) -> None:
@@ -177,12 +186,11 @@ def test_topic_narrative_preserves_exact_tsv_field_content(tmp_path: Path) -> No
     ]
 
 
-def test_topic_ids_reject_noncanonical_surrounding_whitespace(tmp_path: Path) -> None:
+def test_topic_ids_preserve_organizer_topic_text(tmp_path: Path) -> None:
     path = tmp_path / "topics.tsv"
     path.write_text(" rag2026-0\tExact narrative\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="topic id"):
-        load_queries(path)
+    assert load_queries(path) == [(" rag2026-0", "Exact narrative")]
 
 
 def test_trec_run_requires_organizer_six_field_ranked_rows(tmp_path: Path) -> None:
@@ -626,6 +634,38 @@ def _topic_output(docids: list[str], text: str) -> dict[str, Any]:
     }
 
 
+def test_prompt_labels_documents_by_docid_without_numeric_pseudo_citations() -> None:
+    prompt = competition_rag.render_prompt(
+        "What does the evidence say?",
+        ["climbmix-a", "climbmix-b"],
+        {"climbmix-a": "Evidence A.", "climbmix-b": "Evidence B."},
+    )
+
+    assert "Reference document docid: climbmix-a\nEvidence A." in prompt
+    assert "Reference document docid: climbmix-b\nEvidence B." in prompt
+    assert "[1] docid:" not in prompt
+    assert "[2] docid:" not in prompt
+
+
+def test_configuration_mode_guidance_uses_config_values_not_cli_flags(tmp_path: Path) -> None:
+    existing = _pipeline_config(tmp_path)
+    existing.output_path.parent.mkdir(parents=True, exist_ok=True)
+    existing.output_path.write_text("old output\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="experiment\\.mode: resume") as create_error:
+        asyncio.run(run_generation(existing, FakeGenerator({})))
+    assert "experiment.mode: overwrite" in str(create_error.value)
+    assert "--resume" not in str(create_error.value)
+    assert "--overwrite" not in str(create_error.value)
+
+    failed_root = tmp_path / "failed"
+    failed_root.mkdir()
+    failed = _pipeline_config(failed_root)
+    with pytest.raises(RuntimeError, match="experiment\\.mode: resume") as failure_error:
+        asyncio.run(run_generation(failed, FakeGenerator({})))
+    assert "--resume" not in str(failure_error.value)
+
+
 def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     tmp_path: Path,
 ) -> None:
@@ -644,8 +684,8 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     assert rows[0]["answer"][0]["citations"] == [0]
     assert {call["topic_id"] for call in generator.calls} == {"rag2026-1", "rag2026-2"}
     topic_one_prompt = next(call["user_prompt"] for call in generator.calls if call["topic_id"] == "rag2026-1")
-    assert "[1] docid: climbmix-a" in topic_one_prompt
-    assert "[2] docid: climbmix-b" in topic_one_prompt
+    assert "Reference document docid: climbmix-a" in topic_one_prompt
+    assert "Reference document docid: climbmix-b" in topic_one_prompt
 
 
 def test_generation_consumes_the_retrieval_export_file_contract(
@@ -1116,6 +1156,45 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
     persisted = raw_path.read_text(encoding="utf-8")
     assert api_key not in persisted
     assert "provider-reflected-[REDACTED]" in persisted
+
+
+def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
+    api_key = "secret-token"
+    response = FakeHttpResponse(
+        200,
+        {
+            "id": "provider-reflected-secret%2Dtoken",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            _topic_output(["climbmix-c"], "C supports it.")
+                        )
+                    }
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(competition_rag.requests, "post", lambda *args, **kwargs: response)
+    generator = OpenRouterJsonGenerator(
+        api_base="https://openrouter.example/v1",
+        api_key=api_key,
+        model="openai/gpt-5.6-sol",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=6000,
+        timeout_seconds=30,
+        transport_max_attempts=2,
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    raw = json.loads(next((config.work_dir / "raw").glob("*.json")).read_text(encoding="utf-8"))
+    assert raw["id"] == "[REDACTED]"
+    assert "secret%2Dtoken" not in json.dumps(raw)
 
 
 class FakeHttpResponse:

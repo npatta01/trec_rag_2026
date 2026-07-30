@@ -18,12 +18,14 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Iterator, Protocol, Sequence, TextIO
+from urllib.parse import unquote
 
 import requests
 import yaml
 from filelock import FileLock, Timeout as FileLockTimeout
 
 from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_root
+from trec_rag.topics import load_narrative_topics
 
 
 _SCHEMA_VERSION = "competition_rag_config_v1"
@@ -36,7 +38,7 @@ document identifiers, references, or source-specific claims."""
 
 USER_PROMPT = """Answer the question using only the reference documents below.
 
-Read every numbered reference document before writing. Cover answer-relevant evidence,
+Read every reference document before writing. Cover answer-relevant evidence,
 tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
 1,024 whitespace-separated words. Each answer object must have one to three unique zero-based
 citation indexes into references. Include each cited raw ClimbMix docid once in references, and
@@ -206,25 +208,10 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
 
 def load_queries(path: Path) -> list[tuple[str, str]]:
     """Read the canonical headerless ``narrative_id<TAB>narrative`` topic TSV."""
-    queries: list[tuple[str, str]] = []
-    for line_number, raw_line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
-        fields = raw_line.split("\t")
-        if len(fields) != 2:
-            raise ValueError(f"{path}:{line_number}: expected exactly two TSV fields")
-        raw_topic_id, narrative = fields
-        topic_id = raw_topic_id.strip()
-        if line_number == 1 and topic_id.lower() in {"qid", "query_id", "topic_id", "narrative_id"}:
-            raise ValueError(f"{path}:{line_number}: topic TSV must not have a header")
-        if raw_topic_id != topic_id:
-            raise ValueError(f"{path}:{line_number}: topic id must not have surrounding whitespace")
-        if not topic_id or not narrative.strip():
-            raise ValueError(f"{path}:{line_number}: empty topic id or narrative")
-        queries.append((topic_id, narrative))
-    if not queries:
-        raise ValueError(f"{path}: no topics found")
-    ids = [topic_id for topic_id, _ in queries]
-    if len(ids) != len(set(ids)):
-        raise ValueError(f"{path}: duplicate topic ids")
+    topics = load_narrative_topics(path)
+    if topics[0].id.casefold() in {"qid", "query_id", "topic_id", "narrative_id"}:
+        raise ValueError(f"{path}:1: topic TSV must not have a header")
+    queries = [(topic.id, topic.narrative) for topic in topics]
     return queries
 
 
@@ -758,8 +745,8 @@ def render_prompt(
     narrative: str, ranked_docids: list[str], documents: dict[str, str]
 ) -> str:
     context = "\n\n".join(
-        f"[{index}] docid: {docid}\n{documents[docid]}"
-        for index, docid in enumerate(ranked_docids, 1)
+        f"Reference document docid: {docid}\n{documents[docid]}"
+        for docid in ranked_docids
     )
     return USER_PROMPT.format(documents=context, question=narrative)
 
@@ -902,6 +889,14 @@ def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
 def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
     for secret in secrets:
         value = value.replace(secret, "[REDACTED]")
+        decoded_value = value
+        while True:
+            percent_decoded = unquote(decoded_value)
+            if percent_decoded == decoded_value:
+                break
+            decoded_value = percent_decoded
+        if secret in decoded_value:
+            return "[REDACTED]"
         while True:
             decoded: list[str] = []
             spans: list[tuple[int, int]] = []
@@ -1116,7 +1111,10 @@ async def _run_generation_locked(
     elif not config.resume and (
         config.output_path.exists() or _work_has_artifacts(work_dir)
     ):
-        raise ValueError("generation artifacts exist; use --resume or --overwrite")
+        raise ValueError(
+            "generation artifacts exist; set experiment.mode: resume or "
+            "experiment.mode: overwrite"
+        )
 
     topics = select_queries(load_queries(config.queries_path), config.topic_ids)
     ranked = load_trec_run(config.run_path, {topic_id for topic_id, _ in topics}, config.top_k)
@@ -1162,7 +1160,8 @@ async def _run_generation_locked(
     failures = [(topic_id, error) for topic_id, error in results if error]
     if failures:
         raise RuntimeError(
-            f"{len(failures)} topic(s) failed; inspect {work_dir / 'errors'} and rerun with --resume"
+            f"{len(failures)} topic(s) failed; inspect {work_dir / 'errors'} and rerun with "
+            "experiment.mode: resume"
         )
     final_records: list[dict[str, Any]] = []
     for topic_id, narrative in topics:
