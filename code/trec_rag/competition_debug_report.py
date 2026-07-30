@@ -102,7 +102,9 @@ def load_debug_report_data(
     receipts: dict[str, str] = {}
     export_path = _safe_file(output_dir / "retrieval_export_manifest.json", output_dir)
     export = _read_json_object(export_path, "retrieval export manifest")
-    receipts[_portable_label(output_dir, export_path)] = _sha256_file(export_path)
+    receipts[_portable_label(output_dir, export_path)] = _sha256_file(
+        export_path, _MAX_JSON_BYTES
+    )
     exported_ids = _validate_export_manifest(export, config, topics)
 
     configured_by_id = {topic.id: topic for topic in topics}
@@ -113,7 +115,8 @@ def load_debug_report_data(
         raise ValueError("retrieval export topics differ from requested configured topics")
 
     reports = tuple(
-        _load_topic_report(output_dir, topic, receipts) for topic in selected_topics
+        _load_topic_report(config, output_dir, topic, receipts)
+        for topic in selected_topics
     )
     return DebugReportData(
         retrieval_config_path=Path(retrieval_config_path).resolve(),
@@ -124,6 +127,7 @@ def load_debug_report_data(
 
 
 def _load_topic_report(
+    config: FacetPilotConfig,
     output_dir: Path,
     topic: Topic,
     receipts: dict[str, str],
@@ -134,8 +138,12 @@ def _load_topic_report(
     selected_path = _safe_file(
         topic_root / "scoring" / "selected_documents.jsonl", output_dir
     )
-    for path in (decomposition_path, selection_path, selected_path):
-        receipts[_portable_label(output_dir, path)] = _sha256_file(path)
+    for path, maximum in (
+        (decomposition_path, _MAX_JSON_BYTES),
+        (selection_path, _MAX_JSON_BYTES),
+        (selected_path, _MAX_JSONL_BYTES),
+    ):
+        receipts[_portable_label(output_dir, path)] = _sha256_file(path, maximum)
 
     decomposition = _read_json_object(decomposition_path, "decomposition")
     subnarratives = _decode_decomposition(decomposition, topic)
@@ -143,7 +151,16 @@ def _load_topic_report(
     selected = _decode_selected_documents(_read_jsonl(selected_path, "selected documents"), topic)
     union_rows = _decode_selection(selection, topic, selected)
 
-    audit_hashes = _load_audit_hashes(topic_root, output_dir, receipts)
+    audit_hashes = _load_audit_hashes(
+        topic_root,
+        output_dir,
+        receipts,
+        topic,
+        decomposition["narrative_sha256"],
+        decomposition["source_sha256"],
+        subnarratives,
+        config.retrieval.candidate_depth_per_query,
+    )
     selected_by_docid = {row.docid: row for row in selected}
     for row in selected:
         audit_hash = audit_hashes.get(row.docid)
@@ -226,7 +243,7 @@ def _decode_decomposition(
         raise ValueError("decomposition plan and subnarratives differ")
     result: list[SubnarrativeReport] = []
     seen_ids: set[str] = set()
-    for index, (row, plan_row) in enumerate(zip(rows, plan_rows, strict=True), start=1):
+    for row, plan_row in zip(rows, plan_rows, strict=True):
         if not isinstance(row, Mapping) or not isinstance(plan_row, Mapping):
             raise ValueError("decomposition subnarrative is invalid")
         identifier = row.get("subnarrative_id")
@@ -235,7 +252,8 @@ def _decode_decomposition(
         hashes = row.get("bm25_query_sha256s")
         semantic_hash = row.get("semantic_query_sha256")
         if (
-            not _is_identifier(identifier)
+            row.get("topic_id") != topic.id
+            or not _is_identifier(identifier)
             or identifier in seen_ids
             or not _is_text(text)
             or not _text_list(queries)
@@ -260,16 +278,28 @@ def _validate_decomposition_queries(
     if not isinstance(rows, list) or not rows:
         raise ValueError("decomposition queries are invalid")
     original = rows[0]
-    if not isinstance(original, Mapping) or (
-        original.get("topic_id"), original.get("variant_name"), original.get("query_text"), original.get("source_type")
+    if not isinstance(original, Mapping) or set(original) != {
+        "topic_id", "variant_name", "query_text", "source_type"
+    } or (
+        original.get("topic_id"), original.get("variant_name"),
+        original.get("query_text"), original.get("source_type")
     ) != (topic.id, "original", topic.narrative, "original_topic"):
         raise ValueError("decomposition original query differs from official narrative")
-    expected = sum((list(row.bm25_queries) for row in subnarratives), [])
-    actual: list[str] = []
+    expected = [
+        (topic.id, f"facet:{subnarrative.subnarrative_id}:q{query_index}", query,
+         "generated_subnarrative_bm25")
+        for subnarrative in subnarratives
+        for query_index, query in enumerate(subnarrative.bm25_queries, start=1)
+    ]
+    actual: list[tuple[object, object, object, object]] = []
     for row in rows[1:]:
-        if not isinstance(row, Mapping) or row.get("topic_id") != topic.id or not _is_text(row.get("query_text")):
+        if not isinstance(row, Mapping) or set(row) != {
+            "topic_id", "variant_name", "query_text", "source_type"
+        }:
             raise ValueError("decomposition query identity is invalid")
-        actual.append(row["query_text"])
+        actual.append(
+            (row.get("topic_id"), row.get("variant_name"), row.get("query_text"), row.get("source_type"))
+        )
     if actual != expected:
         raise ValueError("decomposition queries differ from subnarrative plan")
 
@@ -317,9 +347,13 @@ def _decode_selection(
     if not isinstance(memberships, list) or [row.get("docid") if isinstance(row, Mapping) else None for row in memberships] != stored_order:
         raise ValueError("selection memberships differ from stored order")
     selected_by_docid = {row.docid: row for row in selected}
+    membership_lanes: dict[str, frozenset[str]] = {}
     for membership in memberships:
         if not isinstance(membership, Mapping) or not _valid_membership(membership, selected_by_docid):
             raise ValueError("selection membership or lane rank is invalid")
+        membership_lanes[membership["docid"]] = frozenset(
+            lane["lane_name"] for lane in membership["lanes"]
+        )
 
     union = value.get("union_pool")
     if not isinstance(union, list) or not union:
@@ -343,7 +377,43 @@ def _decode_selection(
         result.append({"docid": docid, "first_seen_lane": lane, "memberships": tuple(memberships)})
     if not set(stored_order) <= seen:
         raise ValueError("selected document is absent from selection union pool")
+    for row in result:
+        if row["docid"] in membership_lanes and set(row["memberships"]) != membership_lanes[row["docid"]]:
+            raise ValueError("selection union membership differs from selected provenance")
+    _validate_selection_trace(value.get("trace"), selected)
     return tuple(result)
+
+
+def _validate_selection_trace(
+    value: object, selected: Sequence[SelectedDocumentReport]
+) -> None:
+    if not isinstance(value, list):
+        raise ValueError("selection trace is invalid")
+    selected_events: list[tuple[object, object, object, object]] = []
+    for row in value:
+        if not isinstance(row, Mapping) or set(row) != {
+            "slot", "docid", "lane_name", "lane_rank", "lane_exhausted", "action"
+        } or not _positive_int(row.get("slot")) or not _is_identifier(row.get("lane_name")) or type(row.get("lane_exhausted")) is not bool:
+            raise ValueError("selection trace is invalid")
+        action = row.get("action")
+        if action not in {"selected", "duplicate_skip", "exhausted"}:
+            raise ValueError("selection trace action is invalid")
+        if action == "exhausted":
+            if row.get("docid") is not None or row.get("lane_rank") is not None or row["lane_exhausted"] is not True:
+                raise ValueError("selection trace exhaustion is invalid")
+            continue
+        if not _is_docid(row.get("docid")) or not _positive_int(row.get("lane_rank")):
+            raise ValueError("selection trace candidate provenance is invalid")
+        if action == "selected":
+            selected_events.append(
+                (row["slot"], row["docid"], row["lane_name"], row["lane_rank"])
+            )
+    expected = [
+        (row.selection_rank, row.docid, row.selected_from_lane, row.selected_from_lane_rank)
+        for row in selected
+    ]
+    if selected_events != expected:
+        raise ValueError("selection trace differs from selected rank provenance")
 
 
 def _valid_membership(value: Mapping[str, Any], selected: Mapping[str, SelectedDocumentReport]) -> bool:
@@ -372,27 +442,77 @@ def _valid_membership(value: Mapping[str, Any], selected: Mapping[str, SelectedD
     return origin_matches
 
 
-def _load_audit_hashes(topic_root: Path, output_dir: Path, receipts: dict[str, str]) -> Mapping[str, str]:
+def _load_audit_hashes(
+    topic_root: Path,
+    output_dir: Path,
+    receipts: dict[str, str],
+    topic: Topic,
+    narrative_sha256: object,
+    decomposition_source_sha256: object,
+    subnarratives: Sequence[SubnarrativeReport],
+    requested_depth: int,
+) -> Mapping[str, str]:
     path = topic_root / "retrieval" / "audit.json"
     if not path.exists():
         return MappingProxyType({})
     path = _safe_file(path, output_dir)
-    receipts[_portable_label(output_dir, path)] = _sha256_file(path)
+    receipts[_portable_label(output_dir, path)] = _sha256_file(path, _MAX_JSON_BYTES)
     value = _read_json_object(path, "retrieval audit")
     lanes = value.get("lanes")
-    if not isinstance(lanes, list):
-        raise ValueError("retrieval audit lanes are invalid")
+    expected_lanes = [
+        ("original", None, narrative_sha256, narrative_sha256),
+        *[
+            (
+                f"facet:{row.subnarrative_id}:text",
+                row.subnarrative_id,
+                row.semantic_query_sha256,
+                row.semantic_query_sha256,
+            )
+            for row in subnarratives
+        ],
+    ]
+    required = {
+        "schema_version", "topic_id", "narrative_sha256",
+        "decomposition_source_sha256", "requested_depth", "lanes",
+    }
+    if (
+        set(value) != required
+        or value.get("schema_version") != "facet_pilot_v2"
+        or value.get("topic_id") != topic.id
+        or value.get("narrative_sha256") != narrative_sha256
+        or value.get("decomposition_source_sha256") != decomposition_source_sha256
+        or value.get("requested_depth") != requested_depth
+        or not isinstance(lanes, list)
+        or len(lanes) != len(expected_lanes)
+    ):
+        raise ValueError("retrieval audit identity or lane set is invalid")
     hashes: dict[str, str] = {}
-    for lane in lanes:
-        candidates = lane.get("candidates") if isinstance(lane, Mapping) else None
-        if not isinstance(candidates, list):
-            raise ValueError("retrieval audit candidates are invalid")
-        for candidate in candidates:
-            if not isinstance(candidate, Mapping):
+    for lane, expected in zip(lanes, expected_lanes, strict=True):
+        if not isinstance(lane, Mapping) or set(lane) != {
+            "lane_name", "subnarrative_id", "bm25_query_sha256",
+            "semantic_query_sha256", "returned_count", "retained_count", "candidates",
+        } or (
+            lane.get("lane_name"), lane.get("subnarrative_id"),
+            lane.get("bm25_query_sha256"), lane.get("semantic_query_sha256"),
+        ) != expected or type(lane.get("returned_count")) is not int or lane["returned_count"] < 0 or type(lane.get("retained_count")) is not int or lane["retained_count"] < 0 or lane["retained_count"] != min(lane["returned_count"], requested_depth) or not isinstance(lane.get("candidates"), list) or len(lane["candidates"]) != lane["retained_count"]:
+            raise ValueError("retrieval audit lane identity or counts are invalid")
+        seen: set[str] = set()
+        for rank, candidate in enumerate(lane["candidates"], start=1):
+            if not isinstance(candidate, Mapping) or set(candidate) != {
+                "docid", "bm25_rank", "bm25_score", "text_sha256"
+            }:
                 raise ValueError("retrieval audit candidate is invalid")
             docid, text_hash = candidate.get("docid"), candidate.get("text_sha256")
-            if not _is_docid(docid) or not _is_sha256(text_hash):
+            if (
+                not _is_docid(docid)
+                or docid in seen
+                or type(candidate.get("bm25_rank")) is not int
+                or candidate["bm25_rank"] != rank
+                or not _finite_number(candidate.get("bm25_score"))
+                or not _is_sha256(text_hash)
+            ):
                 raise ValueError("retrieval audit candidate identity is invalid")
+            seen.add(docid)
             previous = hashes.setdefault(docid, text_hash)
             if previous != text_hash:
                 raise ValueError("retrieval audit has conflicting document text hashes")
@@ -456,16 +576,28 @@ def _safe_file(path: Path, output_dir: Path) -> Path:
 
 
 def _read_bounded(path: Path, maximum: int) -> bytes:
-    size = path.stat().st_size
-    if size <= 0 or size > maximum:
-        raise ValueError(f"artifact size is outside the bounded reader limit: {path.name}")
+    _bounded_size(path, maximum)
     return path.read_bytes()
 
 
-def _sha256_file(path: Path) -> str:
+def _bounded_size(path: Path, maximum: int) -> int:
+    size = path.stat().st_size
+    if size <= 0 or size > maximum:
+        raise ValueError(f"artifact size is outside the bounded reader limit: {path.name}")
+    return size
+
+
+def _sha256_file(path: Path, maximum: int) -> str:
+    _bounded_size(path, maximum)
     digest = sha256()
+    total = 0
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            total += len(chunk)
+            if total > maximum:
+                raise ValueError(
+                    f"artifact size is outside the bounded reader limit: {path.name}"
+                )
             digest.update(chunk)
     return digest.hexdigest()
 

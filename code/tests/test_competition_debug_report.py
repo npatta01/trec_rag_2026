@@ -92,9 +92,9 @@ nuggets:
             },
             {
                 "topic_id": "rag2026-0",
-                "variant_name": "facet-1",
+                "variant_name": "facet:subnarrative-1:q1",
                 "query_text": query,
-                "source_type": "subnarrative_bm25",
+                "source_type": "generated_subnarrative_bm25",
             },
         ],
         "plan": {
@@ -119,17 +119,17 @@ nuggets:
         "selected_order": ["doc-original", "doc-facet"],
         "union_pool": [
             {"docid": "doc-original", "first_seen_lane": "original", "memberships": ["original"]},
-            {"docid": "doc-both", "first_seen_lane": "original", "memberships": ["original", "facet-1"]},
-            {"docid": "doc-facet", "first_seen_lane": "facet-1", "memberships": ["facet-1"]},
-            {"docid": "doc-discarded", "first_seen_lane": "facet-1", "memberships": ["facet-1"]},
+            {"docid": "doc-both", "first_seen_lane": "original", "memberships": ["original", "facet:subnarrative-1:text"]},
+            {"docid": "doc-facet", "first_seen_lane": "facet:subnarrative-1:text", "memberships": ["facet:subnarrative-1:text"]},
+            {"docid": "doc-discarded", "first_seen_lane": "facet:subnarrative-1:text", "memberships": ["facet:subnarrative-1:text"]},
         ],
         "memberships": [
             {"docid": "doc-original", "lanes": [{"lane_name": "original", "aggregate_rank": 1, "aggregate_score": 9.0, "bm25_rank": 1, "bm25_score": 8.0}]},
-            {"docid": "doc-facet", "lanes": [{"lane_name": "facet-1", "aggregate_rank": 1, "aggregate_score": 7.0, "bm25_rank": 2, "bm25_score": 6.0}]},
+            {"docid": "doc-facet", "lanes": [{"lane_name": "facet:subnarrative-1:text", "aggregate_rank": 1, "aggregate_score": 7.0, "bm25_rank": 2, "bm25_score": 6.0}]},
         ],
         "trace": [
             {"slot": 1, "docid": "doc-original", "lane_name": "original", "lane_rank": 1, "lane_exhausted": False, "action": "selected"},
-            {"slot": 2, "docid": "doc-facet", "lane_name": "facet-1", "lane_rank": 1, "lane_exhausted": False, "action": "selected"},
+            {"slot": 2, "docid": "doc-facet", "lane_name": "facet:subnarrative-1:text", "lane_rank": 1, "lane_exhausted": False, "action": "selected"},
         ],
     }
     (topic_root / "scoring" / "selection.json").write_bytes(_json_bytes(selection))
@@ -142,7 +142,7 @@ nuggets:
         },
         {
             "topic_id": "rag2026-0", "docid": "doc-facet", "selection_rank": 2,
-            "selected_from_lane": "facet-1", "selected_from_lane_rank": 1,
+            "selected_from_lane": "facet:subnarrative-1:text", "selected_from_lane_rank": 1,
             "text": "Facet selected source with <unsafe> text.",
             "text_sha256": _sha256("Facet selected source with <unsafe> text."),
         },
@@ -150,6 +150,31 @@ nuggets:
     (topic_root / "scoring" / "selected_documents.jsonl").write_bytes(
         b"".join(_json_bytes(row) for row in selected_rows)
     )
+    audit = {
+        "schema_version": "facet_pilot_v2",
+        "topic_id": "rag2026-0",
+        "narrative_sha256": _sha256(narrative),
+        "decomposition_source_sha256": "a" * 64,
+        "requested_depth": 10,
+        "lanes": [
+            {
+                "lane_name": "original", "subnarrative_id": None,
+                "bm25_query_sha256": _sha256(narrative),
+                "semantic_query_sha256": _sha256(narrative),
+                "returned_count": 1, "retained_count": 1,
+                "candidates": [{"docid": "doc-original", "bm25_rank": 1, "bm25_score": 8.0, "text_sha256": _sha256("Original selected source.")}],
+            },
+            {
+                "lane_name": "facet:subnarrative-1:text", "subnarrative_id": "subnarrative-1",
+                "bm25_query_sha256": _sha256(subnarrative),
+                "semantic_query_sha256": _sha256(subnarrative),
+                "returned_count": 1, "retained_count": 1,
+                "candidates": [{"docid": "doc-facet", "bm25_rank": 1, "bm25_score": 6.0, "text_sha256": _sha256("Facet selected source with <unsafe> text.")}],
+            },
+        ],
+    }
+    (topic_root / "retrieval").mkdir()
+    (topic_root / "retrieval" / "audit.json").write_bytes(_json_bytes(audit))
     return config_path, output
 
 
@@ -198,3 +223,97 @@ def test_new_document_classification_uses_union_membership_and_selected_excerpts
     assert documents["doc-both"].is_new is False
     assert documents["doc-discarded"].excerpt is None
     assert documents["doc-facet"].excerpt == "Facet selected source with <unsafe> text."
+
+
+@pytest.mark.parametrize(
+    ("path_suffix", "mutation"),
+    [
+        (("subnarratives", 0, "topic_id"), "rag2026-1"),
+        (("queries", 1, "variant_name"), "forged-lane"),
+        (("queries", 1, "source_type"), "forged-source"),
+    ],
+)
+def test_identity_rejects_cross_topic_subnarratives_and_forged_query_lanes(
+    tmp_path: Path, path_suffix: tuple[object, ...], mutation: str
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "decomposition.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    target: object = value
+    for key in path_suffix[:-1]:
+        target = target[key]  # type: ignore[index]
+    target[path_suffix[-1]] = mutation  # type: ignore[index]
+    path.write_bytes(_json_bytes(value))
+
+    with pytest.raises(ValueError, match="decomposition.*(?:identity|queries)"):
+        load_debug_report_data(config_path)
+
+
+def test_selection_rejects_union_memberships_that_disagree_with_selected_provenance(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "scoring" / "selection.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["union_pool"][2]["first_seen_lane"] = "original"
+    value["union_pool"][2]["memberships"] = ["original"]
+    path.write_bytes(_json_bytes(value))
+
+    with pytest.raises(ValueError, match="selection.*membership"):
+        load_debug_report_data(config_path)
+
+
+def test_selection_rejects_trace_that_disagrees_with_selected_rank_provenance(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "scoring" / "selection.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["trace"][1]["lane_rank"] = 2
+    path.write_bytes(_json_bytes(value))
+
+    with pytest.raises(ValueError, match="selection trace"):
+        load_debug_report_data(config_path)
+
+
+@pytest.mark.parametrize("field", ("topic_id", "narrative_sha256", "decomposition_source_sha256"))
+def test_audit_hashes_require_current_topic_and_decomposition_identity(
+    tmp_path: Path, field: str
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "retrieval" / "audit.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value[field] = "rag2026-1" if field == "topic_id" else "f" * 64
+    path.write_bytes(_json_bytes(value))
+
+    with pytest.raises(ValueError, match="retrieval audit identity"):
+        load_debug_report_data(config_path)
+
+
+def test_audit_hashes_reject_non_integer_candidate_rank(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "retrieval" / "audit.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["lanes"][0]["candidates"][0]["bm25_rank"] = True
+    path.write_bytes(_json_bytes(value))
+
+    with pytest.raises(ValueError, match="retrieval audit candidate identity"):
+        load_debug_report_data(config_path)
+
+
+def test_oversized_artifact_is_rejected_before_receipt_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "scoring" / "selection.json"
+    path.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
+    original_open = Path.open
+
+    def guarded_open(candidate: Path, *args: object, **kwargs: object):
+        if candidate.resolve() == path.resolve():
+            raise AssertionError("oversized artifact must not be opened for hashing")
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    with pytest.raises(ValueError, match="bounded reader limit"):
+        load_debug_report_data(config_path)
