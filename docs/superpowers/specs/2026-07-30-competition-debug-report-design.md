@@ -200,12 +200,14 @@ effect.
 
 ## Generic Agent Skill
 
-The tracked
-`trec-rag-skills/skills/trec-rag-competition-debug-report/SKILL.md` skill
-provides generic instructions for any compatible agent. The implementation is
-committed in the existing `trec-rag-skills` submodule and the parent repository
-records that submodule revision. It triggers when a user asks to inspect,
-explain, visualize, or debug a completed competition retrieval or RAG run.
+The tracked repo-local
+`.agents/skills/trec-rag-competition-debug-report/SKILL.md` skill provides
+generic instructions for any compatible agent. The implementation is delivered
+in the same parent-repository PR as the report CLI, with no dependency on an
+unpublished organizer-submodule revision. It triggers when a user asks to
+inspect, explain, visualize, or debug a completed competition retrieval or RAG
+run. The `trec-rag-skills` submodule remains pinned to the official organizer
+revision used as source provenance.
 
 The skill:
 

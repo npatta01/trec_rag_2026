@@ -4,7 +4,7 @@
 
 **Goal:** Build a read-only CLI and generic agent skill that explain every stored stage of a completed competition retrieval and optional RAG run in one private, self-contained HTML file.
 
-**Architecture:** `trec_rag.competition_debug_report` loads standard retrieval and optional RAG configs, validates only bounded post-run artifacts, builds immutable topic-stage view records, renders deterministic standalone HTML, writes it atomically, and emits a compact JSON receipt. A concise skill in the existing `trec-rag-skills` submodule discovers compatible completed runs and invokes this CLI without starting retrieval or generation.
+**Architecture:** `trec_rag.competition_debug_report` loads standard retrieval and optional RAG configs, validates only bounded post-run artifacts, builds immutable topic-stage view records, renders deterministic standalone HTML, writes it atomically, and emits a compact JSON receipt. A concise repo-local skill under `.agents/skills/` discovers compatible completed runs and invokes this CLI without starting retrieval or generation. The skill ships in this parent-repository PR and does not depend on an unpublished organizer-submodule revision.
 
 **Tech Stack:** Python 3.12, standard-library `argparse`, `dataclasses`, `hashlib`, `html`, `json`, `pathlib`, and `tempfile`; existing PyYAML-backed competition config loaders and validators; pytest; self-contained HTML5/CSS; Playwright when available; Agent Skills `SKILL.md` plus `agents/openai.yaml`.
 
@@ -30,9 +30,10 @@
 - Create `code/trec_rag/competition_debug_report.py`: typed report records, bounded artifact loading, cross-artifact validation, HTML rendering, atomic write, receipt, and CLI.
 - Create `code/tests/test_competition_debug_report.py`: compact sealed-run fixtures and report/data/CLI contract tests.
 - Modify `code/trec_rag/README.md`: post-run debugging command, privacy warning, output contract, and skill-friendly receipt.
-- Create `trec-rag-skills/skills/trec-rag-competition-debug-report/SKILL.md`: generic invocation workflow and safety/privacy contract.
-- Create `trec-rag-skills/skills/trec-rag-competition-debug-report/agents/openai.yaml`: generated Codex UI metadata.
-- Modify the parent `trec-rag-skills` gitlink after committing the skill in its submodule.
+- Create `.agents/skills/trec-rag-competition-debug-report/SKILL.md`: generic invocation workflow and safety/privacy contract.
+- Create `.agents/skills/trec-rag-competition-debug-report/agents/openai.yaml`: generated Codex UI metadata.
+- Create `code/tests/test_competition_debug_report_skill.py`: parent-local static skill contracts and discovery-path assertion.
+- Keep `trec-rag-skills` at the official organizer revision; it remains source provenance only.
 
 ### Public interfaces
 
@@ -437,13 +438,13 @@ git commit -m "Add competition debug report CLI"
 ### Task 5: Generic agent skill, metadata, and forward evaluation
 
 **Files:**
-- Create: `trec-rag-skills/skills/trec-rag-competition-debug-report/SKILL.md`
-- Create: `trec-rag-skills/skills/trec-rag-competition-debug-report/agents/openai.yaml`
-- Modify: parent repository gitlink `trec-rag-skills`
+- Create: `.agents/skills/trec-rag-competition-debug-report/SKILL.md`
+- Create: `.agents/skills/trec-rag-competition-debug-report/agents/openai.yaml`
+- Create: `code/tests/test_competition_debug_report_skill.py`
 
 **Interfaces:**
 - Consumes: Task 4 CLI contract and standard retrieval/RAG config paths.
-- Produces: discoverable `trec-rag-competition-debug-report` skill with no bundled executable script; the repository CLI is the single implementation.
+- Produces: discoverable repo-local `trec-rag-competition-debug-report` skill with no bundled executable script; the repository CLI is the single implementation and the parent PR is self-contained.
 
 - [ ] **Step 1: Run a no-skill baseline scenario (RED)**
 
@@ -464,18 +465,13 @@ hypothetical prohibitions.
 
 - [ ] **Step 2: Initialize the skill using the required scaffold tool**
 
-Create a named submodule branch first because the submodule starts detached:
+Run from the parent repository root:
 
 ```bash
-git -C trec-rag-skills switch -c codex/competition-debug-report-skill
-```
-
-Then run:
-
-```bash
-/home/npatta01/.codex/skills/.system/skill-creator/scripts/init_skill.py \
+.venv/bin/python \
+  /home/npatta01/.codex/skills/.system/skill-creator/scripts/init_skill.py \
   trec-rag-competition-debug-report \
-  --path trec-rag-skills/skills \
+  --path .agents/skills \
   --interface 'display_name=Competition Debug Report' \
   --interface 'short_description=Explain a completed TREC RAG run' \
   --interface 'default_prompt=Use $trec-rag-competition-debug-report to create a private HTML explanation of this completed competition run.'
@@ -506,9 +502,11 @@ competition retrieval/RAG path instead.
 - [ ] **Step 4: Validate structure and metadata**
 
 ```bash
-/home/npatta01/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  trec-rag-skills/skills/trec-rag-competition-debug-report
-wc -w trec-rag-skills/skills/trec-rag-competition-debug-report/SKILL.md
+.venv/bin/python \
+  /home/npatta01/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  .agents/skills/trec-rag-competition-debug-report
+wc -w .agents/skills/trec-rag-competition-debug-report/SKILL.md
+.venv/bin/python -m pytest code/tests/test_competition_debug_report_skill.py -q
 ```
 
 Expected: validation passes, frontmatter contains only required fields, UI
@@ -524,21 +522,16 @@ publish the raw report, and reports the CLI receipt. If it misses an observable
 contract element, revise only the instruction responsible and repeat the same
 scenario.
 
-- [ ] **Step 6: Commit the skill in its submodule**
+- [ ] **Step 6: Include the skill in the parent feature commit**
 
 ```bash
-git -C trec-rag-skills add \
-  skills/trec-rag-competition-debug-report/SKILL.md \
-  skills/trec-rag-competition-debug-report/agents/openai.yaml
-git -C trec-rag-skills commit -m "Add competition debug report skill"
+git add .agents/skills/trec-rag-competition-debug-report \
+  code/tests/test_competition_debug_report_skill.py
 ```
 
-- [ ] **Step 7: Commit the updated skill revision in the parent**
-
-```bash
-git add trec-rag-skills
-git commit -m "Pin competition debug report skill"
-```
+Deliver these parent-local files in the same parent-repository PR as the CLI.
+Do not create an organizer branch or commit, and do not change the organizer
+gitlink for this feature.
 
 ---
 
@@ -570,11 +563,11 @@ Use the production module and a small read-only assertion command to require:
 
 ```python
 assert receipt.topic_ids == ("rag2026-0", "rag2026-1")
-assert [topic.final_retrieval.depth for topic in data.topics] == [71, 60]
+assert [topic.retrieval_output.final_supported_depth for topic in data.topics] == [71, 60]
 assert all(topic.subnarratives for topic in data.topics)
 assert all(topic.new_documents for topic in data.topics)
-assert all(sub.passage_rankings for topic in data.topics for sub in topic.subnarratives)
-assert all(sub.canonical_nuggets for topic in data.topics for sub in topic.subnarratives)
+assert all(topic.passage_rankings for topic in data.topics)
+assert all(topic.canonical_nuggets for topic in data.topics)
 assert all(topic.rag_output is not None for topic in data.topics)
 ```
 
@@ -601,7 +594,8 @@ git submodule status
 ```
 
 Expected: full suite passes; compilation and diff checks exit 0; both parent and
-submodule are clean; submodule status points to the new committed skill revision.
+submodule are clean; submodule status pins `trec-rag-skills` to the official
+pre-feature revision `f281e88f61252662033c681df8b1ed2d0ceda97e`.
 
 - [ ] **Step 5: Review the complete branch against the spec**
 
@@ -613,6 +607,5 @@ privacy guard as blocking. Fix blocking findings test-first and repeat Steps 1â€
 - [ ] **Step 6: Hand off without publishing**
 
 Report the CLI command, absolute private HTML path, receipt hashes, full-suite
-result, skill submodule revision, and any unavailable visual check. Do not push
-either repository or create a PR until the user explicitly selects that branch
-integration option.
+result, repo-local skill path, official organizer submodule revision, and any
+unavailable visual check. Do not publish the private report.
