@@ -393,7 +393,14 @@ def test_export_recursively_preserves_trace_semantics_and_returns_public_ids():
         '{"messages":[{"content":"question","role":"user"}]}'
     )
     assert exported_grandchild.attributes["output.mime_type"] == "application/json"
-    assert exported_grandchild.attributes["output.value"] == '{"answer":"response"}'
+    assert exported_grandchild.attributes["output.value"] == (
+        '{"choices":[{"finish_reason":null,"index":0,"message":{}}],'
+        '"object":"chat.completion"}'
+    )
+    assert exported_grandchild.attributes["pi.native.input_json"] == (
+        '{"messages":[{"content":"question","role":"user"}]}'
+    )
+    assert exported_grandchild.attributes["pi.native.output_json"] == '{"answer":"response"}'
     assert exported_root.status.status_code is StatusCode.OK
     assert exported_grandchild.status.status_code is StatusCode.ERROR
     assert exported_grandchild.status.description == "synthetic failure"
@@ -466,13 +473,17 @@ def test_export_adds_openinference_chat_attributes_for_fixed_generation():
         "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments"
     ] == '{"query":"evidence"}'
     assert attributes["llm.model_name"] == "claude-test"
-    assert attributes["llm.provider"] == "anthropic"
+    assert attributes["llm.system"] == "openai"
+    assert attributes["llm.provider"] == "openai"
+    assert attributes["pi.original.llm.provider"] == "anthropic"
     assert attributes["llm.finish_reason"] == "stop"
     assert attributes["llm.token_count.prompt"] == 12
     assert attributes["llm.token_count.completion"] == 7
     assert attributes["llm.token_count.total"] == 19
-    assert attributes["input.value"].startswith('{"system_prompt"')
-    assert attributes["output.value"].startswith('{"content"')
+    assert attributes["input.value"].startswith('{"messages"')
+    assert attributes["output.value"].startswith('{"choices"')
+    assert attributes["pi.native.input_json"].startswith('{"system_prompt"')
+    assert attributes["pi.native.output_json"].startswith('{"content"')
 
 
 def test_export_normalizes_native_tool_result_role_without_losing_raw_payload():
@@ -504,7 +515,8 @@ def test_export_normalizes_native_tool_result_role_without_losing_raw_payload():
     attributes = provider.tracer.spans[1].attributes
     assert attributes["llm.input_messages.0.message.role"] == "tool"
     assert attributes["llm.input_messages.0.message.tool_call_id"] == "call-1"
-    assert '"role":"toolResult"' in attributes["input.value"]
+    assert '"role":"tool"' in attributes["input.value"]
+    assert '"role":"toolResult"' in attributes["pi.native.input_json"]
 
 
 def test_export_adds_openinference_retrieval_document_attributes():

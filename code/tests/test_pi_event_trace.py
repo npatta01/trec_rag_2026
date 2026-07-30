@@ -100,7 +100,8 @@ def test_piika_events_become_ordered_full_content_spans(tmp_path):
 
     assert bundle.project_name == "trec-rag-2026-pi-baselines"
     assert bundle.baseline == "piika-agentic"
-    assert bundle.root.kind == "CHAIN"
+    assert bundle.root.kind == "AGENT"
+    assert bundle.root.attributes["pi.system_prompt.captured"] is False
     assert [child.kind for child in bundle.root.children] == [
         "LLM",
         "RETRIEVER",
@@ -163,6 +164,31 @@ def test_piika_trace_preserves_prompt_bearing_native_events(tmp_path):
         "narrative": "official narrative",
         "events": [agent_start, user_start, user_end],
     }
+
+
+def test_piika_llm_with_no_prior_messages_still_advertises_both_tools(tmp_path):
+    assistant = _assistant("answer", 1_800_000_000_000)
+    bundle = build_piika_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=load_pi_events(
+            _write_jsonl(
+                tmp_path / "assistant-only.jsonl",
+                [
+                    {"type": "message_start", "message": assistant},
+                    {"type": "message_end", "message": assistant},
+                ],
+            )
+        ),
+        run_record={"status": "completed"},
+        session_id="session",
+    )
+
+    llm = next(span for span in bundle.root.children if span.kind == "LLM")
+    assert llm.input_value["messages"] == []
+    assert [tool["function"]["name"] for tool in llm.input_value["tools"]] == [
+        "search",
+        "read_document",
+    ]
 
 
 def test_piika_trace_uses_native_conversation_and_observed_completion_timing(tmp_path):
@@ -241,11 +267,19 @@ def test_piika_trace_uses_native_conversation_and_observed_completion_timing(tmp
     assert llms[0].start_ns == first_ms * 1_000_000
     assert llms[0].end_ns == tool_result_ms * 1_000_000
     assert llms[0].attributes["trace.end_time.source"] == "next_tool_result_upper_bound"
-    assert llms[0].input_value == {"messages": [user]}
+    assert llms[0].input_value["messages"] == [user]
+    assert [tool["function"]["name"] for tool in llms[0].input_value["tools"]] == [
+        "search",
+        "read_document",
+    ]
     assert llms[1].start_ns == final_ms * 1_000_000
     assert llms[1].end_ns == completion_ns
     assert llms[1].attributes["trace.end_time.source"] == "event_file_mtime_upper_bound"
-    assert llms[1].input_value == {"messages": [user, first, tool_result]}
+    assert llms[1].input_value["messages"] == [user, first, tool_result]
+    assert [tool["function"]["name"] for tool in llms[1].input_value["tools"]] == [
+        "search",
+        "read_document",
+    ]
     tool = next(span for span in bundle.root.children if span.kind == "RETRIEVER")
     assert tool.end_ns - tool.start_ns == 2_500_000_000
     assert tool.attributes["trace.duration.source"] == "native_timing_ms"
@@ -368,6 +402,8 @@ def test_fixed_trace_keeps_100_ordered_documents_and_complete_prompts(tmp_path):
     )
 
     assert bundle.baseline == "ragnarok-fixed"
+    assert bundle.root.kind == "AGENT"
+    assert bundle.root.attributes["pi.system_prompt.captured"] is True
     assert [child.kind for child in bundle.root.children] == [
         "RETRIEVER",
         "CHAIN",

@@ -10,6 +10,7 @@ import time
 from typing import Iterable, Mapping, Sequence
 
 from trec_rag.organizer_pi_inputs import OrganizerTopic
+from trec_rag.openai_trace_semantics import piika_tool_schemas
 from trec_rag.pi_trace_models import (
     SpanSpec,
     TraceBundle,
@@ -445,11 +446,10 @@ def _assistant_span(
             "trace.end_time.source": end_time_source,
             "trace.end_time.upper_bound": True,
         },
-        input_value=(
-            {"messages": [dict(message) for message in input_messages]}
-            if input_messages
-            else None
-        ),
+        input_value={
+            "messages": [dict(message) for message in input_messages],
+            "tools": list(piika_tool_schemas()),
+        },
         output_value=output,
         status="ERROR" if diagnostic is not None else "OK",
         status_message=diagnostic,
@@ -614,13 +614,14 @@ def _root_span(
     observed_start_ns: int,
     observed_end_ns: int,
     observed_end_source: str,
+    system_prompt_captured: bool | None = None,
 ) -> SpanSpec:
     start_ns = min(observed_start_ns, *(child.start_ns for child in children))
     end_ns = max(observed_end_ns, *(child.end_ns for child in children))
     failed_children = [child for child in children if child.status == "ERROR"]
     return SpanSpec(
         name=name,
-        kind="CHAIN",
+        kind="AGENT",
         start_ns=start_ns,
         end_ns=end_ns,
         attributes={
@@ -629,6 +630,11 @@ def _root_span(
             "pi.event.unknown_count": unknown_count,
             "trace.timing_reconstructed": reconstructed,
             "trace.root.end_time.source": observed_end_source,
+            **(
+                {"pi.system_prompt.captured": system_prompt_captured}
+                if system_prompt_captured is not None
+                else {}
+            ),
         },
         input_value={"topic_id": topic.topic_id, "narrative": topic.narrative},
         output_value=None,
@@ -678,6 +684,7 @@ def build_piika_trace(
             observed_start_ns=observed_start_ns,
             observed_end_ns=observed_end_ns,
             observed_end_source=observed_end_source,
+            system_prompt_captured=False,
         ),
     )
 
@@ -814,6 +821,7 @@ def build_fixed_trace(
             observed_start_ns=observed_start_ns,
             observed_end_ns=observed_end_ns,
             observed_end_source=observed_end_source,
+            system_prompt_captured=True,
         ),
     )
 

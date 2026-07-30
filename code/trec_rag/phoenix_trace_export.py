@@ -16,6 +16,11 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace.status import Status, StatusCode
 
 from trec_rag.pi_trace_models import SpanSpec, TraceBundle
+from trec_rag.openai_trace_semantics import (
+    openai_llm_attributes,
+    openai_request_envelope,
+    openai_response_envelope,
+)
 
 
 _JSON_MIME_TYPE = "application/json"
@@ -419,7 +424,7 @@ def _retrieval_attributes(output_value: object | None) -> dict[str, object]:
 def _semantic_attributes(spec: SpanSpec) -> dict[str, object]:
     attributes: dict[str, object] = {}
     if spec.kind == "LLM":
-        attributes.update(_llm_attributes(spec))
+        attributes.update(openai_llm_attributes(spec))
     if spec.kind == "RETRIEVER":
         attributes.update(_retrieval_attributes(spec.output_value))
     tool_name = spec.attributes.get("pi.tool.name")
@@ -456,9 +461,20 @@ def _export_span(
     )
     exported_count = 1
     try:
-        for name, value in _payload_attributes("INPUT", spec.input_value).items():
+        input_value = (
+            openai_request_envelope(spec) if spec.kind == "LLM" else spec.input_value
+        )
+        output_value = (
+            openai_response_envelope(spec) if spec.kind == "LLM" else spec.output_value
+        )
+        if spec.kind == "LLM":
+            if spec.input_value is not None:
+                span.set_attribute("pi.native.input_json", _json_string(spec.input_value))
+            if spec.output_value is not None:
+                span.set_attribute("pi.native.output_json", _json_string(spec.output_value))
+        for name, value in _payload_attributes("INPUT", input_value).items():
             span.set_attribute(name, value)
-        for name, value in _payload_attributes("OUTPUT", spec.output_value).items():
+        for name, value in _payload_attributes("OUTPUT", output_value).items():
             span.set_attribute(name, value)
         if spec.status == "ERROR":
             span.set_status(Status(StatusCode.ERROR, spec.status_message))
