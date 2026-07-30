@@ -443,6 +443,37 @@ def test_local_ranker_identity_and_partial_cache_miss_are_exact(tmp_path: Path) 
     assert model.pairs == [[("query", "first evidence")], [("query", "second evidence")]]
 
 
+@pytest.mark.parametrize(
+    ("first_settings", "second_settings"),
+    [
+        ({"batch_size": 1, "device": "cpu"}, {"batch_size": 2, "device": "cpu"}),
+        ({"batch_size": 1, "device": "cpu"}, {"batch_size": 1, "device": "cuda"}),
+    ],
+)
+def test_local_score_cache_partitions_effective_adapter_settings(
+    tmp_path: Path,
+    first_settings: dict[str, object],
+    second_settings: dict[str, object],
+) -> None:
+    first_model = FakeCrossEncoder([[0.8]])
+    first = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: first_model,
+        **first_settings,
+    )
+    assert first.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.8
+
+    second_model = FakeCrossEncoder([[0.2]])
+    second = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: second_model,
+        **second_settings,
+    )
+
+    assert second.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.2
+    assert second_model.predict_calls == 1
+
+
 def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: Path) -> None:
     chat = FakeChatModel(['{"scores":[{"chunk_id":"doc-a:0000","score":0.2},{"chunk_id":"doc-a:0001","score":0.8}]}'])
     ranker = SmallLLMSnippetRanker(
@@ -481,6 +512,80 @@ def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: 
             ],
         }
     ]
+
+
+def test_small_llm_ranker_sends_every_uncached_duplicate_text_chunk_id(
+    tmp_path: Path,
+) -> None:
+    duplicate_text_chunks = _chunks("same evidence", "same evidence")
+    chat = FakeChatModel(
+        [
+            '{"scores":['
+            '{"chunk_id":"doc-a:0000","score":0.6},'
+            '{"chunk_id":"doc-a:0001","score":0.6}'
+            "]}"
+        ]
+    )
+    ranker = SmallLLMSnippetRanker(
+        chat_model=chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+    )
+
+    assert [row.chunk.chunk_id for row in ranker.rank("query", duplicate_text_chunks)] == [
+        "doc-a:0000",
+        "doc-a:0001",
+    ]
+    prompt_data = json.loads(chat.prompts[0].rsplit("\n", 1)[1])
+    assert [chunk["chunk_id"] for chunk in prompt_data["chunks"]] == [
+        "doc-a:0000",
+        "doc-a:0001",
+    ]
+
+
+def test_small_llm_ranker_rejects_conflicting_duplicate_text_scores(tmp_path: Path) -> None:
+    duplicate_text_chunks = _chunks("same evidence", "same evidence")
+    chat = FakeChatModel(
+        [
+            '{"scores":['
+            '{"chunk_id":"doc-a:0000","score":0.6},'
+            '{"chunk_id":"doc-a:0001","score":0.4}'
+            "]}"
+        ]
+    )
+    ranker = SmallLLMSnippetRanker(
+        chat_model=chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+    )
+
+    with pytest.raises(ValueError, match="conflicting scores for identical chunk text"):
+        ranker.rank("query", duplicate_text_chunks)
+
+
+def test_small_llm_ranker_score_cache_partitions_batch_size(tmp_path: Path) -> None:
+    first = SmallLLMSnippetRanker(
+        chat_model=FakeChatModel(
+            ['{"scores":[{"chunk_id":"doc-a:0000","score":0.8}]}']
+        ),
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+        batch_size=1,
+    )
+    assert first.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.8
+
+    second_chat = FakeChatModel(
+        ['{"scores":[{"chunk_id":"doc-a:0000","score":0.2}]}']
+    )
+    second = SmallLLMSnippetRanker(
+        chat_model=second_chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+        batch_size=2,
+    )
+
+    assert second.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.2
+    assert len(second_chat.prompts) == 1
 
 
 @pytest.mark.parametrize(

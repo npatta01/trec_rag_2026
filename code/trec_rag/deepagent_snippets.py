@@ -186,6 +186,10 @@ def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON constant: {value}")
 
 
+def _score_cache_input_policy(name: str, **settings: object) -> str:
+    return f"{name}|{json.dumps(settings, sort_keys=True, separators=(',', ':'))}"
+
+
 class LocalMixedbreadSnippetRanker:
     """Lazy, cache-aware local Mixedbread cross-encoder snippet ranker."""
 
@@ -224,7 +228,11 @@ class LocalMixedbreadSnippetRanker:
                 max_length=self._max_length,
                 score_kind=_SNIPPET_SCORE_KIND,
                 score_representation="raw_logits",
-                input_policy="focus_query_chunk_v1",
+                input_policy=_score_cache_input_policy(
+                    "focus_query_chunk_v1",
+                    batch_size=self._batch_size,
+                    device=self._device,
+                ),
             ),
         )
 
@@ -346,7 +354,10 @@ class SmallLLMSnippetRanker:
                 max_length=_SMALL_LLM_MAX_LENGTH,
                 score_kind=_SNIPPET_SCORE_KIND,
                 score_representation=_SMALL_LLM_SCORE_REPRESENTATION,
-                input_policy="focus_query_chunk_id_json_batch_v1",
+                input_policy=_score_cache_input_policy(
+                    "focus_query_chunk_id_json_batch_v1",
+                    batch_size=self._batch_size,
+                ),
             ),
         )
 
@@ -368,28 +379,33 @@ class SmallLLMSnippetRanker:
         rows = tuple(chunks)
         if len({chunk.chunk_id for chunk in rows}) != len(rows):
             raise ValueError("small-LLM ranking requires unique chunk IDs")
-        missing: dict[str, TextChunk] = {}
+        missing: list[TextChunk] = []
         scores: dict[str, float] = {}
         for chunk in rows:
             key = self._score_cache.cache_key(query_text=focus_query, text=chunk.text)
             cached = self._score_cache.get(query_text=focus_query, text=chunk.text)
             if cached is None:
-                missing.setdefault(key, chunk)
+                missing.append(chunk)
             else:
                 scores[key] = _finite_score(cached, source="cached small-LLM")
-        pending = tuple(missing.values())
+        pending = tuple(missing)
         for offset in range(0, len(pending), self._batch_size):
             batch = pending[offset : offset + self._batch_size]
             returned_scores = self._invoke_scores(focus_query, batch)
-            self._score_cache.add_many(
-                (focus_query, chunk.text, returned_scores[chunk.chunk_id]) for chunk in batch
-            )
-            scores.update(
-                (
-                    self._score_cache.cache_key(query_text=focus_query, text=chunk.text),
-                    returned_scores[chunk.chunk_id],
+            batch_scores: list[tuple[TextChunk, float]] = []
+            for chunk in batch:
+                score = returned_scores[chunk.chunk_id]
+                key = self._score_cache.cache_key(
+                    query_text=focus_query, text=chunk.text
                 )
-                for chunk in batch
+                if key in scores and scores[key] != score:
+                    raise ValueError(
+                        "small-LLM returned conflicting scores for identical chunk text"
+                    )
+                scores[key] = score
+                batch_scores.append((chunk, score))
+            self._score_cache.add_many(
+                (focus_query, chunk.text, score) for chunk, score in batch_scores
             )
         return tuple(
             sorted(
