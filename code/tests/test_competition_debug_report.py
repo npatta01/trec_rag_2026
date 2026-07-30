@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import subprocess
 import zipfile
 
 import pytest
@@ -1692,16 +1693,82 @@ def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(
         ("topic-literal-rag2026-1", ""),
     ]
     assert rendered.count('class="topic-tab"') == 2
-    assert 'role="tablist"' in rendered
-    assert rendered.count('role="tab"') == 2
-    assert 'aria-controls="topic-literal-rag2026-0"' in rendered
-    assert 'aria-controls="topic-literal-rag2026-1"' in rendered
-    assert 'aria-selected="true"' in rendered
-    assert 'aria-selected="false"' in rendered
+    static_markup = rendered.split("</style>", 1)[1].split("<script>", 1)[0]
+    assert 'role="tablist"' not in static_markup
+    assert 'role="tab"' not in static_markup
+    assert 'role="tabpanel"' not in static_markup
+    assert "aria-selected=" not in static_markup
+    assert "aria-controls=" not in static_markup
     script = rendered.split("<script>", 1)[1].split("</script>", 1)[0]
     assert "location.hash" in script
     assert '"ArrowLeft"' in script and '"ArrowRight"' in script
     assert "panel.open" in script
+    assert "width: 1px" not in rendered
+
+
+def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hashes(
+    tmp_path: Path,
+) -> None:
+    """Deep links must select their owning topic without resetting unknown hashes."""
+    chrome = shutil.which("google-chrome") or shutil.which("chromium")
+    if chrome is None:
+        pytest.skip("headless Chrome is not available")
+    config_path, output = _write_debug_run(tmp_path)
+    _add_second_debug_topic(tmp_path, output)
+    rendered = render_debug_report(load_debug_report_data(config_path))
+
+    def dump_dom(document: str, fragment: str, name: str) -> str:
+        path = tmp_path / name
+        path.write_text(document, encoding="utf-8")
+        completed = subprocess.run(
+            [
+                chrome,
+                "--headless=new",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--dump-dom",
+                f"{path.as_uri()}#{fragment}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return completed.stdout
+
+    deep_link_dom = dump_dom(
+        rendered,
+        "stage-literal-rag2026-1-narrative",
+        "deep-link.html",
+    )
+    first_panel = re.search(
+        r'<details[^>]*id="topic-literal-rag2026-0"[^>]*>', deep_link_dom
+    )
+    second_panel = re.search(
+        r'<details[^>]*id="topic-literal-rag2026-1"[^>]*>', deep_link_dom
+    )
+    assert first_panel is not None and " open" not in first_panel.group()
+    assert second_panel is not None and " open" in second_panel.group()
+    assert 'role="tabpanel"' in second_panel.group()
+    assert 'aria-labelledby="topic-tab-literal-rag2026-1"' in second_panel.group()
+    assert 'id="topic-summary-literal-rag2026-1" hidden=""' in deep_link_dom
+
+    second_initially_open = rendered.replace(
+        'id="topic-literal-rag2026-0" open',
+        'id="topic-literal-rag2026-0"',
+    ).replace(
+        'id="topic-literal-rag2026-1">',
+        'id="topic-literal-rag2026-1" open>',
+    )
+    unknown_dom = dump_dom(second_initially_open, "unknown-anchor", "unknown.html")
+    first_panel = re.search(
+        r'<details[^>]*id="topic-literal-rag2026-0"[^>]*>', unknown_dom
+    )
+    second_panel = re.search(
+        r'<details[^>]*id="topic-literal-rag2026-1"[^>]*>', unknown_dom
+    )
+    assert first_panel is not None and " open" not in first_panel.group()
+    assert second_panel is not None and " open" in second_panel.group()
 
 
 def test_html_validation_configuration_and_receipts_are_collapsed(

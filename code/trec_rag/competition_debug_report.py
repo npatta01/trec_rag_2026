@@ -2190,14 +2190,12 @@ def render_debug_report(data: DebugReportData) -> str:
     """
     topic_links = "".join(
         '<li>'
-        f'<button type="button" class="topic-tab" id="topic-tab-{_topic_anchor(topic.topic_id)}" role="tab" '
-        f'aria-controls="topic-{_topic_anchor(topic.topic_id)}" '
-        f'aria-selected="{str(index == 0).lower()}" tabindex="{0 if index == 0 else -1}" '
+        f'<button type="button" class="topic-tab" id="topic-tab-{_topic_anchor(topic.topic_id)}" '
         f'data-topic-target="topic-{_topic_anchor(topic.topic_id)}">'
         f'{_html(topic.topic_id)}</button>'
         f'<a class="topic-link-fallback" href="#topic-{_topic_anchor(topic.topic_id)}">'
         f'{_html(topic.topic_id)}</a></li>'
-        for index, topic in enumerate(data.topics)
+        for topic in data.topics
     )
     topics = "".join(
         _render_topic(topic, initially_open=index == 0)
@@ -2233,7 +2231,7 @@ section section {{ border-color: color-mix(in srgb, var(--line) 75%, transparent
 .topic-panel > summary {{ min-height: 44px; padding: 1rem 1.25rem; cursor: pointer; font-size: 1.2rem; font-weight: 800; }}
 .topic-panel > .topic-content {{ min-width: 0; padding: 0 clamp(.75rem, 2vw, 1.25rem) .25rem; }}
 .js .topic-panel:not([open]) {{ display: none; }}
-.js .topic-panel > summary {{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }}
+.js .topic-panel > summary {{ display: none; }}
 .run-diagnostics {{ margin-top: 1rem; padding: .25rem 1rem 1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
 .run-diagnostics > summary {{ min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 750; }}
 .run-diagnostics dl {{ display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: .35rem 1rem; }}
@@ -2260,7 +2258,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem 
 <header>
 <h1>Competition retrieval debug report</h1>
 <p>Read-only rendering of sealed retrieval artifacts. Corpus text and identifiers may be sensitive.</p>
-<nav aria-label="Topic navigation"><ul role="tablist">{topic_links}</ul></nav>
+<nav aria-label="Topic navigation"><ul>{topic_links}</ul></nav>
 </header>
 <main>
 {run_summary}
@@ -2270,10 +2268,10 @@ a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem 
 <footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
 <script>
 (() => {{
-  document.documentElement.classList.add("js");
   const panels = Array.from(document.querySelectorAll(".topic-panel"));
   const tabs = Array.from(document.querySelectorAll(".topic-tab"));
   if (!panels.length) return;
+  const tablist = document.querySelector('nav[aria-label="Topic navigation"] ul');
   let synchronizing = false;
   const panelForTab = (tab) => document.getElementById(tab.dataset.topicTarget);
   const activate = (panel, updateHash, focusTab) => {{
@@ -2292,9 +2290,18 @@ a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem 
     }}
   }};
   const restoreHash = () => {{
-    const identifier = decodeURIComponent(location.hash.slice(1));
-    const requested = panels.find((panel) => panel.id === identifier);
-    activate(requested || panels[0], false, false);
+    let target = null;
+    try {{
+      target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    }} catch (_error) {{
+      target = null;
+    }}
+    const requested = target && target.closest(".topic-panel");
+    if (requested && panels.includes(requested)) {{
+      activate(requested, false, false);
+      return;
+    }}
+    activate(panels.find((panel) => panel.open) || panels[0], false, false);
   }};
   tabs.forEach((tab, index) => {{
     tab.addEventListener("click", () => activate(panelForTab(tab), true, false));
@@ -2312,7 +2319,17 @@ a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem 
     else if (!panels.some((candidate) => candidate.open)) activate(panel, true, false);
   }}));
   window.addEventListener("hashchange", restoreHash);
+  tablist.setAttribute("role", "tablist");
+  tabs.forEach((tab) => {{
+    const panel = panelForTab(tab);
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", panel.id);
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", tab.id);
+    panel.querySelector(":scope > summary").hidden = true;
+  }});
   restoreHash();
+  document.documentElement.classList.add("js");
 }})();
 </script>
 </body>
