@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -243,6 +243,33 @@ class _Tracing(Protocol):
     ) -> AbstractContextManager[_SnippetTraceSpan]: ...
 
     def force_flush(self) -> bool: ...
+
+
+@contextmanager
+def _isolated_snippet_span(
+    tracing: _Tracing, document_id: str, focus_query: str
+) -> Iterator[_SnippetTraceSpan | None]:
+    """Keep optional snippet tracing lifecycle failures out of tool behavior."""
+    try:
+        manager = tracing.snippet_span(document_id, focus_query)
+        span = manager.__enter__()
+    except Exception:
+        yield None
+        return
+
+    try:
+        yield span
+    except BaseException as exc:
+        try:
+            manager.__exit__(type(exc), exc, exc.__traceback__)
+        except Exception:
+            pass
+        raise
+    else:
+        try:
+            manager.__exit__(None, None, None)
+        except Exception:
+            pass
 
 
 AgentFactory = Callable[
@@ -610,7 +637,9 @@ class DeepAgentRetriever:
             if document_text is None:
                 return json.dumps({"error": "unknown document_id"}, sort_keys=True)
             try:
-                with self._tracing.snippet_span(document_id, focus_query) as span:
+                with _isolated_snippet_span(
+                    self._tracing, document_id, focus_query
+                ) as span:
                     with self._snippet_extractor_lock:
                         if self._snippet_extractor is None:
                             self._snippet_extractor = create_default_snippet_extractor(
@@ -625,32 +654,35 @@ class DeepAgentRetriever:
                         cursor,
                     )
                     latency_ms = (monotonic() - started_at) * 1_000
-                    try:
-                        span.record_page(
-                            chunk_ids=tuple(
-                                snippet.chunk_id for snippet in result.page.snippets
-                            ),
-                            start_chars=tuple(
-                                snippet.start_char for snippet in result.page.snippets
-                            ),
-                            end_chars=tuple(
-                                snippet.end_char for snippet in result.page.snippets
-                            ),
-                            relevance_scores=tuple(
-                                snippet.relevance_score
-                                for snippet in result.page.snippets
-                            ),
-                            texts=tuple(
-                                snippet.text for snippet in result.page.snippets
-                            ),
-                            cache_status=result.cache_status,
-                            ranker_backend=result.ranker_backend,
-                            latency_ms=latency_ms,
-                            page_offset=result.page_offset,
-                            has_next_page=result.page.next_cursor is not None,
-                        )
-                    except Exception:
-                        pass
+                    if span is not None:
+                        try:
+                            span.record_page(
+                                chunk_ids=tuple(
+                                    snippet.chunk_id
+                                    for snippet in result.page.snippets
+                                ),
+                                start_chars=tuple(
+                                    snippet.start_char
+                                    for snippet in result.page.snippets
+                                ),
+                                end_chars=tuple(
+                                    snippet.end_char for snippet in result.page.snippets
+                                ),
+                                relevance_scores=tuple(
+                                    snippet.relevance_score
+                                    for snippet in result.page.snippets
+                                ),
+                                texts=tuple(
+                                    snippet.text for snippet in result.page.snippets
+                                ),
+                                cache_status=result.cache_status,
+                                ranker_backend=result.ranker_backend,
+                                latency_ms=latency_ms,
+                                page_offset=result.page_offset,
+                                has_next_page=result.page.next_cursor is not None,
+                            )
+                        except Exception:
+                            pass
             except ValueError:
                 error = (
                     "invalid cursor"

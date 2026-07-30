@@ -209,6 +209,20 @@ class FailedFlushTracing(FakeTracing):
         return False
 
 
+class FailedSnippetLifecycleTracing(FakeTracing):
+    def __init__(self, failed_phase: str) -> None:
+        super().__init__()
+        self.failed_phase = failed_phase
+
+    @contextmanager
+    def snippet_span(self, _document_id: str, _focus_query: str):
+        if self.failed_phase == "enter":
+            raise RuntimeError("trace span enter failed")
+        yield self
+        if self.failed_phase == "exit":
+            raise RuntimeError("trace span exit failed")
+
+
 class RejectedEvidenceTracing(FakeTracing):
     def __init__(self, rejected_phase: str) -> None:
         super().__init__()
@@ -997,6 +1011,30 @@ def test_snippet_trace_validation_rejection_does_not_change_tool_result(
 
     assert snippet_payloads[0]["document_id"] == oversized_document_id
     assert result.candidates[0].docid == oversized_document_id
+
+
+@pytest.mark.parametrize("failed_phase", ["enter", "exit"])
+def test_snippet_span_lifecycle_failure_does_not_change_tool_result(
+    failed_phase: str,
+) -> None:
+    snippet_payloads: list[dict[str, object]] = []
+
+    result = _sdk(
+        FakeRetriever(),
+        lambda _model, _search_tool, snippet_tool: FakeAgent(
+            lambda _payload: (
+                snippet_payloads.append(
+                    json.loads(snippet_tool("original-doc-1", "safe focus", None))
+                ),
+                {"messages": [{"role": "assistant", "content": "Done."}]},
+            )[1]
+        ),
+        tracing=FailedSnippetLifecycleTracing(failed_phase),
+        snippet_extractor=RecordingSnippetExtractor(),
+    ).retrieve("narrative")
+
+    assert snippet_payloads[0]["document_id"] == "original-doc-1"
+    assert result.candidates[0].docid == "original-doc-1"
 
 
 def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> None:
