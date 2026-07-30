@@ -328,8 +328,15 @@ def _make_span(source: str, byte_offsets: tuple[int, ...], start: int, end: int)
 
 
 def _word_before(text: str, index: int) -> str:
-    match = re.search(r"[A-Za-z.]+$", text[:index])
-    return "" if match is None else match.group().casefold()
+    reversed_word: list[str] = []
+    cursor = index
+    while cursor > 0:
+        char = text[cursor - 1]
+        if char != "." and not ("A" <= char <= "Z" or "a" <= char <= "z"):
+            break
+        reversed_word.append(char)
+        cursor -= 1
+    return "".join(reversed(reversed_word)).casefold()
 
 
 def _is_terminal(text: str, index: int) -> bool:

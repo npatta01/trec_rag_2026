@@ -14,6 +14,7 @@ from trec_rag.facet_evidence import (
     SelectionCandidate,
     SelectionPolicy,
     SubnarrativeContext,
+    _word_before,
     extract_document_candidates,
     select_subnarrative_candidates,
 )
@@ -94,6 +95,20 @@ def _request() -> ExtractiveCandidateRequest:
             ),
         ),
     )
+
+
+def test_word_before_scans_backward_without_copying_the_paragraph_prefix() -> None:
+    """Regress the quadratic prefix copy in sentence-boundary validation."""
+
+    class NoSliceText(str):
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                raise AssertionError("sentence splitting must not copy a text prefix")
+            return super().__getitem__(key)
+
+    text = NoSliceText("A long paragraph ends with e.g.")
+
+    assert _word_before(text, len(text) - 1) == "e.g"
 
 
 def test_exact_extraction_keeps_character_byte_and_adjacent_evidence() -> None:
