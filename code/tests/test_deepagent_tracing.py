@@ -172,9 +172,30 @@ def test_force_flush_returns_false_when_provider_raises(provider: TracerProvider
     assert tracing.force_flush() is False
 
 
-def test_live_registration_uses_resolved_phoenix_settings(provider: TracerProvider) -> None:
+@pytest.mark.parametrize(
+    ("configured_endpoint", "expected_otlp_endpoint"),
+    [
+        (
+            "https://app.phoenix.arize.com/s/example",
+            "https://app.phoenix.arize.com/s/example/v1/traces",
+        ),
+        (
+            "https://collector.example/v1/traces",
+            "https://collector.example/v1/traces",
+        ),
+        (
+            "http://phoenix.internal:6006/custom/base/",
+            "http://phoenix.internal:6006/custom/base/v1/traces",
+        ),
+    ],
+)
+def test_live_registration_uses_normalized_otlp_http_endpoint(
+    provider: TracerProvider,
+    configured_endpoint: str,
+    expected_otlp_endpoint: str,
+) -> None:
     environ = {
-        "PHOENIX_COLLECTOR_ENDPOINT": "https://collector.example/v1/traces",
+        "PHOENIX_COLLECTOR_ENDPOINT": configured_endpoint,
         "PHOENIX_PROJECT_NAME": "custom-project",
         "PHOENIX_API_KEY": "test-key",
     }
@@ -186,13 +207,48 @@ def test_live_registration_uses_resolved_phoenix_settings(provider: TracerProvid
 
     assert tracing.enabled is True
     register.assert_called_once_with(
-        endpoint="https://collector.example/v1/traces",
+        endpoint=expected_otlp_endpoint,
         project_name="custom-project",
         protocol="http/protobuf",
         batch=True,
         api_key="test-key",
         verbose=False,
     )
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "collector.example/private-token",
+        "ftp://collector.example/private-token",
+        "https://user:private-token@collector.example",
+        "https://collector.example/traces?api_key=private-token",
+        "https://collector.example/traces#private-token",
+    ],
+)
+def test_malformed_collector_endpoint_is_rejected_without_disclosure(
+    endpoint: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with (
+        patch("trec_rag.deepagent_tracing.phoenix_register") as register,
+        patch("trec_rag.deepagent_tracing.LangChainInstrumentor.instrument"),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            create_retrieval_tracing(
+                environ={
+                    "PHOENIX_COLLECTOR_ENDPOINT": endpoint,
+                    "PHOENIX_API_KEY": "test-key",
+                }
+            )
+
+    register.assert_not_called()
+    assert str(exc_info.value) == (
+        "PHOENIX_COLLECTOR_ENDPOINT must be an absolute HTTP(S) URL without "
+        "credentials, query, or fragment"
+    )
+    captured = capsys.readouterr()
+    assert endpoint not in captured.out
+    assert endpoint not in captured.err
 
 
 def test_injected_provider_never_registers_with_phoenix(provider: TracerProvider) -> None:

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import os
 from threading import Lock
 from typing import Iterator, Mapping, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from opentelemetry import trace
 from opentelemetry.trace.status import Status, StatusCode
@@ -20,6 +21,10 @@ REDACTED_CONTENT = "[REDACTED]"
 _CLOUD_HOST = "app.phoenix.arize.com"
 _INSTRUMENTED_PROVIDERS: dict[int, object] = {}
 _INSTRUMENTATION_LOCK = Lock()
+_INVALID_ENDPOINT_MESSAGE = (
+    "PHOENIX_COLLECTOR_ENDPOINT must be an absolute HTTP(S) URL without "
+    "credentials, query, or fragment"
+)
 
 
 class _TracerProvider(Protocol):
@@ -41,10 +46,46 @@ class _MaskingSpan:
             raise ValueError(f"attribute {key!r} is not safe for retrieval tracing")
         self._wrapped.set_attribute(key, value)  # type: ignore[attr-defined]
 
+
+def _normalize_otlp_http_endpoint(endpoint: str) -> str:
+    """Return an explicit OTLP/HTTP trace endpoint without disclosing bad input."""
+    try:
+        parsed = urlsplit(endpoint)
+        _ = parsed.port
+    except ValueError:
+        raise ValueError(_INVALID_ENDPOINT_MESSAGE) from None
+
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(character.isspace() for character in endpoint)
+    ):
+        raise ValueError(_INVALID_ENDPOINT_MESSAGE)
+
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/v1/traces"):
+        path = f"{path}/v1/traces"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 def _settings(environ: Mapping[str, str]) -> tuple[str | None, str, bool]:
-    endpoint = environ.get("PHOENIX_COLLECTOR_ENDPOINT") or None
+    configured_endpoint = environ.get("PHOENIX_COLLECTOR_ENDPOINT") or None
+    endpoint = (
+        _normalize_otlp_http_endpoint(configured_endpoint)
+        if configured_endpoint is not None
+        else None
+    )
     project = environ.get("PHOENIX_PROJECT_NAME") or DEFAULT_PHOENIX_PROJECT
-    if endpoint and _CLOUD_HOST in endpoint and not environ.get("PHOENIX_API_KEY"):
+    if (
+        endpoint
+        and urlsplit(endpoint).hostname == _CLOUD_HOST
+        and not environ.get("PHOENIX_API_KEY")
+    ):
         raise ValueError("PHOENIX_API_KEY is required for Phoenix Cloud")
     return endpoint, project, endpoint is not None
 
