@@ -12,6 +12,96 @@ before invoking either filtering function. The helper validates the selected
 topic and run ranks strictly, then atomically replaces its outputs. It does not
 copy or transform document text.
 
+### Build and export organizer Pi traces
+
+`trec_rag.organizer_pi_trace` converts one completed or failed native organizer
+run into a durable strict-JSON trace bundle before any Phoenix configuration or
+network access is needed. A partial fixed-run failure record must retain the
+selected `query_id`; its native failures and validation result become
+error-status spans. Native Pi JSONL events are authoritative; the bundle and
+the Phoenix view are derived records. Keep native events, normalized output
+records, bundles, and receipts together so the derived trace can always be
+checked against its source.
+
+Choose ignored local paths first. The CLI rejects bundle and receipt paths that
+Git would track:
+
+```bash
+TRACE_ROOT=outputs/organizer-pi-phoenix/rag2026-1
+git check-ignore "$TRACE_ROOT/probe"
+```
+
+Build the Piika agentic bundle from its one-topic TSV, native events, and
+normalized per-query run artifact:
+
+```bash
+.venv/bin/python -m trec_rag.organizer_pi_trace build \
+  --baseline piika-agentic \
+  --topic rag2026-1 \
+  --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
+  --events "$TRACE_ROOT/piika/merged/raw-events/rag2026-1.jsonl" \
+  --record "$TRACE_ROOT/piika/merged/rag2026-1.json" \
+  --session rag2026-1-comparison \
+  --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json"
+```
+
+Build the fixed-retrieval bundle from the same topic plus the filtered 100-row
+run, published document ZIP, and unmodified organizer script:
+
+```bash
+DOCUMENT_ZIP="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/retrieval/bm25_climbmix_top1000_with_text.jsonl.zip"
+ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/code/ragnarok_style_ag.py"
+
+.venv/bin/python -m trec_rag.organizer_pi_trace build \
+  --baseline ragnarok-fixed \
+  --topic rag2026-1 \
+  --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
+  --events "$TRACE_ROOT/fixed/raw/rag2026-1.events.jsonl" \
+  --record "$TRACE_ROOT/fixed/rows/rag2026-1.json" \
+  --ranked-run "$TRACE_ROOT/inputs/rag2026-1.top100.trec" \
+  --documents "$DOCUMENT_ZIP" \
+  --organizer-script "$ORGANIZER_SCRIPT" \
+  --session rag2026-1-comparison \
+  --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json"
+```
+
+The fixed builder streams the ZIP, retains only the selected 100 document IDs,
+and independently applies the organizer's 1,000-word cap to each document. It
+imports `SYSTEM_PROMPT` and `prompt()` from the supplied organizer script to
+reconstruct the exact prompts and rejects a mismatch with a native Pi user
+message when one is present.
+
+Export is a separate command. Put these values in the repository's ignored
+`.env` or `.env.local`; never put an API key on the command line:
+
+```text
+PHOENIX_API_KEY=<secret>
+PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com
+PHOENIX_PROJECT_NAME=trec-rag-2026-pi-baselines
+```
+
+Then export each saved bundle:
+
+```bash
+.venv/bin/python -m trec_rag.organizer_pi_trace export \
+  --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json" \
+  --receipt "$TRACE_ROOT/piika/phoenix-receipt.json"
+
+.venv/bin/python -m trec_rag.organizer_pi_trace export \
+  --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json" \
+  --receipt "$TRACE_ROOT/fixed/phoenix-receipt.json"
+```
+
+The Phoenix project is `trec-rag-2026-pi-baselines`. Export sends the complete
+narrative, prompts, search/tool inputs and outputs, selected document text,
+assistant messages, and validation record to the configured hosted collector.
+This full-content transmission is intentional and must use only data authorized
+for that Phoenix project. The CLI scans configured credential values before
+export and writes the public project name, trace ID, root span ID, and span count
+to the receipt only after every span export and the provider flush succeed. A
+failed export leaves the durable bundle intact and does not create a new
+receipt.
+
 ## Experimental facet official run
 
 `trec_rag.official_run` is the only supported interface for the
