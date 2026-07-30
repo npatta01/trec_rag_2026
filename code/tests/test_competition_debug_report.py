@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import replace
 from hashlib import sha256
 import html
@@ -1164,6 +1165,67 @@ def test_scoring_manifest_seal_and_parse_share_one_descriptor(
     ):
         load_debug_report_data(config_path)
     assert open_count == 1
+
+
+def test_canonical_artifact_parse_uses_the_authenticated_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-size post-authentication replacement must never reach the report."""
+    config_path, output = _write_debug_run(tmp_path)
+    canonical = output / "rag2026-0" / "canonical"
+    selection_path = canonical / "subnarrative-selections.jsonl"
+    nuggets_path = canonical / "canonical-nuggets.jsonl"
+    manifest_path = canonical / "canonical-nugget-manifest.json"
+
+    sealed_selection = selection_path.read_bytes()
+    forged_selection_value = json.loads(sealed_selection)
+    forged_selection_value["embedding_identity"]["model"] = "forged!-minilm"
+    forged_selection = _json_bytes(forged_selection_value)
+    sealed_nuggets = nuggets_path.read_bytes()
+    forged_nuggets_value = json.loads(sealed_nuggets)
+    forged_nuggets_value["request_sha256"] = "e" * 64
+    forged_nuggets_value["nuggets"][0][
+        "claim_text"
+    ] = "The fake! evidence is supported."
+    forged_nuggets = _json_bytes(forged_nuggets_value)
+    forged_manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+    forged_manifest_value["request_sha256s"] = ["e" * 64]
+    forged_manifest = _json_bytes(forged_manifest_value)
+    assert len(forged_selection) == len(sealed_selection)
+    assert len(forged_nuggets) == len(sealed_nuggets)
+    assert len(forged_manifest) == manifest_path.stat().st_size
+
+    replacements: dict[Path, Path] = {}
+    for target, body in (
+        (selection_path, forged_selection),
+        (nuggets_path, forged_nuggets),
+        (manifest_path, forged_manifest),
+    ):
+        replacement = tmp_path / f"forged-{target.name}"
+        replacement.write_bytes(body)
+        replacements[target.resolve()] = replacement
+
+    real_open_receipted_file = debug_report._open_receipted_file
+
+    @contextmanager
+    def replace_after_authentication(
+        path: Path, receipt: object, *, label: str = "retrieval export artifact"
+    ):
+        with real_open_receipted_file(path, receipt, label=label) as authenticated:
+            replacement = replacements.pop(path.resolve(), None)
+            if replacement is not None:
+                replacement.replace(path)
+            yield authenticated
+
+    monkeypatch.setattr(
+        debug_report, "_open_receipted_file", replace_after_authentication
+    )
+
+    rendered = render_debug_report(load_debug_report_data(config_path))
+
+    assert "The exact evidence is supported." in rendered
+    assert "The fake! evidence is supported." not in rendered
+    assert replacements == {}
 
 
 def test_receipted_parse_rejects_same_inode_same_size_mutation_after_hashing(

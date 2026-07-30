@@ -111,6 +111,22 @@ and the evidence commit:**
   changed.
 - Fresh full repository verification passed: `664 passed in 29.09s`.
 
+#### Final-review seal fix round 2/5
+
+- A deterministic same-size replacement test reproduced the canonical-artifact
+  TOCTOU: after receipt authentication, reopened selection, nugget, and nugget
+  manifest paths could supply coordinated unsealed values to the report. RED
+  failed because the forged canonical claim replaced the sealed claim.
+- The canonical loader now decodes the exact private snapshot bytes authenticated
+  by `_open_receipted_file`; it no longer reopens the three parsed canonical JSON
+  artifacts after hashing. Receipt validation and error behavior remain unchanged.
+- GREEN verification passed: the focused regression test (`1 passed`), the full
+  debug-report module (`95 passed`), the complete repository suite
+  (`665 passed in 28.92s`), and the existing sealed two-topic read (`rag2026-0`
+  and `rag2026-1`, with `10` and `11` answer items).
+- Retrieval and generation were not rerun. No portal, submodule, push, or PR state
+  was changed.
+
 ---
 
 ### Task 1: Add deterministic funnel projections and the funnel stage

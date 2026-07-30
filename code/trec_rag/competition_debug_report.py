@@ -1125,6 +1125,7 @@ def _load_canonical_projection(
         "canonical/canonical-nuggets.jsonl": nugget_path,
         "canonical/canonical-nugget-manifest.json": manifest_path,
     }
+    authenticated_artifacts: dict[str, bytes] = {}
     for relative_path, path in expected_artifacts.items():
         matches = [
             row
@@ -1149,14 +1150,21 @@ def _load_canonical_projection(
         )
         if artifact_receipt["bytes"] > maximum:
             raise ValueError("canonical checkpoint artifact receipt exceeds report bound")
-        observed = _sha256_receipted_file(path, artifact_receipt)
+        with _open_receipted_file(path, artifact_receipt) as (
+            artifact_source,
+            observed,
+        ):
+            authenticated_artifacts[relative_path] = artifact_source.read(maximum + 1)
         receipts[_portable_label(output_dir, path)] = observed
-    manifest = _read_json_object(manifest_path, "canonical nugget manifest")
+    manifest = _decode_json_object(
+        authenticated_artifacts["canonical/canonical-nugget-manifest.json"],
+        "canonical nugget manifest",
+    )
     budget = config.nuggets.evidence_budget_per_subnarrative
     maximum_claims = config.nuggets.maximum_claims_per_subnarrative
     maximum_supporting = config.nuggets.maximum_supporting_documents_per_claim
-    nugget_rows = _read_jsonl(
-        nugget_path,
+    nugget_rows = _decode_jsonl(
+        authenticated_artifacts["canonical/canonical-nuggets.jsonl"],
         "canonical nuggets",
         allow_empty=original_only_fallback,
     )
@@ -1191,8 +1199,8 @@ def _load_canonical_projection(
         raise ValueError("original-only fallback canonical work is not empty")
 
     selected_by_id = {row.docid: row for row in selected}
-    selection_rows = _read_jsonl(
-        selection_path,
+    selection_rows = _decode_jsonl(
+        authenticated_artifacts["canonical/subnarrative-selections.jsonl"],
         "subnarrative selections",
         allow_empty=original_only_fallback,
     )
@@ -2132,6 +2140,15 @@ def _read_jsonl(
     path: Path, label: str, *, allow_empty: bool = False
 ) -> tuple[dict[str, Any], ...]:
     raw = _read_bounded(path, _MAX_JSONL_BYTES, allow_empty=allow_empty)
+    return _decode_jsonl(raw, label, allow_empty=allow_empty)
+
+
+def _decode_jsonl(
+    raw: bytes,
+    label: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[dict[str, Any], ...]:
     if not raw and allow_empty:
         return ()
     if not raw.endswith(b"\n"):
