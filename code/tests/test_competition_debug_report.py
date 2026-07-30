@@ -1382,6 +1382,7 @@ def test_funnel_overview_renderer_shows_labeled_counts_and_subnarrative_comparis
     ]
     assert "document × subnarrative rankings" in stage.group()
     assert re.findall(r'<th scope="col">([^<]+)</th>', stage.group()) == [
+        "Subnarrative",
         "Ranked documents",
         "Stored passages",
         "Evidence clusters",
@@ -1392,6 +1393,9 @@ def test_funnel_overview_renderer_shows_labeled_counts_and_subnarrative_comparis
         'class="break">Facet &lt;scope&gt; &amp; &quot;query&quot;</span></th>'
         "<td>2</td><td>2</td><td>1</td><td>1</td>"
     ) in stage.group()
+    row = re.search(r"<tbody><tr>(.*?)</tr></tbody>", stage.group(), flags=re.DOTALL)
+    assert row is not None
+    assert len(re.findall(r"<(?:th|td)\b", row.group(1))) == 5
 
 
 def test_funnel_overview_renderer_explains_original_only_fallback(

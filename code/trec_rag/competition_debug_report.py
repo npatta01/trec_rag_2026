@@ -2581,6 +2581,7 @@ def _render_funnel_overview(topic: TopicReport, prefix: str) -> str:
         comparison = _table(
             "Per-subnarrative funnel comparison",
             (
+                "Subnarrative",
                 "Ranked documents",
                 "Stored passages",
                 "Evidence clusters",
