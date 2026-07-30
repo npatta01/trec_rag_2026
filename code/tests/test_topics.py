@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from trec_rag.topics import Topic, derive_title, load_topics, write_topics_jsonl
+from trec_rag.topics import (
+    Topic,
+    derive_title,
+    load_topic_narrative,
+    load_topics,
+    write_topics_jsonl,
+)
 
 
 def read_jsonl(path):
@@ -93,3 +99,18 @@ def test_write_topics_jsonl_round_trips_loaded_topics(tmp_path):
         {"id": "31", "title": "E-waste impacts", "narrative": "Explain e-waste impacts."}
     ]
     assert load_topics(output_path) == topics
+
+
+def test_load_topic_narrative_is_separate_exact_lookup(tmp_path):
+    path = tmp_path / "topics.tsv"
+    path.write_text("224\tProvided narrative exactly.\n", encoding="utf-8")
+
+    assert load_topic_narrative("224", path) == "Provided narrative exactly."
+
+
+def test_load_topic_narrative_rejects_unknown_id(tmp_path):
+    path = tmp_path / "topics.tsv"
+    path.write_text("224\tProvided narrative.\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="topic ID '999'.*not found"):
+        load_topic_narrative("999", path)
