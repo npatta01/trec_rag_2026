@@ -1930,7 +1930,40 @@ def _remove_backup_after_success(target: Path, backup_path: Path) -> None:
         except Exception as triggering_error:
             recovery_path = backup_path
             if not recovery_path.exists():
-                recovery_path = _write_report_copy(target, recovery_source, suffix=".bak")
+                try:
+                    recovery_path = _write_report_copy(
+                        target, recovery_source, suffix=".bak"
+                    )
+                except Exception as recovery_error:
+                    try:
+                        recovery_path = _write_report_copy(
+                            target, recovery_source, suffix=".bak"
+                        )
+                        _fsync_directory(target.parent)
+                    except Exception as preservation_error:
+                        retained = (
+                            recovery_path
+                            if recovery_path.exists()
+                            else None
+                        )
+                        location = (
+                            str(retained) if retained is not None else "unavailable"
+                        )
+                        raise _ReportRecoveryError(
+                            "backup cleanup failed: "
+                            f"{triggering_error}; recovery recreation failed: "
+                            f"{recovery_error}; emergency recovery preservation failed: "
+                            f"{preservation_error}; recovery material at {location}",
+                            retained,
+                        ) from preservation_error
+                    raise _ReportRecoveryError(
+                        "backup cleanup failed: "
+                        f"{triggering_error}; recovery recreation failed: "
+                        f"{recovery_error}; rollback not attempted; previous report "
+                        "recovery preserved at "
+                        f"{recovery_path}",
+                        recovery_path,
+                    ) from recovery_error
             try:
                 _fsync_directory(target.parent)
                 _restore_previous_report(target, recovery_path)
@@ -1960,19 +1993,34 @@ def _remove_backup_durably(backup_path: Path) -> None:
 
 def _write_report_copy(target: Path, source: BinaryIO, *, suffix: str) -> Path:
     source.seek(0)
-    with tempfile.NamedTemporaryFile(
-        mode="wb",
-        dir=target.parent,
-        prefix=f".{target.name}.",
-        suffix=suffix,
-        delete=False,
-    ) as copy:
-        copy_path = Path(copy.name)
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            copy.write(chunk)
-        copy.flush()
-        os.fsync(copy.fileno())
-    return copy_path
+    copy_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=suffix,
+            delete=False,
+        ) as copy:
+            copy_path = Path(copy.name)
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                copy.write(chunk)
+            copy.flush()
+            os.fsync(copy.fileno())
+        return copy_path
+    except Exception as copy_error:
+        if copy_path is None:
+            raise
+        try:
+            copy_path.unlink()
+            _fsync_directory(copy_path.parent)
+        except Exception as cleanup_error:
+            location = str(copy_path) if copy_path.exists() else "unavailable"
+            raise RuntimeError(
+                f"report copy failed: {copy_error}; partial copy cleanup failed: "
+                f"{cleanup_error}; partial recovery material at {location}"
+            ) from cleanup_error
+        raise
 
 
 def _fsync_directory(path: Path) -> None:

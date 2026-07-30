@@ -1185,6 +1185,56 @@ def test_atomic_success_directory_fsyncs_after_backup_unlink(
     assert list(retrieval_output.glob(".competition_debug_report.html.*.bak")) == []
 
 
+def test_atomic_cleanup_preserves_recovery_when_first_recovery_copy_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    previous = b"old bytes held through cleanup recovery\n"
+    target.write_bytes(previous)
+    real_fsync_directory = debug_report._fsync_directory
+    real_fsync = debug_report.os.fsync
+    cleanup_sync_failed = False
+    recovery_copy_failed = False
+
+    def fail_cleanup_directory_sync_once(path: Path) -> None:
+        nonlocal cleanup_sync_failed
+        backups = list(retrieval_output.glob(".competition_debug_report.html.*.bak"))
+        if not cleanup_sync_failed and target.read_bytes() != previous and not backups:
+            cleanup_sync_failed = True
+            raise OSError("primary backup cleanup directory fsync failure")
+        real_fsync_directory(path)
+
+    def fail_first_recovery_copy_fsync(descriptor: int) -> None:
+        nonlocal recovery_copy_failed
+        descriptor_path = Path(debug_report.os.readlink(f"/proc/self/fd/{descriptor}"))
+        if (
+            cleanup_sync_failed
+            and not recovery_copy_failed
+            and descriptor_path.suffix == ".bak"
+        ):
+            recovery_copy_failed = True
+            raise OSError("recovery backup file fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(debug_report, "_fsync_directory", fail_cleanup_directory_sync_once)
+    monkeypatch.setattr(debug_report.os, "fsync", fail_first_recovery_copy_fsync)
+
+    with pytest.raises(RuntimeError) as raised:
+        debug_report.build_debug_report(config_path)
+
+    recovery = list(retrieval_output.glob(".competition_debug_report.html.*.bak"))
+    assert cleanup_sync_failed is True
+    assert recovery_copy_failed is True
+    assert target.read_bytes() != previous
+    assert len(recovery) == 1
+    assert recovery[0].read_bytes() == previous
+    assert str(recovery[0]) in str(raised.value)
+    assert "primary backup cleanup directory fsync failure" in str(raised.value)
+    assert "recovery backup file fsync failure" in str(raised.value)
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
+
+
 def test_atomic_build_restores_existing_output_when_backup_unlink_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
