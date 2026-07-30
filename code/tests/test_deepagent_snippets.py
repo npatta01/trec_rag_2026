@@ -2,19 +2,27 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from trec_rag.chunking import SemanticTextChunker, TextChunk
+from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk
 from trec_rag.deepagent_snippets import (
+    DEFAULT_SNIPPET_MODEL,
+    DEFAULT_SNIPPET_MODEL_REVISION,
+    LocalMixedbreadSnippetRanker,
     RelevantSnippetExtractor,
     ScoredTextChunk,
+    SmallLLMSnippetRanker,
     SnippetCacheIntegrityError,
     SnippetExtractionConfig,
     SnippetResultCache,
+    create_default_snippet_extractor,
 )
+from trec_rag.rerank_score_cache import DEFAULT_BACKEND_VERSION
 
 
 class FixedChunker:
@@ -337,3 +345,162 @@ def test_cache_rejects_malformed_entries_without_returning_them(tmp_path: Path) 
 
     with pytest.raises(SnippetCacheIntegrityError):
         extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+class FakeCrossEncoder:
+    """Offline cross-encoder fake returning one configured score batch per call."""
+
+    def __init__(self, score_batches: Sequence[Sequence[float]]) -> None:
+        self._score_batches = [list(batch) for batch in score_batches]
+        self.predict_calls = 0
+        self.pairs: list[list[tuple[str, str]]] = []
+        self.predict_kwargs: list[dict[str, object]] = []
+
+    def predict(self, pairs: Sequence[tuple[str, str]], **kwargs: object) -> list[float]:
+        self.predict_calls += 1
+        self.pairs.append(list(pairs))
+        self.predict_kwargs.append(dict(kwargs))
+        return self._score_batches.pop(0)
+
+
+@dataclass
+class FakeChatReply:
+    content: str
+
+
+class FakeChatModel:
+    """Offline chat fake that records bounded JSON prompts."""
+
+    def __init__(self, responses: Sequence[str]) -> None:
+        self._responses = list(responses)
+        self.prompts: list[str] = []
+
+    def invoke(self, prompt: str) -> FakeChatReply:
+        self.prompts.append(prompt)
+        return FakeChatReply(self._responses.pop(0))
+
+
+ADAPTER_CHUNKS = _chunks("first evidence", "second evidence")
+
+
+def test_local_ranker_scores_only_cache_misses_and_loads_lazily(tmp_path: Path) -> None:
+    model = FakeCrossEncoder([[0.8, 0.2]])
+    loader_calls: list[dict[str, object]] = []
+
+    def load_model(**kwargs: object) -> FakeCrossEncoder:
+        loader_calls.append(dict(kwargs))
+        return model
+
+    ranker = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=load_model,
+        device="cpu",
+    )
+
+    assert loader_calls == []
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
+    assert model.predict_calls == 1
+    assert loader_calls == [
+        {
+            "model_name": DEFAULT_SNIPPET_MODEL,
+            "revision": DEFAULT_SNIPPET_MODEL_REVISION,
+            "max_length": 512,
+            "device": "cpu",
+        }
+    ]
+    assert model.pairs == [[("query", "first evidence"), ("query", "second evidence")]]
+    assert model.predict_kwargs[0] | {"activation_fn": None} == {
+        "batch_size": 32,
+        "show_progress_bar": False,
+        "convert_to_tensor": True,
+        "activation_fn": None,
+    }
+    assert model.predict_kwargs[0]["activation_fn"](3.25) == 3.25
+
+
+def test_local_ranker_identity_and_partial_cache_miss_are_exact(tmp_path: Path) -> None:
+    model = FakeCrossEncoder([[0.8], [0.2]])
+    ranker = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: model,
+        device="cpu",
+    )
+
+    assert ranker.identity == {
+        "backend": "sentence_transformers_cross_encoder",
+        "backend_version": DEFAULT_BACKEND_VERSION,
+        "model": DEFAULT_SNIPPET_MODEL,
+        "model_revision": DEFAULT_SNIPPET_MODEL_REVISION,
+        "score_representation": "raw_logits",
+        "max_length": 512,
+        "batch_size": 32,
+        "device": "cpu",
+        "implementation_version": 1,
+    }
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS[:1])] == [0.8]
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
+    assert model.pairs == [[("query", "first evidence")], [("query", "second evidence")]]
+
+
+def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: Path) -> None:
+    chat = FakeChatModel(['{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"doc-a:0001","score":0.2}]}'])
+    ranker = SmallLLMSnippetRanker(
+        chat_model=chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+        model_revision="test-revision",
+        backend_version="test-backend",
+        batch_size=2,
+    )
+
+    assert ranker.identity == {
+        "backend": "small_llm_json",
+        "backend_version": "test-backend",
+        "model": "test-small-llm",
+        "model_revision": "test-revision",
+        "score_representation": "json_scalar",
+        "batch_size": 2,
+        "implementation_version": 1,
+    }
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
+    assert [json.loads(prompt) for prompt in chat.prompts] == [
+        {
+            "focus_query": "query",
+            "chunks": [
+                {"chunk_id": "doc-a:0000", "text": "first evidence"},
+                {"chunk_id": "doc-a:0001", "text": "second evidence"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"scores":[{"chunk_id":"doc-a:0000","score":0.8}]}',
+        '{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"doc-a:0000","score":0.2}]}',
+        '{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"unknown","score":0.2}]}',
+        '{"scores":[{"chunk_id":"doc-a:0000","score":true},{"chunk_id":"doc-a:0001","score":0.2}]}',
+        '{"scores":[{"chunk_id":"doc-a:0000","score":NaN},{"chunk_id":"doc-a:0001","score":0.2}]}',
+    ],
+)
+def test_small_llm_ranker_rejects_invalid_score_sets(tmp_path: Path, response: str) -> None:
+    ranker = SmallLLMSnippetRanker(
+        chat_model=FakeChatModel([response]),
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+    )
+
+    with pytest.raises(ValueError, match="small-LLM score response"):
+        ranker.rank("query", ADAPTER_CHUNKS)
+
+
+def test_default_extractor_constructs_lazy_local_ranker(tmp_path: Path) -> None:
+    extractor = create_default_snippet_extractor(tmp_path)
+
+    assert isinstance(extractor._ranker, LocalMixedbreadSnippetRanker)
+    assert isinstance(extractor._chunker, SemanticTextChunker)
+    assert extractor._chunker.config == ChunkingConfig(max_characters=3500, overlap_characters=350)
+    assert extractor._result_cache.root_dir == tmp_path / "cache" / "reranker" / "deepagent_snippets"

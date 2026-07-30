@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version
@@ -18,11 +18,25 @@ from uuid import uuid4
 from filelock import FileLock
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk, TextChunker
+from trec_rag.rerank_score_cache import (
+    DEFAULT_BACKEND_VERSION,
+    GlobalScoreCache,
+    ScoreCacheContext,
+    _choose_device,
+)
+from trec_rag.repo_env import repo_cache_root
 
 
 CURSOR_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 IMPLEMENTATION_VERSION = 2
+DEFAULT_SNIPPET_MODEL = "mixedbread-ai/mxbai-rerank-base-v2"
+DEFAULT_SNIPPET_MODEL_REVISION = "3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
+_SNIPPET_MAX_LENGTH = 512
+_SNIPPET_BATCH_SIZE = 32
+_SNIPPET_SCORE_KIND = "snippet_relevance_v1"
+_SMALL_LLM_SCORE_REPRESENTATION = "json_scalar"
+_SMALL_LLM_MAX_LENGTH = 0
 
 
 class SnippetCacheIntegrityError(RuntimeError):
@@ -113,6 +127,288 @@ class SnippetRanker(Protocol):
         self, focus_query: str, chunks: Sequence[TextChunk]
     ) -> tuple[ScoredTextChunk, ...]:
         raise NotImplementedError
+
+
+def _identity_activation(value: Any) -> Any:
+    return value
+
+
+def _load_local_cross_encoder(
+    *, model_name: str, revision: str, max_length: int, device: str
+) -> Any:
+    try:
+        from sentence_transformers import CrossEncoder
+    except ImportError as exc:
+        raise RuntimeError(
+            "sentence-transformers is required for local snippet ranking. "
+            "Run code/tools/setup_env.sh and pre-cache the pinned model revision."
+        ) from exc
+    return CrossEncoder(
+        model_name,
+        revision=revision,
+        max_length=max_length,
+        device=device,
+        local_files_only=True,
+    )
+
+
+def _finite_score(value: object, *, source: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{source} score must be finite")
+    return float(value)
+
+
+def _model_scores(values: Any, *, expected_count: int) -> tuple[float, ...]:
+    if hasattr(values, "detach"):
+        values = values.detach().float().cpu()
+    if hasattr(values, "tolist"):
+        values = values.tolist()
+    if isinstance(values, (int, float, bool)):
+        values = [values]
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("local model scores must be a sequence")
+    scores = tuple(_finite_score(value, source="local model") for value in values)
+    if len(scores) != expected_count:
+        raise ValueError("local model score count must match missing chunks")
+    return scores
+
+
+class LocalMixedbreadSnippetRanker:
+    """Lazy, cache-aware local Mixedbread cross-encoder snippet ranker."""
+
+    def __init__(
+        self,
+        *,
+        score_cache_root: Path,
+        device: str = "auto",
+        model_loader: Callable[..., Any] = _load_local_cross_encoder,
+        model_name: str = DEFAULT_SNIPPET_MODEL,
+        model_revision: str = DEFAULT_SNIPPET_MODEL_REVISION,
+        backend_version: str = DEFAULT_BACKEND_VERSION,
+        max_length: int = _SNIPPET_MAX_LENGTH,
+        batch_size: int = _SNIPPET_BATCH_SIZE,
+    ) -> None:
+        if not isinstance(device, str) or not device:
+            raise ValueError("device must be a nonblank string")
+        for name, value in (("max_length", max_length), ("batch_size", batch_size)):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        self._model_name = model_name
+        self._model_revision = model_revision
+        self._backend_version = backend_version
+        self._max_length = max_length
+        self._batch_size = batch_size
+        self._device = device
+        self._model_loader = model_loader
+        self._model: Any | None = None
+        self._score_cache = GlobalScoreCache(
+            Path(score_cache_root),
+            ScoreCacheContext(
+                backend="sentence_transformers_cross_encoder",
+                backend_version=self._backend_version,
+                model=self._model_name,
+                model_revision=self._model_revision,
+                max_length=self._max_length,
+                score_kind=_SNIPPET_SCORE_KIND,
+                score_representation="raw_logits",
+                input_policy="focus_query_chunk_v1",
+            ),
+        )
+
+    @property
+    def identity(self) -> Mapping[str, object]:
+        return {
+            "backend": "sentence_transformers_cross_encoder",
+            "backend_version": self._backend_version,
+            "model": self._model_name,
+            "model_revision": self._model_revision,
+            "score_representation": "raw_logits",
+            "max_length": self._max_length,
+            "batch_size": self._batch_size,
+            "device": self._device,
+            "implementation_version": 1,
+        }
+
+    def rank(
+        self, focus_query: str, chunks: Sequence[TextChunk]
+    ) -> tuple[ScoredTextChunk, ...]:
+        rows = tuple(chunks)
+        missing: dict[str, TextChunk] = {}
+        scores: dict[str, float] = {}
+        for chunk in rows:
+            key = self._score_cache.cache_key(query_text=focus_query, text=chunk.text)
+            cached = self._score_cache.get(query_text=focus_query, text=chunk.text)
+            if cached is None:
+                missing.setdefault(key, chunk)
+            else:
+                scores[key] = _finite_score(cached, source="cached local")
+        pending = tuple(missing.values())
+        for offset in range(0, len(pending), self._batch_size):
+            batch = pending[offset : offset + self._batch_size]
+            model = self._get_model()
+            predicted = _model_scores(
+                model.predict(
+                    [(focus_query, chunk.text) for chunk in batch],
+                    batch_size=self._batch_size,
+                    show_progress_bar=False,
+                    convert_to_tensor=True,
+                    activation_fn=_identity_activation,
+                ),
+                expected_count=len(batch),
+            )
+            self._score_cache.add_many(
+                (focus_query, chunk.text, score)
+                for chunk, score in zip(batch, predicted, strict=True)
+            )
+            scores.update(
+                (
+                    self._score_cache.cache_key(query_text=focus_query, text=chunk.text),
+                    score,
+                )
+                for chunk, score in zip(batch, predicted, strict=True)
+            )
+        return tuple(
+            ScoredTextChunk(
+                chunk,
+                scores[self._score_cache.cache_key(query_text=focus_query, text=chunk.text)],
+            )
+            for chunk in rows
+        )
+
+    def _get_model(self) -> Any:
+        if self._model is None:
+            self._model = self._model_loader(
+                model_name=self._model_name,
+                revision=self._model_revision,
+                max_length=self._max_length,
+                device=_choose_device(self._device),
+            )
+        return self._model
+
+
+class SmallLLMSnippetRanker:
+    """Cache-aware JSON-only ranker for an explicitly injected small chat model."""
+
+    def __init__(
+        self,
+        *,
+        chat_model: Any,
+        score_cache_root: Path,
+        model_name: str,
+        model_revision: str = "unversioned",
+        backend_version: str = "unversioned",
+        batch_size: int = 10,
+    ) -> None:
+        if not callable(getattr(chat_model, "invoke", None)):
+            raise ValueError("chat_model must provide invoke")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("model_name must be nonblank")
+        self._chat_model = chat_model
+        self._model_name = model_name
+        self._model_revision = model_revision
+        self._backend_version = backend_version
+        self._batch_size = batch_size
+        self._score_cache = GlobalScoreCache(
+            Path(score_cache_root),
+            ScoreCacheContext(
+                backend="small_llm_json",
+                backend_version=self._backend_version,
+                model=self._model_name,
+                model_revision=self._model_revision,
+                max_length=_SMALL_LLM_MAX_LENGTH,
+                score_kind=_SNIPPET_SCORE_KIND,
+                score_representation=_SMALL_LLM_SCORE_REPRESENTATION,
+                input_policy="focus_query_chunk_id_json_batch_v1",
+            ),
+        )
+
+    @property
+    def identity(self) -> Mapping[str, object]:
+        return {
+            "backend": "small_llm_json",
+            "backend_version": self._backend_version,
+            "model": self._model_name,
+            "model_revision": self._model_revision,
+            "score_representation": _SMALL_LLM_SCORE_REPRESENTATION,
+            "batch_size": self._batch_size,
+            "implementation_version": 1,
+        }
+
+    def rank(
+        self, focus_query: str, chunks: Sequence[TextChunk]
+    ) -> tuple[ScoredTextChunk, ...]:
+        rows = tuple(chunks)
+        if len({chunk.chunk_id for chunk in rows}) != len(rows):
+            raise ValueError("small-LLM ranking requires unique chunk IDs")
+        missing: dict[str, TextChunk] = {}
+        scores: dict[str, float] = {}
+        for chunk in rows:
+            key = self._score_cache.cache_key(query_text=focus_query, text=chunk.text)
+            cached = self._score_cache.get(query_text=focus_query, text=chunk.text)
+            if cached is None:
+                missing.setdefault(key, chunk)
+            else:
+                scores[key] = _finite_score(cached, source="cached small-LLM")
+        pending = tuple(missing.values())
+        for offset in range(0, len(pending), self._batch_size):
+            batch = pending[offset : offset + self._batch_size]
+            returned_scores = self._invoke_scores(focus_query, batch)
+            self._score_cache.add_many(
+                (focus_query, chunk.text, returned_scores[chunk.chunk_id]) for chunk in batch
+            )
+            scores.update(
+                (
+                    self._score_cache.cache_key(query_text=focus_query, text=chunk.text),
+                    returned_scores[chunk.chunk_id],
+                )
+                for chunk in batch
+            )
+        return tuple(
+            ScoredTextChunk(
+                chunk,
+                scores[self._score_cache.cache_key(query_text=focus_query, text=chunk.text)],
+            )
+            for chunk in rows
+        )
+
+    def _invoke_scores(self, focus_query: str, chunks: Sequence[TextChunk]) -> dict[str, float]:
+        prompt = json.dumps(
+            {
+                "focus_query": focus_query,
+                "chunks": [
+                    {"chunk_id": chunk.chunk_id, "text": chunk.text} for chunk in chunks
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        reply = self._chat_model.invoke(prompt)
+        content = reply if isinstance(reply, str) else getattr(reply, "content", None)
+        if not isinstance(content, str):
+            raise ValueError("small-LLM score response must be JSON text")
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError("small-LLM score response must be valid JSON") from exc
+        if not isinstance(payload, dict) or set(payload) != {"scores"} or not isinstance(payload["scores"], list):
+            raise ValueError("small-LLM score response must contain scores")
+        expected_ids = {chunk.chunk_id for chunk in chunks}
+        returned: dict[str, float] = {}
+        for item in payload["scores"]:
+            if not isinstance(item, dict) or set(item) != {"chunk_id", "score"}:
+                raise ValueError("small-LLM score response contains an invalid score")
+            chunk_id = item["chunk_id"]
+            if not isinstance(chunk_id, str) or chunk_id not in expected_ids or chunk_id in returned:
+                raise ValueError("small-LLM score response contains invalid chunk IDs")
+            try:
+                returned[chunk_id] = _finite_score(item["score"], source="small-LLM")
+            except ValueError as exc:
+                raise ValueError("small-LLM score response contains an invalid score") from exc
+        if set(returned) != expected_ids:
+            raise ValueError("small-LLM score response must score every requested chunk")
+        return returned
 
 
 def _canonical_json(value: object) -> str:
@@ -532,3 +828,29 @@ class RelevantSnippetExtractor:
                     raise ValueError("cached next cursor does not follow page")
         except ValueError as exc:
             raise SnippetCacheIntegrityError("invalid snippet cache entry") from exc
+
+
+def create_default_snippet_extractor(
+    root: Path,
+    config: SnippetExtractionConfig | None = None,
+    device: str = "auto",
+) -> RelevantSnippetExtractor:
+    """Build the standard cache-first extractor without loading the local model."""
+    effective_config = config or SnippetExtractionConfig()
+    root = Path(root)
+    return RelevantSnippetExtractor(
+        ranker=LocalMixedbreadSnippetRanker(
+            score_cache_root=repo_cache_root(root) / "reranker" / "score_cache",
+            device=device,
+        ),
+        chunker=SemanticTextChunker(
+            ChunkingConfig(
+                max_characters=effective_config.chunk_max_characters,
+                overlap_characters=effective_config.chunk_overlap_characters,
+            )
+        ),
+        result_cache=SnippetResultCache(
+            repo_cache_root(root) / "reranker" / "deepagent_snippets"
+        ),
+        config=effective_config,
+    )
