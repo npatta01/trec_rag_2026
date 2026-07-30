@@ -935,6 +935,35 @@ def test_export_writes_exact_variable_depth_official_and_candidate_runs(
     )
 
 
+def test_export_streams_the_sealed_candidate_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, topics = _config_and_topics(tmp_path)
+    _write_sealed_topic(
+        config.output_dir,
+        topics[0],
+        selected=("doc-a",),
+        supported=("doc-a",),
+        source_commit="a" * 40,
+    )
+    candidate_path = (
+        config.output_dir / topics[0].id / "canonical" / "candidates.jsonl"
+    ).resolve()
+    original_read_bytes = Path.read_bytes
+
+    def reject_whole_candidate_read(path: Path) -> bytes:
+        if path.resolve() == candidate_path:
+            raise AssertionError("sealed candidate ledgers must be streamed")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_whole_candidate_read)
+
+    receipt = export_retrieval_run(config, topics, code_commit="a" * 40)
+
+    assert receipt.official_run.read_text() == "rag2026-0 Q0 doc-a 1 1 demo\n"
+
+
 def test_export_writes_deterministic_full_text_provenance_and_manifest(
     tmp_path: Path,
 ) -> None:

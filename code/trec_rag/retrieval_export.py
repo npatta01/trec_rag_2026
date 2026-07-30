@@ -1087,11 +1087,21 @@ def _validate_receipts(topic_root: Path, manifest: Mapping[str, object]) -> set[
             raise ValueError("checkpoint artifact byte count changed")
         if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
             raise ValueError("checkpoint artifact digest changed")
-        body = path.read_bytes()
-        if len(body) != byte_count or sha256(body).hexdigest() != digest:
+        actual_bytes, actual_digest = _streamed_file_identity(path)
+        if actual_bytes != byte_count or actual_digest != digest:
             raise ValueError("checkpoint artifact hash changed")
         seen.add(relative)
     return seen
+
+
+def _streamed_file_identity(path: Path) -> tuple[int, str]:
+    digest = sha256()
+    byte_count = 0
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            byte_count += len(chunk)
+            digest.update(chunk)
+    return byte_count, digest.hexdigest()
 
 
 def _load_selected_documents(path: Path, topic_id: str) -> tuple[_SelectedDocument, ...]:
@@ -1554,7 +1564,7 @@ def _load_allowed_canonical_evidence(
         "contexts_file": contexts_path.name,
     }
     digests = {
-        "candidates_sha256": sha256(candidates_path.read_bytes()).hexdigest(),
+        "candidates_sha256": _streamed_file_identity(candidates_path)[1],
         "candidate_manifest_sha256": sha256(
             candidate_manifest_path.read_bytes()
         ).hexdigest(),
