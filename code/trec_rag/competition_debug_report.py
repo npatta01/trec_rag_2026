@@ -1828,10 +1828,14 @@ def _resolve_report_output(data: DebugReportData, output_path: Path | None) -> P
     parent = target.parent
     if not parent.is_dir():
         raise ValueError("report output parent must be an existing directory")
-    try:
-        target.relative_to(repo_root)
-    except ValueError as exc:
-        raise ValueError("report output must remain inside the repository") from exc
+    retrieval_output = data.output_dir.resolve()
+    if not (
+        target.is_relative_to(repo_root)
+        or target.is_relative_to(retrieval_output)
+    ):
+        raise ValueError(
+            "report output must remain inside the repository or retrieval output"
+        )
     if target.exists() and not target.is_file():
         raise ValueError("report output must be a regular file path")
     if output_path is not None and target.exists() and target != default_target.resolve():

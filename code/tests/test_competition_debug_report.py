@@ -179,6 +179,17 @@ nuggets:
     return config_path, output
 
 
+def _write_symlinked_debug_run(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Model a linked worktree whose retrieval output lives in a shared checkout."""
+    worktree_root = tmp_path / "linked-worktree"
+    worktree_root.mkdir()
+    config_path, linked_output = _write_debug_run(worktree_root)
+    shared_output = tmp_path / "shared-retrieval-output"
+    linked_output.rename(shared_output)
+    linked_output.symlink_to(shared_output, target_is_directory=True)
+    return config_path, linked_output, shared_output
+
+
 def _write_rag_run(tmp_path: Path, retrieval_output: Path) -> tuple[Path, Path, str]:
     narrative = 'Original <narrative> & "quotes"'
     queries_path = tmp_path / "rag_queries.tsv"
@@ -1338,6 +1349,55 @@ def test_build_defaults_to_retrieval_output_directory(tmp_path: Path) -> None:
 
     assert receipt.output_path == (retrieval_output / "competition_debug_report.html").resolve()
     assert receipt.rag_included is False
+
+
+def test_linked_worktree_output_accepts_default_and_explicit_report_targets(
+    tmp_path: Path,
+) -> None:
+    config_path, linked_output, shared_output = _write_symlinked_debug_run(tmp_path)
+
+    default_receipt = debug_report.build_debug_report(config_path)
+    explicit_path = linked_output / "explicit-debug-report.html"
+    explicit_receipt = debug_report.build_debug_report(
+        config_path,
+        output_path=explicit_path,
+    )
+
+    assert default_receipt.output_path == (
+        shared_output / "competition_debug_report.html"
+    ).resolve()
+    assert explicit_receipt.output_path == (
+        shared_output / "explicit-debug-report.html"
+    ).resolve()
+    assert default_receipt.output_path.is_file()
+    assert explicit_receipt.output_path.is_file()
+
+
+def test_linked_worktree_output_rejects_arbitrary_external_report_target(
+    tmp_path: Path,
+) -> None:
+    config_path, _linked_output, _shared_output = _write_symlinked_debug_run(tmp_path)
+    arbitrary_directory = tmp_path / "arbitrary-external-directory"
+    arbitrary_directory.mkdir()
+    target = arbitrary_directory / "debug-report.html"
+
+    with pytest.raises(ValueError, match="report output must remain inside"):
+        debug_report.build_debug_report(config_path, output_path=target)
+
+    assert not target.exists()
+
+
+def test_linked_worktree_output_cannot_replace_a_sealed_source_artifact(
+    tmp_path: Path,
+) -> None:
+    config_path, linked_output, _shared_output = _write_symlinked_debug_run(tmp_path)
+    run_path = linked_output / "r_output_trec_rag_2026.tsv"
+    original = run_path.read_bytes()
+
+    with pytest.raises(ValueError, match="report output.*(?:HTML|source|artifact)"):
+        debug_report.build_debug_report(config_path, output_path=run_path)
+
+    assert run_path.read_bytes() == original
 
 
 def test_output_override_cannot_replace_a_sealed_source_artifact(tmp_path: Path) -> None:
