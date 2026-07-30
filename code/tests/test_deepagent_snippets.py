@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from trec_rag.chunking import TextChunk
+from trec_rag.chunking import SemanticTextChunker, TextChunk
 from trec_rag.deepagent_snippets import (
     RelevantSnippetExtractor,
     ScoredTextChunk,
@@ -277,6 +277,18 @@ def test_injected_chunker_requires_a_stable_serializable_identity(tmp_path: Path
         RelevantSnippetExtractor(
             ranker=CountingRanker(),
             chunker=UnidentifiedChunker(),
+            result_cache=SnippetResultCache(tmp_path / "pages"),
+        )
+
+
+def test_semantic_chunker_subclass_requires_its_own_identity(tmp_path: Path) -> None:
+    class CustomSemanticChunker(SemanticTextChunker):
+        pass
+
+    with pytest.raises(ValueError, match="chunker identity"):
+        RelevantSnippetExtractor(
+            ranker=CountingRanker(),
+            chunker=CustomSemanticChunker(),
             result_cache=SnippetResultCache(tmp_path / "pages"),
         )
 

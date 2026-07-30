@@ -293,7 +293,7 @@ class RelevantSnippetExtractor:
 
     @staticmethod
     def _validated_chunker_identity(chunker: TextChunker) -> dict[str, object]:
-        if isinstance(chunker, SemanticTextChunker):
+        if type(chunker) is SemanticTextChunker:
             try:
                 backend_version = version("semantic-text-splitter")
             except PackageNotFoundError:
