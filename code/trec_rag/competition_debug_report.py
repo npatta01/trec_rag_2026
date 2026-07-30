@@ -1844,6 +1844,8 @@ def _resolve_report_output(data: DebugReportData, output_path: Path | None) -> P
 
 def _atomic_write_report(target: Path, body: bytes) -> None:
     temporary_path: Path | None = None
+    backup_path: Path | None = None
+    replaced = False
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb",
@@ -1856,14 +1858,58 @@ def _atomic_write_report(target: Path, body: bytes) -> None:
             handle.write(body)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, target)
-        _fsync_directory(target.parent)
-    finally:
-        if temporary_path is not None:
+        if target.exists():
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".bak",
+                delete=False,
+            ) as backup:
+                backup_path = Path(backup.name)
+                with target.open("rb") as previous:
+                    for chunk in iter(lambda: previous.read(1024 * 1024), b""):
+                        backup.write(chunk)
+                backup.flush()
+                os.fsync(backup.fileno())
+            _fsync_directory(target.parent)
+        try:
+            os.replace(temporary_path, target)
+            temporary_path = None
+            replaced = True
+            _fsync_directory(target.parent)
+        except Exception:
+            if replaced:
+                _restore_previous_report(target, backup_path)
+                backup_path = None
+            raise
+        if backup_path is not None:
             try:
-                temporary_path.unlink()
+                backup_path.unlink()
+            except Exception:
+                _restore_previous_report(target, backup_path)
+                backup_path = None
+                raise
+            backup_path = None
+    finally:
+        for candidate in (temporary_path, backup_path):
+            if candidate is None:
+                continue
+            try:
+                candidate.unlink()
             except FileNotFoundError:
                 pass
+
+
+def _restore_previous_report(target: Path, backup_path: Path | None) -> None:
+    try:
+        if backup_path is None:
+            target.unlink()
+        else:
+            os.replace(backup_path, target)
+        _fsync_directory(target.parent)
+    except Exception as exc:
+        raise RuntimeError("failed to restore previous report after output failure") from exc
 
 
 def _fsync_directory(path: Path) -> None:

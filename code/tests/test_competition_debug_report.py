@@ -1086,6 +1086,34 @@ def test_atomic_build_preserves_existing_output_when_rendering_fails(
     assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
 
 
+def test_atomic_build_restores_existing_output_when_directory_fsync_fails_after_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    previous = b"exact previous report bytes\n"
+    target.write_bytes(previous)
+    real_fsync_directory = debug_report._fsync_directory
+    failed = False
+
+    def fail_once_after_replacement(path: Path) -> None:
+        nonlocal failed
+        if not failed and target.read_bytes() != previous:
+            failed = True
+            raise OSError("forced directory fsync failure after replacement")
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(debug_report, "_fsync_directory", fail_once_after_replacement)
+
+    with pytest.raises(OSError, match="forced directory fsync failure after replacement"):
+        debug_report.build_debug_report(config_path)
+
+    assert failed is True
+    assert target.read_bytes() == previous
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.bak")) == []
+
+
 def test_build_defaults_to_retrieval_output_directory(tmp_path: Path) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
 
