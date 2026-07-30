@@ -1617,8 +1617,6 @@ def _load_lane_score_provenance(
     retrieval_artifacts: _RootRetrievalArtifacts,
 ) -> Mapping[tuple[str, str], LaneScoreProvenanceReport]:
     manifest_path = _safe_file(topic_root / "scoring" / "complete.json", output_dir)
-    manifest_digest = _sha256_file(manifest_path, _MAX_JSON_BYTES)
-    receipts[_portable_label(output_dir, manifest_path)] = manifest_digest
     sealed_manifest_digests: set[str] = set()
     for (topic_id, _docid), row in retrieval_artifacts.provenance.items():
         if topic_id != topic.id:
@@ -1632,10 +1630,30 @@ def _load_lane_score_provenance(
         if not _is_sha256(digest):
             raise ValueError("retrieval provenance scoring manifest seal is invalid")
         sealed_manifest_digests.add(digest)
-    if sealed_manifest_digests != {manifest_digest}:
+    if len(sealed_manifest_digests) != 1:
         raise ValueError("scoring manifest differs from retrieval provenance seal")
 
-    manifest = _read_json_object(manifest_path, "scoring manifest")
+    manifest_receipt = {
+        "bytes": _bounded_size(manifest_path, _MAX_JSON_BYTES),
+        "sha256": next(iter(sealed_manifest_digests)),
+    }
+    try:
+        with _open_receipted_file(
+            manifest_path,
+            manifest_receipt,
+            label="scoring manifest",
+        ) as (manifest_source, manifest_digest):
+            receipts[_portable_label(output_dir, manifest_path)] = manifest_digest
+            manifest = _decode_json_object(
+                manifest_source.read(_MAX_JSON_BYTES + 1),
+                "scoring manifest",
+            )
+    except ValueError as exc:
+        if str(exc) == "scoring manifest receipt differs from stored artifact":
+            raise ValueError(
+                "scoring manifest differs from retrieval provenance seal"
+            ) from exc
+        raise
     artifact_rows = manifest.get("artifacts")
     if (
         manifest.get("schema_version") != "facet_pilot_v2"
@@ -1871,6 +1889,10 @@ def _iter_strict_jsonl(
 
 def _read_json_object(path: Path, label: str) -> dict[str, Any]:
     raw = _read_bounded(path, _MAX_JSON_BYTES)
+    return _decode_json_object(raw, label)
+
+
+def _decode_json_object(raw: bytes, label: str) -> dict[str, Any]:
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys, parse_constant=_reject_constant)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -1978,13 +2000,18 @@ def _open_receipted_file(
     *,
     label: str = "retrieval export artifact",
 ) -> Iterator[tuple[BinaryIO, str]]:
-    """Yield one descriptor whose exact receipted bytes were just hashed."""
+    """Yield a private snapshot containing exactly the bytes hashed for the receipt."""
     with path.open("rb") as source:
-        digest = _sha256_receipted_stream(source, receipt, label=label)
-        source.seek(0)
-        yield source, digest
-        if os.fstat(source.fileno()).st_size != receipt["bytes"]:
-            raise ValueError(f"{label} receipt differs from stored artifact")
+        with tempfile.TemporaryFile(mode="w+b") as snapshot:
+            digest = _sha256_receipted_stream(
+                source,
+                receipt,
+                label=label,
+                snapshot=snapshot,
+            )
+            snapshot.flush()
+            snapshot.seek(0)
+            yield snapshot, digest
 
 
 def _sha256_receipted_stream(
@@ -1992,12 +2019,22 @@ def _sha256_receipted_stream(
     receipt: Mapping[str, Any],
     *,
     label: str,
+    snapshot: BinaryIO | None = None,
 ) -> str:
     expected_size = receipt["bytes"]
     expected_digest = receipt["sha256"]
     digest = sha256()
     total = 0
-    if os.fstat(source.fileno()).st_size != expected_size:
+    initial_stat = os.fstat(source.fileno())
+    initial_identity = (
+        initial_stat.st_dev,
+        initial_stat.st_ino,
+        initial_stat.st_nlink,
+        initial_stat.st_size,
+        initial_stat.st_mtime_ns,
+        initial_stat.st_ctime_ns,
+    )
+    if initial_stat.st_size != expected_size:
         raise ValueError(f"{label} receipt differs from stored artifact")
     while True:
         chunk = source.read(min(1024 * 1024, expected_size - total + 1))
@@ -2007,8 +2044,23 @@ def _sha256_receipted_stream(
         if total > expected_size:
             raise ValueError(f"{label} receipt differs from stored artifact")
         digest.update(chunk)
+        if snapshot is not None:
+            snapshot.write(chunk)
+    final_stat = os.fstat(source.fileno())
+    final_identity = (
+        final_stat.st_dev,
+        final_stat.st_ino,
+        final_stat.st_nlink,
+        final_stat.st_size,
+        final_stat.st_mtime_ns,
+        final_stat.st_ctime_ns,
+    )
     observed_digest = digest.hexdigest()
-    if total != expected_size or observed_digest != expected_digest:
+    if (
+        total != expected_size
+        or observed_digest != expected_digest
+        or final_identity != initial_identity
+    ):
         raise ValueError(f"{label} receipt differs from stored artifact")
     return observed_digest
 

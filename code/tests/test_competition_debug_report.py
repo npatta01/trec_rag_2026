@@ -7,6 +7,7 @@ from dataclasses import replace
 from hashlib import sha256
 import html
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -1016,6 +1017,118 @@ def test_lane_score_receipt_and_parse_share_one_descriptor(
 
     assert document.lane_provenance[0].aggregate_score == 6.0
     assert open_count == 1
+
+
+def test_scoring_manifest_seal_and_parse_share_one_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    scoring = output / "rag2026-0" / "scoring"
+    manifest_path = scoring / "complete.json"
+    lane_scores_path = scoring / "lane_scores.jsonl"
+
+    lane_scores = [
+        json.loads(line)
+        for line in lane_scores_path.read_text(encoding="utf-8").splitlines()
+    ]
+    discarded = next(row for row in lane_scores if row["docid"] == "doc-discarded")
+    discarded["aggregate_score"] = 6.5
+    lane_scores_path.write_bytes(b"".join(_json_bytes(row) for row in lane_scores))
+
+    replacement = tmp_path / "unsealed-scoring-manifest.json"
+    unsealed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    lane_score_receipt = next(
+        row
+        for row in unsealed_manifest["artifacts"]
+        if row.get("relative_path") == "scoring/lane_scores.jsonl"
+    )
+    lane_score_receipt.update(_file_receipt(lane_scores_path))
+    replacement.write_bytes(_json_bytes(unsealed_manifest))
+    original_open = Path.open
+    open_count = 0
+
+    def racing_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal open_count
+        if candidate.resolve() == manifest_path.resolve() and args[:1] == ("rb",):
+            open_count += 1
+            if open_count == 2:
+                replacement.replace(manifest_path)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    with pytest.raises(
+        ValueError,
+        match="scoring lane-score artifact receipt differs",
+    ):
+        load_debug_report_data(config_path)
+    assert open_count == 1
+
+
+def test_receipted_parse_rejects_same_inode_same_size_mutation_after_hashing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "retrieval_provenance.jsonl"
+    sealed = path.read_bytes()
+    row = json.loads(sealed)
+    row["score"] = 9
+    mutation = _json_bytes(row)
+    assert len(mutation) == len(sealed)
+    original_open = Path.open
+    inode = path.stat().st_ino
+    mutated = False
+
+    class SameInodeMutatingReader:
+        def __init__(self, source: object) -> None:
+            self.source = source
+
+        def __enter__(self) -> "SameInodeMutatingReader":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.source.close()  # type: ignore[attr-defined]
+
+        def fileno(self) -> int:
+            return self.source.fileno()  # type: ignore[attr-defined,no-any-return]
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal mutated
+            chunk = self.source.read(size)  # type: ignore[attr-defined]
+            if not chunk and not mutated:
+                before = path.stat()
+                with original_open(path, "r+b") as target:
+                    target.write(mutation)
+                    target.flush()
+                # Make the metadata change deterministic even on coarse-clock filesystems.
+                os.utime(
+                    path,
+                    ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+                )
+                mutated = True
+            return chunk  # type: ignore[no-any-return]
+
+        def seek(self, *args: object, **kwargs: object) -> int:
+            return self.source.seek(*args, **kwargs)  # type: ignore[attr-defined,no-any-return]
+
+        def readline(self, *args: object, **kwargs: object) -> bytes:
+            return self.source.readline(*args, **kwargs)  # type: ignore[attr-defined,no-any-return]
+
+    def mutating_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        source = original_open(candidate, *args, **kwargs)
+        if candidate.resolve() == path.resolve() and args[:1] == ("rb",):
+            return SameInodeMutatingReader(source)
+        return source
+
+    monkeypatch.setattr(Path, "open", mutating_open)
+
+    with pytest.raises(ValueError, match="receipt differs"):
+        load_debug_report_data(config_path)
+    assert mutated
+    assert path.stat().st_ino == inode
+    assert path.stat().st_size == len(sealed)
 
 
 def test_root_export_streams_valid_full_scale_artifacts_and_retains_topic_subset(
