@@ -463,3 +463,167 @@ def test_stop_rules_include_page_yield_saturation_not_action_count() -> None:
     )
     assert accepted["state"] == "terminal"
     assert state.report().terminal_reason == "saturation"
+
+
+def test_duplicate_evidence_is_a_version_preserving_noop() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta())
+    version_before_duplicate = state.report().state_version
+
+    duplicate = state.apply_delta(
+        {
+            "add_evidence": [
+                {
+                    "nugget_id": "g1",
+                    "snippet_id": "doc-a:0001",
+                    "quote": "Conflict and persecution force people to flee.",
+                }
+            ]
+        }
+    )
+
+    assert duplicate.accepted_ids == ()
+    assert duplicate.rejected[0].code == "DUPLICATE_EVIDENCE"
+    assert duplicate.state_version == version_before_duplicate
+
+
+def test_evidence_attachment_does_not_reset_zero_yield_saturation() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta())
+    for page_index in (1, 2):
+        state.record_snippet_page(
+            SnippetPage(
+                document_id="doc-a",
+                focus_query="migration drivers",
+                snippets=(),
+                next_cursor=None,
+                page_index=page_index,
+                residual_count=0,
+                residual_top_score=None,
+                returned_min_score=None,
+                pages_estimated=4,
+            )
+        )
+    state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-b",
+            focus_query="migration drivers",
+            snippets=(RelevantSnippet("doc-b:0001", 0, 16, "Outside support.", 0.7),),
+            next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.7,
+            pages_estimated=1,
+        )
+    )
+    state.apply_delta(
+        {
+            "add_evidence": [
+                {
+                    "nugget_id": "g1",
+                    "snippet_id": "doc-b:0001",
+                    "quote": "Outside support.",
+                }
+            ]
+        }
+    )
+
+    stopped = state.choose_action(
+        action="stop",
+        target="saturation",
+        focus_query=None,
+        motivating_ids=["n1"],
+        rationale="three pages produced no new nuggets",
+    )
+
+    assert stopped["state"] == "terminal"
+
+
+def test_frontier_renders_recent_yield_for_each_document_focus() -> None:
+    state = _state_with_snippet()
+    state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-b",
+            focus_query="migration drivers",
+            snippets=(RelevantSnippet("doc-b:0001", 0, 16, "Outside support.", 0.7),),
+            next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.7,
+            pages_estimated=1,
+        )
+    )
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta())
+
+    documents = {
+        item["document_id"]: item for item in json.loads(state.view("frontier"))["documents"]
+    }
+
+    assert documents["doc-a"]["recent_yield"] is True
+    assert documents["doc-b"]["recent_yield"] is False
+
+
+def test_terminal_stop_rejects_pending_retrieval_action() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.choose_action(
+        action="search",
+        target="targeted migration query",
+        focus_query=None,
+        motivating_ids=["n1"],
+        rationale="an open need remains",
+    )
+    for page_index in range(1, SATURATION_ZERO_YIELD_PAGES + 1):
+        state.record_snippet_page(
+            SnippetPage(
+                document_id="doc-a",
+                focus_query="migration drivers",
+                snippets=(),
+                next_cursor=None,
+                page_index=page_index,
+                residual_count=0,
+                residual_top_score=None,
+                returned_min_score=None,
+                pages_estimated=SATURATION_ZERO_YIELD_PAGES + 1,
+            )
+        )
+
+    stopped = state.choose_action(
+        action="stop",
+        target="saturation",
+        focus_query=None,
+        motivating_ids=["n1"],
+        rationale="pages were empty",
+    )
+
+    assert stopped["code"] == "PENDING_ACTION_EXISTS"
+
+
+def test_terminal_stop_rejects_all_later_action_operations() -> None:
+    state = EvidenceCoverageState("Why do people migrate and what challenges do they face?")
+    state.choose_action(
+        action="stop",
+        target="completion",
+        focus_query=None,
+        motivating_ids=[],
+        rationale="no needs were recorded",
+    )
+
+    later_action = state.choose_action(
+        action="search",
+        target="query",
+        focus_query=None,
+        motivating_ids=["n1"],
+        rationale="should not be accepted",
+    )
+    later_consumption = state.require_pending_action(
+        action="search", target="query", focus_query=None
+    )
+
+    assert later_action["code"] == "TERMINAL_STATE"
+    assert later_consumption["code"] == "TERMINAL_STATE"

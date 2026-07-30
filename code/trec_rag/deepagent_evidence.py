@@ -213,6 +213,7 @@ class _DocumentFocus:
     residual_top_score: float | None = None
     returned_min_score: float | None = None
     nugget_ids: list[str] = field(default_factory=list)
+    recent_yield: bool = False
     state: DocumentState = "unexamined"
     state_reason: str = "not yet inspected"
 
@@ -454,6 +455,7 @@ class EvidenceCoverageState:
             focus.residual_count = page.residual_count
             focus.residual_top_score = page.residual_top_score
             focus.returned_min_score = page.returned_min_score
+            focus.recent_yield = False
             if page.snippets:
                 focus.state = "productive"
                 focus.state_reason = "returned snippets"
@@ -500,6 +502,7 @@ class EvidenceCoverageState:
             snippet = self._snippets[reference.snippet_id]
             self._page_yields[snippet.page_yield_index] = True
             focus = self._documents[(snippet.document_id, snippet.focus_query)]
+            focus.recent_yield = True
             if nugget_id not in focus.nugget_ids:
                 focus.nugget_ids.append(nugget_id)
 
@@ -604,10 +607,12 @@ class EvidenceCoverageState:
         if isinstance(evidence, str):
             return evidence
         nugget = self._nuggets[nugget_id]
-        for reference in evidence:
-            if reference not in nugget.evidence:
-                nugget.evidence.append(reference)
-        self._record_grounded_yield(evidence, nugget_id)
+        new_evidence = tuple(
+            reference for reference in evidence if reference not in nugget.evidence
+        )
+        if not new_evidence:
+            return "DUPLICATE_EVIDENCE"
+        nugget.evidence.extend(new_evidence)
         return _Accepted(nugget_id)
 
     def _set_facet_status(self, row: Mapping[str, object]) -> _Accepted | str:
@@ -715,7 +720,7 @@ class EvidenceCoverageState:
                             "residual_top_score": item.residual_top_score,
                             "returned_min_score": item.returned_min_score,
                             "next_page_available": item.next_page_available,
-                            "recent_yield": bool(self._page_yields and self._page_yields[-1]),
+                            "recent_yield": item.recent_yield,
                         }
                         for item in self._documents.values()
                     ],
@@ -760,6 +765,8 @@ class EvidenceCoverageState:
     ) -> Mapping[str, object]:
         """Validate, append, and expose one pending action or terminal stop."""
         with self._lock:
+            if self._terminal_reason is not None:
+                return self._action_error("TERMINAL_STATE")
             if action not in {"search", "extract", "paginate", "refocus", "stop"} or _nonblank(target) is None or _nonblank(rationale) is None:
                 return self._action_error("INVALID_ACTION")
             ids = _string_ids(motivating_ids)
@@ -777,6 +784,8 @@ class EvidenceCoverageState:
                 self._actions.append(_Action(action, target, focus_query, list(ids), rationale, "pending"))
                 self._changed()
                 return {"ok": True, "action": action, "state": "pending", "state_version": self._state_version, "state_hash": self._hash()}
+            if any(item.state == "pending" for item in self._actions):
+                return self._action_error("PENDING_ACTION_EXISTS")
             if target == "completion":
                 if any(self._open_motivation(item.need_id) is None for item in self._needs.values()):
                     return self._action_error("COMPLETION_OPEN_NEEDS")
@@ -815,6 +824,8 @@ class EvidenceCoverageState:
     ) -> Mapping[str, object] | None:
         """Consume a matching pending action or return a safe tool error."""
         with self._lock:
+            if self._terminal_reason is not None:
+                return self._action_error("TERMINAL_STATE")
             pending = next((item for item in self._actions if item.state == "pending"), None)
             if pending is None:
                 return self._action_error("PENDING_ACTION_REQUIRED")
