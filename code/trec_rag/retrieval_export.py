@@ -1581,18 +1581,9 @@ def _load_allowed_canonical_evidence(
         selection_by_id[context.subnarrative_id] = selection
     if set(selection_by_id) != set(expected_subnarratives):
         raise ValueError("canonical selection set is incomplete")
-    documents = {row.docid: row.text for row in selected}
-    candidates = load_validated_candidate_artifacts(
-        candidates_path,
-        candidate_manifest_path,
-        documents=documents,
-        subnarratives=expected_subnarratives,
-    )
-    allowed: set[tuple[object, ...]] = set()
+    selected_members: list[tuple[str, str, Any]] = []
     for subnarrative_id, selection in selection_by_id.items():
-        snapshots = {
-            snapshot.budget: snapshot for snapshot in selection.snapshots
-        }
+        snapshots = {snapshot.budget: snapshot for snapshot in selection.snapshots}
         snapshot = snapshots.get(selected_budget)
         if snapshot is None:
             raise ValueError("canonical selection lacks configured budget")
@@ -1601,32 +1592,44 @@ def _load_allowed_canonical_evidence(
             cluster = clusters.get(cluster_id)
             if cluster is None:
                 raise ValueError("canonical selection snapshot names an unknown cluster")
-            for member in cluster.supports:
-                candidate = candidates.get(
-                    (subnarrative_id, member.candidate_nugget_id)
-                )
-                if (
-                    candidate is None
-                    or member.candidate_kind != candidate.candidate_kind
-                    or member.text != candidate.text
-                    or member.docid != candidate.docid
-                    or member.document_sha256 != candidate.document_sha256
-                    or member.raw_logit != candidate.sentence_cross_encoder_score
-                ):
-                    raise ValueError(
-                        "canonical selection member differs from sealed candidate"
-                    )
-                allowed.add(
-                    (
-                        subnarrative_id,
-                        cluster_id,
-                        candidate.candidate_nugget_id,
-                        candidate.candidate_kind,
-                        candidate.text,
-                        candidate.docid,
-                        candidate.document_sha256,
-                    )
-                )
+            selected_members.extend(
+                (subnarrative_id, cluster_id, member)
+                for member in cluster.supports
+            )
+    documents = {row.docid: row.text for row in selected}
+    candidates = load_validated_candidate_artifacts(
+        candidates_path,
+        candidate_manifest_path,
+        documents=documents,
+        subnarratives=expected_subnarratives,
+        required_candidate_keys=frozenset(
+            (subnarrative_id, member.candidate_nugget_id)
+            for subnarrative_id, _cluster_id, member in selected_members
+        ),
+    )
+    allowed: set[tuple[object, ...]] = set()
+    for subnarrative_id, cluster_id, member in selected_members:
+        candidate = candidates.get((subnarrative_id, member.candidate_nugget_id))
+        if (
+            candidate is None
+            or member.candidate_kind != candidate.candidate_kind
+            or member.text != candidate.text
+            or member.docid != candidate.docid
+            or member.document_sha256 != candidate.document_sha256
+            or member.raw_logit != candidate.sentence_cross_encoder_score
+        ):
+            raise ValueError("canonical selection member differs from sealed candidate")
+        allowed.add(
+            (
+                subnarrative_id,
+                cluster_id,
+                candidate.candidate_nugget_id,
+                candidate.candidate_kind,
+                candidate.text,
+                candidate.docid,
+                candidate.document_sha256,
+            )
+        )
     requests = tuple(
         build_canonical_nugget_request(
             selection,

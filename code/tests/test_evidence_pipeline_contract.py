@@ -21,6 +21,7 @@ from trec_rag.facet_evidence import (
 from trec_rag.evidence_store import (
     CandidateArtifacts,
     generate_candidate_artifacts,
+    load_validated_candidate_artifacts,
     materialize_candidate_inputs,
     select_evidence_artifacts,
     write_candidate_jsonl,
@@ -524,3 +525,40 @@ def test_original_only_pipeline_is_empty_and_never_constructs_local_models(
     assert candidate_manifest["hosted_llm_calls"] == 0
     assert selection_manifest["retrieval_network_calls"] == 0
     assert selection_manifest["hosted_llm_calls"] == 0
+
+
+def test_candidate_validation_streams_when_only_selected_candidates_are_required(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic, fallback=True)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=True)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+    )
+    artifacts = generate_candidate_artifacts(
+        handoff, score_cache_root=tmp_path / "score-cache", device="cpu"
+    )
+    original_read_bytes = Path.read_bytes
+
+    def reject_candidate_buffering(path: Path) -> bytes:
+        if path == artifacts.candidates_path:
+            raise AssertionError("candidate validation must stream the JSONL ledger")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_candidate_buffering)
+
+    assert load_validated_candidate_artifacts(
+        artifacts.candidates_path,
+        artifacts.manifest_path,
+        documents={},
+        subnarratives={},
+        required_candidate_keys=frozenset(),
+    ) == {}
