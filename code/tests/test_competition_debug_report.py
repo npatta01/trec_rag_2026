@@ -1950,6 +1950,97 @@ def test_best_stored_passage_has_an_explicit_missing_state(tmp_path: Path) -> No
     assert debug_report._best_stored_passage(without_document_passages, document.docid) is None
 
 
+def test_selected_documents_render_as_ordered_evidence_cards(tmp_path: Path) -> None:
+    """Wide rows or unexplained selections must fail the readable evidence contract."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+
+    rendered = render_debug_report(loaded)
+    section = rendered.split(
+        '<section id="stage-literal-rag2026-0-selected-documents"', 1
+    )[1].split(
+        '<section id="stage-literal-rag2026-0-top-passages"', 1
+    )[0]
+
+    assert '<ol class="selected-document-list">' in section
+    assert section.count('<article class="selected-document-card"') == len(
+        topic.selected_documents
+    )
+    assert "Selected pool in stored selection order" not in section
+    assert "Original-narrative document selected at position 1" in section
+    assert "Facet-only document selected at position 2" in section
+    assert "Strongest stored passage" in section
+    assert html.escape(topic.subnarratives[0].text, quote=True) in section
+    assert "Aggregate rank</dt><dd>1</dd>" in section
+    assert '<details class="technical-provenance">' in section
+    assert "Memberships and selection rationale" in section
+
+    first = topic.selected_documents[0]
+    no_passage_topic = replace(
+        topic,
+        passage_rankings=tuple(
+            ranking
+            for ranking in topic.passage_rankings
+            if ranking.docid != first.docid
+        ),
+    )
+    without_passage = render_debug_report(
+        replace(loaded, topics=(no_passage_topic,))
+    )
+    first_card = without_passage.split(
+        'id="selected-document-literal-rag2026-0-1"', 1
+    )[1].split("</article>", 1)[0]
+    assert "No stored passage ranking is available for this selected document." in first_card
+
+
+def test_rag_output_renders_linked_prose_reference_cards_and_provenance(
+    tmp_path: Path,
+) -> None:
+    """Tabular answers or unresolved reference links must fail the reading contract."""
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, _output_sha256 = _write_rag_run(
+        tmp_path, retrieval_output
+    )
+    loaded = load_debug_report_data(config_path, rag_config_path=rag_config)
+    topic = replace(loaded.topics[0], topic_id="x!")
+
+    rendered = render_debug_report(replace(loaded, topics=(topic,)))
+    section = rendered.split(
+        '<section id="stage-hash-4038e65dabd89221-final-rag"', 1
+    )[1].split("</section>", 1)[0]
+
+    assert "RAG answer items in stored order" not in section
+    assert "RAG reference order" not in section
+    assert '<aside class="rag-provenance" aria-label="RAG generation provenance">' in section
+    for expected in (
+        "trec_rag.competition_rag",
+        "rag-debug-fixture",
+        "Fixture answer generation.",
+        "openrouter",
+        "fixture/model",
+        "Validated against standard retrieval inputs",
+        "5 words",
+    ):
+        assert expected in section
+    assert '<ol class="rag-answer-list">' in section
+    assert section.count('<article class="rag-answer-item"') == 2
+    assert (
+        '<a class="citation-chip" href="#rag-reference-hash-4038e65dabd89221-0">'
+        "citation 0 → doc-original</a>"
+    ) in section
+    assert 'id="rag-reference-hash-4038e65dabd89221-0"' in section
+    assert '<article class="rag-reference-card"' in section
+    assert "Citation index</dt><dd>0</dd>" in section
+    assert "doc-original" in section
+    assert "Intro. Exact evidence sentence. Tail." in section
+    assert '<details class="technical-provenance">' in section
+    targets = set(re.findall(r'id="([^"]+)"', section))
+    citation_targets = re.findall(r'class="citation-chip" href="#([^"]+)"', section)
+    assert citation_targets
+    assert set(citation_targets) <= targets
+
+
 def test_document_disclosures_render_bounded_excerpts(tmp_path: Path) -> None:
     """A renderer that emits an entire stored body must fail this boundary test."""
     config_path, _output = _write_debug_run(tmp_path)

@@ -2248,6 +2248,25 @@ summary {{ cursor: pointer; font-weight: 650; }}
 .status-complete {{ color: #063; background: #d8f3df; }}
 .status-empty {{ color: #735400; background: #fff0bd; }}
 .status-fallback-extractive {{ color: #7a2300; background: #ffe0d2; }}
+.selected-document-list, .rag-answer-list, .rag-reference-list {{ display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }}
+.selected-document-card, .rag-answer-item, .rag-reference-card {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
+.card-heading {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem .75rem; margin: 0 0 .75rem; }}
+.card-rank, .citation-chip {{ display: inline-flex; min-height: 2rem; align-items: center; padding: .2rem .65rem; border-radius: 999px; font-weight: 750; }}
+.card-rank {{ color: var(--accent-ink); background: var(--accent); }}
+.card-metadata, .rag-provenance dl {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: .65rem 1rem; margin: .75rem 0; }}
+.card-metadata > div, .rag-provenance dl > div {{ min-width: 0; }}
+.card-metadata dt, .rag-provenance dt {{ color: var(--muted); font-size: .86rem; font-weight: 750; text-transform: uppercase; letter-spacing: .035em; }}
+.card-metadata dd, .rag-provenance dd {{ margin: .15rem 0 0; }}
+.evidence-callout {{ margin: 1rem 0; padding: .8rem 1rem; border-inline-start: .3rem solid var(--accent); border-radius: .35rem; background: var(--surface); }}
+.evidence-callout h4 {{ margin: 0 0 .35rem; }}
+.technical-provenance {{ margin-top: .85rem; }}
+.rag-provenance {{ margin: 0 0 1.25rem; padding: 1rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
+.rag-provenance h3, .rag-reference-card h4, .rag-answer-item h4 {{ margin-top: 0; }}
+.rag-answer-item {{ background: var(--surface); }}
+.citation-list {{ display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }}
+.citation-chip {{ min-height: 44px; color: var(--accent); border: 1px solid var(--accent); background: var(--surface-soft); text-decoration: none; }}
+.citation-chip:hover {{ color: var(--accent-ink); background: var(--accent); }}
+.rag-reference-list {{ margin-top: 1rem; }}
 a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem solid var(--focus); outline-offset: .2rem; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --page: #0d1320; --surface: #141d2d; --surface-soft: #1a263a; --ink: #edf3ff; --muted: #aebbd0; --line: #39475e; --accent: #7ca1ff; --accent-ink: #10182a; --focus: #fbbf24; }} }}
 @media (max-width: 42rem) {{ header, main, footer {{ padding: .75rem; }} section {{ padding: .75rem; }} nav li {{ flex: 1 1 calc(50% - .65rem); }} .topic-tab, .topic-link-fallback {{ width: 100%; }} .run-diagnostics dl {{ display: block; }} .run-diagnostics dd {{ margin: 0 0 .75rem; }} }}
@@ -2505,22 +2524,59 @@ def _render_new_documents(topic: TopicReport, prefix: str) -> str:
 
 
 def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
-    rows = "".join(
-        "<tr>"
-        f"<th scope=\"row\">{_html(item.selection_rank)}</th>"
-        f"<td>{_html(item.docid)}</td><td>{_html(item.selected_from_lane)}</td>"
-        f"<td>{_html(item.selected_from_lane_rank)}</td>"
-        f"<td>{_html('Original member' if item.is_original_member else 'Facet-only')}</td>"
-        f"<td>{_detail_selected_provenance(item)}</td>"
-        f"<td><code>{_html(item.text_sha256)}</code></td>"
-        f"<td>{_detail_text('Document excerpt', item.text)}</td></tr>"
+    cards = "".join(
+        _render_selected_document_card(topic, item)
         for item in topic.selected_documents
     )
     return _stage(
         prefix,
         "selected-documents",
         "Selected documents",
-        _table("Selected pool in stored selection order", ("Selection rank", "DocID", "Selected from lane", "Lane rank", "Original/facet status", "Memberships and rationale", "Text SHA-256", "Document excerpt"), rows),
+        '<p>Stored selections, explained by their sealed lane evidence and strongest '
+        'available passage.</p><ol class="selected-document-list">'
+        f"{cards}</ol>",
+    )
+
+
+def _render_selected_document_card(
+    topic: TopicReport, item: SelectedDocumentReport
+) -> str:
+    best = _best_stored_passage(topic, item.docid)
+    memberships = "; ".join(_membership_text(value) for value in item.memberships)
+    status = "Original member" if item.is_original_member else "Facet-only"
+    if best is None:
+        evidence = (
+            '<div class="evidence-callout"><h4>Strongest stored passage</h4>'
+            "<p>No stored passage ranking is available for this selected document.</p></div>"
+        )
+    else:
+        evidence = (
+            '<div class="evidence-callout"><h4>Strongest stored passage</h4>'
+            f'<p class="break">{_html(_bounded_excerpt(best.passage.text))}</p>'
+            '<dl class="card-metadata">'
+            f'<div><dt>Subnarrative</dt><dd><code>{_html(best.subnarrative_id)}</code></dd></div>'
+            f'<div><dt>Aggregate rank</dt><dd>{_html(best.aggregate_rank)}</dd></div>'
+            f'<div><dt>Facet</dt><dd class="break">{_html(best.subnarrative_text)}</dd></div>'
+            "</dl></div>"
+        )
+    return (
+        '<li><article class="selected-document-card" '
+        f'id="selected-document-{_topic_anchor(topic.topic_id)}-{_html(item.selection_rank)}">'
+        '<h3 class="card-heading">'
+        f'<span class="card-rank">#{_html(item.selection_rank)}</span>'
+        f'<code>{_html(item.docid)}</code></h3>'
+        f'<p class="selection-reason">{_html(_selected_document_reason(item))}</p>'
+        '<dl class="card-metadata">'
+        f'<div><dt>Status</dt><dd>{_html(status)}</dd></div>'
+        f'<div><dt>Selected lane</dt><dd class="break">{_html(item.selected_from_lane)}</dd></div>'
+        f'<div><dt>Lane rank</dt><dd>{_html(item.selected_from_lane_rank)}</dd></div>'
+        f'<div><dt>Memberships</dt><dd class="break">{_html(memberships)}</dd></div>'
+        f"</dl>{evidence}"
+        '<details class="technical-provenance"><summary>Technical provenance</summary><dl>'
+        f'<dt>Text SHA-256</dt><dd><code>{_html(item.text_sha256)}</code></dd>'
+        f'<dt>Memberships and selection rationale</dt><dd class="break">{_html(memberships)}. {_html(item.selection_rationale)}</dd>'
+        f'<dt>Document excerpt (first {_DOCUMENT_EXCERPT_CHARACTERS} characters)</dt><dd class="break">{_html(_bounded_excerpt(item.text))}</dd>'
+        "</dl></details></article></li>"
     )
 
 
@@ -2672,24 +2728,99 @@ def _render_final_rag(topic: TopicReport, prefix: str) -> str:
             "Final RAG",
             '<p><span class="status status-empty">Not included</span> RAG output not supplied.</p>',
         )
-    reference_rows = "".join(
-        f'<tr><th scope="row">{index}</th><td><code>{_html(docid)}</code></td></tr>'
-        for index, docid in enumerate(rag.references)
-    )
-    answer_rows = "".join(
-        "<tr>"
-        f'<th scope="row">{index}</th><td class="break">{_html(item.text)}</td>'
-        f'<td class="break">{_html("; ".join(f"citation {citation} → {docid}" for citation, docid in zip(item.citations, item.citation_docids, strict=True)))}</td>'
-        "</tr>"
+    anchor_prefix = f"rag-reference-{_topic_anchor(topic.topic_id)}"
+    documents = {item.docid: item for item in topic.retrieval_output.documents}
+    answers = "".join(
+        _render_rag_answer_item(item, index, anchor_prefix)
         for index, item in enumerate(rag.answer_items, start=1)
     )
+    references = "".join(
+        _render_rag_reference_card(index, docid, documents.get(docid), anchor_prefix)
+        for index, docid in enumerate(rag.references)
+    )
     body = (
-        f"<p>Validated answer word count: {_html(rag.word_count)}. "
-        f"Output SHA-256: <code>{_html(rag.output_sha256)}</code>.</p>"
-        + _table("RAG reference order", ("Citation index", "Reference DocID"), reference_rows)
-        + _table("RAG answer items in stored order", ("Item", "Text", "Resolved citations"), answer_rows)
+        '<aside class="rag-provenance" aria-label="RAG generation provenance">'
+        "<h3>Generation provenance</h3><dl>"
+        '<div><dt>Implementation</dt><dd><code>trec_rag.competition_rag</code></dd></div>'
+        f'<div><dt>Run</dt><dd><code>{_html(rag.run_id)}</code></dd></div>'
+        f'<div><dt>Description</dt><dd class="break">{_html(rag.run_desc)}</dd></div>'
+        f'<div><dt>Provider</dt><dd><code>{_html(rag.provider)}</code></dd></div>'
+        f'<div><dt>Model</dt><dd><code>{_html(rag.model)}</code></dd></div>'
+        '<div><dt>Validation</dt><dd>Validated against standard retrieval inputs</dd></div>'
+        f'<div><dt>Answer length</dt><dd>{_html(rag.word_count)} words</dd></div>'
+        "</dl></aside>"
+        '<h3>Generated answer</h3><ol class="rag-answer-list">'
+        f"{answers}</ol><h3>Referenced documents</h3>"
+        '<ol class="rag-reference-list">'
+        f"{references}</ol>"
+        '<details class="technical-provenance"><summary>RAG output receipt</summary>'
+        f'<p>Output SHA-256: <code>{_html(rag.output_sha256)}</code>.</p></details>'
     )
     return _stage(prefix, "final-rag", "Final RAG", body)
+
+
+def _render_rag_answer_item(
+    item: RagAnswerItemReport, index: int, anchor_prefix: str
+) -> str:
+    citations = "".join(
+        '<a class="citation-chip" '
+        f'href="#{anchor_prefix}-{_html(citation)}">'
+        f'citation {_html(citation)} → {_html(docid)}</a>'
+        for citation, docid in zip(
+            item.citations, item.citation_docids, strict=True
+        )
+    )
+    return (
+        '<li><article class="rag-answer-item">'
+        f'<h4>Answer {_html(index)}</h4>'
+        f'<p class="break">{_html(item.text)}</p>'
+        f'<div class="citation-list" aria-label="Resolved citations">{citations}</div>'
+        "</article></li>"
+    )
+
+
+def _render_rag_reference_card(
+    citation: int,
+    docid: str,
+    document: RetrievalDocumentReport | None,
+    anchor_prefix: str,
+) -> str:
+    if document is None:
+        excerpt = "Validated reference text is not stored in this report."
+        detail = "No retrieval detail is stored for this reference."
+    else:
+        excerpt = _bounded_excerpt(document.text)
+        memberships = "; ".join(
+            _membership_text(value) for value in document.memberships
+        ) or "None"
+        seals = "; ".join(
+            f"{key}: {value}" for key, value in sorted(document.source_seals.items())
+        ) or "None"
+        detail = (
+            f"Organizer rank {document.rank}; selection rank {document.selection_rank}; "
+            f"source lane {document.selected_from_lane}; memberships {memberships}; "
+            f"source seals {seals}."
+        )
+    return (
+        '<li><article class="rag-reference-card" '
+        f'id="{anchor_prefix}-{_html(citation)}">'
+        f'<h4>Reference {_html(citation)} · <code>{_html(docid)}</code></h4>'
+        '<dl class="card-metadata">'
+        f'<div><dt>Citation index</dt><dd>{_html(citation)}</dd></div>'
+        f'<div><dt>DocID</dt><dd><code>{_html(docid)}</code></dd></div>'
+        "</dl>"
+        f'<p class="break">{_html(excerpt)}</p>'
+        '<details class="technical-provenance"><summary>Technical document detail</summary>'
+        f'<p class="break">{_html(detail)}</p></details>'
+        "</article></li>"
+    )
+
+
+def _bounded_excerpt(value: str) -> str:
+    excerpt = value[:_DOCUMENT_EXCERPT_CHARACTERS]
+    if len(value) > _DOCUMENT_EXCERPT_CHARACTERS:
+        excerpt += "…"
+    return excerpt
 
 
 def _table(caption: str, headings: Sequence[str], rows: str) -> str:
