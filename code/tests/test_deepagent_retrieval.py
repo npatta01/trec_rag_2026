@@ -223,6 +223,42 @@ class FailedSnippetLifecycleTracing(FakeTracing):
             raise RuntimeError("trace span exit failed")
 
 
+class FailedTraceLifecycleTracing(FakeTracing):
+    def __init__(self, span_name: str, failed_phase: str) -> None:
+        super().__init__()
+        self.span_name = span_name
+        self.failed_phase = failed_phase
+
+    @contextmanager
+    def _manager(self, span_name: str):
+        if self.span_name == span_name and self.failed_phase == "enter":
+            raise RuntimeError(f"{span_name} trace span enter failed")
+        try:
+            yield self
+        except BaseException:
+            if self.span_name == span_name and self.failed_phase == "exit":
+                raise RuntimeError(f"{span_name} trace span exit failed")
+            raise
+        if self.span_name == span_name and self.failed_phase == "exit":
+            raise RuntimeError(f"{span_name} trace span exit failed")
+
+    def agent_span(self, _narrative: str):
+        if self.span_name == "agent" and self.failed_phase == "create":
+            raise RuntimeError("agent trace span creation failed")
+        return self._manager("agent")
+
+    def retriever_span(self, _query: str):
+        if self.span_name == "retriever" and self.failed_phase == "create":
+            raise RuntimeError("retriever trace span creation failed")
+        return self._manager("retriever")
+
+
+class RaisingFlushTracing(FakeTracing):
+    def force_flush(self) -> bool:
+        self.flushes += 1
+        raise RuntimeError("trace flush failed")
+
+
 class RejectedEvidenceTracing(FakeTracing):
     def __init__(self, rejected_phase: str) -> None:
         super().__init__()
@@ -942,6 +978,87 @@ def test_failed_trace_flush_is_reported_without_retrying_or_changing_ranking() -
     assert len(retriever.queries) == 1
     assert agent_calls == 1
     assert tracing.flushes == 1
+
+
+def test_raised_trace_flush_is_reported_without_changing_result() -> None:
+    retriever = FakeRetriever(candidate_count=2)
+    tracing = RaisingFlushTracing()
+
+    result = _sdk(
+        retriever,
+        lambda _model, _search_tool, _snippet_tool: FakeAgent(
+            lambda _payload: {
+                "messages": [{"role": "assistant", "content": "Stable rationale."}]
+            }
+        ),
+        tracing=tracing,
+    ).retrieve("narrative")
+
+    assert result.trace_flush_succeeded is False
+    assert [candidate.docid for candidate in result.candidates] == [
+        "original-doc-1",
+        "original-doc-2",
+    ]
+    assert result.rationale == "Stable rationale."
+    assert tracing.flushes == 1
+
+
+@pytest.mark.parametrize("span_name", ["agent", "retriever"])
+@pytest.mark.parametrize("failed_phase", ["create", "enter", "exit"])
+def test_trace_span_lifecycle_failure_does_not_change_completed_result(
+    span_name: str, failed_phase: str
+) -> None:
+    snippet_payloads: list[dict[str, object]] = []
+    tracing = FailedTraceLifecycleTracing(span_name, failed_phase)
+
+    result = _sdk(
+        FakeRetriever(candidate_count=2),
+        lambda _model, _search_tool, snippet_tool: FakeAgent(
+            lambda _payload: (
+                snippet_payloads.append(
+                    json.loads(snippet_tool("original-doc-1", "safe focus", None))
+                ),
+                {
+                    "messages": [
+                        {"role": "assistant", "content": "Stable rationale."}
+                    ]
+                },
+            )[1]
+        ),
+        tracing=tracing,
+        snippet_extractor=RecordingSnippetExtractor(),
+    ).retrieve("narrative")
+
+    assert snippet_payloads[0]["document_id"] == "original-doc-1"
+    assert [search.query for search in result.searches] == ["narrative"]
+    assert [candidate.docid for candidate in result.candidates] == [
+        "original-doc-1",
+        "original-doc-2",
+    ]
+    assert result.rationale == "Stable rationale."
+    assert result.stopping_reason == "agent_completed"
+    assert result.trace_flush_succeeded is True
+    assert tracing.flushes == 1
+
+
+@pytest.mark.parametrize("span_name", ["agent", "retriever"])
+def test_trace_span_exit_failure_preserves_retrieval_error(
+    span_name: str,
+) -> None:
+    class ActualFailureRetriever(FakeRetriever):
+        def retrieve(self, _query):
+            raise RuntimeError("actual retrieval failed")
+
+    with pytest.raises(RuntimeError, match="^actual retrieval failed$"):
+        _sdk(
+            ActualFailureRetriever(),
+            lambda _model, _search_tool, _snippet_tool: FakeAgent(
+                lambda _payload: {
+                    "messages": [{"role": "assistant", "content": "unused"}]
+                }
+            ),
+            tracing=FailedTraceLifecycleTracing(span_name, "exit"),
+        ).retrieve("narrative")
 
 
 @pytest.mark.parametrize("rejected_phase", ["search", "snippet", "result"])

@@ -212,7 +212,9 @@ Agent-facing search and snippet behavior is deliberately narrow:
 - For any document returned during the current invocation, the agent can ask
   for up to ten relevance-ranked snippets at a time and follow `next_cursor`
   for another page. A page may contain multiple snippets from the same
-  document.
+  document. One bounded snippet may equal a complete short document that fits
+  in one chunk; long documents remain relevance-chunked and paginated and are
+  never blindly injected whole.
 - The search transport and snippet extractor own their respective caches. The
   model receives no cache keys, paths, bypass switches, or other cache controls.
 - Deep Agents may spill oversized tool results or temporary notes into
@@ -225,6 +227,27 @@ document text, focus query, and optional cursor. It returns a typed
 internal cache status, ranker backend, and page offset used by tracing. Its
 default factory uses the repository cache roots; experiments can instead inject
 an explicit extractor or ranker without changing the agent-facing tool schema.
+
+The reusable layer validates its boundary before returning or caching a page:
+
+- document IDs and focus queries must be nonblank, document text must be a
+  string, and cursors must be strings or `None`;
+- opaque cursors are schema-checked and bound to the document, focus query,
+  document-text hash, ranker/chunker identity, extraction configuration, and
+  next page offset;
+- page size and chunk maximum must be positive integers, overlap must be
+  non-negative and smaller than the chunk maximum, and the duplicate-overlap
+  ratio must be a finite value from zero through one;
+- chunk IDs/ranges/text must match the source document, ranker outputs must
+  reference known chunks, and every relevance score must be finite;
+- cached identities, response digests and bindings, page fields, snippet
+  records, offsets, and continuation cursors are validated before reuse.
+
+Malformed or identity-mismatched cache data raises the constant,
+non-disclosing `invalid snippet cache entry` integrity error. At the agent tool
+boundary, unknown documents, blank queries, invalid cursors, and extraction
+failures likewise return fixed errors without internal cache, model, or path
+details.
 
 The three retrieval bounds are explicit keyword-only constructor and
 `from_env` options. They accept positive integers only (booleans are rejected)

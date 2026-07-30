@@ -5,8 +5,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
-
 import pytest
 
 import trec_rag.deepagent_snippets as deepagent_snippets
@@ -145,6 +143,29 @@ def test_relevant_passage_near_document_end_leads_first_ten_item_page(tmp_path: 
         "next_cursor",
     }
     assert "page_offset" not in result.page.as_dict()
+
+
+def test_complete_short_document_is_one_bounded_relevant_snippet(tmp_path: Path) -> None:
+    short_document = "A complete short document with relevant evidence."
+    chunks = (
+        TextChunk(
+            document_id="doc-a",
+            chunk_id="doc-a:0000",
+            text=short_document,
+            start_char=0,
+            end_char=len(short_document),
+        ),
+    )
+    extractor, _ranker = _extractor(tmp_path, chunks)
+
+    result = extractor.extract("doc-a", short_document, "relevant evidence")
+
+    assert len(short_document) < 3_500
+    assert len(result.page.snippets) == 1
+    assert result.page.snippets[0].text == short_document
+    assert result.page.snippets[0].start_char == 0
+    assert result.page.snippets[0].end_char == len(short_document)
+    assert result.page.next_cursor is None
 
 
 def test_continuation_is_stable_and_has_no_duplicate_snippets(tmp_path: Path) -> None:

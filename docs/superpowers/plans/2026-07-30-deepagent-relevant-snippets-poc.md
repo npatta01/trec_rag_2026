@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Search the supplied narrative byte-for-byte before the first model call.
-- Search and snippet tool payloads must not expose cache controls, keys, paths, status, or full documents.
+- Search messages, search-tool payloads, and search spans expose metadata but never complete document text. Snippet output and manual snippet-span content are bounded to relevance-ranked pages; one bounded snippet may equal a complete short document that fits in one chunk, while long documents remain chunked/paginated and are never blindly injected whole.
 - Every public tool argument and every effective extraction/ranker setting participates in the exact tool-result cache identity.
 - `snippets_per_page` is a fixed SDK setting with default `10`; there is no global snippet/page/document limit.
 - Use 3,500-character semantic chunks with 350-character overlap.
@@ -47,7 +47,7 @@
 
 - [ ] **Step 1: Add representative extraction and cache smoke tests**
 
-Use an injected deterministic ranker and temporary cache to cover the relevant passage near the end, ten-item pages, multiple snippets from one document, stable no-duplicate continuation, blank-query rejection, invalid-cursor rejection, and exact cache behavior:
+Use an injected deterministic ranker and temporary cache to cover one complete short document returned as one bounded relevant snippet, the relevant passage near the end of a long document, ten-item pages, multiple snippets from one document, stable no-duplicate continuation, blank-query rejection, invalid-cursor rejection, and exact cache behavior:
 
 ```python
 class CountingRanker:
@@ -412,7 +412,7 @@ assert span.attributes["snippet.ranker_backend"] == "sentence_transformers_cross
 assert span.attributes["snippet.has_next_page"] is True
 ```
 
-Parameterize `trace_content=True/False` and assert snippet text is present only in content mode and otherwise equals `REDACTED_CONTENT`. Assert no cache path, cache key, cursor, scratch path, or complete document attribute is emitted.
+Parameterize `trace_content=True/False` and assert snippet text is present only in content mode and otherwise equals `REDACTED_CONTENT`. Assert no cache path, cache key, cursor, scratch path, or separate unbounded complete-document attribute is emitted. A bounded snippet text attribute may equal a complete short document when that document fits in one configured chunk.
 
 - [ ] **Step 2: Run tracing and retrieval tests and confirm expected failures**
 
@@ -424,7 +424,7 @@ Expected: failures identify the new typed snippet span and revised search record
 
 Update `_RetrieverSpan.record_search` to accept `text_lengths: Sequence[int]` and emit `retrieval.document_text_lengths`, never `retrieval.document_excerpts`. Add `_SnippetSpan.record_page` with typed arrays for at most ten chunk IDs, offsets, finite scores, bounded texts, cache status, backend, latency, page offset, and `has_next_page`. `RetrievalTracing.snippet_span` must use span name `deepagent.extract_relevant_snippets` and inherit existing narrative/query content redaction behavior.
 
-Wrap each snippet extraction call in the new span, record only its validated page metadata and internally observed cache status/backend, and preserve current behavior that trace rejection/export failure cannot change retrieval results.
+Wrap each snippet extraction call in the new span and record only its validated page metadata and internally observed cache status/backend. Isolate context-manager creation, entry, record validation, exit/export, and flush failures for agent, retriever, and snippet spans so optional tracing cannot change completed searches, snippet pages, fusion, rationale, or returned results; actual retrieval, model, and extractor failures retain their existing behavior.
 
 - [ ] **Step 4: Update the experimental SDK README**
 

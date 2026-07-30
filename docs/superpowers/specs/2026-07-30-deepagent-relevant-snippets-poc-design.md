@@ -27,7 +27,7 @@ The POC will:
   ranking interface;
 - provide state-backed ephemeral scratch files for notes and automatic spill of
   oversized tool results;
-- preserve optional Phoenix tracing without tracing complete documents.
+- preserve optional Phoenix tracing with bounded relevance-ranked snippet pages.
 
 The POC will not add global limits on inspected documents, snippet pages, or
 snippet count. It will not integrate with the official pipeline, organizer
@@ -126,7 +126,8 @@ no minimum-score threshold, so pagination can continue through the complete
 stable, de-duplicated ranking.
 
 The optional small-LLM ranker receives bounded batches of chunk IDs and text and
-returns an ordering. It never receives a complete document in one prompt. This
+returns an ordering. One bounded chunk may equal a complete short document, but
+a long document remains chunked and is never sent whole in one prompt. This
 adapter remains dependency-injected so the default path makes no additional
 hosted inference call.
 
@@ -206,13 +207,20 @@ silent registry overwrite.
 
 ## Context and Tracing Boundaries
 
-Complete documents never enter agent messages, tool outputs, or Phoenix span
-attributes. Search spans retain document IDs, ranks, scores, lengths, cache
-state, and latency. A snippet-extraction span records document/chunk IDs,
-offsets, scores, backend identity, page offset, and whether another page exists.
-Snippet text is traced only when the existing `trace_content` setting allows
-content; metadata-only mode redacts it. Scratch paths and scratch-file contents
-are not added by the SDK to manual Phoenix span attributes.
+Search messages, search-tool results, and search spans never expose complete
+document text; they contain metadata only. Snippet tool output and manual
+snippet-span content are instead bounded to configured relevance-ranked pages
+(ten chunks per page by default), with each chunk bounded to 3,500 characters
+by default. Manual snippet-span evidence is capped at ten chunks. One bounded
+snippet may therefore equal a complete short document that fits within one
+chunk. Long documents remain chunked and paginated and are never blindly
+injected whole.
+Search spans retain document IDs, ranks, scores, lengths, cache state, and
+latency. A snippet-extraction span records document/chunk IDs, offsets, scores,
+backend identity, page offset, and whether another page exists. Snippet text is
+traced only when the existing `trace_content` setting allows content;
+metadata-only mode redacts it. Scratch paths and scratch-file contents are not
+added by the SDK to manual Phoenix span attributes.
 
 ## Failure Behavior
 
@@ -235,17 +243,19 @@ Keep verification deliberately small:
 
 1. A long-document smoke test places the relevant passage near the end and
    proves the local ranker returns it rather than the document prefix.
-2. A pagination smoke test proves multiple relevant snippets continue across
+2. A short-document smoke test proves a complete document that fits in one
+   bounded chunk is returned as one relevant snippet.
+3. A pagination smoke test proves multiple relevant snippets continue across
    stable ten-item pages without duplication.
-3. An agent-context smoke test proves original and follow-up search payloads
+4. An agent-context smoke test proves original and follow-up search payloads
    contain metadata but not complete document text.
-4. An authorization smoke test rejects a document ID that was not retrieved in
+5. An authorization smoke test rejects a document ID that was not retrieved in
    the current invocation.
-5. A cache-first smoke test proves an exact repeated call does no ranker/hosted
+6. A cache-first smoke test proves an exact repeated call does no ranker/hosted
    work and that changing each tool argument changes the result-cache identity.
-6. A tool-allowlist smoke test permits ephemeral state read/write tools while
+7. A tool-allowlist smoke test permits ephemeral state read/write tools while
    rejecting shell, task, and host-filesystem access.
-7. A lightweight ranker-contract test covers the default adapter boundary and
+8. A lightweight ranker-contract test covers the default adapter boundary and
    the optional small-LLM adapter without a live hosted call.
 
 Run the existing focused Deep Agent, tracing, chunking, and remote-retriever

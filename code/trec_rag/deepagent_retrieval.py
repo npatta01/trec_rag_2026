@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from threading import Lock
 from time import monotonic
-from typing import Any, ClassVar, Literal, Protocol, cast
+from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
@@ -245,13 +245,16 @@ class _Tracing(Protocol):
     def force_flush(self) -> bool: ...
 
 
+_TraceSpan = TypeVar("_TraceSpan")
+
+
 @contextmanager
-def _isolated_snippet_span(
-    tracing: _Tracing, document_id: str, focus_query: str
-) -> Iterator[_SnippetTraceSpan | None]:
-    """Keep optional snippet tracing lifecycle failures out of tool behavior."""
+def _isolated_trace_span(
+    factory: Callable[[], AbstractContextManager[_TraceSpan]],
+) -> Iterator[_TraceSpan | None]:
+    """Keep optional tracing lifecycle failures out of application behavior."""
     try:
-        manager = tracing.snippet_span(document_id, focus_query)
+        manager = factory()
         span = manager.__enter__()
     except Exception:
         yield None
@@ -538,7 +541,9 @@ class DeepAgentRetriever:
             query: str, kind: Literal["original", "followup"], variant: str
         ) -> AgentSearch:
             before = _cache_counts(self._retriever)
-            with self._tracing.retriever_span(query) as span:
+            with _isolated_trace_span(
+                lambda: self._tracing.retriever_span(query)
+            ) as span:
                 started_at = monotonic()
                 candidates = tuple(
                     self._retriever.retrieve(
@@ -555,25 +560,26 @@ class DeepAgentRetriever:
                 trace_candidates = candidates[
                     : min(self._hits_per_search, MAX_TRACE_DOCUMENTS)
                 ]
-                try:
-                    span.record_search(
-                        document_ids=tuple(
-                            candidate.docid for candidate in trace_candidates
-                        ),
-                        source_ranks=tuple(
-                            candidate.rank for candidate in trace_candidates
-                        ),
-                        source_scores=tuple(
-                            candidate.score for candidate in trace_candidates
-                        ),
-                        cache_status=cache_status,
-                        latency_ms=latency_ms,
-                        text_lengths=tuple(
-                            len(candidate.text) for candidate in trace_candidates
-                        ),
-                    )
-                except Exception:
-                    pass
+                if span is not None:
+                    try:
+                        span.record_search(
+                            document_ids=tuple(
+                                candidate.docid for candidate in trace_candidates
+                            ),
+                            source_ranks=tuple(
+                                candidate.rank for candidate in trace_candidates
+                            ),
+                            source_scores=tuple(
+                                candidate.score for candidate in trace_candidates
+                            ),
+                            cache_status=cache_status,
+                            latency_ms=latency_ms,
+                            text_lengths=tuple(
+                                len(candidate.text) for candidate in trace_candidates
+                            ),
+                        )
+                    except Exception:
+                        pass
             register_documents(candidates)
             return AgentSearch(
                 query=query,
@@ -637,8 +643,8 @@ class DeepAgentRetriever:
             if document_text is None:
                 return json.dumps({"error": "unknown document_id"}, sort_keys=True)
             try:
-                with _isolated_snippet_span(
-                    self._tracing, document_id, focus_query
+                with _isolated_trace_span(
+                    lambda: self._tracing.snippet_span(document_id, focus_query)
                 ) as span:
                     with self._snippet_extractor_lock:
                         if self._snippet_extractor is None:
@@ -697,7 +703,9 @@ class DeepAgentRetriever:
             return json.dumps(result.page.as_dict(), sort_keys=True)
 
         try:
-            with self._tracing.agent_span(narrative) as agent_span:
+            with _isolated_trace_span(
+                lambda: self._tracing.agent_span(narrative)
+            ) as agent_span:
                 original = run_search(narrative, "original", "original")
                 searches.append(original)
                 agent = self._agent_factory(
@@ -733,16 +741,17 @@ class DeepAgentRetriever:
                 stopping_reason = (
                     "search_budget_exhausted" if exhausted else "agent_completed"
                 )
-                try:
-                    agent_span.record_result(
-                        fused_document_ids=tuple(
-                            candidate.docid
-                            for candidate in candidates[:MAX_TRACE_DOCUMENTS]
-                        ),
-                        stopping_reason=stopping_reason,
-                    )
-                except Exception:
-                    pass
+                if agent_span is not None:
+                    try:
+                        agent_span.record_result(
+                            fused_document_ids=tuple(
+                                candidate.docid
+                                for candidate in candidates[:MAX_TRACE_DOCUMENTS]
+                            ),
+                            stopping_reason=stopping_reason,
+                        )
+                    except Exception:
+                        pass
         except Exception as exc:
             if searches:
                 raise AgentRetrievalError(
