@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import asyncio
 import hashlib
 import json
@@ -18,14 +19,24 @@ from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_openrouter import ChatOpenRouter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from openinference.instrumentation.langchain import LangChainInstrumentor
 from pydantic import Field
 
+import trec_rag.deepagent_tracing as deepagent_tracing
 from trec_rag.deepagent_retrieval import (
     AgentRetrievalError,
     AgentSearch,
     DeepAgentRetriever,
     _create_agent,
     reciprocal_rank_fuse,
+)
+from trec_rag.deepagent_tracing import (
+    MAX_TRACE_DOCUMENTS,
+    REDACTED_CONTENT,
+    create_retrieval_tracing,
 )
 from trec_rag.pipeline_models import RetrievedCandidate, jsonable
 
@@ -117,7 +128,8 @@ class FakeAgent:
 class FakeTracing:
     def __init__(self) -> None:
         self.flushes = 0
-        self.attribute_keys = []
+        self.search_records: list[dict[str, object]] = []
+        self.result_records: list[dict[str, object]] = []
 
     @contextmanager
     def agent_span(self, _narrative: str):
@@ -127,12 +139,37 @@ class FakeTracing:
     def retriever_span(self, _query: str):
         yield self
 
-    def set_attribute(self, key: str, _value: object) -> None:
-        self.attribute_keys.append(key)
+    def record_search(self, **evidence: object) -> None:
+        self.search_records.append(evidence)
+
+    def record_result(self, **evidence: object) -> None:
+        self.result_records.append(evidence)
 
     def force_flush(self) -> bool:
         self.flushes += 1
         return True
+
+
+class FailedFlushTracing(FakeTracing):
+    def force_flush(self) -> bool:
+        self.flushes += 1
+        return False
+
+
+class RejectedEvidenceTracing(FakeTracing):
+    def __init__(self, rejected_phase: str) -> None:
+        super().__init__()
+        self.rejected_phase = rejected_phase
+
+    def record_search(self, **evidence: object) -> None:
+        if self.rejected_phase == "search":
+            raise ValueError("trace evidence rejected")
+        super().record_search(**evidence)
+
+    def record_result(self, **evidence: object) -> None:
+        if self.rejected_phase == "result":
+            raise ValueError("trace evidence rejected")
+        super().record_result(**evidence)
 
 
 class CaptureChatModel(FakeMessagesListChatModel):
@@ -147,6 +184,20 @@ class CaptureChatModel(FakeMessagesListChatModel):
         self.captured_tool_names = [str(getattr(tool, "name", "")) for tool in tools]
         self.captured_bind_settings.append(dict(kwargs))
         return self
+
+
+@pytest.fixture
+def isolated_real_tracing() -> None:
+    def reset() -> None:
+        instrumentor = LangChainInstrumentor()
+        if instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.uninstrument()
+        deepagent_tracing._LIVE_PROVIDER_CACHE.clear()
+        deepagent_tracing._ACTIVE_INSTRUMENTATION = None
+
+    reset()
+    yield
+    reset()
 
 
 def _sdk(
@@ -237,8 +288,12 @@ def test_fusion_provenance_is_deeply_immutable_and_jsonable() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         fused[0].provenance.append({"query_kind": "followup"})
+    assert isinstance(fused[0].provenance[0], Mapping)
+    assert not isinstance(fused[0].provenance[0], dict)
     with pytest.raises(TypeError):
         fused[0].provenance[0]["query_kind"] = "followup"
+    with pytest.raises((AttributeError, TypeError)):
+        fused[0].provenance[0].query_kind = "followup"
 
     serialized = jsonable(fused[0])
     assert serialized["provenance"] == [
@@ -538,6 +593,90 @@ def test_retrieve_wraps_agent_failure_with_completed_searches() -> None:
     assert tracing.flushes == 1
 
 
+def test_result_reports_successful_trace_flush() -> None:
+    tracing = FakeTracing()
+
+    result = _sdk(
+        FakeRetriever(),
+        lambda _model, _tool: FakeAgent(
+            lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
+        ),
+        tracing=tracing,
+    ).retrieve("narrative")
+
+    assert result.trace_flush_succeeded is True
+    assert tracing.flushes == 1
+    with pytest.raises((AttributeError, TypeError)):
+        result.trace_flush_succeeded = False
+
+
+def test_result_reports_disabled_tracing_as_successful_noop() -> None:
+    tracing = create_retrieval_tracing(environ={})
+
+    result = DeepAgentRetriever(
+        retriever=FakeRetriever(),
+        agent_factory=lambda _model, _tool: FakeAgent(
+            lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
+        ),
+        tracing=tracing,
+        model="test-model",
+    ).retrieve("narrative")
+
+    assert tracing.enabled is False
+    assert result.trace_flush_succeeded is True
+
+
+def test_failed_trace_flush_is_reported_without_retrying_or_changing_ranking() -> None:
+    retriever = FakeRetriever(candidate_count=2)
+    tracing = FailedFlushTracing()
+    agent_calls = 0
+
+    def invoke(_payload: dict[str, object]) -> object:
+        nonlocal agent_calls
+        agent_calls += 1
+        return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+    result = _sdk(
+        retriever,
+        lambda _model, _tool: FakeAgent(invoke),
+        tracing=tracing,
+    ).retrieve("narrative")
+
+    assert result.trace_flush_succeeded is False
+    assert [candidate.docid for candidate in result.candidates] == [
+        "original-doc-1",
+        "original-doc-2",
+    ]
+    assert [candidate.rank for candidate in result.candidates] == [1, 2]
+    assert len(retriever.queries) == 1
+    assert agent_calls == 1
+    assert tracing.flushes == 1
+
+
+@pytest.mark.parametrize("rejected_phase", ["search", "result"])
+def test_trace_evidence_rejection_does_not_change_retrieval(
+    rejected_phase: str,
+) -> None:
+    retriever = FakeRetriever(candidate_count=2)
+    tracing = RejectedEvidenceTracing(rejected_phase)
+
+    result = _sdk(
+        retriever,
+        lambda _model, _tool: FakeAgent(
+            lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
+        ),
+        tracing=tracing,
+    ).retrieve("narrative")
+
+    assert [candidate.docid for candidate in result.candidates] == [
+        "original-doc-1",
+        "original-doc-2",
+    ]
+    assert result.stopping_reason == "agent_completed"
+    assert len(retriever.queries) == 1
+    assert tracing.flushes == 1
+
+
 def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> None:
     calls = []
 
@@ -695,7 +834,138 @@ def test_tool_returns_bounded_excerpts_but_result_retains_all_candidates() -> No
     assert tool_payloads[0]["remaining_budget"] == 2
 
 
-def test_retrieve_uses_only_the_safe_tracing_attribute() -> None:
+def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> None:
+    fake_retriever = FakeRetriever(candidate_count=4)
+    tracing = FakeTracing()
+    initial_payloads: list[dict[str, object]] = []
+    tool_payloads: list[dict[str, object]] = []
+
+    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        def invoke(payload: dict[str, object]) -> object:
+            initial_payloads.append(payload)
+            tool_payloads.append(json.loads(search_tool("targeted query")))
+            tool_payloads.append(json.loads(search_tool("over budget query")))
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = DeepAgentRetriever(
+        retriever=fake_retriever,
+        agent_factory=agent_factory,
+        tracing=tracing,
+        model="test-model",
+        hits_per_search=2,
+        max_followup_searches=1,
+        fused_result_limit=1,
+    ).retrieve("narrative")
+
+    assert len(fake_retriever.queries) == 2
+    assert "original-doc-3" not in json.dumps(initial_payloads[0], sort_keys=True)
+    assert len(tool_payloads[0]["candidates"]) == 2
+    assert tool_payloads[0]["remaining_budget"] == 0
+    assert tool_payloads[1] == {"error": "search budget exhausted"}
+    assert result.stopping_reason == "search_budget_exhausted"
+    assert len(result.candidates) == 1
+    assert len(result.searches[0].candidates) == 4
+    assert len(result.searches[1].candidates) == 4
+    assert tracing.search_records[0]["document_ids"] == (
+        "original-doc-1",
+        "original-doc-2",
+    )
+    assert tracing.result_records[0]["fused_document_ids"] == (
+        "followup-52d6e9c630f589d8-doc-1",
+    )
+
+
+def test_large_fused_override_keeps_root_trace_ids_at_safe_limit() -> None:
+    requested_limit = MAX_TRACE_DOCUMENTS + 1
+    tracing = FakeTracing()
+
+    result = DeepAgentRetriever(
+        retriever=FakeRetriever(candidate_count=requested_limit),
+        agent_factory=lambda _model, _tool: FakeAgent(
+            lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
+        ),
+        tracing=tracing,
+        model="test-model",
+        hits_per_search=requested_limit,
+        fused_result_limit=requested_limit,
+    ).retrieve("narrative")
+
+    assert len(result.candidates) == requested_limit
+    assert len(tracing.result_records[0]["fused_document_ids"]) == MAX_TRACE_DOCUMENTS
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "2", None])
+@pytest.mark.parametrize(
+    "parameter",
+    ["hits_per_search", "max_followup_searches", "fused_result_limit"],
+)
+def test_constructor_rejects_invalid_retrieval_bounds_before_use(
+    parameter: str, value: object
+) -> None:
+    with pytest.raises(ValueError, match=f"{parameter} must be a positive integer"):
+        DeepAgentRetriever(
+            retriever=FakeRetriever(),
+            tracing=FakeTracing(),
+            **{parameter: value},
+        )
+
+
+def test_from_env_threads_nondefault_retrieval_bounds_into_remote_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    created = []
+
+    class OfflineRemoteRetriever:
+        def __init__(self, config: object, *, cache_dir: object) -> None:
+            self.config = config
+            self.cache_dir = cache_dir
+            created.append(self)
+
+        def retrieve(self, _query: object) -> list[RetrievedCandidate]:
+            return []
+
+    monkeypatch.setattr(
+        "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever", OfflineRemoteRetriever
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    sdk = DeepAgentRetriever.from_env(
+        root=tmp_path,
+        tracing=FakeTracing(),
+        hits_per_search=7,
+        max_followup_searches=2,
+        fused_result_limit=5,
+    )
+
+    assert created[0].config.hits == 7
+    assert sdk._hits_per_search == 7
+    assert sdk._max_followup_searches == 2
+    assert sdk._fused_result_limit == 5
+
+
+def test_from_env_rejects_invalid_bound_before_remote_retriever_construction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    remote_constructions = []
+    monkeypatch.setattr(
+        "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever",
+        lambda *_args, **_kwargs: remote_constructions.append(True),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    with pytest.raises(ValueError, match="hits_per_search must be a positive integer"):
+        DeepAgentRetriever.from_env(
+            root=tmp_path,
+            tracing=FakeTracing(),
+            hits_per_search=True,
+        )
+
+    assert remote_constructions == []
+
+
+def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
     fake_retriever = FakeRetriever()
     tracing = FakeTracing()
     result = _sdk(
@@ -707,8 +977,98 @@ def test_retrieve_uses_only_the_safe_tracing_attribute() -> None:
     ).retrieve("narrative")
 
     assert result.stopping_reason == "agent_completed"
-    assert tracing.attribute_keys == ["retrieval.document_count"]
+    assert len(tracing.search_records) == 1
+    assert set(tracing.search_records[0]) == {
+        "document_ids",
+        "source_ranks",
+        "source_scores",
+        "cache_status",
+        "latency_ms",
+        "excerpts",
+    }
+    assert tracing.result_records == [
+        {
+            "fused_document_ids": ("original-doc-1",),
+            "stopping_reason": "agent_completed",
+        }
+    ]
     assert tracing.flushes == 1
+
+
+@pytest.mark.parametrize("trace_content", [True, False])
+def test_retrieve_exports_complete_bounded_safe_trace_payload(
+    monkeypatch: pytest.MonkeyPatch, trace_content: bool, isolated_real_tracing: None
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracing = create_retrieval_tracing(
+        environ={}, tracer_provider=provider, trace_content=trace_content
+    )
+    clock = iter((10.0, 10.125))
+    monkeypatch.setattr(deepagent_retrieval, "monotonic", lambda: next(clock), raising=False)
+
+    result = _sdk(
+        FakeRetriever(candidate_count=2),
+        lambda _model, _tool: FakeAgent(
+            lambda _payload: {
+                "messages": [{"role": "assistant", "content": "Coverage is sufficient."}]
+            }
+        ),
+        tracing=tracing,
+    ).retrieve("private narrative")
+
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["climbmix.retrieve", "deepagent.retrieve"]
+    retriever_span, root_span = spans
+    assert retriever_span.parent is not None
+    assert retriever_span.parent.span_id == root_span.context.span_id
+    assert set(retriever_span.attributes) == {
+        "input.value",
+        "openinference.span.kind",
+        "retrieval.cache_status",
+        "retrieval.document_count",
+        "retrieval.document_excerpts",
+        "retrieval.document_ids",
+        "retrieval.latency_ms",
+        "retrieval.source_ranks",
+        "retrieval.source_scores",
+    }
+    assert retriever_span.attributes["input.value"] == (
+        "private narrative" if trace_content else REDACTED_CONTENT
+    )
+    assert retriever_span.attributes["retrieval.document_ids"] == (
+        "original-doc-1",
+        "original-doc-2",
+    )
+    assert retriever_span.attributes["retrieval.source_ranks"] == (1, 2)
+    assert retriever_span.attributes["retrieval.source_scores"] == (99.0, 98.0)
+    assert retriever_span.attributes["retrieval.cache_status"] == "not_reported"
+    assert retriever_span.attributes["retrieval.latency_ms"] == 125.0
+    assert retriever_span.attributes["retrieval.document_count"] == 2
+    assert retriever_span.attributes["retrieval.document_excerpts"] == (
+        ("private narrative excerpt 1", "private narrative excerpt 2")
+        if trace_content
+        else (REDACTED_CONTENT, REDACTED_CONTENT)
+    )
+    assert set(root_span.attributes) == {
+        "input.value",
+        "openinference.span.kind",
+        "retrieval.fused_document_ids",
+        "retrieval.stopping_reason",
+    }
+    assert root_span.attributes["input.value"] == (
+        "private narrative" if trace_content else REDACTED_CONTENT
+    )
+    assert root_span.attributes["retrieval.fused_document_ids"] == (
+        "original-doc-1",
+        "original-doc-2",
+    )
+    assert root_span.attributes["retrieval.stopping_reason"] == "agent_completed"
+    assert [candidate.docid for candidate in result.candidates] == [
+        "original-doc-1",
+        "original-doc-2",
+    ]
 
 
 def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(

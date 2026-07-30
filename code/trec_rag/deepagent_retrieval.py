@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -10,11 +10,16 @@ import json
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal, Protocol, cast
+from time import monotonic
+from typing import Any, ClassVar, Literal, Protocol, cast
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
-from trec_rag.deepagent_tracing import RetrievalTracing, create_retrieval_tracing
+from trec_rag.deepagent_tracing import (
+    MAX_TRACE_DOCUMENTS,
+    RetrievalTracing,
+    create_retrieval_tracing,
+)
 from trec_rag.pipeline_config import RetrieverConfig
 from trec_rag.pipeline_models import QueryVariant, RankedCandidate, RetrievedCandidate
 from trec_rag.repo_env import find_repo_root, load_repo_env, repo_cache_root
@@ -47,13 +52,14 @@ class AgentSearch:
 
 @dataclass(frozen=True)
 class AgentRetrievalResult:
-    """Immutable result of a narrative-driven retrieval session."""
+    """Immutable retrieval result, including the optional trace flush outcome."""
 
     narrative: str
     searches: tuple[AgentSearch, ...]
-    candidates: tuple[RankedCandidate, ...]
+    candidates: tuple[AgentRankedCandidate, ...]
     rationale: str
     stopping_reason: str
+    trace_flush_succeeded: bool
 
 
 class AgentRetrievalError(RuntimeError):
@@ -64,28 +70,53 @@ class AgentRetrievalError(RuntimeError):
         self.searches = tuple(searches)
 
 
-class _FrozenProvenance(dict[str, Any]):
-    """A dict-shaped provenance record that cannot be mutated after ranking."""
+@dataclass(frozen=True)
+class AgentCandidateProvenance(Mapping[str, object]):
+    """Explicit immutable provenance for one candidate's source search."""
 
-    def __init__(self, values: Mapping[str, Any]) -> None:
-        dict.__init__(self, values)
+    query: str
+    query_kind: Literal["original", "followup"]
+    variant_name: str
+    retriever_name: str
+    source_rank: int
+    source_score: float
+    cache_status: str
 
-    @staticmethod
-    def _immutable(*_args: object, **_kwargs: object) -> None:
-        raise TypeError("ranked candidate provenance is immutable")
+    _KEYS: ClassVar[tuple[str, ...]] = (
+        "query",
+        "query_kind",
+        "variant_name",
+        "retriever_name",
+        "source_rank",
+        "source_score",
+        "cache_status",
+    )
 
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    __ior__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable
-    setdefault = _immutable
-    update = _immutable
+    def __getitem__(self, key: str) -> object:
+        if key not in self._KEYS:
+            raise KeyError(key)
+        return getattr(self, key)
 
-    def __deepcopy__(self, _memo: dict[int, object]) -> dict[str, Any]:
-        """Keep existing dataclass serialization compatible with plain dict output."""
-        return dict(self)
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._KEYS)
+
+    def __len__(self) -> int:
+        return len(self._KEYS)
+
+
+@dataclass(frozen=True)
+class AgentRankedCandidate(RankedCandidate):
+    """A ranked candidate whose Deep Agent provenance is deeply immutable."""
+
+    provenance: tuple[AgentCandidateProvenance, ...]
+
+
+@dataclass
+class _FusionRow:
+    score: float
+    text: str
+    topic_id: str
+    provenance: list[AgentCandidateProvenance]
 
 
 class _RetrievalOnlyMiddleware(AgentMiddleware):
@@ -140,14 +171,29 @@ class _Agent(Protocol):
     def invoke(self, input: Mapping[str, object]) -> object: ...
 
 
-class _SafeSpan(Protocol):
-    def set_attribute(self, key: str, value: object) -> None: ...
+class _AgentTraceSpan(Protocol):
+    def record_result(
+        self, *, fused_document_ids: Sequence[str], stopping_reason: str
+    ) -> None: ...
+
+
+class _RetrieverTraceSpan(Protocol):
+    def record_search(
+        self,
+        *,
+        document_ids: Sequence[str],
+        source_ranks: Sequence[int],
+        source_scores: Sequence[float],
+        cache_status: str,
+        latency_ms: float,
+        excerpts: Sequence[str],
+    ) -> None: ...
 
 
 class _Tracing(Protocol):
-    def agent_span(self, narrative: str) -> AbstractContextManager[_SafeSpan]: ...
+    def agent_span(self, narrative: str) -> AbstractContextManager[_AgentTraceSpan]: ...
 
-    def retriever_span(self, query: str) -> AbstractContextManager[_SafeSpan]: ...
+    def retriever_span(self, query: str) -> AbstractContextManager[_RetrieverTraceSpan]: ...
 
     def force_flush(self) -> bool: ...
 
@@ -157,55 +203,49 @@ AgentFactory = Callable[[str, Callable[[str], str]], _Agent]
 
 def reciprocal_rank_fuse(
     searches: Sequence[AgentSearch], *, limit: int = FUSED_RESULT_LIMIT, rrf_k: int = 60
-) -> tuple[RankedCandidate, ...]:
+) -> tuple[AgentRankedCandidate, ...]:
     """Fuse searches by document ID using deterministic reciprocal-rank fusion."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     if rrf_k <= 0:
         raise ValueError("rrf_k must be positive")
 
-    rows: dict[str, dict[str, object]] = {}
+    rows: dict[str, _FusionRow] = {}
     for search in searches:
         for candidate in search.candidates:
             row = rows.setdefault(
                 candidate.docid,
-                {
-                    "score": 0.0,
-                    "text": "",
-                    "topic_id": candidate.topic_id,
-                    "provenance": [],
-                },
+                _FusionRow(
+                    score=0.0,
+                    text="",
+                    topic_id=candidate.topic_id,
+                    provenance=[],
+                ),
             )
-            row["score"] = float(row["score"]) + 1.0 / (rrf_k + candidate.rank)
-            if not row["text"] and candidate.text:
-                row["text"] = candidate.text
-            provenance = cast(list[dict[str, Any]], row["provenance"])
-            provenance.append(
-                {
-                    "query": search.query,
-                    "query_kind": search.kind,
-                    "variant_name": candidate.variant_name,
-                    "retriever_name": candidate.retriever_name,
-                    "source_rank": candidate.rank,
-                    "source_score": candidate.score,
-                    "cache_status": search.cache_status,
-                }
+            row.score += 1.0 / (rrf_k + candidate.rank)
+            if not row.text and candidate.text:
+                row.text = candidate.text
+            row.provenance.append(
+                AgentCandidateProvenance(
+                    query=search.query,
+                    query_kind=search.kind,
+                    variant_name=candidate.variant_name,
+                    retriever_name=candidate.retriever_name,
+                    source_rank=candidate.rank,
+                    source_score=candidate.score,
+                    cache_status=search.cache_status,
+                )
             )
 
-    ordered = sorted(
-        rows.items(), key=lambda item: (-float(item[1]["score"]), item[0])
-    )[:limit]
+    ordered = sorted(rows.items(), key=lambda item: (-item[1].score, item[0]))[:limit]
     return tuple(
-        RankedCandidate(
-            topic_id=str(row["topic_id"]),
+        AgentRankedCandidate(
+            topic_id=row.topic_id,
             docid=docid,
             rank=rank,
-            score=float(row["score"]),
-            text=str(row["text"]),
-            provenance=cast(
-                list[dict[str, Any]],
-                tuple(_FrozenProvenance(item) for item in row["provenance"]),
-            ),
+            score=row.score,
+            text=row.text,
+            provenance=tuple(row.provenance),
         )
         for rank, (docid, row) in enumerate(ordered, start=1)
     )
@@ -259,7 +299,15 @@ def _cache_status(before: Mapping[str, int] | None, after: Mapping[str, int] | N
     return "not_reported"
 
 
-def _bounded_candidates(candidates: Sequence[RetrievedCandidate]) -> list[dict[str, object]]:
+def _positive_int(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _bounded_candidates(
+    candidates: Sequence[RetrievedCandidate], *, limit: int
+) -> list[dict[str, object]]:
     return [
         {
             "docid": candidate.docid,
@@ -267,7 +315,7 @@ def _bounded_candidates(candidates: Sequence[RetrievedCandidate]) -> list[dict[s
             "score": candidate.score,
             "excerpt": candidate.text[:EXCERPT_MAX_CHARACTERS],
         }
-        for candidate in candidates[:HITS_PER_SEARCH]
+        for candidate in candidates[:limit]
     ]
 
 
@@ -303,7 +351,19 @@ class DeepAgentRetriever:
         model: str = DEFAULT_MODEL,
         agent_factory: AgentFactory = _create_agent,
         tracing: _Tracing | None = None,
+        hits_per_search: int = HITS_PER_SEARCH,
+        max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
+        fused_result_limit: int = FUSED_RESULT_LIMIT,
     ) -> None:
+        self._hits_per_search = _positive_int(
+            hits_per_search, name="hits_per_search"
+        )
+        self._max_followup_searches = _positive_int(
+            max_followup_searches, name="max_followup_searches"
+        )
+        self._fused_result_limit = _positive_int(
+            fused_result_limit, name="fused_result_limit"
+        )
         self._retriever = retriever
         self._model = model
         self._agent_factory = agent_factory
@@ -317,8 +377,18 @@ class DeepAgentRetriever:
         model: str | None = None,
         agent_factory: AgentFactory = _create_agent,
         tracing: _Tracing | None = None,
+        hits_per_search: int = HITS_PER_SEARCH,
+        max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
+        fused_result_limit: int = FUSED_RESULT_LIMIT,
     ) -> "DeepAgentRetriever":
         """Build the isolated SDK using the existing remote retriever and cache."""
+        validated_hits = _positive_int(hits_per_search, name="hits_per_search")
+        validated_followups = _positive_int(
+            max_followup_searches, name="max_followup_searches"
+        )
+        validated_fused_limit = _positive_int(
+            fused_result_limit, name="fused_result_limit"
+        )
         resolved_root = Path(root) if root is not None else find_repo_root()
         load_repo_env(resolved_root)
         if not os.environ.get("OPENROUTER_API_KEY", "").strip():
@@ -327,7 +397,7 @@ class DeepAgentRetriever:
             name="deepagent_climbmix",
             type="pyserini_remote",
             query_variants=("original", "followup"),
-            hits=HITS_PER_SEARCH,
+            hits=validated_hits,
             index="climbmix-400b",
             cache=True,
         )
@@ -339,6 +409,9 @@ class DeepAgentRetriever:
             model=model or os.environ.get("DEEPAGENT_MODEL") or DEFAULT_MODEL,
             agent_factory=agent_factory,
             tracing=tracing or create_retrieval_tracing(environ=os.environ),
+            hits_per_search=validated_hits,
+            max_followup_searches=validated_followups,
+            fused_result_limit=validated_fused_limit,
         )
 
     def retrieve(self, narrative: str) -> AgentRetrievalResult:
@@ -354,6 +427,7 @@ class DeepAgentRetriever:
         def run_search(query: str, kind: Literal["original", "followup"], variant: str) -> AgentSearch:
             before = _cache_counts(self._retriever)
             with self._tracing.retriever_span(query) as span:
+                started_at = monotonic()
                 candidates = tuple(
                     self._retriever.retrieve(
                         QueryVariant(
@@ -364,12 +438,36 @@ class DeepAgentRetriever:
                         )
                     )
                 )
-                span.set_attribute("retrieval.document_count", len(candidates))
+                latency_ms = (monotonic() - started_at) * 1_000
+                cache_status = _cache_status(before, _cache_counts(self._retriever))
+                trace_candidates = candidates[
+                    : min(self._hits_per_search, MAX_TRACE_DOCUMENTS)
+                ]
+                try:
+                    span.record_search(
+                        document_ids=tuple(
+                            candidate.docid for candidate in trace_candidates
+                        ),
+                        source_ranks=tuple(
+                            candidate.rank for candidate in trace_candidates
+                        ),
+                        source_scores=tuple(
+                            candidate.score for candidate in trace_candidates
+                        ),
+                        cache_status=cache_status,
+                        latency_ms=latency_ms,
+                        excerpts=tuple(
+                            candidate.text[:EXCERPT_MAX_CHARACTERS]
+                            for candidate in trace_candidates
+                        ),
+                    )
+                except Exception:
+                    pass
             return AgentSearch(
                 query=query,
                 kind=kind,
                 candidates=candidates,
-                cache_status=_cache_status(before, _cache_counts(self._retriever)),
+                cache_status=cache_status,
             )
 
         def search_climbmix(query: str) -> str:
@@ -380,7 +478,7 @@ class DeepAgentRetriever:
                     return json.dumps({"error": "query must be non-empty text"}, sort_keys=True)
                 if any(search.query == query for search in searches):
                     return json.dumps({"error": "duplicate follow-up query"}, sort_keys=True)
-                if len(searches) - 1 >= MAX_FOLLOWUP_SEARCHES:
+                if len(searches) - 1 >= self._max_followup_searches:
                     exhausted = True
                     return json.dumps({"error": "search budget exhausted"}, sort_keys=True)
                 search = run_search(
@@ -391,19 +489,25 @@ class DeepAgentRetriever:
                 searches.append(search)
                 return json.dumps(
                     {
-                        "candidates": _bounded_candidates(search.candidates),
-                        "remaining_budget": MAX_FOLLOWUP_SEARCHES - (len(searches) - 1),
+                        "candidates": _bounded_candidates(
+                            search.candidates, limit=self._hits_per_search
+                        ),
+                        "remaining_budget": self._max_followup_searches
+                        - (len(searches) - 1),
                     },
                     sort_keys=True,
                 )
 
         try:
-            with self._tracing.agent_span(narrative):
+            with self._tracing.agent_span(narrative) as agent_span:
                 original = run_search(narrative, "original", "original")
                 searches.append(original)
                 agent = self._agent_factory(self._model, search_climbmix)
                 initial_results = json.dumps(
-                    _bounded_candidates(original.candidates), sort_keys=True
+                    _bounded_candidates(
+                        original.candidates, limit=self._hits_per_search
+                    ),
+                    sort_keys=True,
                 )
                 reply = agent.invoke(
                     {
@@ -421,15 +525,20 @@ class DeepAgentRetriever:
                     }
                 )
                 rationale = _assistant_rationale(reply)
-                candidates = reciprocal_rank_fuse(searches)
-                stopping_reason = "search_budget_exhausted" if exhausted else "agent_completed"
-                return AgentRetrievalResult(
-                    narrative=narrative,
-                    searches=tuple(searches),
-                    candidates=candidates,
-                    rationale=rationale,
-                    stopping_reason=stopping_reason,
+                candidates = reciprocal_rank_fuse(
+                    searches, limit=self._fused_result_limit
                 )
+                stopping_reason = "search_budget_exhausted" if exhausted else "agent_completed"
+                try:
+                    agent_span.record_result(
+                        fused_document_ids=tuple(
+                            candidate.docid
+                            for candidate in candidates[:MAX_TRACE_DOCUMENTS]
+                        ),
+                        stopping_reason=stopping_reason,
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             if searches:
                 raise AgentRetrievalError(
@@ -437,4 +546,16 @@ class DeepAgentRetriever:
                 ) from exc
             raise
         finally:
-            self._tracing.force_flush()
+            try:
+                trace_flush_succeeded = bool(self._tracing.force_flush())
+            except Exception:
+                trace_flush_succeeded = False
+
+        return AgentRetrievalResult(
+            narrative=narrative,
+            searches=tuple(searches),
+            candidates=candidates,
+            rationale=rationale,
+            stopping_reason=stopping_reason,
+            trace_flush_succeeded=trace_flush_succeeded,
+        )

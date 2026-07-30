@@ -199,7 +199,29 @@ rank fusion (RRF, `k=60`) and return at most twenty candidates; raw BM25 scores
 from different queries are never compared. `AgentRetrievalResult` contains the
 input `narrative`, completed `searches` (`AgentSearch` records), fused
 `candidates` (`RankedCandidate` records with per-search provenance), the
-agent's `rationale`, and a `stopping_reason`.
+agent's `rationale`, a `stopping_reason`, and immutable
+`trace_flush_succeeded`. That diagnostic is `True` when configured tracing
+flushes successfully or tracing is disabled and no export is required; it is
+`False` when export fails. Export failure does not retry or change retrieval.
+
+The three retrieval bounds are explicit keyword-only constructor and
+`from_env` options. They accept positive integers only (booleans are rejected)
+and are not environment variables:
+
+```python
+retriever = DeepAgentRetriever.from_env(
+    hits_per_search=10,
+    max_followup_searches=3,
+    fused_result_limit=20,
+)
+result = retriever.retrieve(provided_narrative)
+```
+
+`hits_per_search` controls the remote request depth and model candidate view;
+trace evidence is additionally subject to an absolute safety ceiling.
+`max_followup_searches` controls the serialized follow-up budget, and
+`fused_result_limit` controls the deterministic final RRF depth. Defaults remain
+10, 3, and 20 respectively.
 
 Phoenix tracing is optional. When configured, spans can contain the supplied
 narrative, targeted follow-up queries, and bounded result excerpts. They never
@@ -207,7 +229,11 @@ include credentials, authorization headers, raw provider responses,
 continuation-ticket values, or local cache paths. For metadata-only tracing,
 construct tracing with `trace_content=False`; narrative/query/excerpt content
 is replaced with a redacted marker. Keep provider credentials in ignored local
-environment files rather than source or notebooks.
+environment files rather than source or notebooks. Tracing configuration is
+process-global and idempotent: identical normalized live setup reuses its
+provider/exporter, while a conflicting endpoint, project, credential,
+injected provider, or content mode raises a constant non-disclosing
+configuration error instead of silently reconfiguring instrumentation.
 
 Validate the isolated SDK and its existing transport boundaries with:
 

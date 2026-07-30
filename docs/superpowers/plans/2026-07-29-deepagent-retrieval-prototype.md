@@ -52,7 +52,7 @@
 - Consumes: existing `load_narrative_topics(path: Path) -> list[Topic]`.
 - Produces: `load_topic_narrative(topic_id: str, path: Path) -> str` and the exact installed dependency versions used by Tasks 2–4.
 
-- [ ] **Step 1: Add failing narrative-helper tests**
+- [x] **Step 1: Add failing narrative-helper tests**
 
 Append tests that prove the helper returns the exact stored narrative and fails clearly for missing IDs:
 
@@ -73,13 +73,13 @@ def test_load_topic_narrative_rejects_unknown_id(tmp_path):
         load_topic_narrative("999", path)
 ```
 
-- [ ] **Step 2: Run the helper tests and verify red**
+- [x] **Step 2: Run the helper tests and verify red**
 
 Run: `.venv/bin/python -m pytest code/tests/test_topics.py -q`
 
 Expected: collection fails because `load_topic_narrative` is not defined.
 
-- [ ] **Step 3: Implement the exact lookup**
+- [x] **Step 3: Implement the exact lookup**
 
 Add the helper without a default topic path:
 
@@ -96,7 +96,7 @@ def load_topic_narrative(topic_id: str, path: Path) -> str:
 
 The underlying loader already rejects duplicate IDs. Do not normalize or summarize the returned narrative.
 
-- [ ] **Step 4: Pin current runtime and verification dependencies**
+- [x] **Step 4: Pin current runtime and verification dependencies**
 
 Add these exact runtime dependencies under `[project].dependencies`:
 
@@ -117,7 +117,7 @@ Run: `uv lock`
 
 Expected: `uv.lock` resolves on Python 3.12 with the exact direct pins.
 
-- [ ] **Step 5: Set up the repository environment and run the focused tests**
+- [x] **Step 5: Set up the repository environment and run the focused tests**
 
 Run: `code/tools/setup_env.sh`
 
@@ -125,7 +125,7 @@ Run: `.venv/bin/python -m pytest code/tests/test_topics.py -q`
 
 Expected: all topic tests pass.
 
-- [ ] **Step 6: Verify installed versions without contacting providers**
+- [x] **Step 6: Verify installed versions without contacting providers**
 
 Run:
 
@@ -135,7 +135,7 @@ Run:
 
 Expected: the printed mapping exactly matches `expected`.
 
-- [ ] **Step 7: Commit Task 1**
+- [x] **Step 7: Commit Task 1**
 
 ```bash
 git add pyproject.toml uv.lock code/trec_rag/topics.py code/tests/test_topics.py
@@ -157,7 +157,7 @@ git commit -m "Add Deep Agent prototype dependencies"
   - `RetrievalTracing.agent_span(narrative: str)` and `RetrievalTracing.retriever_span(query: str)` context managers.
   - `RetrievalTracing.force_flush() -> bool`.
 
-- [ ] **Step 1: Write failing configuration and span tests**
+- [x] **Step 1: Write failing configuration and span tests**
 
 Create tests with an OpenTelemetry `TracerProvider`, `SimpleSpanProcessor`, and `InMemorySpanExporter` that verify:
 
@@ -191,13 +191,13 @@ def test_injected_provider_captures_agent_and_retriever_hierarchy(span_exporter,
 
 Also assert metadata-only mode replaces narrative/query/excerpt values with a redacted marker and that repeated setup with the same provider does not duplicate LangChain instrumentation.
 
-- [ ] **Step 2: Run tracing tests and verify red**
+- [x] **Step 2: Run tracing tests and verify red**
 
 Run: `.venv/bin/python -m pytest code/tests/test_deepagent_tracing.py -q`
 
 Expected: collection fails because `deepagent_tracing` is not defined.
 
-- [ ] **Step 3: Implement configuration validation and no-op behavior**
+- [x] **Step 3: Implement configuration validation and no-op behavior**
 
 Use constants rather than embedding secrets:
 
@@ -216,7 +216,7 @@ def _settings(environ: Mapping[str, str]) -> tuple[str | None, str, bool]:
 
 When no endpoint and no injected provider are present, return `RetrievalTracing(enabled=False)` backed by an OpenTelemetry no-op tracer. Never print the environment mapping.
 
-- [ ] **Step 4: Implement idempotent Phoenix/LangChain setup**
+- [x] **Step 4: Implement idempotent Phoenix/LangChain setup**
 
 For live configuration, call Phoenix registration with HTTP/protobuf and the resolved project name, then instrument LangChain with the same provider and a `TraceConfig` matching `trace_content`. Track instrumented provider identities under a module lock so a notebook can construct multiple SDK objects safely:
 
@@ -237,17 +237,17 @@ LangChainInstrumentor().instrument(
 
 Use the injected provider directly in tests; injected providers never export over the network.
 
-- [ ] **Step 5: Implement manual agent and retriever spans**
+- [x] **Step 5: Implement manual agent and retriever spans**
 
 Create an `OITracer` and context managers that name spans exactly `deepagent.retrieve` and `climbmix.retrieve`, set `openinference.span.kind` to `AGENT` and `RETRIEVER`, record exceptions/status, and expose the active span to the caller for safe attributes. Apply the same content masking to manually set narrative/query values.
 
-- [ ] **Step 6: Run the tracing tests**
+- [x] **Step 6: Run the tracing tests**
 
 Run: `.venv/bin/python -m pytest code/tests/test_deepagent_tracing.py -q`
 
 Expected: all tracing tests pass with no network request.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 ```bash
 git add code/trec_rag/deepagent_tracing.py code/tests/test_deepagent_tracing.py
@@ -271,7 +271,7 @@ git commit -m "Add Phoenix tracing for retrieval agent"
   - `DeepAgentRetriever.from_env(...) -> DeepAgentRetriever`.
   - `DeepAgentRetriever.retrieve(narrative: str) -> AgentRetrievalResult`.
 
-- [ ] **Step 1: Write failing fusion and orchestration tests**
+- [x] **Step 1: Write failing fusion and orchestration tests**
 
 Use fake retriever and agent factories; no test calls OpenRouter or Pyserini. Cover these exact behaviors:
 
@@ -297,17 +297,17 @@ def test_retrieve_rejects_empty_narrative_before_external_calls():
 
 Also test the three-follow-up budget, stable query-hash cache variants, an agent exception carrying completed searches, explicit factory arguments to `create_deep_agent`, and `search_budget_exhausted` stopping behavior.
 
-- [ ] **Step 2: Run SDK tests and verify red**
+- [x] **Step 2: Run SDK tests and verify red**
 
 Run: `.venv/bin/python -m pytest code/tests/test_deepagent_retrieval.py -q`
 
 Expected: collection fails because `deepagent_retrieval` is not defined.
 
-- [ ] **Step 3: Add result records and reciprocal-rank fusion**
+- [x] **Step 3: Add result records and reciprocal-rank fusion**
 
 Use frozen dataclasses and existing pipeline records. Sum `1 / (rrf_k + source_rank)` per document, retain every query/rank in `RankedCandidate.provenance`, choose the first non-empty document text, sort by descending fused score then `docid`, and assign contiguous one-based output ranks. Validate positive `limit` and `rrf_k`.
 
-- [ ] **Step 4: Add the Deep Agents 0.7.0 factory boundary**
+- [x] **Step 4: Add the Deep Agents 0.7.0 factory boundary**
 
 Keep the import and construction in one function:
 
@@ -325,23 +325,23 @@ def _create_agent(model: str, search_tool: Callable[[str], str]):
 
 The prompt must tell the model that the untouched narrative has already been searched, it may use only targeted follow-ups, it must not use filesystem/task tools for this retrieval, and its final message must explain why it stopped. Do not rely on the removed 0.7.0 todo prompt.
 
-- [ ] **Step 5: Implement `from_env` without logging secrets**
+- [x] **Step 5: Implement `from_env` without logging secrets**
 
 Load the shared and worktree environments through `load_repo_env`. Require non-empty `OPENROUTER_API_KEY`, construct `RetrieverConfig(name="deepagent_climbmix", type="pyserini_remote", query_variants=("original", "followup"), hits=10, index="climbmix-400b", cache=True)`, and point `PyseriniRemoteRetriever` at `repo_cache_root(root) / "retrieval/pyserini_remote"`. Resolve the model from the constructor argument, then `DEEPAGENT_MODEL`, then `DEFAULT_MODEL`. Construct tracing from the loaded process environment.
 
-- [ ] **Step 6: Implement mandatory original search and bounded follow-up tool**
+- [x] **Step 6: Implement mandatory original search and bounded follow-up tool**
 
 Validate without stripping or rewriting the narrative. Use `sha256(narrative.encode()).hexdigest()[:16]` as the internal cache topic component. Search with variant `original` before agent construction. The closure tool uses `followup-<query-sha256-prefix>` variant names, rejects blank or duplicate queries, records at most three successful follow-ups, and returns JSON containing at most ten bounded excerpts plus remaining budget.
 
 The SDK-side `AgentSearch` retains complete normalized candidates. Tool JSON and Phoenix attributes receive only the bounded excerpts.
 
-- [ ] **Step 7: Invoke the agent, fuse results, and preserve failures**
+- [x] **Step 7: Invoke the agent, fuse results, and preserve failures**
 
 Invoke with the untouched narrative plus bounded original results. Extract the last assistant message as `rationale`; use `search_budget_exhausted` if the tool rejected an over-budget call and `agent_completed` otherwise. Wrap the operation in `deepagent.retrieve`, each search in `climbmix.retrieve`, attach only approved attributes, call `force_flush`, and return immutable records.
 
 Define `AgentRetrievalError(RuntimeError)` with a `searches` tuple. When OpenRouter fails after the original search, raise it with those completed records and keep the original exception as `__cause__`.
 
-- [ ] **Step 8: Run focused SDK and existing retriever tests**
+- [x] **Step 8: Run focused SDK and existing retriever tests**
 
 Run:
 
@@ -351,7 +351,7 @@ Run:
 
 Expected: all selected tests pass with no live external call.
 
-- [ ] **Step 9: Commit Task 3**
+- [x] **Step 9: Commit Task 3**
 
 ```bash
 git add code/trec_rag/deepagent_retrieval.py code/tests/test_deepagent_retrieval.py
@@ -369,7 +369,7 @@ git commit -m "Add narrative-only Deep Agent retriever"
 - Consumes: the public SDK and helper from Tasks 1–3.
 - Produces: copy-paste SDK usage and fresh evidence for local tests, one live OpenRouter/Pyserini run, and Phoenix trace arrival.
 
-- [ ] **Step 1: Add README usage and boundaries**
+- [x] **Step 1: Add README usage and boundaries**
 
 Document this primary example:
 
@@ -383,7 +383,7 @@ for candidate in result.candidates:
 
 Document the separate explicit-path helper, four environment names (`OPENROUTER_API_KEY`, `INDEX_URL`, `PYSERINI_API_TOKEN`, and `PHOENIX_COLLECTOR_ENDPOINT`), optional `PHOENIX_API_KEY`/`PHOENIX_PROJECT_NAME`, default bounds, returned records, Phoenix content/privacy behavior, and the absence of official pipeline integration.
 
-- [ ] **Step 2: Run the complete focused automated verification**
+- [x] **Step 2: Run the complete focused automated verification**
 
 Run:
 
@@ -393,7 +393,7 @@ Run:
 
 Expected: all selected tests pass.
 
-- [ ] **Step 3: Run a secret and portability scan before the live call**
+- [x] **Step 3: Run a secret and portability scan before the live call**
 
 Run:
 
@@ -405,7 +405,7 @@ git check-ignore -q .env && test "$(stat -c %a .env)" = 600
 
 Expected: `git diff --check` exits zero, the scan finds no credential values or hard-coded authorization headers, and the local credential file remains ignored with mode `600`.
 
-- [ ] **Step 4: Run one bounded live SDK retrieval**
+- [x] **Step 4: Run one bounded live SDK retrieval**
 
 Use the separate helper for test Topic 224, invoke the SDK once, and print only counts, IDs, query text, stopping reason, and candidate ranks—not raw environment values or full document text:
 
@@ -431,7 +431,7 @@ PY
 
 Expected: the original narrative is search 1, there are no more than four searches total, the fused list has no more than twenty unique IDs, and the call returns without hidden retries.
 
-- [ ] **Step 5: Confirm the root span arrived in Phoenix Cloud**
+- [x] **Step 5: Confirm the root span arrived in Phoenix Cloud**
 
 Set `PHOENIX_BASE_URL` to the same space URL as `PHOENIX_COLLECTOR_ENDPOINT` for the read client, query only recent root spans, and assert the project contains `deepagent.retrieve`:
 
@@ -454,14 +454,14 @@ PY
 
 Expected: prints `root_span_seen: True` without printing trace content or credentials.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add code/trec_rag/README.md
 git commit -m "Document Deep Agent retrieval prototype"
 ```
 
-- [ ] **Step 7: Run final repository checks**
+- [x] **Step 7: Run final repository checks**
 
 Run:
 

@@ -68,7 +68,7 @@ from trec_rag.topics import load_topic_narrative
 
 narrative = load_topic_narrative(
     "224",
-    Path("trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv"),
+    Path("trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv"),
 )
 result = DeepAgentRetriever.from_env().retrieve(narrative)
 ```
@@ -153,7 +153,10 @@ Focused dataclasses describe the observable result:
 - `AgentSearch`: exact query, query kind (`original` or `followup`), ordered
   normalized candidates, and cache information available from the retriever;
 - `AgentRetrievalResult`: untouched narrative, ordered `AgentSearch` records,
-  fused final candidates, agent rationale, and stopping reason.
+  fused final candidates, agent rationale, stopping reason, and the immutable
+  `trace_flush_succeeded` diagnostic. The diagnostic is true when export flush
+  succeeds or tracing is disabled and no export is required; false reports an
+  exporter failure without changing retrieval.
 
 The final candidate set is computed by deterministic reciprocal-rank fusion
 across the searches, followed by document-ID deduplication. Raw BM25 scores are
