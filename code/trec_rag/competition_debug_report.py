@@ -54,6 +54,7 @@ _PASSAGE_FIELDS = {"chunk_index", "start_char", "end_char", "raw_logit", "weight
 _CANONICAL_STATES = {"complete", "empty", "fallback_extractive"}
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _REPORT_SCHEMA_VERSION = "competition_debug_report_v1"
+_DOCUMENT_EXCERPT_CHARACTERS = 500
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,9 @@ class SelectedDocumentReport:
     selected_from_lane_rank: int
     text: str
     text_sha256: str
+    memberships: tuple[Mapping[str, Any], ...]
+    is_original_member: bool
+    selection_rationale: str
 
 
 @dataclass(frozen=True)
@@ -374,7 +378,7 @@ def _load_topic_report(
     subnarratives = _decode_decomposition(decomposition, topic)
     selection = _read_json_object(selection_path, "selection checkpoint")
     selected = _decode_selected_documents(_read_jsonl(selected_path, "selected documents"), topic)
-    union_rows = _decode_selection(selection, topic, selected)
+    union_rows, selected = _decode_selection(selection, topic, selected)
 
     audit_hashes = _load_audit_hashes(
         topic_root,
@@ -1148,13 +1152,25 @@ def _decode_selected_documents(
         ):
             raise ValueError("selected document identity, rank, or text hash is invalid")
         seen.add(docid)
-        result.append(SelectedDocumentReport(docid, rank, lane, lane_rank, text, text_hash))
+        result.append(
+            SelectedDocumentReport(
+                docid,
+                rank,
+                lane,
+                lane_rank,
+                text,
+                text_hash,
+                (),
+                False,
+                "",
+            )
+        )
     return tuple(result)
 
 
 def _decode_selection(
     value: Mapping[str, Any], topic: Topic, selected: Sequence[SelectedDocumentReport]
-) -> tuple[dict[str, Any], ...]:
+) -> tuple[tuple[dict[str, Any], ...], tuple[SelectedDocumentReport, ...]]:
     if value.get("schema_version") != "facet_pilot_selection_v2" or value.get("topic_id") != topic.id:
         raise ValueError("selection checkpoint topic identity is invalid")
     stored_order = value.get("selected_order")
@@ -1167,11 +1183,15 @@ def _decode_selection(
         raise ValueError("selection memberships differ from stored order")
     selected_by_docid = {row.docid: row for row in selected}
     membership_lanes: dict[str, frozenset[str]] = {}
+    membership_rows: dict[str, tuple[Mapping[str, Any], ...]] = {}
     for membership in memberships:
         if not isinstance(membership, Mapping) or not _valid_membership(membership, selected_by_docid):
             raise ValueError("selection membership or lane rank is invalid")
         membership_lanes[membership["docid"]] = frozenset(
             lane["lane_name"] for lane in membership["lanes"]
+        )
+        membership_rows[membership["docid"]] = tuple(
+            MappingProxyType(dict(lane)) for lane in membership["lanes"]
         )
 
     union = value.get("union_pool")
@@ -1199,13 +1219,22 @@ def _decode_selection(
     for row in result:
         if row["docid"] in membership_lanes and set(row["memberships"]) != membership_lanes[row["docid"]]:
             raise ValueError("selection union membership differs from selected provenance")
-    _validate_selection_trace(value.get("trace"), selected)
-    return tuple(result)
+    rationales = _validate_selection_trace(value.get("trace"), selected)
+    explained = tuple(
+        replace(
+            document,
+            memberships=membership_rows[document.docid],
+            is_original_member="original" in membership_lanes[document.docid],
+            selection_rationale=rationales[document.docid],
+        )
+        for document in selected
+    )
+    return tuple(result), explained
 
 
 def _validate_selection_trace(
     value: object, selected: Sequence[SelectedDocumentReport]
-) -> None:
+) -> Mapping[str, str]:
     if not isinstance(value, list):
         raise ValueError("selection trace is invalid")
     selected_events: list[tuple[object, object, object, object]] = []
@@ -1233,6 +1262,15 @@ def _validate_selection_trace(
     ]
     if selected_events != expected:
         raise ValueError("selection trace differs from selected rank provenance")
+    return MappingProxyType(
+        {
+            row.docid: (
+                f"Selected at slot {row.selection_rank} from "
+                f"{row.selected_from_lane} rank {row.selected_from_lane_rank}."
+            )
+            for row in selected
+        }
+    )
 
 
 def _valid_membership(value: Mapping[str, Any], selected: Mapping[str, SelectedDocumentReport]) -> bool:
@@ -1484,10 +1522,8 @@ def render_debug_report(data: DebugReportData) -> str:
         for topic in data.topics
     )
     topics = "".join(_render_topic(topic) for topic in data.topics)
-    source_rows = "".join(
-        f"<tr><th scope=\"row\">{_html(label)}</th><td><code>{_html(digest)}</code></td></tr>"
-        for label, digest in sorted(data.source_sha256s.items())
-    )
+    run_summary = _render_run_summary(data)
+    pipeline_legend = _render_pipeline_legend()
     return f'''<!doctype html>
 <html lang="en">
 <head>
@@ -1526,14 +1562,64 @@ a:focus-visible, summary:focus-visible {{ outline: .22rem solid Highlight; outli
 <nav aria-label="Topic navigation"><ul>{topic_links}</ul></nav>
 </header>
 <main>
+{run_summary}
+{pipeline_legend}
 {topics}
-<section aria-labelledby="source-receipts"><h2 id="source-receipts">Source receipts</h2>
-<div class="table-wrap"><table><caption>Bounded artifact SHA-256 receipts</caption><thead><tr><th scope="col">Artifact</th><th scope="col">SHA-256</th></tr></thead><tbody>{source_rows}</tbody></table></div>
-</section>
 </main>
 <footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
 </body>
 </html>'''
+
+
+def _render_run_summary(data: DebugReportData) -> str:
+    topic_ids = ", ".join(topic.topic_id for topic in data.topics)
+    rag_path = str(data.rag_config_path) if data.rag_config_path is not None else "Not supplied"
+    source_rows = "".join(
+        f'<tr><th scope="row">{_html(label)}</th><td><code>{_html(digest)}</code></td></tr>'
+        for label, digest in sorted(data.source_sha256s.items())
+    )
+    return (
+        '<section id="run-summary" aria-labelledby="run-summary-title">'
+        '<h2 id="run-summary-title">Run summary</h2><dl>'
+        f'<dt>Retrieval config</dt><dd class="break">{_html(data.retrieval_config_path)}</dd>'
+        f'<dt>RAG config</dt><dd class="break">{_html(rag_path)}</dd>'
+        f'<dt>Retrieval output</dt><dd class="break">{_html(data.output_dir)}</dd>'
+        f'<dt>Included topics</dt><dd>{_html(len(data.topics))}: {_html(topic_ids)}</dd>'
+        '<dt>Validation state</dt><dd>Bounded sealed artifacts validated</dd>'
+        f'<dt>Source receipts</dt><dd>{_html(len(data.source_sha256s))} SHA-256 values</dd>'
+        '</dl>'
+        + _table(
+            "Bounded artifact SHA-256 receipts",
+            ("Artifact", "SHA-256"),
+            source_rows,
+        )
+        + "</section>"
+    )
+
+
+def _render_pipeline_legend() -> str:
+    definitions = (
+        ("Narrative", "The official topic narrative supplied to the run."),
+        ("Subnarratives", "Stored decomposition facets and their literal BM25 queries."),
+        (
+            "New documents",
+            "Union-pool documents with no original lane membership; new is relative to the original reranked eligible pool, not the corpus.",
+        ),
+        ("Selected documents", "The stored selected pool with lane memberships and selection rationale."),
+        ("Top passages", "Every stored document ranking, grouped by subnarrative; raw model scores are logits."),
+        ("Final selected nuggets", "Configured-budget evidence clusters and their final canonical claims."),
+        ("Final retrieval", "Organizer-facing documents supported by at least one canonical nugget."),
+        ("Final RAG", "Validated answer items, references, and resolved citations when supplied."),
+    )
+    rows = "".join(
+        f"<dt>{_html(label)}</dt><dd>{_html(description)}</dd>"
+        for label, description in definitions
+    )
+    return (
+        '<section id="pipeline-legend" aria-labelledby="pipeline-legend-title">'
+        '<h2 id="pipeline-legend-title">Pipeline legend</h2>'
+        f"<dl>{rows}</dl></section>"
+    )
 
 
 def _render_topic(topic: TopicReport) -> str:
@@ -1592,7 +1678,7 @@ def _render_new_documents(topic: TopicReport, prefix: str) -> str:
         f"<td>{_html(item.first_seen_lane)}</td>"
         f"<td class=\"break\">{_html(', '.join(item.memberships))}</td>"
         f"<td><code>{_html(item.text_sha256 or 'Not stored')}</code></td>"
-        f"<td>{_detail_text('Selected-document excerpt', item.excerpt)}</td>"
+        f"<td>{_detail_text('Document excerpt', item.excerpt)}</td>"
         "</tr>"
         for item in topic.new_documents
     )
@@ -1610,15 +1696,17 @@ def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
         f"<th scope=\"row\">{_html(item.selection_rank)}</th>"
         f"<td>{_html(item.docid)}</td><td>{_html(item.selected_from_lane)}</td>"
         f"<td>{_html(item.selected_from_lane_rank)}</td>"
+        f"<td>{_html('Original member' if item.is_original_member else 'Facet-only')}</td>"
+        f"<td>{_detail_selected_provenance(item)}</td>"
         f"<td><code>{_html(item.text_sha256)}</code></td>"
-        f"<td>{_detail_text('Stored document text', item.text)}</td></tr>"
+        f"<td>{_detail_text('Document excerpt', item.text)}</td></tr>"
         for item in topic.selected_documents
     )
     return _stage(
         prefix,
         "selected-documents",
         "Selected documents",
-        _table("Selected pool in stored selection order", ("Selection rank", "DocID", "Selected from lane", "Lane rank", "Text SHA-256", "Document text"), rows),
+        _table("Selected pool in stored selection order", ("Selection rank", "DocID", "Selected from lane", "Lane rank", "Original/facet status", "Memberships and rationale", "Text SHA-256", "Document excerpt"), rows),
     )
 
 
@@ -1639,12 +1727,41 @@ def _render_passage_rows(rankings: Sequence[PassageRankingReport]) -> str:
 
 def _render_passages(topic: TopicReport, prefix: str) -> str:
     headings = ("Aggregate rank", "Subnarrative", "DocID", "Selection rank", "BM25 rank", "BM25 score", "Aggregate score", "Document raw logit", "Passage raw logit", "Span support", "Winning passages")
-    visible = _table("Top stored passage rankings", headings, _render_passage_rows(topic.passage_rankings[:5]))
-    remainder = topic.passage_rankings[5:]
-    disclosure = ""
-    if remainder:
-        disclosure = f'<details class="passage-remainder"><summary>Show remaining {len(remainder)} stored passage rankings</summary>{_table("Remaining stored passage rankings", headings, _render_passage_rows(remainder))}</details>'
-    return _stage(prefix, "top-passages", "Top passages", visible + disclosure)
+    groups: list[str] = []
+    for subnarrative in topic.subnarratives:
+        rankings = tuple(
+            row
+            for row in topic.passage_rankings
+            if row.subnarrative_id == subnarrative.subnarrative_id
+        )
+        visible = _table(
+            f"Top stored passage rankings for {subnarrative.subnarrative_id}",
+            headings,
+            _render_passage_rows(rankings[:5]),
+        )
+        remainder = rankings[5:]
+        disclosure = ""
+        if remainder:
+            disclosure = (
+                '<details class="passage-remainder"><summary>Show remaining '
+                f"{len(remainder)} stored passage rankings</summary>"
+                + _table(
+                    f"Remaining stored passage rankings for {subnarrative.subnarrative_id}",
+                    headings,
+                    _render_passage_rows(remainder),
+                )
+                + "</details>"
+            )
+        heading_id = (
+            f"{prefix}-top-passages-{_topic_anchor(subnarrative.subnarrative_id)}"
+        )
+        groups.append(
+            '<section class="passage-ranking-group" '
+            f'aria-labelledby="{_html(heading_id)}"><h3 id="{_html(heading_id)}">'
+            f"Subnarrative {_html(subnarrative.subnarrative_id)}</h3>"
+            f"{visible}{disclosure}</section>"
+        )
+    return _stage(prefix, "top-passages", "Top passages", "".join(groups))
 
 
 def _render_nuggets(topic: TopicReport, prefix: str) -> str:
@@ -1674,7 +1791,7 @@ def _render_retrieval(topic: TopicReport, prefix: str) -> str:
         "<tr>"
         f"<th scope=\"row\">{_html(item.rank)}</th><td>{_html(item.docid)}</td><td>{_html(_number(item.score))}</td>"
         f"<td>{_html(item.selection_rank)}</td><td>{_html(item.selected_from_lane)}</td>"
-        f"<td>{_detail_retrieval_provenance(item)}</td><td>{_detail_text('Stored retrieval document text', item.text)}</td></tr>"
+        f"<td>{_detail_retrieval_provenance(item)}</td><td>{_detail_text('Document excerpt', item.text)}</td></tr>"
         for item in topic.retrieval_output.documents
     )
     intro = f"<p>Selected-pool depth: {_html(topic.retrieval_output.selected_pool_depth)}. Final supported depth: {_html(topic.retrieval_output.final_supported_depth)}.</p>"
@@ -1718,7 +1835,11 @@ def _table(caption: str, headings: Sequence[str], rows: str) -> str:
 def _detail_text(summary: str, value: str | None) -> str:
     if value is None:
         return "Not stored"
-    return f'<details><summary>{_html(summary)}</summary><p class="break">{_html(value)}</p></details>'
+    excerpt = value[:_DOCUMENT_EXCERPT_CHARACTERS]
+    if len(value) > _DOCUMENT_EXCERPT_CHARACTERS:
+        excerpt += "…"
+    label = f"{summary} (first {_DOCUMENT_EXCERPT_CHARACTERS} characters)"
+    return f'<details><summary>{_html(label)}</summary><p class="break">{_html(excerpt)}</p></details>'
 
 
 def _detail_passages(passages: Sequence[WinningPassageReport]) -> str:
@@ -1750,6 +1871,16 @@ def _detail_retrieval_provenance(item: RetrievalDocumentReport) -> str:
         f"<dt>Subnarrative scores</dt><dd class=\"break\">{_html(scores)}</dd>"
         f"<dt>Canonical nugget IDs</dt><dd class=\"break\">{_html(nuggets)}</dd>"
         f"<dt>Source seals</dt><dd class=\"break\">{_html(seals)}</dd></dl></details>"
+    )
+
+
+def _detail_selected_provenance(item: SelectedDocumentReport) -> str:
+    memberships = "; ".join(_membership_text(value) for value in item.memberships)
+    return (
+        "<details><summary>Memberships and selection rationale</summary><dl>"
+        f'<dt>Memberships</dt><dd class="break">{_html(memberships)}</dd>'
+        f'<dt>Rationale</dt><dd class="break">{_html(item.selection_rationale)}</dd>'
+        "</dl></details>"
     )
 
 

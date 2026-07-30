@@ -1023,6 +1023,135 @@ def test_html_renderer_discloses_passage_rankings_after_the_first_five(tmp_path:
         assert f"ranked-doc-{rank}" in remainder
 
 
+def test_selected_documents_retain_membership_status_and_selection_rationale(
+    tmp_path: Path,
+) -> None:
+    """Dropping validated selection provenance must make this contract fail."""
+    config_path, _output = _write_debug_run(tmp_path)
+
+    topic = load_debug_report_data(config_path).topics[0]
+
+    original, facet_only = topic.selected_documents
+    assert original.is_original_member is True
+    assert [lane["lane_name"] for lane in original.memberships] == ["original"]
+    assert original.selection_rationale == "Selected at slot 1 from original rank 1."
+    assert facet_only.is_original_member is False
+    assert [lane["lane_name"] for lane in facet_only.memberships] == [
+        "facet:subnarrative-1:text"
+    ]
+    assert facet_only.selection_rationale == (
+        "Selected at slot 2 from facet:subnarrative-1:text rank 1."
+    )
+
+    rendered = render_debug_report(load_debug_report_data(config_path))
+    assert "Original member" in rendered
+    assert "Facet-only" in rendered
+    assert "Selected at slot 2 from facet:subnarrative-1:text rank 1." in rendered
+    assert "lane_name=original" in rendered
+
+
+def test_document_disclosures_render_bounded_excerpts(tmp_path: Path) -> None:
+    """A renderer that emits an entire stored body must fail this boundary test."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    long_text = "A" * 520 + "FULL-BODY-SENTINEL"
+    selected = replace(topic.selected_documents[0], text=long_text)
+    retrieval = replace(topic.retrieval_output.documents[0], text=long_text)
+    new = replace(topic.new_documents[0], excerpt=long_text)
+    rendered = render_debug_report(
+        replace(
+            loaded,
+            topics=(
+                replace(
+                    topic,
+                    selected_documents=(selected, *topic.selected_documents[1:]),
+                    retrieval_output=replace(
+                        topic.retrieval_output,
+                        documents=(retrieval, *topic.retrieval_output.documents[1:]),
+                    ),
+                    new_documents=(new, *topic.new_documents[1:]),
+                ),
+            ),
+        )
+    )
+
+    assert "A" * 500 + "…" in rendered
+    assert "FULL-BODY-SENTINEL" not in rendered
+    assert rendered.count("Document excerpt (first 500 characters)") >= 3
+
+
+def test_passage_disclosure_keeps_five_visible_rows_per_subnarrative(
+    tmp_path: Path,
+) -> None:
+    """Flattening all subnarratives before disclosure must hide this second top five."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    first_sub = topic.subnarratives[0]
+    second_sub = replace(first_sub, subnarrative_id="subnarrative-2")
+    source = topic.passage_rankings[0]
+    rankings = tuple(
+        replace(
+            source,
+            subnarrative_id=sub.subnarrative_id,
+            docid=f"{sub.subnarrative_id}-doc-{rank}",
+            aggregate_rank=rank,
+        )
+        for sub in (first_sub, second_sub)
+        for rank in range(1, 7)
+    )
+    rendered = render_debug_report(
+        replace(
+            loaded,
+            topics=(
+                replace(
+                    topic,
+                    subnarratives=(first_sub, second_sub),
+                    passage_rankings=rankings,
+                ),
+            ),
+        )
+    )
+
+    groups = rendered.split('<section class="passage-ranking-group"')[1:]
+    assert len(groups) == 2
+    for sub, group in zip((first_sub, second_sub), groups, strict=True):
+        visible, remainder = group.split(
+            '<details class="passage-remainder">', 1
+        )
+        for rank in range(1, 6):
+            assert f"{sub.subnarrative_id}-doc-{rank}" in visible
+        assert f"{sub.subnarrative_id}-doc-6" not in visible
+        assert f"{sub.subnarrative_id}-doc-6" in remainder
+
+
+def test_html_includes_run_summary_and_pipeline_legend(tmp_path: Path) -> None:
+    """Removing either top-level orientation aid must fail semantic coverage."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+
+    rendered = render_debug_report(loaded)
+
+    assert '<section id="run-summary"' in rendered
+    assert "<dt>Included topics</dt><dd>1: rag2026-0</dd>" in rendered
+    assert "Validation state" in rendered
+    assert str(loaded.retrieval_config_path) in rendered
+    assert '<section id="pipeline-legend"' in rendered
+    for label in (
+        "Narrative",
+        "Subnarratives",
+        "New documents",
+        "Selected documents",
+        "Top passages",
+        "Final selected nuggets",
+        "Final retrieval",
+        "Final RAG",
+    ):
+        assert f"<dt>{label}</dt>" in rendered
+    assert "no original lane membership" in rendered
+
+
 def test_html_renderer_uses_disjoint_anchor_namespaces_for_valid_topic_id_collision(
     tmp_path: Path,
 ) -> None:
