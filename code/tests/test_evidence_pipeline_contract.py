@@ -15,6 +15,7 @@ from trec_rag.facet_evidence import (
     SelectionPolicy,
     SubnarrativeContext,
     _byte_offsets,
+    _scoring_text_and_boundaries,
     _word_before,
     extract_document_candidates,
     select_subnarrative_candidates,
@@ -126,6 +127,29 @@ def test_source_coordinate_cache_reuses_document_offsets() -> None:
     source = CountedText("Repeated source text.")
 
     assert _byte_offsets(source) == _byte_offsets(source)
+
+
+def test_bounded_document_projection_cache_retains_only_current_document() -> None:
+    """Document projection caches release superseded document text."""
+    _scoring_text_and_boundaries.cache_clear()
+    _byte_offsets.cache_clear()
+    sources = (
+        "First\t document.",
+        "Second\n document.",
+        "Café  Ωmega.",
+    )
+
+    for source in sources:
+        _scoring_text_and_boundaries(source)
+        _byte_offsets(source)
+
+    assert _scoring_text_and_boundaries.cache_info().currsize == 1
+    assert _byte_offsets.cache_info().currsize == 1
+    assert _scoring_text_and_boundaries("Café  Ωmega.") == (
+        "Café Ωmega.",
+        (0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12),
+    )
+    assert _byte_offsets("Café  Ωmega.") == (0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14)
 
 
 def test_exact_extraction_keeps_character_byte_and_adjacent_evidence() -> None:
