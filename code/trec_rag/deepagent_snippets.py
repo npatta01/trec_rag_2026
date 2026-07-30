@@ -609,6 +609,32 @@ def _source_chunk_tuple(value: object) -> tuple[str, str, int, int, str]:
     return document_id, chunk_id, start_char, end_char, text_sha256
 
 
+def _scored_chunk_record(row: ScoredTextChunk) -> dict[str, object]:
+    return {
+        "chunk_id": row.chunk.chunk_id,
+        "relevance_score": row.relevance_score,
+    }
+
+
+def _scored_chunk_tuple(value: object) -> tuple[str, float]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "chunk_id",
+        "relevance_score",
+    }:
+        raise ValueError("invalid scored chunk record")
+    chunk_id = value["chunk_id"]
+    relevance_score = value["relevance_score"]
+    if (
+        not isinstance(chunk_id, str)
+        or not chunk_id.strip()
+        or isinstance(relevance_score, bool)
+        or not isinstance(relevance_score, (int, float))
+        or not math.isfinite(relevance_score)
+    ):
+        raise ValueError("invalid scored chunk record")
+    return chunk_id, float(relevance_score)
+
+
 class SnippetResultCache:
     """Content-addressed persistent cache for complete, model-visible pages."""
 
@@ -638,13 +664,23 @@ class SnippetResultCache:
 
     def get(
         self, identity: Mapping[str, object]
-    ) -> tuple[SnippetPage, int, tuple[tuple[str, str, int, int, str], ...]] | None:
+    ) -> tuple[
+        SnippetPage,
+        int,
+        tuple[tuple[str, str, int, int, str], ...],
+        tuple[tuple[str, float], ...],
+    ] | None:
         with self.locked(identity):
             return self._get_locked(identity)
 
     def _get_locked(
         self, identity: Mapping[str, object]
-    ) -> tuple[SnippetPage, int, tuple[tuple[str, str, int, int, str], ...]] | None:
+    ) -> tuple[
+        SnippetPage,
+        int,
+        tuple[tuple[str, str, int, int, str], ...],
+        tuple[tuple[str, float], ...],
+    ] | None:
         path = self._path(identity)
         if not path.exists():
             return None
@@ -657,6 +693,8 @@ class SnippetResultCache:
                 "response_sha256",
                 "source_chunks",
                 "source_chunks_sha256",
+                "scored_chunks",
+                "scored_chunks_sha256",
             }:
                 raise ValueError("unexpected cache fields")
             if payload.get("identity") != dict(identity):
@@ -676,6 +714,16 @@ class SnippetResultCache:
             source_chunk_records = tuple(
                 _source_chunk_tuple(record) for record in source_chunks
             )
+            scored_chunks = payload.get("scored_chunks")
+            if not isinstance(scored_chunks, list):
+                raise ValueError("missing scored chunks")
+            if payload.get("scored_chunks_sha256") != _sha256_text(
+                _canonical_json(scored_chunks)
+            ):
+                raise ValueError("scored chunk digest mismatch")
+            scored_chunk_records = tuple(
+                _scored_chunk_tuple(record) for record in scored_chunks
+            )
             page = self._page_from_response(response)
             if (
                 page.document_id != identity.get("document_id")
@@ -683,7 +731,7 @@ class SnippetResultCache:
             ):
                 raise ValueError("response binding mismatch")
             page_offset = self._valid_page_offset(payload.get("page_offset"))
-            return page, page_offset, source_chunk_records
+            return page, page_offset, source_chunk_records, scored_chunk_records
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise SnippetCacheIntegrityError("invalid snippet cache entry") from exc
 
@@ -694,6 +742,7 @@ class SnippetResultCache:
         *,
         page_offset: int,
         source_chunks: Sequence[TextChunk] | None = None,
+        scored_chunks: Sequence[ScoredTextChunk] | None = None,
     ) -> None:
         with self.locked(identity):
             self._put_locked(
@@ -701,6 +750,7 @@ class SnippetResultCache:
                 page,
                 page_offset=page_offset,
                 source_chunks=source_chunks,
+                scored_chunks=scored_chunks,
             )
 
     def _put_locked(
@@ -710,6 +760,7 @@ class SnippetResultCache:
         *,
         page_offset: int,
         source_chunks: Sequence[TextChunk] | None = None,
+        scored_chunks: Sequence[ScoredTextChunk] | None = None,
     ) -> None:
         page_offset = self._valid_page_offset(page_offset)
         response = page.as_dict()
@@ -727,6 +778,17 @@ class SnippetResultCache:
         source_chunk_records = [
             _source_chunk_record(chunk) for chunk in source_chunks
         ]
+        if scored_chunks is None:
+            scores_by_chunk_id = {
+                snippet.chunk_id: snippet.relevance_score for snippet in page.snippets
+            }
+            scored_chunks = tuple(
+                ScoredTextChunk(chunk, scores_by_chunk_id[chunk.chunk_id])
+                for chunk in source_chunks
+            )
+        scored_chunk_records = [
+            _scored_chunk_record(row) for row in scored_chunks
+        ]
         payload = {
             "identity": dict(identity),
             "response": response,
@@ -735,6 +797,10 @@ class SnippetResultCache:
             "source_chunks": source_chunk_records,
             "source_chunks_sha256": _sha256_text(
                 _canonical_json(source_chunk_records)
+            ),
+            "scored_chunks": scored_chunk_records,
+            "scored_chunks_sha256": _sha256_text(
+                _canonical_json(scored_chunk_records)
             ),
         }
         path = self._path(identity)
@@ -930,7 +996,12 @@ class RelevantSnippetExtractor:
         with self._result_cache.locked(identity):
             cached = self._result_cache._get_locked(identity)
             if cached is not None:
-                cached_page, cached_offset, source_chunk_records = cached
+                (
+                    cached_page,
+                    cached_offset,
+                    source_chunk_records,
+                    scored_chunk_records,
+                ) = cached
                 self._validate_cached_page(
                     cached_page,
                     cached_offset,
@@ -938,6 +1009,7 @@ class RelevantSnippetExtractor:
                     binding_identity,
                     document_text,
                     source_chunk_records,
+                    scored_chunk_records,
                 )
                 return SnippetExtractionResult(
                     cached_page,
@@ -965,6 +1037,7 @@ class RelevantSnippetExtractor:
                 page,
                 page_offset=offset,
                 source_chunks=chunks,
+                scored_chunks=ranked,
             )
             return SnippetExtractionResult(
                 page,
@@ -1185,6 +1258,7 @@ class RelevantSnippetExtractor:
         binding_identity: Mapping[str, object],
         document_text: str,
         source_chunk_records: Sequence[tuple[str, str, int, int, str]],
+        scored_chunk_records: Sequence[tuple[str, float]],
     ) -> None:
         try:
             if request_offset != page_offset:
@@ -1209,6 +1283,7 @@ class RelevantSnippetExtractor:
                 raise ValueError("cached returned score does not match snippets")
             valid_source_chunks: set[tuple[str, str, int, int, str]] = set()
             source_chunk_ids: set[str] = set()
+            source_chunks_by_id: dict[str, TextChunk] = {}
             for record in source_chunk_records:
                 document_id, chunk_id, start_char, end_char, text_sha256 = record
                 if (
@@ -1224,6 +1299,36 @@ class RelevantSnippetExtractor:
                     raise ValueError("cached source chunks do not match document")
                 valid_source_chunks.add(record)
                 source_chunk_ids.add(chunk_id)
+                source_chunks_by_id[chunk_id] = TextChunk(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    text=document_text[start_char:end_char],
+                    start_char=start_char,
+                    end_char=end_char,
+                )
+            scored_chunk_ids: set[str] = set()
+            ranked_from_cache: list[ScoredTextChunk] = []
+            for chunk_id, relevance_score in scored_chunk_records:
+                if chunk_id not in source_chunks_by_id or chunk_id in scored_chunk_ids:
+                    raise ValueError("cached scores do not match source chunks")
+                scored_chunk_ids.add(chunk_id)
+                ranked_from_cache.append(
+                    ScoredTextChunk(source_chunks_by_id[chunk_id], relevance_score)
+                )
+            if scored_chunk_ids != source_chunk_ids:
+                raise ValueError("cached scores do not cover source chunks")
+            ranked_from_cache.sort(
+                key=lambda row: (-row.relevance_score, row.chunk.chunk_id)
+            )
+            expected_page = self._page(
+                page.document_id,
+                page.focus_query,
+                self._deduplicate(ranked_from_cache),
+                page_offset,
+                binding_identity,
+            )
+            if page != expected_page:
+                raise ValueError("cached page does not match ranked evidence")
             chunk_ids: set[str] = set()
             records: set[tuple[int, int, str]] = set()
             for snippet in page.snippets:

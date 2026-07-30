@@ -798,6 +798,27 @@ def test_cache_rejects_inconsistent_pagination_metadata(
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("residual_count", 3),
+        ("residual_top_score", 0.5),
+    ],
+)
+def test_cache_rejects_count_plausible_but_ranking_incorrect_pagination_signals(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = _cache_file(tmp_path / "pages")
+    _rewrite_checksum_consistent_cache_response(
+        cache_file, lambda response: response.__setitem__(field, value)
+    )
+
+    with pytest.raises(SnippetCacheIntegrityError):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+@pytest.mark.parametrize(
     "mutation",
     ["page_size", "duplicate", "offset", "text", "document_chunk_identity"],
 )
