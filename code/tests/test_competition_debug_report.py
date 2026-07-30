@@ -2314,6 +2314,7 @@ def test_compact_selected_document_disclosures_keep_all_diagnostics_available(
 
     assert "#1" in summary
     assert first.docid in summary
+    assert summary.count('class="selected-document-summary-field"') == 4
     assert "Original member" in summary
     assert "Selected lane: <code>original</code>" in summary
     assert "Lane rank: 1" in summary
@@ -2342,6 +2343,7 @@ def test_compact_selected_document_disclosures_keep_all_diagnostics_available(
         rendered_topic, remainder_item.docid
     )
 
+    assert remainder_summary.count('class="selected-document-summary-field"') == 4
     assert debug_report._selected_document_reason(remainder_item) not in remainder_summary
     assert "aggregate_score" not in remainder_summary
     assert "bm25_score" not in remainder_summary

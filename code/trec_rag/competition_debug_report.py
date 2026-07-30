@@ -2328,6 +2328,7 @@ summary {{ min-height: 44px; display: list-item; padding-block: .6rem; cursor: p
 .new-document-lane > summary, .passage-ranking-disclosure > summary, .canonical-cluster-diagnostics > summary, .canonical-result > summary {{ padding-inline: .5rem; }}
 .new-document-lane > .new-document-list, .passage-ranking-disclosure > .passage-diagnostics, .canonical-cluster-diagnostics > .table-wrap, .canonical-result > .canonical-result-detail {{ margin: .5rem; }}
 .selected-document-disclosure > summary, .selected-document-remainder > summary {{ padding-inline: .5rem; }}
+.selected-document-disclosure > summary > * + * {{ margin-inline-start: .65rem; }}
 .selected-document-detail, .selected-document-remainder > .selected-document-list {{ margin: .5rem; }}
 .card-heading {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem .75rem; margin: 0 0 .75rem; }}
 .card-rank, .citation-chip {{ display: inline-flex; min-height: 2rem; align-items: center; padding: .2rem .65rem; border-radius: 999px; font-weight: 750; }}
@@ -2752,10 +2753,10 @@ def _render_selected_document_disclosure(
         f'id="selected-document-{_topic_anchor(topic.topic_id)}-{_html(item.selection_rank)}">'
         '<summary>'
         f'<span class="card-rank">#{_html(item.selection_rank)}</span>'
-        f'<code>{_html(item.docid)}</code>'
-        f'<span>{_html(status)}</span>'
-        f'<span>Selected lane: <code>{_html(item.selected_from_lane)}</code></span>'
-        f'<span>Lane rank: {_html(item.selected_from_lane_rank)}</span>'
+        f'<span class="selected-document-summary-field"><code>{_html(item.docid)}</code></span>'
+        f'<span class="selected-document-summary-field">{_html(status)}</span>'
+        f'<span class="selected-document-summary-field">Selected lane: <code>{_html(item.selected_from_lane)}</code></span>'
+        f'<span class="selected-document-summary-field">Lane rank: {_html(item.selected_from_lane_rank)}</span>'
         '</summary><div class="selected-document-detail">'
         f'<p class="selection-reason">{_html(_selected_document_reason(item))}</p>'
         '<dl class="card-metadata">'
