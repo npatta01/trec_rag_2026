@@ -8,6 +8,7 @@ from hashlib import sha256
 import html
 import json
 from pathlib import Path
+import re
 import socket
 import zipfile
 
@@ -738,7 +739,7 @@ def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_tex
     assert 'name="viewport"' in rendered
     assert 'name="color-scheme"' in rendered
     assert "<main" in rendered and "<nav" in rendered
-    assert '<section id="topic-rag2026-0"' in rendered
+    assert '<section id="topic-literal-rag2026-0"' in rendered
     headings = (
         "Narrative",
         "Subnarratives",
@@ -775,8 +776,10 @@ def test_html_renderer_discloses_passage_rankings_after_the_first_five(tmp_path:
     )
 
     rendered = render_debug_report(replace(loaded, topics=(replace(topic, passage_rankings=rankings),)))
-    passage_section = rendered.split('<section id="stage-rag2026-0-top-passages"', 1)[1].split(
-        '<section id="stage-rag2026-0-final-selected-nuggets"', 1
+    passage_section = rendered.split(
+        '<section id="stage-literal-rag2026-0-top-passages"', 1
+    )[1].split(
+        '<section id="stage-literal-rag2026-0-final-selected-nuggets"', 1
     )[0]
     visible, remainder = passage_section.split('<details class="passage-remainder">', 1)
 
@@ -785,3 +788,23 @@ def test_html_renderer_discloses_passage_rankings_after_the_first_five(tmp_path:
     for rank in range(6, 8):
         assert f"ranked-doc-{rank}" not in visible
         assert f"ranked-doc-{rank}" in remainder
+
+
+def test_html_renderer_uses_disjoint_anchor_namespaces_for_valid_topic_id_collision(
+    tmp_path: Path,
+) -> None:
+    """A hashed unsafe ID must not collide with a literal safe ID."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    source = loaded.topics[0]
+    hashed_topic = replace(source, topic_id="x!")
+    literal_topic = replace(source, topic_id="topic-4038e65dabd89221")
+
+    rendered = render_debug_report(replace(loaded, topics=(hashed_topic, literal_topic)))
+
+    assert 'href="#topic-hash-4038e65dabd89221"' in rendered
+    assert 'href="#topic-literal-topic-4038e65dabd89221"' in rendered
+    assert '<section id="topic-hash-4038e65dabd89221"' in rendered
+    assert '<section id="topic-literal-topic-4038e65dabd89221"' in rendered
+    section_ids = re.findall(r'<section id="([^"]+)"', rendered)
+    assert len(section_ids) == len(set(section_ids))

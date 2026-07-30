@@ -1634,8 +1634,8 @@ def _number(value: int | float) -> str:
 def _topic_anchor(topic_id: str) -> str:
     """Return a stable HTML-safe anchor token without trusting stored text."""
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", topic_id):
-        return topic_id
-    return f"topic-{sha256(topic_id.encode('utf-8')).hexdigest()[:16]}"
+        return f"literal-{topic_id}"
+    return f"hash-{sha256(topic_id.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _status_class(state: str) -> str:
