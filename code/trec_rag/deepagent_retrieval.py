@@ -209,11 +209,20 @@ def reciprocal_rank_fuse(
 def _create_agent(model: str, search_tool: Callable[[str], str]) -> _Agent:
     """Keep the Deep Agents 0.7 construction surface intentionally narrow."""
     from deepagents import create_deep_agent
+    from langchain_openrouter import ChatOpenRouter
+
+    prefix = "openrouter:"
+    if not isinstance(model, str) or not model.startswith(prefix):
+        raise ValueError("model must match openrouter:<model-id>")
+    model_id = model[len(prefix) :]
+    if not model_id or model_id != model_id.strip():
+        raise ValueError("model must match openrouter:<model-id>")
+    provider_model = ChatOpenRouter(model=model_id, max_retries=0)
 
     return cast(
         _Agent,
         create_deep_agent(
-            model=model,
+            model=provider_model,
             tools=[search_tool],
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             middleware=[_RetrievalOnlyMiddleware()],

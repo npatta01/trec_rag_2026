@@ -14,6 +14,7 @@ from deepagents import create_deep_agent
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
+from langchain_openrouter import ChatOpenRouter
 from pydantic import Field
 
 from trec_rag.deepagent_retrieval import (
@@ -214,8 +215,10 @@ def test_fusion_provenance_is_deeply_immutable_and_jsonable() -> None:
 def test_retrieve_searches_untouched_narrative_before_agent_followups() -> None:
     fake_retriever = FakeRetriever()
     factory_queries = []
+    factory_models = []
 
-    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+    def agent_factory(model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        factory_models.append(model)
         factory_queries.extend(fake_retriever.queries)
         return FakeAgent(
             lambda _payload: (
@@ -227,6 +230,7 @@ def test_retrieve_searches_untouched_narrative_before_agent_followups() -> None:
     result = _sdk(fake_retriever, agent_factory).retrieve("  supplied narrative exactly  ")
 
     assert [query.query_text for query in factory_queries] == ["  supplied narrative exactly  "]
+    assert factory_models == ["test-model"]
     assert fake_retriever.queries[0].query_text == "  supplied narrative exactly  "
     assert [search.kind for search in result.searches] == ["original", "followup"]
     assert result.narrative == "  supplied narrative exactly  "
@@ -357,19 +361,42 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
         return object()
 
     monkeypatch.setattr("deepagents.create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     tool = lambda _query: "{}"
 
-    agent = _create_agent("openrouter:test-model", tool)
+    agent = _create_agent("openrouter:deepseek/test-model", tool)
 
     assert agent is not None
     assert len(calls) == 1
     args, kwargs = calls[0]
     assert args == ()
-    assert kwargs["model"] == "openrouter:test-model"
+    assert set(kwargs) == {"model", "tools", "system_prompt", "middleware"}
+    assert isinstance(kwargs["model"], ChatOpenRouter)
+    assert kwargs["model"].model_name == "deepseek/test-model"
+    assert kwargs["model"].max_retries == 0
     assert kwargs["tools"] == [tool]
     assert kwargs["system_prompt"] == ANY
     assert len(kwargs["middleware"]) == 1
     assert isinstance(kwargs["middleware"][0], deepagent_retrieval._RetrievalOnlyMiddleware)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["test:model", "openrouter:", "openrouter:   ", " openrouter:test/model"],
+)
+def test_factory_rejects_invalid_openrouter_specs_before_agent_construction(
+    monkeypatch, model: str
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "deepagents.create_deep_agent",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(ValueError, match="openrouter:<model-id>"):
+        _create_agent(model, lambda _query: "{}")
+
+    assert calls == []
 
 
 def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) -> None:
@@ -377,10 +404,11 @@ def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) ->
     unrelated_model = CaptureChatModel(responses=[AIMessage(content="Unrelated done.")])
     resolved_model = [sdk_model]
 
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr("deepagents.graph.resolve_model", lambda _spec: resolved_model[0])
     result = DeepAgentRetriever(
         retriever=FakeRetriever(),
-        model="test:deepagent-retrieval-capture",
+        model="openrouter:test/deepagent-retrieval-capture",
         tracing=FakeTracing(),
     ).retrieve("narrative")
 
@@ -393,7 +421,7 @@ def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) ->
 
     resolved_model[0] = unrelated_model
     unrelated_agent = create_deep_agent(
-        model="test:deepagent-retrieval-capture",
+        model="openrouter:test/deepagent-retrieval-capture",
         tools=[unrelated_tool],
     )
     unrelated_agent.invoke({"messages": [{"role": "user", "content": "unrelated"}]})
@@ -500,12 +528,12 @@ def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(
         "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever", OfflineRemoteRetriever
     )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setenv("DEEPAGENT_MODEL", "environment-model")
+    monkeypatch.setenv("DEEPAGENT_MODEL", "openrouter:environment-model")
     tracing = FakeTracing()
 
     configured = DeepAgentRetriever.from_env(
         root=tmp_path,
-        model="constructor-model",
+        model="openrouter:constructor-model",
         tracing=tracing,
     )
     from_environment = DeepAgentRetriever.from_env(root=tmp_path, tracing=tracing)
@@ -513,8 +541,8 @@ def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(
     defaulted = DeepAgentRetriever.from_env(root=tmp_path, tracing=tracing)
 
     assert [sdk._model for sdk in (configured, from_environment, defaulted)] == [
-        "constructor-model",
-        "environment-model",
+        "openrouter:constructor-model",
+        "openrouter:environment-model",
         "openrouter:deepseek/deepseek-v4-flash",
     ]
     assert len(created) == 3
