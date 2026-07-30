@@ -209,7 +209,12 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
 def load_queries(path: Path) -> list[tuple[str, str]]:
     """Read the canonical headerless ``narrative_id<TAB>narrative`` topic TSV."""
     topics = load_narrative_topics(path)
-    if topics[0].id.casefold() in {"qid", "query_id", "topic_id", "narrative_id"}:
+    if topics[0].id.strip().casefold() in {
+        "qid",
+        "query_id",
+        "topic_id",
+        "narrative_id",
+    }:
         raise ValueError(f"{path}:1: topic TSV must not have a header")
     queries = [(topic.id, topic.narrative) for topic in topics]
     return queries
@@ -891,12 +896,12 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
         value = value.replace(secret, "[REDACTED]")
         decoded_value = value
         while True:
+            if secret in decoded_value:
+                return "[REDACTED]"
             percent_decoded = unquote(decoded_value)
             if percent_decoded == decoded_value:
                 break
             decoded_value = percent_decoded
-        if secret in decoded_value:
-            return "[REDACTED]"
         while True:
             decoded: list[str] = []
             spans: list[tuple[int, int]] = []

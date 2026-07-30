@@ -154,6 +154,7 @@ def test_topic_selection_is_unique_known_and_in_canonical_tsv_order(tmp_path: Pa
     ("contents", "message"),
     [
         ("qid\tnarrative\nrag2026-0\tQuestion\n", "header"),
+        (" qid\tnarrative\nrag2026-0\tQuestion\n", "header"),
         ("rag2026-0\n", "expected qid<TAB>narrative"),
     ],
 )
@@ -1158,15 +1159,29 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
     assert "provider-reflected-[REDACTED]" in persisted
 
 
+@pytest.mark.parametrize(
+    ("api_key", "reflected_key"),
+    [
+        ("secret-token", "secret%2Dtoken"),
+        ("secret-token", "secret%252Dtoken"),
+        pytest.param(
+            "secret%2Dtoken",
+            "secret%252Dtoken",
+            id="configured-secret-contains-percent-escape",
+        ),
+    ],
+)
 def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    api_key: str,
+    reflected_key: str,
 ) -> None:
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-2",))
-    api_key = "secret-token"
     response = FakeHttpResponse(
         200,
         {
-            "id": "provider-reflected-secret%2Dtoken",
+            "id": f"provider-reflected-{reflected_key}",
             "choices": [
                 {
                     "message": {
@@ -1194,7 +1209,9 @@ def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
 
     raw = json.loads(next((config.work_dir / "raw").glob("*.json")).read_text(encoding="utf-8"))
     assert raw["id"] == "[REDACTED]"
-    assert "secret%2Dtoken" not in json.dumps(raw)
+    persisted = json.dumps(raw)
+    assert api_key not in persisted
+    assert reflected_key not in persisted
 
 
 class FakeHttpResponse:
