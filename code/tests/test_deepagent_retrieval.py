@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from contextlib import contextmanager
@@ -8,6 +9,9 @@ from typing import Any, Callable, Sequence
 from unittest.mock import ANY
 
 import pytest
+import trec_rag.deepagent_retrieval as deepagent_retrieval
+from deepagents import create_deep_agent
+from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from pydantic import Field
@@ -358,22 +362,22 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     agent = _create_agent("openrouter:test-model", tool)
 
     assert agent is not None
-    assert calls == [
-        (
-            (),
-            {
-                "model": "openrouter:test-model",
-                "tools": [tool],
-                "system_prompt": ANY,
-            },
-        )
-    ]
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ()
+    assert kwargs["model"] == "openrouter:test-model"
+    assert kwargs["tools"] == [tool]
+    assert kwargs["system_prompt"] == ANY
+    assert len(kwargs["middleware"]) == 1
+    assert isinstance(kwargs["middleware"][0], deepagent_retrieval._RetrievalOnlyMiddleware)
 
 
 def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) -> None:
-    model = CaptureChatModel(responses=[AIMessage(content="Coverage is sufficient.")])
+    sdk_model = CaptureChatModel(responses=[AIMessage(content="Coverage is sufficient.")])
+    unrelated_model = CaptureChatModel(responses=[AIMessage(content="Unrelated done.")])
+    resolved_model = [sdk_model]
 
-    monkeypatch.setattr("deepagents.graph.resolve_model", lambda _spec: model)
+    monkeypatch.setattr("deepagents.graph.resolve_model", lambda _spec: resolved_model[0])
     result = DeepAgentRetriever(
         retriever=FakeRetriever(),
         model="test:deepagent-retrieval-capture",
@@ -381,7 +385,67 @@ def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) ->
     ).retrieve("narrative")
 
     assert result.rationale == "Coverage is sufficient."
-    assert model.captured_tool_names == ["search_climbmix"]
+    assert sdk_model.captured_tool_names == ["search_climbmix"]
+
+    def unrelated_tool(query: str) -> str:
+        """Return a test-only unrelated result."""
+        return query
+
+    resolved_model[0] = unrelated_model
+    unrelated_agent = create_deep_agent(
+        model="test:deepagent-retrieval-capture",
+        tools=[unrelated_tool],
+    )
+    unrelated_agent.invoke({"messages": [{"role": "user", "content": "unrelated"}]})
+
+    assert {"ls", "task", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
+
+
+def test_retrieval_only_middleware_filters_sync_async_models_and_blocks_tools() -> None:
+    middleware = deepagent_retrieval._RetrievalOnlyMiddleware()
+    request = ModelRequest(
+        model=CaptureChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": "search_climbmix"}, {"name": "ls"}],
+    )
+    seen_sync = []
+
+    def sync_handler(filtered: ModelRequest[object]) -> AIMessage:
+        seen_sync.extend(tool["name"] for tool in filtered.tools if isinstance(tool, dict))
+        return AIMessage(content="ok")
+
+    assert middleware.wrap_model_call(request, sync_handler).content == "ok"
+    assert seen_sync == ["search_climbmix"]
+
+    async def verify_async() -> None:
+        seen_async = []
+
+        async def async_handler(filtered: ModelRequest[object]) -> AIMessage:
+            seen_async.extend(tool["name"] for tool in filtered.tools if isinstance(tool, dict))
+            return AIMessage(content="ok")
+
+        reply = await middleware.awrap_model_call(request, async_handler)
+        assert reply.content == "ok"
+        assert seen_async == ["search_climbmix"]
+
+        forbidden = ToolCallRequest(
+            tool_call={"name": "ls", "args": {}, "id": "call-1"},
+            tool=None,
+            state={},
+            runtime=None,
+        )
+        with pytest.raises(PermissionError, match="retrieval-only tool access denied"):
+            middleware.wrap_tool_call(
+                forbidden,
+                lambda _request: pytest.fail("forbidden tool handler was called"),
+            )
+        with pytest.raises(PermissionError, match="retrieval-only tool access denied"):
+            await middleware.awrap_tool_call(
+                forbidden,
+                lambda _request: pytest.fail("forbidden tool handler was called"),
+            )
+
+    asyncio.run(verify_async())
 
 
 def test_tool_returns_bounded_excerpts_but_result_retains_all_candidates() -> None:

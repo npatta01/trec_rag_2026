@@ -9,9 +9,10 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
-from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from trec_rag.deepagent_tracing import RetrievalTracing, create_retrieval_tracing
 from trec_rag.pipeline_config import RetrieverConfig
 from trec_rag.pipeline_models import QueryVariant, RankedCandidate, RetrievedCandidate
@@ -24,11 +25,6 @@ MAX_FOLLOWUP_SEARCHES = 3
 HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
 EXCERPT_MAX_CHARACTERS = 1_000
-_BUILTIN_TOOL_NAMES = frozenset(
-    {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute", "task"}
-)
-_HARNESS_PROFILE_LOCK = Lock()
-_REGISTERED_HARNESS_MODELS: set[str] = set()
 
 RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
 The supplied narrative has already been searched exactly as provided. Use the
@@ -89,6 +85,50 @@ class _FrozenProvenance(dict[str, Any]):
     def __deepcopy__(self, _memo: dict[int, object]) -> dict[str, Any]:
         """Keep existing dataclass serialization compatible with plain dict output."""
         return dict(self)
+
+
+class _RetrievalOnlyMiddleware(AgentMiddleware):
+    """Limit one SDK-created agent to the retrieval tool at every boundary."""
+
+    _ALLOWED_TOOL = "search_climbmix"
+    _DENIED_MESSAGE = "retrieval-only tool access denied"
+
+    @staticmethod
+    def _tool_name(tool: object) -> str | None:
+        if isinstance(tool, Mapping):
+            name = tool.get("name")
+        else:
+            name = getattr(tool, "name", None)
+        return name if isinstance(name, str) else None
+
+    def _filter_tools(self, request: ModelRequest) -> ModelRequest:
+        return request.override(
+            tools=[
+                tool for tool in request.tools if self._tool_name(tool) == self._ALLOWED_TOOL
+            ]
+        )
+
+    def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:
+        return handler(self._filter_tools(request))
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Any]
+    ) -> Any:
+        return await handler(self._filter_tools(request))
+
+    def _require_allowed_tool(self, request: ToolCallRequest) -> None:
+        if request.tool_call.get("name") != self._ALLOWED_TOOL:
+            raise PermissionError(self._DENIED_MESSAGE)
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]) -> Any:
+        self._require_allowed_tool(request)
+        return handler(request)
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]
+    ) -> Any:
+        self._require_allowed_tool(request)
+        return await handler(request)
 
 
 class _Agent(Protocol):
@@ -166,38 +206,17 @@ def reciprocal_rank_fuse(
     )
 
 
-def _ensure_retrieval_harness_profile(model: str) -> None:
-    """Register the exact-model, process-global tool restriction once."""
-    from deepagents import (
-        GeneralPurposeSubagentProfile,
-        HarnessProfile,
-        register_harness_profile,
-    )
-
-    with _HARNESS_PROFILE_LOCK:
-        if model in _REGISTERED_HARNESS_MODELS:
-            return
-        register_harness_profile(
-            model,
-            HarnessProfile(
-                excluded_tools=_BUILTIN_TOOL_NAMES,
-                general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
-            ),
-        )
-        _REGISTERED_HARNESS_MODELS.add(model)
-
-
 def _create_agent(model: str, search_tool: Callable[[str], str]) -> _Agent:
     """Keep the Deep Agents 0.7 construction surface intentionally narrow."""
     from deepagents import create_deep_agent
 
-    _ensure_retrieval_harness_profile(model)
     return cast(
         _Agent,
         create_deep_agent(
             model=model,
             tools=[search_tool],
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+            middleware=[_RetrievalOnlyMiddleware()],
         ),
     )
 
