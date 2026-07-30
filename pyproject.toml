@@ -9,6 +9,7 @@ dependencies = [
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
     "nuggetizer==0.0.5",
+    "openinference-semantic-conventions==0.1.30",
 ]
 
 [dependency-groups]

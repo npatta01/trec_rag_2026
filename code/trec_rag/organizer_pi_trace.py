@@ -20,11 +20,11 @@ from typing import BinaryIO, Iterator
 import zipfile
 
 from trec_rag.organizer_pi_inputs import OrganizerTopic, select_topic
-from trec_rag.phoenix_trace_export import (
+from trec_rag.tracing.phoenix_export import (
     ExportReceipt,
     PhoenixSettings,
     assert_no_secrets,
-    export_trace,
+    export_trace_bundle,
 )
 from trec_rag.pi_event_trace import (
     DEFAULT_PROJECT_NAME,
@@ -32,7 +32,7 @@ from trec_rag.pi_event_trace import (
     build_piika_trace,
     load_pi_events,
 )
-from trec_rag.pi_trace_models import (
+from trec_rag.tracing.models import (
     TraceBundle,
     _strict_json_loads,
     read_trace_bundle,
@@ -392,7 +392,9 @@ def main(
     *,
     bundle_loader: Callable[[Path], TraceBundle] = read_trace_bundle,
     settings_loader: Callable[[], PhoenixSettings] = PhoenixSettings.from_env,
-    exporter: Callable[[TraceBundle, PhoenixSettings], ExportReceipt] = export_trace,
+    exporter: Callable[
+        [TraceBundle, PhoenixSettings], ExportReceipt
+    ] = export_trace_bundle,
     ignored_checker: Callable[[Path], bool] | None = None,
     environment_loader: Callable[[], None] = _load_repository_environment,
     credential_loader: Callable[[PhoenixSettings], Sequence[object]] = _credential_values,

@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 
@@ -18,3 +19,13 @@ def test_reusable_trace_export_is_available_from_the_tracing_package():
     from trec_rag.tracing.phoenix_export import export_trace_bundle
 
     assert export_trace_bundle.__name__ == "export_trace_bundle"
+
+
+def test_openai_semantics_dependency_is_declared_for_core_installs():
+    project_root = Path(__file__).parents[3]
+    metadata = tomllib.loads((project_root / "pyproject.toml").read_text())
+
+    assert any(
+        dependency.startswith("openinference-semantic-conventions")
+        for dependency in metadata["project"]["dependencies"]
+    )

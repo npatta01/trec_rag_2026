@@ -10,8 +10,8 @@ import time
 from typing import Iterable, Mapping, Sequence
 
 from trec_rag.organizer_pi_inputs import OrganizerTopic
-from trec_rag.openai_trace_semantics import piika_tool_schemas
-from trec_rag.pi_trace_models import (
+from trec_rag.tracing.openai_semantics import piika_tool_schemas
+from trec_rag.tracing.models import (
     SpanSpec,
     TraceBundle,
     _strict_json_loads,

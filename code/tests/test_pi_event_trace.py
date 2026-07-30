@@ -12,7 +12,7 @@ from trec_rag.pi_event_trace import (
     build_piika_trace,
     load_pi_events,
 )
-from trec_rag.pi_trace_models import read_trace_bundle, write_trace_bundle
+from trec_rag.tracing.models import read_trace_bundle, write_trace_bundle
 
 
 def _write_jsonl(path, rows):

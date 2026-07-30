@@ -10,9 +10,9 @@ import pytest
 
 import trec_rag.organizer_pi_trace as trace_cli
 from trec_rag.organizer_pi_trace import main
-from trec_rag.phoenix_trace_export import ExportReceipt, PhoenixSettings, SecretStr
+from trec_rag.tracing.phoenix_export import ExportReceipt, PhoenixSettings, SecretStr
 from trec_rag.pi_event_trace import build_piika_trace
-from trec_rag.pi_trace_models import read_trace_bundle, write_trace_bundle
+from trec_rag.tracing.models import read_trace_bundle, write_trace_bundle
 from trec_rag.organizer_pi_inputs import OrganizerTopic
 
 

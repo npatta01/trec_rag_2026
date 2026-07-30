@@ -1557,6 +1557,7 @@ source = { editable = "." }
 dependencies = [
     { name = "filelock" },
     { name = "nuggetizer" },
+    { name = "openinference-semantic-conventions" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "requests-ratelimiter" },
@@ -1583,6 +1584,7 @@ rocm = [
 requires-dist = [
     { name = "filelock", specifier = "==3.20.3" },
     { name = "nuggetizer", specifier = "==0.0.5" },
+    { name = "openinference-semantic-conventions", specifier = "==0.1.30" },
     { name = "pyyaml" },
     { name = "requests", specifier = "==2.32.5" },
     { name = "requests-ratelimiter", specifier = "==0.7.0" },
