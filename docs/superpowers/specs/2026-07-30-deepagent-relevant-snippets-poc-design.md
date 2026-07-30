@@ -17,18 +17,24 @@ The POC will:
 - keep complete retrieved document text in an invocation-local registry;
 - allow the agent to request relevance-ranked snippet pages from any document
   retrieved during that invocation;
+- make both retrieval tools cache-first without exposing cache decisions,
+  keys, paths, or controls to the agent;
 - return ten snippets per page by default and allow pagination until all ranked
   snippets are exhausted;
 - use the existing semantic chunker and a local Mixedbread cross-encoder by
   default;
 - keep a small-LLM ranker as an optional implementation of the same narrow
   ranking interface;
+- provide state-backed ephemeral scratch files for notes and automatic spill of
+  oversized tool results;
 - preserve optional Phoenix tracing without tracing complete documents.
 
 The POC will not add global limits on inspected documents, snippet pages, or
 snippet count. It will not integrate with the official pipeline, organizer
 export, or sealed experiment artifacts. It will not add a CLI, persistent chat
 state, a second corpus retriever, or a production-hardening test matrix.
+Scratch state is not a persistent cache and is discarded with the SDK
+invocation.
 
 ## Confirmed ClimbMix Schema
 
@@ -60,9 +66,8 @@ The existing tool keeps its query and search-budget behavior but returns only:
 The mandatory original-narrative search is still performed before the first
 model call. Its initial model message contains the untouched narrative plus the
 same metadata-only document list. Full text remains in SDK-side result records
-and the invocation-local registry. The retrieval-only middleware exposes exactly
-`search_climbmix` and `extract_relevant_snippets`; filesystem, shell, task, and
-other Deep Agent tools remain unavailable.
+and the invocation-local registry. Cache hits and misses are intentionally absent
+from the model-visible payload.
 
 ### `extract_relevant_snippets`
 
@@ -118,7 +123,7 @@ Scores order chunks by descending relevance, then stable chunk ID. Overlapping
 or duplicate selections are suppressed while distinct relevant regions from
 the same document remain eligible. The POC ranks every non-empty chunk and uses
 no minimum-score threshold, so pagination can continue through the complete
-stable ranking.
+stable, de-duplicated ranking.
 
 The optional small-LLM ranker receives bounded batches of chunk IDs and text and
 returns an ordering. It never receives a complete document in one prompt. This
@@ -129,6 +134,54 @@ Cursor contents are opaque to the model and bind the document ID, focus-query
 hash, ranker/config identity, document-text hash, and next offset. A different
 document, query, ranker, configuration, or document body invalidates the cursor.
 
+## Cache-First Tool Execution
+
+Caching belongs to the tools, not the agent. The model never receives cache
+arguments, cache status, cache paths, continuation tickets, or instructions to
+reuse a prior result.
+
+`search_climbmix` retains the existing `PyseriniRemoteRetriever` cache-first
+behavior and validated provenance. Its only agent-supplied argument, the exact
+`query`, participates in the existing request-cache identity alongside the
+effective retrieval configuration; there is no model-visible cache argument.
+`extract_relevant_snippets` adds a content-addressed result cache under the
+repository's shared reranker cache.
+Before chunking, local model loading, or optional hosted inference, it checks an
+exact tool-result identity containing:
+
+- every tool argument: `document_id`, the exact `focus_query`, and the explicit
+  `cursor` value including `null`;
+- the retrieved document-text SHA-256;
+- `snippets_per_page`, chunk size, overlap, and de-duplication policy;
+- ranker backend, model, revision, scoring policy, and implementation version;
+- cursor schema and tool-result schema versions.
+
+Changing any argument or effective configuration produces a different cache
+identity. The first-page `cursor=null` call is cached like every later page.
+Identical small-LLM calls therefore do not repeat hosted inference. Cache files
+store the full identity, output hash, and response; malformed, stale, or
+identity-mismatched entries are rejected rather than returned. Cache lookup and
+write behavior remains invisible to document ranking and agent reasoning.
+
+Chunk and score caches may use narrower internal identities, but the public
+tool-result cache always includes every tool argument. No cache content is
+stored in Deep Agent scratch state.
+
+## Ephemeral Scratch and Context Spill
+
+The agent uses an explicit Deep Agents 0.7 `StateBackend`, never
+`FilesystemBackend`, `LocalShellBackend`, or another host-mounted backend. It
+may use only state-backed `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
+`glob`, and `grep` alongside the two retrieval tools. `execute`, shell access,
+`task`, subagents, skills, memory, and host paths remain unavailable.
+
+Deep Agents' filesystem middleware automatically moves an oversized tool result
+to `/large_tool_results/...` in the ephemeral state backend and returns a
+preview plus file reference. The agent may inspect that file with paginated
+`read_file` calls or write its own temporary notes. This scratch space exists
+only for the current SDK invocation and is never used as the persistent result
+cache.
+
 ## Invocation State and Data Flow
 
 1. Search the untouched narrative through the existing retriever.
@@ -138,10 +191,13 @@ document, query, ranker, configuration, or document body invalidates the cursor.
    registry and return metadata only.
 5. Let the agent call `extract_relevant_snippets` for a registered document and
    focus query.
-6. Chunk once per document/configuration, rank once per document/focus/backend,
-   and cache both results for the invocation.
-7. Return the next ten ranked, non-duplicate snippets and an optional cursor.
-8. Preserve the existing deterministic document-level RRF result independently
+6. Validate the complete cache identity and return an exact cached page before
+   chunking, loading a ranker, or making an optional hosted call.
+7. On a cache miss, chunk and rank, persist the validated page, and return the
+   next ten ranked, non-duplicate snippets plus an optional cursor.
+8. Let Deep Agents spill oversized tool results or agent notes into ephemeral
+   state-backed scratch files when needed.
+9. Preserve the existing deterministic document-level RRF result independently
    of which snippets the agent inspected.
 
 If the same document ID appears in multiple searches, the first non-empty text
@@ -155,7 +211,8 @@ attributes. Search spans retain document IDs, ranks, scores, lengths, cache
 state, and latency. A snippet-extraction span records document/chunk IDs,
 offsets, scores, backend identity, page offset, and whether another page exists.
 Snippet text is traced only when the existing `trace_content` setting allows
-content; metadata-only mode redacts it.
+content; metadata-only mode redacts it. Scratch paths and scratch-file contents
+are not added by the SDK to manual Phoenix span attributes.
 
 ## Failure Behavior
 
@@ -168,6 +225,8 @@ content; metadata-only mode redacts it.
   characters.
 - Chunker/ranker failures are surfaced without hidden retries.
 - Optional small-LLM failures do not silently switch ranking backends.
+- Invalid or mismatched cache entries fail with a non-disclosing cache-integrity
+  error; the agent is not asked to repair or bypass them.
 - Snippet failures do not change completed searches or document-level fusion.
 
 ## POC Verification
@@ -182,7 +241,11 @@ Keep verification deliberately small:
    contain metadata but not complete document text.
 4. An authorization smoke test rejects a document ID that was not retrieved in
    the current invocation.
-5. A lightweight ranker-contract test covers the default adapter boundary and
+5. A cache-first smoke test proves an exact repeated call does no ranker/hosted
+   work and that changing each tool argument changes the result-cache identity.
+6. A tool-allowlist smoke test permits ephemeral state read/write tools while
+   rejecting shell, task, and host-filesystem access.
+7. A lightweight ranker-contract test covers the default adapter boundary and
    the optional small-LLM adapter without a live hosted call.
 
 Run the existing focused Deep Agent, tracing, chunking, and remote-retriever
