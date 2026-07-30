@@ -393,19 +393,18 @@ def _credential_fingerprint(api_key: str | None) -> str | None:
     return sha256(api_key.encode()).hexdigest() if api_key is not None else None
 
 
-def _instrument_langchain(provider: _TracerProvider, _trace_content: bool) -> None:
+def _instrument_langchain(provider: _TracerProvider, trace_content: bool) -> None:
     """Install the one process-global LangChain instrumentor for a resolved provider."""
     LangChainInstrumentor().instrument(
         tracer_provider=provider,
         config=TraceConfig(
-            # Generic LangChain values may contain opaque cursors, provider
-            # responses, or state-backend paths. Purpose-specific manual spans
-            # below are the only content-bearing tracing surface.
-            hide_llm_invocation_parameters=True,
-            hide_inputs=True,
-            hide_outputs=True,
-            hide_input_text=True,
-            hide_output_text=True,
+            # Content mode is intended for interactive Phoenix debugging. The
+            # caller can still select metadata-only tracing explicitly.
+            hide_llm_invocation_parameters=not trace_content,
+            hide_inputs=not trace_content,
+            hide_outputs=not trace_content,
+            hide_input_text=not trace_content,
+            hide_output_text=not trace_content,
         ),
     )
 

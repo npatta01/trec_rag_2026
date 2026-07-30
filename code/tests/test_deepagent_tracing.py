@@ -324,14 +324,9 @@ def test_real_langchain_instrumentation_respects_content_mode_in_fresh_process(
     serialized_spans = json.dumps(exported["spans"], sort_keys=True)
 
     assert exported["spans"]
-    assert all(
-        exported["sentinels"][key] not in serialized_spans
-        for key in ("cursor", "scratch")
-    ), serialized_spans
     if trace_content:
         assert all(
-            exported["sentinels"][key] in serialized_spans
-            for key in ("narrative", "snippet")
+            value in serialized_spans for value in exported["sentinels"].values()
         )
     else:
         assert all(
@@ -432,19 +427,26 @@ def test_metadata_only_exception_does_not_export_secret_details(
     assert span.attributes["error.type"] == "RuntimeError"
 
 
-def test_instrumentation_is_idempotent_per_provider_identity(provider: TracerProvider) -> None:
+@pytest.mark.parametrize("trace_content", [False, True])
+def test_instrumentation_is_idempotent_per_provider_identity(
+    provider: TracerProvider, trace_content: bool
+) -> None:
     with patch("trec_rag.deepagent_tracing.LangChainInstrumentor.instrument") as instrument:
-        create_retrieval_tracing(environ={}, tracer_provider=provider)
-        create_retrieval_tracing(environ={}, tracer_provider=provider)
+        create_retrieval_tracing(
+            environ={}, tracer_provider=provider, trace_content=trace_content
+        )
+        create_retrieval_tracing(
+            environ={}, tracer_provider=provider, trace_content=trace_content
+        )
 
     assert instrument.call_count == 1
     assert instrument.call_args.kwargs["tracer_provider"] is provider
     config = instrument.call_args.kwargs["config"]
-    assert config.hide_llm_invocation_parameters is True
-    assert config.hide_inputs is True
-    assert config.hide_outputs is True
-    assert config.hide_input_text is True
-    assert config.hide_output_text is True
+    assert config.hide_llm_invocation_parameters is (not trace_content)
+    assert config.hide_inputs is (not trace_content)
+    assert config.hide_outputs is (not trace_content)
+    assert config.hide_input_text is (not trace_content)
+    assert config.hide_output_text is (not trace_content)
 
 
 def test_equivalent_live_setup_reuses_registration_and_real_instrumentation(

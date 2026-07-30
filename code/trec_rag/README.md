@@ -277,14 +277,15 @@ trace evidence is additionally subject to an absolute safety ceiling.
 Phoenix tracing is optional. Search spans contain document lengths rather than
 document text. Snippet-page spans contain bounded IDs, offsets, relevance
 scores, backend/cache metadata, and snippet text only when `trace_content=True`;
-with `trace_content=False`, narrative, query, and snippet text use a redacted
-marker. Automatically instrumented LangChain spans always hide generic input
-and output values, structured message text, and invocation parameters;
-purpose-specific manual spans are the only content-bearing surface. Spans never
-include credentials, authorization headers, raw provider
-responses, continuation-ticket values, cursors, scratch paths, or local cache
-paths. Keep provider credentials in ignored local environment files rather
-than source or notebooks. Tracing configuration is process-global and idempotent:
+with `trace_content=False`, narrative, query, snippet text, and automatically
+instrumented LangChain inputs/outputs use a redacted marker. With the default
+`trace_content=True`, Phoenix shows automatic agent, model, and tool
+inputs/outputs for interactive debugging, including snippet-tool arguments and
+results. Purpose-specific manual spans still exclude credentials,
+authorization headers, raw provider responses, continuation-ticket values,
+cursors, scratch paths, and local cache paths. Keep provider credentials in
+ignored local environment files rather than source or notebooks. Tracing
+configuration is process-global and idempotent:
 identical normalized live setup reuses its provider/exporter, while a
 conflicting endpoint, project, credential, injected provider, or content mode
 raises a constant non-disclosing configuration error instead of silently
