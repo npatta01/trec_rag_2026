@@ -1248,6 +1248,178 @@ def test_passage_rankings_retain_stored_ranks_logits_and_exact_source_spans(
     assert topic.passage_rankings[0].winning_passages[0].text == "Exact evidence sentence."
 
 
+def test_funnel_projection_counts_overall_and_per_subnarrative(tmp_path: Path) -> None:
+    """A missing or miscounted source stage must change the funnel projection."""
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+
+    projected = debug_report._project_funnel(topic)
+
+    assert projected.facet_only_documents == len(topic.new_documents)
+    assert projected.selected_documents == len(topic.selected_documents)
+    assert projected.document_subnarrative_rankings == len(topic.passage_rankings)
+    assert projected.stored_passages == sum(
+        len(ranking.winning_passages) for ranking in topic.passage_rankings
+    )
+    assert projected.evidence_clusters == len(topic.evidence_clusters)
+    assert projected.final_nuggets == len(topic.canonical_nuggets)
+    assert projected.final_documents == len(topic.retrieval_output.documents)
+    assert [row.subnarrative_id for row in projected.subnarratives] == [
+        item.subnarrative_id for item in topic.subnarratives
+    ]
+
+
+def test_funnel_projection_keeps_pair_records_distinct_from_ranked_documents(
+    tmp_path: Path,
+) -> None:
+    """Counting ranking rows as documents would overstate the first facet here."""
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    first_subnarrative = topic.subnarratives[0]
+    second_subnarrative = replace(
+        first_subnarrative,
+        subnarrative_id="subnarrative-2",
+        text="Second controlled facet",
+    )
+    first_passage = topic.passage_rankings[0].winning_passages[0]
+    second_passage = topic.passage_rankings[1].winning_passages[0]
+    rankings = (
+        replace(
+            topic.passage_rankings[0],
+            docid="doc-shared",
+            winning_passages=(first_passage, replace(first_passage, chunk_index=1)),
+        ),
+        replace(
+            topic.passage_rankings[1],
+            docid="doc-shared",
+            winning_passages=(second_passage,),
+        ),
+        replace(
+            topic.passage_rankings[1],
+            subnarrative_id=second_subnarrative.subnarrative_id,
+            docid="doc-other",
+            winning_passages=(
+                second_passage,
+                replace(second_passage, chunk_index=1),
+                replace(second_passage, chunk_index=2),
+            ),
+        ),
+    )
+    clusters = (
+        replace(topic.evidence_clusters[0], cluster_id="cluster-first"),
+        replace(
+            topic.evidence_clusters[0],
+            subnarrative_id=second_subnarrative.subnarrative_id,
+            cluster_id="cluster-second-a",
+        ),
+        replace(
+            topic.evidence_clusters[0],
+            subnarrative_id=second_subnarrative.subnarrative_id,
+            cluster_id="cluster-second-b",
+        ),
+    )
+    nuggets = (
+        replace(topic.canonical_nuggets[0], canonical_nugget_id="nugget-first-a"),
+        replace(topic.canonical_nuggets[0], canonical_nugget_id="nugget-first-b"),
+        replace(
+            topic.canonical_nuggets[0],
+            subnarrative_id=second_subnarrative.subnarrative_id,
+            canonical_nugget_id="nugget-second",
+        ),
+    )
+    controlled = replace(
+        topic,
+        subnarratives=(first_subnarrative, second_subnarrative),
+        passage_rankings=rankings,
+        evidence_clusters=clusters,
+        canonical_nuggets=nuggets,
+    )
+
+    projected = debug_report._project_funnel(controlled)
+
+    assert projected.document_subnarrative_rankings == 3
+    assert projected.stored_passages == 6
+    assert [
+        (
+            row.subnarrative_id,
+            row.ranked_documents,
+            row.stored_passages,
+            row.evidence_clusters,
+            row.final_nuggets,
+        )
+        for row in projected.subnarratives
+    ] == [
+        ("subnarrative-1", 1, 3, 1, 2),
+        ("subnarrative-2", 1, 3, 2, 1),
+    ]
+
+
+def test_funnel_overview_renderer_shows_labeled_counts_and_subnarrative_comparison(
+    tmp_path: Path,
+) -> None:
+    """A missing stage or a mislabeled pair count must not look like a document count."""
+    config_path, _output = _write_debug_run(tmp_path)
+    rendered = render_debug_report(load_debug_report_data(config_path))
+    stage = re.search(
+        r'<section id="stage-literal-rag2026-0-funnel-overview".*?</section>',
+        rendered,
+        flags=re.DOTALL,
+    )
+
+    assert stage is not None
+    cards = re.findall(
+        r'<li class="funnel-count"><strong>(\d+)</strong><span>([^<]+)</span></li>',
+        stage.group(),
+    )
+    assert cards == [
+        ("2", "Facet-only documents"),
+        ("2", "Selected documents"),
+        ("2", "document × subnarrative rankings"),
+        ("2", "Stored passages"),
+        ("1", "Evidence clusters"),
+        ("1", "Final nuggets"),
+        ("1", "Final documents"),
+    ]
+    assert "document × subnarrative rankings" in stage.group()
+    assert re.findall(r'<th scope="col">([^<]+)</th>', stage.group()) == [
+        "Ranked documents",
+        "Stored passages",
+        "Evidence clusters",
+        "Final nuggets",
+    ]
+    assert (
+        '<th scope="row"><code>subnarrative-1</code><br><span '
+        'class="break">Facet &lt;scope&gt; &amp; &quot;query&quot;</span></th>'
+        "<td>2</td><td>2</td><td>1</td><td>1</td>"
+    ) in stage.group()
+
+
+def test_funnel_overview_renderer_explains_original_only_fallback(
+    tmp_path: Path,
+) -> None:
+    """An original-only run needs an explanatory fallback instead of a blank table."""
+    config_path, _output = _write_debug_run(tmp_path)
+    data = load_debug_report_data(config_path)
+    topic = replace(
+        data.topics[0],
+        subnarratives=(),
+        passage_rankings=(),
+        evidence_clusters=(),
+        canonical_nuggets=(),
+        original_only_fallback=True,
+    )
+    rendered = render_debug_report(replace(data, topics=(topic,)))
+    stage = re.search(
+        r'<section id="stage-literal-rag2026-0-funnel-overview".*?</section>',
+        rendered,
+        flags=re.DOTALL,
+    )
+
+    assert stage is not None
+    assert "No subnarrative funnel rows; the sealed run used the original-only fallback." in stage.group()
+    assert "<table" not in stage.group()
+
+
 def test_nugget_join_uses_configured_budget_selected_clusters_and_evidence_docids(
     tmp_path: Path,
 ) -> None:

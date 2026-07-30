@@ -239,6 +239,71 @@ class TopicReport:
 
 
 @dataclass(frozen=True)
+class _SubnarrativeFunnelReport:
+    subnarrative_id: str
+    subnarrative_text: str
+    ranked_documents: int
+    stored_passages: int
+    evidence_clusters: int
+    final_nuggets: int
+
+
+@dataclass(frozen=True)
+class _FunnelReport:
+    facet_only_documents: int
+    selected_documents: int
+    document_subnarrative_rankings: int
+    stored_passages: int
+    evidence_clusters: int
+    final_nuggets: int
+    final_documents: int
+    subnarratives: tuple[_SubnarrativeFunnelReport, ...]
+
+
+def _project_funnel(topic: TopicReport) -> _FunnelReport:
+    """Summarize the sealed retrieval and evidence records without score aggregation."""
+    subnarratives = tuple(
+        _SubnarrativeFunnelReport(
+            subnarrative_id=subnarrative.subnarrative_id,
+            subnarrative_text=subnarrative.text,
+            ranked_documents=len(
+                {
+                    ranking.docid
+                    for ranking in topic.passage_rankings
+                    if ranking.subnarrative_id == subnarrative.subnarrative_id
+                }
+            ),
+            stored_passages=sum(
+                len(ranking.winning_passages)
+                for ranking in topic.passage_rankings
+                if ranking.subnarrative_id == subnarrative.subnarrative_id
+            ),
+            evidence_clusters=sum(
+                cluster.subnarrative_id == subnarrative.subnarrative_id
+                for cluster in topic.evidence_clusters
+            ),
+            final_nuggets=sum(
+                nugget.subnarrative_id == subnarrative.subnarrative_id
+                for nugget in topic.canonical_nuggets
+            ),
+        )
+        for subnarrative in topic.subnarratives
+    )
+    return _FunnelReport(
+        facet_only_documents=len(topic.new_documents),
+        selected_documents=len(topic.selected_documents),
+        document_subnarrative_rankings=len(topic.passage_rankings),
+        stored_passages=sum(
+            len(ranking.winning_passages) for ranking in topic.passage_rankings
+        ),
+        evidence_clusters=len(topic.evidence_clusters),
+        final_nuggets=len(topic.canonical_nuggets),
+        final_documents=len(topic.retrieval_output.documents),
+        subnarratives=subnarratives,
+    )
+
+
+@dataclass(frozen=True)
 class _BestStoredPassage:
     subnarrative_id: str
     subnarrative_text: str
@@ -2251,6 +2316,11 @@ summary {{ min-height: 44px; display: list-item; padding-block: .6rem; cursor: p
 .subnarrative-list, .new-document-list, .selected-document-list, .retrieval-document-list, .rag-answer-list, .rag-reference-list {{ display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }}
 .subnarrative-card, .new-document-card, .selected-document-card, .retrieval-document-card, .rag-answer-item, .rag-reference-card {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
 .subnarrative-card h3, .new-document-card h4, .retrieval-document-card h3 {{ margin-top: 0; }}
+.funnel-counts {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .75rem; margin: 1rem 0; padding: 0; list-style: none; }}
+.funnel-count {{ min-width: 0; padding: .8rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
+.funnel-count strong, .funnel-count span {{ display: block; }}
+.funnel-count strong {{ color: var(--accent); font-size: 1.5rem; line-height: 1.1; }}
+.funnel-count span {{ margin-top: .3rem; color: var(--muted); font-weight: 700; }}
 .query-list {{ margin-bottom: 0; }}
 .stage-note, .rank-caveat {{ color: var(--muted); }}
 .new-document-lane, .passage-ranking-disclosure, .canonical-cluster-diagnostics, .canonical-result {{ margin-block: 1rem; border: 1px solid var(--line); border-inline-start-width: .25rem; border-radius: .65rem; background: var(--surface-soft); }}
@@ -2433,6 +2503,7 @@ def _render_topic(topic: TopicReport, *, initially_open: bool = False) -> str:
     prefix = f"stage-{anchor}"
     stages = (
         _render_narrative(topic, prefix),
+        _render_funnel_overview(topic, prefix),
         _render_subnarratives(topic, prefix),
         _render_new_documents(topic, prefix),
         _render_selected_documents(topic, prefix),
@@ -2469,6 +2540,62 @@ def _render_narrative(topic: TopicReport, prefix: str) -> str:
         "narrative",
         "Narrative",
         f'<p class="break">{_html(topic.narrative)}</p><p>Source seal: <code>{_html(topic.narrative_sha256)}</code></p>{fallback}',
+    )
+
+
+def _render_funnel_overview(topic: TopicReport, prefix: str) -> str:
+    funnel = _project_funnel(topic)
+    counts = (
+        (funnel.facet_only_documents, "Facet-only documents"),
+        (funnel.selected_documents, "Selected documents"),
+        (
+            funnel.document_subnarrative_rankings,
+            "document × subnarrative rankings",
+        ),
+        (funnel.stored_passages, "Stored passages"),
+        (funnel.evidence_clusters, "Evidence clusters"),
+        (funnel.final_nuggets, "Final nuggets"),
+        (funnel.final_documents, "Final documents"),
+    )
+    cards = "".join(
+        '<li class="funnel-count">'
+        f"<strong>{_html(count)}</strong><span>{_html(label)}</span></li>"
+        for count, label in counts
+    )
+    if not funnel.subnarratives:
+        comparison = (
+            "<p>No subnarrative funnel rows; the sealed run used the original-only "
+            "fallback.</p>"
+        )
+    else:
+        rows = "".join(
+            "<tr>"
+            f'<th scope="row"><code>{_html(row.subnarrative_id)}</code><br><span '
+            f'class="break">{_html(row.subnarrative_text)}</span></th>'
+            f"<td>{_html(row.ranked_documents)}</td>"
+            f"<td>{_html(row.stored_passages)}</td>"
+            f"<td>{_html(row.evidence_clusters)}</td>"
+            f"<td>{_html(row.final_nuggets)}</td></tr>"
+            for row in funnel.subnarratives
+        )
+        comparison = _table(
+            "Per-subnarrative funnel comparison",
+            (
+                "Ranked documents",
+                "Stored passages",
+                "Evidence clusters",
+                "Final nuggets",
+            ),
+            rows,
+        )
+    return _stage(
+        prefix,
+        "funnel-overview",
+        "Funnel overview",
+        '<p class="stage-note">Counts reflect sealed records. A document × '
+        "subnarrative ranking is a pair record, not a unique document.</p>"
+        '<ol class="funnel-counts" aria-label="Overall retrieval and evidence funnel">'
+        f"{cards}</ol>{comparison}",
     )
 
 
