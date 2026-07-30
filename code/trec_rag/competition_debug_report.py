@@ -7,24 +7,35 @@ already-written artifacts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import html
 import json
 import math
+import os
 from pathlib import Path
 import re
+import tempfile
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 import zipfile
 
-from trec_rag.competition_rag import load_documents, load_trec_run
+from trec_rag.competition_rag import (
+    load_documents,
+    load_queries,
+    load_rag_generation_config,
+    load_trec_run,
+    select_queries,
+    validate_submission_record,
+)
 from trec_rag.evidence_store import decode_subnarrative_selection
 from trec_rag.facet_pilot_config import (
     FacetPilotConfig,
     load_facet_pilot_config,
     select_configured_topics,
 )
+from trec_rag.repo_env import find_repo_root
 from trec_rag.topics import Topic
 
 
@@ -42,6 +53,7 @@ _SCORE_FIELDS = {
 _PASSAGE_FIELDS = {"chunk_index", "start_char", "end_char", "raw_logit", "weighted_rank"}
 _CANONICAL_STATES = {"complete", "empty", "fallback_extractive"}
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+_REPORT_SCHEMA_VERSION = "competition_debug_report_v1"
 
 
 @dataclass(frozen=True)
@@ -158,6 +170,21 @@ class RetrievalOutputReport:
 
 
 @dataclass(frozen=True)
+class RagAnswerItemReport:
+    text: str
+    citations: tuple[int, ...]
+    citation_docids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RagOutputReport:
+    references: tuple[str, ...]
+    answer_items: tuple[RagAnswerItemReport, ...]
+    word_count: int
+    output_sha256: str
+
+
+@dataclass(frozen=True)
 class TopicReport:
     topic_id: str
     narrative: str
@@ -169,6 +196,7 @@ class TopicReport:
     evidence_clusters: tuple[EvidenceClusterReport, ...]
     canonical_nuggets: tuple[CanonicalNuggetReport, ...]
     retrieval_output: RetrievalOutputReport
+    rag_output: RagOutputReport | None = None
 
 
 @dataclass(frozen=True)
@@ -182,8 +210,18 @@ class _RootRetrievalArtifacts:
 @dataclass(frozen=True)
 class DebugReportData:
     retrieval_config_path: Path
+    rag_config_path: Path | None
     output_dir: Path
     topics: tuple[TopicReport, ...]
+    source_sha256s: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class DebugReportReceipt:
+    schema_version: str
+    output_path: Path
+    topic_ids: tuple[str, ...]
+    rag_included: bool
     source_sha256s: Mapping[str, str]
 
 
@@ -193,20 +231,10 @@ def load_debug_report_data(
     rag_config_path: Path | None = None,
     topic_ids: Sequence[str] | None = None,
 ) -> DebugReportData:
-    """Load the immutable, bounded data foundation for a completed export.
-
-    ``rag_config_path`` is reserved for the later optional RAG projection.  It
-    is intentionally rejected here so this first-stage loader cannot discover
-    or read a broader set of artifacts by accident.
-    """
-    if rag_config_path is not None:
-        raise ValueError("RAG artifacts are not supported by the bounded data loader")
+    """Load immutable, bounded retrieval and optional validated RAG artifacts."""
     config = load_facet_pilot_config(retrieval_config_path)
-    topics = select_configured_topics(
-        config,
-        topic_ids=() if topic_ids is None else tuple(topic_ids),
-    )
-    if not topics:
+    configured_topics = select_configured_topics(config)
+    if not configured_topics:
         raise ValueError("at least one configured topic is required")
 
     output_dir = _safe_directory(config.output_dir, "configured output directory")
@@ -216,27 +244,109 @@ def load_debug_report_data(
     receipts[_portable_label(output_dir, export_path)] = _sha256_file(
         export_path, _MAX_JSON_BYTES
     )
-    exported_ids = _validate_export_manifest(export, config, topics)
+    exported_ids = _validate_export_manifest(export, config, configured_topics)
 
-    configured_by_id = {topic.id: topic for topic in topics}
-    selected_topics = tuple(configured_by_id[topic_id] for topic_id in exported_ids)
-    if topic_ids is not None and tuple(topic.id for topic in selected_topics) != tuple(
-        topic.id for topic in topics
-    ):
-        raise ValueError("retrieval export topics differ from requested configured topics")
+    configured_by_id = {topic.id: topic for topic in configured_topics}
+    exported_topics = tuple(configured_by_id[topic_id] for topic_id in exported_ids)
+    if topic_ids is None:
+        selected_topics = exported_topics
+    else:
+        requested_topics = select_configured_topics(config, topic_ids=tuple(topic_ids))
+        exported_set = set(exported_ids)
+        if any(topic.id not in exported_set for topic in requested_topics):
+            raise ValueError("requested topic is absent from the retrieval export")
+        selected_topics = requested_topics
 
     retrieval_artifacts = _load_root_retrieval_artifacts(
-        output_dir, export, selected_topics, receipts
+        output_dir, export, exported_topics, receipts
     )
     reports = tuple(
         _load_topic_report(config, output_dir, topic, retrieval_artifacts, receipts)
         for topic in selected_topics
     )
-    return DebugReportData(
+    data = DebugReportData(
         retrieval_config_path=Path(retrieval_config_path).resolve(),
+        rag_config_path=None,
         output_dir=output_dir,
         topics=reports,
         source_sha256s=MappingProxyType(dict(sorted(receipts.items()))),
+    )
+    if rag_config_path is not None:
+        data = _attach_rag_outputs(data, Path(rag_config_path), exported_topics)
+    return data
+
+
+def _attach_rag_outputs(
+    data: DebugReportData,
+    rag_config_path: Path,
+    exported_topics: Sequence[Topic],
+) -> DebugReportData:
+    config = load_rag_generation_config(rag_config_path)
+    expected_run = (data.output_dir / "r_output_trec_rag_2026.tsv").resolve()
+    expected_documents = (data.output_dir / "retrieval_with_text.jsonl.zip").resolve()
+    if config.run_path.resolve() != expected_run:
+        raise ValueError("RAG retrieval run path is incompatible with the retrieval export")
+    if config.documents_path.resolve() != expected_documents:
+        raise ValueError("RAG retrieval documents path is incompatible with the retrieval export")
+
+    configured_queries = select_queries(load_queries(config.queries_path), config.topic_ids)
+    configured_ids = tuple(topic_id for topic_id, _ in configured_queries)
+    if configured_ids != tuple(topic.id for topic in exported_topics):
+        raise ValueError("RAG topic order or coverage is incompatible with the retrieval export")
+    retrieval_narratives = {topic.id: topic.narrative for topic in exported_topics}
+    for topic_id, narrative in configured_queries:
+        if narrative != retrieval_narratives[topic_id]:
+            raise ValueError("RAG topic narrative is incompatible with the retrieval export")
+
+    allowed_by_topic = load_trec_run(
+        config.run_path,
+        set(configured_ids),
+        config.top_k,
+    )
+    output_parent = _safe_directory(config.output_path.parent, "RAG output directory")
+    output_path = _safe_file(config.output_path, output_parent)
+    rows = _read_jsonl(output_path, "RAG output")
+    if len(rows) != len(configured_queries):
+        raise ValueError("RAG output topic coverage is incompatible with the RAG config")
+    output_sha256 = _sha256_file(output_path, _MAX_JSONL_BYTES)
+
+    rag_by_topic: dict[str, RagOutputReport] = {}
+    for row, (topic_id, narrative) in zip(rows, configured_queries, strict=True):
+        validate_submission_record(
+            row,
+            topic_id=topic_id,
+            narrative=narrative,
+            allowed_docids=allowed_by_topic[topic_id],
+            team_id=config.team_id,
+            run_id=config.run_id,
+            run_desc=config.run_desc,
+        )
+        references = tuple(row["references"])
+        answer_items = tuple(
+            RagAnswerItemReport(
+                text=item["text"],
+                citations=tuple(item["citations"]),
+                citation_docids=tuple(references[index] for index in item["citations"]),
+            )
+            for item in row["answer"]
+        )
+        rag_by_topic[topic_id] = RagOutputReport(
+            references=references,
+            answer_items=answer_items,
+            word_count=sum(len(item.text.split()) for item in answer_items),
+            output_sha256=output_sha256,
+        )
+
+    sources = dict(data.source_sha256s)
+    sources["rag/rag_output_trec_rag_2026.jsonl"] = output_sha256
+    return replace(
+        data,
+        rag_config_path=rag_config_path.resolve(),
+        topics=tuple(
+            replace(topic, rag_output=rag_by_topic[topic.topic_id])
+            for topic in data.topics
+        ),
+        source_sha256s=MappingProxyType(dict(sorted(sources.items()))),
     )
 
 
@@ -1434,7 +1544,7 @@ def _render_topic(topic: TopicReport) -> str:
         _render_passages(topic, prefix),
         _render_nuggets(topic, prefix),
         _render_retrieval(topic, prefix),
-        _render_final_rag(prefix),
+        _render_final_rag(topic, prefix),
     )
     return f'<section id="topic-{anchor}" aria-labelledby="topic-title-{anchor}"><h1 id="topic-title-{anchor}">Topic {_html(topic.topic_id)}</h1>{"".join(stages)}</section>'
 
@@ -1568,8 +1678,33 @@ def _render_retrieval(topic: TopicReport, prefix: str) -> str:
     return _stage(prefix, "final-retrieval", "Final retrieval", intro + _table("Organizer-facing retrieval rows", ("Rank", "DocID", "Score", "Selection rank", "Source lane", "Sealed provenance", "Document text"), rows))
 
 
-def _render_final_rag(prefix: str) -> str:
-    return _stage(prefix, "final-rag", "Final RAG", "<p><span class=\"status status-empty\">Not included</span> This bounded retrieval report does not load RAG artifacts.</p>")
+def _render_final_rag(topic: TopicReport, prefix: str) -> str:
+    rag = topic.rag_output
+    if rag is None:
+        return _stage(
+            prefix,
+            "final-rag",
+            "Final RAG",
+            '<p><span class="status status-empty">Not included</span> RAG output not supplied.</p>',
+        )
+    reference_rows = "".join(
+        f'<tr><th scope="row">{index}</th><td><code>{_html(docid)}</code></td></tr>'
+        for index, docid in enumerate(rag.references)
+    )
+    answer_rows = "".join(
+        "<tr>"
+        f'<th scope="row">{index}</th><td class="break">{_html(item.text)}</td>'
+        f'<td class="break">{_html("; ".join(f"citation {citation} → {docid}" for citation, docid in zip(item.citations, item.citation_docids, strict=True)))}</td>'
+        "</tr>"
+        for index, item in enumerate(rag.answer_items, start=1)
+    )
+    body = (
+        f"<p>Validated answer word count: {_html(rag.word_count)}. "
+        f"Output SHA-256: <code>{_html(rag.output_sha256)}</code>.</p>"
+        + _table("RAG reference order", ("Citation index", "Reference DocID"), reference_rows)
+        + _table("RAG answer items in stored order", ("Item", "Text", "Resolved citations"), answer_rows)
+    )
+    return _stage(prefix, "final-rag", "Final RAG", body)
 
 
 def _table(caption: str, headings: Sequence[str], rows: str) -> str:
@@ -1648,3 +1783,129 @@ def _status_class(state: str) -> str:
 
 def _html(value: object) -> str:
     return html.escape(str(value), quote=True)
+
+
+def build_debug_report(
+    retrieval_config_path: Path,
+    *,
+    rag_config_path: Path | None = None,
+    topic_ids: Sequence[str] | None = None,
+    output_path: Path | None = None,
+) -> DebugReportReceipt:
+    """Validate completed artifacts, atomically write HTML, and return its receipt."""
+    data = load_debug_report_data(
+        Path(retrieval_config_path),
+        rag_config_path=None if rag_config_path is None else Path(rag_config_path),
+        topic_ids=topic_ids,
+    )
+    target = _resolve_report_output(data, output_path)
+    rendered = render_debug_report(data)
+    _atomic_write_report(target, rendered.encode("utf-8"))
+    return DebugReportReceipt(
+        schema_version=_REPORT_SCHEMA_VERSION,
+        output_path=target,
+        topic_ids=tuple(topic.topic_id for topic in data.topics),
+        rag_included=data.rag_config_path is not None,
+        source_sha256s=MappingProxyType(dict(sorted(data.source_sha256s.items()))),
+    )
+
+
+def _resolve_report_output(data: DebugReportData, output_path: Path | None) -> Path:
+    repo_root = find_repo_root(data.retrieval_config_path.parent).resolve()
+    default_target = data.output_dir / "competition_debug_report.html"
+    if output_path is None:
+        requested = default_target
+    else:
+        requested = Path(output_path)
+    if requested.is_symlink():
+        raise ValueError("report output must not be a symbolic link")
+    target = requested.resolve()
+    if target.suffix.lower() != ".html":
+        raise ValueError("report output must be an HTML path, not a source artifact")
+    parent = target.parent
+    if not parent.is_dir():
+        raise ValueError("report output parent must be an existing directory")
+    try:
+        target.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError("report output must remain inside the repository") from exc
+    if target.exists() and not target.is_file():
+        raise ValueError("report output must be a regular file path")
+    if output_path is not None and target.exists() and target != default_target.resolve():
+        with target.open("rb") as existing:
+            prefix = existing.read(4096)
+        if (
+            not prefix.startswith(b"<!doctype html>\n")
+            or b"<title>Competition retrieval debug report</title>" not in prefix
+        ):
+            raise ValueError("report output must not replace an existing non-report artifact")
+    return target
+
+
+def _atomic_write_report(target: Path, body: bytes) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, target)
+        _fsync_directory(target.parent)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Render a private post-run competition debug report."
+    )
+    parser.add_argument("--retrieval-config", type=Path, required=True)
+    parser.add_argument("--rag-config", type=Path)
+    parser.add_argument("--topic", action="append", dest="topic_ids")
+    parser.add_argument("--output", type=Path)
+    arguments = parser.parse_args(argv)
+    receipt = build_debug_report(
+        arguments.retrieval_config,
+        rag_config_path=arguments.rag_config,
+        topic_ids=arguments.topic_ids,
+        output_path=arguments.output,
+    )
+    print(
+        json.dumps(
+            {
+                "schema_version": receipt.schema_version,
+                "output_path": str(receipt.output_path),
+                "topic_ids": list(receipt.topic_ids),
+                "rag_included": receipt.rag_included,
+                "source_sha256s": dict(receipt.source_sha256s),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

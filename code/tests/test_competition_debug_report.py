@@ -9,12 +9,17 @@ import html
 import json
 from pathlib import Path
 import re
+import shutil
 import socket
 import zipfile
 
 import pytest
 
-from trec_rag.competition_debug_report import load_debug_report_data, render_debug_report
+import trec_rag.competition_debug_report as debug_report
+from trec_rag.competition_debug_report import (
+    load_debug_report_data,
+    render_debug_report,
+)
 
 
 def _json_bytes(value: object) -> bytes:
@@ -172,6 +177,155 @@ nuggets:
     (topic_root / "retrieval" / "audit.json").write_bytes(_json_bytes(audit))
     _write_task_2_artifacts(output, topic_root, narrative, subnarrative, query)
     return config_path, output
+
+
+def _write_rag_run(tmp_path: Path, retrieval_output: Path) -> tuple[Path, Path, str]:
+    narrative = 'Original <narrative> & "quotes"'
+    queries_path = tmp_path / "rag_queries.tsv"
+    queries_path.write_text(f"rag2026-0\t{narrative}\n", encoding="utf-8")
+    rag_config = tmp_path / "rag.yaml"
+    rag_config.write_text(
+        """schema_version: competition_rag_config_v1
+experiment:
+  id: rag-debug-fixture
+  output_dir: outputs/rag-debug-fixture
+  mode: create
+submission:
+  team_id: fixture-team
+  run_desc: Fixture answer generation.
+inputs:
+  queries: rag_queries.tsv
+  run: outputs/debug-fixture/r_output_trec_rag_2026.tsv
+  documents: outputs/debug-fixture/retrieval_with_text.jsonl.zip
+  archive_member: null
+  topic_ids: [rag2026-0]
+retrieval:
+  top_k: null
+  max_document_words: 1000
+generation:
+  type: openrouter
+  api_base: https://example.invalid/api/v1
+  api_key_env: UNUSED_FIXTURE_KEY
+  model: fixture/model
+  reasoning_effort: medium
+  temperature: null
+  max_tokens: 1000
+  timeout_seconds: 30
+  transport_max_attempts: 1
+  concurrency: 1
+""",
+        encoding="utf-8",
+    )
+    rag_output = tmp_path / "outputs" / "rag-debug-fixture" / "rag_output_trec_rag_2026.jsonl"
+    rag_output.parent.mkdir()
+    record = {
+        "metadata": {
+            "team_id": "fixture-team",
+            "narrative_id": "rag2026-0",
+            "narrative": narrative,
+            "run_id": "rag-debug-fixture",
+            "run_desc": "Fixture answer generation.",
+        },
+        "references": ["doc-original"],
+        "answer": [
+            {"text": "First supported answer.", "citations": [0]},
+            {"text": "Second detail.", "citations": [0]},
+        ],
+    }
+    body = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+    rag_output.write_bytes(body)
+    assert retrieval_output == tmp_path / "outputs" / "debug-fixture"
+    return rag_config, rag_output, sha256(body).hexdigest()
+
+
+def _add_second_debug_topic(tmp_path: Path, output: Path) -> None:
+    old_narrative = 'Original <narrative> & "quotes"'
+    new_narrative = "Second official narrative"
+    old_hash = _sha256(old_narrative)
+    new_hash = _sha256(new_narrative)
+    source_root = output / "rag2026-0"
+    target_root = output / "rag2026-1"
+    shutil.copytree(source_root, target_root)
+
+    def rewrite(value: object) -> object:
+        if isinstance(value, str):
+            return {
+                "rag2026-0": "rag2026-1",
+                old_narrative: new_narrative,
+                old_hash: new_hash,
+            }.get(value, value)
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        if isinstance(value, dict):
+            return {key: rewrite(item) for key, item in value.items()}
+        return value
+
+    for path in target_root.rglob("*.json"):
+        path.write_bytes(_json_bytes(rewrite(json.loads(path.read_text(encoding="utf-8")))))
+    for path in target_root.rglob("*.jsonl"):
+        rows = [rewrite(json.loads(line)) for line in path.read_text(encoding="utf-8").splitlines()]
+        path.write_bytes(b"".join(_json_bytes(row) for row in rows))
+    nuggets_path = target_root / "canonical" / "canonical-nuggets.jsonl"
+    nugget_manifest_path = nuggets_path.with_name("canonical-nugget-manifest.json")
+    nugget_manifest = json.loads(nugget_manifest_path.read_text(encoding="utf-8"))
+    nugget_manifest["canonical_nuggets_sha256"] = sha256(nuggets_path.read_bytes()).hexdigest()
+    nugget_manifest_path.write_bytes(_json_bytes(nugget_manifest))
+
+    run_path = output / "r_output_trec_rag_2026.tsv"
+    run_path.write_bytes(
+        run_path.read_bytes() + b"rag2026-1 Q0 doc-original 1 1 debug-fixture\n"
+    )
+    provenance_path = output / "retrieval_provenance.jsonl"
+    first_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    second_provenance = rewrite(first_provenance)
+    provenance_path.write_bytes(
+        _json_bytes(first_provenance) + _json_bytes(second_provenance)
+    )
+    archive_path = output / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(archive_path) as archive:
+        first_archive = json.loads(archive.read("retrieval_with_text.jsonl"))
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            _json_bytes(first_archive) + _json_bytes(rewrite(first_archive)),
+        )
+    manifest_path = output / "retrieval_export_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["selected_topic_ids"] = ["rag2026-0", "rag2026-1"]
+    manifest["topic_depths"]["rag2026-1"] = {"official": 1, "candidate_pool": 2}
+    manifest["official_row_count"] = 2
+    for artifact_name in (
+        "r_output_trec_rag_2026.tsv",
+        "retrieval_provenance.jsonl",
+        "retrieval_with_text.jsonl.zip",
+    ):
+        body = (output / artifact_name).read_bytes()
+        manifest["artifacts"][artifact_name] = {
+            "bytes": len(body),
+            "sha256": sha256(body).hexdigest(),
+        }
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+
+def _extend_rag_run_with_forged_second_narrative(
+    tmp_path: Path, rag_config: Path, rag_output: Path
+) -> None:
+    (tmp_path / "rag_queries.tsv").write_text(
+        'rag2026-0\tOriginal <narrative> & "quotes"\n'
+        "rag2026-1\tForged second narrative\n",
+        encoding="utf-8",
+    )
+    rag_config.write_text(
+        rag_config.read_text(encoding="utf-8").replace(
+            "topic_ids: [rag2026-0]", "topic_ids: [rag2026-0, rag2026-1]"
+        ),
+        encoding="utf-8",
+    )
+    first = json.loads(rag_output.read_text(encoding="utf-8"))
+    second = json.loads(json.dumps(first))
+    second["metadata"]["narrative_id"] = "rag2026-1"
+    second["metadata"]["narrative"] = "Forged second narrative"
+    rag_output.write_bytes(_json_bytes(first) + _json_bytes(second))
 
 
 def _write_task_2_artifacts(
@@ -808,3 +962,165 @@ def test_html_renderer_uses_disjoint_anchor_namespaces_for_valid_topic_id_collis
     assert '<section id="topic-literal-topic-4038e65dabd89221"' in rendered
     section_ids = re.findall(r'<section id="([^"]+)"', rendered)
     assert len(section_ids) == len(set(section_ids))
+
+
+def test_rag_omission_is_visible_in_the_rendered_report(tmp_path: Path) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+
+    data = load_debug_report_data(config_path)
+    rendered = render_debug_report(data)
+
+    assert data.topics[0].rag_output is None
+    assert "RAG output not supplied." in rendered
+
+
+def test_standard_rag_config_loads_validated_answers_and_resolved_citations(
+    tmp_path: Path,
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+
+    data = load_debug_report_data(config_path, rag_config_path=rag_config)
+
+    assert [topic.topic_id for topic in data.topics] == ["rag2026-0"]
+    rag = data.topics[0].rag_output
+    assert rag is not None
+    assert rag.references == ("doc-original",)
+    assert [item.text for item in rag.answer_items] == [
+        "First supported answer.",
+        "Second detail.",
+    ]
+    assert [item.citations for item in rag.answer_items] == [(0,), (0,)]
+    assert [item.citation_docids for item in rag.answer_items] == [
+        ("doc-original",),
+        ("doc-original",),
+    ]
+    assert rag.word_count == 5
+    assert rag.output_sha256 == output_sha256
+    assert data.source_sha256s["rag/rag_output_trec_rag_2026.jsonl"] == output_sha256
+    rendered = render_debug_report(data)
+    assert "First supported answer." in rendered
+    assert "citation 0 → doc-original" in rendered
+
+
+@pytest.mark.parametrize("mismatch", ("run_path", "topic_narrative"))
+def test_rag_compatibility_errors_before_output_is_written(
+    tmp_path: Path, mismatch: str
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, _output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+    if mismatch == "run_path":
+        text = rag_config.read_text(encoding="utf-8").replace(
+            "outputs/debug-fixture/r_output_trec_rag_2026.tsv",
+            "outputs/debug-fixture/retrieval_provenance.jsonl",
+        )
+        rag_config.write_text(text, encoding="utf-8")
+    else:
+        (tmp_path / "rag_queries.tsv").write_text(
+            "rag2026-0\tDifferent official narrative\n", encoding="utf-8"
+        )
+    target = retrieval_output / "must-not-be-written.html"
+
+    with pytest.raises(ValueError, match="RAG.*(?:retrieval|topic|narrative|compatible)"):
+        debug_report.build_debug_report(
+            config_path,
+            rag_config_path=rag_config,
+            output_path=target,
+        )
+
+    assert not target.exists()
+
+
+def test_cli_emits_one_compact_stable_json_receipt(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+    target = retrieval_output / "custom-debug-report.html"
+    argv = [
+        "--retrieval-config", str(config_path),
+        "--rag-config", str(rag_config),
+        "--topic", "rag2026-0",
+        "--output", str(target),
+    ]
+
+    assert debug_report.main(argv) == 0
+    first_stdout = capsys.readouterr().out
+    assert debug_report.main(argv) == 0
+    second_stdout = capsys.readouterr().out
+
+    assert first_stdout == second_stdout
+    assert first_stdout.endswith("\n") and first_stdout.count("\n") == 1
+    assert " " not in first_stdout
+    receipt = json.loads(first_stdout)
+    assert set(receipt) == {
+        "schema_version",
+        "output_path",
+        "topic_ids",
+        "rag_included",
+        "source_sha256s",
+    }
+    assert list(receipt) == sorted(receipt)
+    assert receipt["output_path"] == str(target.resolve())
+    assert receipt["topic_ids"] == ["rag2026-0"]
+    assert receipt["rag_included"] is True
+    assert list(receipt["source_sha256s"]) == sorted(receipt["source_sha256s"])
+    assert receipt["source_sha256s"]["rag/rag_output_trec_rag_2026.jsonl"] == output_sha256
+    assert target.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_atomic_build_preserves_existing_output_when_rendering_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    target.write_text("existing report\n", encoding="utf-8")
+
+    def fail_render(_data: object) -> str:
+        raise RuntimeError("forced render failure")
+
+    monkeypatch.setattr(debug_report, "render_debug_report", fail_render)
+
+    with pytest.raises(RuntimeError, match="forced render failure"):
+        debug_report.build_debug_report(config_path)
+
+    assert target.read_text(encoding="utf-8") == "existing report\n"
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
+
+
+def test_build_defaults_to_retrieval_output_directory(tmp_path: Path) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+
+    receipt = debug_report.build_debug_report(config_path)
+
+    assert receipt.output_path == (retrieval_output / "competition_debug_report.html").resolve()
+    assert receipt.rag_included is False
+
+
+def test_output_override_cannot_replace_a_sealed_source_artifact(tmp_path: Path) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    run_path = retrieval_output / "r_output_trec_rag_2026.tsv"
+    original = run_path.read_bytes()
+
+    with pytest.raises(ValueError, match="report output.*(?:HTML|source|artifact)"):
+        debug_report.build_debug_report(config_path, output_path=run_path)
+
+    assert run_path.read_bytes() == original
+
+
+def test_topic_subset_still_rejects_rag_narrative_drift_in_an_unrendered_topic(
+    tmp_path: Path,
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    _add_second_debug_topic(tmp_path, retrieval_output)
+    rag_config, rag_output, _output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+    _extend_rag_run_with_forged_second_narrative(tmp_path, rag_config, rag_output)
+    target = retrieval_output / "subset-report.html"
+
+    with pytest.raises(ValueError, match="RAG topic narrative"):
+        debug_report.build_debug_report(
+            config_path,
+            rag_config_path=rag_config,
+            topic_ids=["rag2026-0"],
+            output_path=target,
+        )
+
+    assert not target.exists()
