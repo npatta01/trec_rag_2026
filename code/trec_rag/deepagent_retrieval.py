@@ -15,9 +15,13 @@ from typing import Any, ClassVar, Literal, Protocol, cast
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
+from trec_rag.deepagent_snippets import (
+    RelevantSnippetExtractor,
+    SnippetExtractionResult,
+    create_default_snippet_extractor,
+)
 from trec_rag.deepagent_tracing import (
     MAX_TRACE_DOCUMENTS,
-    RetrievalTracing,
     create_retrieval_tracing,
 )
 from trec_rag.pipeline_config import RetrieverConfig
@@ -35,9 +39,12 @@ EXCERPT_MAX_CHARACTERS = 1_000
 RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
 The supplied narrative has already been searched exactly as provided. Use the
 search_climbmix tool only for targeted follow-up queries that cover a specific
-uncovered aspect. Do not use filesystem, shell, task, or other tools for this
-retrieval. Stop when targeted follow-ups no longer add coverage, and make your
-final message explain why you stopped."""
+uncovered aspect. Inspect candidate documents through extract_relevant_snippets
+with a focused query, and follow next_cursor when another page would add useful
+evidence. Use state-file tools only for oversized tool output or temporary notes;
+the state filesystem is ephemeral. Do not use execute, task, or unrelated tools.
+Stop when targeted follow-ups and document inspection no longer add coverage,
+and make your final message explain why you stopped."""
 
 
 @dataclass(frozen=True)
@@ -120,9 +127,21 @@ class _FusionRow:
 
 
 class _RetrievalOnlyMiddleware(AgentMiddleware):
-    """Limit one SDK-created agent to the retrieval tool at every boundary."""
+    """Limit one SDK-created agent to retrieval and state scratch tools."""
 
-    _ALLOWED_TOOL = "search_climbmix"
+    _ALLOWED_TOOLS = frozenset(
+        {
+            "search_climbmix",
+            "extract_relevant_snippets",
+            "ls",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "delete",
+            "glob",
+            "grep",
+        }
+    )
     _DENIED_MESSAGE = "retrieval-only tool access denied"
 
     @staticmethod
@@ -136,7 +155,9 @@ class _RetrievalOnlyMiddleware(AgentMiddleware):
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
         return request.override(
             tools=[
-                tool for tool in request.tools if self._tool_name(tool) == self._ALLOWED_TOOL
+                tool
+                for tool in request.tools
+                if self._tool_name(tool) in self._ALLOWED_TOOLS
             ],
             model_settings={
                 **(request.model_settings or {}),
@@ -144,7 +165,9 @@ class _RetrievalOnlyMiddleware(AgentMiddleware):
             },
         )
 
-    def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:
+    def wrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Any]
+    ) -> Any:
         return handler(self._filter_tools(request))
 
     async def awrap_model_call(
@@ -153,10 +176,12 @@ class _RetrievalOnlyMiddleware(AgentMiddleware):
         return await handler(self._filter_tools(request))
 
     def _require_allowed_tool(self, request: ToolCallRequest) -> None:
-        if request.tool_call.get("name") != self._ALLOWED_TOOL:
+        if request.tool_call.get("name") not in self._ALLOWED_TOOLS:
             raise PermissionError(self._DENIED_MESSAGE)
 
-    def wrap_tool_call(self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]) -> Any:
+    def wrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]
+    ) -> Any:
         self._require_allowed_tool(request)
         return handler(request)
 
@@ -193,12 +218,17 @@ class _RetrieverTraceSpan(Protocol):
 class _Tracing(Protocol):
     def agent_span(self, narrative: str) -> AbstractContextManager[_AgentTraceSpan]: ...
 
-    def retriever_span(self, query: str) -> AbstractContextManager[_RetrieverTraceSpan]: ...
+    def retriever_span(
+        self, query: str
+    ) -> AbstractContextManager[_RetrieverTraceSpan]: ...
 
     def force_flush(self) -> bool: ...
 
 
-AgentFactory = Callable[[str, Callable[[str], str]], _Agent]
+AgentFactory = Callable[
+    [str, Callable[[str], str], Callable[[str, str, str | None], str]],
+    _Agent,
+]
 
 
 def reciprocal_rank_fuse(
@@ -251,9 +281,14 @@ def reciprocal_rank_fuse(
     )
 
 
-def _create_agent(model: str, search_tool: Callable[[str], str]) -> _Agent:
+def _create_agent(
+    model: str,
+    search_tool: Callable[[str], str],
+    snippet_tool: Callable[[str, str, str | None], str],
+) -> _Agent:
     """Keep the Deep Agents 0.7 construction surface intentionally narrow."""
     from deepagents import create_deep_agent
+    from deepagents.backends import StateBackend
     from langchain_openrouter import ChatOpenRouter
 
     prefix = "openrouter:"
@@ -268,9 +303,10 @@ def _create_agent(model: str, search_tool: Callable[[str], str]) -> _Agent:
         _Agent,
         create_deep_agent(
             model=provider_model,
-            tools=[search_tool],
+            tools=[search_tool, snippet_tool],
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             middleware=[_RetrievalOnlyMiddleware()],
+            backend=StateBackend(),
         ),
     )
 
@@ -290,7 +326,9 @@ def _cache_counts(retriever: Retriever) -> Mapping[str, int] | None:
     return counts
 
 
-def _cache_status(before: Mapping[str, int] | None, after: Mapping[str, int] | None) -> str:
+def _cache_status(
+    before: Mapping[str, int] | None, after: Mapping[str, int] | None
+) -> str:
     if before is None or after is None:
         return "not_reported"
     for key, label in (("hits", "hit"), ("misses", "miss"), ("bypasses", "bypass")):
@@ -305,7 +343,7 @@ def _positive_int(value: object, *, name: str) -> int:
     return value
 
 
-def _bounded_candidates(
+def _candidate_metadata(
     candidates: Sequence[RetrievedCandidate], *, limit: int
 ) -> list[dict[str, object]]:
     return [
@@ -313,7 +351,7 @@ def _bounded_candidates(
             "docid": candidate.docid,
             "rank": candidate.rank,
             "score": candidate.score,
-            "excerpt": candidate.text[:EXCERPT_MAX_CHARACTERS],
+            "text_length": len(candidate.text),
         }
         for candidate in candidates[:limit]
     ]
@@ -351,13 +389,12 @@ class DeepAgentRetriever:
         model: str = DEFAULT_MODEL,
         agent_factory: AgentFactory = _create_agent,
         tracing: _Tracing | None = None,
+        snippet_extractor: RelevantSnippetExtractor | None = None,
         hits_per_search: int = HITS_PER_SEARCH,
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
     ) -> None:
-        self._hits_per_search = _positive_int(
-            hits_per_search, name="hits_per_search"
-        )
+        self._hits_per_search = _positive_int(hits_per_search, name="hits_per_search")
         self._max_followup_searches = _positive_int(
             max_followup_searches, name="max_followup_searches"
         )
@@ -368,6 +405,8 @@ class DeepAgentRetriever:
         self._model = model
         self._agent_factory = agent_factory
         self._tracing = tracing or create_retrieval_tracing()
+        self._snippet_extractor = snippet_extractor
+        self._snippet_extractor_lock = Lock()
 
     @classmethod
     def from_env(
@@ -377,6 +416,7 @@ class DeepAgentRetriever:
         model: str | None = None,
         agent_factory: AgentFactory = _create_agent,
         tracing: _Tracing | None = None,
+        snippet_extractor: RelevantSnippetExtractor | None = None,
         hits_per_search: int = HITS_PER_SEARCH,
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
@@ -404,11 +444,18 @@ class DeepAgentRetriever:
         return cls(
             retriever=PyseriniRemoteRetriever(
                 config,
-                cache_dir=repo_cache_root(resolved_root) / "retrieval" / "pyserini_remote",
+                cache_dir=repo_cache_root(resolved_root)
+                / "retrieval"
+                / "pyserini_remote",
             ),
             model=model or os.environ.get("DEEPAGENT_MODEL") or DEFAULT_MODEL,
             agent_factory=agent_factory,
             tracing=tracing or create_retrieval_tracing(environ=os.environ),
+            snippet_extractor=(
+                snippet_extractor
+                if snippet_extractor is not None
+                else create_default_snippet_extractor(resolved_root)
+            ),
             hits_per_search=validated_hits,
             max_followup_searches=validated_followups,
             fused_result_limit=validated_fused_limit,
@@ -421,10 +468,28 @@ class DeepAgentRetriever:
 
         topic_component = sha256(narrative.encode()).hexdigest()[:16]
         searches: list[AgentSearch] = []
+        documents: dict[str, str] = {}
         exhausted = False
         followup_lock = Lock()
+        document_lock = Lock()
 
-        def run_search(query: str, kind: Literal["original", "followup"], variant: str) -> AgentSearch:
+        def register_documents(candidates: Sequence[RetrievedCandidate]) -> None:
+            with document_lock:
+                for candidate in candidates:
+                    if candidate.docid not in documents:
+                        documents[candidate.docid] = candidate.text
+                        continue
+                    existing = documents[candidate.docid]
+                    if existing and existing != candidate.text:
+                        raise ValueError(
+                            f"conflicting text for document_id {candidate.docid}"
+                        )
+                    if not existing and candidate.text:
+                        documents[candidate.docid] = candidate.text
+
+        def run_search(
+            query: str, kind: Literal["original", "followup"], variant: str
+        ) -> AgentSearch:
             before = _cache_counts(self._retriever)
             with self._tracing.retriever_span(query) as span:
                 started_at = monotonic()
@@ -463,6 +528,7 @@ class DeepAgentRetriever:
                     )
                 except Exception:
                     pass
+            register_documents(candidates)
             return AgentSearch(
                 query=query,
                 kind=kind,
@@ -475,12 +541,18 @@ class DeepAgentRetriever:
             nonlocal exhausted
             with followup_lock:
                 if not isinstance(query, str) or not query.strip():
-                    return json.dumps({"error": "query must be non-empty text"}, sort_keys=True)
+                    return json.dumps(
+                        {"error": "query must be non-empty text"}, sort_keys=True
+                    )
                 if any(search.query == query for search in searches):
-                    return json.dumps({"error": "duplicate follow-up query"}, sort_keys=True)
+                    return json.dumps(
+                        {"error": "duplicate follow-up query"}, sort_keys=True
+                    )
                 if len(searches) - 1 >= self._max_followup_searches:
                     exhausted = True
-                    return json.dumps({"error": "search budget exhausted"}, sort_keys=True)
+                    return json.dumps(
+                        {"error": "search budget exhausted"}, sort_keys=True
+                    )
                 search = run_search(
                     query,
                     "followup",
@@ -489,7 +561,7 @@ class DeepAgentRetriever:
                 searches.append(search)
                 return json.dumps(
                     {
-                        "candidates": _bounded_candidates(
+                        "candidates": _candidate_metadata(
                             search.candidates, limit=self._hits_per_search
                         ),
                         "remaining_budget": self._max_followup_searches
@@ -498,13 +570,63 @@ class DeepAgentRetriever:
                     sort_keys=True,
                 )
 
+        def extract_relevant_snippets(
+            document_id: str,
+            focus_query: str,
+            cursor: str | None = None,
+        ) -> str:
+            """Return one relevance-ranked snippet page for a retrieved document."""
+            if not isinstance(document_id, str) or not document_id.strip():
+                return json.dumps({"error": "unknown document_id"}, sort_keys=True)
+            if not isinstance(focus_query, str) or not focus_query.strip():
+                return json.dumps(
+                    {"error": "focus_query must be non-empty text"}, sort_keys=True
+                )
+            if cursor is not None and (
+                not isinstance(cursor, str) or not cursor.strip()
+            ):
+                return json.dumps({"error": "invalid cursor"}, sort_keys=True)
+            with document_lock:
+                document_text = documents.get(document_id)
+            if document_text is None:
+                return json.dumps({"error": "unknown document_id"}, sort_keys=True)
+            try:
+                with self._snippet_extractor_lock:
+                    if self._snippet_extractor is None:
+                        self._snippet_extractor = create_default_snippet_extractor(
+                            find_repo_root()
+                        )
+                    extractor = self._snippet_extractor
+                result: SnippetExtractionResult = extractor.extract(
+                    document_id,
+                    document_text,
+                    focus_query,
+                    cursor,
+                )
+            except ValueError:
+                error = (
+                    "invalid cursor"
+                    if cursor is not None
+                    else "snippet extraction failed"
+                )
+                return json.dumps({"error": error}, sort_keys=True)
+            except Exception:
+                return json.dumps(
+                    {"error": "snippet extraction failed"}, sort_keys=True
+                )
+            return json.dumps(result.page.as_dict(), sort_keys=True)
+
         try:
             with self._tracing.agent_span(narrative) as agent_span:
                 original = run_search(narrative, "original", "original")
                 searches.append(original)
-                agent = self._agent_factory(self._model, search_climbmix)
+                agent = self._agent_factory(
+                    self._model,
+                    search_climbmix,
+                    extract_relevant_snippets,
+                )
                 initial_results = json.dumps(
-                    _bounded_candidates(
+                    _candidate_metadata(
                         original.candidates, limit=self._hits_per_search
                     ),
                     sort_keys=True,
@@ -528,7 +650,9 @@ class DeepAgentRetriever:
                 candidates = reciprocal_rank_fuse(
                     searches, limit=self._fused_result_limit
                 )
-                stopping_reason = "search_budget_exhausted" if exhausted else "agent_completed"
+                stopping_reason = (
+                    "search_budget_exhausted" if exhausted else "agent_completed"
+                )
                 try:
                     agent_span.record_result(
                         fused_document_ids=tuple(
