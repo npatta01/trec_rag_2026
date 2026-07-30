@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Iterator, Mapping, Protocol
 
 from opentelemetry import trace
+from opentelemetry.trace.status import Status, StatusCode
 from openinference.instrumentation import OITracer, TraceConfig
 from openinference.instrumentation.langchain import LangChainInstrumentor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
@@ -44,10 +45,6 @@ class _MaskingSpan:
             value = REDACTED_CONTENT
         self._wrapped.set_attribute(key, value)  # type: ignore[attr-defined]
 
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._wrapped, name)
-
-
 def _settings(environ: Mapping[str, str]) -> tuple[str | None, str, bool]:
     endpoint = environ.get("PHOENIX_COLLECTOR_ENDPOINT") or None
     project = environ.get("PHOENIX_PROJECT_NAME") or DEFAULT_PHOENIX_PROJECT
@@ -76,28 +73,48 @@ class RetrievalTracing:
         return value if self._trace_content else REDACTED_CONTENT
 
     @contextmanager
-    def agent_span(self, narrative: str) -> Iterator[object]:
+    def _span(
+        self,
+        name: str,
+        content: str,
+        kind: OpenInferenceSpanKindValues,
+    ) -> Iterator[_MaskingSpan]:
         with self._tracer.start_as_current_span(
-            "deepagent.retrieve",
-            attributes={SpanAttributes.INPUT_VALUE: self._content(narrative)},
-            openinference_span_kind=OpenInferenceSpanKindValues.AGENT,
+            name,
+            attributes={SpanAttributes.INPUT_VALUE: self._content(content)},
+            openinference_span_kind=kind,
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
-            yield _MaskingSpan(span, trace_content=self._trace_content)
+            try:
+                yield _MaskingSpan(span, trace_content=self._trace_content)
+            except Exception as exc:
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("error.type", type(exc).__name__)
+                raise
 
     @contextmanager
-    def retriever_span(self, query: str) -> Iterator[object]:
-        with self._tracer.start_as_current_span(
-            "climbmix.retrieve",
-            attributes={SpanAttributes.INPUT_VALUE: self._content(query)},
-            openinference_span_kind=OpenInferenceSpanKindValues.RETRIEVER,
+    def agent_span(self, narrative: str) -> Iterator[_MaskingSpan]:
+        with self._span(
+            "deepagent.retrieve", narrative, OpenInferenceSpanKindValues.AGENT
         ) as span:
-            yield _MaskingSpan(span, trace_content=self._trace_content)
+            yield span
+
+    @contextmanager
+    def retriever_span(self, query: str) -> Iterator[_MaskingSpan]:
+        with self._span(
+            "climbmix.retrieve", query, OpenInferenceSpanKindValues.RETRIEVER
+        ) as span:
+            yield span
 
     def force_flush(self) -> bool:
         """Flush a configured exporter without raising from an optional sink."""
         if self._provider is None:
             return True
-        return bool(self._provider.force_flush())
+        try:
+            return bool(self._provider.force_flush())
+        except Exception:
+            return False
 
 
 def _instrument_langchain(provider: _TracerProvider, trace_content: bool) -> None:
