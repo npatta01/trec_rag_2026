@@ -2233,7 +2233,7 @@ section section {{ border-color: color-mix(in srgb, var(--line) 75%, transparent
 .js .topic-panel:not([open]) {{ display: none; }}
 .js .topic-panel > summary {{ display: none; }}
 .run-diagnostics {{ margin-top: 1rem; padding: .25rem 1rem 1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
-.run-diagnostics > summary {{ min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 750; }}
+.run-diagnostics > summary {{ font-weight: 750; }}
 .run-diagnostics dl {{ display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: .35rem 1rem; }}
 .run-diagnostics dt {{ font-weight: 750; }}
 .run-diagnostics dd {{ min-width: 0; margin: 0; }}
@@ -2243,7 +2243,7 @@ caption {{ text-align: left; font-weight: 700; padding: .4rem 0; }}
 th, td {{ text-align: left; vertical-align: top; border: 1px solid var(--line); padding: .45rem; }}
 code, .break {{ overflow-wrap: anywhere; word-break: break-word; }}
 details:not(.topic-panel, .run-diagnostics) {{ margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }}
-summary {{ min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 650; }}
+summary {{ min-height: 44px; display: list-item; padding-block: .6rem; cursor: pointer; font-weight: 650; }}
 .status {{ display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }}
 .status-complete {{ color: #063; background: #d8f3df; }}
 .status-empty {{ color: #735400; background: #fff0bd; }}
@@ -2732,7 +2732,7 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
     cluster_rows = "".join(
         "<tr>"
         f"<th scope=\"row\">{_html(item.subnarrative_id)}</th><td>{_html(item.selected_budget)}</td>"
-        f"<td>{_html(item.cluster_id)}</td><td class=\"break\">{_html(_bounded_excerpt(item.representative_text))}</td>"
+        f"<td>{_html(item.cluster_id)}</td><td class=\"break\">{_html(item.representative_text)}</td>"
         f"<td>{_html(_number(item.representative_raw_logit))}</td>"
         f"<td>{_detail_evidence(item.evidence)}</td></tr>"
         for item in topic.evidence_clusters
@@ -2767,7 +2767,7 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
             "<tr>"
             f"<th scope=\"row\">{_html(item.canonical_nugget_id)}</th>"
             f"<td>{_html(item.nugget_kind)}</td>"
-            f"<td class=\"break\">{_html(_bounded_excerpt(item.claim_text))}</td>"
+            f"<td class=\"break\">{_html(item.claim_text)}</td>"
             f"<td>{_detail_evidence(item.evidence)}</td></tr>"
             for item in claims
         )
@@ -2952,7 +2952,7 @@ def _table(caption: str, headings: Sequence[str], rows: str) -> str:
 
 def _detail_passages(passages: Sequence[WinningPassageReport]) -> str:
     items = "".join(
-        f'<li>Chunk {_html(item.chunk_index)}, offsets {_html(item.start_char)}–{_html(item.end_char)}, raw logit {_html(_number(item.raw_logit))}: <span class="break">{_html(_bounded_excerpt(item.text))}</span></li>'
+        f'<li>Chunk {_html(item.chunk_index)}, offsets {_html(item.start_char)}–{_html(item.end_char)}, raw logit {_html(_number(item.raw_logit))}: <span class="break">{_html(item.text)}</span></li>'
         for item in passages
     )
     return f'<details><summary>{_html(len(passages))} stored passage(s)</summary><ul>{items}</ul></details>'
@@ -2978,7 +2978,7 @@ def _detail_lane_provenance(
 
 def _detail_evidence(evidence: Sequence[CanonicalEvidenceReport]) -> str:
     items = "".join(
-        f'<li><code>{_html(item.docid)}</code>: <span class="break">{_html(_bounded_excerpt(item.text))}</span></li>'
+        f'<li><code>{_html(item.docid)}</code>: <span class="break">{_html(item.text)}</span></li>'
         for item in evidence
     )
     return f'<details><summary>{_html(len(evidence))} evidence item(s)</summary><ul>{items}</ul></details>'

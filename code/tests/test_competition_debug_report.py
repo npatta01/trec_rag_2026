@@ -2378,11 +2378,63 @@ def test_representative_passage_and_rag_provenance_state_semantic_limits(
 
 
 def test_all_disclosure_summaries_have_a_44_pixel_target(tmp_path: Path) -> None:
-    """Every progressive-disclosure control must meet the touch target contract."""
+    """Every disclosure keeps its native marker and a large touch target."""
     config_path, _output = _write_debug_run(tmp_path)
     rendered = render_debug_report(load_debug_report_data(config_path))
 
-    assert "summary { min-height: 44px; display: flex; align-items: center;" in rendered
+    assert "summary { min-height: 44px; display: list-item;" in rendered
+    assert ".run-diagnostics > summary { min-height: 44px; display: flex;" not in rendered
+
+
+def test_collapsed_diagnostic_tables_retain_full_escaped_stored_text(
+    tmp_path: Path,
+) -> None:
+    """Diagnostic records must remain lossless even when default cards use previews."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    passage_text = "P" * 520 + '<PASSAGE-FULL & "stored">'
+    cluster_text = "C" * 520 + '<CLUSTER-FULL & "stored">'
+    claim_text = "N" * 520 + '<CLAIM-FULL & "stored">'
+    evidence_text = "E" * 520 + '<EVIDENCE-FULL & "stored">'
+    ranking = topic.passage_rankings[0]
+    passage = replace(ranking.winning_passages[0], text=passage_text)
+    cluster = replace(
+        topic.evidence_clusters[0],
+        representative_text=cluster_text,
+        evidence=(replace(topic.evidence_clusters[0].evidence[0], text=evidence_text),),
+    )
+    nugget = replace(
+        topic.canonical_nuggets[0],
+        claim_text=claim_text,
+        evidence=(replace(topic.canonical_nuggets[0].evidence[0], text=evidence_text),),
+    )
+    rendered = render_debug_report(
+        replace(
+            loaded,
+            topics=(
+                replace(
+                    topic,
+                    passage_rankings=(
+                        replace(ranking, winning_passages=(passage,)),
+                        *topic.passage_rankings[1:],
+                    ),
+                    evidence_clusters=(cluster, *topic.evidence_clusters[1:]),
+                    canonical_nuggets=(nugget, *topic.canonical_nuggets[1:]),
+                ),
+            ),
+        )
+    )
+    selected = rendered.split(
+        '<section id="stage-literal-rag2026-0-selected-documents"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-top-passages"', 1)[0]
+    diagnostics = rendered.split(
+        '<section id="stage-literal-rag2026-0-top-passages"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-final-retrieval"', 1)[0]
+
+    assert "PASSAGE-FULL" not in selected
+    for stored in (passage_text, cluster_text, claim_text, evidence_text):
+        assert html.escape(stored, quote=True) in diagnostics
 
 
 def test_html_includes_run_summary_and_pipeline_legend(tmp_path: Path) -> None:
