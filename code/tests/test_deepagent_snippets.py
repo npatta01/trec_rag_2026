@@ -317,11 +317,21 @@ def test_relevant_passage_near_document_end_leads_first_ten_item_page(tmp_path: 
     ]
     assert result.page.snippets[0].text == "target passage near the end with primary evidence"
     assert result.page.next_cursor is not None
+    assert result.page.page_index == 0
+    assert result.page.residual_count == 2
+    assert result.page.residual_top_score == 0.0
+    assert result.page.returned_min_score == 0.0
+    assert result.page.pages_estimated == 2
     assert result.page.as_dict().keys() == {
         "document_id",
         "focus_query",
         "snippets",
         "next_cursor",
+        "page_index",
+        "residual_count",
+        "residual_top_score",
+        "returned_min_score",
+        "pages_estimated",
     }
     assert "page_offset" not in result.page.as_dict()
 
@@ -347,9 +357,14 @@ def test_complete_short_document_is_one_bounded_relevant_snippet(tmp_path: Path)
     assert result.page.snippets[0].start_char == 0
     assert result.page.snippets[0].end_char == len(short_document)
     assert result.page.next_cursor is None
+    assert result.page.page_index == 0
+    assert result.page.residual_count == 0
+    assert result.page.residual_top_score is None
+    assert result.page.returned_min_score == 2.0
+    assert result.page.pages_estimated == 1
 
 
-def test_continuation_is_stable_and_has_no_duplicate_snippets(tmp_path: Path) -> None:
+def test_continuation_reports_exhausted_residual_ranking(tmp_path: Path) -> None:
     extractor, _ranker = _extractor(tmp_path)
 
     first = extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
@@ -358,9 +373,26 @@ def test_continuation_is_stable_and_has_no_duplicate_snippets(tmp_path: Path) ->
     assert second.page_offset == 10
     assert len(second.page.snippets) == 2
     assert second.page.next_cursor is None
+    assert second.page.page_index == 1
+    assert second.page.residual_count == 0
+    assert second.page.residual_top_score is None
+    assert second.page.returned_min_score == 0.0
+    assert second.page.pages_estimated == 2
     assert {snippet.chunk_id for snippet in first.page.snippets}.isdisjoint(
         snippet.chunk_id for snippet in second.page.snippets
     )
+
+
+def test_empty_page_reports_no_pagination_or_score_signals(tmp_path: Path) -> None:
+    extractor, _ranker = _extractor(tmp_path, ())
+
+    result = extractor.extract("doc-a", "", "target passage")
+
+    assert result.page.page_index == 0
+    assert result.page.residual_count == 0
+    assert result.page.residual_top_score is None
+    assert result.page.returned_min_score is None
+    assert result.page.pages_estimated == 0
 
 
 def test_deduplication_suppresses_normalized_and_overlapping_chunks(tmp_path: Path) -> None:
@@ -708,6 +740,64 @@ def test_cache_rejects_malformed_entries_without_returning_them(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("page_index", -1),
+        ("residual_count", True),
+        ("residual_top_score", float("nan")),
+        ("returned_min_score", "0.5"),
+        ("pages_estimated", -1),
+    ],
+)
+def test_cache_rejects_invalid_pagination_metadata(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = _cache_file(tmp_path / "pages")
+    payload = json.loads(cache_file.read_text())
+    payload["response"][field] = value
+    try:
+        response = deepagent_snippets._canonical_json(payload["response"])
+    except ValueError:
+        response = json.dumps(
+            payload["response"],
+            allow_nan=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    payload["response_sha256"] = sha256(response.encode()).hexdigest()
+    cache_file.write_text(json.dumps(payload))
+
+    with pytest.raises(SnippetCacheIntegrityError):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("page_index", 1),
+        ("next_cursor", None),
+        ("returned_min_score", 1.0),
+        ("pages_estimated", 1),
+    ],
+)
+def test_cache_rejects_inconsistent_pagination_metadata(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = _cache_file(tmp_path / "pages")
+    _rewrite_checksum_consistent_cache_response(
+        cache_file, lambda response: response.__setitem__(field, value)
+    )
+
+    with pytest.raises(SnippetCacheIntegrityError):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+@pytest.mark.parametrize(
     "mutation",
     ["page_size", "duplicate", "offset", "text", "document_chunk_identity"],
 )
@@ -797,6 +887,11 @@ def test_cache_rejects_nonprogressing_empty_continuation_page(
             focus_query="focus",
             snippets=(),
             next_cursor=extractor._encode_cursor(binding_identity, 0),
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=None,
+            pages_estimated=0,
         ),
         page_offset=0,
     )
@@ -838,6 +933,11 @@ def test_cache_rejects_complete_long_document_even_with_consistent_checksum(
                 ),
             ),
             next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=1.0,
+            pages_estimated=1,
         ),
         page_offset=0,
     )

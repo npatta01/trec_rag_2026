@@ -30,7 +30,7 @@ from trec_rag.repo_env import repo_cache_root
 
 
 CURSOR_SCHEMA_VERSION = 2
-RESULT_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 3
 IMPLEMENTATION_VERSION = 3
 DEFAULT_SNIPPET_MODEL = "mixedbread-ai/mxbai-rerank-base-v2"
 DEFAULT_SNIPPET_MODEL_REVISION = "3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
@@ -133,6 +133,11 @@ class SnippetPage:
     focus_query: str
     snippets: tuple[RelevantSnippet, ...]
     next_cursor: str | None
+    page_index: int
+    residual_count: int
+    residual_top_score: float | None
+    returned_min_score: float | None
+    pages_estimated: int
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -140,6 +145,11 @@ class SnippetPage:
             "focus_query": self.focus_query,
             "snippets": [asdict(snippet) for snippet in self.snippets],
             "next_cursor": self.next_cursor,
+            "page_index": self.page_index,
+            "residual_count": self.residual_count,
+            "residual_top_score": self.residual_top_score,
+            "returned_min_score": self.returned_min_score,
+            "pages_estimated": self.pages_estimated,
         }
 
 
@@ -747,13 +757,28 @@ class SnippetResultCache:
 
     @staticmethod
     def _page_from_response(response: Mapping[str, object]) -> SnippetPage:
-        expected_keys = {"document_id", "focus_query", "snippets", "next_cursor"}
+        expected_keys = {
+            "document_id",
+            "focus_query",
+            "snippets",
+            "next_cursor",
+            "page_index",
+            "residual_count",
+            "residual_top_score",
+            "returned_min_score",
+            "pages_estimated",
+        }
         if set(response) != expected_keys:
             raise ValueError("unexpected response fields")
         document_id = response["document_id"]
         focus_query = response["focus_query"]
         snippets_value = response["snippets"]
         next_cursor = response["next_cursor"]
+        page_index = response["page_index"]
+        residual_count = response["residual_count"]
+        residual_top_score = response["residual_top_score"]
+        returned_min_score = response["returned_min_score"]
+        pages_estimated = response["pages_estimated"]
         if not isinstance(document_id, str) or not document_id.strip():
             raise ValueError("invalid document_id")
         if not isinstance(focus_query, str) or not focus_query.strip():
@@ -762,8 +787,39 @@ class SnippetResultCache:
             raise ValueError("invalid snippets")
         if next_cursor is not None and not isinstance(next_cursor, str):
             raise ValueError("invalid next_cursor")
+        for value, source in (
+            (page_index, "page_index"),
+            (residual_count, "residual_count"),
+            (pages_estimated, "pages_estimated"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"invalid {source}")
+        for value, source in (
+            (residual_top_score, "residual_top_score"),
+            (returned_min_score, "returned_min_score"),
+        ):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"invalid {source}")
         snippets = tuple(SnippetResultCache._snippet_from_dict(row) for row in snippets_value)
-        return SnippetPage(document_id, focus_query, snippets, next_cursor)
+        if (residual_top_score is None) != (residual_count == 0):
+            raise ValueError("invalid residual score")
+        if (returned_min_score is None) != (not snippets):
+            raise ValueError("invalid returned score")
+        return SnippetPage(
+            document_id,
+            focus_query,
+            snippets,
+            next_cursor,
+            page_index,
+            residual_count,
+            None if residual_top_score is None else float(residual_top_score),
+            None if returned_min_score is None else float(returned_min_score),
+            pages_estimated,
+        )
 
     @staticmethod
     def _snippet_from_dict(value: object) -> RelevantSnippet:
@@ -1030,6 +1086,15 @@ class RelevantSnippetExtractor:
         binding_identity: Mapping[str, object],
     ) -> SnippetPage:
         selected = ranked[offset : offset + self.config.snippets_per_page]
+        next_offset = offset + len(selected)
+        residual_count = len(ranked) - next_offset
+        residual_top_score = (
+            ranked[next_offset].relevance_score if residual_count else None
+        )
+        returned_min_score = (
+            min(row.relevance_score for row in selected) if selected else None
+        )
+        pages_estimated = math.ceil(len(ranked) / self.config.snippets_per_page)
         snippets = tuple(
             RelevantSnippet(
                 chunk_id=row.chunk.chunk_id,
@@ -1040,13 +1105,22 @@ class RelevantSnippetExtractor:
             )
             for row in selected
         )
-        next_offset = offset + len(snippets)
         next_cursor = (
             self._encode_cursor(binding_identity, next_offset)
-            if next_offset < len(ranked)
+            if residual_count
             else None
         )
-        return SnippetPage(document_id, focus_query, snippets, next_cursor)
+        return SnippetPage(
+            document_id,
+            focus_query,
+            snippets,
+            next_cursor,
+            offset // self.config.snippets_per_page,
+            residual_count,
+            residual_top_score,
+            returned_min_score,
+            pages_estimated,
+        )
 
     @staticmethod
     def _cursor_binding_digest(
@@ -1117,6 +1191,22 @@ class RelevantSnippetExtractor:
                 raise ValueError("cached page offset does not match request cursor")
             if len(page.snippets) > self.config.snippets_per_page:
                 raise ValueError("cached page exceeds configured page size")
+            if page.page_index != page_offset // self.config.snippets_per_page:
+                raise ValueError("cached page index does not match page offset")
+            if (page.next_cursor is not None) != (page.residual_count > 0):
+                raise ValueError("cached next cursor does not match residual count")
+            if page.pages_estimated != math.ceil(
+                (page_offset + len(page.snippets) + page.residual_count)
+                / self.config.snippets_per_page
+            ):
+                raise ValueError("cached page estimate does not match ranking size")
+            expected_returned_min_score = (
+                min(snippet.relevance_score for snippet in page.snippets)
+                if page.snippets
+                else None
+            )
+            if page.returned_min_score != expected_returned_min_score:
+                raise ValueError("cached returned score does not match snippets")
             valid_source_chunks: set[tuple[str, str, int, int, str]] = set()
             source_chunk_ids: set[str] = set()
             for record in source_chunk_records:
