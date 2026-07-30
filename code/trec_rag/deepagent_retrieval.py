@@ -106,7 +106,11 @@ class _RetrievalOnlyMiddleware(AgentMiddleware):
         return request.override(
             tools=[
                 tool for tool in request.tools if self._tool_name(tool) == self._ALLOWED_TOOL
-            ]
+            ],
+            model_settings={
+                **(request.model_settings or {}),
+                "parallel_tool_calls": False,
+            },
         )
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], Any]) -> Any:

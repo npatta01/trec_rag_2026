@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Barrier
+from threading import Barrier, Event
 from typing import Any, Callable, Sequence
 from unittest.mock import ANY
 
@@ -78,6 +78,34 @@ class SlowFollowupRetriever(FakeRetriever):
         return super().retrieve(query)
 
 
+class ControlledFailureRetriever(FakeRetriever):
+    """Pause one failing follow-up while later calls queue behind the SDK lock."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempted_queries: list[str] = []
+        self.failure_started = Event()
+        self.release_failure = Event()
+
+    def retrieve(self, query):
+        self.attempted_queries.append(query.query_text)
+        if query.query_text == "failing query":
+            self.failure_started.set()
+            if not self.release_failure.wait(timeout=2):
+                raise AssertionError("test did not release the controlled failure")
+            raise RuntimeError("controlled retrieval failure")
+        self.queries.append(query)
+        return [
+            _candidate(
+                query=query.query_text,
+                variant=query.variant_name,
+                docid="shared-doc",
+                rank=1,
+                text=f"{query.query_text} excerpt",
+            )
+        ]
+
+
 @dataclass
 class FakeAgent:
     invoke_callback: Callable[[dict[str, object]], object]
@@ -111,11 +139,13 @@ class CaptureChatModel(FakeMessagesListChatModel):
     """Offline chat model that records the tools Deep Agents exposes to it."""
 
     captured_tool_names: list[str] = Field(default_factory=list)
+    captured_bind_settings: list[dict[str, object]] = Field(default_factory=list)
 
     def bind_tools(
-        self, tools: Sequence[object], **_kwargs: object
+        self, tools: Sequence[object], **kwargs: object
     ) -> "CaptureChatModel":
         self.captured_tool_names = [str(getattr(tool, "name", "")) for tool in tools]
+        self.captured_bind_settings.append(dict(kwargs))
         return self
 
 
@@ -352,6 +382,89 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
     assert result.stopping_reason == "agent_completed"
 
 
+def test_retrieve_concurrent_blank_followups_do_not_use_budget() -> None:
+    fake_retriever = SlowFollowupRetriever()
+    blank_results = []
+    successful_results = []
+
+    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            barrier = Barrier(4)
+
+            def call_blank(number: int) -> str:
+                barrier.wait(timeout=2)
+                return search_tool(" " * (number + 1))
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                blank_results.extend(pool.map(call_blank, range(4)))
+            successful_results.extend(search_tool(f"query {number}") for number in range(3))
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
+
+    assert [query.query_text for query in fake_retriever.queries] == [
+        "narrative",
+        "query 0",
+        "query 1",
+        "query 2",
+    ]
+    assert all(
+        json.loads(item) == {"error": "query must be non-empty text"}
+        for item in blank_results
+    )
+    assert [json.loads(item)["remaining_budget"] for item in successful_results] == [
+        2,
+        1,
+        0,
+    ]
+    assert result.stopping_reason == "agent_completed"
+
+
+def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order() -> None:
+    fake_retriever = ControlledFailureRetriever()
+    tool_results = []
+
+    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            queued = Barrier(4)
+
+            def call_success(number: int) -> str:
+                queued.wait(timeout=2)
+                return search_tool(f"query {number}")
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                failed = pool.submit(search_tool, "failing query")
+                assert fake_retriever.failure_started.wait(timeout=2)
+                successful = [pool.submit(call_success, number) for number in range(3)]
+                queued.wait(timeout=2)
+                fake_retriever.release_failure.set()
+                with pytest.raises(RuntimeError, match="controlled retrieval failure"):
+                    failed.result(timeout=2)
+                tool_results.extend(future.result(timeout=2) for future in successful)
+            tool_results.append(search_tool("query beyond budget"))
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
+    recorded_queries = [query.query_text for query in fake_retriever.queries]
+
+    assert fake_retriever.attempted_queries[0:2] == ["narrative", "failing query"]
+    assert "failing query" not in recorded_queries
+    assert len(recorded_queries) == 4
+    assert [search.query for search in result.searches] == recorded_queries
+    assert [item["query"] for item in result.candidates[0].provenance] == recorded_queries
+    assert sorted(json.loads(item)["remaining_budget"] for item in tool_results[:3]) == [
+        0,
+        1,
+        2,
+    ]
+    assert json.loads(tool_results[-1]) == {"error": "search budget exhausted"}
+    assert result.stopping_reason == "search_budget_exhausted"
+
+
 def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_budget() -> None:
     fake_retriever = FakeRetriever()
     tool_results = []
@@ -486,6 +599,11 @@ def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) ->
 
     assert result.rationale == "Coverage is sufficient."
     assert sdk_model.captured_tool_names == ["search_climbmix"]
+    assert sdk_model.captured_bind_settings
+    assert all(
+        settings["parallel_tool_calls"] is False
+        for settings in sdk_model.captured_bind_settings
+    )
 
     def unrelated_tool(query: str) -> str:
         """Return a test-only unrelated result."""
@@ -501,32 +619,43 @@ def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) ->
     assert {"ls", "task", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
 
 
-def test_retrieval_only_middleware_filters_sync_async_models_and_blocks_tools() -> None:
+def test_retrieval_only_middleware_serializes_sync_async_models_and_blocks_tools() -> None:
     middleware = deepagent_retrieval._RetrievalOnlyMiddleware()
+    model = CaptureChatModel(responses=[AIMessage(content="unused")])
     request = ModelRequest(
-        model=CaptureChatModel(responses=[AIMessage(content="unused")]),
+        model=model,
         messages=[],
         tools=[{"name": "search_climbmix"}, {"name": "ls"}],
+        model_settings={"temperature": 0.25, "parallel_tool_calls": True},
     )
     seen_sync = []
 
     def sync_handler(filtered: ModelRequest[object]) -> AIMessage:
         seen_sync.extend(tool["name"] for tool in filtered.tools if isinstance(tool, dict))
+        filtered.model.bind_tools(filtered.tools, **(filtered.model_settings or {}))
         return AIMessage(content="ok")
 
     assert middleware.wrap_model_call(request, sync_handler).content == "ok"
     assert seen_sync == ["search_climbmix"]
+    assert model.captured_bind_settings == [
+        {"temperature": 0.25, "parallel_tool_calls": False}
+    ]
 
     async def verify_async() -> None:
         seen_async = []
 
         async def async_handler(filtered: ModelRequest[object]) -> AIMessage:
             seen_async.extend(tool["name"] for tool in filtered.tools if isinstance(tool, dict))
+            filtered.model.bind_tools(filtered.tools, **(filtered.model_settings or {}))
             return AIMessage(content="ok")
 
         reply = await middleware.awrap_model_call(request, async_handler)
         assert reply.content == "ok"
         assert seen_async == ["search_climbmix"]
+        assert model.captured_bind_settings == [
+            {"temperature": 0.25, "parallel_tool_calls": False},
+            {"temperature": 0.25, "parallel_tool_calls": False},
+        ]
 
         forbidden = ToolCallRequest(
             tool_call={"name": "ls", "args": {}, "id": "call-1"},
