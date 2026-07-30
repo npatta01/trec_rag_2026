@@ -9,6 +9,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
 from langchain.agents.middleware import AgentMiddleware
@@ -344,6 +345,7 @@ class DeepAgentRetriever:
         topic_component = sha256(narrative.encode()).hexdigest()[:16]
         searches: list[AgentSearch] = []
         exhausted = False
+        followup_lock = Lock()
 
         def run_search(query: str, kind: Literal["original", "followup"], variant: str) -> AgentSearch:
             before = _cache_counts(self._retriever)
@@ -369,26 +371,27 @@ class DeepAgentRetriever:
         def search_climbmix(query: str) -> str:
             """Search ClimbMix for a targeted, previously uncovered narrative aspect."""
             nonlocal exhausted
-            if not isinstance(query, str) or not query.strip():
-                return json.dumps({"error": "query must be non-empty text"}, sort_keys=True)
-            if any(search.query == query for search in searches):
-                return json.dumps({"error": "duplicate follow-up query"}, sort_keys=True)
-            if len(searches) - 1 >= MAX_FOLLOWUP_SEARCHES:
-                exhausted = True
-                return json.dumps({"error": "search budget exhausted"}, sort_keys=True)
-            search = run_search(
-                query,
-                "followup",
-                "followup-" + sha256(query.encode()).hexdigest()[:16],
-            )
-            searches.append(search)
-            return json.dumps(
-                {
-                    "candidates": _bounded_candidates(search.candidates),
-                    "remaining_budget": MAX_FOLLOWUP_SEARCHES - (len(searches) - 1),
-                },
-                sort_keys=True,
-            )
+            with followup_lock:
+                if not isinstance(query, str) or not query.strip():
+                    return json.dumps({"error": "query must be non-empty text"}, sort_keys=True)
+                if any(search.query == query for search in searches):
+                    return json.dumps({"error": "duplicate follow-up query"}, sort_keys=True)
+                if len(searches) - 1 >= MAX_FOLLOWUP_SEARCHES:
+                    exhausted = True
+                    return json.dumps({"error": "search budget exhausted"}, sort_keys=True)
+                search = run_search(
+                    query,
+                    "followup",
+                    "followup-" + sha256(query.encode()).hexdigest()[:16],
+                )
+                searches.append(search)
+                return json.dumps(
+                    {
+                        "candidates": _bounded_candidates(search.candidates),
+                        "remaining_budget": MAX_FOLLOWUP_SEARCHES - (len(searches) - 1),
+                    },
+                    sort_keys=True,
+                )
 
         try:
             with self._tracing.agent_span(narrative):

@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Barrier
 from typing import Any, Callable, Sequence
 from unittest.mock import ANY
 
@@ -64,6 +67,15 @@ class FakeRetriever:
             )
             for rank in range(1, self.candidate_count + 1)
         ]
+
+
+class SlowFollowupRetriever(FakeRetriever):
+    """Make concurrent pre-append budget checks overlap deterministically."""
+
+    def retrieve(self, query):
+        if query.variant_name != "original":
+            time.sleep(0.05)
+        return super().retrieve(query)
 
 
 @dataclass
@@ -278,6 +290,66 @@ def test_retrieve_limits_successful_followups_to_three_and_marks_budget_exhausti
     ]
     assert json.loads(tool_results[-1])["error"] == "search budget exhausted"
     assert result.stopping_reason == "search_budget_exhausted"
+
+
+def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
+    fake_retriever = SlowFollowupRetriever()
+    tool_results = []
+
+    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            barrier = Barrier(4)
+
+            def call_tool(number: int) -> str:
+                barrier.wait(timeout=2)
+                return search_tool(f"concurrent query {number}")
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                tool_results.extend(pool.map(call_tool, range(4)))
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
+    payloads = [json.loads(item) for item in tool_results]
+
+    assert len(fake_retriever.queries) == 4
+    assert len(result.searches) == 4
+    assert [search.kind for search in result.searches] == [
+        "original",
+        "followup",
+        "followup",
+        "followup",
+    ]
+    assert sum(payload.get("error") == "search budget exhausted" for payload in payloads) == 1
+    assert result.stopping_reason == "search_budget_exhausted"
+
+
+def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
+    fake_retriever = SlowFollowupRetriever()
+    tool_results = []
+
+    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            barrier = Barrier(2)
+
+            def call_tool(_number: int) -> str:
+                barrier.wait(timeout=2)
+                return search_tool("same concurrent query")
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                tool_results.extend(pool.map(call_tool, range(2)))
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
+    payloads = [json.loads(item) for item in tool_results]
+
+    assert len(fake_retriever.queries) == 2
+    assert len(result.searches) == 2
+    assert sum(payload.get("error") == "duplicate follow-up query" for payload in payloads) == 1
+    assert result.stopping_reason == "agent_completed"
 
 
 def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_budget() -> None:
