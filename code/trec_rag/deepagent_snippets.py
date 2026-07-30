@@ -7,6 +7,7 @@ import binascii
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+from importlib.metadata import PackageNotFoundError, version
 import json
 import math
 import os
@@ -21,7 +22,7 @@ from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk, Te
 
 CURSOR_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
-IMPLEMENTATION_VERSION = 1
+IMPLEMENTATION_VERSION = 2
 
 
 class SnippetCacheIntegrityError(RuntimeError):
@@ -36,11 +37,23 @@ class SnippetExtractionConfig:
     duplicate_overlap_ratio: float = 0.8
 
     def __post_init__(self) -> None:
-        if isinstance(self.snippets_per_page, bool) or self.snippets_per_page <= 0:
+        if (
+            isinstance(self.snippets_per_page, bool)
+            or not isinstance(self.snippets_per_page, int)
+            or self.snippets_per_page <= 0
+        ):
             raise ValueError("snippets_per_page must be positive")
-        if isinstance(self.chunk_max_characters, bool) or self.chunk_max_characters <= 0:
+        if (
+            isinstance(self.chunk_max_characters, bool)
+            or not isinstance(self.chunk_max_characters, int)
+            or self.chunk_max_characters <= 0
+        ):
             raise ValueError("chunk_max_characters must be positive")
-        if isinstance(self.chunk_overlap_characters, bool) or self.chunk_overlap_characters < 0:
+        if (
+            isinstance(self.chunk_overlap_characters, bool)
+            or not isinstance(self.chunk_overlap_characters, int)
+            or self.chunk_overlap_characters < 0
+        ):
             raise ValueError("chunk_overlap_characters must be non-negative")
         if self.chunk_overlap_characters >= self.chunk_max_characters:
             raise ValueError("chunk_overlap_characters must be smaller than chunk_max_characters")
@@ -258,13 +271,16 @@ class RelevantSnippetExtractor:
         self._ranker = ranker
         self._result_cache = result_cache
         self.config = config or SnippetExtractionConfig()
-        self._chunker = chunker or SemanticTextChunker(
-            ChunkingConfig(
-                max_characters=self.config.chunk_max_characters,
-                overlap_characters=self.config.chunk_overlap_characters,
+        if chunker is None:
+            chunker = SemanticTextChunker(
+                ChunkingConfig(
+                    max_characters=self.config.chunk_max_characters,
+                    overlap_characters=self.config.chunk_overlap_characters,
+                )
             )
-        )
+        self._chunker = chunker
         self._ranker_identity = self._validated_ranker_identity(ranker.identity)
+        self._chunker_identity = self._validated_chunker_identity(chunker)
 
     @staticmethod
     def _validated_ranker_identity(value: Mapping[str, object]) -> dict[str, object]:
@@ -273,6 +289,36 @@ class RelevantSnippetExtractor:
         if not isinstance(backend, str) or not backend.strip():
             raise ValueError("ranker identity requires a nonblank backend")
         _canonical_json(identity)
+        return identity
+
+    @staticmethod
+    def _validated_chunker_identity(chunker: TextChunker) -> dict[str, object]:
+        if isinstance(chunker, SemanticTextChunker):
+            try:
+                backend_version = version("semantic-text-splitter")
+            except PackageNotFoundError:
+                backend_version = "unavailable"
+            identity: dict[str, object] = {
+                "backend": "semantic_text_splitter",
+                "backend_version": backend_version,
+                "implementation": "trec_rag.chunking.SemanticTextChunker",
+                "implementation_version": 1,
+                "max_characters": chunker.config.max_characters,
+                "overlap_characters": chunker.config.overlap_characters,
+                "trim": chunker.config.trim,
+            }
+        else:
+            supplied = getattr(chunker, "identity", None)
+            if not isinstance(supplied, Mapping):
+                raise ValueError("injected chunker requires an explicit chunker identity")
+            identity = dict(supplied)
+        backend = identity.get("backend")
+        if not isinstance(backend, str) or not backend.strip():
+            raise ValueError("chunker identity requires a nonblank backend")
+        try:
+            _canonical_json(identity)
+        except ValueError as exc:
+            raise ValueError("chunker identity must be JSON serializable") from exc
         return identity
 
     def extract(
@@ -287,6 +333,12 @@ class RelevantSnippetExtractor:
         cached = self._result_cache.get(identity)
         if cached is not None:
             cached_page, cached_offset = cached
+            self._validate_cached_page(
+                cached_page,
+                cached_offset,
+                cursor,
+                self._identity_without_cursor(identity),
+            )
             return SnippetExtractionResult(
                 cached_page,
                 "hit",
@@ -328,6 +380,7 @@ class RelevantSnippetExtractor:
             "chunk_overlap_characters": self.config.chunk_overlap_characters,
             "duplicate_overlap_ratio": self.config.duplicate_overlap_ratio,
             "ranker": self._ranker_identity,
+            "chunker": self._chunker_identity,
         }
 
     @staticmethod
@@ -439,9 +492,13 @@ class RelevantSnippetExtractor:
     ) -> int:
         if cursor is None:
             return 0
+        padded = cursor + "=" * (-len(cursor) % 4)
         try:
-            padded = cursor + "=" * (-len(cursor) % 4)
-            decoded = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+            encoded_cursor = padded.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise ValueError("invalid cursor") from exc
+        try:
+            decoded = base64.b64decode(encoded_cursor, altchars=b"-_", validate=True)
             payload = json.loads(decoded.decode("utf-8"))
             if not isinstance(payload, dict) or set(payload) != {
                 "schema_version",
@@ -456,3 +513,22 @@ class RelevantSnippetExtractor:
             return SnippetResultCache._valid_page_offset(payload["next_offset"])
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError, binascii.Error) as exc:
             raise ValueError("invalid cursor") from exc
+
+    def _validate_cached_page(
+        self,
+        page: SnippetPage,
+        page_offset: int,
+        request_cursor: str | None,
+        binding_identity: Mapping[str, object],
+    ) -> None:
+        try:
+            if self._decode_and_validate_cursor(request_cursor, binding_identity) != page_offset:
+                raise ValueError("cached page offset does not match request cursor")
+            if page.next_cursor is not None:
+                next_offset = self._decode_and_validate_cursor(
+                    page.next_cursor, binding_identity
+                )
+                if next_offset != page_offset + len(page.snippets):
+                    raise ValueError("cached next cursor does not follow page")
+        except ValueError as exc:
+            raise SnippetCacheIntegrityError("invalid snippet cache entry") from exc

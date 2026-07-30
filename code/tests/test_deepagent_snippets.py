@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,23 @@ from trec_rag.deepagent_snippets import (
 class FixedChunker:
     """A deterministic chunker that keeps extraction tests model-free."""
 
-    def __init__(self, chunks: Sequence[TextChunk]) -> None:
+    def __init__(
+        self, chunks: Sequence[TextChunk], *, implementation: str = "fixed-v1"
+    ) -> None:
         self._chunks = list(chunks)
+        self.identity = {
+            "backend": "test_fixed_chunker",
+            "implementation": implementation,
+            "chunks": [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "text": chunk.text,
+                    "start_char": chunk.start_char,
+                    "end_char": chunk.end_char,
+                }
+                for chunk in chunks
+            ],
+        }
 
     def split_text(self, text: str, *, document_id: str) -> list[TextChunk]:
         assert document_id == "doc-a" or document_id == "doc-b"
@@ -168,6 +184,27 @@ def test_extract_rejects_blank_query_and_invalid_cursor(tmp_path: Path) -> None:
         extractor.extract("doc-a", LONG_DOCUMENT, " \n ")
     with pytest.raises(ValueError, match="cursor"):
         extractor.extract("doc-a", LONG_DOCUMENT, "target passage", "not-a-cursor")
+    with pytest.raises(ValueError, match="^invalid cursor$"):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage", "snowman-☃")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("snippets_per_page", True),
+        ("snippets_per_page", 1.5),
+        ("snippets_per_page", "10"),
+        ("chunk_max_characters", True),
+        ("chunk_max_characters", 1.5),
+        ("chunk_max_characters", "3500"),
+        ("chunk_overlap_characters", True),
+        ("chunk_overlap_characters", 1.5),
+        ("chunk_overlap_characters", "350"),
+    ],
+)
+def test_config_rejects_non_integer_page_and_chunk_counts(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=field):
+        SnippetExtractionConfig(**{field: value})
 
 
 def test_config_and_ranker_scores_are_validated(tmp_path: Path) -> None:
@@ -208,6 +245,76 @@ def test_cache_first_pages_use_every_tool_argument(tmp_path: Path) -> None:
         == "miss"
     )
     assert extractor.extract("doc-a", LONG_DOCUMENT + " revised", "target passage", None).cache_status == "miss"
+
+
+def test_cache_identity_distinguishes_injected_chunker_implementations(tmp_path: Path) -> None:
+    cache = SnippetResultCache(tmp_path / "pages")
+    first_ranker = CountingRanker()
+    first = RelevantSnippetExtractor(
+        ranker=first_ranker,
+        chunker=FixedChunker(LONG_CHUNKS, implementation="split-policy-a"),
+        result_cache=cache,
+    )
+    second_ranker = CountingRanker()
+    second = RelevantSnippetExtractor(
+        ranker=second_ranker,
+        chunker=FixedChunker(LONG_CHUNKS, implementation="split-policy-b"),
+        result_cache=cache,
+    )
+
+    assert first.extract("doc-a", LONG_DOCUMENT, "target passage").cache_status == "miss"
+    assert second.extract("doc-a", LONG_DOCUMENT, "target passage").cache_status == "miss"
+    assert first_ranker.calls == 1
+    assert second_ranker.calls == 1
+
+
+def test_injected_chunker_requires_a_stable_serializable_identity(tmp_path: Path) -> None:
+    class UnidentifiedChunker:
+        def split_text(self, text: str, *, document_id: str) -> list[TextChunk]:
+            return []
+
+    with pytest.raises(ValueError, match="chunker identity"):
+        RelevantSnippetExtractor(
+            ranker=CountingRanker(),
+            chunker=UnidentifiedChunker(),
+            result_cache=SnippetResultCache(tmp_path / "pages"),
+        )
+
+
+def _rewrite_cache_response(cache_file: Path, *, next_cursor: object) -> None:
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    payload["response"]["next_cursor"] = next_cursor
+    encoded_response = json.dumps(
+        payload["response"],
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    payload["response_sha256"] = sha256(encoded_response).hexdigest()
+    cache_file.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_cache_rejects_semantically_invalid_next_cursor(tmp_path: Path) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = next((tmp_path / "pages").glob("schema_v1/*/*.json"))
+    _rewrite_cache_response(cache_file, next_cursor="snowman-☃")
+
+    with pytest.raises(SnippetCacheIntegrityError, match="^invalid snippet cache entry$"):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+
+
+def test_cache_rejects_next_cursor_that_disagrees_with_page_offset(tmp_path: Path) -> None:
+    extractor, _ranker = _extractor(tmp_path)
+    extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
+    cache_file = next((tmp_path / "pages").glob("schema_v1/*/*.json"))
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    payload["page_offset"] = 1
+    cache_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SnippetCacheIntegrityError, match="^invalid snippet cache entry$"):
+        extractor.extract("doc-a", LONG_DOCUMENT, "target passage")
 
 
 def test_cache_rejects_malformed_entries_without_returning_them(tmp_path: Path) -> None:
