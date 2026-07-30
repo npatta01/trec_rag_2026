@@ -3171,6 +3171,45 @@ def test_standard_rag_config_loads_validated_answers_and_resolved_citations(
     assert "citation 0 → doc-original" in rendered
 
 
+def test_rag_validation_uses_authenticated_organizer_run_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run-path open must not authorize unreceipted RAG references."""
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, rag_output, _output_sha256 = _write_rag_run(
+        tmp_path, retrieval_output
+    )
+    run_path = retrieval_output / "r_output_trec_rag_2026.tsv"
+    sealed_run = run_path.read_bytes()
+    forged_run = sealed_run.replace(b"doc-original", b"doc-forged!!")
+    assert len(forged_run) == len(sealed_run)
+    replacement = tmp_path / "forged-r_output_trec_rag_2026.tsv"
+    replacement.write_bytes(forged_run)
+
+    record = json.loads(rag_output.read_text(encoding="utf-8"))
+    record["references"] = ["doc-forged!!"]
+    rag_output.write_bytes(_json_bytes(record))
+    original_open = Path.open
+    open_count = 0
+
+    def racing_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal open_count
+        if candidate.resolve() == run_path.resolve():
+            open_count += 1
+            if open_count == 2:
+                replacement.replace(run_path)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    with pytest.raises(
+        ValueError,
+        match="references are duplicated or outside selected TREC rows",
+    ):
+        load_debug_report_data(config_path, rag_config_path=rag_config)
+    assert open_count == 1
+
+
 def test_rag_report_resolves_index_direct_docid_and_empty_citations(
     tmp_path: Path,
 ) -> None:

@@ -25,7 +25,6 @@ import zipfile
 from trec_rag.competition_rag import (
     load_queries,
     load_rag_generation_config,
-    load_trec_run,
     select_queries,
     validate_submission_record,
 )
@@ -440,7 +439,12 @@ def load_debug_report_data(
         source_sha256s=MappingProxyType(dict(sorted(receipts.items()))),
     )
     if rag_config_path is not None:
-        data = _attach_rag_outputs(data, Path(rag_config_path), exported_topics)
+        data = _attach_rag_outputs(
+            data,
+            Path(rag_config_path),
+            exported_topics,
+            retrieval_artifacts.run_docids,
+        )
     return data
 
 
@@ -448,6 +452,7 @@ def _attach_rag_outputs(
     data: DebugReportData,
     rag_config_path: Path,
     exported_topics: Sequence[Topic],
+    run_docids: Mapping[str, tuple[str, ...]],
 ) -> DebugReportData:
     config = load_rag_generation_config(rag_config_path)
     expected_run = (data.output_dir / "r_output_trec_rag_2026.tsv").resolve()
@@ -466,11 +471,10 @@ def _attach_rag_outputs(
         if narrative != retrieval_narratives[topic_id]:
             raise ValueError("RAG topic narrative is incompatible with the retrieval export")
 
-    allowed_by_topic = load_trec_run(
-        config.run_path,
-        set(configured_ids),
-        config.top_k,
-    )
+    allowed_by_topic = {
+        topic_id: list(run_docids[topic_id][: config.top_k])
+        for topic_id in configured_ids
+    }
     output_parent = _safe_directory(config.output_path.parent, "RAG output directory")
     output_path = _safe_file(config.output_path, output_parent)
     with _open_hashed_snapshot(output_path, _MAX_JSONL_BYTES) as (
