@@ -40,6 +40,7 @@ _SCORE_FIELDS = {
 }
 _PASSAGE_FIELDS = {"chunk_index", "start_char", "end_char", "raw_logit", "weighted_rank"}
 _CANONICAL_STATES = {"complete", "empty", "fallback_extractive"}
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 
 
 @dataclass(frozen=True)
@@ -339,6 +340,14 @@ def _load_root_retrieval_artifacts(
     _validate_export_artifact_receipts(export, paths, receipts, output_dir)
 
     topic_ids = {topic.id for topic in topics}
+    run_topic_ids, run_row_count = _trec_run_coverage(paths["run"])
+    if run_topic_ids != topic_ids:
+        raise ValueError("organizer run topic coverage differs from export manifest")
+    if (
+        type(export.get("official_row_count")) is not int
+        or export["official_row_count"] != run_row_count
+    ):
+        raise ValueError("retrieval export official row count differs from organizer run")
     run_rows = load_trec_run(paths["run"], topic_ids, None)
     run_docids = {topic_id: tuple(docids) for topic_id, docids in run_rows.items()}
     provenance_rows = _read_jsonl(paths["provenance"], "retrieval provenance")
@@ -401,6 +410,20 @@ def _load_root_retrieval_artifacts(
         MappingProxyType(archive_pairs),
         MappingProxyType(depths),
     )
+
+
+def _trec_run_coverage(path: Path) -> tuple[set[str], int]:
+    try:
+        lines = _read_bounded(path, _MAX_JSONL_BYTES).decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("organizer run is not valid UTF-8") from exc
+    topic_ids: set[str] = set()
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 6 or not _is_identifier(fields[0]):
+            raise ValueError("organizer run row identity is invalid")
+        topic_ids.add(fields[0])
+    return topic_ids, len(lines)
 
 
 def _validate_export_artifact_receipts(
@@ -596,6 +619,7 @@ def _load_canonical_projection(
     maximum_claims = config.nuggets.maximum_claims_per_subnarrative
     maximum_supporting = config.nuggets.maximum_supporting_documents_per_claim
     nugget_rows = _read_jsonl(nugget_path, "canonical nuggets")
+    request_sha256s = manifest.get("request_sha256s")
     if (
         manifest.get("schema_version") != "canonical_nugget_manifest_v2"
         or manifest.get("selected_budget") != budget
@@ -604,6 +628,10 @@ def _load_canonical_projection(
         or manifest.get("result_count") != len(nugget_rows)
         or manifest.get("selection_count") != len(subnarratives)
         or manifest.get("canonical_nuggets_sha256") != receipts[_portable_label(output_dir, nugget_path)]
+        or not isinstance(request_sha256s, list)
+        or len(request_sha256s) != len(nugget_rows)
+        or any(not _is_sha256(value) for value in request_sha256s)
+        or len(set(request_sha256s)) != len(request_sha256s)
     ):
         raise ValueError("canonical nugget manifest differs from retrieval config or result")
 
@@ -665,19 +693,22 @@ def _load_canonical_projection(
     canonical: list[CanonicalNuggetReport] = []
     states: dict[str, int] = {}
     seen_nuggets: set[str] = set()
-    for raw, expected in zip(nugget_rows, subnarratives, strict=True):
+    for index, (raw, expected) in enumerate(
+        zip(nugget_rows, subnarratives, strict=True)
+    ):
         required = {
             "schema_version", "topic_id", "subnarrative_id", "selected_budget",
             "request_sha256", "state", "nuggets", "metadata", "error",
         }
         state, values = raw.get("state"), raw.get("nuggets")
+        if raw.get("request_sha256") != request_sha256s[index]:
+            raise ValueError("canonical nugget request identity differs from manifest")
         if (
             set(raw) != required
             or raw.get("schema_version") != "canonical_nugget_result_v1"
             or raw.get("topic_id") != topic.id
             or raw.get("subnarrative_id") != expected.subnarrative_id
             or raw.get("selected_budget") != budget
-            or not _is_sha256(raw.get("request_sha256"))
             or state not in _CANONICAL_STATES
             or not isinstance(values, list)
             or len(values) > maximum_claims
@@ -685,6 +716,32 @@ def _load_canonical_projection(
             or raw.get("error") is not None and not _is_text(raw.get("error"))
         ):
             raise ValueError("canonical nugget result identity or state is invalid")
+        has_selected_evidence = any(
+            subnarrative_id == expected.subnarrative_id
+            for subnarrative_id, _candidate_id in selected_evidence
+        )
+        if state == "empty":
+            if has_selected_evidence or values or dict(raw["metadata"]) or raw["error"] is not None:
+                raise ValueError("canonical nugget empty state semantics are invalid")
+            states[state] = states.get(state, 0) + 1
+            continue
+        if not has_selected_evidence:
+            raise ValueError("canonical nugget non-empty state lacks selected evidence")
+        if state == "complete":
+            if raw["error"] is not None:
+                raise ValueError("canonical nugget complete state semantics are invalid")
+            expected_kind = "model_claim"
+        else:
+            error = raw["error"]
+            if (
+                type(error) is not str
+                or not error
+                or error != error.strip()
+                or len(error) > 500
+                or _CONTROL.search(error) is not None
+            ):
+                raise ValueError("canonical nugget fallback state semantics are invalid")
+            expected_kind = "extractive_fallback"
         states[state] = states.get(state, 0) + 1
         for nugget in values:
             if not isinstance(nugget, Mapping) or set(nugget) != {
@@ -692,10 +749,11 @@ def _load_canonical_projection(
             }:
                 raise ValueError("canonical nugget schema is invalid")
             nugget_id, evidence_values = nugget.get("canonical_nugget_id"), nugget.get("evidence")
+            if nugget.get("nugget_kind") != expected_kind:
+                raise ValueError("canonical nugget state and kind are inconsistent")
             if (
                 not _is_identifier(nugget_id)
                 or nugget_id in seen_nuggets
-                or not _is_text(nugget.get("nugget_kind"))
                 or not _is_text(nugget.get("claim_text"))
                 or not isinstance(evidence_values, list)
                 or not evidence_values
@@ -714,6 +772,11 @@ def _load_canonical_projection(
                     raise ValueError("canonical nugget repeats a supporting document")
                 evidence_docids.add(report.docid)
                 evidence_reports.append(report)
+            if state == "fallback_extractive" and (
+                len(evidence_reports) != 1
+                or nugget["claim_text"] != evidence_reports[0].text
+            ):
+                raise ValueError("canonical nugget fallback state or kind is invalid")
             canonical.append(
                 CanonicalNuggetReport(
                     expected.subnarrative_id, budget, state, nugget_id,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -311,6 +312,7 @@ def _write_task_2_artifacts(
                 "state_counts": {"complete": 1},
                 "max_canonical_claims": 2,
                 "max_supporting_documents_per_claim": 1,
+                "request_sha256s": ["b" * 64],
                 "canonical_nuggets_sha256": sha256(nuggets_body).hexdigest(),
             }
         )
@@ -591,4 +593,90 @@ def test_passage_ranking_rejects_offsets_outside_selected_document(tmp_path: Pat
     path.write_bytes(b"".join(_json_bytes(row) for row in rows))
 
     with pytest.raises(ValueError, match="winning passage offsets are outside selected document"):
+        load_debug_report_data(config_path)
+
+
+def _rewrite_canonical_result(
+    output: Path, mutate: Callable[[dict[str, object]], None],
+) -> None:
+    path = output / "rag2026-0" / "canonical" / "canonical-nuggets.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    mutate(row)
+    body = _json_bytes(row)
+    path.write_bytes(body)
+    manifest_path = path.with_name("canonical-nugget-manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["canonical_nuggets_sha256"] = sha256(body).hexdigest()
+    manifest["state_counts"] = {row["state"]: 1}
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+
+@pytest.mark.parametrize("case", ("empty_with_nuggets", "complete_with_error", "wrong_kind"))
+def test_canonical_state_rejects_semantically_impossible_results(
+    tmp_path: Path, case: str
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+
+    def mutate(row: dict[str, object]) -> None:
+        if case == "empty_with_nuggets":
+            row["state"] = "empty"
+        elif case == "complete_with_error":
+            row["error"] = "provider failed"
+        else:
+            row["nuggets"][0]["nugget_kind"] = "extractive_fallback"  # type: ignore[index]
+
+    _rewrite_canonical_result(output, mutate)
+
+    with pytest.raises(ValueError, match="canonical nugget.*(?:state|kind)"):
+        load_debug_report_data(config_path)
+
+
+def test_canonical_request_identity_must_match_manifest_order(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+
+    def mutate(row: dict[str, object]) -> None:
+        row["request_sha256"] = "e" * 64
+
+    _rewrite_canonical_result(output, mutate)
+
+    with pytest.raises(ValueError, match="canonical nugget.*request"):
+        load_debug_report_data(config_path)
+
+
+def _rewrite_export_artifact_receipt(output: Path, artifact_name: str) -> None:
+    artifact = output / artifact_name
+    body = artifact.read_bytes()
+    manifest_path = output / "retrieval_export_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"][artifact_name] = {
+        "bytes": len(body),
+        "sha256": sha256(body).hexdigest(),
+    }
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+
+def test_root_run_coverage_rejects_unmanifested_topic_rows(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    run_path = output / "r_output_trec_rag_2026.tsv"
+    run_path.write_bytes(
+        run_path.read_bytes() + b"rag2026-extra Q0 doc-extra 1 1 debug-fixture\n"
+    )
+    _rewrite_export_artifact_receipt(output, run_path.name)
+    manifest_path = output / "retrieval_export_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["official_row_count"] = 2
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+    with pytest.raises(ValueError, match="organizer run.*(?:coverage|manifest)"):
+        load_debug_report_data(config_path)
+
+
+def test_official_row_count_must_equal_trec_rows(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    manifest_path = output / "retrieval_export_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["official_row_count"] = 2
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+    with pytest.raises(ValueError, match="official row count"):
         load_debug_report_data(config_path)
