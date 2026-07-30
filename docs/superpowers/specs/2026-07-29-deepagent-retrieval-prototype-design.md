@@ -28,6 +28,8 @@ The prototype will:
   TREC topic file;
 - use the same OpenRouter provider and DeepSeek model family as the repository's
   existing facet-planning work;
+- send OpenInference traces to Phoenix Cloud when Phoenix environment settings
+  are present;
 - reuse the shared retrieval cache, rate limiter, and explicit-continuation
   policy already implemented by `PyseriniRemoteRetriever`;
 - remain importable and usable without an interactive terminal.
@@ -42,6 +44,8 @@ The prototype will not:
 - use organizer nuggets, qrels, or hidden topic metadata at retrieval time;
 - persist conversation state across SDK calls;
 - silently retry hosted model or retrieval calls.
+- require Phoenix in environments that intentionally leave tracing
+  unconfigured.
 
 ## Public API
 
@@ -100,6 +104,33 @@ The narrow factory is intentional: Deep Agents 0.7.0 changed default prompts,
 todo middleware, filesystem behavior, and backend contracts. Later upgrades
 should require changes at this boundary rather than throughout retrieval code.
 
+### Phoenix tracing boundary
+
+`trec_rag.deepagent_tracing` configures OpenTelemetry export through Phoenix
+and OpenInference without coupling the retrieval records to a hosted
+observability service. It reads `PHOENIX_COLLECTOR_ENDPOINT`,
+`PHOENIX_API_KEY`, and `PHOENIX_PROJECT_NAME`; if no collector endpoint is
+configured, it returns a no-op tracing context and retrieval still runs.
+
+The default project name is `trec-rag-deepagent-retrieval`. Configuration uses
+the current Phoenix/OpenInference packages:
+
+- `arize-phoenix-otel==0.16.1`;
+- `openinference-instrumentation-langchain==0.1.67`.
+
+Each `retrieve()` call creates one agent trace. LangChain instrumentation
+captures Deep Agent and OpenRouter model/tool spans, while the SDK creates one
+explicit `RETRIEVER` span per Pyserini search. The trace includes the supplied
+narrative, exact follow-up query text, bounded model-visible document excerpts,
+document IDs, ranks, scores, cache-hit state, latency, exceptions, fused result
+IDs, and the stopping reason. It never adds credentials, authorization headers,
+raw hosted responses, continuation-ticket values, or local cache paths as span
+attributes.
+
+Tracing initialization is explicit and idempotent so constructing multiple SDK
+objects in one notebook does not install duplicate instrumentors or exporters.
+Tests and callers may inject a tracer provider rather than sending telemetry.
+
 ### Search tool
 
 The custom `search_climbmix(query: str)` tool adapts each agent query to the
@@ -134,14 +165,18 @@ when to stop; deterministic code chooses the returned ordering.
 
 1. Validate and preserve the supplied narrative exactly.
 2. Load repository environment values without logging secrets.
-3. Search the untouched narrative through `PyseriniRemoteRetriever`.
-4. Give the Deep Agent the narrative and a bounded view of the original
+3. Initialize Phoenix tracing when a collector endpoint is configured.
+4. Start the root agent span and search the untouched narrative through a child
+   retriever span backed by `PyseriniRemoteRetriever`.
+5. Give the Deep Agent the narrative and a bounded view of the original
    results.
-5. Let the agent issue zero or more bounded follow-up queries through
+6. Let the agent issue zero or more bounded follow-up queries through
    `search_climbmix`.
-6. Record each query and normalized candidate list in order.
-7. Fuse and deduplicate candidates deterministically.
-8. Return the typed result without writing official pipeline artifacts.
+7. Record each query and normalized candidate list in order, with one
+   retriever span per search.
+8. Fuse and deduplicate candidates deterministically.
+9. Record fused IDs and the stopping reason, flush completed spans, and return
+   the typed result without writing official pipeline artifacts.
 
 ## Bounds and Safety
 
@@ -153,6 +188,11 @@ Initial defaults are:
 - twenty candidates in the fused result;
 - bounded document excerpts in model-visible tool results;
 - no persistent checkpointer or store.
+
+Phoenix export is bounded to the same excerpts that the model receives. The
+SDK provides a tracing-content switch that maps to OpenInference masking when a
+caller needs metadata-only spans. Tracing failures are reported separately and
+do not alter retrieval ranking or candidate records.
 
 The default Deep Agents state backend is in-memory and ephemeral. The system
 prompt directs the model to use the retrieval tool directly, preserve the
@@ -174,6 +214,10 @@ when follow-up searches no longer target a specific uncovered aspect.
   error so the original search is still inspectable.
 - Exceeding the search budget returns a tool-visible budget error and records
   `search_budget_exhausted` as the stopping condition.
+- Missing Phoenix configuration disables export without warning; partial or
+  invalid Phoenix configuration raises a setup error before external retrieval.
+- Phoenix exporter failures do not trigger retrieval retries and cannot change
+  the returned candidate order.
 
 ## Prototype Verification
 
@@ -187,9 +231,12 @@ large test surface:
 - exercise the deterministic fusion helper with repeated document IDs;
 - confirm the pinned Deep Agents 0.7.0 factory imports and constructs without a
   live OpenRouter call;
+- capture a full fake-model/fake-retriever trace with an in-memory span exporter
+  and assert the agent, tool, and retriever hierarchy plus redaction rules;
 - run the repository's existing targeted topic/retriever tests;
-- run one live retrieval only when the required OpenRouter credential is
-  available, without printing secrets or raw logs;
+- run one live retrieval when the required OpenRouter credential is available,
+  confirm its trace arrives in the `trec-rag-deepagent-retrieval` Phoenix
+  project, and avoid printing secrets or raw logs;
 - run `git diff --check` and a source scan for credentials and placeholder
   markers.
 
@@ -202,6 +249,8 @@ that decision is made.
 
 - `code/trec_rag/deepagent_retrieval.py` — prototype SDK, Deep Agents factory,
   search-tool adapter, result records, and deterministic fusion;
+- `code/trec_rag/deepagent_tracing.py` — optional, idempotent Phoenix setup and
+  manual agent/retriever spans;
 - `code/trec_rag/topics.py` — separate `load_topic_narrative` convenience
   helper;
 - `code/trec_rag/README.md` — SDK usage, inputs, outputs, credentials, bounds,
