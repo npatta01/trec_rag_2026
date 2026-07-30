@@ -75,9 +75,13 @@ order and identifiers.
 pool, not new to the corpus.
 
 New documents are grouped by their stored first-seen lane. Counts, identities,
-lane provenance, ranks, and expandable text excerpts are shown. The report must
-not infer newness from `selected_from_lane != original`, because a document can
-be selected through a facet lane while still belonging to the original lane.
+lane provenance, ranks, memberships, and text hashes are shown for every row.
+An expandable text excerpt is shown only when the document also reached the
+selected pool, because the bounded sealed union artifact does not retain text
+for discarded rows. The report does not read unsealed provider caches to recover
+that discarded text. It must not infer newness from
+`selected_from_lane != original`, because a document can be selected through a
+facet lane while still belonging to the original lane.
 
 ### Selected documents
 
