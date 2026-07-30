@@ -8,6 +8,7 @@ from trec_rag.phoenix_trace_export import (
     SecretStr,
     assert_no_secrets,
     export_trace,
+    _semantic_attributes,
 )
 from trec_rag.pi_trace_models import SpanSpec, TraceBundle
 from opentelemetry import trace
@@ -474,6 +475,38 @@ def test_export_adds_openinference_chat_attributes_for_fixed_generation():
     assert attributes["output.value"].startswith('{"content"')
 
 
+def test_export_normalizes_native_tool_result_role_without_losing_raw_payload():
+    generation = _span(
+        name="Pi assistant turn",
+        kind="LLM",
+        input_value={
+            "messages": [
+                {
+                    "role": "toolResult",
+                    "toolCallId": "call-1",
+                    "content": [{"type": "text", "text": "native result"}],
+                }
+            ]
+        },
+        output_value={
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer"}],
+        },
+    )
+    provider = _FakeProvider()
+
+    export_trace(
+        _bundle(_span(children=(generation,))),
+        _settings(),
+        provider_factory=_ProviderFactory(provider),
+    )
+
+    attributes = provider.tracer.spans[1].attributes
+    assert attributes["llm.input_messages.0.message.role"] == "tool"
+    assert attributes["llm.input_messages.0.message.tool_call_id"] == "call-1"
+    assert '"role":"toolResult"' in attributes["input.value"]
+
+
 def test_export_adds_openinference_retrieval_document_attributes():
     retrieval = _span(
         name="fixed evidence preparation",
@@ -516,7 +549,13 @@ def test_export_maps_native_pi_usage_tokens_cache_and_costs():
                 "totalTokens": 150,
                 "cacheRead": 20,
                 "cacheWrite": 10,
-                "cost": {"input": 0.12, "output": 0.03, "total": 0.15},
+                "cost": {
+                    "input": 0.12,
+                    "output": 0.03,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "total": 0.15,
+                },
             },
         },
     )
@@ -537,13 +576,15 @@ def test_export_maps_native_pi_usage_tokens_cache_and_costs():
     assert attributes["llm.cost.prompt"] == 0.12
     assert attributes["llm.cost.completion"] == 0.03
     assert attributes["llm.cost.total"] == 0.15
+    assert attributes["llm.cost.prompt_details.cache_read"] == 0
+    assert attributes["llm.cost.prompt_details.cache_write"] == 0
 
 
 def test_export_adds_openinference_tool_attributes_without_inventing_documents():
     tool = _span(
         name="Pi read_document",
         kind="TOOL",
-        attributes={"pi.tool.name": "read_document"},
+        attributes={"pi.tool.name": "read_document", "pi.tool_call.id": "call-1"},
         input_value={"docid": "doc-1", "reason": "inspect evidence"},
         output_value={"text": "full document"},
     )
@@ -564,6 +605,7 @@ def test_export_adds_openinference_tool_attributes_without_inventing_documents()
 
     tool_attributes = provider.tracer.spans[1].attributes
     assert tool_attributes["tool.name"] == "read_document"
+    assert tool_attributes["tool.id"] == "call-1"
     assert tool_attributes["tool.parameters"] == (
         '{"docid":"doc-1","reason":"inspect evidence"}'
     )
@@ -571,6 +613,40 @@ def test_export_adds_openinference_tool_attributes_without_inventing_documents()
     assert search_attributes["tool.name"] == "search"
     assert search_attributes["tool.parameters"] == '{"query":"topic"}'
     assert not any(key.startswith("retrieval.documents.") for key in search_attributes)
+
+
+def test_phoenix_register_provider_limit_fits_one_hundred_full_documents():
+    from phoenix.otel import register
+
+    provider = register(
+        endpoint="http://localhost:6006/v1/traces",
+        project_name="offline-limit-check",
+        batch=False,
+        set_global_tracer_provider=False,
+        verbose=False,
+    )
+    try:
+        retrieval = _span(
+            kind="RETRIEVER",
+            output_value={
+                "documents": [
+                    {
+                        "docid": f"doc-{index}",
+                        "text": f"full document {index}",
+                        "score": float(index),
+                    }
+                    for index in range(100)
+                ]
+            },
+        )
+        generated_document_attributes = len(_semantic_attributes(retrieval))
+        assert provider._span_limits.max_span_attributes == 10_000
+        assert generated_document_attributes == 300
+        assert provider._span_limits.max_span_attributes > (
+            generated_document_attributes + 10
+        )
+    finally:
+        provider.shutdown()
 
 
 def test_export_rejects_secret_content_before_constructing_provider():

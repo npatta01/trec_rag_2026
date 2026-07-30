@@ -278,7 +278,10 @@ def _message_attributes(
         base = f"{prefix}.{message_index}.message"
         role = message.get("role")
         if isinstance(role, str):
-            attributes[f"{base}.role"] = role
+            attributes[f"{base}.role"] = "tool" if role == "toolResult" else role
+        tool_call_id = message.get("toolCallId", message.get("tool_call_id"))
+        if isinstance(tool_call_id, str):
+            attributes[f"{base}.tool_call_id"] = tool_call_id
         content = message.get("content")
         if isinstance(content, str):
             attributes[f"{base}.content"] = content
@@ -374,6 +377,8 @@ def _llm_attributes(spec: SpanSpec) -> dict[str, object]:
                     ("input", SpanAttributes.LLM_COST_PROMPT),
                     ("output", SpanAttributes.LLM_COST_COMPLETION),
                     ("total", SpanAttributes.LLM_COST_TOTAL),
+                    ("cacheRead", SpanAttributes.LLM_COST_PROMPT_DETAILS_CACHE_READ),
+                    ("cacheWrite", SpanAttributes.LLM_COST_PROMPT_DETAILS_CACHE_WRITE),
                 ):
                     value = costs.get(source)
                     if isinstance(value, int | float) and not isinstance(value, bool):
@@ -420,6 +425,9 @@ def _semantic_attributes(spec: SpanSpec) -> dict[str, object]:
     tool_name = spec.attributes.get("pi.tool.name")
     if isinstance(tool_name, str) and tool_name:
         attributes[SpanAttributes.TOOL_NAME] = tool_name
+        tool_id = spec.attributes.get("pi.tool_call.id")
+        if isinstance(tool_id, str) and tool_id:
+            attributes[SpanAttributes.TOOL_ID] = tool_id
         if spec.input_value is not None:
             attributes[SpanAttributes.TOOL_PARAMETERS] = _json_string(spec.input_value)
     return attributes

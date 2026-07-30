@@ -165,6 +165,92 @@ def test_piika_trace_preserves_prompt_bearing_native_events(tmp_path):
     }
 
 
+def test_piika_trace_uses_native_conversation_and_observed_completion_timing(tmp_path):
+    session_ns = 1_800_000_000_000_000_000
+    user_ms = 1_800_000_000_200
+    first_ms = 1_800_000_000_300
+    tool_result_ms = 1_800_000_012_900
+    final_ms = 1_800_000_013_000
+    completion_ns = 1_800_000_068_000_000_000
+    user = {
+        "role": "user",
+        "content": [{"type": "text", "text": "question"}],
+        "timestamp": user_ms,
+    }
+    first = _assistant("calling tool", first_ms)
+    first["content"] = [
+        {
+            "type": "toolCall",
+            "id": "call-1",
+            "name": "search",
+            "arguments": {"query": "q"},
+        }
+    ]
+    tool_result = {
+        "role": "toolResult",
+        "toolCallId": "call-1",
+        "toolName": "search",
+        "content": [{"type": "text", "text": "result text"}],
+        "timestamp": tool_result_ms,
+    }
+    final = _assistant("final answer", final_ms)
+    path = _write_jsonl(
+        tmp_path / "real-pattern.jsonl",
+        [
+            {"type": "session", "timestamp": "2027-01-15T08:00:00Z"},
+            {"type": "message_end", "message": user},
+            {"type": "message_start", "message": first},
+            {"type": "message_end", "message": first},
+            {
+                "type": "tool_execution_start",
+                "toolCallId": "call-1",
+                "toolName": "search",
+                "args": {"query": "q"},
+            },
+            {
+                "type": "tool_execution_end",
+                "toolCallId": "call-1",
+                "toolName": "search",
+                "result": {
+                    "content": "result text",
+                    "details": {"timingMs": {"searchRpcMs": 2500.0}},
+                },
+                "isError": False,
+            },
+            {"type": "message_end", "message": tool_result},
+            {"type": "turn_end", "message": first},
+            {"type": "message_start", "message": final},
+            {"type": "message_end", "message": final},
+            {"type": "turn_end", "message": final},
+            {"type": "agent_end"},
+        ],
+    )
+    os.utime(path, ns=(completion_ns, completion_ns))
+
+    events = load_pi_events(path)
+    bundle = build_piika_trace(
+        topic=OrganizerTopic("rag2026-1", "narrative must not be fabricated as every turn"),
+        events=events,
+        run_record={"status": "completed"},
+        session_id="session",
+    )
+
+    llms = [span for span in bundle.root.children if span.kind == "LLM"]
+    assert bundle.root.start_ns == session_ns
+    assert bundle.root.end_ns == completion_ns
+    assert llms[0].start_ns == first_ms * 1_000_000
+    assert llms[0].end_ns == tool_result_ms * 1_000_000
+    assert llms[0].attributes["trace.end_time.source"] == "next_tool_result_upper_bound"
+    assert llms[0].input_value == {"messages": [user]}
+    assert llms[1].start_ns == final_ms * 1_000_000
+    assert llms[1].end_ns == completion_ns
+    assert llms[1].attributes["trace.end_time.source"] == "event_file_mtime_upper_bound"
+    assert llms[1].input_value == {"messages": [user, first, tool_result]}
+    tool = next(span for span in bundle.root.children if span.kind == "RETRIEVER")
+    assert tool.end_ns - tool.start_ns == 2_500_000_000
+    assert tool.attributes["trace.duration.source"] == "native_timing_ms"
+
+
 def test_failed_tool_event_becomes_error_span_with_diagnostic(tmp_path):
     event_path = _write_jsonl(
         tmp_path / "failed.jsonl",
@@ -302,6 +388,42 @@ def test_fixed_trace_keeps_100_ordered_documents_and_complete_prompts(tmp_path):
     }
     assert generation.output_value == final
     assert bundle.root.children[-1].name == "organizer validation"
+    assert sum(span.kind == "LLM" for span in bundle.root.children) == 1
+    assert not any(child.kind == "LLM" for child in generation.children)
+
+
+def test_fixed_trace_generation_uses_observed_file_completion_without_duplicate_llm(tmp_path):
+    start_ms = 1_800_000_000_000
+    completion_ns = 1_800_000_062_600_000_000
+    final = _assistant("final", start_ms)
+    path = _write_jsonl(
+        tmp_path / "fixed-completion.jsonl",
+        [
+            {"type": "session", "timestamp": 1_799_999_999_000},
+            {"type": "message_start", "message": final},
+            {"type": "message_end", "message": final},
+            {"type": "turn_end", "message": final},
+            {"type": "agent_end"},
+        ],
+    )
+    os.utime(path, ns=(completion_ns, completion_ns))
+
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=load_pi_events(path),
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    generation = next(span for span in bundle.root.children if span.kind == "LLM")
+    assert bundle.root.end_ns == completion_ns
+    assert generation.start_ns == start_ms * 1_000_000
+    assert generation.end_ns == completion_ns
+    assert generation.attributes["trace.end_time.source"] == "event_file_mtime_upper_bound"
+    assert not any(child.kind == "LLM" for child in generation.children)
 
 
 def test_fixed_trace_nests_native_failures_under_generation(tmp_path):
@@ -330,10 +452,9 @@ def test_fixed_trace_nests_native_failures_under_generation(tmp_path):
     assert generation.output_value == final
     assert generation.status == "ERROR"
     assert generation.status_message == "fixed extension failed"
-    assert len(generation.children) == 2
-    assert generation.children[0].output_value == final
-    assert generation.children[1].name == "Pi extension_error"
-    assert generation.children[1].output_value["error"] == "fixed extension failed"
+    assert len(generation.children) == 1
+    assert generation.children[0].name == "Pi extension_error"
+    assert generation.children[0].output_value["error"] == "fixed extension failed"
     assert bundle.root.status == "ERROR"
 
 
@@ -365,8 +486,9 @@ def test_fixed_trace_retains_every_assistant_attempt_and_final_output(tmp_path):
 
     generation = bundle.root.children[2]
     assert generation.output_value == final
-    assert [child.output_value for child in generation.children] == [aborted, final]
-    assert [child.status for child in generation.children] == ["ERROR", "OK"]
+    assert [child.output_value for child in generation.children] == [aborted]
+    assert [child.kind for child in generation.children] == ["CHAIN"]
+    assert [child.status for child in generation.children] == ["ERROR"]
     assert generation.children[0].status_message == "first attempt aborted"
     assert generation.status == "ERROR"
     assert generation.status_message == "first attempt aborted"

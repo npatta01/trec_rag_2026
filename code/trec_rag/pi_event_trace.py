@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import math
 from pathlib import Path
@@ -45,6 +46,8 @@ class LoadedPiEvents(tuple):
 
     timing_reconstructed: bool
     timestamps_ns: tuple[int, ...]
+    observed_end_ns: int
+    observed_end_source: str
 
     def __new__(
         cls,
@@ -52,10 +55,14 @@ class LoadedPiEvents(tuple):
         *,
         timestamps_ns: Sequence[int],
         timing_reconstructed: bool,
+        observed_end_ns: int,
+        observed_end_source: str,
     ) -> "LoadedPiEvents":
         instance = super().__new__(cls, tuple(events))
         instance.timestamps_ns = tuple(timestamps_ns)
         instance.timing_reconstructed = timing_reconstructed
+        instance.observed_end_ns = observed_end_ns
+        instance.observed_end_source = observed_end_source
         return instance
 
 
@@ -203,25 +210,44 @@ def load_pi_events(
         [_native_timestamp_ns(event) for event in events],
         fallback_ns=stat.st_mtime_ns,
     )
+    observed_end_ns = max(stat.st_mtime_ns, timestamps[-1] + 1)
     return LoadedPiEvents(
         events,
         timestamps_ns=timestamps,
         timing_reconstructed=reconstructed,
+        observed_end_ns=observed_end_ns,
+        observed_end_source=(
+            "event_file_mtime"
+            if stat.st_mtime_ns == observed_end_ns
+            else "last_native_event_upper_bound"
+        ),
     )
 
 
 def _events_with_timing(
     events: Sequence[Mapping[str, object]],
-) -> tuple[tuple[Mapping[str, object], ...], tuple[int, ...], bool]:
+) -> tuple[tuple[Mapping[str, object], ...], tuple[int, ...], bool, int, str]:
     records = tuple(events)
     if isinstance(events, LoadedPiEvents):
-        return records, events.timestamps_ns, events.timing_reconstructed
+        return (
+            records,
+            events.timestamps_ns,
+            events.timing_reconstructed,
+            events.observed_end_ns,
+            events.observed_end_source,
+        )
 
     timestamps, reconstructed = _resolve_timestamps(
         tuple(_native_timestamp_ns(event) for event in records),
         fallback_ns=time.time_ns(),
     )
-    return records, timestamps, reconstructed
+    return (
+        records,
+        timestamps,
+        reconstructed,
+        timestamps[-1] + 1,
+        "last_native_event_upper_bound",
+    )
 
 
 def _message_role(event: Mapping[str, object]) -> object:
@@ -355,19 +381,38 @@ def _tool_span(
     diagnostic = _diagnostic(result) if failed else None
     if failed and diagnostic is None:
         diagnostic = "tool execution did not produce a matching end event"
+    timing_ms: float | None = None
+    if isinstance(result, Mapping):
+        details = result.get("details")
+        if isinstance(details, Mapping):
+            timings = details.get("timingMs")
+            if isinstance(timings, Mapping):
+                values = [
+                    float(value)
+                    for value in timings.values()
+                    if isinstance(value, int | float)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                ]
+                if values:
+                    timing_ms = max(values)
+    attributes: dict[str, object] = {
+        "pi.event.start_type": "tool_execution_start",
+        "pi.event.end_type": (
+            "tool_execution_end" if end_event is not None else "missing"
+        ),
+        "pi.tool_call.id": str(tool_call_id or ""),
+        "pi.tool.name": str(tool_name or ""),
+    }
+    if timing_ms is not None:
+        end_ns = start_ns + max(1, round(timing_ms * 1_000_000))
+        attributes["trace.duration.source"] = "native_timing_ms"
     return SpanSpec(
         name=f"Pi {tool_name or 'tool'}",
         kind=kind,
         start_ns=start_ns,
         end_ns=max(start_ns + 1, end_ns),
-        attributes={
-            "pi.event.start_type": "tool_execution_start",
-            "pi.event.end_type": (
-                "tool_execution_end" if end_event is not None else "missing"
-            ),
-            "pi.tool_call.id": str(tool_call_id or ""),
-            "pi.tool.name": str(tool_name or ""),
-        },
+        attributes=attributes,
         input_value=start_event.get("args"),
         output_value=_tool_output(result),
         status="ERROR" if failed else "OK",
@@ -381,7 +426,8 @@ def _assistant_span(
     start_ns: int,
     end_ns: int,
     *,
-    topic: OrganizerTopic,
+    input_messages: Sequence[Mapping[str, object]],
+    end_time_source: str,
 ) -> SpanSpec:
     message = end_event.get("message")
     output = dict(message) if isinstance(message, Mapping) else message
@@ -396,8 +442,14 @@ def _assistant_span(
                 "message_start" if start_event is not None else "missing"
             ),
             "pi.event.end_type": "message_end",
+            "trace.end_time.source": end_time_source,
+            "trace.end_time.upper_bound": True,
         },
-        input_value={"topic_id": topic.topic_id, "narrative": topic.narrative},
+        input_value=(
+            {"messages": [dict(message) for message in input_messages]}
+            if input_messages
+            else None
+        ),
         output_value=output,
         status="ERROR" if diagnostic is not None else "OK",
         status_message=diagnostic,
@@ -431,11 +483,18 @@ def _native_spans(
     *,
     topic: OrganizerTopic,
     events: Sequence[Mapping[str, object]],
-) -> tuple[list[tuple[int, SpanSpec]], tuple[int, ...], bool, int]:
-    records, timestamps, reconstructed = _events_with_timing(events)
+) -> tuple[list[tuple[int, SpanSpec]], tuple[int, ...], bool, int, int, int, str]:
+    (
+        records,
+        timestamps,
+        reconstructed,
+        observed_end_ns,
+        observed_end_source,
+    ) = _events_with_timing(events)
     starts: dict[object, tuple[int, Mapping[str, object], int]] = {}
     assistant_start: tuple[int, Mapping[str, object], int] | None = None
     prompt_events: list[tuple[int, Mapping[str, object], int]] = []
+    conversation: list[Mapping[str, object]] = []
     spans: list[tuple[int, SpanSpec]] = []
 
     for index, (event, timestamp_ns) in enumerate(zip(records, timestamps)):
@@ -449,6 +508,23 @@ def _native_spans(
                 start_index, start_event, start_ns = index, None, timestamp_ns
             else:
                 start_index, start_event, start_ns = assistant_start
+            next_boundary = observed_end_ns
+            end_source = f"{observed_end_source}_upper_bound"
+            for later_event, later_ns in zip(
+                records[index + 1 :], timestamps[index + 1 :]
+            ):
+                later_role = _message_role(later_event)
+                if (
+                    later_event.get("type") in {"message_start", "message_end"}
+                    and later_role == "toolResult"
+                ):
+                    next_boundary = later_ns
+                    end_source = "next_tool_result_upper_bound"
+                    break
+                if later_event.get("type") == "message_start" and later_role == "assistant":
+                    next_boundary = later_ns
+                    end_source = "next_assistant_start_upper_bound"
+                    break
             spans.append(
                 (
                     start_index,
@@ -456,11 +532,14 @@ def _native_spans(
                         start_event,
                         event,
                         start_ns,
-                        timestamp_ns,
-                        topic=topic,
+                        max(start_ns + 1, next_boundary),
+                        input_messages=conversation,
+                        end_time_source=end_source,
                     ),
                 )
             )
+            if isinstance(event.get("message"), Mapping):
+                conversation.append(dict(event["message"]))
             assistant_start = None
         elif event_type == "tool_execution_start":
             starts[event.get("toolCallId")] = (index, event, timestamp_ns)
@@ -491,6 +570,14 @@ def _native_spans(
             )
         ):
             spans.append((index, _failure_event_span(event, timestamp_ns)))
+        elif event_type == "message_end" and _message_role(event) in {
+            "user",
+            "system",
+            "toolResult",
+        }:
+            message = event.get("message")
+            if isinstance(message, Mapping):
+                conversation.append(dict(message))
 
     last_timestamp = timestamps[-1] if timestamps else time.time_ns()
     for _, (start_index, start_event, start_ns) in starts.items():
@@ -506,7 +593,15 @@ def _native_spans(
         )
     spans.sort(key=lambda item: item[0])
     unknown_count = sum(event.get("type") not in _KNOWN_EVENT_TYPES for event in records)
-    return spans, timestamps, reconstructed, unknown_count
+    return (
+        spans,
+        timestamps,
+        reconstructed,
+        unknown_count,
+        timestamps[0],
+        observed_end_ns,
+        observed_end_source,
+    )
 
 
 def _root_span(
@@ -516,9 +611,12 @@ def _root_span(
     children: Sequence[SpanSpec],
     reconstructed: bool,
     unknown_count: int,
+    observed_start_ns: int,
+    observed_end_ns: int,
+    observed_end_source: str,
 ) -> SpanSpec:
-    start_ns = min(child.start_ns for child in children)
-    end_ns = max(child.end_ns for child in children)
+    start_ns = min(observed_start_ns, *(child.start_ns for child in children))
+    end_ns = max(observed_end_ns, *(child.end_ns for child in children))
     failed_children = [child for child in children if child.status == "ERROR"]
     return SpanSpec(
         name=name,
@@ -530,6 +628,7 @@ def _root_span(
             "content.capture": "full",
             "pi.event.unknown_count": unknown_count,
             "trace.timing_reconstructed": reconstructed,
+            "trace.root.end_time.source": observed_end_source,
         },
         input_value={"topic_id": topic.topic_id, "narrative": topic.narrative},
         output_value=None,
@@ -548,15 +647,21 @@ def build_piika_trace(
     project_name: str = DEFAULT_PROJECT_NAME,
 ) -> TraceBundle:
     """Build an agentic Piika trace from paired native Pi events."""
-    native_spans, timestamps, reconstructed, unknown_count = _native_spans(
+    (
+        native_spans,
+        timestamps,
+        reconstructed,
+        unknown_count,
+        observed_start_ns,
+        observed_end_ns,
+        observed_end_source,
+    ) = _native_spans(
         topic=topic, events=events
     )
-    fallback_end_ns = timestamps[-1] if timestamps else time.time_ns()
-    last_ns = max(
-        (span.end_ns for _, span in native_spans), default=fallback_end_ns
-    )
     validation = _validation_span(
-        topic=topic, run_record=run_record, timestamp_ns=last_ns + 1
+        topic=topic,
+        run_record=run_record,
+        timestamp_ns=max(observed_start_ns, observed_end_ns - 1),
     )
     children = [span for _, span in native_spans] + [validation]
     return TraceBundle(
@@ -570,6 +675,9 @@ def build_piika_trace(
             children=children,
             reconstructed=reconstructed,
             unknown_count=unknown_count,
+            observed_start_ns=observed_start_ns,
+            observed_end_ns=observed_end_ns,
+            observed_end_source=observed_end_source,
         ),
     )
 
@@ -586,22 +694,49 @@ def build_fixed_trace(
     project_name: str = DEFAULT_PROJECT_NAME,
 ) -> TraceBundle:
     """Build a fixed-retrieval trace without collapsing evidence or prompts."""
-    native_spans, timestamps, reconstructed, unknown_count = _native_spans(
+    (
+        native_spans,
+        timestamps,
+        reconstructed,
+        unknown_count,
+        observed_start_ns,
+        observed_end_ns,
+        observed_end_source,
+    ) = _native_spans(
         topic=topic, events=events
     )
     assistant_spans = [span for _, span in native_spans if span.kind == "LLM"]
-    generation_children = [
+    failure_children = [
         span
         for _, span in native_spans
-        if span.kind == "LLM" or span.status == "ERROR"
+        if span.kind != "LLM" and span.status == "ERROR"
     ]
+    attempt_children = [
+        replace(
+            span,
+            name="Pi assistant attempt",
+            kind="CHAIN",
+            attributes={**span.attributes, "pi.original.span.kind": "LLM"},
+        )
+        for span in assistant_spans[:-1]
+    ]
+    generation_children = attempt_children + failure_children
     base_ns = timestamps[0] if timestamps else time.time_ns()
-    generation_start = min(
-        (span.start_ns for span in generation_children), default=base_ns + 2
+    generation_start = (
+        assistant_spans[-1].start_ns if assistant_spans else base_ns + 2
     )
-    generation_end = max(
-        (span.end_ns for span in generation_children), default=generation_start + 1
+    generation_end = (
+        assistant_spans[-1].end_ns
+        if assistant_spans
+        else generation_start + 1
     )
+    if generation_children:
+        generation_start = min(
+            generation_start, *(span.start_ns for span in generation_children)
+        )
+        generation_end = max(
+            generation_end, *(span.end_ns for span in generation_children)
+        )
     generation_message = assistant_spans[-1].output_value if assistant_spans else None
     failed_generation_children = [
         span for span in generation_children if span.status == "ERROR"
@@ -646,6 +781,12 @@ def build_fixed_trace(
         attributes={
             "pi.event.end_type": "message_end",
             "pi.assistant.attempt_count": len(assistant_spans),
+            "trace.end_time.source": (
+                assistant_spans[-1].attributes.get("trace.end_time.source", "unknown")
+                if assistant_spans
+                else "unknown"
+            ),
+            "trace.end_time.upper_bound": True,
         },
         input_value={"system_prompt": system_prompt, "user_prompt": user_prompt},
         output_value=generation_message,
@@ -654,7 +795,9 @@ def build_fixed_trace(
         children=tuple(generation_children),
     )
     validation = _validation_span(
-        topic=topic, run_record=run_record, timestamp_ns=generation.end_ns + 1
+        topic=topic,
+        run_record=run_record,
+        timestamp_ns=max(observed_start_ns, observed_end_ns - 1),
     )
     children = [evidence, prompts, generation, validation]
     return TraceBundle(
@@ -668,6 +811,9 @@ def build_fixed_trace(
             children=children,
             reconstructed=reconstructed,
             unknown_count=unknown_count,
+            observed_start_ns=observed_start_ns,
+            observed_end_ns=observed_end_ns,
+            observed_end_source=observed_end_source,
         ),
     )
 
