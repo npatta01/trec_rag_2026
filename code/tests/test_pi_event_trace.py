@@ -428,6 +428,100 @@ def test_fixed_trace_keeps_100_ordered_documents_and_complete_prompts(tmp_path):
     assert not any(child.kind == "LLM" for child in generation.children)
 
 
+def _walk_spans(span):
+    yield span
+    for child in span.children:
+        yield from _walk_spans(child)
+
+
+def test_fixed_trace_extracts_native_reasoning_into_three_children(tmp_path):
+    final = {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "first native block"},
+            {"type": "thinking", "thinking": "second native block"},
+            {"type": "thinking", "thinking": "third native block"},
+            {"type": "text", "text": "final answer"},
+        ],
+        "provider": "anthropic",
+        "model": "model-id",
+        "stopReason": "stop",
+        "timestamp": 1_800_000_000_000,
+    }
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=load_pi_events(
+            _write_jsonl(
+                tmp_path / "fixed-reasoning-events.jsonl",
+                [
+                    {"type": "message_start", "message": final},
+                    {"type": "message_end", "message": final},
+                ],
+            )
+        ),
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    generation = bundle.root.children[2]
+    assert generation.kind == "LLM"
+    assert generation.attributes["pi.reasoning.extracted_to_children"] is True
+    assert generation.attributes["pi.reasoning.block_count"] == 3
+    assert [child.name for child in generation.children] == [
+        "Reasoning summary 1",
+        "Reasoning summary 2",
+        "Reasoning summary 3",
+    ]
+    assert [child.output_value for child in generation.children] == [
+        "first native block",
+        "second native block",
+        "third native block",
+    ]
+    assert all(child.kind == "CHAIN" for child in generation.children)
+    assert all(
+        child.attributes["trace.timing_reconstructed"] is True
+        for child in generation.children
+    )
+    assert all(
+        child.attributes["pi.reasoning.timing_method"] == "equal-partition"
+        for child in generation.children
+    )
+    assert generation.children[0].start_ns == generation.start_ns
+    assert generation.children[-1].end_ns == generation.end_ns
+    assert all(
+        left.end_ns == right.start_ns
+        for left, right in zip(generation.children, generation.children[1:])
+    )
+    assert sum(span.kind == "LLM" for span in _walk_spans(bundle.root)) == 1
+    assert sum(1 for _ in _walk_spans(bundle.root)) == 8
+
+
+def test_fixed_trace_without_thinking_keeps_existing_topology(tmp_path):
+    final = _assistant("final answer", 1_800_000_000_000)
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=load_pi_events(
+            _write_jsonl(
+                tmp_path / "fixed-no-reasoning-events.jsonl",
+                [{"type": "message_end", "message": final}],
+            )
+        ),
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    generation = bundle.root.children[2]
+    assert generation.children == ()
+    assert "pi.reasoning.extracted_to_children" not in generation.attributes
+    assert sum(1 for _ in _walk_spans(bundle.root)) == 5
+
+
 def test_fixed_trace_generation_uses_observed_file_completion_without_duplicate_llm(tmp_path):
     start_ms = 1_800_000_000_000
     completion_ns = 1_800_000_062_600_000_000

@@ -456,6 +456,56 @@ def _assistant_span(
     )
 
 
+def _reasoning_summary_children(
+    message: object, *, start_ns: int, end_ns: int
+) -> tuple[SpanSpec, ...]:
+    """Create presentation-only children for captured native thinking blocks."""
+    if not isinstance(message, Mapping):
+        return ()
+    content = message.get("content")
+    if not isinstance(content, Sequence) or isinstance(content, str | bytes | bytearray):
+        return ()
+    blocks = [
+        item["thinking"]
+        for item in content
+        if isinstance(item, Mapping)
+        and item.get("type") == "thinking"
+        and isinstance(item.get("thinking"), str)
+        and item["thinking"]
+    ]
+    if not blocks:
+        return ()
+
+    count = len(blocks)
+    base_duration, remainder = divmod(end_ns - start_ns, count)
+    children: list[SpanSpec] = []
+    child_start = start_ns
+    for index, block in enumerate(blocks, start=1):
+        child_end = child_start + base_duration
+        if index == count:
+            child_end += remainder
+        children.append(
+            SpanSpec(
+                name=f"Reasoning summary {index}",
+                kind="CHAIN",
+                start_ns=child_start,
+                end_ns=child_end,
+                attributes={
+                    "pi.reasoning.block.index": index,
+                    "pi.reasoning.block.count": count,
+                    "pi.reasoning.source": "native-thinking-content",
+                    "pi.reasoning.timing_method": "equal-partition",
+                    "trace.timing_reconstructed": True,
+                },
+                input_value=None,
+                output_value=block,
+                status="OK",
+            )
+        )
+        child_start = child_end
+    return tuple(children)
+
+
 def _validation_span(
     *,
     topic: OrganizerTopic,
@@ -780,26 +830,41 @@ def build_fixed_trace(
         output_value={"system_prompt": system_prompt, "user_prompt": user_prompt},
         status="OK",
     )
+    final_generation_start = max(prompts.end_ns, generation_start)
+    final_generation_end = max(prompts.end_ns + 1, generation_end)
+    reasoning_children = _reasoning_summary_children(
+        generation_message,
+        start_ns=final_generation_start,
+        end_ns=final_generation_end,
+    )
+    generation_attributes: dict[str, object] = {
+        "pi.event.end_type": "message_end",
+        "pi.assistant.attempt_count": len(assistant_spans),
+        "trace.end_time.source": (
+            assistant_spans[-1].attributes.get("trace.end_time.source", "unknown")
+            if assistant_spans
+            else "unknown"
+        ),
+        "trace.end_time.upper_bound": True,
+    }
+    if reasoning_children:
+        generation_attributes.update(
+            {
+                "pi.reasoning.extracted_to_children": True,
+                "pi.reasoning.block_count": len(reasoning_children),
+            }
+        )
     generation = SpanSpec(
         name="Pi generation",
         kind="LLM",
-        start_ns=max(prompts.end_ns, generation_start),
-        end_ns=max(prompts.end_ns + 1, generation_end),
-        attributes={
-            "pi.event.end_type": "message_end",
-            "pi.assistant.attempt_count": len(assistant_spans),
-            "trace.end_time.source": (
-                assistant_spans[-1].attributes.get("trace.end_time.source", "unknown")
-                if assistant_spans
-                else "unknown"
-            ),
-            "trace.end_time.upper_bound": True,
-        },
+        start_ns=final_generation_start,
+        end_ns=final_generation_end,
+        attributes=generation_attributes,
         input_value={"system_prompt": system_prompt, "user_prompt": user_prompt},
         output_value=generation_message,
         status=generation_status,
         status_message=generation_diagnostic,
-        children=tuple(generation_children),
+        children=tuple(generation_children) + reasoning_children,
     )
     validation = _validation_span(
         topic=topic,

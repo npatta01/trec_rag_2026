@@ -36,6 +36,12 @@ The adapter emits only captured messages and known invocation parameters. In
 particular, it does not fabricate the Pi system prompt when that prompt was not
 captured. Validate semantic, export, and event-normalization behavior together:
 
+For fixed traces with captured native thinking, the trace exposes one `CHAIN`
+child per native block while retaining one LLM/cost span. Child timing is a
+reconstructed equal partition of the generation interval; the extracted
+reasoning is omitted from the LLM presentation to avoid duplication, while the
+complete native response remains under `pi.native.output_json`.
+
 ```bash
 .venv/bin/python -m pytest \
   code/tests/test_openai_trace_semantics.py \

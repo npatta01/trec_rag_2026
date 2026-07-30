@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from trec_rag.phoenix_trace_export import (
@@ -484,6 +486,77 @@ def test_export_adds_openinference_chat_attributes_for_fixed_generation():
     assert attributes["output.value"].startswith('{"choices"')
     assert attributes["pi.native.input_json"].startswith('{"system_prompt"')
     assert attributes["pi.native.output_json"].startswith('{"content"')
+
+
+def test_export_separates_reasoning_children_without_changing_native_llm_payload():
+    native_output = {
+        "role": "assistant",
+        "provider": "anthropic",
+        "model": "claude-test",
+        "stopReason": "stop",
+        "usage": {"inputTokens": 12, "outputTokens": 7},
+        "content": [
+            {"type": "thinking", "thinking": "first native block"},
+            {"type": "thinking", "thinking": "second native block"},
+            {"type": "thinking", "thinking": "third native block"},
+            {"type": "text", "text": "final answer"},
+        ],
+    }
+    generation = _span(
+        name="Pi generation",
+        kind="LLM",
+        attributes={
+            "pi.reasoning.extracted_to_children": True,
+            "pi.reasoning.block_count": 3,
+        },
+        input_value={"system_prompt": "system", "user_prompt": "question"},
+        output_value=native_output,
+        children=tuple(
+            _span(
+                name=f"Reasoning summary {index}",
+                kind="CHAIN",
+                start_ns=20 + index,
+                end_ns=21 + index,
+                attributes={
+                    "pi.reasoning.block.index": index,
+                    "pi.reasoning.block.count": 3,
+                    "pi.reasoning.source": "native-thinking-content",
+                    "pi.reasoning.timing_method": "equal-partition",
+                    "trace.timing_reconstructed": True,
+                },
+                output_value=block,
+            )
+            for index, block in enumerate(
+                ("first native block", "second native block", "third native block"),
+                start=1,
+            )
+        ),
+    )
+    provider = _FakeProvider()
+
+    export_trace(
+        _bundle(_span(children=(generation,))),
+        _settings(),
+        provider_factory=_ProviderFactory(provider),
+    )
+
+    attributes = provider.tracer.spans[1].attributes
+    assert attributes["pi.native.output_json"] == json.dumps(
+        native_output, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+    assert json.loads(attributes["output.value"])["choices"][0]["message"] == {
+        "role": "assistant",
+        "content": "final answer",
+    }
+    assert not any(
+        "message_content.type" in key and value == "reasoning"
+        for key, value in attributes.items()
+    )
+    assert [span.name for span in provider.tracer.spans[2:]] == [
+        "Reasoning summary 1",
+        "Reasoning summary 2",
+        "Reasoning summary 3",
+    ]
 
 
 def test_export_normalizes_native_tool_result_role_without_losing_raw_payload():

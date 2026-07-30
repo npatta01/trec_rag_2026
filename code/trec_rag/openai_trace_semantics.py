@@ -166,6 +166,25 @@ def _model(spec: SpanSpec) -> str | None:
     return None
 
 
+def _presented_output(spec: SpanSpec) -> Mapping[str, object]:
+    """Return the LLM output used for OpenAI presentation without mutation."""
+    if not isinstance(spec.output_value, Mapping):
+        return {}
+    output = dict(spec.output_value)
+    if spec.attributes.get("pi.reasoning.extracted_to_children") is not True:
+        return output
+    content = output.get("content")
+    if not isinstance(content, Sequence) or isinstance(content, str | bytes | bytearray):
+        return output
+    output["content"] = [
+        item
+        for item in content
+        if not isinstance(item, Mapping)
+        or item.get("type") not in {"thinking", "reasoning"}
+    ]
+    return output
+
+
 def openai_request_envelope(spec: SpanSpec) -> Mapping[str, object]:
     request: dict[str, object] = {}
     model = _model(spec)
@@ -184,7 +203,7 @@ def openai_request_envelope(spec: SpanSpec) -> Mapping[str, object]:
 
 
 def openai_response_envelope(spec: SpanSpec) -> Mapping[str, object]:
-    output = spec.output_value if isinstance(spec.output_value, Mapping) else {}
+    output = _presented_output(spec)
     message = normalize_openai_message(output) if output else {"role": "assistant"}
     response: dict[str, object] = {
         "object": "chat.completion",
@@ -289,7 +308,8 @@ def openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]:
         SpanAttributes.LLM_PROVIDER: "openai",
     }
     input_messages = _messages(spec.input_value, input_side=True)
-    output_messages = _messages(spec.output_value, input_side=False)
+    output = _presented_output(spec)
+    output_messages = _messages(output, input_side=False)
     attributes.update(_message_attributes(SpanAttributes.LLM_INPUT_MESSAGES, input_messages))
     attributes.update(_message_attributes(SpanAttributes.LLM_OUTPUT_MESSAGES, output_messages))
     if isinstance(spec.input_value, Mapping):
@@ -305,9 +325,6 @@ def openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]:
         }
         if invocation:
             attributes[SpanAttributes.LLM_INVOCATION_PARAMETERS] = _json_string(invocation)
-    if not isinstance(spec.output_value, Mapping):
-        return attributes
-    output = spec.output_value
     model = output.get("model")
     if isinstance(model, str):
         attributes[SpanAttributes.LLM_MODEL_NAME] = model

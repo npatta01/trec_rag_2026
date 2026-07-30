@@ -128,6 +128,42 @@ def test_parallel_tool_calls_and_ordered_reasoning_are_preserved():
     ] == "second reason"
 
 
+def test_extracted_reasoning_is_omitted_only_from_llm_presentation():
+    spec = SpanSpec(
+        name="Pi generation",
+        kind="LLM",
+        start_ns=1,
+        end_ns=2,
+        attributes={"pi.reasoning.extracted_to_children": True},
+        input_value={"system_prompt": "system", "user_prompt": "question"},
+        output_value=_assistant_payload(
+            content=[
+                {"type": "thinking", "thinking": "first native block"},
+                {"type": "reasoning", "text": "second native block"},
+                {"type": "text", "text": "final answer"},
+            ]
+        ),
+        status="OK",
+    )
+
+    attrs = openai_llm_attributes(spec)
+    assert attrs["llm.output_messages.0.message.content"] == "final answer"
+    assert not any(
+        "message_content.type" in key and value == "reasoning"
+        for key, value in attrs.items()
+    )
+    response = openai_response_envelope(spec)
+    assert response["choices"][0]["message"] == {
+        "role": "assistant",
+        "content": "final answer",
+    }
+    assert spec.output_value["content"] == [
+        {"type": "thinking", "thinking": "first native block"},
+        {"type": "reasoning", "text": "second native block"},
+        {"type": "text", "text": "final answer"},
+    ]
+
+
 def test_scalar_tool_result_content_is_preserved_as_scalar_openai_content():
     spec = _llm_span(
         input_value={
