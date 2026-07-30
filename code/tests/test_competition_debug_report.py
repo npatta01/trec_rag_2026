@@ -1640,7 +1640,7 @@ def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_tex
     assert 'name="viewport"' in rendered
     assert 'name="color-scheme"' in rendered
     assert "<main" in rendered and "<nav" in rendered
-    assert '<section id="topic-literal-rag2026-0"' in rendered
+    assert 'id="topic-literal-rag2026-0"' in rendered
     headings = (
         "Narrative",
         "Subnarratives",
@@ -1658,12 +1658,69 @@ def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_tex
     assert ":focus-visible" in rendered
     assert "prefers-reduced-motion" in rendered
     assert "http://" not in rendered and "https://" not in rendered
-    assert "<script" not in rendered
+    assert rendered.count("<script>") == 1
+    assert '<script src=' not in rendered
     assert '<link rel="stylesheet"' not in rendered
     assert "<img" not in rendered and "@font-face" not in rendered
     assert narrative not in rendered and claim not in rendered
     assert html.escape(narrative, quote=True) in rendered
     assert html.escape(claim, quote=True) in rendered
+    script = rendered.split("<script>", 1)[1].split("</script>", 1)[0]
+    baseline_script = render_debug_report(loaded).split("<script>", 1)[1].split(
+        "</script>", 1
+    )[0]
+    assert script == baseline_script
+
+
+def test_html_topics_use_one_open_native_panel_and_a_progressive_switcher(
+    tmp_path: Path,
+) -> None:
+    """Rendering all topic bodies at once or omitting keyboard/hash state must fail."""
+    config_path, output = _write_debug_run(tmp_path)
+    _add_second_debug_topic(tmp_path, output)
+    loaded = load_debug_report_data(config_path)
+
+    rendered = render_debug_report(loaded)
+
+    panels = re.findall(
+        r'<details class="topic-panel" name="competition-topic" '
+        r'id="([^"]+)"([^>]*)>',
+        rendered,
+    )
+    assert panels == [
+        ("topic-literal-rag2026-0", " open"),
+        ("topic-literal-rag2026-1", ""),
+    ]
+    assert rendered.count('class="topic-tab"') == 2
+    assert 'role="tablist"' in rendered
+    assert rendered.count('role="tab"') == 2
+    assert 'aria-controls="topic-literal-rag2026-0"' in rendered
+    assert 'aria-controls="topic-literal-rag2026-1"' in rendered
+    assert 'aria-selected="true"' in rendered
+    assert 'aria-selected="false"' in rendered
+    script = rendered.split("<script>", 1)[1].split("</script>", 1)[0]
+    assert "location.hash" in script
+    assert '"ArrowLeft"' in script and '"ArrowRight"' in script
+    assert "panel.open" in script
+
+
+def test_html_validation_configuration_and_receipts_are_collapsed(
+    tmp_path: Path,
+) -> None:
+    """Putting long paths and receipt rows in the default reading flow must fail."""
+    config_path, _output = _write_debug_run(tmp_path)
+
+    rendered = render_debug_report(load_debug_report_data(config_path))
+    summary = rendered.split('<section id="run-summary"', 1)[1].split(
+        "</section>", 1
+    )[0]
+
+    assert '<details class="run-diagnostics">' in summary
+    assert '<details class="run-diagnostics" open' not in summary
+    disclosure = summary.split('<details class="run-diagnostics">', 1)[1]
+    assert "Retrieval config" in disclosure
+    assert "Validation state" in disclosure
+    assert "Bounded artifact SHA-256 receipts" in disclosure
 
 
 def test_html_renderer_discloses_passage_rankings_after_the_first_five(tmp_path: Path) -> None:
@@ -1930,8 +1987,8 @@ def test_html_renderer_uses_disjoint_anchor_namespaces_for_valid_topic_id_collis
 
     assert 'href="#topic-hash-4038e65dabd89221"' in rendered
     assert 'href="#topic-literal-topic-4038e65dabd89221"' in rendered
-    assert '<section id="topic-hash-4038e65dabd89221"' in rendered
-    assert '<section id="topic-literal-topic-4038e65dabd89221"' in rendered
+    assert 'id="topic-hash-4038e65dabd89221"' in rendered
+    assert 'id="topic-literal-topic-4038e65dabd89221"' in rendered
     section_ids = re.findall(r'<section id="([^"]+)"', rendered)
     assert len(section_ids) == len(set(section_ids))
 

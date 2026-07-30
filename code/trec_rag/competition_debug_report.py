@@ -2189,10 +2189,20 @@ def render_debug_report(data: DebugReportData) -> str:
     stored corpus text safe for an HTML context.
     """
     topic_links = "".join(
-        f'<li><a href="#topic-{_topic_anchor(topic.topic_id)}">{_html(topic.topic_id)}</a></li>'
-        for topic in data.topics
+        '<li>'
+        f'<button type="button" class="topic-tab" id="topic-tab-{_topic_anchor(topic.topic_id)}" role="tab" '
+        f'aria-controls="topic-{_topic_anchor(topic.topic_id)}" '
+        f'aria-selected="{str(index == 0).lower()}" tabindex="{0 if index == 0 else -1}" '
+        f'data-topic-target="topic-{_topic_anchor(topic.topic_id)}">'
+        f'{_html(topic.topic_id)}</button>'
+        f'<a class="topic-link-fallback" href="#topic-{_topic_anchor(topic.topic_id)}">'
+        f'{_html(topic.topic_id)}</a></li>'
+        for index, topic in enumerate(data.topics)
     )
-    topics = "".join(_render_topic(topic) for topic in data.topics)
+    topics = "".join(
+        _render_topic(topic, initially_open=index == 0)
+        for index, topic in enumerate(data.topics)
+    )
     run_summary = _render_run_summary(data)
     pipeline_legend = _render_pipeline_legend()
     return f'''<!doctype html>
@@ -2203,26 +2213,46 @@ def render_debug_report(data: DebugReportData) -> str:
 <meta name="color-scheme" content="light dark">
 <title>Competition retrieval debug report</title>
 <style>
-:root {{ color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }}
-body {{ margin: 0; background: Canvas; color: CanvasText; }}
-header, main, footer {{ max-width: 76rem; margin: auto; padding: 1rem; }}
-header {{ border-bottom: 1px solid GrayText; }}
-nav ul {{ display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding-left: 1.25rem; }}
-section {{ margin: 1.5rem 0; padding: 1rem; border: 1px solid GrayText; border-radius: .4rem; }}
-section section {{ border-color: color-mix(in srgb, GrayText 55%, transparent); }}
+:root {{ color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; line-height: 1.5; --page: #f5f7fb; --surface: #fff; --surface-soft: #eef3fb; --ink: #182235; --muted: #5d687b; --line: #ccd5e3; --accent: #2859c5; --accent-ink: #fff; --focus: #f59e0b; }}
+* {{ box-sizing: border-box; }}
+html {{ overflow-x: hidden; scroll-behavior: smooth; }}
+body {{ margin: 0; min-width: 0; overflow-x: hidden; background: var(--page); color: var(--ink); }}
+header, main, footer {{ width: min(100%, 82rem); margin: auto; padding: clamp(1rem, 3vw, 2rem); }}
+header {{ margin-top: clamp(.5rem, 2vw, 1.5rem); border-bottom: 1px solid var(--line); }}
+header h1 {{ margin-block: 0 .35rem; font-size: clamp(1.75rem, 4vw, 3rem); line-height: 1.1; letter-spacing: -.035em; }}
+header p {{ max-width: 70ch; color: var(--muted); }}
+nav ul {{ display: flex; flex-wrap: wrap; gap: .65rem; margin: 1.25rem 0 0; padding: 0; list-style: none; }}
+.topic-tab, .topic-link-fallback {{ min-height: 44px; align-items: center; justify-content: center; padding: .65rem 1rem; border-radius: 999px; border: 1px solid var(--line); font: inherit; font-weight: 750; color: var(--ink); background: var(--surface); text-decoration: none; cursor: pointer; }}
+.topic-tab {{ display: none; }}
+.js .topic-tab {{ display: inline-flex; }}
+.js .topic-link-fallback {{ display: none; }}
+.topic-tab[aria-selected="true"] {{ color: var(--accent-ink); border-color: var(--accent); background: var(--accent); box-shadow: 0 .35rem 1rem rgb(40 89 197 / 22%); }}
+section {{ min-width: 0; margin: 1.5rem 0; padding: clamp(.85rem, 2.5vw, 1.35rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }}
+section section {{ border-color: color-mix(in srgb, var(--line) 75%, transparent); background: color-mix(in srgb, var(--surface) 92%, var(--surface-soft)); }}
+.topic-panel {{ min-width: 0; margin: 1.5rem 0; border: 1px solid var(--line); border-radius: 1rem; background: var(--surface); box-shadow: 0 .6rem 2rem rgb(30 50 90 / 8%); }}
+.topic-panel > summary {{ min-height: 44px; padding: 1rem 1.25rem; cursor: pointer; font-size: 1.2rem; font-weight: 800; }}
+.topic-panel > .topic-content {{ min-width: 0; padding: 0 clamp(.75rem, 2vw, 1.25rem) .25rem; }}
+.js .topic-panel:not([open]) {{ display: none; }}
+.js .topic-panel > summary {{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }}
+.run-diagnostics {{ margin-top: 1rem; padding: .25rem 1rem 1rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }}
+.run-diagnostics > summary {{ min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 750; }}
+.run-diagnostics dl {{ display: grid; grid-template-columns: minmax(9rem, auto) minmax(0, 1fr); gap: .35rem 1rem; }}
+.run-diagnostics dt {{ font-weight: 750; }}
+.run-diagnostics dd {{ min-width: 0; margin: 0; }}
 .table-wrap {{ overflow-x: auto; }}
 table {{ width: 100%; border-collapse: collapse; min-width: 38rem; }}
 caption {{ text-align: left; font-weight: 700; padding: .4rem 0; }}
-th, td {{ text-align: left; vertical-align: top; border: 1px solid GrayText; padding: .45rem; }}
+th, td {{ text-align: left; vertical-align: top; border: 1px solid var(--line); padding: .45rem; }}
 code, .break {{ overflow-wrap: anywhere; word-break: break-word; }}
-details {{ margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid GrayText; }}
+details:not(.topic-panel, .run-diagnostics) {{ margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }}
 summary {{ cursor: pointer; font-weight: 650; }}
 .status {{ display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }}
 .status-complete {{ color: #063; background: #d8f3df; }}
 .status-empty {{ color: #735400; background: #fff0bd; }}
 .status-fallback-extractive {{ color: #7a2300; background: #ffe0d2; }}
-a:focus-visible, summary:focus-visible {{ outline: .22rem solid Highlight; outline-offset: .2rem; }}
-@media (max-width: 42rem) {{ header, main, footer {{ padding: .75rem; }} section {{ padding: .75rem; }} }}
+a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem solid var(--focus); outline-offset: .2rem; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --page: #0d1320; --surface: #141d2d; --surface-soft: #1a263a; --ink: #edf3ff; --muted: #aebbd0; --line: #39475e; --accent: #7ca1ff; --accent-ink: #10182a; --focus: #fbbf24; }} }}
+@media (max-width: 42rem) {{ header, main, footer {{ padding: .75rem; }} section {{ padding: .75rem; }} nav li {{ flex: 1 1 calc(50% - .65rem); }} .topic-tab, .topic-link-fallback {{ width: 100%; }} .run-diagnostics dl {{ display: block; }} .run-diagnostics dd {{ margin: 0 0 .75rem; }} }}
 @media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }} }}
 </style>
 </head>
@@ -2230,7 +2260,7 @@ a:focus-visible, summary:focus-visible {{ outline: .22rem solid Highlight; outli
 <header>
 <h1>Competition retrieval debug report</h1>
 <p>Read-only rendering of sealed retrieval artifacts. Corpus text and identifiers may be sensitive.</p>
-<nav aria-label="Topic navigation"><ul>{topic_links}</ul></nav>
+<nav aria-label="Topic navigation"><ul role="tablist">{topic_links}</ul></nav>
 </header>
 <main>
 {run_summary}
@@ -2238,6 +2268,53 @@ a:focus-visible, summary:focus-visible {{ outline: .22rem solid Highlight; outli
 {topics}
 </main>
 <footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
+<script>
+(() => {{
+  document.documentElement.classList.add("js");
+  const panels = Array.from(document.querySelectorAll(".topic-panel"));
+  const tabs = Array.from(document.querySelectorAll(".topic-tab"));
+  if (!panels.length) return;
+  let synchronizing = false;
+  const panelForTab = (tab) => document.getElementById(tab.dataset.topicTarget);
+  const activate = (panel, updateHash, focusTab) => {{
+    if (!panel) return;
+    synchronizing = true;
+    panels.forEach((candidate) => {{ candidate.open = candidate === panel; }});
+    tabs.forEach((tab) => {{
+      const selected = panelForTab(tab) === panel;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focusTab) tab.focus();
+    }});
+    synchronizing = false;
+    if (updateHash && location.hash !== "#" + panel.id) {{
+      history.replaceState(null, "", "#" + panel.id);
+    }}
+  }};
+  const restoreHash = () => {{
+    const identifier = decodeURIComponent(location.hash.slice(1));
+    const requested = panels.find((panel) => panel.id === identifier);
+    activate(requested || panels[0], false, false);
+  }};
+  tabs.forEach((tab, index) => {{
+    tab.addEventListener("click", () => activate(panelForTab(tab), true, false));
+    tab.addEventListener("keydown", (event) => {{
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(index + direction + tabs.length) % tabs.length];
+      activate(panelForTab(next), true, true);
+    }});
+  }});
+  panels.forEach((panel) => panel.addEventListener("toggle", () => {{
+    if (synchronizing) return;
+    if (panel.open) activate(panel, true, false);
+    else if (!panels.some((candidate) => candidate.open)) activate(panel, true, false);
+  }}));
+  window.addEventListener("hashchange", restoreHash);
+  restoreHash();
+}})();
+</script>
 </body>
 </html>'''
 
@@ -2251,7 +2328,10 @@ def _render_run_summary(data: DebugReportData) -> str:
     )
     return (
         '<section id="run-summary" aria-labelledby="run-summary-title">'
-        '<h2 id="run-summary-title">Run summary</h2><dl>'
+        '<h2 id="run-summary-title">Run summary</h2>'
+        f'<p>{_html(len(data.topics))} validated topic'
+        f'{"s" if len(data.topics) != 1 else ""} ready to inspect.</p>'
+        '<details class="run-diagnostics"><summary>Validation, configuration, and source receipts</summary><dl>'
         f'<dt>Retrieval config</dt><dd class="break">{_html(data.retrieval_config_path)}</dd>'
         f'<dt>RAG config</dt><dd class="break">{_html(rag_path)}</dd>'
         f'<dt>Retrieval output</dt><dd class="break">{_html(data.output_dir)}</dd>'
@@ -2264,7 +2344,7 @@ def _render_run_summary(data: DebugReportData) -> str:
             ("Artifact", "SHA-256"),
             source_rows,
         )
-        + "</section>"
+        + "</details></section>"
     )
 
 
@@ -2293,7 +2373,7 @@ def _render_pipeline_legend() -> str:
     )
 
 
-def _render_topic(topic: TopicReport) -> str:
+def _render_topic(topic: TopicReport, *, initially_open: bool = False) -> str:
     anchor = _topic_anchor(topic.topic_id)
     prefix = f"stage-{anchor}"
     stages = (
@@ -2306,7 +2386,14 @@ def _render_topic(topic: TopicReport) -> str:
         _render_retrieval(topic, prefix),
         _render_final_rag(topic, prefix),
     )
-    return f'<section id="topic-{anchor}" aria-labelledby="topic-title-{anchor}"><h1 id="topic-title-{anchor}">Topic {_html(topic.topic_id)}</h1>{"".join(stages)}</section>'
+    open_attribute = " open" if initially_open else ""
+    return (
+        f'<details class="topic-panel" name="competition-topic" '
+        f'id="topic-{anchor}"{open_attribute}>'
+        f'<summary id="topic-summary-{anchor}">Topic {_html(topic.topic_id)}</summary>'
+        f'<div class="topic-content"><h1 id="topic-title-{anchor}">'
+        f'Topic {_html(topic.topic_id)}</h1>{"".join(stages)}</div></details>'
+    )
 
 
 def _stage(prefix: str, suffix: str, title: str, body: str) -> str:
