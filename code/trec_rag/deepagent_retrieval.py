@@ -422,7 +422,13 @@ def _positive_int(value: object, *, name: str) -> int:
 
 
 def _validated_action_kind(action: object) -> ActionKind | None:
-    if action not in {"search", "extract", "paginate", "refocus", "stop"}:
+    if not isinstance(action, str) or action not in {
+        "search",
+        "extract",
+        "paginate",
+        "refocus",
+        "stop",
+    }:
         return None
     return cast(ActionKind, action)
 
@@ -701,6 +707,18 @@ class DeepAgentRetriever:
                 focus_query=focus_query,
                 cursor=cursor,
             )
+            if expected_action is None:
+                authorization_error = coverage_state.require_pending_action(
+                    action="paginate",
+                    target=document_id,
+                    focus_query=focus_query,
+                )
+                if authorization_error is not None:
+                    return _matching_action_error()
+                return json.dumps(
+                    {"error": "pagination requires prior snippet page"},
+                    sort_keys=True,
+                )
             authorization_error = coverage_state.require_pending_action(
                 action=expected_action,
                 target=document_id,

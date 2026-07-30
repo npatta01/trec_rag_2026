@@ -627,3 +627,47 @@ def test_terminal_stop_rejects_all_later_action_operations() -> None:
 
     assert later_action["code"] == "TERMINAL_STATE"
     assert later_consumption["code"] == "TERMINAL_STATE"
+
+
+def test_paginate_action_requires_a_recorded_page_for_exact_document_focus() -> None:
+    state = EvidenceCoverageState("Explain migration drivers.")
+
+    assert (
+        state.expected_snippet_action(
+            document_id="doc-a",
+            focus_query="migration drivers",
+            cursor="opaque-page-two",
+        )
+        is None
+    )
+
+    state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="migration drivers",
+            snippets=(),
+            next_cursor="opaque-page-two",
+            page_index=0,
+            residual_count=1,
+            residual_top_score=0.6,
+            returned_min_score=None,
+            pages_estimated=2,
+        )
+    )
+
+    assert (
+        state.expected_snippet_action(
+            document_id="doc-a",
+            focus_query="migration drivers",
+            cursor="opaque-page-two",
+        )
+        == "paginate"
+    )
+    assert (
+        state.expected_snippet_action(
+            document_id="doc-a",
+            focus_query="unseen focus",
+            cursor="opaque-page-two",
+        )
+        is None
+    )

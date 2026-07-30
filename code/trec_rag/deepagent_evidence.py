@@ -837,10 +837,10 @@ class EvidenceCoverageState:
 
     def expected_snippet_action(
         self, *, document_id: str, focus_query: str, cursor: str | None
-    ) -> Literal["extract", "paginate", "refocus"]:
+    ) -> Literal["extract", "paginate", "refocus"] | None:
         with self._lock:
             if cursor is not None:
-                return "paginate"
+                return "paginate" if (document_id, focus_query) in self._documents else None
             if (document_id, focus_query) in self._documents:
                 return "extract"
             if any(key[0] == document_id for key in self._documents):

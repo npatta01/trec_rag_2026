@@ -4,7 +4,6 @@ from collections.abc import Mapping
 import asyncio
 import hashlib
 import json
-import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -88,12 +87,44 @@ class FakeRetriever:
         ]
 
 
-class SlowFollowupRetriever(FakeRetriever):
-    """Make concurrent pre-append budget checks overlap deterministically."""
+class GatedFollowupRetriever(FakeRetriever):
+    """Hold named follow-ups inside transport until a test releases them."""
+
+    def __init__(self, *queries: str) -> None:
+        super().__init__()
+        self.entered = {query: Event() for query in queries}
+        self.releases = {query: Event() for query in queries}
+
+    def retrieve(self, query):
+        if query.query_text in self.entered:
+            self.entered[query.query_text].set()
+            if not self.releases[query.query_text].wait(timeout=2):
+                raise AssertionError(f"test did not release {query.query_text}")
+        return super().retrieve(query)
+
+
+class GatedDuplicateRetriever(FakeRetriever):
+    """Expose an unintended second transport call for one duplicate query."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_entered = Event()
+        self.second_entered = Event()
+        self.release_first = Event()
+        self._followup_calls = 0
+        self._calls_lock = Lock()
 
     def retrieve(self, query):
         if query.variant_name != "original":
-            time.sleep(0.05)
+            with self._calls_lock:
+                self._followup_calls += 1
+                call_number = self._followup_calls
+            if call_number == 1:
+                self.first_entered.set()
+                if not self.release_first.wait(timeout=2):
+                    raise AssertionError("test did not release first duplicate call")
+            else:
+                self.second_entered.set()
         return super().retrieve(query)
 
 
@@ -133,9 +164,6 @@ class FakeAgent:
         return self.invoke_callback(payload)
 
 
-_TOOL_ACTION_LOCK = Lock()
-
-
 def _seed_test_need(
     toolset: deepagent_retrieval.AgentToolset,
     *,
@@ -160,12 +188,11 @@ def _authorized_search(
     *,
     narrative_span: str = "narrative",
 ) -> str:
-    with _TOOL_ACTION_LOCK:
-        _seed_test_need(toolset, narrative_span=narrative_span)
-        toolset.choose_next_action(
-            "search", query, None, ["test-need"], "test need remains open"
-        )
-        return toolset.search_climbmix(query)
+    _seed_test_need(toolset, narrative_span=narrative_span)
+    toolset.choose_next_action(
+        "search", query, None, ["test-need"], "test need remains open"
+    )
+    return toolset.search_climbmix(query)
 
 
 def _authorized_snippet(
@@ -177,16 +204,15 @@ def _authorized_snippet(
     action: str = "extract",
     narrative_span: str = "narrative",
 ) -> str:
-    with _TOOL_ACTION_LOCK:
-        _seed_test_need(toolset, narrative_span=narrative_span)
-        toolset.choose_next_action(
-            action,
-            document_id,
-            focus_query,
-            ["test-need"],
-            "test need remains open",
-        )
-        return toolset.extract_relevant_snippets(document_id, focus_query, cursor)
+    _seed_test_need(toolset, narrative_span=narrative_span)
+    toolset.choose_next_action(
+        action,
+        document_id,
+        focus_query,
+        ["test-need"],
+        "test need remains open",
+    )
+    return toolset.extract_relevant_snippets(document_id, focus_query, cursor)
 
 
 class FakeTracing:
@@ -626,10 +652,19 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             tool_payloads.extend(
+                (
+                    json.loads(
+                        toolset.extract_relevant_snippets("unknown-doc", "focus", None)
+                    ),
+                    json.loads(
+                        toolset.extract_relevant_snippets("original-doc-1", "   ", None)
+                    ),
+                )
+            )
+            _authorized_snippet(toolset, "original-doc-1", "focus", None)
+            tool_payloads.extend(
                 json.loads(response)
                 for response in (
-                    toolset.extract_relevant_snippets("unknown-doc", "focus", None),
-                    toolset.extract_relevant_snippets("original-doc-1", "   ", None),
                     _authorized_snippet(
                         toolset,
                         "original-doc-1",
@@ -641,11 +676,15 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
                         toolset,
                         "original-doc-1",
                         "ranker value failure",
-                        "valid-cursor",
-                        action="paginate",
+                        None,
+                        action="refocus",
                     ),
                     _authorized_snippet(
-                        toolset, "original-doc-1", "extractor failure", None
+                        toolset,
+                        "original-doc-1",
+                        "extractor failure",
+                        None,
+                        action="refocus",
                     ),
                 )
             )
@@ -753,7 +792,8 @@ def test_retrieve_limits_successful_followups_to_three_and_marks_budget_exhausti
 
 
 def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
-    fake_retriever = SlowFollowupRetriever()
+    queries = tuple(f"concurrent query {number}" for number in range(3))
+    fake_retriever = GatedFollowupRetriever(*queries)
     tool_results = []
 
     def agent_factory(
@@ -761,14 +801,50 @@ def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
         toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            barrier = Barrier(4)
+            _seed_test_need(toolset)
+            started = [Event() for _query in range(4)]
 
-            def call_tool(number: int) -> str:
-                barrier.wait(timeout=2)
-                return _authorized_search(toolset, f"concurrent query {number}")
+            def authorize(query: str) -> None:
+                action = json.loads(
+                    toolset.choose_next_action(
+                        "search",
+                        query,
+                        None,
+                        ["test-need"],
+                        "test need remains open",
+                    )
+                )
+                assert action["state"] == "pending"
+
+            def call_tool(index: int, query: str) -> str:
+                started[index].set()
+                return toolset.search_climbmix(query)
 
             with ThreadPoolExecutor(max_workers=4) as pool:
-                tool_results.extend(pool.map(call_tool, range(4)))
+                authorize(queries[0])
+                futures = [pool.submit(call_tool, 0, queries[0])]
+                assert fake_retriever.entered[queries[0]].wait(timeout=2)
+
+                authorize(queries[1])
+                futures.append(pool.submit(call_tool, 1, queries[1]))
+                assert started[1].wait(timeout=2)
+                assert not fake_retriever.entered[queries[1]].wait(timeout=0.1)
+                fake_retriever.releases[queries[0]].set()
+                assert fake_retriever.entered[queries[1]].wait(timeout=2)
+
+                authorize(queries[2])
+                futures.append(pool.submit(call_tool, 2, queries[2]))
+                assert started[2].wait(timeout=2)
+                assert not fake_retriever.entered[queries[2]].wait(timeout=0.1)
+                fake_retriever.releases[queries[1]].set()
+                assert fake_retriever.entered[queries[2]].wait(timeout=2)
+
+                over_budget_query = "concurrent query 3"
+                authorize(over_budget_query)
+                futures.append(pool.submit(call_tool, 3, over_budget_query))
+                assert started[3].wait(timeout=2)
+                fake_retriever.releases[queries[2]].set()
+                tool_results.extend(future.result(timeout=2) for future in futures)
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
         return FakeAgent(invoke)
@@ -792,7 +868,7 @@ def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
 
 
 def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
-    fake_retriever = SlowFollowupRetriever()
+    fake_retriever = GatedDuplicateRetriever()
     tool_results = []
 
     def agent_factory(
@@ -800,14 +876,38 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
         toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            barrier = Barrier(2)
+            _seed_test_need(toolset)
+            query = "same concurrent query"
 
-            def call_tool(_number: int) -> str:
-                barrier.wait(timeout=2)
-                return _authorized_search(toolset, "same concurrent query")
+            def authorize() -> None:
+                action = json.loads(
+                    toolset.choose_next_action(
+                        "search",
+                        query,
+                        None,
+                        ["test-need"],
+                        "test need remains open",
+                    )
+                )
+                assert action["state"] == "pending"
 
+            second_started = Event()
             with ThreadPoolExecutor(max_workers=2) as pool:
-                tool_results.extend(pool.map(call_tool, range(2)))
+                authorize()
+                first = pool.submit(toolset.search_climbmix, query)
+                assert fake_retriever.first_entered.wait(timeout=2)
+
+                authorize()
+
+                def call_second() -> str:
+                    second_started.set()
+                    return toolset.search_climbmix(query)
+
+                second = pool.submit(call_second)
+                assert second_started.wait(timeout=2)
+                assert not fake_retriever.second_entered.wait(timeout=0.1)
+                fake_retriever.release_first.set()
+                tool_results.extend((first.result(timeout=2), second.result(timeout=2)))
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
         return FakeAgent(invoke)
@@ -825,7 +925,7 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
 
 
 def test_retrieve_concurrent_blank_followups_do_not_use_budget() -> None:
-    fake_retriever = SlowFollowupRetriever()
+    fake_retriever = FakeRetriever()
     blank_results = []
     successful_results = []
 
@@ -880,21 +980,46 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
         toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            queued = Barrier(4)
+            _seed_test_need(toolset)
 
-            def call_success(number: int) -> str:
-                queued.wait(timeout=2)
-                return _authorized_search(toolset, f"query {number}")
+            def authorize(query: str) -> None:
+                action = json.loads(
+                    toolset.choose_next_action(
+                        "search",
+                        query,
+                        None,
+                        ["test-need"],
+                        "test need remains open",
+                    )
+                )
+                assert action["state"] == "pending"
 
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                failed = pool.submit(_authorized_search, toolset, "failing query")
+            authorize("failing query")
+            queued_started = Event()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                failed = pool.submit(toolset.search_climbmix, "failing query")
                 assert fake_retriever.failure_started.wait(timeout=2)
-                successful = [pool.submit(call_success, number) for number in range(3)]
-                queued.wait(timeout=2)
+
+                authorize("query 0")
+
+                def call_queued_success() -> str:
+                    queued_started.set()
+                    return toolset.search_climbmix("query 0")
+
+                successful = pool.submit(call_queued_success)
+                assert queued_started.wait(timeout=2)
+                assert fake_retriever.attempted_queries == [
+                    "narrative",
+                    "failing query",
+                ]
                 fake_retriever.release_failure.set()
                 with pytest.raises(RuntimeError, match="controlled retrieval failure"):
                     failed.result(timeout=2)
-                tool_results.extend(future.result(timeout=2) for future in successful)
+                tool_results.append(successful.result(timeout=2))
+
+            tool_results.extend(
+                _authorized_search(toolset, f"query {number}") for number in range(1, 3)
+            )
             tool_results.append(_authorized_search(toolset, "query beyond budget"))
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
@@ -1547,6 +1672,75 @@ def test_retrieve_requires_recorded_actions_for_agent_retrieval_tools() -> None:
         "refocus",
         "paginate",
     ]
+
+
+def test_choose_next_action_rejects_unhashable_action_kinds_as_safe_json() -> None:
+    observed: list[dict[str, object]] = []
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            for malformed in ([], {}):
+                observed.append(
+                    json.loads(
+                        toolset.choose_next_action(
+                            malformed,  # type: ignore[arg-type]
+                            "original-doc-1",
+                            None,
+                            [],
+                            "malformed actions must be rejected safely",
+                        )
+                    )
+                )
+            return {"messages": [{"role": "assistant", "content": "Stopped."}]}
+
+        return FakeAgent(invoke)
+
+    _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert observed == [
+        {"code": "INVALID_ACTION", "ok": False},
+        {"code": "INVALID_ACTION", "ok": False},
+    ]
+
+
+def test_paginate_rejects_unseen_document_focus_before_extractor_work() -> None:
+    extractor = RecordingSnippetExtractor()
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _seed_test_need(toolset)
+            observed["action"] = json.loads(
+                toolset.choose_next_action(
+                    "paginate",
+                    "original-doc-1",
+                    "unseen focus",
+                    ["test-need"],
+                    "attempt pagination before inspection",
+                )
+            )
+            observed["page"] = json.loads(
+                toolset.extract_relevant_snippets(
+                    "original-doc-1", "unseen focus", "opaque-page-two"
+                )
+            )
+            return {"messages": [{"role": "assistant", "content": "Stopped."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(FakeRetriever(), agent_factory, snippet_extractor=extractor).retrieve(
+        "narrative"
+    )
+
+    assert observed["action"]["state"] == "pending"
+    assert observed["page"] == {"error": "pagination requires prior snippet page"}
+    assert extractor.calls == []
+    assert result.coverage_report.actions[-1].state == "consumed"
+    assert result.coverage_report.inspected_page_count == 0
 
 
 def test_coverage_report_preserves_five_seeded_topic_224_needs_and_open_gaps() -> None:
