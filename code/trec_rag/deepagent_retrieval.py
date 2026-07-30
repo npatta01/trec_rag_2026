@@ -15,6 +15,12 @@ from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
+from trec_rag.deepagent_evidence import (
+    ActionKind,
+    DocumentObservation,
+    EvidenceCoverageReport,
+    EvidenceCoverageState,
+)
 from trec_rag.deepagent_snippets import (
     InvalidSnippetCursorError,
     RelevantSnippetExtractor,
@@ -37,14 +43,20 @@ HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
 
 RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
-The supplied narrative has already been searched exactly as provided. Use the
-search_climbmix tool only for targeted follow-up queries that cover a specific
-uncovered aspect. Inspect candidate documents through extract_relevant_snippets
-with a focused query, and follow next_cursor when another page would add useful
-evidence. Use state-file tools only for oversized tool output or temporary notes;
-the state filesystem is ephemeral. Do not use execute, task, or unrelated tools.
-Stop when targeted follow-ups and document inspection no longer add coverage,
-and make your final message explain why you stopped."""
+The supplied narrative has already been searched exactly as provided.
+First decompose the untouched narrative into explicit needs and record them
+with update_retrieval_state. Preserve each need's exact narrative span.
+Before every search or document inspection, view the frontier and record one
+matching next action with its open motivating need or facet. After every
+snippet page, add only claims grounded by exact returned quotes, update gaps,
+and then choose whether to inspect another document, refocus, paginate, search,
+or stop. A next_cursor alone is not a reason to paginate: use residual count,
+within-ranking score continuity, novel nugget yield, and the remaining gap.
+Mark a need answerable only with a draft answer and grounded nugget IDs. Report
+conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
+for oversized output or temporary notes.
+The state filesystem is ephemeral. Do not use execute, task, or unrelated
+tools."""
 
 
 @dataclass(frozen=True)
@@ -66,6 +78,7 @@ class AgentRetrievalResult:
     candidates: tuple[AgentRankedCandidate, ...]
     rationale: str
     stopping_reason: str
+    coverage_report: EvidenceCoverageReport
     trace_flush_succeeded: bool
 
 
@@ -133,6 +146,9 @@ class _RetrievalOnlyMiddleware(AgentMiddleware):
         {
             "search_climbmix",
             "extract_relevant_snippets",
+            "view_retrieval_state",
+            "update_retrieval_state",
+            "choose_next_action",
             "ls",
             "read_file",
             "write_file",
@@ -276,10 +292,16 @@ def _isolated_trace_span(
             pass
 
 
-AgentFactory = Callable[
-    [str, Callable[[str], str], Callable[[str, str, str | None], str]],
-    _Agent,
-]
+@dataclass(frozen=True)
+class AgentToolset:
+    search_climbmix: Callable[[str], str]
+    extract_relevant_snippets: Callable[[str, str, str | None], str]
+    view_retrieval_state: Callable[[str], str]
+    update_retrieval_state: Callable[[dict[str, Any]], str]
+    choose_next_action: Callable[[str, str, str | None, list[str], str], str]
+
+
+AgentFactory = Callable[[str, AgentToolset], _Agent]
 
 
 def reciprocal_rank_fuse(
@@ -334,8 +356,7 @@ def reciprocal_rank_fuse(
 
 def _create_agent(
     model: str,
-    search_tool: Callable[[str], str],
-    snippet_tool: Callable[[str, str, str | None], str],
+    toolset: AgentToolset,
 ) -> _Agent:
     """Keep the Deep Agents 0.7 construction surface intentionally narrow."""
     from deepagents import create_deep_agent
@@ -354,7 +375,13 @@ def _create_agent(
         _Agent,
         create_deep_agent(
             model=provider_model,
-            tools=[search_tool, snippet_tool],
+            tools=[
+                toolset.search_climbmix,
+                toolset.extract_relevant_snippets,
+                toolset.view_retrieval_state,
+                toolset.update_retrieval_state,
+                toolset.choose_next_action,
+            ],
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             middleware=[_RetrievalOnlyMiddleware()],
             backend=StateBackend(),
@@ -392,6 +419,16 @@ def _positive_int(value: object, *, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return value
+
+
+def _validated_action_kind(action: object) -> ActionKind | None:
+    if action not in {"search", "extract", "paginate", "refocus", "stop"}:
+        return None
+    return cast(ActionKind, action)
+
+
+def _matching_action_error() -> str:
+    return json.dumps({"error": "matching next action required"}, sort_keys=True)
 
 
 def _candidate_metadata(
@@ -518,6 +555,7 @@ class DeepAgentRetriever:
             raise ValueError("narrative must be non-empty text")
 
         topic_component = sha256(narrative.encode()).hexdigest()[:16]
+        coverage_state = EvidenceCoverageState(narrative)
         searches: list[AgentSearch] = []
         documents: dict[str, str] = {}
         exhausted = False
@@ -582,6 +620,14 @@ class DeepAgentRetriever:
                     except Exception:
                         pass
             register_documents(candidates)
+            coverage_state.record_search(
+                query=query,
+                kind=kind,
+                documents=tuple(
+                    DocumentObservation(candidate.docid, candidate.rank)
+                    for candidate in candidates
+                ),
+            )
             return AgentSearch(
                 query=query,
                 kind=kind,
@@ -597,6 +643,13 @@ class DeepAgentRetriever:
                     return json.dumps(
                         {"error": "query must be non-empty text"}, sort_keys=True
                     )
+                authorization_error = coverage_state.require_pending_action(
+                    action="search",
+                    target=query,
+                    focus_query=None,
+                )
+                if authorization_error is not None:
+                    return _matching_action_error()
                 if any(search.query == query for search in searches):
                     return json.dumps(
                         {"error": "duplicate follow-up query"}, sort_keys=True
@@ -643,6 +696,18 @@ class DeepAgentRetriever:
                 document_text = documents.get(document_id)
             if document_text is None:
                 return json.dumps({"error": "unknown document_id"}, sort_keys=True)
+            expected_action = coverage_state.expected_snippet_action(
+                document_id=document_id,
+                focus_query=focus_query,
+                cursor=cursor,
+            )
+            authorization_error = coverage_state.require_pending_action(
+                action=expected_action,
+                target=document_id,
+                focus_query=focus_query,
+            )
+            if authorization_error is not None:
+                return _matching_action_error()
             try:
                 with _isolated_trace_span(
                     lambda: self._tracing.snippet_span(document_id, focus_query)
@@ -660,13 +725,13 @@ class DeepAgentRetriever:
                         focus_query,
                         cursor,
                     )
+                    coverage_state.record_snippet_page(result.page)
                     latency_ms = (monotonic() - started_at) * 1_000
                     if span is not None:
                         try:
                             span.record_page(
                                 chunk_ids=tuple(
-                                    snippet.chunk_id
-                                    for snippet in result.page.snippets
+                                    snippet.chunk_id for snippet in result.page.snippets
                                 ),
                                 start_chars=tuple(
                                     snippet.start_char
@@ -698,6 +763,45 @@ class DeepAgentRetriever:
                 )
             return json.dumps(result.page.as_dict(), sort_keys=True)
 
+        def view_retrieval_state(scope: str = "frontier") -> str:
+            """View compact invocation-local needs, gaps, evidence, or document state."""
+            if not isinstance(scope, str):
+                return json.dumps({"error": "invalid state scope"}, sort_keys=True)
+            return coverage_state.view(scope)
+
+        def update_retrieval_state(delta: dict[str, Any]) -> str:
+            """Add grounded needs, facets, nuggets, evidence, and coverage judgments."""
+            return json.dumps(
+                coverage_state.apply_delta(delta).as_dict(), sort_keys=True
+            )
+
+        def choose_next_action(
+            action: str,
+            target: str,
+            focus_query: str | None,
+            motivating_ids: list[str],
+            rationale: str,
+        ) -> str:
+            """Record the coverage gap motivating the next retrieval action or stop."""
+            validated_action = _validated_action_kind(action)
+            invalid_focus = focus_query is not None and (
+                not isinstance(focus_query, str) or not focus_query.strip()
+            )
+            if validated_action is None or invalid_focus:
+                return json.dumps(
+                    {"ok": False, "code": "INVALID_ACTION"}, sort_keys=True
+                )
+            return json.dumps(
+                coverage_state.choose_action(
+                    action=validated_action,
+                    target=target,
+                    focus_query=focus_query,
+                    motivating_ids=motivating_ids,
+                    rationale=rationale,
+                ),
+                sort_keys=True,
+            )
+
         try:
             with _isolated_trace_span(
                 lambda: self._tracing.agent_span(narrative)
@@ -706,8 +810,13 @@ class DeepAgentRetriever:
                 searches.append(original)
                 agent = self._agent_factory(
                     self._model,
-                    search_climbmix,
-                    extract_relevant_snippets,
+                    AgentToolset(
+                        search_climbmix=search_climbmix,
+                        extract_relevant_snippets=extract_relevant_snippets,
+                        view_retrieval_state=view_retrieval_state,
+                        update_retrieval_state=update_retrieval_state,
+                        choose_next_action=choose_next_action,
+                    ),
                 )
                 initial_results = json.dumps(
                     _candidate_metadata(
@@ -734,7 +843,8 @@ class DeepAgentRetriever:
                 candidates = reciprocal_rank_fuse(
                     searches, limit=self._fused_result_limit
                 )
-                stopping_reason = (
+                coverage_report = coverage_state.report()
+                stopping_reason = coverage_report.terminal_reason or (
                     "search_budget_exhausted" if exhausted else "agent_completed"
                 )
                 if agent_span is not None:
@@ -766,5 +876,6 @@ class DeepAgentRetriever:
             candidates=candidates,
             rationale=rationale,
             stopping_reason=stopping_reason,
+            coverage_report=coverage_report,
             trace_flush_succeeded=trace_flush_succeeded,
         )

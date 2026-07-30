@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Barrier, Event
+from threading import Barrier, Event, Lock
 from typing import Callable, Sequence
 from unittest.mock import ANY
 
@@ -131,6 +131,62 @@ class FakeAgent:
 
     def invoke(self, payload: dict[str, object]) -> object:
         return self.invoke_callback(payload)
+
+
+_TOOL_ACTION_LOCK = Lock()
+
+
+def _seed_test_need(
+    toolset: deepagent_retrieval.AgentToolset,
+    *,
+    narrative_span: str = "narrative",
+) -> None:
+    toolset.update_retrieval_state(
+        {
+            "add_needs": [
+                {
+                    "need_id": "test-need",
+                    "narrative_span": narrative_span,
+                    "question": "What evidence closes the test need?",
+                }
+            ]
+        }
+    )
+
+
+def _authorized_search(
+    toolset: deepagent_retrieval.AgentToolset,
+    query: str,
+    *,
+    narrative_span: str = "narrative",
+) -> str:
+    with _TOOL_ACTION_LOCK:
+        _seed_test_need(toolset, narrative_span=narrative_span)
+        toolset.choose_next_action(
+            "search", query, None, ["test-need"], "test need remains open"
+        )
+        return toolset.search_climbmix(query)
+
+
+def _authorized_snippet(
+    toolset: deepagent_retrieval.AgentToolset,
+    document_id: str,
+    focus_query: str,
+    cursor: str | None = None,
+    *,
+    action: str = "extract",
+    narrative_span: str = "narrative",
+) -> str:
+    with _TOOL_ACTION_LOCK:
+        _seed_test_need(toolset, narrative_span=narrative_span)
+        toolset.choose_next_action(
+            action,
+            document_id,
+            focus_query,
+            ["test-need"],
+            "test need remains open",
+        )
+        return toolset.extract_relevant_snippets(document_id, focus_query, cursor)
 
 
 class FakeTracing:
@@ -437,14 +493,13 @@ def test_retrieve_searches_untouched_narrative_before_agent_followups() -> None:
 
     def agent_factory(
         model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         factory_models.append(model)
         factory_queries.extend(fake_retriever.queries)
         return FakeAgent(
             lambda _payload: (
-                search_tool("targeted follow-up"),
+                _authorized_search(toolset, "targeted follow-up"),
                 {
                     "messages": [
                         {"role": "assistant", "content": "Coverage is sufficient."}
@@ -495,8 +550,7 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(payload: dict[str, object]) -> object:
             content = str(payload["messages"][0]["content"])
@@ -504,13 +558,19 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
                 json.loads(content.split("Bounded original results:\n", 1)[1])
             )
             snippet_payloads.append(
-                json.loads(snippet_tool("original-doc-1", "original focus", None))
+                json.loads(
+                    _authorized_snippet(
+                        toolset, "original-doc-1", "original focus", None
+                    )
+                )
             )
-            followup = json.loads(search_tool("targeted query"))
+            followup = json.loads(_authorized_search(toolset, "targeted query"))
             followup_candidates.extend(followup["documents"])
             followup_docid = str(followup["documents"][0]["docid"])
             snippet_payloads.append(
-                json.loads(snippet_tool(followup_docid, "followup focus", None))
+                json.loads(
+                    _authorized_snippet(toolset, followup_docid, "followup focus", None)
+                )
             )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
@@ -562,20 +622,31 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
 
     def agent_factory(
         _model: str,
-        _search_tool: Callable[[str], str],
-        snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             tool_payloads.extend(
                 json.loads(response)
                 for response in (
-                    snippet_tool("unknown-doc", "focus", None),
-                    snippet_tool("original-doc-1", "   ", None),
-                    snippet_tool("original-doc-1", "focus", "invalid-cursor"),
-                    snippet_tool(
-                        "original-doc-1", "ranker value failure", "valid-cursor"
+                    toolset.extract_relevant_snippets("unknown-doc", "focus", None),
+                    toolset.extract_relevant_snippets("original-doc-1", "   ", None),
+                    _authorized_snippet(
+                        toolset,
+                        "original-doc-1",
+                        "focus",
+                        "invalid-cursor",
+                        action="paginate",
                     ),
-                    snippet_tool("original-doc-1", "extractor failure", None),
+                    _authorized_snippet(
+                        toolset,
+                        "original-doc-1",
+                        "ranker value failure",
+                        "valid-cursor",
+                        action="paginate",
+                    ),
+                    _authorized_snippet(
+                        toolset, "original-doc-1", "extractor failure", None
+                    ),
                 )
             )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
@@ -611,12 +682,11 @@ def test_retrieve_raises_when_one_document_id_has_conflicting_nonempty_text() ->
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         return FakeAgent(
             lambda _payload: (
-                search_tool("targeted query"),
+                _authorized_search(toolset, "targeted query"),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
         )
@@ -635,7 +705,7 @@ def test_retrieve_rejects_empty_narrative_before_external_calls() -> None:
     with pytest.raises(ValueError, match="narrative must be non-empty text"):
         _sdk(
             fake_retriever,
-            lambda _model, _search_tool, _snippet_tool: factory_calls.append(True),  # type: ignore[return-value]
+            lambda _model, _toolset: factory_calls.append(True),  # type: ignore[return-value]
         ).retrieve("   ")
 
     assert fake_retriever.queries == []
@@ -650,11 +720,12 @@ def test_retrieve_limits_successful_followups_to_three_and_marks_budget_exhausti
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            tool_results.extend(search_tool(f"query {number}") for number in range(4))
+            tool_results.extend(
+                _authorized_search(toolset, f"query {number}") for number in range(4)
+            )
             return {
                 "messages": [
                     {"role": "assistant", "content": "Stopped after coverage."}
@@ -687,15 +758,14 @@ def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             barrier = Barrier(4)
 
             def call_tool(number: int) -> str:
                 barrier.wait(timeout=2)
-                return search_tool(f"concurrent query {number}")
+                return _authorized_search(toolset, f"concurrent query {number}")
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 tool_results.extend(pool.map(call_tool, range(4)))
@@ -727,15 +797,14 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             barrier = Barrier(2)
 
             def call_tool(_number: int) -> str:
                 barrier.wait(timeout=2)
-                return search_tool("same concurrent query")
+                return _authorized_search(toolset, "same concurrent query")
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 tool_results.extend(pool.map(call_tool, range(2)))
@@ -762,20 +831,19 @@ def test_retrieve_concurrent_blank_followups_do_not_use_budget() -> None:
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             barrier = Barrier(4)
 
             def call_blank(number: int) -> str:
                 barrier.wait(timeout=2)
-                return search_tool(" " * (number + 1))
+                return toolset.search_climbmix(" " * (number + 1))
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 blank_results.extend(pool.map(call_blank, range(4)))
             successful_results.extend(
-                search_tool(f"query {number}") for number in range(3)
+                _authorized_search(toolset, f"query {number}") for number in range(3)
             )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
@@ -809,18 +877,17 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             queued = Barrier(4)
 
             def call_success(number: int) -> str:
                 queued.wait(timeout=2)
-                return search_tool(f"query {number}")
+                return _authorized_search(toolset, f"query {number}")
 
             with ThreadPoolExecutor(max_workers=4) as pool:
-                failed = pool.submit(search_tool, "failing query")
+                failed = pool.submit(_authorized_search, toolset, "failing query")
                 assert fake_retriever.failure_started.wait(timeout=2)
                 successful = [pool.submit(call_success, number) for number in range(3)]
                 queued.wait(timeout=2)
@@ -828,7 +895,7 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
                 with pytest.raises(RuntimeError, match="controlled retrieval failure"):
                     failed.result(timeout=2)
                 tool_results.extend(future.result(timeout=2) for future in successful)
-            tool_results.append(search_tool("query beyond budget"))
+            tool_results.append(_authorized_search(toolset, "query beyond budget"))
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
         return FakeAgent(invoke)
@@ -862,18 +929,17 @@ def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_b
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
             tool_results.extend(
                 [
-                    search_tool("   "),
-                    search_tool("narrative"),
-                    search_tool("query 0"),
-                    search_tool("query 1"),
-                    search_tool("query 2"),
-                    search_tool("query 3"),
+                    toolset.search_climbmix("   "),
+                    _authorized_search(toolset, "narrative"),
+                    _authorized_search(toolset, "query 0"),
+                    _authorized_search(toolset, "query 1"),
+                    _authorized_search(toolset, "query 2"),
+                    _authorized_search(toolset, "query 3"),
                 ]
             )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
@@ -899,12 +965,13 @@ def test_retrieve_uses_stable_hashes_for_private_cache_variants() -> None:
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         return FakeAgent(
             lambda _payload: (
-                search_tool("specific missing aspect"),
+                _authorized_search(
+                    toolset, "specific missing aspect", narrative_span="Narrative"
+                ),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
         )
@@ -930,8 +997,7 @@ def test_retrieve_wraps_agent_failure_with_completed_searches() -> None:
 
     def agent_factory(
         _model: str,
-        _search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         return FakeAgent(lambda _payload: (_ for _ in ()).throw(failure))
 
@@ -948,7 +1014,7 @@ def test_result_reports_successful_trace_flush() -> None:
 
     result = _sdk(
         FakeRetriever(),
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(
+        lambda _model, _toolset: FakeAgent(
             lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
         ),
         tracing=tracing,
@@ -965,7 +1031,7 @@ def test_result_reports_disabled_tracing_as_successful_noop() -> None:
 
     result = DeepAgentRetriever(
         retriever=FakeRetriever(),
-        agent_factory=lambda _model, _search_tool, _snippet_tool: FakeAgent(
+        agent_factory=lambda _model, _toolset: FakeAgent(
             lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
         ),
         tracing=tracing,
@@ -988,7 +1054,7 @@ def test_failed_trace_flush_is_reported_without_retrying_or_changing_ranking() -
 
     result = _sdk(
         retriever,
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(invoke),
+        lambda _model, _toolset: FakeAgent(invoke),
         tracing=tracing,
     ).retrieve("narrative")
 
@@ -1009,7 +1075,7 @@ def test_raised_trace_flush_is_reported_without_changing_result() -> None:
 
     result = _sdk(
         retriever,
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(
+        lambda _model, _toolset: FakeAgent(
             lambda _payload: {
                 "messages": [{"role": "assistant", "content": "Stable rationale."}]
             }
@@ -1036,16 +1102,16 @@ def test_trace_span_lifecycle_failure_does_not_change_completed_result(
 
     result = _sdk(
         FakeRetriever(candidate_count=2),
-        lambda _model, _search_tool, snippet_tool: FakeAgent(
+        lambda _model, toolset: FakeAgent(
             lambda _payload: (
                 snippet_payloads.append(
-                    json.loads(snippet_tool("original-doc-1", "safe focus", None))
+                    json.loads(
+                        _authorized_snippet(
+                            toolset, "original-doc-1", "safe focus", None
+                        )
+                    )
                 ),
-                {
-                    "messages": [
-                        {"role": "assistant", "content": "Stable rationale."}
-                    ]
-                },
+                {"messages": [{"role": "assistant", "content": "Stable rationale."}]},
             )[1]
         ),
         tracing=tracing,
@@ -1075,7 +1141,7 @@ def test_trace_span_exit_failure_preserves_retrieval_error(
     with pytest.raises(RuntimeError, match="^actual retrieval failed$"):
         _sdk(
             ActualFailureRetriever(),
-            lambda _model, _search_tool, _snippet_tool: FakeAgent(
+            lambda _model, _toolset: FakeAgent(
                 lambda _payload: {
                     "messages": [{"role": "assistant", "content": "unused"}]
                 }
@@ -1093,9 +1159,9 @@ def test_trace_evidence_rejection_does_not_change_retrieval(
 
     result = _sdk(
         retriever,
-        lambda _model, _search_tool, snippet_tool: FakeAgent(
+        lambda _model, toolset: FakeAgent(
             lambda _payload: (
-                snippet_tool("original-doc-1", "safe focus", None),
+                _authorized_snippet(toolset, "original-doc-1", "safe focus", None),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
         ),
@@ -1137,10 +1203,14 @@ def test_snippet_trace_validation_rejection_does_not_change_tool_result(
 
     result = _sdk(
         OversizedIdRetriever(),
-        lambda _model, _search_tool, snippet_tool: FakeAgent(
+        lambda _model, toolset: FakeAgent(
             lambda _payload: (
                 snippet_payloads.append(
-                    json.loads(snippet_tool(oversized_document_id, "safe focus", None))
+                    json.loads(
+                        _authorized_snippet(
+                            toolset, oversized_document_id, "safe focus", None
+                        )
+                    )
                 ),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
@@ -1161,10 +1231,14 @@ def test_snippet_span_lifecycle_failure_does_not_change_tool_result(
 
     result = _sdk(
         FakeRetriever(),
-        lambda _model, _search_tool, snippet_tool: FakeAgent(
+        lambda _model, toolset: FakeAgent(
             lambda _payload: (
                 snippet_payloads.append(
-                    json.loads(snippet_tool("original-doc-1", "safe focus", None))
+                    json.loads(
+                        _authorized_snippet(
+                            toolset, "original-doc-1", "safe focus", None
+                        )
+                    )
                 ),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
@@ -1195,7 +1269,29 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     ) -> str:
         return "{}"
 
-    agent = _create_agent("openrouter:deepseek/test-model", search_tool, snippet_tool)
+    def view_tool(_scope: str = "frontier") -> str:
+        return "{}"
+
+    def update_tool(_delta: dict[str, object]) -> str:
+        return "{}"
+
+    def action_tool(
+        _action: str,
+        _target: str,
+        _focus_query: str | None,
+        _motivating_ids: list[str],
+        _rationale: str,
+    ) -> str:
+        return "{}"
+
+    toolset = deepagent_retrieval.AgentToolset(
+        search_climbmix=search_tool,
+        extract_relevant_snippets=snippet_tool,
+        view_retrieval_state=view_tool,
+        update_retrieval_state=update_tool,
+        choose_next_action=action_tool,
+    )
+    agent = _create_agent("openrouter:deepseek/test-model", toolset)
 
     assert agent is not None
     assert len(calls) == 1
@@ -1205,7 +1301,13 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     assert isinstance(kwargs["model"], ChatOpenRouter)
     assert kwargs["model"].model_name == "deepseek/test-model"
     assert kwargs["model"].max_retries == 0
-    assert kwargs["tools"] == [search_tool, snippet_tool]
+    assert kwargs["tools"] == [
+        search_tool,
+        snippet_tool,
+        view_tool,
+        update_tool,
+        action_tool,
+    ]
     assert kwargs["system_prompt"] == ANY
     assert len(kwargs["middleware"]) == 1
     assert isinstance(
@@ -1230,8 +1332,19 @@ def test_factory_rejects_invalid_openrouter_specs_before_agent_construction(
     with pytest.raises(ValueError, match="openrouter:<model-id>"):
         _create_agent(
             model,
-            lambda _query: "{}",
-            lambda _document_id, _focus_query, _cursor=None: "{}",
+            deepagent_retrieval.AgentToolset(
+                search_climbmix=lambda _query: "{}",
+                extract_relevant_snippets=lambda _document_id,
+                _focus_query,
+                _cursor=None: "{}",
+                view_retrieval_state=lambda _scope="frontier": "{}",
+                update_retrieval_state=lambda _delta: "{}",
+                choose_next_action=lambda _action,
+                _target,
+                _focus_query,
+                _motivating_ids,
+                _rationale: "{}",
+            ),
         )
 
     assert calls == []
@@ -1260,6 +1373,9 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
     assert set(sdk_model.captured_tool_names) == {
         "search_climbmix",
         "extract_relevant_snippets",
+        "view_retrieval_state",
+        "update_retrieval_state",
+        "choose_next_action",
         "ls",
         "read_file",
         "write_file",
@@ -1290,6 +1406,223 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
     assert {"ls", "task", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
 
 
+def test_retrieve_requires_recorded_actions_for_agent_retrieval_tools() -> None:
+    retriever = FakeRetriever()
+    extractor = RecordingSnippetExtractor()
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(payload: dict[str, object]) -> object:
+            observed["initial_message"] = payload["messages"][0]["content"]
+            observed["unauthorized_search"] = json.loads(
+                toolset.search_climbmix("targeted follow-up")
+            )
+            observed["calls_after_unauthorized_search"] = len(retriever.queries)
+            observed["need_update"] = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_needs": [
+                            {
+                                "need_id": "n1",
+                                "narrative_span": "narrative",
+                                "question": "What evidence answers the narrative?",
+                            }
+                        ]
+                    }
+                )
+            )
+            observed["invalid_action_input"] = json.loads(
+                toolset.choose_next_action(
+                    "extract",
+                    "original-doc-1",
+                    object(),  # type: ignore[arg-type]
+                    ["n1"],
+                    "invalid focus must remain a safe tool error",
+                )
+            )
+            observed["search_action"] = json.loads(
+                toolset.choose_next_action(
+                    "search",
+                    "targeted follow-up",
+                    None,
+                    ["n1"],
+                    "the need remains open",
+                )
+            )
+            observed["authorized_search"] = json.loads(
+                toolset.search_climbmix("targeted follow-up")
+            )
+            observed["replayed_search"] = json.loads(
+                toolset.search_climbmix("targeted follow-up")
+            )
+
+            observed["unauthorized_extract"] = json.loads(
+                toolset.extract_relevant_snippets("original-doc-1", "first focus", None)
+            )
+            toolset.choose_next_action(
+                "extract",
+                "original-doc-1",
+                "first focus",
+                ["n1"],
+                "inspect the first result",
+            )
+            observed["authorized_extract"] = json.loads(
+                toolset.extract_relevant_snippets("original-doc-1", "first focus", None)
+            )
+
+            observed["unauthorized_refocus"] = json.loads(
+                toolset.extract_relevant_snippets("original-doc-1", "new focus", None)
+            )
+            toolset.choose_next_action(
+                "refocus",
+                "original-doc-1",
+                "new focus",
+                ["n1"],
+                "inspect a distinct gap",
+            )
+            observed["authorized_refocus"] = json.loads(
+                toolset.extract_relevant_snippets("original-doc-1", "new focus", None)
+            )
+
+            observed["unauthorized_paginate"] = json.loads(
+                toolset.extract_relevant_snippets(
+                    "original-doc-1", "first focus", "page-two"
+                )
+            )
+            toolset.choose_next_action(
+                "paginate",
+                "original-doc-1",
+                "first focus",
+                ["n1"],
+                "the stored focus still has a gap",
+            )
+            observed["authorized_paginate"] = json.loads(
+                toolset.extract_relevant_snippets(
+                    "original-doc-1", "first focus", "page-two"
+                )
+            )
+            return {"messages": [{"role": "assistant", "content": "Stopped early."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(retriever, agent_factory, snippet_extractor=extractor).retrieve(
+        "narrative"
+    )
+
+    required_error = {"error": "matching next action required"}
+    assert observed["initial_message"] == (
+        "The untouched narrative is:\n"
+        "narrative\n\n"
+        "It has already been searched. Bounded original results:\n"
+        '[{"docid": "original-doc-1", "rank": 1, "score": 99.0, '
+        '"text_length": 19}]'
+    )
+    assert observed["unauthorized_search"] == required_error
+    assert observed["calls_after_unauthorized_search"] == 1
+    assert observed["invalid_action_input"] == {
+        "code": "INVALID_ACTION",
+        "ok": False,
+    }
+    assert "documents" in observed["authorized_search"]
+    assert observed["replayed_search"] == required_error
+    assert observed["unauthorized_extract"] == required_error
+    assert "snippets" in observed["authorized_extract"]
+    assert observed["unauthorized_refocus"] == required_error
+    assert "snippets" in observed["authorized_refocus"]
+    assert observed["unauthorized_paginate"] == required_error
+    assert "snippets" in observed["authorized_paginate"]
+    assert len(extractor.calls) == 3
+    assert [search.kind for search in result.searches] == ["original", "followup"]
+    assert [
+        (search.query, search.kind) for search in result.coverage_report.searches
+    ] == [
+        ("narrative", "original"),
+        ("targeted follow-up", "followup"),
+    ]
+    assert [action.action for action in result.coverage_report.actions] == [
+        "search",
+        "extract",
+        "refocus",
+        "paginate",
+    ]
+
+
+def test_coverage_report_preserves_five_seeded_topic_224_needs_and_open_gaps() -> None:
+    narrative = (
+        "I want to understand why people immigrate or become refugees, the challenges "
+        "they face, and how laws and different groups shape immigration policies. "
+        "Additionally, I'm interested in how various countries and religions view "
+        "immigrants, and what options migrant workers have to improve their lives."
+    )
+    spans = (
+        "why people immigrate or become refugees",
+        "the challenges they face",
+        "how laws and different groups shape immigration policies",
+        "how various countries and religions view immigrants",
+        "what options migrant workers have to improve their lives",
+    )
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        return FakeAgent(
+            lambda _payload: (
+                toolset.update_retrieval_state(
+                    {
+                        "add_needs": [
+                            {
+                                "need_id": f"n{index}",
+                                "narrative_span": span,
+                                "question": f"Need {index}?",
+                            }
+                            for index, span in enumerate(spans, start=1)
+                        ]
+                    }
+                ),
+                {"messages": [{"role": "assistant", "content": "Stopped early."}]},
+            )[1]
+        )
+
+    result = _sdk(FakeRetriever(), agent_factory).retrieve(narrative)
+
+    assert [need.narrative_span for need in result.coverage_report.needs] == list(spans)
+    assert result.coverage_report.unresolved_need_ids == (
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5",
+    )
+    assert result.coverage_report.terminal_reason is None
+    assert result.stopping_reason == "agent_completed"
+
+
+def test_recorded_terminal_stop_controls_result_stopping_reason() -> None:
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        return FakeAgent(
+            lambda _payload: (
+                toolset.choose_next_action(
+                    "stop",
+                    "completion",
+                    None,
+                    [],
+                    "no open needs remain",
+                ),
+                {"messages": [{"role": "assistant", "content": "Complete."}]},
+            )[1]
+        )
+
+    result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert result.stopping_reason == "completion"
+    assert result.coverage_report.terminal_reason == "completion"
+    assert result.coverage_report.actions[-1].state == "terminal"
+
+
 def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_others() -> (
     None
 ):
@@ -1303,6 +1636,9 @@ def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_o
             for name in (
                 "search_climbmix",
                 "extract_relevant_snippets",
+                "view_retrieval_state",
+                "update_retrieval_state",
+                "choose_next_action",
                 "ls",
                 "read_file",
                 "write_file",
@@ -1330,6 +1666,9 @@ def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_o
     assert seen_sync == [
         "search_climbmix",
         "extract_relevant_snippets",
+        "view_retrieval_state",
+        "update_retrieval_state",
+        "choose_next_action",
         "ls",
         "read_file",
         "write_file",
@@ -1405,11 +1744,12 @@ def test_tool_returns_bounded_metadata_but_result_retains_all_candidates() -> No
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            tool_payloads.append(json.loads(search_tool("targeted query")))
+            tool_payloads.append(
+                json.loads(_authorized_search(toolset, "targeted query"))
+            )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
         return FakeAgent(invoke)
@@ -1433,13 +1773,16 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
 
     def agent_factory(
         _model: str,
-        search_tool: Callable[[str], str],
-        _snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         def invoke(payload: dict[str, object]) -> object:
             initial_payloads.append(payload)
-            tool_payloads.append(json.loads(search_tool("targeted query")))
-            tool_payloads.append(json.loads(search_tool("over budget query")))
+            tool_payloads.append(
+                json.loads(_authorized_search(toolset, "targeted query"))
+            )
+            tool_payloads.append(
+                json.loads(_authorized_search(toolset, "over budget query"))
+            )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
         return FakeAgent(invoke)
@@ -1478,7 +1821,7 @@ def test_large_fused_override_keeps_root_trace_ids_at_safe_limit() -> None:
 
     result = DeepAgentRetriever(
         retriever=FakeRetriever(candidate_count=requested_limit),
-        agent_factory=lambda _model, _search_tool, _snippet_tool: FakeAgent(
+        agent_factory=lambda _model, _toolset: FakeAgent(
             lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
         ),
         tracing=tracing,
@@ -1565,9 +1908,9 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
     tracing = FakeTracing()
     result = _sdk(
         fake_retriever,
-        lambda _model, _search_tool, snippet_tool: FakeAgent(
+        lambda _model, toolset: FakeAgent(
             lambda _payload: (
-                snippet_tool("original-doc-1", "safe focus", None),
+                _authorized_snippet(toolset, "original-doc-1", "safe focus", None),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
         ),
@@ -1626,9 +1969,11 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
 
     result = _sdk(
         FakeRetriever(candidate_count=2),
-        lambda _model, _search_tool, snippet_tool: FakeAgent(
+        lambda _model, toolset: FakeAgent(
             lambda _payload: (
-                snippet_tool("original-doc-1", "private focus query", None),
+                _authorized_snippet(
+                    toolset, "original-doc-1", "private focus query", None
+                ),
                 {
                     "messages": [
                         {"role": "assistant", "content": "Coverage is sufficient."}
@@ -1774,7 +2119,7 @@ def test_direct_construction_creates_default_extractor_only_when_snippet_tool_is
 
     _sdk(
         FakeRetriever(),
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(
+        lambda _model, _toolset: FakeAgent(
             lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
         ),
     ).retrieve("narrative")
@@ -1784,13 +2129,14 @@ def test_direct_construction_creates_default_extractor_only_when_snippet_tool_is
 
     def agent_factory(
         _model: str,
-        _search_tool: Callable[[str], str],
-        snippet_tool: Callable[[str, str, str | None], str],
+        toolset: deepagent_retrieval.AgentToolset,
     ) -> FakeAgent:
         return FakeAgent(
             lambda _payload: (
                 snippet_payloads.append(
-                    json.loads(snippet_tool("original-doc-1", "focus", None))
+                    json.loads(
+                        _authorized_snippet(toolset, "original-doc-1", "focus", None)
+                    )
                 ),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
             )[1]
