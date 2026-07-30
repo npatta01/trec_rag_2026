@@ -1165,6 +1165,16 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
         ("secret-token", "secret%2Dtoken"),
         ("secret-token", "secret%252Dtoken"),
         pytest.param(
+            "secret-token",
+            r"secret%5Cu002Dtoken",
+            id="percent-then-unicode-escape",
+        ),
+        pytest.param(
+            "secret-token",
+            r"secret\u00252Dtoken",
+            id="unicode-escape-then-percent",
+        ),
+        pytest.param(
             "secret%2Dtoken",
             "secret%252Dtoken",
             id="configured-secret-contains-percent-escape",

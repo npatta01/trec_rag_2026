@@ -31,6 +31,7 @@ from trec_rag.topics import load_narrative_topics
 _SCHEMA_VERSION = "competition_rag_config_v1"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+_MAX_REDACTION_NORMALIZATION_ROUNDS = 32
 
 SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
 provided reference documents and the user's task instructions. Do not invent evidence,
@@ -894,49 +895,46 @@ def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
 def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
     for secret in secrets:
         value = value.replace(secret, "[REDACTED]")
-        decoded_value = value
-        while True:
-            if secret in decoded_value:
+        normalized = value
+        seen: set[str] = set()
+        for _ in range(_MAX_REDACTION_NORMALIZATION_ROUNDS):
+            if normalized in seen:
+                break
+            seen.add(normalized)
+            if secret in normalized:
                 return "[REDACTED]"
-            percent_decoded = unquote(decoded_value)
-            if percent_decoded == decoded_value:
-                break
-            decoded_value = percent_decoded
-        while True:
-            decoded: list[str] = []
-            spans: list[tuple[int, int]] = []
-            offset = 0
-            while offset < len(value):
-                match = re.match(r"\\u([0-9A-Fa-f]{4})", value[offset:])
-                if match is None:
-                    decoded.append(value[offset])
-                    spans.append((offset, offset + 1))
-                    offset += 1
-                    continue
-                codepoint = int(match.group(1), 16)
-                end = offset + 6
-                if 0xD800 <= codepoint <= 0xDBFF:
-                    low = re.match(r"\\u([0-9A-Fa-f]{4})", value[end:])
-                    if low is not None:
-                        low_codepoint = int(low.group(1), 16)
-                        if 0xDC00 <= low_codepoint <= 0xDFFF:
-                            codepoint = (
-                                0x10000
-                                + ((codepoint - 0xD800) << 10)
-                                + (low_codepoint - 0xDC00)
-                            )
-                            end += 6
-                decoded.append(chr(codepoint))
-                spans.append((offset, end))
-                offset = end
-            decoded_value = "".join(decoded)
-            secret_offset = decoded_value.find(secret)
-            if secret_offset < 0:
-                break
-            source_start = spans[secret_offset][0]
-            source_end = spans[secret_offset + len(secret) - 1][1]
-            value = value[:source_start] + "[REDACTED]" + value[source_end:]
+            for decode in (unquote, _decode_unicode_escapes):
+                normalized = decode(normalized)
+                if secret in normalized:
+                    return "[REDACTED]"
     return value
+
+
+def _decode_unicode_escapes(value: str) -> str:
+    decoded: list[str] = []
+    offset = 0
+    while offset < len(value):
+        match = re.match(r"\\u([0-9A-Fa-f]{4})", value[offset:])
+        if match is None:
+            decoded.append(value[offset])
+            offset += 1
+            continue
+        codepoint = int(match.group(1), 16)
+        end = offset + 6
+        if 0xD800 <= codepoint <= 0xDBFF:
+            low = re.match(r"\\u([0-9A-Fa-f]{4})", value[end:])
+            if low is not None:
+                low_codepoint = int(low.group(1), 16)
+                if 0xDC00 <= low_codepoint <= 0xDFFF:
+                    codepoint = (
+                        0x10000
+                        + ((codepoint - 0xD800) << 10)
+                        + (low_codepoint - 0xDC00)
+                    )
+                    end += 6
+        decoded.append(chr(codepoint))
+        offset = end
+    return "".join(decoded)
 
 
 def _fsync_directory(path: Path) -> None:
