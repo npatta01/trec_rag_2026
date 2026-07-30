@@ -148,6 +148,11 @@ def test_injected_provider_captures_bounded_redacted_snippet_page(
             latency_ms=7.5,
             page_offset=10,
             has_next_page=True,
+            page_index=0,
+            residual_count=7,
+            residual_top_score=0.81,
+            returned_min_score=0.62,
+            pages_estimated=2,
         )
 
     exported = span_exporter.get_finished_spans()[0]
@@ -171,6 +176,11 @@ def test_injected_provider_captures_bounded_redacted_snippet_page(
     assert exported.attributes["snippet.latency_ms"] == 7.5
     assert exported.attributes["snippet.page_offset"] == 10
     assert exported.attributes["snippet.has_next_page"] is True
+    assert exported.attributes["snippet.page_index"] == 0
+    assert exported.attributes["snippet.residual_count"] == 7
+    assert exported.attributes["snippet.residual_top_score"] == 0.81
+    assert exported.attributes["snippet.returned_min_score"] == 0.62
+    assert exported.attributes["snippet.pages_estimated"] == 2
     assert not {
         "snippet.cache_path",
         "snippet.cache_key",
@@ -178,6 +188,159 @@ def test_injected_provider_captures_bounded_redacted_snippet_page(
         "snippet.scratch_path",
         "snippet.document_text",
     } & set(exported.attributes)
+
+
+@pytest.mark.parametrize(
+    "stopping_reason", ["coverage_complete", "evidence_saturated"]
+)
+def test_agent_trace_exports_only_bounded_coverage_summary(
+    span_exporter: InMemorySpanExporter,
+    provider: TracerProvider,
+    stopping_reason: str,
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+
+    with tracing.agent_span("private narrative") as span:
+        span.record_result(
+            fused_document_ids=("doc-a",),
+            stopping_reason=stopping_reason,
+            coverage_state_hash="a" * 64,
+            need_count=5,
+            answerable_need_count=3,
+            conflicted_need_count=1,
+            unresolved_need_count=1,
+            nugget_count=14,
+            action_count=19,
+        )
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert exported.attributes["coverage.state_hash"] == "a" * 64
+    assert exported.attributes["coverage.need_count"] == 5
+    assert exported.attributes["coverage.answerable_need_count"] == 3
+    assert exported.attributes["coverage.conflicted_need_count"] == 1
+    assert exported.attributes["coverage.unresolved_need_count"] == 1
+    assert exported.attributes["coverage.nugget_count"] == 14
+    assert exported.attributes["coverage.action_count"] == 19
+    assert not {
+        "coverage.narrative",
+        "coverage.nuggets",
+        "coverage.quotes",
+        "coverage.scratch",
+        "coverage.cursor",
+    } & set(exported.attributes)
+
+
+def test_snippet_trace_omits_none_optional_scores(
+    span_exporter: InMemorySpanExporter, provider: TracerProvider
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+
+    with tracing.snippet_span("doc-a", "safe focus query") as span:
+        span.record_page(
+            chunk_ids=(),
+            start_chars=(),
+            end_chars=(),
+            relevance_scores=(),
+            texts=(),
+            cache_status="miss",
+            ranker_backend="test-ranker",
+            latency_ms=1.0,
+            page_offset=0,
+            has_next_page=False,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=None,
+            pages_estimated=0,
+        )
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert "snippet.residual_top_score" not in exported.attributes
+    assert "snippet.returned_min_score" not in exported.attributes
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("page_index", -1, "page_index must be a non-negative integer"),
+        ("residual_count", -1, "residual_count must be a non-negative integer"),
+        ("pages_estimated", -1, "pages_estimated must be a non-negative integer"),
+        ("residual_top_score", float("nan"), "residual_top_score must be a finite number or None"),
+        ("returned_min_score", float("inf"), "returned_min_score must be a finite number or None"),
+        ("residual_count", 0, "residual_count and residual_top_score must agree"),
+        ("residual_top_score", None, "residual_count and residual_top_score must agree"),
+    ],
+)
+def test_snippet_trace_rejects_invalid_residual_pagination_evidence(
+    span_exporter: InMemorySpanExporter,
+    provider: TracerProvider,
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+    evidence: dict[str, object] = {
+        "chunk_ids": ("doc-a:0000",),
+        "start_chars": (0,),
+        "end_chars": (10,),
+        "relevance_scores": (0.75,),
+        "texts": ("bounded text",),
+        "cache_status": "miss",
+        "ranker_backend": "test-ranker",
+        "latency_ms": 1.0,
+        "page_offset": 0,
+        "has_next_page": True,
+        "page_index": 0,
+        "residual_count": 1,
+        "residual_top_score": 0.8,
+        "returned_min_score": 0.75,
+        "pages_estimated": 2,
+    }
+    evidence[field] = value
+
+    with tracing.snippet_span("doc-a", "safe focus query") as span:
+        with pytest.raises((TypeError, ValueError), match=match):
+            span.record_page(**evidence)  # type: ignore[arg-type]
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert not any(key.startswith("snippet.") for key in exported.attributes)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("coverage_state_hash", "A" * 64, "coverage_state_hash must be 64 lowercase hexadecimal characters"),
+        ("need_count", -1, "need_count must be a non-negative integer"),
+        ("answerable_need_count", True, "answerable_need_count must be a non-negative integer"),
+    ],
+)
+def test_agent_trace_rejects_invalid_coverage_summary(
+    span_exporter: InMemorySpanExporter,
+    provider: TracerProvider,
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+    evidence: dict[str, object] = {
+        "fused_document_ids": ("doc-a",),
+        "stopping_reason": "agent_completed",
+        "coverage_state_hash": "a" * 64,
+        "need_count": 1,
+        "answerable_need_count": 0,
+        "conflicted_need_count": 0,
+        "unresolved_need_count": 1,
+        "nugget_count": 0,
+        "action_count": 0,
+    }
+    evidence[field] = value
+
+    with tracing.agent_span("safe narrative") as span:
+        with pytest.raises((TypeError, ValueError), match=match):
+            span.record_result(**evidence)  # type: ignore[arg-type]
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert not any(key.startswith("coverage.") for key in exported.attributes)
 
 
 def test_snippet_trace_api_rejects_more_than_ten_chunks_before_export(
@@ -199,6 +362,11 @@ def test_snippet_trace_api_rejects_more_than_ten_chunks_before_export(
                 latency_ms=1.0,
                 page_offset=0,
                 has_next_page=False,
+                page_index=0,
+                residual_count=0,
+                residual_top_score=None,
+                returned_min_score=0.5,
+                pages_estimated=1,
             )
 
     exported = span_exporter.get_finished_spans()[0]
@@ -296,6 +464,11 @@ def test_real_langchain_instrumentation_respects_content_mode_in_fresh_process(
                 latency_ms=1.0,
                 page_offset=0,
                 has_next_page=False,
+                page_index=0,
+                residual_count=0,
+                residual_top_score=None,
+                returned_min_score=1.0,
+                pages_estimated=1,
             )
         spans = [
             {

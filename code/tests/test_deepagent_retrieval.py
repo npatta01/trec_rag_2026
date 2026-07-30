@@ -2135,12 +2135,24 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
             "latency_ms": ANY,
             "page_offset": 0,
             "has_next_page": False,
+            "page_index": 0,
+            "residual_count": 0,
+            "residual_top_score": None,
+            "returned_min_score": 0.75,
+            "pages_estimated": 1,
         }
     ]
     assert tracing.result_records == [
         {
             "fused_document_ids": ("original-doc-1",),
             "stopping_reason": "agent_completed",
+            "coverage_state_hash": result.coverage_report.state_hash,
+            "need_count": 1,
+            "answerable_need_count": 0,
+            "conflicted_need_count": 0,
+            "unresolved_need_count": 1,
+            "nugget_count": 0,
+            "action_count": 1,
         }
     ]
     assert tracing.flushes == 1
@@ -2230,11 +2242,23 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     assert snippet_span.attributes["snippet.latency_ms"] == pytest.approx(7.5)
     assert snippet_span.attributes["snippet.page_offset"] == 0
     assert snippet_span.attributes["snippet.has_next_page"] is False
+    assert snippet_span.attributes["snippet.page_index"] == 0
+    assert snippet_span.attributes["snippet.residual_count"] == 0
+    assert "snippet.residual_top_score" not in snippet_span.attributes
+    assert snippet_span.attributes["snippet.returned_min_score"] == 0.75
+    assert snippet_span.attributes["snippet.pages_estimated"] == 1
     assert set(root_span.attributes) == {
         "input.value",
         "openinference.span.kind",
         "retrieval.fused_document_ids",
         "retrieval.stopping_reason",
+        "coverage.state_hash",
+        "coverage.need_count",
+        "coverage.answerable_need_count",
+        "coverage.conflicted_need_count",
+        "coverage.unresolved_need_count",
+        "coverage.nugget_count",
+        "coverage.action_count",
     }
     assert root_span.attributes["input.value"] == (
         "private narrative" if trace_content else REDACTED_CONTENT
@@ -2244,6 +2268,13 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
         "original-doc-2",
     )
     assert root_span.attributes["retrieval.stopping_reason"] == "agent_completed"
+    assert root_span.attributes["coverage.state_hash"] == result.coverage_report.state_hash
+    assert root_span.attributes["coverage.need_count"] == 1
+    assert root_span.attributes["coverage.answerable_need_count"] == 0
+    assert root_span.attributes["coverage.conflicted_need_count"] == 0
+    assert root_span.attributes["coverage.unresolved_need_count"] == 1
+    assert root_span.attributes["coverage.nugget_count"] == 0
+    assert root_span.attributes["coverage.action_count"] == 1
     assert [candidate.docid for candidate in result.candidates] == [
         "original-doc-1",
         "original-doc-2",

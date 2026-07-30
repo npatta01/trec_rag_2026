@@ -214,7 +214,17 @@ class _Agent(Protocol):
 
 class _AgentTraceSpan(Protocol):
     def record_result(
-        self, *, fused_document_ids: Sequence[str], stopping_reason: str
+        self,
+        *,
+        fused_document_ids: Sequence[str],
+        stopping_reason: str,
+        coverage_state_hash: str,
+        need_count: int,
+        answerable_need_count: int,
+        conflicted_need_count: int,
+        unresolved_need_count: int,
+        nugget_count: int,
+        action_count: int,
     ) -> None: ...
 
 
@@ -245,6 +255,11 @@ class _SnippetTraceSpan(Protocol):
         latency_ms: float,
         page_offset: int,
         has_next_page: bool,
+        page_index: int,
+        residual_count: int,
+        residual_top_score: float | None,
+        returned_min_score: float | None,
+        pages_estimated: int,
     ) -> None: ...
 
 
@@ -770,6 +785,11 @@ class DeepAgentRetriever:
                                 latency_ms=latency_ms,
                                 page_offset=result.page_offset,
                                 has_next_page=result.page.next_cursor is not None,
+                                page_index=result.page.page_index,
+                                residual_count=result.page.residual_count,
+                                residual_top_score=result.page.residual_top_score,
+                                returned_min_score=result.page.returned_min_score,
+                                pages_estimated=result.page.pages_estimated,
                             )
                         except Exception:
                             pass
@@ -867,12 +887,31 @@ class DeepAgentRetriever:
                 )
                 if agent_span is not None:
                     try:
+                        trace_stopping_reason = {
+                            "completion": "coverage_complete",
+                            "saturation": "evidence_saturated",
+                        }.get(stopping_reason, stopping_reason)
                         agent_span.record_result(
                             fused_document_ids=tuple(
                                 candidate.docid
                                 for candidate in candidates[:MAX_TRACE_DOCUMENTS]
                             ),
-                            stopping_reason=stopping_reason,
+                            stopping_reason=trace_stopping_reason,
+                            coverage_state_hash=coverage_report.state_hash,
+                            need_count=len(coverage_report.needs),
+                            answerable_need_count=sum(
+                                need.status == "answerable"
+                                for need in coverage_report.needs
+                            ),
+                            conflicted_need_count=sum(
+                                need.status == "conflicted"
+                                for need in coverage_report.needs
+                            ),
+                            unresolved_need_count=len(
+                                coverage_report.unresolved_need_ids
+                            ),
+                            nugget_count=len(coverage_report.nuggets),
+                            action_count=len(coverage_report.actions),
                         )
                     except Exception:
                         pass

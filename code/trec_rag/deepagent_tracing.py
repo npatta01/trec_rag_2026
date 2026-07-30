@@ -78,6 +78,24 @@ def _validated_strings(
     return normalized
 
 
+def _non_negative_integer(name: str, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TypeError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _optional_finite_score(name: str, value: object) -> float | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(float(value))
+    ):
+        raise TypeError(f"{name} must be a finite number or None")
+    return float(value)
+
+
 class _RetrieverSpan(_SafeSpan):
     """Allow only the bounded, typed evidence for one retrieval operation."""
 
@@ -164,6 +182,11 @@ class _SnippetSpan(_SafeSpan):
         latency_ms: float,
         page_offset: int,
         has_next_page: bool,
+        page_index: int,
+        residual_count: int,
+        residual_top_score: float | None,
+        returned_min_score: float | None,
+        pages_estimated: int,
     ) -> None:
         document_id = _validated_strings(
             "document_ids",
@@ -227,6 +250,23 @@ class _SnippetSpan(_SafeSpan):
             raise TypeError("page_offset must be a non-negative integer")
         if not isinstance(has_next_page, bool):
             raise TypeError("has_next_page must be a boolean")
+        validated_page_index = _non_negative_integer("page_index", page_index)
+        validated_residual_count = _non_negative_integer(
+            "residual_count", residual_count
+        )
+        validated_pages_estimated = _non_negative_integer(
+            "pages_estimated", pages_estimated
+        )
+        validated_residual_top_score = _optional_finite_score(
+            "residual_top_score", residual_top_score
+        )
+        validated_returned_min_score = _optional_finite_score(
+            "returned_min_score", returned_min_score
+        )
+        if (validated_residual_count == 0) != (
+            validated_residual_top_score is None
+        ):
+            raise ValueError("residual_count and residual_top_score must agree")
 
         self._set("snippet.document_id", document_id)
         self._set("snippet.chunk_ids", ids)
@@ -239,15 +279,39 @@ class _SnippetSpan(_SafeSpan):
         self._set("snippet.latency_ms", float(latency_ms))
         self._set("snippet.page_offset", page_offset)
         self._set("snippet.has_next_page", has_next_page)
+        self._set("snippet.page_index", validated_page_index)
+        self._set("snippet.residual_count", validated_residual_count)
+        if validated_residual_top_score is not None:
+            self._set("snippet.residual_top_score", validated_residual_top_score)
+        if validated_returned_min_score is not None:
+            self._set("snippet.returned_min_score", validated_returned_min_score)
+        self._set("snippet.pages_estimated", validated_pages_estimated)
 
 
 class _AgentSpan(_SafeSpan):
     """Allow only bounded final retrieval evidence on the root span."""
 
-    _STOPPING_REASONS = frozenset({"agent_completed", "search_budget_exhausted"})
+    _STOPPING_REASONS = frozenset(
+        {
+            "agent_completed",
+            "search_budget_exhausted",
+            "coverage_complete",
+            "evidence_saturated",
+        }
+    )
 
     def record_result(
-        self, *, fused_document_ids: Sequence[str], stopping_reason: str
+        self,
+        *,
+        fused_document_ids: Sequence[str],
+        stopping_reason: str,
+        coverage_state_hash: str,
+        need_count: int,
+        answerable_need_count: int,
+        conflicted_need_count: int,
+        unresolved_need_count: int,
+        nugget_count: int,
+        action_count: int,
     ) -> None:
         ids = _validated_strings(
             "fused_document_ids",
@@ -257,8 +321,36 @@ class _AgentSpan(_SafeSpan):
         )
         if stopping_reason not in self._STOPPING_REASONS:
             raise ValueError("stopping_reason is not safe for retrieval tracing")
+        if not (
+            isinstance(coverage_state_hash, str)
+            and len(coverage_state_hash) == 64
+            and all(
+                "0" <= character <= "9" or "a" <= character <= "f"
+                for character in coverage_state_hash
+            )
+        ):
+            raise ValueError(
+                "coverage_state_hash must be 64 lowercase hexadecimal characters"
+            )
+        counts = {
+            "need_count": _non_negative_integer("need_count", need_count),
+            "answerable_need_count": _non_negative_integer(
+                "answerable_need_count", answerable_need_count
+            ),
+            "conflicted_need_count": _non_negative_integer(
+                "conflicted_need_count", conflicted_need_count
+            ),
+            "unresolved_need_count": _non_negative_integer(
+                "unresolved_need_count", unresolved_need_count
+            ),
+            "nugget_count": _non_negative_integer("nugget_count", nugget_count),
+            "action_count": _non_negative_integer("action_count", action_count),
+        }
         self._set("retrieval.fused_document_ids", ids)
         self._set("retrieval.stopping_reason", stopping_reason)
+        self._set("coverage.state_hash", coverage_state_hash)
+        for name, count in counts.items():
+            self._set(f"coverage.{name}", count)
 
 
 def _normalize_otlp_http_endpoint(endpoint: str) -> str:

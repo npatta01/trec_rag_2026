@@ -199,10 +199,36 @@ rank fusion (RRF, `k=60`) and return at most twenty candidates; raw BM25 scores
 from different queries are never compared. `AgentRetrievalResult` contains the
 input `narrative`, completed `searches` (`AgentSearch` records), fused
 `candidates` (`RankedCandidate` records with per-search provenance), the
-agent's `rationale`, a `stopping_reason`, and immutable
-`trace_flush_succeeded`. That diagnostic is `True` when configured tracing
-flushes successfully or tracing is disabled and no export is required; it is
-`False` when export fails. Export failure does not retry or change retrieval.
+agent's `rationale`, a `stopping_reason`, immutable `coverage_report`, and
+immutable `trace_flush_succeeded`. Inspect the coverage report through the
+Python SDK when deciding whether the evidence is ready for a downstream draft:
+
+```python
+coverage = result.coverage_report
+print(coverage.state_hash, coverage.unresolved_need_ids)
+for need in coverage.needs:
+    print(need.need_id, need.status, need.draft_answer)
+```
+
+`trace_flush_succeeded` is `True` when configured tracing flushes successfully
+or tracing is disabled and no export is required; it is `False` when export
+fails. Export failure does not retry or change retrieval.
+
+The agent maintains three distinct stores, each with a different job:
+
+- The invocation-local **need map** records narrative-derived needs, facets,
+  remaining gaps, statuses, and any draft answer.
+- The mechanical **retrieval ledger** records searches, inspected pages,
+  document/focus pagination state, residual signals, and consumed actions.
+- The grounded **nugget store** holds only concise claims linked to exact quote
+  evidence from returned snippets.
+
+Use `view_retrieval_state` to inspect a compact frontier or a bounded state
+view, `update_retrieval_state` to add needs, facets, nuggets, evidence, and
+coverage judgments, and `choose_next_action` to record the coverage gap that
+authorizes one search, extraction, refocus, pagination, or terminal stop. The
+SDK owns this state for one retrieval invocation; it is not a persistent cache
+or a replacement for the final result's immutable `coverage_report`.
 
 Agent-facing search and snippet behavior is deliberately narrow:
 
@@ -214,12 +240,24 @@ Agent-facing search and snippet behavior is deliberately narrow:
   for another page. A page may contain multiple snippets from the same
   document. One bounded snippet may equal a complete short document that fits
   in one chunk; long documents remain relevance-chunked and paginated and are
-  never blindly injected whole.
+  never blindly injected whole. Each page reports `page_index`,
+  `residual_count`, `residual_top_score`, `returned_min_score`, and
+  `pages_estimated`; these scores describe continuity only within that page's
+  ranking, never calibrated relevance or comparability across documents or
+  focus queries.
+- A nugget is admitted only when its submitted quote occurs exactly in a
+  returned snippet. A need becomes `answerable` only with a nonblank draft
+  answer and grounded nugget IDs; otherwise it remains unaddressed, partial,
+  or conflicted. A nugget's `single_document` or `multi_document` support
+  label describes the observed support count only; it does not establish
+  source independence.
 - The search transport and snippet extractor own their respective caches. The
   model receives no cache keys, paths, bypass switches, or other cache controls.
 - Deep Agents may spill oversized tool results or temporary notes into
-  invocation-local state scratch. That state is discarded after the retrieval
-  invocation and is separate from both persistent result caches.
+  invocation-local state scratch. Need-map and ledger state, caches, and
+  scratch are separate: state is discarded after the retrieval invocation,
+  cache-first search/snippet tools retain their own validated reusable results,
+  and scratch is only a temporary overflow for the current invocation.
 
 The reusable `trec_rag.deepagent_snippets` layer accepts a document ID, complete
 document text, focus query, and optional cursor. It returns a typed
