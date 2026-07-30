@@ -1890,8 +1890,13 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     if chrome is None:
         pytest.skip("headless Chrome is not available")
     config_path, output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, _output_sha256 = _write_rag_run(tmp_path, output)
+    rag_data = load_debug_report_data(config_path, rag_config_path=rag_config)
     _add_second_debug_topic(tmp_path, output)
-    rendered = render_debug_report(load_debug_report_data(config_path))
+    loaded = load_debug_report_data(config_path)
+    rendered = render_debug_report(
+        replace(loaded, topics=(rag_data.topics[0], *loaded.topics[1:]))
+    )
 
     def dump_dom(document: str, fragment: str, name: str) -> str:
         path = tmp_path / name
@@ -1947,6 +1952,24 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     )
     target_top = re.search(r'data-target-top="(-?\d+)"', deep_link_dom)
     viewport_height = re.search(r'data-viewport-height="(\d+)"', deep_link_dom)
+    assert target_top is not None and viewport_height is not None
+    assert -1 <= int(target_top.group(1)) < int(viewport_height.group(1))
+
+    citation_dom = dump_dom(
+        rendered,
+        "rag-reference-literal-rag2026-0-0",
+        "citation-link.html",
+    )
+    reference_panel = re.search(
+        r'<details[^>]*id="topic-literal-rag2026-0"[^>]*>', citation_dom
+    )
+    references_disclosure = re.search(
+        r'<details class="rag-references"[^>]*>', citation_dom
+    )
+    assert reference_panel is not None and " open" in reference_panel.group()
+    assert references_disclosure is not None and " open" in references_disclosure.group()
+    target_top = re.search(r'data-target-top="(-?\d+)"', citation_dom)
+    viewport_height = re.search(r'data-viewport-height="(\d+)"', citation_dom)
     assert target_top is not None and viewport_height is not None
     assert -1 <= int(target_top.group(1)) < int(viewport_height.group(1))
 
@@ -2320,6 +2343,80 @@ def test_document_disclosures_render_bounded_excerpts(tmp_path: Path) -> None:
     assert rendered.count("Document excerpt (first 500 characters)") >= 3
 
 
+def test_story_stage_order_keeps_narrative_before_diagnostics(tmp_path: Path) -> None:
+    """Diagnostic stages must not interrupt the narrative-to-answer reading path."""
+    config_path, _output = _write_debug_run(tmp_path)
+    rendered = render_debug_report(load_debug_report_data(config_path))
+    expected = (
+        "narrative", "subnarratives", "final-rag", "funnel-overview",
+        "new-documents", "selected-documents", "top-passages",
+        "final-selected-nuggets", "final-retrieval",
+    )
+    positions = [
+        rendered.index(f'stage-literal-rag2026-0-{suffix}')
+        for suffix in expected
+    ]
+    assert positions == sorted(positions)
+
+    narrative = rendered.split(
+        '<section id="stage-literal-rag2026-0-narrative"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-subnarratives"', 1)[0]
+    visible, provenance = narrative.split(
+        '<details class="technical-provenance">', 1
+    )
+    assert "Source seal" not in visible
+    assert "Source seal" in provenance
+    assert '<details class="technical-provenance" open' not in narrative
+
+
+def test_answer_precedes_provenance_and_referenced_documents(tmp_path: Path) -> None:
+    """The generated answer must remain visible before optional answer context."""
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, _output_sha256 = _write_rag_run(
+        tmp_path, retrieval_output
+    )
+    rendered = render_debug_report(
+        load_debug_report_data(config_path, rag_config_path=rag_config)
+    )
+    section = rendered.split(
+        '<section id="stage-literal-rag2026-0-final-rag"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-funnel-overview"', 1)[0]
+
+    assert section.index("Generated answer") < section.index("Answer 1")
+    assert section.index("Answer 1") < section.index("Generation provenance")
+    assert section.index("Generation provenance") < section.index("Referenced documents")
+    assert '<details class="generation-provenance" open' not in section
+    assert '<details class="rag-references" open' not in section
+
+
+def test_concise_subnarrative_keeps_queries_and_seals_collapsed(
+    tmp_path: Path,
+) -> None:
+    """Literal query text must not crowd the default decomposition reading path."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    rendered = render_debug_report(loaded)
+    section = rendered.split(
+        '<section id="stage-literal-rag2026-0-subnarratives"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-final-rag"', 1)[0]
+
+    for item in loaded.topics[0].subnarratives:
+        card = section.split('<article class="subnarrative-card">', 1)[1].split(
+            "</article>", 1
+        )[0]
+        visible, technical = card.split(
+            '<details class="technical-provenance"><summary>'
+            'Retrieval query and seal details</summary>',
+            1,
+        )
+        assert html.escape(item.text, quote=True) in visible
+        assert html.escape(item.bm25_queries[0], quote=True) not in visible
+        assert html.escape(item.bm25_queries[0], quote=True) in technical
+        assert item.semantic_query_sha256 in technical
+        assert item.bm25_query_sha256s[0] in technical
+        assert '<details class="technical-provenance" open' not in card
+
+
 def test_passage_disclosure_keeps_five_visible_rows_per_subnarrative(
     tmp_path: Path,
 ) -> None:
@@ -2375,7 +2472,7 @@ def test_subnarratives_render_as_readable_cards_without_a_default_table(
 
     section = render_debug_report(loaded).split(
         '<section id="stage-literal-rag2026-0-subnarratives"', 1
-    )[1].split('<section id="stage-literal-rag2026-0-new-documents"', 1)[0]
+    )[1].split('<section id="stage-literal-rag2026-0-final-rag"', 1)[0]
 
     assert '<ol class="subnarrative-list">' in section
     assert section.count('<article class="subnarrative-card"') == len(
@@ -2384,11 +2481,16 @@ def test_subnarratives_render_as_readable_cards_without_a_default_table(
     assert "<table" not in section
     for item in topic.subnarratives:
         assert html.escape(item.text, quote=True) in section
-        assert html.escape(item.bm25_queries[0], quote=True) in section
-        technical = section.split(
-            '<details class="technical-provenance"><summary>Query and seal details</summary>',
+        card = section.split('<article class="subnarrative-card">', 1)[1].split(
+            "</article>", 1
+        )[0]
+        visible, technical = card.split(
+            '<details class="technical-provenance"><summary>'
+            'Retrieval query and seal details</summary>',
             1,
-        )[1]
+        )
+        assert html.escape(item.bm25_queries[0], quote=True) not in visible
+        assert html.escape(item.bm25_queries[0], quote=True) in technical
         assert item.semantic_query_sha256 in technical
 
 

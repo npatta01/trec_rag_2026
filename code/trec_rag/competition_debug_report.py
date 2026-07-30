@@ -2503,14 +2503,14 @@ def _render_topic(topic: TopicReport, *, initially_open: bool = False) -> str:
     prefix = f"stage-{anchor}"
     stages = (
         _render_narrative(topic, prefix),
-        _render_funnel_overview(topic, prefix),
         _render_subnarratives(topic, prefix),
+        _render_final_rag(topic, prefix),
+        _render_funnel_overview(topic, prefix),
         _render_new_documents(topic, prefix),
         _render_selected_documents(topic, prefix),
         _render_passages(topic, prefix),
         _render_nuggets(topic, prefix),
         _render_retrieval(topic, prefix),
-        _render_final_rag(topic, prefix),
     )
     open_attribute = " open" if initially_open else ""
     return (
@@ -2539,7 +2539,10 @@ def _render_narrative(topic: TopicReport, prefix: str) -> str:
         prefix,
         "narrative",
         "Narrative",
-        f'<p class="break">{_html(topic.narrative)}</p><p>Source seal: <code>{_html(topic.narrative_sha256)}</code></p>{fallback}',
+        f'<p class="break">{_html(topic.narrative)}</p>{fallback}'
+        '<details class="technical-provenance"><summary>Source seal</summary>'
+        f'<p>Source seal: <code>{_html(topic.narrative_sha256)}</code></p>'
+        '</details>',
     )
 
 
@@ -2612,11 +2615,13 @@ def _render_subnarratives(topic: TopicReport, prefix: str) -> str:
         '<li><article class="subnarrative-card">'
         f'<h3><code>{_html(item.subnarrative_id)}</code></h3>'
         f'<p class="break">{_html(item.text)}</p>'
+        '<details class="technical-provenance"><summary>'
+        'Retrieval query and seal details</summary>'
         '<h4>Literal BM25 queries</h4><ol class="query-list">'
         + "".join(
             f'<li class="break">{_html(query)}</li>' for query in item.bm25_queries
         )
-        + '</ol><details class="technical-provenance"><summary>Query and seal details</summary><dl>'
+        + '</ol><dl>'
         f'<dt>Semantic-query SHA-256</dt><dd><code>{_html(item.semantic_query_sha256)}</code></dd>'
         '<dt>BM25 query SHA-256 values</dt><dd><ol>'
         + "".join(
@@ -2989,6 +2994,9 @@ def _render_final_rag(topic: TopicReport, prefix: str) -> str:
         for index, docid in enumerate(rag.references)
     )
     body = (
+        '<h3>Generated answer</h3><ol class="rag-answer-list">'
+        f"{answers}</ol>"
+        '<details class="generation-provenance"><summary>Generation provenance</summary>'
         '<aside class="rag-provenance" aria-label="RAG generation provenance">'
         "<h3>Generation provenance</h3><dl>"
         '<div><dt>Implementation</dt><dd><code>trec_rag.competition_rag</code></dd></div>'
@@ -2999,10 +3007,9 @@ def _render_final_rag(topic: TopicReport, prefix: str) -> str:
         '<div><dt>Validation</dt><dd>Validated against standard retrieval inputs</dd></div>'
         f'<div><dt>Answer length</dt><dd>{_html(rag.word_count)} words</dd></div>'
         "</dl><p>Implementation authorship is not recorded in sealed run artifacts.</p></aside>"
-        '<h3>Generated answer</h3><ol class="rag-answer-list">'
-        f"{answers}</ol><h3>Referenced documents</h3>"
+        '</details><details class="rag-references"><summary>Referenced documents</summary>'
         '<ol class="rag-reference-list">'
-        f"{references}</ol>"
+        f"{references}</ol></details>"
         '<details class="technical-provenance"><summary>RAG output receipt</summary>'
         f'<p>Output SHA-256: <code>{_html(rag.output_sha256)}</code>.</p></details>'
     )
