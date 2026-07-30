@@ -2016,6 +2016,40 @@ def test_selected_documents_render_as_ordered_evidence_cards(tmp_path: Path) -> 
     assert "No stored passage ranking is available for this selected document." in first_card
 
 
+def test_selected_document_cards_summarize_membership_before_technical_scores(
+    tmp_path: Path,
+) -> None:
+    """Score-heavy membership traces must stay out of the default card view."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    original = topic.selected_documents[0]
+    facet_membership = topic.selected_documents[1].memberships[0]
+    combined = replace(
+        original,
+        memberships=(
+            *original.memberships,
+            facet_membership,
+            {**facet_membership, "lane_name": "facet:subnarrative-2:text"},
+        ),
+    )
+    rendered = render_debug_report(
+        replace(loaded, topics=(replace(topic, selected_documents=(combined,)),))
+    )
+    card = rendered.split(
+        'id="selected-document-literal-rag2026-0-1"', 1
+    )[1].split("</article>", 1)[0]
+    visible, technical = card.split(
+        '<details class="technical-provenance">', 1
+    )
+
+    assert "Original + 2 facet lanes" in visible
+    assert "aggregate_score" not in visible
+    assert "bm25_score" not in visible
+    assert "aggregate_score" in technical
+    assert "bm25_score" in technical
+
+
 def test_rag_output_renders_linked_prose_reference_cards_and_provenance(
     tmp_path: Path,
 ) -> None:

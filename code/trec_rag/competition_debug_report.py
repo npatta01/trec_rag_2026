@@ -2556,6 +2556,7 @@ def _render_selected_document_card(
 ) -> str:
     best = _best_stored_passage(topic, item.docid)
     memberships = "; ".join(_membership_text(value) for value in item.memberships)
+    membership_coverage = _membership_coverage(item.memberships)
     status = "Original member" if item.is_original_member else "Facet-only"
     if best is None:
         evidence = (
@@ -2583,7 +2584,7 @@ def _render_selected_document_card(
         f'<div><dt>Status</dt><dd>{_html(status)}</dd></div>'
         f'<div><dt>Selected lane</dt><dd class="break">{_html(item.selected_from_lane)}</dd></div>'
         f'<div><dt>Lane rank</dt><dd>{_html(item.selected_from_lane_rank)}</dd></div>'
-        f'<div><dt>Memberships</dt><dd class="break">{_html(memberships)}</dd></div>'
+        f'<div><dt>Memberships</dt><dd>{_html(membership_coverage)}</dd></div>'
         f"</dl>{evidence}"
         '<details class="technical-provenance"><summary>Technical provenance</summary><dl>'
         f'<dt>Text SHA-256</dt><dd><code>{_html(item.text_sha256)}</code></dd>'
@@ -2591,6 +2592,20 @@ def _render_selected_document_card(
         f'<dt>Document excerpt (first {_DOCUMENT_EXCERPT_CHARACTERS} characters)</dt><dd class="break">{_html(_bounded_excerpt(item.text))}</dd>'
         "</dl></details></article></li>"
     )
+
+
+def _membership_coverage(memberships: Sequence[Mapping[str, Any]]) -> str:
+    lane_names = {str(value["lane_name"]) for value in memberships}
+    has_original = "original" in lane_names
+    facet_count = sum(name.startswith("facet:") for name in lane_names)
+    facet_label = f"{facet_count} facet lane" + ("" if facet_count == 1 else "s")
+    if has_original and facet_count:
+        return f"Original + {facet_label}"
+    if has_original:
+        return "Original lane"
+    if facet_count:
+        return facet_label
+    return "No stored lane memberships"
 
 
 def _render_passage_rows(rankings: Sequence[PassageRankingReport]) -> str:
