@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+import trec_rag.deepagent_snippets as deepagent_snippets
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunk
 from trec_rag.deepagent_snippets import (
     DEFAULT_SNIPPET_MODEL,
@@ -474,6 +475,36 @@ def test_local_score_cache_partitions_effective_adapter_settings(
     assert second_model.predict_calls == 1
 
 
+def test_local_ranker_score_cache_partitions_resolved_auto_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolved_device = "cpu"
+    monkeypatch.setattr(
+        deepagent_snippets,
+        "_choose_device",
+        lambda _requested: resolved_device,
+    )
+    first_model = FakeCrossEncoder([[0.8]])
+    first = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: first_model,
+        device="auto",
+    )
+    assert first.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.8
+
+    resolved_device = "cuda"
+    second_model = FakeCrossEncoder([[0.2]])
+    second = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: second_model,
+        device="auto",
+    )
+
+    assert second.identity["device"] == "cuda"
+    assert second.rank("query", ADAPTER_CHUNKS[:1])[0].relevance_score == 0.2
+    assert second_model.predict_calls == 1
+
+
 def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: Path) -> None:
     chat = FakeChatModel(['{"scores":[{"chunk_id":"doc-a:0000","score":0.2},{"chunk_id":"doc-a:0001","score":0.8}]}'])
     ranker = SmallLLMSnippetRanker(
@@ -561,6 +592,44 @@ def test_small_llm_ranker_rejects_conflicting_duplicate_text_scores(tmp_path: Pa
 
     with pytest.raises(ValueError, match="conflicting scores for identical chunk text"):
         ranker.rank("query", duplicate_text_chunks)
+
+
+def test_small_llm_ranker_does_not_cache_a_cross_batch_duplicate_conflict(
+    tmp_path: Path,
+) -> None:
+    duplicate_text_chunks = _chunks("same evidence", "same evidence")
+    conflicting = SmallLLMSnippetRanker(
+        chat_model=FakeChatModel(
+            [
+                '{"scores":[{"chunk_id":"doc-a:0000","score":0.6}]}',
+                '{"scores":[{"chunk_id":"doc-a:0001","score":0.4}]}',
+            ]
+        ),
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+        batch_size=1,
+    )
+    with pytest.raises(ValueError, match="conflicting scores for identical chunk text"):
+        conflicting.rank("query", duplicate_text_chunks)
+
+    retry_chat = FakeChatModel(
+        [
+            '{"scores":[{"chunk_id":"doc-a:0000","score":0.2}]}',
+            '{"scores":[{"chunk_id":"doc-a:0001","score":0.2}]}',
+        ]
+    )
+    retry = SmallLLMSnippetRanker(
+        chat_model=retry_chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+        batch_size=1,
+    )
+
+    assert [row.relevance_score for row in retry.rank("query", duplicate_text_chunks)] == [
+        0.2,
+        0.2,
+    ]
+    assert len(retry_chat.prompts) == 2
 
 
 def test_small_llm_ranker_score_cache_partitions_batch_size(tmp_path: Path) -> None:

@@ -215,7 +215,7 @@ class LocalMixedbreadSnippetRanker:
         self._backend_version = backend_version
         self._max_length = max_length
         self._batch_size = batch_size
-        self._device = device
+        self._device = _choose_device(device)
         self._model_loader = model_loader
         self._model: Any | None = None
         self._score_cache = GlobalScoreCache(
@@ -315,7 +315,7 @@ class LocalMixedbreadSnippetRanker:
                 model_name=self._model_name,
                 revision=self._model_revision,
                 max_length=self._max_length,
-                device=_choose_device(self._device),
+                device=self._device,
             )
         return self._model
 
@@ -389,10 +389,10 @@ class SmallLLMSnippetRanker:
             else:
                 scores[key] = _finite_score(cached, source="cached small-LLM")
         pending = tuple(missing)
+        pending_scores: list[tuple[TextChunk, float]] = []
         for offset in range(0, len(pending), self._batch_size):
             batch = pending[offset : offset + self._batch_size]
             returned_scores = self._invoke_scores(focus_query, batch)
-            batch_scores: list[tuple[TextChunk, float]] = []
             for chunk in batch:
                 score = returned_scores[chunk.chunk_id]
                 key = self._score_cache.cache_key(
@@ -403,10 +403,10 @@ class SmallLLMSnippetRanker:
                         "small-LLM returned conflicting scores for identical chunk text"
                     )
                 scores[key] = score
-                batch_scores.append((chunk, score))
-            self._score_cache.add_many(
-                (focus_query, chunk.text, score) for chunk, score in batch_scores
-            )
+                pending_scores.append((chunk, score))
+        self._score_cache.add_many(
+            (focus_query, chunk.text, score) for chunk, score in pending_scores
+        )
         return tuple(
             sorted(
                 (
