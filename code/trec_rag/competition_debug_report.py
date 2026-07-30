@@ -402,10 +402,12 @@ def load_debug_report_data(
     output_dir = _safe_directory(config.output_dir, "configured output directory")
     receipts: dict[str, str] = {}
     export_path = _safe_file(output_dir / "retrieval_export_manifest.json", output_dir)
-    export = _read_json_object(export_path, "retrieval export manifest")
-    receipts[_portable_label(output_dir, export_path)] = _sha256_file(
-        export_path, _MAX_JSON_BYTES
-    )
+    with _open_hashed_snapshot(export_path, _MAX_JSON_BYTES) as (
+        export_raw,
+        export_digest,
+    ):
+        export = _decode_json_object(export_raw, "retrieval export manifest")
+        receipts[_portable_label(output_dir, export_path)] = export_digest
     exported_ids = _validate_export_manifest(export, config, configured_topics)
 
     configured_by_id = {topic.id: topic for topic in configured_topics}
@@ -471,10 +473,13 @@ def _attach_rag_outputs(
     )
     output_parent = _safe_directory(config.output_path.parent, "RAG output directory")
     output_path = _safe_file(config.output_path, output_parent)
-    rows = _read_jsonl(output_path, "RAG output")
+    with _open_hashed_snapshot(output_path, _MAX_JSONL_BYTES) as (
+        output_raw,
+        output_sha256,
+    ):
+        rows = _decode_jsonl(output_raw, "RAG output")
     if len(rows) != len(configured_queries):
         raise ValueError("RAG output topic coverage is incompatible with the RAG config")
-    output_sha256 = _sha256_file(output_path, _MAX_JSONL_BYTES)
 
     rag_by_topic: dict[str, RagOutputReport] = {}
     for row, (topic_id, narrative) in zip(rows, configured_queries, strict=True):
@@ -539,19 +544,28 @@ def _load_topic_report(
     selected_path = _safe_file(
         topic_root / "scoring" / "selected_documents.jsonl", output_dir
     )
+    snapshots: dict[Path, bytes] = {}
     for path, maximum in (
         (decomposition_path, _MAX_JSON_BYTES),
         (selection_path, _MAX_JSON_BYTES),
         (selected_path, _MAX_JSONL_BYTES),
     ):
-        receipts[_portable_label(output_dir, path)] = _sha256_file(path, maximum)
+        with _open_hashed_snapshot(path, maximum) as (raw, digest):
+            snapshots[path] = raw
+            receipts[_portable_label(output_dir, path)] = digest
 
-    decomposition = _read_json_object(decomposition_path, "decomposition")
+    decomposition = _decode_json_object(
+        snapshots[decomposition_path], "decomposition"
+    )
     subnarratives, original_only_fallback = _decode_decomposition(
         decomposition, topic
     )
-    selection = _read_json_object(selection_path, "selection checkpoint")
-    selected = _decode_selected_documents(_read_jsonl(selected_path, "selected documents"), topic)
+    selection = _decode_json_object(
+        snapshots[selection_path], "selection checkpoint"
+    )
+    selected = _decode_selected_documents(
+        _decode_jsonl(snapshots[selected_path], "selected documents"), topic
+    )
     union_rows, selected = _decode_selection(selection, topic, selected)
     if original_only_fallback and (
         any(row["memberships"] != ("original",) for row in union_rows)
@@ -965,12 +979,13 @@ def _load_passage_rankings(
     allow_empty: bool = False,
 ) -> tuple[PassageRankingReport, ...]:
     path = _safe_file(topic_root / "scoring" / "selected_subnarrative_scores.jsonl", output_dir)
-    receipts[_portable_label(output_dir, path)] = _sha256_file(
+    with _open_hashed_snapshot(
         path, _MAX_JSONL_BYTES, allow_empty=allow_empty
-    )
-    rows = _read_jsonl(
-        path, "selected subnarrative scores", allow_empty=allow_empty
-    )
+    ) as (raw, digest):
+        receipts[_portable_label(output_dir, path)] = digest
+        rows = _decode_jsonl(
+            raw, "selected subnarrative scores", allow_empty=allow_empty
+        )
     selected_by_id = {row.docid: row for row in selected}
     subnarrative_by_id = {row.subnarrative_id: row for row in subnarratives}
     grouped: dict[str, list[PassageRankingReport]] = {
@@ -2013,8 +2028,9 @@ def _load_audit_hashes(
     if not path.exists():
         return MappingProxyType({})
     path = _safe_file(path, output_dir)
-    receipts[_portable_label(output_dir, path)] = _sha256_file(path, _MAX_JSON_BYTES)
-    value = _read_json_object(path, "retrieval audit")
+    with _open_hashed_snapshot(path, _MAX_JSON_BYTES) as (raw, digest):
+        receipts[_portable_label(output_dir, path)] = digest
+        value = _decode_json_object(raw, "retrieval audit")
     lanes = value.get("lanes")
     expected_lanes = [
         ("original", None, narrative_sha256, narrative_sha256),
@@ -2211,19 +2227,39 @@ def _bounded_size(path: Path, maximum: int, *, allow_empty: bool = False) -> int
     return size
 
 
-def _sha256_file(path: Path, maximum: int, *, allow_empty: bool = False) -> str:
+@contextmanager
+def _open_hashed_snapshot(
+    path: Path, maximum: int, *, allow_empty: bool = False
+) -> Iterator[tuple[bytes, str]]:
+    """Yield the bounded immutable bytes used to compute an artifact receipt."""
     _bounded_size(path, maximum, allow_empty=allow_empty)
-    digest = sha256()
-    total = 0
     with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            total += len(chunk)
-            if total > maximum:
-                raise ValueError(
-                    f"artifact size is outside the bounded reader limit: {path.name}"
-                )
-            digest.update(chunk)
-    return digest.hexdigest()
+        initial_stat = os.fstat(source.fileno())
+        initial_identity = (
+            initial_stat.st_dev,
+            initial_stat.st_ino,
+            initial_stat.st_nlink,
+            initial_stat.st_size,
+            initial_stat.st_mtime_ns,
+            initial_stat.st_ctime_ns,
+        )
+        raw = source.read(maximum + 1)
+        final_stat = os.fstat(source.fileno())
+        final_identity = (
+            final_stat.st_dev,
+            final_stat.st_ino,
+            final_stat.st_nlink,
+            final_stat.st_size,
+            final_stat.st_mtime_ns,
+            final_stat.st_ctime_ns,
+        )
+    if len(raw) > maximum or (not raw and not allow_empty):
+        raise ValueError(
+            f"artifact size is outside the bounded reader limit: {path.name}"
+        )
+    if final_identity != initial_identity:
+        raise ValueError(f"artifact changed while reading bounded snapshot: {path.name}")
+    yield raw, sha256(raw).hexdigest()
 
 
 def _sha256_receipted_file(
@@ -3118,8 +3154,13 @@ def _render_final_rag(topic: TopicReport, prefix: str) -> str:
         )
     anchor_prefix = f"rag-reference-{_topic_anchor(topic.topic_id)}"
     documents = {item.docid: item for item in topic.retrieval_output.documents}
+    reference_indices = {
+        docid: index for index, docid in enumerate(rag.references)
+    }
     answers = "".join(
-        _render_rag_answer_item(item, index, anchor_prefix)
+        _render_rag_answer_item(
+            item, index, anchor_prefix, reference_indices
+        )
         for index, item in enumerate(rag.answer_items, start=1)
     )
     references = "".join(
@@ -3150,11 +3191,14 @@ def _render_final_rag(topic: TopicReport, prefix: str) -> str:
 
 
 def _render_rag_answer_item(
-    item: RagAnswerItemReport, index: int, anchor_prefix: str
+    item: RagAnswerItemReport,
+    index: int,
+    anchor_prefix: str,
+    reference_indices: Mapping[str, int],
 ) -> str:
     citations = "".join(
         '<a class="citation-chip" '
-        f'href="#{anchor_prefix}-{_html(citation)}">'
+        f'href="#{anchor_prefix}-{_html(reference_indices[docid])}">'
         f'citation {_html(citation)} → {_html(docid)}</a>'
         for citation, docid in zip(
             item.citations, item.citation_docids, strict=True
@@ -3555,35 +3599,40 @@ def _fsync_directory(path: Path) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Render a private post-run competition debug report."
-    )
-    parser.add_argument("--retrieval-config", type=Path, required=True)
-    parser.add_argument("--rag-config", type=Path)
-    parser.add_argument("--topic", action="append", dest="topic_ids")
-    parser.add_argument("--output", type=Path)
-    arguments = parser.parse_args(argv)
-    receipt = build_debug_report(
-        arguments.retrieval_config,
-        rag_config_path=arguments.rag_config,
-        topic_ids=arguments.topic_ids,
-        output_path=arguments.output,
-    )
-    print(
-        json.dumps(
-            {
-                "schema_version": receipt.schema_version,
-                "output_path": str(receipt.output_path),
-                "topic_ids": list(receipt.topic_ids),
-                "rag_included": receipt.rag_included,
-                "source_sha256s": dict(receipt.source_sha256s),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+    try:
+        parser = argparse.ArgumentParser(
+            description="Render a private post-run competition debug report."
         )
-    )
-    return 0
+        parser.add_argument("--retrieval-config", type=Path, required=True)
+        parser.add_argument("--rag-config", type=Path)
+        parser.add_argument("--topic", action="append", dest="topic_ids")
+        parser.add_argument("--output", type=Path)
+        arguments = parser.parse_args(argv)
+        receipt = build_debug_report(
+            arguments.retrieval_config,
+            rag_config_path=arguments.rag_config,
+            topic_ids=arguments.topic_ids,
+            output_path=arguments.output,
+        )
+        print(
+            json.dumps(
+                {
+                    "schema_version": receipt.schema_version,
+                    "output_path": str(receipt.output_path),
+                    "topic_ids": list(receipt.topic_ids),
+                    "rag_included": receipt.rag_included,
+                    "source_sha256s": dict(receipt.source_sha256s),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 0
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as exc:
+        raise SystemExit(f"error: {type(exc).__name__}: {exc}") from exc
 
 
 if __name__ == "__main__":

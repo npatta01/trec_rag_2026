@@ -1228,6 +1228,49 @@ def test_canonical_artifact_parse_uses_the_authenticated_snapshot(
     assert replacements == {}
 
 
+def test_noncanonical_snapshot_binds_rendered_data_to_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-size replacement after hashing must not alter rendered scores."""
+    config_path, output = _write_debug_run(tmp_path)
+    path = (
+        output
+        / "rag2026-0"
+        / "scoring"
+        / "selected_subnarrative_scores.jsonl"
+    )
+    sealed = path.read_bytes()
+    rows = [json.loads(line) for line in sealed.splitlines()]
+    original = next(row for row in rows if row["docid"] == "doc-original")
+    original["aggregate_score"] = 4.6
+    forged = b"".join(_json_bytes(row) for row in rows)
+    assert len(forged) == len(sealed)
+    replacement = tmp_path / "forged-selected-subnarrative-scores.jsonl"
+    replacement.write_bytes(forged)
+    original_open = Path.open
+    open_count = 0
+
+    def racing_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal open_count
+        if candidate.resolve() == path.resolve() and args[:1] == ("rb",):
+            open_count += 1
+            if open_count == 2:
+                replacement.replace(path)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    data = load_debug_report_data(config_path)
+    rendered = render_debug_report(data)
+
+    assert data.source_sha256s[
+        "rag2026-0/scoring/selected_subnarrative_scores.jsonl"
+    ] == sha256(sealed).hexdigest()
+    assert "<td>4.5</td><td>3</td><td>3.5</td>" in rendered
+    assert "<td>4.6</td><td>3</td><td>3.5</td>" not in rendered
+    assert open_count == 1
+
+
 def test_receipted_parse_rejects_same_inode_same_size_mutation_after_hashing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3159,6 +3202,32 @@ def test_rag_report_resolves_index_direct_docid_and_empty_citations(
     ]
 
 
+def test_direct_docid_anchor_targets_owning_numeric_reference_card(
+    tmp_path: Path,
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, rag_output, _output_sha256 = _write_rag_run(
+        tmp_path, retrieval_output
+    )
+    record = json.loads(rag_output.read_text(encoding="utf-8"))
+    record["answer"] = [
+        {"text": "Direct evidence", "citations": ["doc-original"]},
+    ]
+    rag_output.write_bytes(_json_bytes(record))
+
+    rendered = render_debug_report(
+        load_debug_report_data(config_path, rag_config_path=rag_config)
+    )
+
+    assert (
+        '<a class="citation-chip" '
+        'href="#rag-reference-literal-rag2026-0-0">'
+        "citation doc-original → doc-original</a>"
+    ) in rendered
+    assert 'id="rag-reference-literal-rag2026-0-0"' in rendered
+    assert 'href="#rag-reference-literal-rag2026-0-doc-original"' not in rendered
+
+
 def test_rag_report_provider_comes_from_the_validated_generation_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3244,6 +3313,30 @@ def test_cli_emits_one_compact_stable_json_receipt(tmp_path: Path, capsys: pytes
     assert list(receipt["source_sha256s"]) == sorted(receipt["source_sha256s"])
     assert receipt["source_sha256s"]["rag/rag_output_trec_rag_2026.jsonl"] == output_sha256
     assert target.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_cli_reports_concise_error_and_preserves_interrupt_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    (output / "rag2026-0" / "decomposition.json").write_bytes(b"{\n")
+
+    with pytest.raises(SystemExit) as malformed:
+        debug_report.main(["--retrieval-config", str(config_path)])
+
+    assert str(malformed.value) == "error: ValueError: decomposition is not strict JSON"
+    assert capsys.readouterr() == ("", "")
+
+    def interrupted(*args: object, **kwargs: object) -> debug_report.DebugReportReceipt:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(debug_report, "build_debug_report", interrupted)
+    with pytest.raises(SystemExit) as interrupt:
+        debug_report.main(["--retrieval-config", str(config_path)])
+    assert interrupt.value.code == 130
+    assert capsys.readouterr() == ("", "")
 
 
 def test_atomic_build_preserves_existing_output_when_rendering_fails(
