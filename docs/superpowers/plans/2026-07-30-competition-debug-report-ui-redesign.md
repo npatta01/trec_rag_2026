@@ -81,6 +81,29 @@
 6. Copy only the sanitized derived HTML to the existing rendered location, preserving private permissions. Verify the source and portal-copy SHA-256 match, live HTTPS returns the new artifact, and `tailscale serve status` still reports tailnet-only with no Funnel.
 7. Commit any final source/test adjustments only; never commit generated private report data.
 
+## Task 3b: Close the remaining stage-presentation and accessibility contracts
+
+**Files:**
+- Modify: `code/trec_rag/competition_debug_report.py`
+- Test: `code/tests/test_competition_debug_report.py`
+
+1. Add failing renderer tests that require subnarratives to use readable cards,
+   new documents to remain grouped but progressively disclosed, passage ranking
+   tables to remain behind per-subnarrative disclosures, canonical diagnostic
+   records to remain behind disclosures, and final retrieval to use compact
+   cards with detailed provenance collapsed.
+2. Rename the cross-facet passage projection in the UI to “Representative
+   stored passage” and display its deterministic selection rule. Do not call it
+   strongest or imply that facet-local aggregate ranks form a semantic global
+   leaderboard.
+3. Give every disclosure summary a 44-pixel minimum target and consolidate the
+   bounded-excerpt implementation.
+4. State explicitly that implementation authorship is not present in sealed
+   run artifacts; keep provider/model/run provenance derived from the standard
+   config/output rather than hard-coding a person or PR.
+5. Run focused tests, the complete debug-report module, and the full repository
+   suite. Commit with message `Complete debug report stage presentation`.
+
 ## Completion Evidence
 
 - Focused debug-report tests pass.
