@@ -124,16 +124,8 @@ def _resolve_timestamps(
     anchors = [(index, value) for index, value in enumerate(parsed) if value is not None]
     if not anchors:
         return tuple(fallback_ns + index for index in range(len(parsed))), True
-    conflicting_anchors = any(
-        later_value - earlier_value < later_index - earlier_index
-        for (earlier_index, earlier_value), (later_index, later_value) in zip(
-            anchors, anchors[1:]
-        )
-    )
-    if anchors[0][1] < anchors[0][0] or conflicting_anchors:
+    if anchors[0][1] < anchors[0][0]:
         return tuple(fallback_ns + index for index in range(len(parsed))), True
-    if len(anchors) == len(parsed):
-        return tuple(value for value in parsed if value is not None), False
 
     resolved = list(parsed)
     index = 0
@@ -166,7 +158,16 @@ def _resolve_timestamps(
             for offset in range(count):
                 resolved[start + offset] = fallback_ns + start + offset
 
-    return tuple(value for value in resolved if value is not None), True
+    reconstructed = len(anchors) != len(parsed)
+    monotonic: list[int] = []
+    for value in resolved:
+        if value is None:  # Covered above; kept for type narrowing.
+            continue
+        if monotonic and value <= monotonic[-1]:
+            value = monotonic[-1] + 1
+            reconstructed = True
+        monotonic.append(value)
+    return tuple(monotonic), reconstructed
 
 
 def load_pi_events(

@@ -497,29 +497,90 @@ def test_load_pi_events_preserves_native_timestamps_while_filling_gaps(tmp_path)
     assert events.timestamps_ns == (first_ns, first_ns + 50, last_ns)
 
 
-@pytest.mark.parametrize("last_offset", [1, -1], ids=["collision", "reversed"])
-def test_load_pi_events_reconstructs_when_native_anchors_cannot_be_monotonic(
-    tmp_path, last_offset
+def test_load_pi_events_breaks_native_millisecond_timestamp_ties_without_losing_epoch_gaps(
+    tmp_path,
 ):
+    first_ms = 1_800_000_000_000
+    last_ms = first_ms + 98_956
+    path = _write_jsonl(
+        tmp_path / "tied-millisecond-timing.jsonl",
+        [
+            {"type": "first", "timestamp": first_ms},
+            {"type": "same-millisecond", "timestamp": first_ms},
+            {"type": "same-millisecond-again", "timestamp": first_ms},
+            {"type": "last", "timestamp": last_ms},
+        ],
+    )
+
+    events = load_pi_events(path)
+
+    first_ns = first_ms * 1_000_000
+    last_ns = last_ms * 1_000_000
+    assert events.timing_reconstructed is True
+    assert events.timestamps_ns == (first_ns, first_ns + 1, first_ns + 2, last_ns)
+    assert events.timestamps_ns[-1] - events.timestamps_ns[0] == 98_956_000_000
+
+
+def test_load_pi_events_repairs_backward_native_events_without_losing_later_gap(
+    tmp_path,
+):
+    first_ms = 1_800_000_000_000
+    path = _write_jsonl(
+        tmp_path / "backward-native-event.jsonl",
+        [
+            {"type": "first", "timestamp": first_ms},
+            {"type": "same-millisecond", "timestamp": first_ms},
+            {"type": "late-emitted-old-event", "timestamp": first_ms - 12_714},
+            {"type": "last", "timestamp": first_ms + 98_956},
+        ],
+    )
+
+    events = load_pi_events(path)
+
+    first_ns = first_ms * 1_000_000
+    assert events.timestamps_ns == (
+        first_ns,
+        first_ns + 1,
+        first_ns + 2,
+        (first_ms + 98_956) * 1_000_000,
+    )
+    assert events.timestamps_ns[-1] - events.timestamps_ns[0] == 98_956_000_000
+
+
+def test_load_pi_events_minimally_breaks_collisions_between_native_anchors(tmp_path):
     first_ns = 1_800_000_000_000_000_000
     path = _write_jsonl(
         tmp_path / "conflicting-timing.jsonl",
         [
             {"type": "first", "timestamp": first_ns},
             {"type": "missing"},
-            {"type": "last", "timestamp": first_ns + last_offset},
+            {"type": "last", "timestamp": first_ns + 1},
         ],
     )
-    modification_ns = 1_700_000_000_123_456_789
-    os.utime(path, ns=(modification_ns, modification_ns))
 
     events = load_pi_events(path)
 
     assert events.timing_reconstructed is True
+    assert events.timestamps_ns == (first_ns, first_ns + 1, first_ns + 2)
+
+
+def test_load_pi_events_minimally_repairs_reversed_native_anchors(tmp_path):
+    first_ns = 1_800_000_000_000_000_000
+    path = _write_jsonl(
+        tmp_path / "reversed-timing.jsonl",
+        [
+            {"type": "first", "timestamp": first_ns},
+            {"type": "missing"},
+            {"type": "last", "timestamp": first_ns - 1},
+        ],
+    )
+    events = load_pi_events(path)
+
+    assert events.timing_reconstructed is True
     assert events.timestamps_ns == (
-        modification_ns,
-        modification_ns + 1,
-        modification_ns + 2,
+        first_ns,
+        first_ns + 1,
+        first_ns + 2,
     )
 
 

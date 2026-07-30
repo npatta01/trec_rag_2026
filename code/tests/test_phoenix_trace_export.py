@@ -96,10 +96,19 @@ def test_settings_fail_closed_when_a_required_environment_value_is_missing(
             "https://app.phoenix.arize.com/v1/traces",
         ),
         (
+            "https://app.phoenix.arize.com/s/npatta01/v1/traces/",
+            "https://app.phoenix.arize.com/s/npatta01/v1/traces",
+        ),
+        (
             "https://app.phoenix.arize.com",
             "https://app.phoenix.arize.com/v1/traces",
         ),
         ("https://phoenix.example.test/custom", "https://phoenix.example.test/custom"),
+        ("https://phoenix.example.test/", "https://phoenix.example.test"),
+        (
+            "https://phoenix.example.test/custom/v1/traces/",
+            "https://phoenix.example.test/custom/v1/traces",
+        ),
         (
             "https://phoenix.example.test/s/team",
             "https://phoenix.example.test/s/team",
@@ -395,6 +404,173 @@ def test_export_recursively_preserves_trace_semantics_and_returns_public_ids():
         root_span_id="0000000000000001",
         exported_span_count=3,
     )
+
+
+def test_export_adds_openinference_chat_attributes_for_fixed_generation():
+    generation = _span(
+        name="Pi generation",
+        kind="LLM",
+        input_value={"system_prompt": "system instructions", "user_prompt": "question"},
+        output_value={
+            "role": "assistant",
+            "provider": "anthropic",
+            "model": "claude-test",
+            "stopReason": "stop",
+            "usage": {"inputTokens": 12, "outputTokens": 7},
+            "content": [
+                {"type": "thinking", "thinking": "private reasoning"},
+                {"type": "text", "text": "grounded answer"},
+                {
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "search",
+                    "arguments": {"query": "evidence"},
+                },
+            ],
+        },
+    )
+    provider = _FakeProvider()
+
+    export_trace(
+        _bundle(_span(children=(generation,))),
+        _settings(),
+        provider_factory=_ProviderFactory(provider),
+    )
+
+    attributes = provider.tracer.spans[1].attributes
+    assert attributes["llm.input_messages.0.message.role"] == "system"
+    assert attributes["llm.input_messages.0.message.content"] == "system instructions"
+    assert attributes["llm.input_messages.1.message.role"] == "user"
+    assert attributes["llm.input_messages.1.message.content"] == "question"
+    assert attributes["llm.output_messages.0.message.role"] == "assistant"
+    assert attributes[
+        "llm.output_messages.0.message.contents.0.message_content.type"
+    ] == "reasoning"
+    assert attributes[
+        "llm.output_messages.0.message.contents.0.message_content.text"
+    ] == "private reasoning"
+    assert attributes[
+        "llm.output_messages.0.message.contents.1.message_content.type"
+    ] == "text"
+    assert attributes[
+        "llm.output_messages.0.message.contents.1.message_content.text"
+    ] == "grounded answer"
+    assert attributes[
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id"
+    ] == "call-1"
+    assert attributes[
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name"
+    ] == "search"
+    assert attributes[
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments"
+    ] == '{"query":"evidence"}'
+    assert attributes["llm.model_name"] == "claude-test"
+    assert attributes["llm.provider"] == "anthropic"
+    assert attributes["llm.finish_reason"] == "stop"
+    assert attributes["llm.token_count.prompt"] == 12
+    assert attributes["llm.token_count.completion"] == 7
+    assert attributes["llm.token_count.total"] == 19
+    assert attributes["input.value"].startswith('{"system_prompt"')
+    assert attributes["output.value"].startswith('{"content"')
+
+
+def test_export_adds_openinference_retrieval_document_attributes():
+    retrieval = _span(
+        name="fixed evidence preparation",
+        kind="RETRIEVER",
+        output_value={
+            "documents": [
+                {"docid": "doc-1", "rank": 1, "score": 9.25, "text": "full one"},
+                {"docid": "doc-2", "rank": 2, "text": "full two"},
+            ]
+        },
+    )
+    provider = _FakeProvider()
+
+    export_trace(
+        _bundle(_span(children=(retrieval,))),
+        _settings(),
+        provider_factory=_ProviderFactory(provider),
+    )
+
+    attributes = provider.tracer.spans[1].attributes
+    assert attributes["retrieval.documents.0.document.id"] == "doc-1"
+    assert attributes["retrieval.documents.0.document.content"] == "full one"
+    assert attributes["retrieval.documents.0.document.score"] == 9.25
+    assert attributes["retrieval.documents.1.document.id"] == "doc-2"
+    assert attributes["retrieval.documents.1.document.content"] == "full two"
+    assert "retrieval.documents.1.document.score" not in attributes
+    assert '"documents"' in attributes["output.value"]
+
+
+def test_export_maps_native_pi_usage_tokens_cache_and_costs():
+    generation = _span(
+        name="Pi assistant turn",
+        kind="LLM",
+        output_value={
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer"}],
+            "usage": {
+                "input": 120,
+                "output": 30,
+                "totalTokens": 150,
+                "cacheRead": 20,
+                "cacheWrite": 10,
+                "cost": {"input": 0.12, "output": 0.03, "total": 0.15},
+            },
+        },
+    )
+    provider = _FakeProvider()
+
+    export_trace(
+        _bundle(_span(children=(generation,))),
+        _settings(),
+        provider_factory=_ProviderFactory(provider),
+    )
+
+    attributes = provider.tracer.spans[1].attributes
+    assert attributes["llm.token_count.prompt"] == 120
+    assert attributes["llm.token_count.completion"] == 30
+    assert attributes["llm.token_count.total"] == 150
+    assert attributes["llm.token_count.prompt_details.cache_read"] == 20
+    assert attributes["llm.token_count.prompt_details.cache_write"] == 10
+    assert attributes["llm.cost.prompt"] == 0.12
+    assert attributes["llm.cost.completion"] == 0.03
+    assert attributes["llm.cost.total"] == 0.15
+
+
+def test_export_adds_openinference_tool_attributes_without_inventing_documents():
+    tool = _span(
+        name="Pi read_document",
+        kind="TOOL",
+        attributes={"pi.tool.name": "read_document"},
+        input_value={"docid": "doc-1", "reason": "inspect evidence"},
+        output_value={"text": "full document"},
+    )
+    search = _span(
+        name="Pi search",
+        kind="RETRIEVER",
+        attributes={"pi.tool.name": "search"},
+        input_value={"query": "topic"},
+        output_value={"retrievedDocids": ["doc-1"], "content": "search summary"},
+    )
+    provider = _FakeProvider()
+
+    export_trace(
+        _bundle(_span(children=(tool, search))),
+        _settings(),
+        provider_factory=_ProviderFactory(provider),
+    )
+
+    tool_attributes = provider.tracer.spans[1].attributes
+    assert tool_attributes["tool.name"] == "read_document"
+    assert tool_attributes["tool.parameters"] == (
+        '{"docid":"doc-1","reason":"inspect evidence"}'
+    )
+    search_attributes = provider.tracer.spans[2].attributes
+    assert search_attributes["tool.name"] == "search"
+    assert search_attributes["tool.parameters"] == '{"query":"topic"}'
+    assert not any(key.startswith("retrieval.documents.") for key in search_attributes)
 
 
 def test_export_rejects_secret_content_before_constructing_provider():

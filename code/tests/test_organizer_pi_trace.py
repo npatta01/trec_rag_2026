@@ -318,6 +318,7 @@ def test_fixed_build_rejects_wrapped_record_for_a_different_topic(tmp_path):
 
 def test_fixed_build_retains_partial_failure_record_as_an_error_trace(tmp_path):
     args = _fixed_args(tmp_path)
+    _, _, _, rendered = _fixed_inputs(tmp_path)
     _write_json(
         tmp_path / "fixed-record.json",
         {"status": "failed", "query_id": TOPIC, "error": "validation failed"},
@@ -325,8 +326,19 @@ def test_fixed_build_retains_partial_failure_record_as_an_error_trace(tmp_path):
     (tmp_path / "fixed-events.jsonl").write_text(
         json.dumps(
             {
+                "type": "message_end",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": rendered}],
+                    "timestamp": 1_800_000_000_000,
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
                 "type": "extension_error",
-                "timestamp": 1_800_000_000_000,
+                "timestamp": 1_800_000_000_001,
                 "error": "generation failed",
             }
         )
@@ -362,6 +374,47 @@ def test_fixed_build_accepts_pi_file_envelope_around_exact_native_prompt(tmp_pat
 
     assert main(args, ignored_checker=_ignored) == 0
     assert (tmp_path / "fixed-trace.json").is_file()
+
+
+def test_fixed_build_rejects_events_without_a_native_user_prompt(tmp_path):
+    args = _fixed_args(tmp_path)
+    _write_events(tmp_path / "fixed-events.jsonl")
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+def test_fixed_build_rejects_an_extra_unrelated_native_user_prompt(tmp_path):
+    args = _fixed_args(tmp_path)
+    _, _, _, rendered = _fixed_inputs(tmp_path)
+    event_path = _write_events(tmp_path / "fixed-events.jsonl", user_prompt=rendered)
+    rows = [json.loads(line) for line in event_path.read_text().splitlines()]
+    extra = {
+        "type": "message_end",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "unrelated extra prompt"}],
+            "timestamp": 1_800_000_000_050,
+        },
+    }
+    rows.insert(2, extra)
+    event_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+def test_fixed_build_rejects_malformed_pi_file_envelope_attributes(tmp_path):
+    args = _fixed_args(tmp_path)
+    _, _, _, rendered = _fixed_inputs(tmp_path)
+    malformed = (
+        f'<file name="/tmp/ragnarok-random/prompt.txt" mode="trusted">\n'
+        f"{rendered}\n</file>\n"
+    )
+    _write_events(tmp_path / "fixed-events.jsonl", user_prompt=malformed)
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
 
 
 def test_build_rejects_non_ignored_bundle_target(tmp_path):

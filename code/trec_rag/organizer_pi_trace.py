@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -289,16 +290,13 @@ def _verify_native_user_prompt(events: Sequence[Mapping[str, object]], rendered:
     def matches(native: str) -> bool:
         if native == rendered:
             return True
-        header, separator, body = native.partition(">\n")
-        return (
-            separator == ">\n"
-            and header.startswith('<file name="')
-            and header.endswith('/prompt.txt"')
-            and "\n" not in header
-            and body == f"{rendered}\n</file>\n"
+        wrapper = re.fullmatch(
+            r'<file name="/[^"\n]*/prompt\.txt">\n(?P<body>[\s\S]*)</file>\n',
+            native,
         )
+        return wrapper is not None and wrapper.group("body") == f"{rendered}\n"
 
-    if native_prompts and not any(matches(native) for native in native_prompts):
+    if not native_prompts or not all(matches(native) for native in native_prompts):
         raise ValueError("rendered organizer prompt does not match native Pi user event")
 
 
