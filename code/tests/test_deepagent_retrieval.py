@@ -199,6 +199,11 @@ class RecordingSnippetExtractor:
                     ),
                 ),
                 next_cursor=None,
+                page_index=0,
+                residual_count=0,
+                residual_top_score=None,
+                returned_min_score=0.75,
+                pages_estimated=1,
             ),
             cache_status="miss",
             ranker_backend="private-ranker",
@@ -526,7 +531,18 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
         "followup focus",
     ]
     assert all(
-        set(payload) == {"document_id", "focus_query", "snippets", "next_cursor"}
+        set(payload)
+        == {
+            "document_id",
+            "focus_query",
+            "snippets",
+            "next_cursor",
+            "page_index",
+            "residual_count",
+            "residual_top_score",
+            "returned_min_score",
+            "pages_estimated",
+        }
         for payload in snippet_payloads
     )
     assert all(
