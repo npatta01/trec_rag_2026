@@ -2596,16 +2596,25 @@ def _render_selected_document_card(
 
 def _membership_coverage(memberships: Sequence[Mapping[str, Any]]) -> str:
     lane_names = {str(value["lane_name"]) for value in memberships}
+    if not lane_names:
+        return "No stored lane memberships"
     has_original = "original" in lane_names
     facet_count = sum(name.startswith("facet:") for name in lane_names)
-    facet_label = f"{facet_count} facet lane" + ("" if facet_count == 1 else "s")
-    if has_original and facet_count:
-        return f"Original + {facet_label}"
-    if has_original:
+    other_count = len(lane_names) - int(has_original) - facet_count
+    if has_original and not facet_count and not other_count:
         return "Original lane"
+    parts: list[str] = []
+    if has_original:
+        parts.append("Original")
     if facet_count:
-        return facet_label
-    return "No stored lane memberships"
+        parts.append(
+            f"{facet_count} facet lane" + ("" if facet_count == 1 else "s")
+        )
+    if other_count:
+        parts.append(
+            f"{other_count} other lane" + ("" if other_count == 1 else "s")
+        )
+    return " + ".join(parts)
 
 
 def _render_passage_rows(rankings: Sequence[PassageRankingReport]) -> str:

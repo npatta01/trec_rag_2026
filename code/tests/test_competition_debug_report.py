@@ -2050,6 +2050,22 @@ def test_selected_document_cards_summarize_membership_before_technical_scores(
     assert "bm25_score" in technical
 
 
+def test_membership_coverage_counts_valid_nonstandard_lanes_truthfully() -> None:
+    """Valid hybrid lanes must not disappear from the compact coverage summary."""
+    original = {"lane_name": "original"}
+    facet = {"lane_name": "facet:subnarrative-1:text"}
+    hybrid = {"lane_name": "hybrid:cross-encoder"}
+
+    assert debug_report._membership_coverage((hybrid,)) == "1 other lane"
+    assert debug_report._membership_coverage((original, hybrid)) == (
+        "Original + 1 other lane"
+    )
+    assert debug_report._membership_coverage((original, facet, hybrid)) == (
+        "Original + 1 facet lane + 1 other lane"
+    )
+    assert debug_report._membership_coverage(()) == "No stored lane memberships"
+
+
 def test_rag_output_renders_linked_prose_reference_cards_and_provenance(
     tmp_path: Path,
 ) -> None:
