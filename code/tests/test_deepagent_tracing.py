@@ -69,8 +69,7 @@ def test_metadata_only_masks_manual_span_content(
     )
 
     with tracing.agent_span("private narrative"):
-        with tracing.retriever_span("private query") as span:
-            span.set_attribute("retrieval.document_excerpt", "private excerpt")
+        with tracing.retriever_span("private query"):
             pass
 
     spans = span_exporter.get_finished_spans()
@@ -78,7 +77,38 @@ def test_metadata_only_masks_manual_span_content(
         REDACTED_CONTENT,
         REDACTED_CONTENT,
     ]
-    assert spans[0].attributes["retrieval.document_excerpt"] == REDACTED_CONTENT
+
+
+@pytest.mark.parametrize("span_factory", ["agent_span", "retriever_span"])
+@pytest.mark.parametrize("trace_content", [False, True])
+@pytest.mark.parametrize(
+    ("key", "secret_value"),
+    [
+        ("http.request.header.authorization", "Bearer private-token"),
+        ("credentials.api_key", "private-api-key"),
+        ("retrieval.raw_response", "private raw response"),
+        ("retrieval.continuation_ticket", "private continuation ticket"),
+        ("cache.path", "/private/cache/path"),
+    ],
+)
+def test_span_facade_rejects_forbidden_attributes_without_exporting_values(
+    span_exporter: InMemorySpanExporter,
+    provider: TracerProvider,
+    span_factory: str,
+    trace_content: bool,
+    key: str,
+    secret_value: str,
+) -> None:
+    tracing = create_retrieval_tracing(
+        environ={}, tracer_provider=provider, trace_content=trace_content
+    )
+
+    with getattr(tracing, span_factory)("safe supplied content") as span:
+        with pytest.raises(ValueError, match="not safe for retrieval tracing"):
+            span.set_attribute(key, secret_value)
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert secret_value not in str(exported.attributes)
 
 
 def test_metadata_only_exposes_only_safe_attribute_mutation(
@@ -95,15 +125,16 @@ def test_metadata_only_exposes_only_safe_attribute_mutation(
             span.add_event("private excerpt")
 
 
+@pytest.mark.parametrize("span_factory", ["agent_span", "retriever_span"])
 def test_metadata_only_exception_does_not_export_secret_details(
-    span_exporter: InMemorySpanExporter, provider: TracerProvider
+    span_exporter: InMemorySpanExporter, provider: TracerProvider, span_factory: str
 ) -> None:
     tracing = create_retrieval_tracing(
         environ={}, tracer_provider=provider, trace_content=False
     )
 
     with pytest.raises(RuntimeError, match="private exception secret"):
-        with tracing.retriever_span("private query"):
+        with getattr(tracing, span_factory)("private supplied content"):
             raise RuntimeError("private exception secret")
 
     span = span_exporter.get_finished_spans()[0]

@@ -29,20 +29,16 @@ class _TracerProvider(Protocol):
 
 
 class _MaskingSpan:
-    """Proxy that prevents manually-added content attributes from leaking."""
+    """Limited facade for non-sensitive retrieval metadata."""
 
-    _CONTENT_ATTRIBUTE_TOKENS = ("narrative", "query", "excerpt")
+    _SAFE_ATTRIBUTE_KEYS = frozenset({"retrieval.document_count"})
 
-    def __init__(self, wrapped: object, *, trace_content: bool) -> None:
+    def __init__(self, wrapped: object) -> None:
         self._wrapped = wrapped
-        self._trace_content = trace_content
 
     def set_attribute(self, key: str, value: object) -> None:
-        if not self._trace_content and (
-            key in {SpanAttributes.INPUT_VALUE, SpanAttributes.OUTPUT_VALUE}
-            or any(token in key.lower() for token in self._CONTENT_ATTRIBUTE_TOKENS)
-        ):
-            value = REDACTED_CONTENT
+        if key not in self._SAFE_ATTRIBUTE_KEYS:
+            raise ValueError(f"attribute {key!r} is not safe for retrieval tracing")
         self._wrapped.set_attribute(key, value)  # type: ignore[attr-defined]
 
 def _settings(environ: Mapping[str, str]) -> tuple[str | None, str, bool]:
@@ -87,7 +83,7 @@ class RetrievalTracing:
             set_status_on_exception=False,
         ) as span:
             try:
-                yield _MaskingSpan(span, trace_content=self._trace_content)
+                yield _MaskingSpan(span)
             except Exception as exc:
                 span.set_status(Status(StatusCode.ERROR))
                 span.set_attribute("error.type", type(exc).__name__)
