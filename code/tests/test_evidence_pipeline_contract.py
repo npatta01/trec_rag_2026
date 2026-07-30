@@ -14,6 +14,7 @@ from trec_rag.facet_evidence import (
     SelectionCandidate,
     SelectionPolicy,
     SubnarrativeContext,
+    _byte_offsets,
     _word_before,
     extract_document_candidates,
     select_subnarrative_candidates,
@@ -110,6 +111,21 @@ def test_word_before_scans_backward_without_copying_the_paragraph_prefix() -> No
     text = NoSliceText("A long paragraph ends with e.g.")
 
     assert _word_before(text, len(text) - 1) == "e.g"
+
+
+def test_source_coordinate_cache_reuses_document_offsets() -> None:
+    class CountedText(str):
+        iterations = 0
+
+        def __iter__(self):
+            type(self).iterations += 1
+            if type(self).iterations > 1:
+                raise AssertionError("document coordinates must be reused")
+            return super().__iter__()
+
+    source = CountedText("Repeated source text.")
+
+    assert _byte_offsets(source) == _byte_offsets(source)
 
 
 def test_exact_extraction_keeps_character_byte_and_adjacent_evidence() -> None:
@@ -562,3 +578,49 @@ def test_candidate_validation_streams_when_only_selected_candidates_are_required
         subnarratives={},
         required_candidate_keys=frozenset(),
     ) == {}
+
+
+def test_candidate_validation_rejects_semantic_tamper_in_an_unselected_row(
+    tmp_path: Path,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=False)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+    )
+    artifacts = generate_candidate_artifacts(
+        handoff,
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        scorer=_FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+    )
+    rows = artifacts.candidates_path.read_bytes().splitlines()
+    tampered = json.loads(rows[0])
+    tampered["document_sha256"] = "0" * 64
+    rows[0] = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
+    candidate_bytes = b"\n".join(rows) + b"\n"
+    artifacts.candidates_path.write_bytes(candidate_bytes)
+    manifest = json.loads(artifacts.manifest_path.read_bytes())
+    manifest["candidates_sha256"] = _digest(candidate_bytes)
+    manifest["output_sha256"] = _digest(candidate_bytes)
+    artifacts.manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    request = json.loads(handoff.requests_path.read_bytes().splitlines()[0])
+
+    with pytest.raises(ValueError, match="document_sha256"):
+        load_validated_candidate_artifacts(
+            artifacts.candidates_path,
+            artifacts.manifest_path,
+            documents={request["document_id"]: request["source"]},
+            subnarratives={
+                row["subnarrative_id"]: row["text"]
+                for row in request["subnarratives"]
+            },
+            required_candidate_keys=frozenset(),
+        )

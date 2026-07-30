@@ -1297,8 +1297,6 @@ def load_validated_candidate_artifacts(
             if key in seen_keys:
                 raise ValueError("candidate artifact contains a duplicate candidate ID")
             seen_keys.add(key)
-            if required_candidate_keys is not None and key not in required_candidate_keys:
-                continue
             docid = value.get("docid")
             document_text = documents.get(docid) if isinstance(docid, str) else None
             subnarrative_text = subnarratives.get(subnarrative_id)
@@ -1308,11 +1306,13 @@ def load_validated_candidate_artifacts(
                 )
             if subnarrative_text is None:
                 raise ValueError("candidate subnarrative is absent from canonical plan")
-            result[key] = decode_extractive_candidate(
+            candidate = decode_extractive_candidate(
                 raw,
                 document_text=document_text,
                 subnarrative_text=subnarrative_text,
             )
+            if required_candidate_keys is None or key in required_candidate_keys:
+                result[key] = candidate
     _reconcile_candidate_manifest(
         manifest,
         _ScannedCandidates(candidate_count, digest.hexdigest()),

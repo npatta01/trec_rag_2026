@@ -30,7 +30,7 @@ Detailed provenance and the organizer-source comparison are recorded in
 Retrieval has one public module and one versioned configuration:
 
 ```bash
-uv run --no-sync python -m trec_rag.competition_retrieval \
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval \
   configs/rag26_competition_retrieval_v1.yaml
 ```
 
@@ -42,7 +42,7 @@ RAG answer generation remains a separate command with a strict, versioned
 configuration:
 
 ```bash
-uv run --no-sync python -m trec_rag.competition_rag \
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag \
   --config configs/rag26_competition_rag_gpt_sol_v1.yaml
 ```
 
@@ -60,7 +60,8 @@ code/tools/setup_env.sh
 ```
 
 The setup script selects the standard dependency set or the ROCm dependency
-group for the active host. Subsequent commands use `uv run --no-sync python` so
+group for the active host. Subsequent commands use `uv run --no-sync` with
+`.venv/bin/python-rocm` for AMD GPU retrieval and `.venv/bin/python` otherwise, so
 uv executes inside that prepared `.venv` without replacing the hardware-aware
 dependency selection. Documentation and verification commands use this form
 consistently rather than calling `.venv/bin/python` directly.

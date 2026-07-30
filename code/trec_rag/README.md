@@ -9,7 +9,7 @@ organizer-compatible facet experiment. Run it with the strict checked-in
 configuration:
 
 ```bash
-uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
 ```
 
 The command runs all official topics by default. Repeat `--topic ID` for an
@@ -112,10 +112,10 @@ per-topic checkpoints.
 code/tools/setup_env.sh
 
 # Publish the full retrieval TSV and full-text ZIP.
-uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
 
 # Generate the full organizer JSONL from those files.
-uv run --no-sync python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
 ```
 
 For a two-topic smoke run, keep the checked-in configurations and their full
@@ -162,8 +162,8 @@ bound the expensive retrieval work; the generation config independently bounds
 the downstream join:
 
 ```bash
-uv run --no-sync python -m trec_rag.competition_retrieval configs/local/rag26_competition_retrieval_two_topic_smoke.yaml --topic rag2026-0 --topic rag2026-1
-uv run --no-sync python -m trec_rag.competition_rag --config configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/local/rag26_competition_retrieval_two_topic_smoke.yaml --topic rag2026-0 --topic rag2026-1
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
 ```
 
 These commands publish only under
@@ -186,7 +186,7 @@ an omission marker, UTF-8 byte length, and SHA-256. Run the module's targeted
 contract suite with the repository environment already set up:
 
 ```bash
-uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q
+uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q
 ```
 
 ## Remote Pyserini Helpers

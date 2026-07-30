@@ -9,6 +9,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from hashlib import sha256
 import json
 import math
@@ -211,6 +212,7 @@ class _TranslatedPassage:
     source_end_char: int
 
 
+@lru_cache(maxsize=128)
 def _scoring_text_and_boundaries(source: str) -> tuple[str, tuple[int, ...]]:
     tokens = tuple(_TOKENS.finditer(source))
     if not tokens:
@@ -298,6 +300,7 @@ def _normalize_scoring_slice(source: str) -> str:
     return _WHITESPACE_RUN.sub(" ", source)
 
 
+@lru_cache(maxsize=128)
 def _byte_offsets(source: str) -> tuple[int, ...]:
     offsets = [0]
     for char in source:

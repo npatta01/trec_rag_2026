@@ -14,7 +14,7 @@
 - Retrieval emits `r_output_trec_rag_2026.tsv` with six TREC fields and `retrieval_with_text.jsonl.zip` with `query.qid`, `candidates[].docid`, and `candidates[].doc`.
 - Generation emits `rag_output_trec_rag_2026.jsonl` with exactly `metadata`, `references`, and `answer`; metadata has exactly `team_id`, `narrative_id`, `narrative`, `run_id`, and `run_desc`.
 - The public modules are `trec_rag.competition_retrieval` and `trec_rag.competition_rag`; no `trec_rag.official_run` alias remains.
-- Commands use `code/tools/setup_env.sh` followed by `uv run --no-sync python`.
+- Commands use `code/tools/setup_env.sh` followed by `uv run --no-sync` with the repo-pinned `.venv/bin/python` or `.venv/bin/python-rocm` executable.
 - No combined orchestrator, ranking change, evaluation/UI work, published outputs, or live provider call in automated tests.
 - Implementation follows red-green-refactor; each production behavior is preceded by a focused failing test.
 - The organizer source pins are `trec-rag-data@a6255c10119a2984a874f46172d94045168ab1f3` and `trec-rag-skills@f281e88f61252662033c681df8b1ed2d0ceda97e`.
@@ -45,7 +45,7 @@
 
 - [ ] **Step 2: Run the focused red test.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_facet_pipeline_e2e.py code/tests/test_retrieval_export.py code/tests/test_evidence_pipeline_contract.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_facet_pipeline_e2e.py code/tests/test_retrieval_export.py code/tests/test_evidence_pipeline_contract.py -q`
 
 - [ ] **Step 3: Rename the module and config, update every tracked import/command/config reference, and preserve `run_official` signatures and retrieval artifact behavior verbatim.**
 
@@ -55,7 +55,7 @@
 
 - [ ] **Step 5: Run the focused tests and reference scan.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_facet_pipeline_e2e.py code/tests/test_retrieval_export.py code/tests/test_evidence_pipeline_contract.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_facet_pipeline_e2e.py code/tests/test_retrieval_export.py code/tests/test_evidence_pipeline_contract.py -q`
 
   Run: `git grep -n 'trec_rag\.official_run\|configs/facet_pilot_v1\.yaml' -- ':!docs/superpowers/research/*' ':!docs/superpowers/specs/*' ':!docs/superpowers/plans/*'`
 
@@ -82,7 +82,7 @@
 
 - [ ] **Step 2: Run the focused tests and verify they fail because the module is absent.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q`
 
 - [ ] **Step 3: Implement the minimal strict config and loaders.**
 
@@ -90,7 +90,7 @@
 
 - [ ] **Step 4: Run the focused tests.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q`
 
 - [ ] **Step 5: Commit.**
 
@@ -112,7 +112,7 @@
 
 - [ ] **Step 2: Run the focused red tests.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q`
 
 - [ ] **Step 3: Implement the provider client and pipeline from PR #24 with the two reviewed fixes.**
 
@@ -120,7 +120,7 @@
 
 - [ ] **Step 4: Run the focused tests.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q`
 
 - [ ] **Step 5: Commit.**
 
@@ -142,13 +142,13 @@
 
 - [ ] **Step 2: Run the integration test and verify the expected failure.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_competition_rag.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q`
 
 - [ ] **Step 3: Make only the minimal cross-path adjustment needed, then document the two independent commands, the three-file generation input, the non-submission status of the ZIP sidecar, `inputs.topic_ids`, setup, resume, and overwrite behavior.**
 
 - [ ] **Step 4: Run generation, retrieval, topic, export, and integrity suites.**
 
-  Run: `uv run --no-sync python -m pytest code/tests/test_competition_rag.py code/tests/test_facet_pipeline_e2e.py code/tests/test_retrieval_export.py code/tests/test_topics.py code/tests/test_run_integrity.py -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py code/tests/test_facet_pipeline_e2e.py code/tests/test_retrieval_export.py code/tests/test_topics.py code/tests/test_run_integrity.py -q`
 
 - [ ] **Step 5: Commit.**
 
@@ -168,11 +168,11 @@
 
   Run: `code/tools/setup_env.sh`
 
-  Run: `uv run --no-sync python -m pytest -q`
+  Run: `uv run --no-sync .venv/bin/python -m pytest -q`
 
 - [ ] **Step 2: Verify compilation, whitespace, secrets, and branch cleanliness.**
 
-  Run: `uv run --no-sync python -m compileall -q code/trec_rag code/tests`
+  Run: `uv run --no-sync .venv/bin/python -m compileall -q code/trec_rag code/tests`
 
   Run: `git diff --check`
 
@@ -182,13 +182,13 @@
 
 - [ ] **Step 3: Run retrieval for `rag2026-0` and `rag2026-1` from the canonical config.**
 
-  Run: `uv run --no-sync python -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml --topic rag2026-0 --topic rag2026-1`
+  Run: `uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml --topic rag2026-0 --topic rag2026-1`
 
   Validate that the receipt contains exactly those IDs in official order, the TREC file has six fields on every row, and the ZIP contains text for every selected run docid.
 
 - [ ] **Step 4: Create a local smoke config by copying the checked-in generation config and adding `inputs.topic_ids: [rag2026-0, rag2026-1]` plus a smoke-only output directory, then run live generation.**
 
-  Run: `uv run --no-sync python -m trec_rag.competition_rag --config SMOKE_CONFIG`
+  Run: `uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config SMOKE_CONFIG`
 
   Do not print or store the API key. If an external service fails, preserve the bounded artifacts and report the exact service error without weakening validation.
 
@@ -197,4 +197,3 @@
   Expected: exactly two valid compact JSONL rows in organizer order and no untracked smoke artifact in the repository.
 
 - [ ] **Step 6: Run a broad whole-branch review, address actionable findings, and present the integration options without pushing until authorized.**
-
