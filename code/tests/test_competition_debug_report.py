@@ -699,6 +699,74 @@ def test_nugget_join_uses_configured_budget_selected_clusters_and_evidence_docid
     assert topic.canonical_nuggets[0].maximum_supporting_documents == 1
 
 
+def test_canonical_nugget_preserves_distinct_same_document_evidence_aliases(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    source = "Intro. Exact evidence sentence. Tail."
+    selection_path = (
+        output / "rag2026-0" / "canonical" / "subnarrative-selections.jsonl"
+    )
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    second_evidence = {
+        "candidate_nugget_id": "candidate-2",
+        "candidate_kind": "exact_sentence",
+        "text": "Intro.",
+        "docid": "doc-original",
+        "document_sha256": _sha256(source),
+        "raw_logit": 3.0,
+    }
+    for field in (
+        "candidate_count", "exact_group_count", "precluster_count",
+        "semantic_cluster_count",
+    ):
+        selection[field] = 2
+    selection["clusters"].append(
+        {
+            "cluster_id": "cluster-2",
+            "representative_candidate_nugget_id": "candidate-2",
+            "representative_text": "Intro.",
+            "representative_raw_logit": 3.0,
+            "members": [second_evidence],
+            "supports": [second_evidence],
+            "support_document_count": 1,
+        }
+    )
+    selection["snapshots"] = [
+        {"budget": 2, "cluster_ids": ["cluster-1", "cluster-2"], "exhausted": False}
+    ]
+    selection_path.write_bytes(_json_bytes(selection))
+
+    nuggets_path = selection_path.with_name("canonical-nuggets.jsonl")
+    result = json.loads(nuggets_path.read_text(encoding="utf-8"))
+    result["nuggets"][0]["evidence"].append(
+        {
+            "candidate_nugget_id": "candidate-2",
+            "candidate_kind": "exact_sentence",
+            "text": "Intro.",
+            "text_sha256": _sha256("Intro."),
+            "docid": "doc-original",
+            "document_sha256": _sha256(source),
+            "cluster_id": "cluster-2",
+        }
+    )
+    nuggets_body = _json_bytes(result)
+    nuggets_path.write_bytes(nuggets_body)
+    manifest_path = nuggets_path.with_name("canonical-nugget-manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["canonical_nuggets_sha256"] = sha256(nuggets_body).hexdigest()
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+    nugget = load_debug_report_data(config_path).topics[0].canonical_nuggets[0]
+
+    assert [row.candidate_nugget_id for row in nugget.evidence] == [
+        "candidate-1", "candidate-2",
+    ]
+    assert [row.docid for row in nugget.evidence] == ["doc-original", "doc-original"]
+    assert len({row.docid for row in nugget.evidence}) == 1
+    assert nugget.maximum_supporting_documents == 1
+
+
 def test_retrieval_projection_explains_selected_depth_versus_supported_depth(
     tmp_path: Path,
 ) -> None:

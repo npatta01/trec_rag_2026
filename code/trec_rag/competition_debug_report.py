@@ -870,21 +870,24 @@ def _load_canonical_projection(
                 or not _is_text(nugget.get("claim_text"))
                 or not isinstance(evidence_values, list)
                 or not evidence_values
-                or len(evidence_values) > maximum_supporting
             ):
                 raise ValueError("canonical nugget identity or supporting-document cap is invalid")
             seen_nuggets.add(nugget_id)
             evidence_reports: list[CanonicalEvidenceReport] = []
             evidence_docids: set[str] = set()
+            evidence_candidate_ids: set[str] = set()
             for evidence in evidence_values:
                 report = _decode_canonical_evidence(
                     evidence, expected.subnarrative_id, selected_by_id,
                     selected_evidence, selected_cluster_ids[expected.subnarrative_id],
                 )
-                if report.docid in evidence_docids:
-                    raise ValueError("canonical nugget repeats a supporting document")
+                if report.candidate_nugget_id in evidence_candidate_ids:
+                    raise ValueError("canonical nugget repeats a selected evidence candidate")
+                evidence_candidate_ids.add(report.candidate_nugget_id)
                 evidence_docids.add(report.docid)
                 evidence_reports.append(report)
+            if len(evidence_docids) > maximum_supporting:
+                raise ValueError("canonical nugget exceeds supporting-document cap")
             if state == "fallback_extractive" and (
                 len(evidence_reports) != 1
                 or nugget["claim_text"] != evidence_reports[0].text
