@@ -46,7 +46,9 @@ FUSED_RESULT_LIMIT = 20
 RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
 The supplied narrative has already been searched exactly as provided.
 First decompose the untouched narrative into explicit needs and record them
-with update_retrieval_state. Preserve each need's exact narrative span.
+with update_retrieval_state under delta.add_needs, using the exact outer shape
+{"delta":{"add_needs":[{"need_id":"N1","narrative_span":"<exact text copied from the untouched narrative>","question":"<question derived from that span>"}]}}.
+Preserve each need's exact narrative span.
 Before every search or document inspection, view the frontier and record one
 matching next action with its open motivating need or facet. After every
 snippet page, add only claims grounded by exact returned quotes, update gaps,
@@ -58,6 +60,36 @@ conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
 for oversized output or temporary notes.
 The state filesystem is ephemeral. Do not use execute, task, or unrelated
 tools."""
+
+_VALID_DELTA_SECTIONS = (
+    "add_needs",
+    "add_facets",
+    "add_nuggets",
+    "add_evidence",
+    "set_facet_status",
+    "set_need_status",
+    "supersede_nuggets",
+    "abandon_documents",
+)
+
+
+def _delta_error_guidance() -> dict[str, object]:
+    return {
+        "valid_delta_sections": list(_VALID_DELTA_SECTIONS),
+        "minimal_add_needs_example": {
+            "delta": {
+                "add_needs": [
+                    {
+                        "need_id": "N1",
+                        "narrative_span": (
+                            "<exact text copied from the untouched narrative>"
+                        ),
+                        "question": "<question derived from that span>",
+                    }
+                ]
+            }
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -809,10 +841,21 @@ class DeepAgentRetriever:
             return coverage_state.view(scope)
 
         def update_retrieval_state(delta: RetrievalStateDelta) -> str:
-            """Record delta rows: add_needs/facets/nuggets/evidence, statuses, supersession, or abandonment."""
-            return json.dumps(
-                coverage_state.apply_delta(delta).as_dict(), sort_keys=True
-            )
+            """Update retrieval state with this exact call shape:
+            {"delta":{"add_needs":[{"need_id":"N1","narrative_span":"<exact text copied from the untouched narrative>","question":"<question derived from that span>"}]}}
+            Valid delta section keys are exactly: add_needs, add_facets,
+            add_nuggets, add_evidence, set_facet_status, set_need_status,
+            supersede_nuggets, abandon_documents.
+            Do not use "needs" or IDs such as "N1" as keys inside delta.
+            """
+            update = coverage_state.apply_delta(delta)
+            payload = update.as_dict()
+            if any(
+                rejection.code in {"UNKNOWN_SECTION", "EMPTY_DELTA"}
+                for rejection in update.rejected
+            ):
+                payload.update(_delta_error_guidance())
+            return json.dumps(payload, sort_keys=True)
 
         def choose_next_action(
             action: str,

@@ -1588,6 +1588,29 @@ def _structured_state_update_tool(
     return StructuredTool.from_function(captured[0].update_retrieval_state)
 
 
+def test_structured_state_tool_description_teaches_exact_delta_shape() -> None:
+    description = _structured_state_update_tool().description
+
+    assert (
+        '{"delta":{"add_needs":[{"need_id":"N1",'
+        '"narrative_span":"<exact text copied from the untouched narrative>",'
+        '"question":"<question derived from that span>"}]}}'
+    ) in description
+    for section in (
+        "add_needs",
+        "add_facets",
+        "add_nuggets",
+        "add_evidence",
+        "set_facet_status",
+        "set_need_status",
+        "supersede_nuggets",
+        "abandon_documents",
+    ):
+        assert section in description
+    assert 'Do not use "needs"' in description
+    assert 'IDs such as "N1"' in description
+
+
 def test_structured_state_tool_preserves_unknown_section_rejection() -> None:
     tool = _structured_state_update_tool()
 
@@ -1597,6 +1620,27 @@ def test_structured_state_tool_preserves_unknown_section_rejection() -> None:
     assert result["rejected"] == [
         {"section": "make_up_a_section", "index": 0, "code": "UNKNOWN_SECTION"}
     ]
+    assert result["valid_delta_sections"] == [
+        "add_needs",
+        "add_facets",
+        "add_nuggets",
+        "add_evidence",
+        "set_facet_status",
+        "set_need_status",
+        "supersede_nuggets",
+        "abandon_documents",
+    ]
+    assert result["minimal_add_needs_example"] == {
+        "delta": {
+            "add_needs": [
+                {
+                    "need_id": "N1",
+                    "narrative_span": "<exact text copied from the untouched narrative>",
+                    "question": "<question derived from that span>",
+                }
+            ]
+        }
+    }
 
 
 def test_structured_state_tool_accepts_valid_rows_while_rejecting_unknown_section() -> (
@@ -1637,6 +1681,27 @@ def test_structured_state_tool_rejects_empty_delta(delta: dict[str, object]) -> 
     assert result["rejected"] == [
         {"section": "delta", "index": 0, "code": "EMPTY_DELTA"}
     ]
+    assert result["valid_delta_sections"] == [
+        "add_needs",
+        "add_facets",
+        "add_nuggets",
+        "add_evidence",
+        "set_facet_status",
+        "set_need_status",
+        "supersede_nuggets",
+        "abandon_documents",
+    ]
+    assert result["minimal_add_needs_example"] == {
+        "delta": {
+            "add_needs": [
+                {
+                    "need_id": "N1",
+                    "narrative_span": "<exact text copied from the untouched narrative>",
+                    "question": "<question derived from that span>",
+                }
+            ]
+        }
+    }
 
 
 def test_structured_state_tool_allows_nullable_status_fields_to_reach_state() -> (
