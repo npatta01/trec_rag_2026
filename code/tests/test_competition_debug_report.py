@@ -1774,6 +1774,17 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     assert target_top is not None and viewport_height is not None
     assert -1 <= int(target_top.group(1)) < int(viewport_height.group(1))
 
+    topic_link_dom = dump_dom(
+        rendered,
+        "topic-literal-rag2026-1",
+        "topic-link.html",
+    )
+    assert 'data-final-hash="#topic-literal-rag2026-1"' in topic_link_dom
+    target_top = re.search(r'data-target-top="(-?\d+)"', topic_link_dom)
+    viewport_height = re.search(r'data-viewport-height="(\d+)"', topic_link_dom)
+    assert target_top is not None and viewport_height is not None
+    assert -1 <= int(target_top.group(1)) < int(viewport_height.group(1))
+
     second_initially_open = rendered.replace(
         'id="topic-literal-rag2026-0" open',
         'id="topic-literal-rag2026-0"',
