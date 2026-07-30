@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict
 import importlib.util
 import io
@@ -14,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 from types import ModuleType
-from typing import Any
+from typing import BinaryIO, Iterator
 import zipfile
 
 from trec_rag.organizer_pi_inputs import OrganizerTopic, select_topic
@@ -323,29 +324,46 @@ def _build_bundle(arguments: argparse.Namespace) -> TraceBundle:
     )
 
 
-def _atomic_json(path: Path, value: object) -> Path:
+def _write_json(temporary: BinaryIO, value: object) -> None:
+    temporary.write(
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+@contextmanager
+def _staged_atomic_json(path: Path) -> Iterator[BinaryIO]:
+    """Reserve an atomic destination, replacing it only after a clean body write."""
     destination = Path(path)
-    body = json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8") + b"\n"
+    destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", dir=destination.parent
     )
     temporary_path = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as temporary:
-            temporary.write(body)
+        temporary = os.fdopen(descriptor, "wb")
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary_path.unlink(missing_ok=True)
+        raise
+    try:
+        with temporary:
+            yield temporary
             temporary.flush()
             os.fsync(temporary.fileno())
         temporary_path.replace(destination)
     except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
-    return destination
 
 
 def _credential_values(settings: PhoenixSettings) -> tuple[object, ...]:
@@ -401,11 +419,11 @@ def main(
         if bundle.project_name != settings.project_name:
             raise ValueError("bundle project does not match PHOENIX_PROJECT_NAME")
         assert_no_secrets(bundle, credential_loader(settings))
-        receipt = exporter(bundle, settings)
-        if not isinstance(receipt, ExportReceipt):
-            raise TypeError("exporter must return ExportReceipt")
-        arguments.receipt.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_json(arguments.receipt, asdict(receipt))
+        with _staged_atomic_json(arguments.receipt) as temporary_receipt:
+            receipt = exporter(bundle, settings)
+            if not isinstance(receipt, ExportReceipt):
+                raise TypeError("exporter must return ExportReceipt")
+            _write_json(temporary_receipt, asdict(receipt))
         return 0
     except _UsageError as error:
         print(f"usage error: {error}", file=sys.stderr)

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import zipfile
 
 import pytest
 
+import trec_rag.organizer_pi_trace as trace_cli
 from trec_rag.organizer_pi_trace import main
 from trec_rag.phoenix_trace_export import ExportReceipt, PhoenixSettings, SecretStr
 from trec_rag.pi_event_trace import build_piika_trace
@@ -384,8 +386,11 @@ def test_export_failure_preserves_bundle_and_does_not_write_receipt(tmp_path, ca
     receipt_path = tmp_path / "receipt.json"
     _bundle(bundle_path)
     original = bundle_path.read_bytes()
+    saw_staged_receipt = False
 
     def fail_export(_bundle, _settings):
+        nonlocal saw_staged_receipt
+        saw_staged_receipt = len(list(tmp_path.glob(".receipt.json.*"))) == 1
         raise RuntimeError(f"collector rejected {SECRET}")
 
     exit_code = main(
@@ -395,9 +400,81 @@ def test_export_failure_preserves_bundle_and_does_not_write_receipt(tmp_path, ca
     )
 
     assert exit_code == 1
+    assert saw_staged_receipt is True
     assert bundle_path.read_bytes() == original
     assert not receipt_path.exists()
+    assert list(tmp_path.glob(".receipt.json.*")) == []
     assert SECRET not in capsys.readouterr().err
+
+
+def test_receipt_staging_failure_prevents_export(tmp_path, monkeypatch):
+    bundle_path = tmp_path / "trace.json"
+    receipt_path = tmp_path / "receipt.json"
+    _bundle(bundle_path)
+    called = False
+
+    def fail_staging(*_args, **_kwargs):
+        raise OSError("synthetic receipt staging failure")
+
+    def exporter(_bundle, _settings):
+        nonlocal called
+        called = True
+        raise AssertionError("export must start only after receipt staging")
+
+    monkeypatch.setattr(trace_cli.tempfile, "mkstemp", fail_staging)
+
+    exit_code = main(
+        ["export", "--bundle", str(bundle_path), "--receipt", str(receipt_path)],
+        exporter=exporter,
+        **_offline_export_kwargs(),
+    )
+
+    assert exit_code == 1
+    assert called is False
+    assert not receipt_path.exists()
+    assert list(tmp_path.glob(".receipt.json.*")) == []
+
+
+def test_receipt_stream_setup_failure_closes_descriptor_and_removes_temp(
+    tmp_path, monkeypatch
+):
+    bundle_path = tmp_path / "trace.json"
+    receipt_path = tmp_path / "receipt.json"
+    _bundle(bundle_path)
+    real_mkstemp = trace_cli.tempfile.mkstemp
+    allocated: list[tuple[int, Path]] = []
+    called = False
+
+    def capture_staging(*args, **kwargs):
+        descriptor, name = real_mkstemp(*args, **kwargs)
+        allocated.append((descriptor, Path(name)))
+        return descriptor, name
+
+    def fail_stream_setup(*_args, **_kwargs):
+        raise OSError("synthetic fdopen failure")
+
+    def exporter(_bundle, _settings):
+        nonlocal called
+        called = True
+        raise AssertionError("export must start only after receipt stream setup")
+
+    monkeypatch.setattr(trace_cli.tempfile, "mkstemp", capture_staging)
+    monkeypatch.setattr(trace_cli.os, "fdopen", fail_stream_setup)
+
+    exit_code = main(
+        ["export", "--bundle", str(bundle_path), "--receipt", str(receipt_path)],
+        exporter=exporter,
+        **_offline_export_kwargs(),
+    )
+
+    assert exit_code == 1
+    assert called is False
+    assert len(allocated) == 1
+    descriptor, temporary_path = allocated[0]
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+    assert not temporary_path.exists()
+    assert not receipt_path.exists()
 
 
 def test_export_scans_bundle_for_credentials_before_calling_exporter(tmp_path, capsys):
