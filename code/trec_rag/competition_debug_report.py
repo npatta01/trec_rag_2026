@@ -2318,6 +2318,21 @@ a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem 
     const requested = target && target.closest(".topic-panel");
     if (requested && panels.includes(requested)) {{
       activate(requested, false, false);
+      if (target !== requested) {{
+        setTimeout(() => {{
+          let currentTarget = null;
+          try {{
+            currentTarget = document.getElementById(
+              decodeURIComponent(location.hash.slice(1))
+            );
+          }} catch (_error) {{
+            currentTarget = null;
+          }}
+          if (currentTarget === target) {{
+            target.scrollIntoView({{ block: "start", behavior: "instant" }});
+          }}
+        }}, 0);
+      }}
       return;
     }}
     activate(panels.find((panel) => panel.open) || panels[0], false, false);

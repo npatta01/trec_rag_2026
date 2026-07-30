@@ -1720,8 +1720,14 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     def dump_dom(document: str, fragment: str, name: str) -> str:
         path = tmp_path / name
         hash_recorder = (
-            '<script>setTimeout(() => document.documentElement.setAttribute('
-            '"data-final-hash", location.hash), 50);</script>'
+            '<script>setTimeout(() => {'
+            'const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));'
+            'document.documentElement.setAttribute("data-final-hash", location.hash);'
+            'document.documentElement.setAttribute("data-target-top", target ? '
+            'String(Math.round(target.getBoundingClientRect().top)) : "missing");'
+            'document.documentElement.setAttribute("data-viewport-height", String(innerHeight));'
+            'document.documentElement.setAttribute("data-scroll-y", String(Math.round(scrollY)));'
+            '}, 150);</script>'
         )
         path.write_text(
             document.replace("</body>", f"{hash_recorder}</body>"),
@@ -1733,7 +1739,7 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
                 "--headless=new",
                 "--no-sandbox",
                 "--disable-gpu",
-                "--virtual-time-budget=250",
+                "--virtual-time-budget=500",
                 "--dump-dom",
                 f"{path.as_uri()}#{fragment}",
             ],
@@ -1746,7 +1752,7 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
 
     deep_link_dom = dump_dom(
         rendered,
-        "stage-literal-rag2026-1-narrative",
+        "stage-literal-rag2026-1-final-rag",
         "deep-link.html",
     )
     first_panel = re.search(
@@ -1761,8 +1767,12 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     assert 'aria-labelledby="topic-tab-literal-rag2026-1"' in second_panel.group()
     assert 'id="topic-summary-literal-rag2026-1" hidden=""' in deep_link_dom
     assert (
-        'data-final-hash="#stage-literal-rag2026-1-narrative"' in deep_link_dom
+        'data-final-hash="#stage-literal-rag2026-1-final-rag"' in deep_link_dom
     )
+    target_top = re.search(r'data-target-top="(-?\d+)"', deep_link_dom)
+    viewport_height = re.search(r'data-viewport-height="(\d+)"', deep_link_dom)
+    assert target_top is not None and viewport_height is not None
+    assert -1 <= int(target_top.group(1)) < int(viewport_height.group(1))
 
     second_initially_open = rendered.replace(
         'id="topic-literal-rag2026-0" open',
@@ -1781,6 +1791,7 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     assert first_panel is not None and " open" not in first_panel.group()
     assert second_panel is not None and " open" in second_panel.group()
     assert 'data-final-hash="#unknown-anchor"' in unknown_dom
+    assert 'data-scroll-y="0"' in unknown_dom
 
 
 def test_html_validation_configuration_and_receipts_are_collapsed(
