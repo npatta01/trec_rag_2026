@@ -17,6 +17,38 @@
 - Preserve the existing topic, stage, citation, and selected-document anchor namespaces.
 - Publish only to the already-authorized tailnet-only Tailscale Serve path after all verification passes.
 
+## Completion Evidence
+
+Completed on 2026-07-30.
+
+- The post-run debug-report CLI regenerated the report from existing sealed
+  artifacts only. Its receipt included `rag2026-0` and `rag2026-1`, reported
+  `rag_included: true`, and matched the official retrieval TSV SHA-256
+  `17855f3ace3b662b67db4a6ff2bb31c7be857f26ff5be2b0d78644287cef5c71`
+  and RAG JSONL SHA-256
+  `65d2efae3dd54d0428f9bf49ed9fb2666996453418128d6df2a400b89ea076af`.
+- Full repository verification passed: 659 tests in 30.83 seconds.
+- Real Chrome checks passed at 1440×1000 and an emulated 390×844 viewport:
+  exactly one visible topic and one selected topic control; story stages in
+  approved order; 38 citation links with zero broken targets; topic-2 citation
+  navigation opened its owning topic and reference disclosure; ten direct
+  selected-document rows plus one closed remaining-90 disclosure; and
+  `scrollWidth == clientWidth` at both widths. Isolated light-mode screenshots
+  of the story, funnel, and compact selected rows were inspected at both widths
+  and retained only as ignored local scratch evidence.
+- The exact overall funnels were verified as `709 → 100 → 800 → 2016 → 320 →
+  148 → 71` for `rag2026-0` and `576 → 100 → 600 → 1374 → 240 → 90 → 60`
+  for `rag2026-1`; all per-subnarrative rows also matched the stored records.
+- The source report, mode-0600 rendered copy, and live HTTPS response are
+  byte-identical at SHA-256
+  `909fba5e5f00f16cee1166bd6dbf1dee746a2e8afbbd9a2d99645fe3dc8af7d4`;
+  live HTTPS returned 200. The artifact is self-contained and no local `.env`
+  secret value was embedded.
+- Tailscale Serve remains `tailnet only`; no Funnel or public deployment was
+  configured. Organizer submodules remained clean at `a6255c10119a2984a874f46172d94045168ab1f3`
+  and `f281e88f61252662033c681df8b1ed2d0ceda97e`, and the official input hashes
+  remained unchanged.
+
 ---
 
 ### Task 1: Add deterministic funnel projections and the funnel stage
@@ -282,13 +314,13 @@ git commit -m "Compact selected document diagnostics"
 - Consumes: existing two-topic retrieval/RAG configs and all Tasks 1–3
 - Produces: verified source and byte-identical tailnet-only rendered HTML
 
-- [ ] **Step 1: Record the safety baseline**
+- [x] **Step 1: Record the safety baseline**
 
 Record `git status`, both submodule SHAs/statuses, and SHA-256 for the official
 retrieval TSV and RAG JSONL. Confirm Tailscale Serve says `tailnet only` and no
 Funnel is configured.
 
-- [ ] **Step 2: Run the post-run CLI only**
+- [x] **Step 2: Run the post-run CLI only**
 
 ```bash
 uv run --no-sync .venv/bin/python \
@@ -300,7 +332,7 @@ uv run --no-sync .venv/bin/python \
 Assert the receipt reports two topic IDs, `rag_included: true`, and the expected
 official input hashes. Do not invoke retrieval or generation CLIs.
 
-- [ ] **Step 3: Run fresh full verification**
+- [x] **Step 3: Run fresh full verification**
 
 ```bash
 uv run --no-sync .venv/bin/python -m pytest -q
@@ -313,7 +345,7 @@ navigation within topic 2, and `scrollWidth == clientWidth`. Capture isolated
 desktop/mobile screenshots of the story, funnel, and compact selected rows for
 visual inspection.
 
-- [ ] **Step 4: Refresh and verify the private copy**
+- [x] **Step 4: Refresh and verify the private copy**
 
 Install the verified source HTML with mode `0600` at the existing rendered
 path. Confirm source, rendered file, and live HTTPS response have identical
@@ -321,7 +353,7 @@ SHA-256 values; live HTTPS returns 200; Tailscale Serve remains tailnet-only;
 and the official retrieval/RAG hashes and organizer submodule states are
 unchanged.
 
-- [ ] **Step 5: Record completion evidence**
+- [x] **Step 5: Record completion evidence**
 
 Update this plan with the final test count, Chrome evidence, live SHA-256, and
 tailnet-only status. Commit only tracked source/test/docs changes; do not commit
