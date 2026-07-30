@@ -5,6 +5,8 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from pathlib import Path
+import socket
+import zipfile
 
 import pytest
 
@@ -62,17 +64,6 @@ nuggets:
     )
     output = tmp_path / "outputs" / "debug-fixture"
     output.mkdir(parents=True)
-    (output / "retrieval_export_manifest.json").write_bytes(
-        _json_bytes(
-            {
-                "schema_version": "retrieval_export_manifest_v2",
-                "run_id": "debug-fixture",
-                "selected_topic_ids": ["rag2026-0"],
-                "artifacts": {},
-            }
-        )
-    )
-
     topic_root = output / "rag2026-0"
     (topic_root / "scoring").mkdir(parents=True)
     subnarrative = 'Facet <scope> & "query"'
@@ -137,8 +128,8 @@ nuggets:
         {
             "topic_id": "rag2026-0", "docid": "doc-original", "selection_rank": 1,
             "selected_from_lane": "original", "selected_from_lane_rank": 1,
-            "text": "Original selected source.",
-            "text_sha256": _sha256("Original selected source."),
+            "text": "Intro. Exact evidence sentence. Tail.",
+            "text_sha256": _sha256("Intro. Exact evidence sentence. Tail."),
         },
         {
             "topic_id": "rag2026-0", "docid": "doc-facet", "selection_rank": 2,
@@ -162,7 +153,7 @@ nuggets:
                 "bm25_query_sha256": _sha256(narrative),
                 "semantic_query_sha256": _sha256(narrative),
                 "returned_count": 1, "retained_count": 1,
-                "candidates": [{"docid": "doc-original", "bm25_rank": 1, "bm25_score": 8.0, "text_sha256": _sha256("Original selected source.")}],
+                "candidates": [{"docid": "doc-original", "bm25_rank": 1, "bm25_score": 8.0, "text_sha256": _sha256("Intro. Exact evidence sentence. Tail.")}],
             },
             {
                 "lane_name": "facet:subnarrative-1:text", "subnarrative_id": "subnarrative-1",
@@ -175,7 +166,206 @@ nuggets:
     }
     (topic_root / "retrieval").mkdir()
     (topic_root / "retrieval" / "audit.json").write_bytes(_json_bytes(audit))
+    _write_task_2_artifacts(output, topic_root, narrative, subnarrative, query)
     return config_path, output
+
+
+def _write_task_2_artifacts(
+    output: Path,
+    topic_root: Path,
+    narrative: str,
+    subnarrative: str,
+    query: str,
+) -> None:
+    source = "Intro. Exact evidence sentence. Tail."
+    start = 7
+    end = 31
+    assert source[start:end] == "Exact evidence sentence."
+    scores = [
+        {
+            "topic_id": "rag2026-0",
+            "lane_name": "subnarrative:subnarrative-1",
+            "semantic_query_sha256": _sha256(subnarrative),
+            "docid": "doc-facet",
+            "bm25_rank": 2,
+            "bm25_score": 6.0,
+            "aggregate_rank": 2,
+            "aggregate_score": 2.5,
+            "long_document_raw_logit": 1.5,
+            "weighted_passage_raw_logit": 2.0,
+            "within_document_span_support": 1,
+            "winning_passages": [
+                {"chunk_index": 0, "start_char": 0, "end_char": 5, "raw_logit": 2.0, "weighted_rank": 1}
+            ],
+            "score_representation": "raw_logits",
+            "text_sha256": _sha256("Facet selected source with <unsafe> text."),
+            "selection_rank": 2,
+            "subnarrative_id": "subnarrative-1",
+            "bm25_queries": [query],
+            "bm25_query_sha256s": [_sha256(query)],
+            "downstream_only": True,
+        },
+        {
+            "topic_id": "rag2026-0",
+            "lane_name": "subnarrative:subnarrative-1",
+            "semantic_query_sha256": _sha256(subnarrative),
+            "docid": "doc-original",
+            "bm25_rank": 1,
+            "bm25_score": 8.0,
+            "aggregate_rank": 1,
+            "aggregate_score": 4.5,
+            "long_document_raw_logit": 3.0,
+            "weighted_passage_raw_logit": 3.5,
+            "within_document_span_support": 1,
+            "winning_passages": [
+                {"chunk_index": 0, "start_char": start, "end_char": end, "raw_logit": 3.5, "weighted_rank": 1}
+            ],
+            "score_representation": "raw_logits",
+            "text_sha256": _sha256(source),
+            "selection_rank": 1,
+            "subnarrative_id": "subnarrative-1",
+            "bm25_queries": [query],
+            "bm25_query_sha256s": [_sha256(query)],
+            "downstream_only": True,
+        },
+    ]
+    (topic_root / "scoring" / "selected_subnarrative_scores.jsonl").write_bytes(
+        b"".join(_json_bytes(row) for row in scores)
+    )
+
+    evidence = {
+        "candidate_nugget_id": "candidate-1",
+        "candidate_kind": "exact_sentence",
+        "text": "Exact evidence sentence.",
+        "docid": "doc-original",
+        "document_sha256": _sha256(source),
+        "raw_logit": 3.5,
+    }
+    selection = {
+        "schema_version": "subnarrative_selection_v1",
+        "topic_id": "rag2026-0",
+        "official_narrative": narrative,
+        "official_narrative_sha256": _sha256(narrative),
+        "subnarrative_id": "subnarrative-1",
+        "subnarrative_text": subnarrative,
+        "subnarrative_sha256": _sha256(subnarrative),
+        "policy": {"budgets": [2], "precluster_limit": 20, "semantic_threshold": 0.92, "mmr_lambda": 0.7},
+        "embedding_identity": {"model": "fixture-minilm"},
+        "candidate_count": 1,
+        "exact_group_count": 1,
+        "precluster_count": 1,
+        "semantic_cluster_count": 1,
+        "clusters": [
+            {
+                "cluster_id": "cluster-1",
+                "representative_candidate_nugget_id": "candidate-1",
+                "representative_text": "Exact evidence sentence.",
+                "representative_raw_logit": 3.5,
+                "members": [evidence],
+                "supports": [evidence],
+                "support_document_count": 1,
+            }
+        ],
+        "snapshots": [{"budget": 2, "cluster_ids": ["cluster-1"], "exhausted": True}],
+    }
+    canonical = topic_root / "canonical"
+    canonical.mkdir()
+    (canonical / "subnarrative-selections.jsonl").write_bytes(_json_bytes(selection))
+    canonical_result = {
+        "schema_version": "canonical_nugget_result_v1",
+        "topic_id": "rag2026-0",
+        "subnarrative_id": "subnarrative-1",
+        "selected_budget": 2,
+        "request_sha256": "b" * 64,
+        "state": "complete",
+        "nuggets": [
+            {
+                "canonical_nugget_id": "canonical-1",
+                "nugget_kind": "model_claim",
+                "claim_text": "The exact evidence is supported.",
+                "evidence": [
+                    {
+                        "candidate_nugget_id": "candidate-1",
+                        "candidate_kind": "exact_sentence",
+                        "text": "Exact evidence sentence.",
+                        "text_sha256": _sha256("Exact evidence sentence."),
+                        "docid": "doc-original",
+                        "document_sha256": _sha256(source),
+                        "cluster_id": "cluster-1",
+                    }
+                ],
+            }
+        ],
+        "metadata": {"fixture": True},
+        "error": None,
+    }
+    nuggets_body = _json_bytes(canonical_result)
+    (canonical / "canonical-nuggets.jsonl").write_bytes(nuggets_body)
+    (canonical / "canonical-nugget-manifest.json").write_bytes(
+        _json_bytes(
+            {
+                "schema_version": "canonical_nugget_manifest_v2",
+                "selected_budget": 2,
+                "selection_count": 1,
+                "result_count": 1,
+                "state_counts": {"complete": 1},
+                "max_canonical_claims": 2,
+                "max_supporting_documents_per_claim": 1,
+                "canonical_nuggets_sha256": sha256(nuggets_body).hexdigest(),
+            }
+        )
+    )
+
+    run_body = b"rag2026-0 Q0 doc-original 1 1 debug-fixture\n"
+    provenance_body = _json_bytes(
+        {
+            "topic_id": "rag2026-0",
+            "docid": "doc-original",
+            "rank": 1,
+            "score": 1,
+            "selection_rank": 1,
+            "selected_from_lane": "original",
+            "selected_from_lane_rank": 1,
+            "memberships": [{"lane_name": "original", "aggregate_rank": 1, "aggregate_score": 9.0, "bm25_rank": 1, "bm25_score": 8.0}],
+            "subnarrative_scores": [scores[1]],
+            "nuggets": [{"canonical_nugget_id": "canonical-1", "subnarrative_id": "subnarrative-1"}],
+            "source_seals": {"scoring_manifest_sha256": "c" * 64, "canonical_manifest_sha256": "d" * 64},
+        }
+    )
+    (output / "r_output_trec_rag_2026.tsv").write_bytes(run_body)
+    (output / "retrieval_provenance.jsonl").write_bytes(provenance_body)
+    archive_path = output / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            _json_bytes(
+                {
+                    "query": {"qid": "rag2026-0", "text": narrative},
+                    "candidates": [{"docid": "doc-original", "rank": 1, "score": 1, "doc": source, "index": "fixture-index", "stage": "canonical_supported"}],
+                }
+            ),
+        )
+    artifacts = {
+        "r_output_trec_rag_2026.tsv": run_body,
+        "retrieval_provenance.jsonl": provenance_body,
+        "retrieval_with_text.jsonl.zip": archive_path.read_bytes(),
+    }
+    (output / "retrieval_export_manifest.json").write_bytes(
+        _json_bytes(
+            {
+                "schema_version": "retrieval_export_manifest_v2",
+                "run_id": "debug-fixture",
+                "selected_topic_ids": ["rag2026-0"],
+                "score_semantics": "ordinal_selection_order",
+                "topic_depths": {"rag2026-0": {"official": 1, "candidate_pool": 2}},
+                "official_row_count": 1,
+                "artifacts": {
+                    name: {"bytes": len(body), "sha256": sha256(body).hexdigest()}
+                    for name, body in artifacts.items()
+                },
+            }
+        )
+    )
 
 
 def test_topic_order_and_identity_are_loaded_from_official_topics(tmp_path: Path) -> None:
@@ -316,4 +506,89 @@ def test_oversized_artifact_is_rejected_before_receipt_hashing(
 
     monkeypatch.setattr(Path, "open", guarded_open)
     with pytest.raises(ValueError, match="bounded reader limit"):
+        load_debug_report_data(config_path)
+
+
+def test_passage_rankings_retain_stored_ranks_logits_and_exact_source_spans(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+
+    topic = load_debug_report_data(config_path).topics[0]
+
+    assert [row.aggregate_rank for row in topic.passage_rankings] == [1, 2]
+    assert [row.docid for row in topic.passage_rankings] == ["doc-original", "doc-facet"]
+    assert topic.passage_rankings[0].score_representation == "raw_logits"
+    assert topic.passage_rankings[0].winning_passages[0].raw_logit == 3.5
+    assert topic.passage_rankings[0].winning_passages[0].text == "Exact evidence sentence."
+
+
+def test_nugget_join_uses_configured_budget_selected_clusters_and_evidence_docids(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+
+    topic = load_debug_report_data(config_path).topics[0]
+
+    assert [cluster.cluster_id for cluster in topic.evidence_clusters] == ["cluster-1"]
+    assert topic.evidence_clusters[0].selected_budget == 2
+    assert topic.canonical_nuggets[0].selected_budget == 2
+    assert topic.canonical_nuggets[0].state == "complete"
+    assert topic.canonical_nuggets[0].evidence[0].docid == "doc-original"
+    assert topic.canonical_nuggets[0].evidence[0].cluster_id == "cluster-1"
+    assert topic.canonical_nuggets[0].maximum_claims == 2
+    assert topic.canonical_nuggets[0].maximum_supporting_documents == 1
+
+
+def test_retrieval_projection_explains_selected_depth_versus_supported_depth(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+
+    retrieval = load_debug_report_data(config_path).topics[0].retrieval_output
+
+    assert retrieval.selected_pool_depth == 2
+    assert retrieval.final_supported_depth == 1
+    assert [row.docid for row in retrieval.documents] == ["doc-original"]
+    assert retrieval.documents[0].text == "Intro. Exact evidence sentence. Tail."
+    assert retrieval.documents[0].canonical_nugget_ids == ("canonical-1",)
+
+
+def test_candidate_ledger_and_network_are_outside_the_bounded_report_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    forbidden = output / "rag2026-0" / "canonical" / "candidates.jsonl"
+    forbidden.mkdir()
+    original_open = Path.open
+    original_read_bytes = Path.read_bytes
+
+    def guarded_open(candidate: Path, *args: object, **kwargs: object):
+        if candidate.resolve() == forbidden.resolve():
+            raise AssertionError("candidate ledger must not be opened")
+        return original_open(candidate, *args, **kwargs)
+
+    def guarded_read_bytes(candidate: Path) -> bytes:
+        if candidate.resolve() == forbidden.resolve():
+            raise AssertionError("candidate ledger must not be read")
+        return original_read_bytes(candidate)
+
+    def reject_network(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("bounded report loading must not use the network")
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+    monkeypatch.setattr(socket.socket, "connect", reject_network)
+
+    assert load_debug_report_data(config_path).topics[0].retrieval_output.final_supported_depth == 1
+
+
+def test_passage_ranking_rejects_offsets_outside_selected_document(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "scoring" / "selected_subnarrative_scores.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    rows[1]["winning_passages"][0]["end_char"] = 10_000
+    path.write_bytes(b"".join(_json_bytes(row) for row in rows))
+
+    with pytest.raises(ValueError, match="winning passage offsets are outside selected document"):
         load_debug_report_data(config_path)
