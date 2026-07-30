@@ -23,6 +23,27 @@ the Phoenix view are derived records. Keep native events, normalized output
 records, bundles, and receipts together so the derived trace can always be
 checked against its source.
 
+### OpenAI trace semantics
+
+`trec_rag.openai_trace_semantics` consumes immutable Pi and fixed-retrieval
+`SpanSpec` payloads. It produces normalized messages, the authoritative Pi
+search and paginated-document tool schemas, OpenAI request/response envelopes,
+and OpenInference LLM attributes. During export, the normalized envelopes
+populate the generic input/output fields while the original strict JSON remains
+available under `pi.native.input_json` and `pi.native.output_json`.
+
+The adapter emits only captured messages and known invocation parameters. In
+particular, it does not fabricate the Pi system prompt when that prompt was not
+captured. Validate semantic, export, and event-normalization behavior together:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_openai_trace_semantics.py \
+  code/tests/test_phoenix_trace_export.py \
+  code/tests/test_pi_event_trace.py \
+  code/tests/test_organizer_pi_trace.py -q
+```
+
 Choose ignored local paths first. The CLI rejects bundle and receipt paths that
 Git would track:
 
