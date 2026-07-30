@@ -11,7 +11,6 @@ from openinference.instrumentation.langchain import LangChainInstrumentor
 
 import trec_rag.deepagent_tracing as deepagent_tracing
 from trec_rag.deepagent_tracing import (
-    MAX_TRACE_EXCERPT_CHARACTERS,
     REDACTED_CONTENT,
     create_retrieval_tracing,
 )
@@ -107,7 +106,7 @@ def test_injected_provider_captures_agent_and_retriever_hierarchy(
                 source_scores=(9.5, 8.0),
                 cache_status="hit",
                 latency_ms=12.5,
-                excerpts=("excerpt a", "excerpt b"),
+                text_lengths=(10, 20),
             )
 
     spans = span_exporter.get_finished_spans()
@@ -119,6 +118,87 @@ def test_injected_provider_captures_agent_and_retriever_hierarchy(
     assert spans[0].attributes["input.value"] == "follow-up query"
     assert spans[1].attributes["input.value"] == "the narrative"
     assert spans[0].attributes["retrieval.document_count"] == 2
+    assert spans[0].attributes["retrieval.document_text_lengths"] == (10, 20)
+    assert "retrieval.document_excerpts" not in spans[0].attributes
+
+
+@pytest.mark.parametrize("trace_content", [True, False])
+def test_injected_provider_captures_bounded_redacted_snippet_page(
+    span_exporter: InMemorySpanExporter,
+    provider: TracerProvider,
+    trace_content: bool,
+) -> None:
+    tracing = create_retrieval_tracing(
+        environ={}, tracer_provider=provider, trace_content=trace_content
+    )
+
+    with tracing.snippet_span("doc-a", "private focus query") as span:
+        span.record_page(
+            chunk_ids=("doc-a:0007",),
+            start_chars=(8100,),
+            end_chars=(9310,),
+            relevance_scores=(0.91,),
+            texts=("bounded snippet text",),
+            cache_status="hit",
+            ranker_backend="sentence_transformers_cross_encoder",
+            latency_ms=7.5,
+            page_offset=10,
+            has_next_page=True,
+        )
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert exported.name == "deepagent.extract_relevant_snippets"
+    assert exported.attributes["input.value"] == (
+        "private focus query" if trace_content else REDACTED_CONTENT
+    )
+    assert exported.attributes["snippet.document_id"] == "doc-a"
+    assert exported.attributes["snippet.chunk_ids"] == ("doc-a:0007",)
+    assert exported.attributes["snippet.start_chars"] == (8100,)
+    assert exported.attributes["snippet.end_chars"] == (9310,)
+    assert exported.attributes["snippet.relevance_scores"] == (0.91,)
+    assert exported.attributes["snippet.texts"] == (
+        ("bounded snippet text",) if trace_content else (REDACTED_CONTENT,)
+    )
+    assert exported.attributes["snippet.cache_status"] == "hit"
+    assert (
+        exported.attributes["snippet.ranker_backend"]
+        == "sentence_transformers_cross_encoder"
+    )
+    assert exported.attributes["snippet.latency_ms"] == 7.5
+    assert exported.attributes["snippet.page_offset"] == 10
+    assert exported.attributes["snippet.has_next_page"] is True
+    assert not {
+        "snippet.cache_path",
+        "snippet.cache_key",
+        "snippet.cursor",
+        "snippet.scratch_path",
+        "snippet.document_text",
+    } & set(exported.attributes)
+
+
+def test_snippet_trace_api_rejects_more_than_ten_chunks_before_export(
+    span_exporter: InMemorySpanExporter, provider: TracerProvider
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+    eleven_chunk_ids = tuple(f"doc-a:{index:04d}" for index in range(11))
+
+    with tracing.snippet_span("doc-a", "safe focus query") as span:
+        with pytest.raises(ValueError, match="chunk_ids exceeds.*item limit"):
+            span.record_page(
+                chunk_ids=eleven_chunk_ids,
+                start_chars=tuple(range(11)),
+                end_chars=tuple(range(1, 12)),
+                relevance_scores=tuple(0.5 for _ in range(11)),
+                texts=tuple("text" for _ in range(11)),
+                cache_status="miss",
+                ranker_backend="test-ranker",
+                latency_ms=1.0,
+                page_offset=0,
+                has_next_page=False,
+            )
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert not any(key.startswith("snippet.") for key in exported.attributes)
 
 
 def test_metadata_only_masks_manual_span_content(
@@ -186,31 +266,31 @@ def test_retriever_trace_api_rejects_blank_document_ids_before_export(
                 source_scores=(1.0,),
                 cache_status="miss",
                 latency_ms=1.0,
-                excerpts=("safe excerpt",),
+                text_lengths=(12,),
             )
 
     exported = span_exporter.get_finished_spans()[0]
     assert "retrieval.document_ids" not in exported.attributes
 
 
-def test_retriever_trace_api_rejects_oversized_excerpts_before_export(
+def test_retriever_trace_api_rejects_negative_text_lengths_before_export(
     span_exporter: InMemorySpanExporter, provider: TracerProvider
 ) -> None:
     tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
 
     with tracing.retriever_span("safe query") as span:
-        with pytest.raises(ValueError, match="excerpts contains an oversized value"):
+        with pytest.raises(TypeError, match="text_lengths.*non-negative integers"):
             span.record_search(
                 document_ids=("doc-a",),
                 source_ranks=(1,),
                 source_scores=(1.0,),
                 cache_status="miss",
                 latency_ms=1.0,
-                excerpts=("x" * (MAX_TRACE_EXCERPT_CHARACTERS + 1),),
+                text_lengths=(-1,),
             )
 
     exported = span_exporter.get_finished_spans()[0]
-    assert "retrieval.document_excerpts" not in exported.attributes
+    assert "retrieval.document_text_lengths" not in exported.attributes
 
 
 @pytest.mark.parametrize("span_factory", ["agent_span", "retriever_span"])

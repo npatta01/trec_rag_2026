@@ -34,7 +34,6 @@ DEFAULT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
 MAX_FOLLOWUP_SEARCHES = 3
 HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
-EXCERPT_MAX_CHARACTERS = 1_000
 
 RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
 The supplied narrative has already been searched exactly as provided. Use the
@@ -211,7 +210,24 @@ class _RetrieverTraceSpan(Protocol):
         source_scores: Sequence[float],
         cache_status: str,
         latency_ms: float,
-        excerpts: Sequence[str],
+        text_lengths: Sequence[int],
+    ) -> None: ...
+
+
+class _SnippetTraceSpan(Protocol):
+    def record_page(
+        self,
+        *,
+        chunk_ids: Sequence[str],
+        start_chars: Sequence[int],
+        end_chars: Sequence[int],
+        relevance_scores: Sequence[float],
+        texts: Sequence[str],
+        cache_status: str,
+        ranker_backend: str,
+        latency_ms: float,
+        page_offset: int,
+        has_next_page: bool,
     ) -> None: ...
 
 
@@ -221,6 +237,10 @@ class _Tracing(Protocol):
     def retriever_span(
         self, query: str
     ) -> AbstractContextManager[_RetrieverTraceSpan]: ...
+
+    def snippet_span(
+        self, document_id: str, focus_query: str
+    ) -> AbstractContextManager[_SnippetTraceSpan]: ...
 
     def force_flush(self) -> bool: ...
 
@@ -521,9 +541,8 @@ class DeepAgentRetriever:
                         ),
                         cache_status=cache_status,
                         latency_ms=latency_ms,
-                        excerpts=tuple(
-                            candidate.text[:EXCERPT_MAX_CHARACTERS]
-                            for candidate in trace_candidates
+                        text_lengths=tuple(
+                            len(candidate.text) for candidate in trace_candidates
                         ),
                     )
                 except Exception:
@@ -591,18 +610,47 @@ class DeepAgentRetriever:
             if document_text is None:
                 return json.dumps({"error": "unknown document_id"}, sort_keys=True)
             try:
-                with self._snippet_extractor_lock:
-                    if self._snippet_extractor is None:
-                        self._snippet_extractor = create_default_snippet_extractor(
-                            find_repo_root()
+                with self._tracing.snippet_span(document_id, focus_query) as span:
+                    with self._snippet_extractor_lock:
+                        if self._snippet_extractor is None:
+                            self._snippet_extractor = create_default_snippet_extractor(
+                                find_repo_root()
+                            )
+                        extractor = self._snippet_extractor
+                    started_at = monotonic()
+                    result: SnippetExtractionResult = extractor.extract(
+                        document_id,
+                        document_text,
+                        focus_query,
+                        cursor,
+                    )
+                    latency_ms = (monotonic() - started_at) * 1_000
+                    try:
+                        span.record_page(
+                            chunk_ids=tuple(
+                                snippet.chunk_id for snippet in result.page.snippets
+                            ),
+                            start_chars=tuple(
+                                snippet.start_char for snippet in result.page.snippets
+                            ),
+                            end_chars=tuple(
+                                snippet.end_char for snippet in result.page.snippets
+                            ),
+                            relevance_scores=tuple(
+                                snippet.relevance_score
+                                for snippet in result.page.snippets
+                            ),
+                            texts=tuple(
+                                snippet.text for snippet in result.page.snippets
+                            ),
+                            cache_status=result.cache_status,
+                            ranker_backend=result.ranker_backend,
+                            latency_ms=latency_ms,
+                            page_offset=result.page_offset,
+                            has_next_page=result.page.next_cursor is not None,
                         )
-                    extractor = self._snippet_extractor
-                result: SnippetExtractionResult = extractor.extract(
-                    document_id,
-                    document_text,
-                    focus_query,
-                    cursor,
-                )
+                    except Exception:
+                        pass
             except ValueError:
                 error = (
                     "invalid cursor"

@@ -23,7 +23,9 @@ DEFAULT_PHOENIX_PROJECT = "trec-rag-deepagent-retrieval"
 REDACTED_CONTENT = "[REDACTED]"
 MAX_TRACE_DOCUMENTS = 1_000
 MAX_TRACE_DOCUMENT_ID_CHARACTERS = 512
-MAX_TRACE_EXCERPT_CHARACTERS = 1_000
+MAX_TRACE_SNIPPETS = 10
+MAX_TRACE_SNIPPET_TEXT_CHARACTERS = 3_500
+MAX_TRACE_RANKER_BACKEND_CHARACTERS = 512
 _CLOUD_HOST = "app.phoenix.arize.com"
 _LIVE_PROVIDER_CACHE: dict[tuple[str, str, str | None], _TracerProvider] = {}
 _ACTIVE_INSTRUMENTATION: tuple[object, ...] | None = None
@@ -67,7 +69,7 @@ def _validated_strings(
     normalized = tuple(values)
     if any(not isinstance(value, str) for value in normalized):
         raise TypeError(f"{name} must contain only strings")
-    if name in {"document_ids", "fused_document_ids"} and any(
+    if name in {"document_ids", "fused_document_ids", "chunk_ids"} and any(
         not value for value in normalized
     ):
         raise ValueError(f"{name} must not contain blank values")
@@ -89,7 +91,7 @@ class _RetrieverSpan(_SafeSpan):
         source_scores: Sequence[float],
         cache_status: str,
         latency_ms: float,
-        excerpts: Sequence[str],
+        text_lengths: Sequence[int],
     ) -> None:
         ids = _validated_strings(
             "document_ids",
@@ -97,15 +99,10 @@ class _RetrieverSpan(_SafeSpan):
             maximum_items=MAX_TRACE_DOCUMENTS,
             maximum_characters=MAX_TRACE_DOCUMENT_ID_CHARACTERS,
         )
-        bounded_excerpts = _validated_strings(
-            "excerpts",
-            excerpts,
-            maximum_items=MAX_TRACE_DOCUMENTS,
-            maximum_characters=MAX_TRACE_EXCERPT_CHARACTERS,
-        )
         ranks = tuple(source_ranks)
         scores = tuple(source_scores)
-        if not (len(ids) == len(ranks) == len(scores) == len(bounded_excerpts)):
+        lengths = tuple(text_lengths)
+        if not (len(ids) == len(ranks) == len(scores) == len(lengths)):
             raise ValueError("retrieval trace evidence arrays must have equal lengths")
         if any(
             isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0
@@ -119,6 +116,11 @@ class _RetrieverSpan(_SafeSpan):
             for score in scores
         ):
             raise TypeError("source_scores must contain only finite numbers")
+        if any(
+            isinstance(length, bool) or not isinstance(length, int) or length < 0
+            for length in lengths
+        ):
+            raise TypeError("text_lengths must contain only non-negative integers")
         if cache_status not in self._CACHE_STATUSES:
             raise ValueError("cache_status is not safe for retrieval tracing")
         if (
@@ -135,10 +137,108 @@ class _RetrieverSpan(_SafeSpan):
         self._set("retrieval.source_scores", tuple(float(score) for score in scores))
         self._set("retrieval.cache_status", cache_status)
         self._set("retrieval.latency_ms", float(latency_ms))
-        self._set(
-            "retrieval.document_excerpts",
-            tuple(self._content(excerpt) for excerpt in bounded_excerpts),
+        self._set("retrieval.document_text_lengths", lengths)
+
+
+class _SnippetSpan(_SafeSpan):
+    """Allow only bounded, typed evidence for one snippet extraction page."""
+
+    _CACHE_STATUSES = frozenset({"hit", "miss"})
+
+    def __init__(
+        self, wrapped: object, *, trace_content: bool, document_id: str
+    ) -> None:
+        super().__init__(wrapped, trace_content=trace_content)
+        self._document_id = document_id
+
+    def record_page(
+        self,
+        *,
+        chunk_ids: Sequence[str],
+        start_chars: Sequence[int],
+        end_chars: Sequence[int],
+        relevance_scores: Sequence[float],
+        texts: Sequence[str],
+        cache_status: str,
+        ranker_backend: str,
+        latency_ms: float,
+        page_offset: int,
+        has_next_page: bool,
+    ) -> None:
+        document_id = _validated_strings(
+            "document_ids",
+            (self._document_id,),
+            maximum_items=1,
+            maximum_characters=MAX_TRACE_DOCUMENT_ID_CHARACTERS,
+        )[0]
+        ids = _validated_strings(
+            "chunk_ids",
+            chunk_ids,
+            maximum_items=MAX_TRACE_SNIPPETS,
+            maximum_characters=MAX_TRACE_DOCUMENT_ID_CHARACTERS,
         )
+        bounded_texts = _validated_strings(
+            "texts",
+            texts,
+            maximum_items=MAX_TRACE_SNIPPETS,
+            maximum_characters=MAX_TRACE_SNIPPET_TEXT_CHARACTERS,
+        )
+        starts = tuple(start_chars)
+        ends = tuple(end_chars)
+        scores = tuple(relevance_scores)
+        if not (
+            len(ids) == len(starts) == len(ends) == len(scores) == len(bounded_texts)
+        ):
+            raise ValueError("snippet trace evidence arrays must have equal lengths")
+        if any(
+            isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+            for offset in (*starts, *ends)
+        ):
+            raise TypeError("snippet offsets must contain only non-negative integers")
+        if any(end < start for start, end in zip(starts, ends, strict=True)):
+            raise ValueError("snippet end offsets must not precede start offsets")
+        if any(
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not isfinite(float(score))
+            for score in scores
+        ):
+            raise TypeError("relevance_scores must contain only finite numbers")
+        if cache_status not in self._CACHE_STATUSES:
+            raise ValueError("cache_status is not safe for snippet tracing")
+        if (
+            not isinstance(ranker_backend, str)
+            or not ranker_backend.strip()
+            or len(ranker_backend) > MAX_TRACE_RANKER_BACKEND_CHARACTERS
+        ):
+            raise ValueError("ranker_backend is not safe for snippet tracing")
+        if (
+            isinstance(latency_ms, bool)
+            or not isinstance(latency_ms, (int, float))
+            or not isfinite(float(latency_ms))
+            or latency_ms < 0
+        ):
+            raise TypeError("latency_ms must be a finite non-negative number")
+        if (
+            isinstance(page_offset, bool)
+            or not isinstance(page_offset, int)
+            or page_offset < 0
+        ):
+            raise TypeError("page_offset must be a non-negative integer")
+        if not isinstance(has_next_page, bool):
+            raise TypeError("has_next_page must be a boolean")
+
+        self._set("snippet.document_id", document_id)
+        self._set("snippet.chunk_ids", ids)
+        self._set("snippet.start_chars", starts)
+        self._set("snippet.end_chars", ends)
+        self._set("snippet.relevance_scores", tuple(float(score) for score in scores))
+        self._set("snippet.texts", tuple(self._content(text) for text in bounded_texts))
+        self._set("snippet.cache_status", cache_status)
+        self._set("snippet.ranker_backend", ranker_backend)
+        self._set("snippet.latency_ms", float(latency_ms))
+        self._set("snippet.page_offset", page_offset)
+        self._set("snippet.has_next_page", has_next_page)
 
 
 class _AgentSpan(_SafeSpan):
@@ -264,6 +364,19 @@ class RetrievalTracing:
             "climbmix.retrieve", query, OpenInferenceSpanKindValues.RETRIEVER
         ) as span:
             yield _RetrieverSpan(span, trace_content=self._trace_content)
+
+    @contextmanager
+    def snippet_span(
+        self, document_id: str, focus_query: str
+    ) -> Iterator[_SnippetSpan]:
+        with self._span(
+            "deepagent.extract_relevant_snippets",
+            focus_query,
+            OpenInferenceSpanKindValues.RETRIEVER,
+        ) as span:
+            yield _SnippetSpan(
+                span, trace_content=self._trace_content, document_id=document_id
+            )
 
     def force_flush(self) -> bool:
         """Flush a configured exporter without raising from an optional sink."""

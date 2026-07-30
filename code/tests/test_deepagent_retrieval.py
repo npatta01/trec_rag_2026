@@ -40,6 +40,7 @@ from trec_rag.deepagent_snippets import (
     SnippetPage,
 )
 from trec_rag.deepagent_tracing import (
+    MAX_TRACE_DOCUMENT_ID_CHARACTERS,
     MAX_TRACE_DOCUMENTS,
     REDACTED_CONTENT,
     create_retrieval_tracing,
@@ -135,6 +136,7 @@ class FakeTracing:
     def __init__(self) -> None:
         self.flushes = 0
         self.search_records: list[dict[str, object]] = []
+        self.snippet_records: list[dict[str, object]] = []
         self.result_records: list[dict[str, object]] = []
 
     @contextmanager
@@ -145,8 +147,15 @@ class FakeTracing:
     def retriever_span(self, _query: str):
         yield self
 
+    @contextmanager
+    def snippet_span(self, _document_id: str, _focus_query: str):
+        yield self
+
     def record_search(self, **evidence: object) -> None:
         self.search_records.append(evidence)
+
+    def record_page(self, **evidence: object) -> None:
+        self.snippet_records.append(evidence)
 
     def record_result(self, **evidence: object) -> None:
         self.result_records.append(evidence)
@@ -209,6 +218,11 @@ class RejectedEvidenceTracing(FakeTracing):
         if self.rejected_phase == "search":
             raise ValueError("trace evidence rejected")
         super().record_search(**evidence)
+
+    def record_page(self, **evidence: object) -> None:
+        if self.rejected_phase == "snippet":
+            raise ValueError("trace evidence rejected")
+        super().record_page(**evidence)
 
     def record_result(self, **evidence: object) -> None:
         if self.rejected_phase == "result":
@@ -916,7 +930,7 @@ def test_failed_trace_flush_is_reported_without_retrying_or_changing_ranking() -
     assert tracing.flushes == 1
 
 
-@pytest.mark.parametrize("rejected_phase", ["search", "result"])
+@pytest.mark.parametrize("rejected_phase", ["search", "snippet", "result"])
 def test_trace_evidence_rejection_does_not_change_retrieval(
     rejected_phase: str,
 ) -> None:
@@ -925,10 +939,14 @@ def test_trace_evidence_rejection_does_not_change_retrieval(
 
     result = _sdk(
         retriever,
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(
-            lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
+        lambda _model, _search_tool, snippet_tool: FakeAgent(
+            lambda _payload: (
+                snippet_tool("original-doc-1", "safe focus", None),
+                {"messages": [{"role": "assistant", "content": "Done."}]},
+            )[1]
         ),
         tracing=tracing,
+        snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("narrative")
 
     assert [candidate.docid for candidate in result.candidates] == [
@@ -938,6 +956,47 @@ def test_trace_evidence_rejection_does_not_change_retrieval(
     assert result.stopping_reason == "agent_completed"
     assert len(retriever.queries) == 1
     assert tracing.flushes == 1
+
+
+def test_snippet_trace_validation_rejection_does_not_change_tool_result(
+    isolated_real_tracing: None,
+) -> None:
+    oversized_document_id = "d" * (MAX_TRACE_DOCUMENT_ID_CHARACTERS + 1)
+    snippet_payloads: list[dict[str, object]] = []
+
+    class OversizedIdRetriever(FakeRetriever):
+        def retrieve(self, query):
+            self.queries.append(query)
+            return [
+                _candidate(
+                    query=query.query_text,
+                    variant=query.variant_name,
+                    docid=oversized_document_id,
+                    rank=1,
+                    text="trace rejection must not hide this text",
+                )
+            ]
+
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+
+    result = _sdk(
+        OversizedIdRetriever(),
+        lambda _model, _search_tool, snippet_tool: FakeAgent(
+            lambda _payload: (
+                snippet_payloads.append(
+                    json.loads(snippet_tool(oversized_document_id, "safe focus", None))
+                ),
+                {"messages": [{"role": "assistant", "content": "Done."}]},
+            )[1]
+        ),
+        tracing=tracing,
+        snippet_extractor=RecordingSnippetExtractor(),
+    ).retrieve("narrative")
+
+    assert snippet_payloads[0]["document_id"] == oversized_document_id
+    assert result.candidates[0].docid == oversized_document_id
 
 
 def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> None:
@@ -1328,10 +1387,14 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
     tracing = FakeTracing()
     result = _sdk(
         fake_retriever,
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(
-            lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
+        lambda _model, _search_tool, snippet_tool: FakeAgent(
+            lambda _payload: (
+                snippet_tool("original-doc-1", "safe focus", None),
+                {"messages": [{"role": "assistant", "content": "Done."}]},
+            )[1]
         ),
         tracing=tracing,
+        snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("narrative")
 
     assert result.stopping_reason == "agent_completed"
@@ -1342,8 +1405,23 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
         "source_scores",
         "cache_status",
         "latency_ms",
-        "excerpts",
+        "text_lengths",
     }
+    assert tracing.search_records[0]["text_lengths"] == (19,)
+    assert tracing.snippet_records == [
+        {
+            "chunk_ids": ("chunk-1",),
+            "start_chars": (0,),
+            "end_chars": (19,),
+            "relevance_scores": (0.75,),
+            "texts": ("narrative excerpt 1",),
+            "cache_status": "miss",
+            "ranker_backend": "private-ranker",
+            "latency_ms": ANY,
+            "page_offset": 0,
+            "has_next_page": False,
+        }
+    ]
     assert tracing.result_records == [
         {
             "fused_document_ids": ("original-doc-1",),
@@ -1363,26 +1441,34 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     tracing = create_retrieval_tracing(
         environ={}, tracer_provider=provider, trace_content=trace_content
     )
-    clock = iter((10.0, 10.125))
+    clock = iter((10.0, 10.125, 20.0, 20.0075))
     monkeypatch.setattr(
         deepagent_retrieval, "monotonic", lambda: next(clock), raising=False
     )
 
     result = _sdk(
         FakeRetriever(candidate_count=2),
-        lambda _model, _search_tool, _snippet_tool: FakeAgent(
-            lambda _payload: {
-                "messages": [
-                    {"role": "assistant", "content": "Coverage is sufficient."}
-                ]
-            }
+        lambda _model, _search_tool, snippet_tool: FakeAgent(
+            lambda _payload: (
+                snippet_tool("original-doc-1", "private focus query", None),
+                {
+                    "messages": [
+                        {"role": "assistant", "content": "Coverage is sufficient."}
+                    ]
+                },
+            )[1]
         ),
         tracing=tracing,
+        snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("private narrative")
 
     spans = exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["climbmix.retrieve", "deepagent.retrieve"]
-    retriever_span, root_span = spans
+    assert [span.name for span in spans] == [
+        "climbmix.retrieve",
+        "deepagent.extract_relevant_snippets",
+        "deepagent.retrieve",
+    ]
+    retriever_span, snippet_span, root_span = spans
     assert retriever_span.parent is not None
     assert retriever_span.parent.span_id == root_span.context.span_id
     assert set(retriever_span.attributes) == {
@@ -1390,7 +1476,7 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
         "openinference.span.kind",
         "retrieval.cache_status",
         "retrieval.document_count",
-        "retrieval.document_excerpts",
+        "retrieval.document_text_lengths",
         "retrieval.document_ids",
         "retrieval.latency_ms",
         "retrieval.source_ranks",
@@ -1408,11 +1494,25 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     assert retriever_span.attributes["retrieval.cache_status"] == "not_reported"
     assert retriever_span.attributes["retrieval.latency_ms"] == 125.0
     assert retriever_span.attributes["retrieval.document_count"] == 2
-    assert retriever_span.attributes["retrieval.document_excerpts"] == (
-        ("private narrative excerpt 1", "private narrative excerpt 2")
-        if trace_content
-        else (REDACTED_CONTENT, REDACTED_CONTENT)
+    assert retriever_span.attributes["retrieval.document_text_lengths"] == (27, 27)
+    assert snippet_span.parent is not None
+    assert snippet_span.parent.span_id == root_span.context.span_id
+    assert snippet_span.attributes["input.value"] == (
+        "private focus query" if trace_content else REDACTED_CONTENT
     )
+    assert snippet_span.attributes["snippet.document_id"] == "original-doc-1"
+    assert snippet_span.attributes["snippet.chunk_ids"] == ("chunk-1",)
+    assert snippet_span.attributes["snippet.start_chars"] == (0,)
+    assert snippet_span.attributes["snippet.end_chars"] == (27,)
+    assert snippet_span.attributes["snippet.relevance_scores"] == (0.75,)
+    assert snippet_span.attributes["snippet.texts"] == (
+        ("private narrative excerpt 1",) if trace_content else (REDACTED_CONTENT,)
+    )
+    assert snippet_span.attributes["snippet.cache_status"] == "miss"
+    assert snippet_span.attributes["snippet.ranker_backend"] == "private-ranker"
+    assert snippet_span.attributes["snippet.latency_ms"] == pytest.approx(7.5)
+    assert snippet_span.attributes["snippet.page_offset"] == 0
+    assert snippet_span.attributes["snippet.has_next_page"] is False
     assert set(root_span.attributes) == {
         "input.value",
         "openinference.span.kind",

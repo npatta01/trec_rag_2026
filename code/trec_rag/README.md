@@ -204,6 +204,28 @@ agent's `rationale`, a `stopping_reason`, and immutable
 flushes successfully or tracing is disabled and no export is required; it is
 `False` when export fails. Export failure does not retry or change retrieval.
 
+Agent-facing search and snippet behavior is deliberately narrow:
+
+- Search results visible to the agent contain only document ID, rank, score,
+  and text length metadata. No title field is emitted because the endpoint does
+  not return titles.
+- For any document returned during the current invocation, the agent can ask
+  for up to ten relevance-ranked snippets at a time and follow `next_cursor`
+  for another page. A page may contain multiple snippets from the same
+  document.
+- The search transport and snippet extractor own their respective caches. The
+  model receives no cache keys, paths, bypass switches, or other cache controls.
+- Deep Agents may spill oversized tool results or temporary notes into
+  invocation-local state scratch. That state is discarded after the retrieval
+  invocation and is separate from both persistent result caches.
+
+The reusable `trec_rag.deepagent_snippets` layer accepts a document ID, complete
+document text, focus query, and optional cursor. It returns a typed
+`SnippetExtractionResult` containing the model-visible `SnippetPage` plus
+internal cache status, ranker backend, and page offset used by tracing. Its
+default factory uses the repository cache roots; experiments can instead inject
+an explicit extractor or ranker without changing the agent-facing tool schema.
+
 The three retrieval bounds are explicit keyword-only constructor and
 `from_env` options. They accept positive integers only (booleans are rejected)
 and are not environment variables:
@@ -223,17 +245,18 @@ trace evidence is additionally subject to an absolute safety ceiling.
 `fused_result_limit` controls the deterministic final RRF depth. Defaults remain
 10, 3, and 20 respectively.
 
-Phoenix tracing is optional. When configured, spans can contain the supplied
-narrative, targeted follow-up queries, and bounded result excerpts. They never
-include credentials, authorization headers, raw provider responses,
-continuation-ticket values, or local cache paths. For metadata-only tracing,
-construct tracing with `trace_content=False`; narrative/query/excerpt content
-is replaced with a redacted marker. Keep provider credentials in ignored local
-environment files rather than source or notebooks. Tracing configuration is
-process-global and idempotent: identical normalized live setup reuses its
-provider/exporter, while a conflicting endpoint, project, credential,
-injected provider, or content mode raises a constant non-disclosing
-configuration error instead of silently reconfiguring instrumentation.
+Phoenix tracing is optional. Search spans contain document lengths rather than
+document text. Snippet-page spans contain bounded IDs, offsets, relevance
+scores, backend/cache metadata, and snippet text only when `trace_content=True`;
+with `trace_content=False`, narrative, query, and snippet text use a redacted
+marker. Spans never include credentials, authorization headers, raw provider
+responses, continuation-ticket values, cursors, scratch paths, or local cache
+paths. Keep provider credentials in ignored local environment files rather than
+source or notebooks. Tracing configuration is process-global and idempotent:
+identical normalized live setup reuses its provider/exporter, while a
+conflicting endpoint, project, credential, injected provider, or content mode
+raises a constant non-disclosing configuration error instead of silently
+reconfiguring instrumentation.
 
 Validate the isolated SDK and its existing transport boundaries with:
 
