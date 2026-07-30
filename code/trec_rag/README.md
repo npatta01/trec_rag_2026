@@ -230,6 +230,26 @@ authorizes one search, extraction, refocus, pagination, or terminal stop. The
 SDK owns this state for one retrieval invocation; it is not a persistent cache
 or a replacement for the final result's immutable `coverage_report`.
 
+`update_retrieval_state(delta)` is the universal append/update entry point for
+the three stores. Its model-facing delta accepts these eight optional lists:
+
+| Delta section | Row input |
+| --- | --- |
+| `add_needs` | `need_id`, exact `narrative_span`, `question` |
+| `add_facets` | `facet_id`, `need_ids`, `dimension`, `value`, `origin`, optional `origin_snippet_id` |
+| `add_nuggets` | `nugget_id`, `text`, `need_ids`, `facet_ids`, grounded `evidence`, optional `contradicts` |
+| `add_evidence` | `nugget_id`, `snippet_id`, exact returned `quote` |
+| `set_facet_status` | `facet_id`, `status`, optional `status_reason` and `supporting_nugget_ids` |
+| `set_need_status` | `need_id`, `status`, `remaining_gap`, optional `draft_answer` and `draft_nugget_ids` |
+| `supersede_nuggets` | `nugget_id`, `superseded_by` |
+| `abandon_documents` | `document_id`, `reason` |
+
+The result reports `accepted_ids`, row-level `rejected` entries,
+`state_version`, and `state_hash`. An unknown section is reported as
+`UNKNOWN_SECTION` without discarding valid rows in the same delta. A delta with
+no accepted rows and no other rejection is reported as `EMPTY_DELTA`, including
+an empty recognized list such as `{"add_needs": []}`.
+
 Agent-facing search and snippet behavior is deliberately narrow:
 
 - Search results visible to the agent contain only document ID, rank, score,

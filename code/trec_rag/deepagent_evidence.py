@@ -9,6 +9,8 @@ import json
 from threading import Lock
 from typing import Literal, NotRequired, TypedDict
 
+from pydantic import ConfigDict
+
 from trec_rag.deepagent_snippets import SnippetPage
 
 
@@ -68,8 +70,8 @@ class AddEvidenceDelta(TypedDict):
 
 class FacetStatusDelta(TypedDict):
     facet_id: str
-    status: Literal["open", "covered", "dropped"]
-    status_reason: NotRequired[str]
+    status: FacetStatus
+    status_reason: NotRequired[str | None]
     supporting_nugget_ids: NotRequired[list[str]]
 
 
@@ -77,7 +79,7 @@ class NeedStatusDelta(TypedDict):
     need_id: str
     status: NeedStatus
     remaining_gap: str
-    draft_answer: NotRequired[str]
+    draft_answer: NotRequired[str | None]
     draft_nugget_ids: NotRequired[list[str]]
 
 
@@ -93,6 +95,8 @@ class AbandonDocumentDelta(TypedDict):
 
 class RetrievalStateDelta(TypedDict, total=False):
     """The model-facing delta accepted by :meth:`EvidenceCoverageState.apply_delta`."""
+
+    __pydantic_config__ = ConfigDict(extra="allow")
 
     add_needs: list[NeedDelta]
     add_facets: list[FacetDelta]
@@ -618,6 +622,8 @@ class EvidenceCoverageState:
                         self._changed()
                     else:
                         rejected.append(self._rejection(section, index, outcome))
+            if not accepted and not rejected:
+                rejected.append(self._rejection("delta", 0, "EMPTY_DELTA"))
             return StateUpdateResult(tuple(accepted), tuple(rejected), self._state_version, self._hash())
 
     def _add_needs(self, row: Mapping[str, object]) -> _Accepted | str:

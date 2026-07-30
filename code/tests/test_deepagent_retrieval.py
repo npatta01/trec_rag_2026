@@ -18,6 +18,7 @@ from deepagents.backends import StateBackend
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openrouter import ChatOpenRouter
 from opentelemetry.sdk.trace import TracerProvider
@@ -1566,6 +1567,146 @@ def test_nested_state_update_tool_exposes_model_facing_delta_sections() -> None:
     assert {"need_id", "narrative_span", "question"} <= set(
         delta["properties"]["add_needs"]["items"]["required"]
     )
+
+
+def _structured_state_update_tool(
+    narrative: str = "narrative",
+) -> StructuredTool:
+    captured: list[deepagent_retrieval.AgentToolset] = []
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        captured.append(toolset)
+        return FakeAgent(
+            lambda _payload: {
+                "messages": [{"role": "assistant", "content": "Done."}]
+            }
+        )
+
+    _sdk(FakeRetriever(), agent_factory).retrieve(narrative)
+    return StructuredTool.from_function(captured[0].update_retrieval_state)
+
+
+def test_structured_state_tool_preserves_unknown_section_rejection() -> None:
+    tool = _structured_state_update_tool()
+
+    result = json.loads(tool.invoke({"delta": {"make_up_a_section": []}}))
+
+    assert result["accepted_ids"] == []
+    assert result["rejected"] == [
+        {"section": "make_up_a_section", "index": 0, "code": "UNKNOWN_SECTION"}
+    ]
+
+
+def test_structured_state_tool_accepts_valid_rows_while_rejecting_unknown_section() -> (
+    None
+):
+    tool = _structured_state_update_tool("Explain migration drivers.")
+
+    result = json.loads(
+        tool.invoke(
+            {
+                "delta": {
+                    "add_needs": [
+                        {
+                            "need_id": "n1",
+                            "narrative_span": "migration drivers",
+                            "question": "What are the drivers?",
+                        }
+                    ],
+                    "make_up_a_section": [],
+                }
+            }
+        )
+    )
+
+    assert result["accepted_ids"] == ["n1"]
+    assert result["rejected"] == [
+        {"section": "make_up_a_section", "index": 0, "code": "UNKNOWN_SECTION"}
+    ]
+
+
+@pytest.mark.parametrize("delta", [{}, {"add_needs": []}])
+def test_structured_state_tool_rejects_empty_delta(delta: dict[str, object]) -> None:
+    tool = _structured_state_update_tool()
+
+    result = json.loads(tool.invoke({"delta": delta}))
+
+    assert result["accepted_ids"] == []
+    assert result["rejected"] == [
+        {"section": "delta", "index": 0, "code": "EMPTY_DELTA"}
+    ]
+
+
+def test_structured_state_tool_allows_nullable_status_fields_to_reach_state() -> (
+    None
+):
+    tool = _structured_state_update_tool("Explain migration drivers.")
+    seeded = json.loads(
+        tool.invoke(
+            {
+                "delta": {
+                    "add_needs": [
+                        {
+                            "need_id": "n1",
+                            "narrative_span": "migration drivers",
+                            "question": "What are the drivers?",
+                        }
+                    ],
+                    "add_facets": [
+                        {
+                            "facet_id": "f1",
+                            "need_ids": ["n1"],
+                            "dimension": "driver",
+                            "value": "conflict",
+                            "origin": "narrative",
+                        }
+                    ],
+                }
+            }
+        )
+    )
+
+    facet = json.loads(
+        tool.invoke(
+            {
+                "delta": {
+                    "set_facet_status": [
+                        {
+                            "facet_id": "f1",
+                            "status": "open",
+                            "status_reason": None,
+                            "supporting_nugget_ids": [],
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    need = json.loads(
+        tool.invoke(
+            {
+                "delta": {
+                    "set_need_status": [
+                        {
+                            "need_id": "n1",
+                            "status": "partial",
+                            "remaining_gap": "Needs evidence.",
+                            "draft_answer": None,
+                            "draft_nugget_ids": [],
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    assert seeded["accepted_ids"] == ["n1", "f1"]
+    assert facet["accepted_ids"] == ["f1"]
+    assert facet["rejected"] == []
+    assert need["accepted_ids"] == ["n1"]
+    assert need["rejected"] == []
 
 
 def test_retrieve_requires_recorded_actions_for_agent_retrieval_tools() -> None:
