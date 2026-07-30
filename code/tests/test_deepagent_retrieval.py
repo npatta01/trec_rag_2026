@@ -4,10 +4,13 @@ import hashlib
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable, Sequence
 from unittest.mock import ANY
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage
+from pydantic import Field
 
 from trec_rag.deepagent_retrieval import (
     AgentRetrievalError,
@@ -16,7 +19,7 @@ from trec_rag.deepagent_retrieval import (
     _create_agent,
     reciprocal_rank_fuse,
 )
-from trec_rag.pipeline_models import RetrievedCandidate
+from trec_rag.pipeline_models import RetrievedCandidate, jsonable
 
 
 def _candidate(
@@ -87,6 +90,18 @@ class FakeTracing:
         return True
 
 
+class CaptureChatModel(FakeMessagesListChatModel):
+    """Offline chat model that records the tools Deep Agents exposes to it."""
+
+    captured_tool_names: list[str] = Field(default_factory=list)
+
+    def bind_tools(
+        self, tools: Sequence[object], **_kwargs: object
+    ) -> "CaptureChatModel":
+        self.captured_tool_names = [str(getattr(tool, "name", "")) for tool in tools]
+        return self
+
+
 def _sdk(
     retriever: FakeRetriever,
     agent_factory: Callable[[str, Callable[[str], str]], FakeAgent],
@@ -154,6 +169,44 @@ def test_fusion_deduplicates_and_sums_reciprocal_ranks() -> None:
     assert [row["source_rank"] for row in fused[0].provenance] == [1, 1]
 
 
+def test_fusion_provenance_is_deeply_immutable_and_jsonable() -> None:
+    fused = reciprocal_rank_fuse(
+        (
+            AgentSearch(
+                query="original narrative",
+                kind="original",
+                cache_status="miss",
+                candidates=(
+                    _candidate(
+                        query="original narrative",
+                        variant="original",
+                        docid="doc-a",
+                        rank=1,
+                    ),
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises((AttributeError, TypeError)):
+        fused[0].provenance.append({"query_kind": "followup"})
+    with pytest.raises(TypeError):
+        fused[0].provenance[0]["query_kind"] = "followup"
+
+    serialized = jsonable(fused[0])
+    assert serialized["provenance"] == [
+        {
+            "cache_status": "miss",
+            "query": "original narrative",
+            "query_kind": "original",
+            "retriever_name": "fake",
+            "source_rank": 1,
+            "source_score": 99.0,
+            "variant_name": "original",
+        }
+    ]
+
+
 def test_retrieve_searches_untouched_narrative_before_agent_followups() -> None:
     fake_retriever = FakeRetriever()
     factory_queries = []
@@ -215,6 +268,40 @@ def test_retrieve_limits_successful_followups_to_three_and_marks_budget_exhausti
         "followup",
         "followup",
     ]
+    assert json.loads(tool_results[-1])["error"] == "search budget exhausted"
+    assert result.stopping_reason == "search_budget_exhausted"
+
+
+def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_budget() -> None:
+    fake_retriever = FakeRetriever()
+    tool_results = []
+
+    def agent_factory(_model: str, search_tool: Callable[[str], str]) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            tool_results.extend(
+                [
+                    search_tool("   "),
+                    search_tool("narrative"),
+                    search_tool("query 0"),
+                    search_tool("query 1"),
+                    search_tool("query 2"),
+                    search_tool("query 3"),
+                ]
+            )
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
+
+    assert [query.query_text for query in fake_retriever.queries] == [
+        "narrative",
+        "query 0",
+        "query 1",
+        "query 2",
+    ]
+    assert json.loads(tool_results[0])["error"] == "query must be non-empty text"
+    assert json.loads(tool_results[1])["error"] == "duplicate follow-up query"
     assert json.loads(tool_results[-1])["error"] == "search budget exhausted"
     assert result.stopping_reason == "search_budget_exhausted"
 
@@ -283,6 +370,20 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     ]
 
 
+def test_real_deepagents_factory_exposes_only_the_retrieval_tool(monkeypatch) -> None:
+    model = CaptureChatModel(responses=[AIMessage(content="Coverage is sufficient.")])
+
+    monkeypatch.setattr("deepagents.graph.resolve_model", lambda _spec: model)
+    result = DeepAgentRetriever(
+        retriever=FakeRetriever(),
+        model="test:deepagent-retrieval-capture",
+        tracing=FakeTracing(),
+    ).retrieve("narrative")
+
+    assert result.rationale == "Coverage is sufficient."
+    assert model.captured_tool_names == ["search_climbmix"]
+
+
 def test_tool_returns_bounded_excerpts_but_result_retains_all_candidates() -> None:
     fake_retriever = FakeRetriever(candidate_count=11)
     tool_payloads = []
@@ -315,3 +416,48 @@ def test_retrieve_uses_only_the_safe_tracing_attribute() -> None:
     assert result.stopping_reason == "agent_completed"
     assert tracing.attribute_keys == ["retrieval.document_count"]
     assert tracing.flushes == 1
+
+
+def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(
+    monkeypatch, tmp_path
+) -> None:
+    created = []
+
+    class OfflineRemoteRetriever:
+        def __init__(self, config: object, *, cache_dir: object) -> None:
+            self.config = config
+            self.cache_dir = cache_dir
+            created.append(self)
+
+        def retrieve(self, _query: object) -> list[RetrievedCandidate]:
+            return []
+
+    monkeypatch.setattr(
+        "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever", OfflineRemoteRetriever
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPAGENT_MODEL", "environment-model")
+    tracing = FakeTracing()
+
+    configured = DeepAgentRetriever.from_env(
+        root=tmp_path,
+        model="constructor-model",
+        tracing=tracing,
+    )
+    from_environment = DeepAgentRetriever.from_env(root=tmp_path, tracing=tracing)
+    monkeypatch.delenv("DEEPAGENT_MODEL")
+    defaulted = DeepAgentRetriever.from_env(root=tmp_path, tracing=tracing)
+
+    assert [sdk._model for sdk in (configured, from_environment, defaulted)] == [
+        "constructor-model",
+        "environment-model",
+        "openrouter:deepseek/deepseek-v4-flash",
+    ]
+    assert len(created) == 3
+    assert created[0].config.name == "deepagent_climbmix"
+    assert created[0].config.type == "pyserini_remote"
+    assert created[0].config.query_variants == ("original", "followup")
+    assert created[0].config.hits == 10
+    assert created[0].config.index == "climbmix-400b"
+    assert created[0].config.cache is True
+    assert created[0].cache_dir == tmp_path / "cache" / "retrieval" / "pyserini_remote"

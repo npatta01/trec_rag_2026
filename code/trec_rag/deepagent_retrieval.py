@@ -9,6 +9,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
 from trec_rag.deepagent_tracing import RetrievalTracing, create_retrieval_tracing
@@ -23,6 +24,11 @@ MAX_FOLLOWUP_SEARCHES = 3
 HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
 EXCERPT_MAX_CHARACTERS = 1_000
+_BUILTIN_TOOL_NAMES = frozenset(
+    {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute", "task"}
+)
+_HARNESS_PROFILE_LOCK = Lock()
+_REGISTERED_HARNESS_MODELS: set[str] = set()
 
 RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
 The supplied narrative has already been searched exactly as provided. Use the
@@ -59,6 +65,30 @@ class AgentRetrievalError(RuntimeError):
     def __init__(self, message: str, *, searches: Sequence[AgentSearch]) -> None:
         super().__init__(message)
         self.searches = tuple(searches)
+
+
+class _FrozenProvenance(dict[str, Any]):
+    """A dict-shaped provenance record that cannot be mutated after ranking."""
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        dict.__init__(self, values)
+
+    @staticmethod
+    def _immutable(*_args: object, **_kwargs: object) -> None:
+        raise TypeError("ranked candidate provenance is immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    __ior__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> dict[str, Any]:
+        """Keep existing dataclass serialization compatible with plain dict output."""
+        return dict(self)
 
 
 class _Agent(Protocol):
@@ -127,16 +157,41 @@ def reciprocal_rank_fuse(
             rank=rank,
             score=float(row["score"]),
             text=str(row["text"]),
-            provenance=cast(list[dict[str, Any]], row["provenance"]),
+            provenance=cast(
+                list[dict[str, Any]],
+                tuple(_FrozenProvenance(item) for item in row["provenance"]),
+            ),
         )
         for rank, (docid, row) in enumerate(ordered, start=1)
     )
+
+
+def _ensure_retrieval_harness_profile(model: str) -> None:
+    """Register the exact-model, process-global tool restriction once."""
+    from deepagents import (
+        GeneralPurposeSubagentProfile,
+        HarnessProfile,
+        register_harness_profile,
+    )
+
+    with _HARNESS_PROFILE_LOCK:
+        if model in _REGISTERED_HARNESS_MODELS:
+            return
+        register_harness_profile(
+            model,
+            HarnessProfile(
+                excluded_tools=_BUILTIN_TOOL_NAMES,
+                general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+            ),
+        )
+        _REGISTERED_HARNESS_MODELS.add(model)
 
 
 def _create_agent(model: str, search_tool: Callable[[str], str]) -> _Agent:
     """Keep the Deep Agents 0.7 construction surface intentionally narrow."""
     from deepagents import create_deep_agent
 
+    _ensure_retrieval_harness_profile(model)
     return cast(
         _Agent,
         create_deep_agent(
@@ -284,10 +339,11 @@ class DeepAgentRetriever:
             )
 
         def search_climbmix(query: str) -> str:
+            """Search ClimbMix for a targeted, previously uncovered narrative aspect."""
             nonlocal exhausted
             if not isinstance(query, str) or not query.strip():
                 return json.dumps({"error": "query must be non-empty text"}, sort_keys=True)
-            if any(search.query == query for search in searches if search.kind == "followup"):
+            if any(search.query == query for search in searches):
                 return json.dumps({"error": "duplicate follow-up query"}, sort_keys=True)
             if len(searches) - 1 >= MAX_FOLLOWUP_SEARCHES:
                 exhausted = True
