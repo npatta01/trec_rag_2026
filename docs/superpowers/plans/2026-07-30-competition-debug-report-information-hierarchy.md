@@ -21,6 +21,51 @@
 
 Completed on 2026-07-30.
 
+### Auditable Safety Baseline
+
+**Pre-run state, recorded immediately before the final post-run renderer invocation:**
+
+- `git status --short --branch` printed only
+  `## codex/competition-retrieval-rag...origin/master [ahead 68]`: the tracked
+  worktree was clean at reviewed implementation commit
+  `dd1672722d211df1f54b37a811279271ee5f5dba`.
+- `git submodule status --recursive` recorded
+  `trec-rag-data` at `a6255c10119a2984a874f46172d94045168ab1f3`
+  and `trec-rag-skills` at `f281e88f61252662033c681df8b1ed2d0ceda97e`.
+  Each submodule's `git status --porcelain=v1 --branch` printed only
+  `## HEAD (no branch)`, so both were detached at the recorded organizer commit
+  and had no modified or untracked files.
+- Official input SHA-256 values were
+  `17855f3ace3b662b67db4a6ff2bb31c7be857f26ff5be2b0d78644287cef5c71`
+  for `r_output_trec_rag_2026.tsv` and
+  `65d2efae3dd54d0428f9bf49ed9fb2666996453418128d6df2a400b89ea076af`
+  for `rag_output_trec_rag_2026.jsonl`.
+- `tailscale serve status` reported
+  `https://npatta01-framework.tail481212.ts.net (tailnet only)` mapped to
+  `/home/npatta01/codex-rendered`. `tailscale funnel status` showed only that
+  same tailnet-only Serve mapping and no public Funnel mapping; Funnel was not
+  configured.
+
+**Post-run state, rechecked after rendering, testing, browser QA, portal copy,
+and the evidence commit:**
+
+- `git status --short --branch` again had no file entries and printed only
+  `## codex/competition-retrieval-rag...origin/master [ahead 69]` at
+  `e291ac304515e746091648c3dbae7ce40052ad7c`; the one-commit ahead-count change
+  is the tracked completion-evidence commit, not an artifact or organizer
+  change.
+- Both submodule SHAs remained exactly
+  `a6255c10119a2984a874f46172d94045168ab1f3` and
+  `f281e88f61252662033c681df8b1ed2d0ceda97e`. Both submodule status commands
+  again printed only `## HEAD (no branch)`, with no file entries.
+- The retrieval TSV and RAG JSONL SHA-256 values remained exactly
+  `17855f3ace3b662b67db4a6ff2bb31c7be857f26ff5be2b0d78644287cef5c71`
+  and `65d2efae3dd54d0428f9bf49ed9fb2666996453418128d6df2a400b89ea076af`.
+- Serve and Funnel status again showed only the authorized
+  `tailnet only` Serve mapping. No public Funnel mapping appeared. Thus the
+  organizer submodules, official inputs, and private-only exposure state were
+  unchanged from the pre-run baseline.
+
 - The post-run debug-report CLI regenerated the report from existing sealed
   artifacts only. Its receipt included `rag2026-0` and `rag2026-1`, reported
   `rag_included: true`, and matched the official retrieval TSV SHA-256
