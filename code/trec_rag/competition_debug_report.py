@@ -213,6 +213,10 @@ class RagAnswerItemReport:
 class RagOutputReport:
     references: tuple[str, ...]
     answer_items: tuple[RagAnswerItemReport, ...]
+    run_id: str
+    run_desc: str
+    provider: str
+    model: str
     word_count: int
     output_sha256: str
 
@@ -232,6 +236,62 @@ class TopicReport:
     retrieval_output: RetrievalOutputReport
     original_only_fallback: bool = False
     rag_output: RagOutputReport | None = None
+
+
+@dataclass(frozen=True)
+class _BestStoredPassage:
+    subnarrative_id: str
+    subnarrative_text: str
+    aggregate_rank: int
+    passage: WinningPassageReport
+
+
+def _selected_document_reason(document: SelectedDocumentReport) -> str:
+    """Describe validated selection provenance without inventing semantics."""
+    membership = "Original-narrative" if document.is_original_member else "Facet-only"
+    lane = document.selected_from_lane
+    if lane == "original":
+        lane_description = "the original lane"
+    elif lane.startswith("facet:") and lane.endswith(":text"):
+        lane_description = f"the {lane[len('facet:'):-len(':text')]} facet lane"
+    else:
+        lane_description = f"the {lane} lane"
+    return (
+        f"{membership} document selected at position {document.selection_rank} from "
+        f"{lane_description} at rank {document.selected_from_lane_rank}."
+    )
+
+
+def _best_stored_passage(
+    topic: TopicReport, docid: str
+) -> _BestStoredPassage | None:
+    """Choose by within-subnarrative rank, then sealed decomposition order."""
+    subnarrative_order = {
+        subnarrative.subnarrative_id: index
+        for index, subnarrative in enumerate(topic.subnarratives)
+    }
+    subnarratives = {
+        subnarrative.subnarrative_id: subnarrative
+        for subnarrative in topic.subnarratives
+    }
+    candidates = [ranking for ranking in topic.passage_rankings if ranking.docid == docid]
+    if not candidates:
+        return None
+    ranking = min(
+        candidates,
+        key=lambda candidate: (
+            candidate.aggregate_rank,
+            subnarrative_order[candidate.subnarrative_id],
+        ),
+    )
+    passage = min(ranking.winning_passages, key=lambda candidate: candidate.weighted_rank)
+    subnarrative = subnarratives[ranking.subnarrative_id]
+    return _BestStoredPassage(
+        subnarrative_id=subnarrative.subnarrative_id,
+        subnarrative_text=subnarrative.text,
+        aggregate_rank=ranking.aggregate_rank,
+        passage=passage,
+    )
 
 
 @dataclass(frozen=True)
@@ -370,9 +430,14 @@ def _attach_rag_outputs(
             )
             for item in row["answer"]
         )
+        metadata = row["metadata"]
         rag_by_topic[topic_id] = RagOutputReport(
             references=references,
             answer_items=answer_items,
+            run_id=metadata["run_id"],
+            run_desc=metadata["run_desc"],
+            provider="openrouter",
+            model=config.model,
             word_count=sum(len(item.text.split()) for item in answer_items),
             output_sha256=output_sha256,
         )

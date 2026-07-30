@@ -1718,6 +1718,102 @@ def test_selected_documents_retain_membership_status_and_selection_rationale(
     assert "lane_name=original" in rendered
 
 
+def test_selected_document_presentation_reason_uses_membership_and_sealed_lane(
+    tmp_path: Path,
+) -> None:
+    """Ignoring membership status or sealed lane provenance must fail this projection."""
+    config_path, _output = _write_debug_run(tmp_path)
+
+    original, facet_only = load_debug_report_data(config_path).topics[0].selected_documents
+
+    assert debug_report._selected_document_reason(original) == (
+        "Original-narrative document selected at position 1 from the original lane at rank 1."
+    )
+    assert debug_report._selected_document_reason(facet_only) == (
+        "Facet-only document selected at position 2 from the subnarrative-1 facet lane "
+        "at rank 1."
+    )
+
+
+def test_best_stored_passage_uses_aggregate_rank_then_decomposition_order(
+    tmp_path: Path,
+) -> None:
+    """Comparing logits or breaking aggregate-rank ties out of topic order must fail."""
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    document = topic.selected_documents[0]
+    first_subnarrative = topic.subnarratives[0]
+    second_subnarrative = replace(
+        first_subnarrative,
+        subnarrative_id="subnarrative-2",
+        text="Second decomposition facet",
+    )
+    source = next(
+        ranking for ranking in topic.passage_rankings if ranking.docid == document.docid
+    )
+    first = replace(
+        source,
+        subnarrative_id=first_subnarrative.subnarrative_id,
+        aggregate_rank=2,
+        aggregate_score=-100.0,
+        weighted_passage_raw_logit=-100.0,
+    )
+    second = replace(
+        source,
+        subnarrative_id=second_subnarrative.subnarrative_id,
+        aggregate_rank=1,
+        aggregate_score=-200.0,
+        weighted_passage_raw_logit=-200.0,
+    )
+    projected_topic = replace(
+        topic,
+        subnarratives=(first_subnarrative, second_subnarrative),
+        passage_rankings=(first, second),
+    )
+
+    best = debug_report._best_stored_passage(projected_topic, document.docid)
+
+    assert best is not None
+    assert best.subnarrative_id == "subnarrative-2"
+    assert best.subnarrative_text == "Second decomposition facet"
+    assert best.aggregate_rank == 1
+    assert best.passage == source.winning_passages[0]
+
+    tied_topic = replace(
+        projected_topic,
+        passage_rankings=(
+            replace(
+                first,
+                aggregate_rank=1,
+                aggregate_score=-300.0,
+                weighted_passage_raw_logit=-300.0,
+            ),
+            second,
+        ),
+    )
+    tied = debug_report._best_stored_passage(tied_topic, document.docid)
+
+    assert tied is not None
+    assert tied.subnarrative_id == first_subnarrative.subnarrative_id
+
+
+def test_best_stored_passage_has_an_explicit_missing_state(tmp_path: Path) -> None:
+    """Falling back to another document's passage must fail this projection."""
+    config_path, _output = _write_debug_run(tmp_path)
+    topic = load_debug_report_data(config_path).topics[0]
+    document = topic.selected_documents[0]
+    without_document_passages = replace(
+        topic,
+        passage_rankings=tuple(
+            ranking
+            for ranking in topic.passage_rankings
+            if ranking.docid != document.docid
+        ),
+    )
+
+    assert debug_report._best_stored_passage(without_document_passages, document.docid) is None
+
+
 def test_document_disclosures_render_bounded_excerpts(tmp_path: Path) -> None:
     """A renderer that emits an entire stored body must fail this boundary test."""
     config_path, _output = _write_debug_run(tmp_path)
@@ -1871,6 +1967,10 @@ def test_standard_rag_config_loads_validated_answers_and_resolved_citations(
         ("doc-original",),
         ("doc-original",),
     ]
+    assert rag.run_id == "rag-debug-fixture"
+    assert rag.run_desc == "Fixture answer generation."
+    assert rag.provider == "openrouter"
+    assert rag.model == "fixture/model"
     assert rag.word_count == 5
     assert rag.output_sha256 == output_sha256
     assert data.source_sha256s["rag/rag_output_trec_rag_2026.jsonl"] == output_sha256
