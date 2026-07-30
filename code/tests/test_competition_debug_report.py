@@ -1114,6 +1114,105 @@ def test_atomic_build_restores_existing_output_when_directory_fsync_fails_after_
     assert list(retrieval_output.glob(".competition_debug_report.html.*.bak")) == []
 
 
+def test_atomic_build_preserves_named_recovery_when_rollback_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    previous = b"exact recovery bytes\n"
+    target.write_bytes(previous)
+    real_fsync_directory = debug_report._fsync_directory
+    real_replace = debug_report.os.replace
+    triggered = False
+    target_replacements = 0
+
+    def fail_once_after_replacement(path: Path) -> None:
+        nonlocal triggered
+        if not triggered and target.read_bytes() != previous:
+            triggered = True
+            raise OSError("triggering post-replace directory fsync failure")
+        real_fsync_directory(path)
+
+    def fail_rollback_replace(source: Path, destination: Path) -> None:
+        nonlocal target_replacements
+        if Path(destination) == target:
+            target_replacements += 1
+            if target_replacements == 2:
+                raise OSError("rollback replace failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(debug_report, "_fsync_directory", fail_once_after_replacement)
+    monkeypatch.setattr(debug_report.os, "replace", fail_rollback_replace)
+
+    with pytest.raises(RuntimeError) as raised:
+        debug_report.build_debug_report(config_path)
+
+    recovery = list(retrieval_output.glob(".competition_debug_report.html.*.bak"))
+    assert triggered is True
+    assert target.read_bytes() != previous
+    assert len(recovery) == 1
+    assert recovery[0].read_bytes() == previous
+    assert str(recovery[0]) in str(raised.value)
+    assert "triggering post-replace directory fsync failure" in str(raised.value)
+    assert "rollback replace failure" in str(raised.value)
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
+
+
+def test_atomic_success_directory_fsyncs_after_backup_unlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    previous = b"previous report\n"
+    target.write_bytes(previous)
+    real_fsync_directory = debug_report._fsync_directory
+    synced_after_cleanup = False
+
+    def observe_cleanup_sync(path: Path) -> None:
+        nonlocal synced_after_cleanup
+        backups = list(retrieval_output.glob(".competition_debug_report.html.*.bak"))
+        if target.read_bytes() != previous and not backups:
+            synced_after_cleanup = True
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(debug_report, "_fsync_directory", observe_cleanup_sync)
+
+    debug_report.build_debug_report(config_path)
+
+    assert synced_after_cleanup is True
+    assert target.read_text(encoding="utf-8").startswith("<!doctype html>")
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.bak")) == []
+
+
+def test_atomic_build_restores_existing_output_when_backup_unlink_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    target = retrieval_output / "competition_debug_report.html"
+    previous = b"previous report before unlink failure\n"
+    target.write_bytes(previous)
+    real_unlink = Path.unlink
+    failed = False
+
+    def fail_backup_unlink_once(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal failed
+        if not failed and path.suffix == ".bak":
+            failed = True
+            raise OSError("forced backup unlink failure")
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_backup_unlink_once)
+
+    with pytest.raises(OSError, match="forced backup unlink failure"):
+        debug_report.build_debug_report(config_path)
+
+    assert failed is True
+    assert target.read_bytes() == previous
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.tmp")) == []
+    assert list(retrieval_output.glob(".competition_debug_report.html.*.bak")) == []
+
+
 def test_build_defaults_to_retrieval_output_directory(tmp_path: Path) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
 
