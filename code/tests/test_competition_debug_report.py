@@ -2270,8 +2270,16 @@ def test_compact_selected_document_disclosures_keep_all_diagnostics_available(
         )
         for rank in range(1, 13)
     )
+    remainder_passage = replace(
+        topic.passage_rankings[0], docid=selected[10].docid
+    )
+    rendered_topic = replace(
+        topic,
+        selected_documents=selected,
+        passage_rankings=(*topic.passage_rankings, remainder_passage),
+    )
     rendered = render_debug_report(
-        replace(loaded, topics=(replace(topic, selected_documents=selected),))
+        replace(loaded, topics=(rendered_topic,))
     )
     section = rendered.split(
         '<section id="stage-literal-rag2026-0-selected-documents"', 1
@@ -2302,7 +2310,7 @@ def test_compact_selected_document_disclosures_keep_all_diagnostics_available(
         1,
     )[1]
     summary, detail = first_disclosure.split("</summary>", 1)
-    best = debug_report._best_stored_passage(topic, first.docid)
+    best = debug_report._best_stored_passage(rendered_topic, first.docid)
 
     assert "#1" in summary
     assert first.docid in summary
@@ -2322,6 +2330,37 @@ def test_compact_selected_document_disclosures_keep_all_diagnostics_available(
     assert first.text_sha256 in detail
     assert first.selection_rationale in detail
     assert html.escape(debug_report._bounded_excerpt(best.passage.text), quote=True) in detail
+
+    remainder_item = selected[10]
+    remainder_disclosure = remainder.split(
+        '<details class="selected-document-disclosure" '
+        'id="selected-document-literal-rag2026-0-11">',
+        1,
+    )[1]
+    remainder_summary, remainder_detail = remainder_disclosure.split("</summary>", 1)
+    remainder_best = debug_report._best_stored_passage(
+        rendered_topic, remainder_item.docid
+    )
+
+    assert debug_report._selected_document_reason(remainder_item) not in remainder_summary
+    assert "aggregate_score" not in remainder_summary
+    assert "bm25_score" not in remainder_summary
+    assert remainder_item.text_sha256 not in remainder_summary
+    assert remainder_best is not None
+    assert (
+        html.escape(debug_report._bounded_excerpt(remainder_best.passage.text), quote=True)
+        not in remainder_summary
+    )
+
+    assert debug_report._selected_document_reason(remainder_item) in remainder_detail
+    assert "aggregate_score" in remainder_detail
+    assert "bm25_score" in remainder_detail
+    assert remainder_item.text_sha256 in remainder_detail
+    assert remainder_item.selection_rationale in remainder_detail
+    assert (
+        html.escape(debug_report._bounded_excerpt(remainder_best.passage.text), quote=True)
+        in remainder_detail
+    )
 
 
 def test_membership_coverage_counts_valid_nonstandard_lanes_truthfully() -> None:
