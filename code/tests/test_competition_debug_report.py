@@ -1355,9 +1355,9 @@ def test_canonical_result_renderer_shows_caps_and_nests_claims_by_subnarrative(
     config_path, _output = _write_debug_run(tmp_path)
 
     rendered = render_debug_report(load_debug_report_data(config_path))
-    result_group = rendered.split('<section class="canonical-result"', 1)[1]
+    result_group = rendered.split('<details class="canonical-result"', 1)[1]
 
-    assert "subnarrative-1 canonical result" in result_group
+    assert "subnarrative-1 · complete · 1 canonical claim" in result_group
     assert "Selected budget</dt><dd>2" in result_group
     assert "Configured maximum claims</dt><dd>2" in result_group
     assert "Configured maximum supporting documents per claim</dt><dd>1" in result_group
@@ -1992,7 +1992,7 @@ def test_selected_documents_render_as_ordered_evidence_cards(tmp_path: Path) -> 
     assert "Selected pool in stored selection order" not in section
     assert "Original-narrative document selected at position 1" in section
     assert "Facet-only document selected at position 2" in section
-    assert "Strongest stored passage" in section
+    assert "Representative stored passage" in section
     assert html.escape(topic.subnarratives[0].text, quote=True) in section
     assert "Aggregate rank</dt><dd>1</dd>" in section
     assert '<details class="technical-provenance">' in section
@@ -2187,6 +2187,202 @@ def test_passage_disclosure_keeps_five_visible_rows_per_subnarrative(
             assert f"{sub.subnarrative_id}-doc-{rank}" in visible
         assert f"{sub.subnarrative_id}-doc-6" not in visible
         assert f"{sub.subnarrative_id}-doc-6" in remainder
+
+
+def test_subnarratives_render_as_readable_cards_without_a_default_table(
+    tmp_path: Path,
+) -> None:
+    """Decomposition text and queries should be readable before technical seals."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+
+    section = render_debug_report(loaded).split(
+        '<section id="stage-literal-rag2026-0-subnarratives"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-new-documents"', 1)[0]
+
+    assert '<ol class="subnarrative-list">' in section
+    assert section.count('<article class="subnarrative-card"') == len(
+        topic.subnarratives
+    )
+    assert "<table" not in section
+    for item in topic.subnarratives:
+        assert html.escape(item.text, quote=True) in section
+        assert html.escape(item.bm25_queries[0], quote=True) in section
+        technical = section.split(
+            '<details class="technical-provenance"><summary>Query and seal details</summary>',
+            1,
+        )[1]
+        assert item.semantic_query_sha256 in technical
+
+
+def test_new_documents_are_grouped_in_collapsed_lanes_with_bounded_cards(
+    tmp_path: Path,
+) -> None:
+    """Lane grouping and every stored document must survive the readable projection."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+
+    section = render_debug_report(loaded).split(
+        '<section id="stage-literal-rag2026-0-new-documents"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-selected-documents"', 1)[0]
+
+    lane_names = list(dict.fromkeys(item.first_seen_lane for item in topic.new_documents))
+    assert section.count('<details class="new-document-lane"') == len(lane_names)
+    assert section.count('<article class="new-document-card"') == len(
+        topic.new_documents
+    )
+    assert "<table" not in section
+    for lane_name in lane_names:
+        lane_count = sum(item.first_seen_lane == lane_name for item in topic.new_documents)
+        assert f"{html.escape(lane_name, quote=True)} — {lane_count} documents" in section
+    for item in topic.new_documents:
+        assert item.docid in section
+        assert item.text_sha256 in section
+
+
+def test_passage_tables_are_collapsed_per_subnarrative_and_keep_every_record(
+    tmp_path: Path,
+) -> None:
+    """Diagnostics stay complete while each facet owns its collapsed top-five view."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    first_sub = topic.subnarratives[0]
+    second_sub = replace(first_sub, subnarrative_id="subnarrative-2")
+    source = topic.passage_rankings[0]
+    rankings = tuple(
+        replace(
+            source,
+            subnarrative_id=sub.subnarrative_id,
+            docid=f"{sub.subnarrative_id}-diagnostic-{rank}",
+            aggregate_rank=rank,
+        )
+        for sub in (first_sub, second_sub)
+        for rank in range(1, 7)
+    )
+    rendered = render_debug_report(
+        replace(
+            loaded,
+            topics=(
+                replace(
+                    topic,
+                    subnarratives=(first_sub, second_sub),
+                    passage_rankings=rankings,
+                ),
+            ),
+        )
+    )
+    section = rendered.split(
+        '<section id="stage-literal-rag2026-0-top-passages"', 1
+    )[1].split(
+        '<section id="stage-literal-rag2026-0-final-selected-nuggets"', 1
+    )[0]
+
+    assert section.count('<details class="passage-ranking-disclosure"') == 2
+    assert '<details class="passage-ranking-disclosure" open' not in section
+    for sub in (first_sub, second_sub):
+        group = section.split(
+            f'data-subnarrative="{sub.subnarrative_id}"', 1
+        )[1].split('</details>', 1)[0]
+        assert "Top 5 of 6 stored rankings" in group
+        for rank in range(1, 7):
+            assert f"{sub.subnarrative_id}-diagnostic-{rank}" in section
+        assert "Show remaining 1 stored passage rankings" in section
+
+
+def test_canonical_diagnostics_are_collapsed_behind_compact_state_summaries(
+    tmp_path: Path,
+) -> None:
+    """Canonical tables should remain available without dominating the stage."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+
+    section = render_debug_report(loaded).split(
+        '<section id="stage-literal-rag2026-0-final-selected-nuggets"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-final-retrieval"', 1)[0]
+
+    assert '<details class="canonical-cluster-diagnostics">' in section
+    assert '<details class="canonical-cluster-diagnostics" open' not in section
+    assert section.count('<details class="canonical-result"') == len(
+        topic.canonical_results
+    )
+    assert '<details class="canonical-result" open' not in section
+    cluster_count = len(topic.evidence_clusters)
+    assert (
+        f"{cluster_count} selected evidence cluster"
+        f'{"" if cluster_count == 1 else "s"}'
+    ) in section
+    for result in topic.canonical_results:
+        claim_count = sum(
+            nugget.subnarrative_id == result.subnarrative_id
+            for nugget in topic.canonical_nuggets
+        )
+        assert (
+            f"{result.subnarrative_id} · {result.state} · {claim_count} canonical claim"
+            in section
+        )
+    assert "Selected evidence clusters" in section
+    assert "Claims for subnarrative-1" in section
+
+
+def test_final_retrieval_uses_compact_cards_with_collapsed_detail(
+    tmp_path: Path,
+) -> None:
+    """Organizer-facing rows should read as cards while retaining sealed provenance."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+
+    section = render_debug_report(loaded).split(
+        '<section id="stage-literal-rag2026-0-final-retrieval"', 1
+    )[1].split('<section id="stage-literal-rag2026-0-final-rag"', 1)[0]
+
+    assert '<ol class="retrieval-document-list">' in section
+    assert section.count('<article class="retrieval-document-card"') == len(
+        topic.retrieval_output.documents
+    )
+    assert "Organizer-facing retrieval rows" not in section
+    assert "<table" not in section
+    for item in topic.retrieval_output.documents:
+        assert item.docid in section
+        assert f"#{item.rank}" in section
+        assert "Retrieval provenance and document excerpt" in section
+        assert item.source_seals["scoring_manifest_sha256"] in section
+
+
+def test_representative_passage_and_rag_provenance_state_semantic_limits(
+    tmp_path: Path,
+) -> None:
+    """The UI must not imply cross-facet score comparability or unknown authorship."""
+    config_path, retrieval_output = _write_debug_run(tmp_path)
+    rag_config, _rag_output, _output_sha256 = _write_rag_run(
+        tmp_path, retrieval_output
+    )
+
+    rendered = render_debug_report(
+        load_debug_report_data(config_path, rag_config_path=rag_config)
+    )
+
+    assert "Strongest stored passage" not in rendered
+    assert "strongest available passage" not in rendered
+    assert "Representative stored passage" in rendered
+    assert (
+        "lowest stored aggregate rank among subnarratives; decomposition order breaks ties"
+        in rendered
+    )
+    assert "Ranks are facet-local; cross-facet logits are not compared." in rendered
+    assert "Implementation authorship is not recorded in sealed run artifacts." in rendered
+
+
+def test_all_disclosure_summaries_have_a_44_pixel_target(tmp_path: Path) -> None:
+    """Every progressive-disclosure control must meet the touch target contract."""
+    config_path, _output = _write_debug_run(tmp_path)
+    rendered = render_debug_report(load_debug_report_data(config_path))
+
+    assert "summary { min-height: 44px; display: flex; align-items: center;" in rendered
 
 
 def test_html_includes_run_summary_and_pipeline_legend(tmp_path: Path) -> None:

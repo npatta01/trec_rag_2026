@@ -2243,13 +2243,19 @@ caption {{ text-align: left; font-weight: 700; padding: .4rem 0; }}
 th, td {{ text-align: left; vertical-align: top; border: 1px solid var(--line); padding: .45rem; }}
 code, .break {{ overflow-wrap: anywhere; word-break: break-word; }}
 details:not(.topic-panel, .run-diagnostics) {{ margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid var(--line); }}
-summary {{ cursor: pointer; font-weight: 650; }}
+summary {{ min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 650; }}
 .status {{ display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }}
 .status-complete {{ color: #063; background: #d8f3df; }}
 .status-empty {{ color: #735400; background: #fff0bd; }}
 .status-fallback-extractive {{ color: #7a2300; background: #ffe0d2; }}
-.selected-document-list, .rag-answer-list, .rag-reference-list {{ display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }}
-.selected-document-card, .rag-answer-item, .rag-reference-card {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
+.subnarrative-list, .new-document-list, .selected-document-list, .retrieval-document-list, .rag-answer-list, .rag-reference-list {{ display: grid; gap: 1rem; margin: 0; padding: 0; list-style: none; }}
+.subnarrative-card, .new-document-card, .selected-document-card, .retrieval-document-card, .rag-answer-item, .rag-reference-card {{ min-width: 0; padding: clamp(.85rem, 2vw, 1.15rem); border: 1px solid var(--line); border-radius: .75rem; background: var(--surface-soft); }}
+.subnarrative-card h3, .new-document-card h4, .retrieval-document-card h3 {{ margin-top: 0; }}
+.query-list {{ margin-bottom: 0; }}
+.stage-note, .rank-caveat {{ color: var(--muted); }}
+.new-document-lane, .passage-ranking-disclosure, .canonical-cluster-diagnostics, .canonical-result {{ margin-block: 1rem; border: 1px solid var(--line); border-inline-start-width: .25rem; border-radius: .65rem; background: var(--surface-soft); }}
+.new-document-lane > summary, .passage-ranking-disclosure > summary, .canonical-cluster-diagnostics > summary, .canonical-result > summary {{ padding-inline: .5rem; }}
+.new-document-lane > .new-document-list, .passage-ranking-disclosure > .passage-diagnostics, .canonical-cluster-diagnostics > .table-wrap, .canonical-result > .canonical-result-detail {{ margin: .5rem; }}
 .card-heading {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem .75rem; margin: 0 0 .75rem; }}
 .card-rank, .citation-chip {{ display: inline-flex; min-height: 2rem; align-items: center; padding: .2rem .65rem; border-radius: 999px; font-weight: 750; }}
 .card-rank {{ color: var(--accent-ink); background: var(--accent); }}
@@ -2474,21 +2480,32 @@ def _render_subnarratives(topic: TopicReport, prefix: str) -> str:
             "Subnarratives",
             "<p>No generated subnarratives; the sealed run used the original-only fallback.</p>",
         )
-    rows = "".join(
-        "<tr>"
-        f"<th scope=\"row\">{_html(item.subnarrative_id)}</th>"
-        f"<td class=\"break\">{_html(item.text)}</td>"
-        f"<td>{_html('; '.join(item.bm25_queries))}</td>"
-        f"<td><code>{_html(item.semantic_query_sha256)}</code></td>"
-        "</tr>"
+    cards = "".join(
+        '<li><article class="subnarrative-card">'
+        f'<h3><code>{_html(item.subnarrative_id)}</code></h3>'
+        f'<p class="break">{_html(item.text)}</p>'
+        '<h4>Literal BM25 queries</h4><ol class="query-list">'
+        + "".join(
+            f'<li class="break">{_html(query)}</li>' for query in item.bm25_queries
+        )
+        + '</ol><details class="technical-provenance"><summary>Query and seal details</summary><dl>'
+        f'<dt>Semantic-query SHA-256</dt><dd><code>{_html(item.semantic_query_sha256)}</code></dd>'
+        '<dt>BM25 query SHA-256 values</dt><dd><ol>'
+        + "".join(
+            f'<li><code>{_html(digest)}</code></li>'
+            for digest in item.bm25_query_sha256s
+        )
+        + "</ol></dd></dl></details></article></li>"
         for item in topic.subnarratives
     )
-    body = _table(
-        "Stored decomposition and BM25 query text",
-        ("ID", "Subnarrative", "BM25 queries", "Semantic-query SHA-256"),
-        rows,
+    return _stage(
+        prefix,
+        "subnarratives",
+        "Subnarratives",
+        '<p class="stage-note">Stored decomposition facets and their literal '
+        'retrieval queries.</p><ol class="subnarrative-list">'
+        f"{cards}</ol>",
     )
-    return _stage(prefix, "subnarratives", "Subnarratives", body)
 
 
 def _render_new_documents(topic: TopicReport, prefix: str) -> str:
@@ -2497,31 +2514,14 @@ def _render_new_documents(topic: TopicReport, prefix: str) -> str:
         grouped.setdefault(item.first_seen_lane, []).append(item)
     groups: list[str] = []
     for lane_name, items in grouped.items():
-        rows = "".join(
-            "<tr>"
-            f"<th scope=\"row\">{_html(item.docid)}</th>"
-            f"<td class=\"break\">{_html(', '.join(item.memberships))}</td>"
-            f"<td>{_detail_lane_provenance(item.lane_provenance)}</td>"
-            f"<td><code>{_html(item.text_sha256 or 'Not stored')}</code></td>"
-            f"<td>{_detail_text('Document excerpt', item.excerpt)}</td>"
-            "</tr>"
+        cards = "".join(
+            _render_new_document_card(item)
             for item in items
         )
         groups.append(
-            '<section class="new-document-lane">'
-            f"<h3>{_html(lane_name)} — {_html(len(items))} documents</h3>"
-            + _table(
-                f"Facet-only documents first seen in {lane_name}",
-                (
-                    "DocID",
-                    "Memberships",
-                    "Lane rank and score provenance",
-                    "Text SHA-256",
-                    "Excerpt",
-                ),
-                rows,
-            )
-            + "</section>"
+            '<details class="new-document-lane">'
+            f"<summary>{_html(lane_name)} — {_html(len(items))} documents</summary>"
+            f'<ol class="new-document-list">{cards}</ol></details>'
         )
     body = (
         f"<p>{_html(len(topic.new_documents))} facet-only new documents; "
@@ -2536,6 +2536,27 @@ def _render_new_documents(topic: TopicReport, prefix: str) -> str:
     )
 
 
+def _render_new_document_card(item: NewDocumentReport) -> str:
+    excerpt = (
+        f'<p class="break">{_html(_bounded_excerpt(item.excerpt))}</p>'
+        if item.excerpt is not None
+        else '<p class="stage-note">Document text is not stored.</p>'
+    )
+    memberships = ", ".join(item.memberships) or "No stored memberships"
+    return (
+        '<li><article class="new-document-card">'
+        f'<h4><code>{_html(item.docid)}</code></h4>{excerpt}'
+        '<dl class="card-metadata">'
+        f'<div><dt>First-seen lane</dt><dd class="break">{_html(item.first_seen_lane)}</dd></div>'
+        f'<div><dt>Memberships</dt><dd class="break">{_html(memberships)}</dd></div>'
+        '</dl><details class="technical-provenance"><summary>Lane and document provenance</summary><dl>'
+        f'<dt>Text SHA-256</dt><dd><code>{_html(item.text_sha256 or "Not stored")}</code></dd>'
+        f'<dt>New-document marker</dt><dd>{_html(item.is_new)}</dd>'
+        f'<dt>Lane rank and score provenance</dt><dd>{_detail_lane_provenance(item.lane_provenance)}</dd>'
+        "</dl></details></article></li>"
+    )
+
+
 def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
     cards = "".join(
         _render_selected_document_card(topic, item)
@@ -2545,8 +2566,12 @@ def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
         prefix,
         "selected-documents",
         "Selected documents",
-        '<p>Stored selections, explained by their sealed lane evidence and strongest '
-        'available passage.</p><ol class="selected-document-list">'
+        '<p>Stored selections, explained by their sealed lane evidence and a '
+        'representative available passage.</p>'
+        '<p class="rank-caveat"><strong>Representative stored passage rule:</strong> '
+        'lowest stored aggregate rank among subnarratives; decomposition order breaks ties. '
+        'Ranks are facet-local; cross-facet logits are not compared.</p>'
+        '<ol class="selected-document-list">'
         f"{cards}</ol>",
     )
 
@@ -2560,12 +2585,12 @@ def _render_selected_document_card(
     status = "Original member" if item.is_original_member else "Facet-only"
     if best is None:
         evidence = (
-            '<div class="evidence-callout"><h4>Strongest stored passage</h4>'
+            '<div class="evidence-callout"><h4>Representative stored passage</h4>'
             "<p>No stored passage ranking is available for this selected document.</p></div>"
         )
     else:
         evidence = (
-            '<div class="evidence-callout"><h4>Strongest stored passage</h4>'
+            '<div class="evidence-callout"><h4>Representative stored passage</h4>'
             f'<p class="break">{_html(_bounded_excerpt(best.passage.text))}</p>'
             '<dl class="card-metadata">'
             f'<div><dt>Subnarrative</dt><dd><code>{_html(best.subnarrative_id)}</code></dd></div>'
@@ -2669,13 +2694,31 @@ def _render_passages(topic: TopicReport, prefix: str) -> str:
         heading_id = (
             f"{prefix}-top-passages-{_topic_anchor(subnarrative.subnarrative_id)}"
         )
+        visible_count = min(5, len(rankings))
+        count_summary = (
+            f"Top {visible_count} of {len(rankings)} stored rankings"
+            if len(rankings) > visible_count
+            else f"{len(rankings)} stored ranking"
+            + ("" if len(rankings) == 1 else "s")
+        )
         groups.append(
             '<section class="passage-ranking-group" '
             f'aria-labelledby="{_html(heading_id)}"><h3 id="{_html(heading_id)}">'
             f"Subnarrative {_html(subnarrative.subnarrative_id)}</h3>"
-            f"{visible}{disclosure}</section>"
+            '<details class="passage-ranking-disclosure" '
+            f'data-subnarrative="{_html(subnarrative.subnarrative_id)}">'
+            f"<summary>{_html(count_summary)} · diagnostic table</summary>"
+            f'<div class="passage-diagnostics">{visible}{disclosure}</div>'
+            "</details></section>"
         )
-    return _stage(prefix, "top-passages", "Top passages", "".join(groups))
+    return _stage(
+        prefix,
+        "top-passages",
+        "Top passages",
+        '<p class="stage-note">Aggregate ranks are meaningful only within each '
+        'subnarrative. Open a facet to inspect its stored diagnostic table.</p>'
+        + "".join(groups),
+    )
 
 
 def _render_nuggets(topic: TopicReport, prefix: str) -> str:
@@ -2689,12 +2732,30 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
     cluster_rows = "".join(
         "<tr>"
         f"<th scope=\"row\">{_html(item.subnarrative_id)}</th><td>{_html(item.selected_budget)}</td>"
-        f"<td>{_html(item.cluster_id)}</td><td class=\"break\">{_html(item.representative_text)}</td>"
+        f"<td>{_html(item.cluster_id)}</td><td class=\"break\">{_html(_bounded_excerpt(item.representative_text))}</td>"
         f"<td>{_html(_number(item.representative_raw_logit))}</td>"
         f"<td>{_detail_evidence(item.evidence)}</td></tr>"
         for item in topic.evidence_clusters
     )
-    body = _table("Selected evidence clusters", ("Subnarrative", "Budget", "Cluster", "Representative text", "Representative raw logit", "Evidence"), cluster_rows)
+    cluster_count = len(topic.evidence_clusters)
+    body = (
+        '<details class="canonical-cluster-diagnostics"><summary>'
+        f'{_html(cluster_count)} selected evidence cluster'
+        f'{"" if cluster_count == 1 else "s"} · diagnostic table</summary>'
+        + _table(
+            "Selected evidence clusters",
+            (
+                "Subnarrative",
+                "Budget",
+                "Cluster",
+                "Representative text",
+                "Representative raw logit",
+                "Evidence",
+            ),
+            cluster_rows,
+        )
+        + "</details>"
+    )
     result_groups: list[str] = []
     for result in topic.canonical_results:
         claims = tuple(
@@ -2706,7 +2767,7 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
             "<tr>"
             f"<th scope=\"row\">{_html(item.canonical_nugget_id)}</th>"
             f"<td>{_html(item.nugget_kind)}</td>"
-            f"<td class=\"break\">{_html(item.claim_text)}</td>"
+            f"<td class=\"break\">{_html(_bounded_excerpt(item.claim_text))}</td>"
             f"<td>{_detail_evidence(item.evidence)}</td></tr>"
             for item in claims
         )
@@ -2724,27 +2785,24 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
             else "<p>No canonical claims were retained for this result.</p>"
         )
         result_groups.append(
-            '<section class="canonical-result">'
-            f"<h3>{_html(result.subnarrative_id)} canonical result</h3>"
-            "<dl>"
+            '<details class="canonical-result"><summary>'
+            f"{_html(result.subnarrative_id)} · {_html(result.state)} · {_html(claim_label)}"
+            '</summary><div class="canonical-result-detail"><dl>'
             f'<dt>State</dt><dd><span class="status {_status_class(result.state)}">{_html(result.state)}</span></dd>'
             f"<dt>Selected budget</dt><dd>{_html(result.selected_budget)}</dd>"
             f"<dt>Configured maximum claims</dt><dd>{_html(result.maximum_claims)}</dd>"
             f"<dt>Configured maximum supporting documents per claim</dt><dd>{_html(result.maximum_supporting_documents)}</dd>"
             f"<dt>Claims</dt><dd>{_html(claim_label)}</dd>"
             "</dl>"
-            f"{claims_body}</section>"
+            f"{claims_body}</div></details>"
         )
     body += "".join(result_groups)
     return _stage(prefix, "final-selected-nuggets", "Final selected nuggets", body)
 
 
 def _render_retrieval(topic: TopicReport, prefix: str) -> str:
-    rows = "".join(
-        "<tr>"
-        f"<th scope=\"row\">{_html(item.rank)}</th><td>{_html(item.docid)}</td><td>{_html(_number(item.score))}</td>"
-        f"<td>{_html(item.selection_rank)}</td><td>{_html(item.selected_from_lane)}</td>"
-        f"<td>{_detail_retrieval_provenance(item)}</td><td>{_detail_text('Document excerpt', item.text)}</td></tr>"
+    cards = "".join(
+        _render_retrieval_document_card(item)
         for item in topic.retrieval_output.documents
     )
     projection = (
@@ -2753,7 +2811,34 @@ def _render_retrieval(topic: TopicReport, prefix: str) -> str:
         else ""
     )
     intro = f"<p>Selected-pool depth: {_html(topic.retrieval_output.selected_pool_depth)}. Final supported depth: {_html(topic.retrieval_output.final_supported_depth)}.{projection}</p>"
-    return _stage(prefix, "final-retrieval", "Final retrieval", intro + _table("Organizer-facing retrieval rows", ("Rank", "DocID", "Score", "Selection rank", "Source lane", "Sealed provenance", "Document text"), rows))
+    return _stage(
+        prefix,
+        "final-retrieval",
+        "Final retrieval",
+        intro + f'<ol class="retrieval-document-list">{cards}</ol>',
+    )
+
+
+def _render_retrieval_document_card(item: RetrievalDocumentReport) -> str:
+    return (
+        '<li><article class="retrieval-document-card">'
+        '<h3 class="card-heading">'
+        f'<span class="card-rank">#{_html(item.rank)}</span>'
+        f'<code>{_html(item.docid)}</code></h3>'
+        '<dl class="card-metadata">'
+        f'<div><dt>Score</dt><dd>{_html(_number(item.score))}</dd></div>'
+        f'<div><dt>Selection rank</dt><dd>{_html(item.selection_rank)}</dd></div>'
+        f'<div><dt>Source lane</dt><dd class="break">{_html(item.selected_from_lane)}</dd></div>'
+        '</dl><details class="technical-provenance"><summary>'
+        'Retrieval provenance and document excerpt</summary><dl>'
+        f'<dt>Selected lane rank</dt><dd>{_html(item.selected_from_lane_rank)}</dd>'
+        f'<dt>Stage</dt><dd>{_html(item.stage)}</dd>'
+        '</dl><h4>Sealed provenance</h4>'
+        f'{_retrieval_provenance_fields(item)}'
+        f'<h4>Document excerpt (first {_DOCUMENT_EXCERPT_CHARACTERS} characters)</h4>'
+        f'<p class="break">{_html(_bounded_excerpt(item.text))}</p>'
+        "</details></article></li>"
+    )
 
 
 def _render_final_rag(topic: TopicReport, prefix: str) -> str:
@@ -2785,7 +2870,7 @@ def _render_final_rag(topic: TopicReport, prefix: str) -> str:
         f'<div><dt>Model</dt><dd><code>{_html(rag.model)}</code></dd></div>'
         '<div><dt>Validation</dt><dd>Validated against standard retrieval inputs</dd></div>'
         f'<div><dt>Answer length</dt><dd>{_html(rag.word_count)} words</dd></div>'
-        "</dl></aside>"
+        "</dl><p>Implementation authorship is not recorded in sealed run artifacts.</p></aside>"
         '<h3>Generated answer</h3><ol class="rag-answer-list">'
         f"{answers}</ol><h3>Referenced documents</h3>"
         '<ol class="rag-reference-list">'
@@ -2865,19 +2950,9 @@ def _table(caption: str, headings: Sequence[str], rows: str) -> str:
     return f'<div class="table-wrap"><table><caption>{_html(caption)}</caption><thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>'
 
 
-def _detail_text(summary: str, value: str | None) -> str:
-    if value is None:
-        return "Not stored"
-    excerpt = value[:_DOCUMENT_EXCERPT_CHARACTERS]
-    if len(value) > _DOCUMENT_EXCERPT_CHARACTERS:
-        excerpt += "…"
-    label = f"{summary} (first {_DOCUMENT_EXCERPT_CHARACTERS} characters)"
-    return f'<details><summary>{_html(label)}</summary><p class="break">{_html(excerpt)}</p></details>'
-
-
 def _detail_passages(passages: Sequence[WinningPassageReport]) -> str:
     items = "".join(
-        f'<li>Chunk {_html(item.chunk_index)}, offsets {_html(item.start_char)}–{_html(item.end_char)}, raw logit {_html(_number(item.raw_logit))}: <span class="break">{_html(item.text)}</span></li>'
+        f'<li>Chunk {_html(item.chunk_index)}, offsets {_html(item.start_char)}–{_html(item.end_char)}, raw logit {_html(_number(item.raw_logit))}: <span class="break">{_html(_bounded_excerpt(item.text))}</span></li>'
         for item in passages
     )
     return f'<details><summary>{_html(len(passages))} stored passage(s)</summary><ul>{items}</ul></details>'
@@ -2903,13 +2978,13 @@ def _detail_lane_provenance(
 
 def _detail_evidence(evidence: Sequence[CanonicalEvidenceReport]) -> str:
     items = "".join(
-        f'<li><code>{_html(item.docid)}</code>: <span class="break">{_html(item.text)}</span></li>'
+        f'<li><code>{_html(item.docid)}</code>: <span class="break">{_html(_bounded_excerpt(item.text))}</span></li>'
         for item in evidence
     )
     return f'<details><summary>{_html(len(evidence))} evidence item(s)</summary><ul>{items}</ul></details>'
 
 
-def _detail_retrieval_provenance(item: RetrievalDocumentReport) -> str:
+def _retrieval_provenance_fields(item: RetrievalDocumentReport) -> str:
     memberships = "; ".join(
         _membership_text(value) for value in item.memberships
     ) or "None"
@@ -2917,21 +2992,11 @@ def _detail_retrieval_provenance(item: RetrievalDocumentReport) -> str:
     nuggets = ", ".join(item.canonical_nugget_ids) or "None"
     seals = "; ".join(f"{key}: {value}" for key, value in sorted(item.source_seals.items())) or "None"
     return (
-        "<details><summary>Memberships, scores, nuggets, and seals</summary><dl>"
+        "<dl>"
         f"<dt>Memberships</dt><dd class=\"break\">{_html(memberships)}</dd>"
         f"<dt>Subnarrative scores</dt><dd class=\"break\">{_html(scores)}</dd>"
         f"<dt>Canonical nugget IDs</dt><dd class=\"break\">{_html(nuggets)}</dd>"
-        f"<dt>Source seals</dt><dd class=\"break\">{_html(seals)}</dd></dl></details>"
-    )
-
-
-def _detail_selected_provenance(item: SelectedDocumentReport) -> str:
-    memberships = "; ".join(_membership_text(value) for value in item.memberships)
-    return (
-        "<details><summary>Memberships and selection rationale</summary><dl>"
-        f'<dt>Memberships</dt><dd class="break">{_html(memberships)}</dd>'
-        f'<dt>Rationale</dt><dd class="break">{_html(item.selection_rationale)}</dd>'
-        "</dl></details>"
+        f"<dt>Source seals</dt><dd class=\"break\">{_html(seals)}</dd></dl>"
     )
 
 
