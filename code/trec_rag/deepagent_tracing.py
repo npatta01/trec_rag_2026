@@ -63,7 +63,10 @@ def _normalize_otlp_http_endpoint(endpoint: str) -> str:
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or any(character.isspace() for character in endpoint)
+        or any(
+            character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F
+            for character in endpoint
+        )
     ):
         raise ValueError(_INVALID_ENDPOINT_MESSAGE)
 
@@ -81,10 +84,14 @@ def _settings(environ: Mapping[str, str]) -> tuple[str | None, str, bool]:
         else None
     )
     project = environ.get("PHOENIX_PROJECT_NAME") or DEFAULT_PHOENIX_PROJECT
+    api_key = environ.get("PHOENIX_API_KEY")
+    cloud_hostname = (
+        (urlsplit(endpoint).hostname or "").lower().rstrip(".") if endpoint else ""
+    )
     if (
         endpoint
-        and urlsplit(endpoint).hostname == _CLOUD_HOST
-        and not environ.get("PHOENIX_API_KEY")
+        and cloud_hostname == _CLOUD_HOST
+        and (api_key is None or not api_key.strip())
     ):
         raise ValueError("PHOENIX_API_KEY is required for Phoenix Cloud")
     return endpoint, project, endpoint is not None

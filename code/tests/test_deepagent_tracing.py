@@ -38,6 +38,30 @@ def test_phoenix_cloud_requires_key() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "api_key"),
+    [
+        ("https://APP.PHOENIX.ARIZE.COM./s/example", None),
+        ("https://app.phoenix.arize.com/s/example", " \t "),
+    ],
+)
+def test_phoenix_cloud_requires_nonblank_key_for_canonical_host(
+    endpoint: str, api_key: str | None
+) -> None:
+    environ = {"PHOENIX_COLLECTOR_ENDPOINT": endpoint}
+    if api_key is not None:
+        environ["PHOENIX_API_KEY"] = api_key
+
+    with (
+        patch("trec_rag.deepagent_tracing.phoenix_register") as register,
+        patch("trec_rag.deepagent_tracing.LangChainInstrumentor.instrument"),
+    ):
+        with pytest.raises(ValueError, match="PHOENIX_API_KEY"):
+            create_retrieval_tracing(environ=environ)
+
+    register.assert_not_called()
+
+
 def test_injected_provider_captures_agent_and_retriever_hierarchy(
     span_exporter: InMemorySpanExporter, provider: TracerProvider
 ) -> None:
@@ -197,7 +221,7 @@ def test_live_registration_uses_normalized_otlp_http_endpoint(
     environ = {
         "PHOENIX_COLLECTOR_ENDPOINT": configured_endpoint,
         "PHOENIX_PROJECT_NAME": "custom-project",
-        "PHOENIX_API_KEY": "test-key",
+        "PHOENIX_API_KEY": "  test-key  ",
     }
     with (
         patch("trec_rag.deepagent_tracing.phoenix_register", return_value=provider) as register,
@@ -211,7 +235,7 @@ def test_live_registration_uses_normalized_otlp_http_endpoint(
         project_name="custom-project",
         protocol="http/protobuf",
         batch=True,
-        api_key="test-key",
+        api_key="  test-key  ",
         verbose=False,
     )
 
@@ -224,6 +248,8 @@ def test_live_registration_uses_normalized_otlp_http_endpoint(
         "https://user:private-token@collector.example",
         "https://collector.example/traces?api_key=private-token",
         "https://collector.example/traces#private-token",
+        "https://collector.example/traces\x01private-token",
+        "https://collector.example/traces\x7fprivate-token",
     ],
 )
 def test_malformed_collector_endpoint_is_rejected_without_disclosure(
