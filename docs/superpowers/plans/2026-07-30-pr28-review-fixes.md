@@ -17,6 +17,91 @@
 - Leave `trec-rag-data` and `trec-rag-skills` pinned and clean.
 - Run Python through `uv run --no-sync .venv/bin/python` for this user-selected workflow.
 
+## Integration Evidence
+
+Recorded on 2026-07-30 from linked worktree
+`/tmp/trec-rag-competition-paths` on
+`codex/competition-retrieval-rag`. This evidence covers Tasks 1-3 and Task 4
+Steps 1, 2, and 4. The controller-owned whole-fix review and PR push remain
+pending; this section does not claim either is complete.
+
+### TDD and scoped-review record
+
+- Task 1 initial RED: `4 failed, 95 deselected in 0.13s`, exposing numeric
+  prompt labels, divergent topic parsing, encoded-secret persistence, and
+  nonexistent CLI flags. Initial GREEN was `4 passed, 95 deselected in 0.11s`;
+  the module passed with `99 passed in 0.23s`. Review fix round 1 then reproduced
+  whitespace-header and layered-percent-decoding gaps with
+  `2 failed, 4 passed, 96 deselected in 0.12s`; GREEN was
+  `6 passed, 96 deselected in 0.07s`, followed by
+  `102 passed in 0.24s`. Scoped spec and quality review were clean after commit
+  `3ff0f35`.
+- Task 2 initial RED was `3 failed, 95 deselected in 0.34s`, reproducing a
+  hash/parse replacement race, dead direct-DocID navigation, and uncaught CLI
+  failures. Initial GREEN was `3 passed, 95 deselected in 0.11s`; the module
+  passed with `98 passed in 1.96s`. Review fix round 1 reproduced the unauthenticated
+  organizer-run reopen with `1 failed, 98 deselected in 0.24s`; GREEN was
+  `1 passed, 98 deselected in 0.10s`, followed by
+  `99 passed in 2.04s`. Scoped review was clean after commit `f132504`, with
+  four explicitly deferred minor test/cleanup items preserved in the SDD
+  ledger.
+- Task 3 RED processed three distinct documents and failed because the scoring
+  cache retained all three (`maxsize=128, currsize=3`). GREEN was
+  `1 passed, 13 deselected`; the two evidence modules passed with
+  `18 passed in 0.15s`. Review fix round 1 added unconditional cache teardown;
+  focused verification remained `1 passed, 13 deselected in 0.08s` and the two
+  modules remained `18 passed in 0.15s`. Scoped review was clean after commit
+  `cfa662c`.
+
+### Complete verification and sealed post-run refresh
+
+- Fresh repository verification passed: `676 passed in 29.12s`.
+  `git diff --check origin/master...HEAD` exited 0 with no output.
+- Only `trec_rag.competition_debug_report` was invoked. Retrieval, reranking,
+  decomposition, canonicalization, and RAG generation were not invoked. The
+  report-only receipt included `rag2026-0` and `rag2026-1`, reported
+  `rag_included: true`, and retained SHA-256
+  `17855f3ace3b662b67db4a6ff2bb31c7be857f26ff5be2b0d78644287cef5c71`
+  for the organizer retrieval TSV and
+  `65d2efae3dd54d0428f9bf49ed9fb2666996453418128d6df2a400b89ea076af`
+  for the organizer RAG JSONL. The official topics input remained
+  `72dc2fd358d3eeda973397ccd7a8775545b19a6deaefc67709167eee6a9f8a2c`.
+- Real Google Chrome 150 checks passed at desktop `1440x1000` and true emulated
+  mobile `390x844`: exactly one visible topic and one selected topic control;
+  the approved story-first nine-stage order; 38 citation links with zero broken
+  targets; topic-2 citation navigation into the revealed owning reference;
+  ten directly visible selected-document disclosures plus one closed
+  remaining-90 disclosure; four compact summary fields with a computed `10.4px`
+  inline gap; and no horizontal page overflow (`1425 == 1425` desktop content
+  width and `390 == 390` mobile). Light-mode screenshots were inspected at both
+  viewports. A separately rendered organizer-valid direct-DocID fixture linked
+  `doc-original` to numeric reference anchor `0` and revealed that target after
+  activation.
+- Exact overall funnels were
+  `709 -> 100 -> 800 -> 2016 -> 320 -> 148 -> 71` for `rag2026-0` and
+  `576 -> 100 -> 600 -> 1374 -> 240 -> 90 -> 60` for `rag2026-1`.
+  All per-subnarrative rows matched sealed records: topic 0 had eight rows of
+  `100` ranked documents, `252` passages, and `40` clusters with nugget counts
+  `15, 20, 20, 13, 20, 20, 20, 20`; topic 1 had six rows of `100` ranked
+  documents, `229` passages, and `40` clusters with nugget counts
+  `10, 10, 10, 20, 20, 20`.
+- Three unique values from the two available local `.env` paths had zero
+  occurrences in the generated report. Chrome loaded zero external resources,
+  and static HTML inspection found no external script, stylesheet, image,
+  frame, audio, or video dependency. Three credential-pattern diff hits were
+  inspected and were the explicit fake keys in redaction tests, not credentials.
+- The source report, mode-`0600` rendered copy, and live HTTPS response are
+  byte-identical at SHA-256
+  `ec897ac66d6d4c4e66ff27818775d7e0bc71803c8aa2e64930dc48a0abbfbc50`;
+  live HTTPS returned 200. Tailscale Serve and Funnel status showed only the
+  authorized `tailnet only` mapping at
+  `https://npatta01-framework.tail481212.ts.net/`, with no public Funnel.
+- `trec-rag-data` remained clean and detached at
+  `a6255c10119a2984a874f46172d94045168ab1f3`; `trec-rag-skills` remained clean
+  and detached at `f281e88f61252662033c681df8b1ed2d0ceda97e`. The organizer
+  TSV/RAG hashes and both submodule states were identical before and after the
+  report-only refresh.
+
 ---
 
 ### Task 1: Harden RAG prompts, parsing, redaction, and operator guidance
@@ -158,14 +243,14 @@ git commit -m "Bound document projection caches"
 - Consumes: Tasks 1-3 and the existing sealed two-topic retrieval/RAG artifacts.
 - Produces: a review-clean branch, refreshed private HTML, and an updated PR #28 head.
 
-- [ ] **Step 1: Run complete verification**
+- [x] **Step 1: Run complete verification**
 
 ```bash
 uv run --no-sync .venv/bin/python -m pytest -q
 git diff --check origin/master...HEAD
 ```
 
-- [ ] **Step 2: Run the post-run report CLI only**
+- [x] **Step 2: Run the post-run report CLI only**
 
 Regenerate from the existing two-topic configs without invoking retrieval or generation. Verify both topic IDs, organizer input hashes, direct-docid citation targets, desktop/mobile overflow, and source/rendered/live byte identity before replacing the tailnet-only portal copy.
 
@@ -173,7 +258,7 @@ Regenerate from the existing two-topic configs without invoking retrieval or gen
 
 Review each task commit for spec and code quality, then review the complete `d378352..HEAD` fix range. Resolve every Critical/Important finding before continuing.
 
-- [ ] **Step 4: Record evidence and commit the plan**
+- [x] **Step 4: Record evidence and commit the plan**
 
 Record RED failures, GREEN counts, final full-suite count, browser evidence, artifact SHA, unchanged input/submodule states, and review outcome.
 
