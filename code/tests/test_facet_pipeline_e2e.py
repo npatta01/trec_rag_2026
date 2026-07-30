@@ -11,6 +11,10 @@ import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
 import trec_rag.nuggetizer_adapter as nuggetizer_adapter
 import trec_rag.competition_retrieval as competition_retrieval
+from trec_rag.competition_debug_report import (
+    load_debug_report_data,
+    render_debug_report,
+)
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
@@ -799,3 +803,52 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
     assert similarity.calls == []
     assert canonical_factories == []
     assert (canonical_root / "canonical-nuggets.jsonl").read_bytes() == b""
+
+    report_data = load_debug_report_data(config)
+    report_topic = report_data.topics[0]
+    assert report_topic.original_only_fallback is True
+    assert report_topic.subnarratives == ()
+    assert report_topic.new_documents == ()
+    assert report_topic.passage_rankings == ()
+    assert report_topic.evidence_clusters == ()
+    assert report_topic.canonical_results == ()
+    assert [row.docid for row in report_topic.retrieval_output.documents] == [
+        "original-d1",
+        "original-d2",
+    ]
+    assert {
+        row.stage for row in report_topic.retrieval_output.documents
+    } == {"original_only_fallback"}
+
+    rendered = render_debug_report(report_data)
+    assert "Original-only fallback" in rendered
+    assert "No generated subnarratives" in rendered
+    assert "No downstream passage rankings" in rendered
+    assert "No canonical result rows" in rendered
+    assert "Final retrieval uses the sealed original-only selected pool" in rendered
+
+    provenance[0]["memberships"].append(
+        {
+            "lane_name": "facet:forged:text",
+            "aggregate_rank": 1,
+            "aggregate_score": 1.0,
+            "bm25_rank": 1,
+            "bm25_score": 1.0,
+        }
+    )
+    forged_body = b"".join(
+        (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        for row in provenance
+    )
+    exported.provenance.write_bytes(forged_body)
+    manifest["artifacts"][exported.provenance.name] = {
+        "bytes": len(forged_body),
+        "sha256": hashlib.sha256(forged_body).hexdigest(),
+    }
+    exported.manifest.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="membership differs from sealed selection"):
+        load_debug_report_data(config)

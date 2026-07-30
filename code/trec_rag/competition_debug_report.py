@@ -8,6 +8,7 @@ already-written artifacts.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import html
@@ -18,11 +19,10 @@ from pathlib import Path
 import re
 import tempfile
 from types import MappingProxyType
-from typing import Any, BinaryIO, Mapping, Sequence
+from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 import zipfile
 
 from trec_rag.competition_rag import (
-    load_documents,
     load_queries,
     load_rag_generation_config,
     load_trec_run,
@@ -41,7 +41,7 @@ from trec_rag.topics import Topic
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSONL_BYTES = 16 * 1024 * 1024
-_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_MAX_STREAM_RECORD_BYTES = 8 * 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _SCORE_FIELDS = {
     "topic_id", "lane_name", "semantic_query_sha256", "docid", "bm25_rank",
@@ -49,6 +49,13 @@ _SCORE_FIELDS = {
     "weighted_passage_raw_logit", "within_document_span_support", "winning_passages",
     "score_representation", "text_sha256", "selection_rank", "subnarrative_id",
     "bm25_queries", "bm25_query_sha256s", "downstream_only",
+}
+_LANE_SCORE_FIELDS = {
+    "topic_id", "lane_name", "bm25_query_sha256", "semantic_query_sha256",
+    "docid", "bm25_rank", "bm25_score", "aggregate_rank", "aggregate_score",
+    "long_document_raw_logit", "weighted_passage_raw_logit",
+    "within_document_span_support", "winning_passages", "score_representation",
+    "text_sha256",
 }
 _PASSAGE_FIELDS = {"chunk_index", "start_char", "end_char", "raw_logit", "weighted_rank"}
 _CANONICAL_STATES = {"complete", "empty", "fallback_extractive"}
@@ -80,6 +87,16 @@ class SelectedDocumentReport:
 
 
 @dataclass(frozen=True)
+class LaneScoreProvenanceReport:
+    lane_name: str
+    aggregate_rank: int
+    aggregate_score: float
+    bm25_rank: int
+    bm25_score: float
+    text_sha256: str
+
+
+@dataclass(frozen=True)
 class NewDocumentReport:
     docid: str
     first_seen_lane: str
@@ -87,6 +104,7 @@ class NewDocumentReport:
     is_new: bool
     text_sha256: str | None
     excerpt: str | None
+    lane_provenance: tuple[LaneScoreProvenanceReport, ...]
 
 
 @dataclass(frozen=True)
@@ -152,6 +170,16 @@ class CanonicalNuggetReport:
 
 
 @dataclass(frozen=True)
+class CanonicalResultReport:
+    subnarrative_id: str
+    selected_budget: int
+    state: str
+    maximum_claims: int
+    maximum_supporting_documents: int
+    nuggets: tuple[CanonicalNuggetReport, ...]
+
+
+@dataclass(frozen=True)
 class RetrievalDocumentReport:
     docid: str
     rank: int
@@ -164,6 +192,7 @@ class RetrievalDocumentReport:
     subnarrative_scores: tuple[Mapping[str, Any], ...]
     canonical_nugget_ids: tuple[str, ...]
     source_seals: Mapping[str, str]
+    stage: str
 
 
 @dataclass(frozen=True)
@@ -199,7 +228,9 @@ class TopicReport:
     passage_rankings: tuple[PassageRankingReport, ...]
     evidence_clusters: tuple[EvidenceClusterReport, ...]
     canonical_nuggets: tuple[CanonicalNuggetReport, ...]
+    canonical_results: tuple[CanonicalResultReport, ...]
     retrieval_output: RetrievalOutputReport
+    original_only_fallback: bool = False
     rag_output: RagOutputReport | None = None
 
 
@@ -208,6 +239,7 @@ class _RootRetrievalArtifacts:
     run_docids: Mapping[str, tuple[str, ...]]
     provenance: Mapping[tuple[str, str], Mapping[str, Any]]
     document_text: Mapping[tuple[str, str], str]
+    document_stage: Mapping[tuple[str, str], str]
     topic_depths: Mapping[str, tuple[int, int]]
 
 
@@ -262,7 +294,11 @@ def load_debug_report_data(
         selected_topics = requested_topics
 
     retrieval_artifacts = _load_root_retrieval_artifacts(
-        output_dir, export, exported_topics, receipts
+        output_dir,
+        export,
+        exported_topics,
+        receipts,
+        retained_topic_ids={topic.id for topic in selected_topics},
     )
     reports = tuple(
         _load_topic_report(config, output_dir, topic, retrieval_artifacts, receipts)
@@ -375,10 +411,23 @@ def _load_topic_report(
         receipts[_portable_label(output_dir, path)] = _sha256_file(path, maximum)
 
     decomposition = _read_json_object(decomposition_path, "decomposition")
-    subnarratives = _decode_decomposition(decomposition, topic)
+    subnarratives, original_only_fallback = _decode_decomposition(
+        decomposition, topic
+    )
     selection = _read_json_object(selection_path, "selection checkpoint")
     selected = _decode_selected_documents(_read_jsonl(selected_path, "selected documents"), topic)
     union_rows, selected = _decode_selection(selection, topic, selected)
+    if original_only_fallback and (
+        any(row["memberships"] != ("original",) for row in union_rows)
+        or any(
+            row.selected_from_lane != "original"
+            or not row.is_original_member
+            or tuple(item.get("lane_name") for item in row.memberships)
+            != ("original",)
+            for row in selected
+        )
+    ):
+        raise ValueError("original-only fallback selection provenance is invalid")
 
     audit_hashes = _load_audit_hashes(
         topic_root,
@@ -391,38 +440,90 @@ def _load_topic_report(
         config.retrieval.candidate_depth_per_query,
     )
     selected_by_docid = {row.docid: row for row in selected}
+    lane_provenance = _load_lane_score_provenance(
+        topic_root,
+        output_dir,
+        receipts,
+        topic,
+        subnarratives,
+        union_rows,
+        retrieval_artifacts,
+    )
+    for (docid, _lane_name), lane_score in lane_provenance.items():
+        audit_hash = audit_hashes.get(docid)
+        if audit_hash is not None and audit_hash != lane_score.text_sha256:
+            raise ValueError("lane score text hash differs from retrieval audit")
     for row in selected:
         audit_hash = audit_hashes.get(row.docid)
         if audit_hash is not None and audit_hash != row.text_sha256:
             raise ValueError("selected document text hash differs from retrieval audit")
+        for membership in row.memberships:
+            source = lane_provenance.get(
+                (row.docid, membership.get("lane_name"))
+            )
+            if source is None or (
+                source.aggregate_rank,
+                source.aggregate_score,
+                source.bm25_rank,
+                source.bm25_score,
+                source.text_sha256,
+            ) != (
+                membership.get("aggregate_rank"),
+                membership.get("aggregate_score"),
+                membership.get("bm25_rank"),
+                membership.get("bm25_score"),
+                row.text_sha256,
+            ):
+                raise ValueError(
+                    "selected document membership differs from sealed lane score"
+                )
 
     passage_rankings = _load_passage_rankings(
-        topic_root, output_dir, receipts, topic, subnarratives, selected
+        topic_root,
+        output_dir,
+        receipts,
+        topic,
+        subnarratives,
+        selected,
+        allow_empty=original_only_fallback,
     )
-    evidence_clusters, canonical_nuggets = _load_canonical_projection(
-        config, topic_root, output_dir, receipts, topic, subnarratives, selected
+    evidence_clusters, canonical_nuggets, canonical_results = _load_canonical_projection(
+        config,
+        topic_root,
+        output_dir,
+        receipts,
+        topic,
+        subnarratives,
+        selected,
+        original_only_fallback=original_only_fallback,
     )
     retrieval_output = _decode_retrieval_output(
-        topic, selected, canonical_nuggets, retrieval_artifacts
+        topic,
+        selected,
+        canonical_nuggets,
+        retrieval_artifacts,
+        original_only_fallback=original_only_fallback,
     )
 
-    new_documents = tuple(
+    new_documents = () if original_only_fallback else tuple(
         NewDocumentReport(
             docid=row["docid"],
             first_seen_lane=row["first_seen_lane"],
             memberships=row["memberships"],
             is_new="original" not in row["memberships"],
-            text_sha256=audit_hashes.get(
-                row["docid"],
-                selected_by_docid[row["docid"]].text_sha256
-                if row["docid"] in selected_by_docid
-                else None,
-            ),
+            text_sha256=lane_provenance[
+                (row["docid"], row["memberships"][0])
+            ].text_sha256,
             excerpt=selected_by_docid[row["docid"]].text
             if row["docid"] in selected_by_docid
             else None,
+            lane_provenance=tuple(
+                lane_provenance[(row["docid"], lane)]
+                for lane in row["memberships"]
+            ),
         )
         for row in union_rows
+        if "original" not in row["memberships"]
     )
     return TopicReport(
         topic_id=topic.id,
@@ -434,7 +535,9 @@ def _load_topic_report(
         passage_rankings=passage_rankings,
         evidence_clusters=evidence_clusters,
         canonical_nuggets=canonical_nuggets,
+        canonical_results=canonical_results,
         retrieval_output=retrieval_output,
+        original_only_fallback=original_only_fallback,
     )
 
 
@@ -443,29 +546,41 @@ def _load_root_retrieval_artifacts(
     export: Mapping[str, Any],
     topics: Sequence[Topic],
     receipts: dict[str, str],
+    *,
+    retained_topic_ids: set[str] | None = None,
 ) -> _RootRetrievalArtifacts:
+    retained_ids = (
+        {topic.id for topic in topics}
+        if retained_topic_ids is None
+        else set(retained_topic_ids)
+    )
+    topic_ids = {topic.id for topic in topics}
+    if not retained_ids <= topic_ids:
+        raise ValueError("retained root artifact topic is absent from export")
     paths = {
         "run": _safe_file(output_dir / "r_output_trec_rag_2026.tsv", output_dir),
         "provenance": _safe_file(output_dir / "retrieval_provenance.jsonl", output_dir),
         "archive": _safe_file(output_dir / "retrieval_with_text.jsonl.zip", output_dir),
     }
-    limits = {"run": _MAX_JSONL_BYTES, "provenance": _MAX_JSONL_BYTES, "archive": _MAX_ARCHIVE_BYTES}
-    for key, path in paths.items():
-        receipts[_portable_label(output_dir, path)] = _sha256_file(path, limits[key])
-    _validate_export_artifact_receipts(export, paths, receipts, output_dir)
+    artifact_receipts = {
+        key: _export_artifact_receipt(export, path)
+        for key, path in paths.items()
+    }
 
-    topic_ids = {topic.id for topic in topics}
-    run_topic_ids, run_row_count = _trec_run_coverage(paths["run"])
-    if run_topic_ids != topic_ids:
+    with _open_receipted_file(
+        paths["run"], artifact_receipts["run"]
+    ) as (run_source, run_digest):
+        receipts[_portable_label(output_dir, paths["run"])] = run_digest
+        run_docids, run_row_count = _load_trec_run_streaming(
+            run_source, paths["run"], topics
+        )
+    if set(run_docids) != topic_ids:
         raise ValueError("organizer run topic coverage differs from export manifest")
     if (
         type(export.get("official_row_count")) is not int
         or export["official_row_count"] != run_row_count
     ):
         raise ValueError("retrieval export official row count differs from organizer run")
-    run_rows = load_trec_run(paths["run"], topic_ids, None)
-    run_docids = {topic_id: tuple(docids) for topic_id, docids in run_rows.items()}
-    provenance_rows = _read_jsonl(paths["provenance"], "retrieval provenance")
     provenance: dict[tuple[str, str], Mapping[str, Any]] = {}
     expected_pairs = {
         (topic_id, docid)
@@ -473,34 +588,47 @@ def _load_root_retrieval_artifacts(
         for docid in docids
     }
     observed_order: dict[str, list[str]] = {topic.id: [] for topic in topics}
-    for row in provenance_rows:
-        topic_id, docid = row.get("topic_id"), row.get("docid")
-        pair = (topic_id, docid)
-        if (
-            topic_id not in topic_ids
-            or not _is_docid(docid)
-            or pair in provenance
-            or not _positive_int(row.get("rank"))
-            or not _finite_number(row.get("score"))
+    seen_provenance: set[tuple[str, str]] = set()
+    with _open_receipted_file(
+        paths["provenance"], artifact_receipts["provenance"]
+    ) as (provenance_source, provenance_digest):
+        receipts[_portable_label(output_dir, paths["provenance"])] = provenance_digest
+        for row in _iter_strict_jsonl(
+            provenance_source,
+            "retrieval provenance",
+            path=paths["provenance"],
         ):
-            raise ValueError("retrieval provenance identity or rank is invalid")
-        observed_order[topic_id].append(docid)
-        provenance[pair] = MappingProxyType(dict(row))
-    if set(provenance) != expected_pairs or any(
+            topic_id, docid = row.get("topic_id"), row.get("docid")
+            pair = (topic_id, docid)
+            if (
+                topic_id not in topic_ids
+                or not _is_docid(docid)
+                or pair in seen_provenance
+                or not _positive_int(row.get("rank"))
+                or not _finite_number(row.get("score"))
+            ):
+                raise ValueError("retrieval provenance identity or rank is invalid")
+            seen_provenance.add(pair)
+            observed_order[topic_id].append(docid)
+            if topic_id in retained_ids:
+                provenance[pair] = MappingProxyType(dict(row))
+    if seen_provenance != expected_pairs or any(
         tuple(observed_order[topic_id]) != run_docids[topic_id]
         for topic_id in observed_order
     ):
         raise ValueError("retrieval provenance coverage differs from organizer run")
 
-    archive_pairs = _load_bounded_archive_pairs(paths["archive"], topics)
-    if set(archive_pairs) != expected_pairs:
-        raise ValueError("full-text archive coverage differs from organizer run")
-    production_documents = load_documents(
-        paths["archive"], "retrieval_with_text.jsonl", {docid for _, docid in expected_pairs}, 10_000_000
-    )
-    for (_topic_id, docid), text in archive_pairs.items():
-        if production_documents.get(docid) != " ".join(text.split()):
-            raise ValueError("full-text archive differs from production document projection")
+    with _open_receipted_file(
+        paths["archive"], artifact_receipts["archive"]
+    ) as (archive_source, archive_digest):
+        receipts[_portable_label(output_dir, paths["archive"])] = archive_digest
+        archive_pairs, archive_stages = _load_streaming_archive_pairs(
+            archive_source,
+            paths["archive"],
+            topics,
+            run_docids,
+            retained_ids,
+        )
 
     depths_value = export.get("topic_depths")
     if not isinstance(depths_value, Mapping) or set(depths_value) != topic_ids:
@@ -523,90 +651,168 @@ def _load_root_retrieval_artifacts(
         MappingProxyType(run_docids),
         MappingProxyType(provenance),
         MappingProxyType(archive_pairs),
+        MappingProxyType(archive_stages),
         MappingProxyType(depths),
     )
 
 
-def _trec_run_coverage(path: Path) -> tuple[set[str], int]:
-    try:
-        lines = _read_bounded(path, _MAX_JSONL_BYTES).decode("utf-8").splitlines()
-    except UnicodeDecodeError as exc:
-        raise ValueError("organizer run is not valid UTF-8") from exc
-    topic_ids: set[str] = set()
-    for line in lines:
+def _load_trec_run_streaming(
+    source: BinaryIO, path: Path, topics: Sequence[Topic]
+) -> tuple[dict[str, tuple[str, ...]], int]:
+    grouped: dict[str, list[tuple[int, float, str]]] = {
+        topic.id: [] for topic in topics
+    }
+    run_tag: str | None = None
+    row_count = 0
+    for row_count, encoded in enumerate(
+        _iter_bounded_lines(source, "organizer run", path=path), start=1
+    ):
+        try:
+            line = encoded.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("organizer run is not valid UTF-8") from exc
         fields = line.split()
-        if len(fields) != 6 or not _is_identifier(fields[0]):
+        if len(fields) != 6:
+            raise ValueError("organizer run row must contain six TREC fields")
+        topic_id, q0, docid, raw_rank, raw_score, tag = fields
+        if not _is_identifier(topic_id) or q0 != "Q0" or not _is_docid(docid):
             raise ValueError("organizer run row identity is invalid")
-        topic_ids.add(fields[0])
-    return topic_ids, len(lines)
+        try:
+            rank = int(raw_rank)
+            score = float(raw_score)
+        except ValueError as exc:
+            raise ValueError("organizer run rank or score is invalid") from exc
+        if rank <= 0 or not math.isfinite(score) or not tag:
+            raise ValueError("organizer run rank, score, or tag is invalid")
+        if run_tag is None:
+            run_tag = tag
+        elif run_tag != tag:
+            raise ValueError("organizer run tag is not stable")
+        grouped.setdefault(topic_id, []).append((rank, score, docid))
+    if row_count == 0:
+        raise ValueError("organizer run contains no rows")
+
+    result: dict[str, tuple[str, ...]] = {}
+    for topic_id, rows in grouped.items():
+        if not rows:
+            continue
+        ranks = [rank for rank, _score, _docid in rows]
+        scores = [score for _rank, score, _docid in rows]
+        docids = [docid for _rank, _score, docid in rows]
+        if (
+            len(ranks) != len(set(ranks))
+            or ranks != sorted(ranks)
+            or ranks[0] != 1
+            or len(docids) != len(set(docids))
+            or any(previous < current for previous, current in zip(scores, scores[1:]))
+        ):
+            raise ValueError("organizer run rank, score, or document order is invalid")
+        result[topic_id] = tuple(docids)
+    return result, row_count
 
 
-def _validate_export_artifact_receipts(
-    export: Mapping[str, Any],
-    paths: Mapping[str, Path],
-    receipts: Mapping[str, str],
-    output_dir: Path,
-) -> None:
+def _export_artifact_receipt(
+    export: Mapping[str, Any], path: Path
+) -> Mapping[str, Any]:
     artifacts = export.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("retrieval export artifact receipts are invalid")
-    for path in paths.values():
-        label = _portable_label(output_dir, path)
-        row = artifacts.get(path.name)
-        if (
-            not isinstance(row, Mapping)
-            or set(row) != {"bytes", "sha256"}
-            or type(row.get("bytes")) is not int
-            or row["bytes"] != path.stat().st_size
-            or row.get("sha256") != receipts[label]
-        ):
-            raise ValueError("retrieval export artifact receipt differs from stored artifact")
+    row = artifacts.get(path.name)
+    if (
+        not isinstance(row, Mapping)
+        or set(row) != {"bytes", "sha256"}
+        or type(row.get("bytes")) is not int
+        or row["bytes"] <= 0
+        or not _is_sha256(row.get("sha256"))
+    ):
+        raise ValueError("retrieval export artifact receipt differs from stored artifact")
+    return MappingProxyType(dict(row))
 
 
-def _load_bounded_archive_pairs(
-    path: Path, topics: Sequence[Topic]
-) -> dict[tuple[str, str], str]:
+def _load_streaming_archive_pairs(
+    source: BinaryIO,
+    path: Path,
+    topics: Sequence[Topic],
+    run_docids: Mapping[str, tuple[str, ...]],
+    retained_topic_ids: set[str],
+) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
     topic_by_id = {topic.id: topic for topic in topics}
+    expected_pairs = {
+        (topic_id, docid)
+        for topic_id, docids in run_docids.items()
+        for docid in docids
+    }
+    result: dict[tuple[str, str], str] = {}
+    stages: dict[tuple[str, str], str] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+    seen_topics: set[str] = set()
+    normalized_hash_by_docid: dict[str, str] = {}
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(source) as archive:
             candidates = [name for name in archive.namelist() if name.lower().endswith((".jsonl", ".json"))]
             if candidates != ["retrieval_with_text.jsonl"]:
                 raise ValueError("full-text archive member set is invalid")
             info = archive.getinfo(candidates[0])
-            if info.file_size <= 0 or info.file_size > _MAX_ARCHIVE_BYTES:
-                raise ValueError("full-text archive member exceeds bounded reader limit")
+            if (
+                info.file_size <= 0
+                or info.file_size > len(topics) * _MAX_STREAM_RECORD_BYTES
+            ):
+                raise ValueError("full-text archive member exceeds bounded record coverage")
             with archive.open(info) as source:
-                body = source.read(_MAX_ARCHIVE_BYTES + 1)
+                for row in _iter_strict_jsonl(
+                    source, "full-text archive", path=path
+                ):
+                    query = row.get("query")
+                    rows = row.get("candidates")
+                    topic_id = query.get("qid") if isinstance(query, Mapping) else None
+                    topic = topic_by_id.get(topic_id)
+                    if (
+                        topic is None
+                        or topic_id in seen_topics
+                        or query.get("text") != topic.narrative
+                        or not isinstance(rows, list)
+                    ):
+                        raise ValueError("full-text archive query identity is invalid")
+                    seen_topics.add(topic_id)
+                    observed_docids: list[str] = []
+                    for rank, candidate in enumerate(rows, start=1):
+                        if not isinstance(candidate, Mapping):
+                            raise ValueError("full-text archive candidate is invalid")
+                        docid, text = candidate.get("docid"), candidate.get("doc")
+                        stage = candidate.get("stage")
+                        pair = (topic_id, docid)
+                        if (
+                            not _is_docid(docid)
+                            or not _is_text(text)
+                            or pair in seen_pairs
+                            or candidate.get("rank") != rank
+                            or stage not in {"canonical_supported", "original_only_fallback"}
+                        ):
+                            raise ValueError("full-text archive candidate identity is invalid")
+                        normalized_digest = _text_sha256(
+                            " ".join(text.split()), "full-text archive document"
+                        )
+                        previous_digest = normalized_hash_by_docid.setdefault(
+                            docid, normalized_digest
+                        )
+                        if previous_digest != normalized_digest:
+                            raise ValueError(
+                                "full-text archive has conflicting duplicate document text"
+                            )
+                        seen_pairs.add(pair)
+                        observed_docids.append(docid)
+                        if topic_id in retained_topic_ids:
+                            result[pair] = text
+                            stages[pair] = stage
+                    if tuple(observed_docids) != run_docids[topic_id]:
+                        raise ValueError(
+                            "full-text archive document order differs from organizer run"
+                        )
     except zipfile.BadZipFile as exc:
         raise ValueError("full-text archive is invalid") from exc
-    if len(body) != info.file_size or len(body) > _MAX_ARCHIVE_BYTES or not body.endswith(b"\n"):
-        raise ValueError("full-text archive member is invalid or oversized")
-    result: dict[tuple[str, str], str] = {}
-    for number, raw in enumerate(body.splitlines(), start=1):
-        try:
-            row = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys, parse_constant=_reject_constant)
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(f"full-text archive:{number}: invalid strict JSON") from exc
-        query = row.get("query") if isinstance(row, Mapping) else None
-        rows = row.get("candidates") if isinstance(row, Mapping) else None
-        topic_id = query.get("qid") if isinstance(query, Mapping) else None
-        topic = topic_by_id.get(topic_id)
-        if topic is None or query.get("text") != topic.narrative or not isinstance(rows, list):
-            raise ValueError("full-text archive query identity is invalid")
-        for rank, candidate in enumerate(rows, start=1):
-            if not isinstance(candidate, Mapping):
-                raise ValueError("full-text archive candidate is invalid")
-            docid, text = candidate.get("docid"), candidate.get("doc")
-            pair = (topic_id, docid)
-            if (
-                not _is_docid(docid)
-                or not _is_text(text)
-                or pair in result
-                or candidate.get("rank") != rank
-            ):
-                raise ValueError("full-text archive candidate identity is invalid")
-            result[pair] = text
-    return result
+    if seen_topics != set(topic_by_id) or seen_pairs != expected_pairs:
+        raise ValueError("full-text archive coverage differs from organizer run")
+    return result, stages
 
 
 def _load_passage_rankings(
@@ -616,10 +822,16 @@ def _load_passage_rankings(
     topic: Topic,
     subnarratives: Sequence[SubnarrativeReport],
     selected: Sequence[SelectedDocumentReport],
+    *,
+    allow_empty: bool = False,
 ) -> tuple[PassageRankingReport, ...]:
     path = _safe_file(topic_root / "scoring" / "selected_subnarrative_scores.jsonl", output_dir)
-    receipts[_portable_label(output_dir, path)] = _sha256_file(path, _MAX_JSONL_BYTES)
-    rows = _read_jsonl(path, "selected subnarrative scores")
+    receipts[_portable_label(output_dir, path)] = _sha256_file(
+        path, _MAX_JSONL_BYTES, allow_empty=allow_empty
+    )
+    rows = _read_jsonl(
+        path, "selected subnarrative scores", allow_empty=allow_empty
+    )
     selected_by_id = {row.docid: row for row in selected}
     subnarrative_by_id = {row.subnarrative_id: row for row in subnarratives}
     grouped: dict[str, list[PassageRankingReport]] = {
@@ -722,18 +934,32 @@ def _load_canonical_projection(
     topic: Topic,
     subnarratives: Sequence[SubnarrativeReport],
     selected: Sequence[SelectedDocumentReport],
-) -> tuple[tuple[EvidenceClusterReport, ...], tuple[CanonicalNuggetReport, ...]]:
+    *,
+    original_only_fallback: bool = False,
+) -> tuple[
+    tuple[EvidenceClusterReport, ...],
+    tuple[CanonicalNuggetReport, ...],
+    tuple[CanonicalResultReport, ...],
+]:
     selection_path = _safe_file(topic_root / "canonical" / "subnarrative-selections.jsonl", output_dir)
     nugget_path = _safe_file(topic_root / "canonical" / "canonical-nuggets.jsonl", output_dir)
     manifest_path = _safe_file(topic_root / "canonical" / "canonical-nugget-manifest.json", output_dir)
     for path in (selection_path, nugget_path, manifest_path):
         maximum = _MAX_JSON_BYTES if path == manifest_path else _MAX_JSONL_BYTES
-        receipts[_portable_label(output_dir, path)] = _sha256_file(path, maximum)
+        receipts[_portable_label(output_dir, path)] = _sha256_file(
+            path,
+            maximum,
+            allow_empty=original_only_fallback and path != manifest_path,
+        )
     manifest = _read_json_object(manifest_path, "canonical nugget manifest")
     budget = config.nuggets.evidence_budget_per_subnarrative
     maximum_claims = config.nuggets.maximum_claims_per_subnarrative
     maximum_supporting = config.nuggets.maximum_supporting_documents_per_claim
-    nugget_rows = _read_jsonl(nugget_path, "canonical nuggets")
+    nugget_rows = _read_jsonl(
+        nugget_path,
+        "canonical nuggets",
+        allow_empty=original_only_fallback,
+    )
     request_sha256s = manifest.get("request_sha256s")
     if (
         manifest.get("schema_version") != "canonical_nugget_manifest_v2"
@@ -749,9 +975,23 @@ def _load_canonical_projection(
         or len(set(request_sha256s)) != len(request_sha256s)
     ):
         raise ValueError("canonical nugget manifest differs from retrieval config or result")
+    if original_only_fallback and any(
+        manifest.get(field) != 0
+        for field in (
+            "hosted_llm_calls",
+            "validated_cache_hits",
+            "raw_cache_writes",
+            "validated_cache_writes",
+        )
+    ):
+        raise ValueError("original-only fallback canonical work is not empty")
 
     selected_by_id = {row.docid: row for row in selected}
-    selection_rows = _read_jsonl(selection_path, "subnarrative selections")
+    selection_rows = _read_jsonl(
+        selection_path,
+        "subnarrative selections",
+        allow_empty=original_only_fallback,
+    )
     if len(selection_rows) != len(subnarratives):
         raise ValueError("subnarrative selection set is incomplete")
     clusters: list[EvidenceClusterReport] = []
@@ -806,6 +1046,7 @@ def _load_canonical_projection(
             )
 
     canonical: list[CanonicalNuggetReport] = []
+    canonical_results: list[CanonicalResultReport] = []
     states: dict[str, int] = {}
     seen_nuggets: set[str] = set()
     for index, (raw, expected) in enumerate(
@@ -839,6 +1080,16 @@ def _load_canonical_projection(
             if has_selected_evidence or values or dict(raw["metadata"]) or raw["error"] is not None:
                 raise ValueError("canonical nugget empty state semantics are invalid")
             states[state] = states.get(state, 0) + 1
+            canonical_results.append(
+                CanonicalResultReport(
+                    expected.subnarrative_id,
+                    budget,
+                    state,
+                    maximum_claims,
+                    maximum_supporting,
+                    (),
+                )
+            )
             continue
         if not has_selected_evidence:
             raise ValueError("canonical nugget non-empty state lacks selected evidence")
@@ -860,6 +1111,7 @@ def _load_canonical_projection(
                 raise ValueError("canonical fallback must retain one exact evidence claim")
             expected_kind = "extractive_fallback"
         states[state] = states.get(state, 0) + 1
+        result_nuggets: list[CanonicalNuggetReport] = []
         for nugget in values:
             if not isinstance(nugget, Mapping) or set(nugget) != {
                 "canonical_nugget_id", "nugget_kind", "claim_text", "evidence"
@@ -897,16 +1149,26 @@ def _load_canonical_projection(
                 or nugget["claim_text"] != evidence_reports[0].text
             ):
                 raise ValueError("canonical nugget fallback state or kind is invalid")
-            canonical.append(
-                CanonicalNuggetReport(
+            report = CanonicalNuggetReport(
                     expected.subnarrative_id, budget, state, nugget_id,
                     nugget["nugget_kind"], nugget["claim_text"], tuple(evidence_reports),
                     maximum_claims, maximum_supporting,
-                )
             )
+            canonical.append(report)
+            result_nuggets.append(report)
+        canonical_results.append(
+            CanonicalResultReport(
+                expected.subnarrative_id,
+                budget,
+                state,
+                maximum_claims,
+                maximum_supporting,
+                tuple(result_nuggets),
+            )
+        )
     if manifest.get("state_counts") != dict(sorted(states.items())):
         raise ValueError("canonical nugget manifest state counts differ from results")
-    return tuple(clusters), tuple(canonical)
+    return tuple(clusters), tuple(canonical), tuple(canonical_results)
 
 
 def _decode_canonical_evidence(
@@ -949,6 +1211,8 @@ def _decode_retrieval_output(
     selected: Sequence[SelectedDocumentReport],
     canonical: Sequence[CanonicalNuggetReport],
     artifacts: _RootRetrievalArtifacts,
+    *,
+    original_only_fallback: bool = False,
 ) -> RetrievalOutputReport:
     selected_by_id = {row.docid: row for row in selected}
     selected_depth, final_depth = artifacts.topic_depths[topic.id]
@@ -959,14 +1223,24 @@ def _decode_retrieval_output(
         for evidence in nugget.evidence:
             canonical_by_docid.setdefault(evidence.docid, set()).add(nugget.canonical_nugget_id)
     run_docids = artifacts.run_docids[topic.id]
-    if final_depth != len(run_docids) or set(run_docids) != set(canonical_by_docid):
-        raise ValueError("organizer run differs from canonical supported-document projection")
+    if original_only_fallback:
+        if canonical or tuple(run_docids) != tuple(row.docid for row in selected):
+            raise ValueError(
+                "organizer run differs from original-only selected-document projection"
+            )
+    elif set(run_docids) != set(canonical_by_docid):
+        raise ValueError(
+            "organizer run differs from canonical supported-document projection"
+        )
+    if final_depth != len(run_docids):
+        raise ValueError("retrieval export final depth differs from organizer run")
     documents: list[RetrievalDocumentReport] = []
     for rank, docid in enumerate(run_docids, start=1):
         pair = (topic.id, docid)
         provenance = artifacts.provenance[pair]
         document = selected_by_id.get(docid)
         text = artifacts.document_text[pair]
+        archive_stage = artifacts.document_stage[pair]
         memberships = provenance.get("memberships")
         subnarrative_scores = provenance.get("subnarrative_scores")
         nuggets = provenance.get("nuggets")
@@ -990,12 +1264,36 @@ def _decode_retrieval_output(
             or any(not _is_sha256(value) for value in seals.values())
         ):
             raise ValueError("retrieval provenance differs from sealed selected document")
+        if tuple(dict(row) for row in memberships) != tuple(
+            dict(row) for row in document.memberships
+        ):
+            raise ValueError(
+                "retrieval provenance membership differs from sealed selection"
+            )
+        expected_stage = (
+            "original_only_fallback"
+            if original_only_fallback
+            else "canonical_supported"
+        )
+        if (
+            archive_stage != expected_stage
+            or (
+                provenance.get("stage") != expected_stage
+                if original_only_fallback
+                else provenance.get("stage") is not None
+            )
+            or (
+                original_only_fallback
+                and (subnarrative_scores != [] or nuggets != [])
+            )
+        ):
+            raise ValueError("retrieval fallback stage provenance is invalid")
         provenance_nugget_ids = tuple(
             row.get("canonical_nugget_id") for row in nuggets
         )
         if (
             any(not _is_identifier(value) for value in provenance_nugget_ids)
-            or set(provenance_nugget_ids) != canonical_by_docid[docid]
+            or set(provenance_nugget_ids) != canonical_by_docid.get(docid, set())
         ):
             raise ValueError("retrieval provenance canonical nugget join is invalid")
         documents.append(
@@ -1011,8 +1309,11 @@ def _decode_retrieval_output(
                 subnarrative_scores=tuple(
                     MappingProxyType(dict(row)) for row in subnarrative_scores
                 ),
-                canonical_nugget_ids=tuple(sorted(canonical_by_docid[docid])),
+                canonical_nugget_ids=tuple(
+                    sorted(canonical_by_docid.get(docid, set()))
+                ),
                 source_seals=MappingProxyType(dict(seals)),
+                stage=expected_stage,
             )
         )
     return RetrievalOutputReport(selected_depth, final_depth, tuple(documents))
@@ -1041,7 +1342,7 @@ def _validate_export_manifest(
 
 def _decode_decomposition(
     value: Mapping[str, Any], topic: Topic
-) -> tuple[SubnarrativeReport, ...]:
+) -> tuple[tuple[SubnarrativeReport, ...], bool]:
     required = {
         "schema_version", "topic_id", "narrative", "narrative_sha256", "source_sha256",
         "queries", "plan", "subnarratives",
@@ -1057,8 +1358,15 @@ def _decode_decomposition(
         raise ValueError("decomposition topic identity differs from official topic")
     rows = value.get("subnarratives")
     plan = value.get("plan")
-    if not isinstance(rows, list) or not isinstance(plan, Mapping):
+    if not isinstance(rows, list):
         raise ValueError("decomposition subnarratives are invalid")
+    if plan is None:
+        if rows:
+            raise ValueError("original-only fallback subnarratives are invalid")
+        _validate_decomposition_queries(value.get("queries"), topic, ())
+        return (), True
+    if not isinstance(plan, Mapping):
+        raise ValueError("decomposition plan is invalid")
     plan_rows = plan.get("subnarratives")
     if plan.get("topic_id") != topic.id or not isinstance(plan_rows, list):
         raise ValueError("decomposition plan topic identity is invalid")
@@ -1092,7 +1400,7 @@ def _decode_decomposition(
             SubnarrativeReport(identifier, text, tuple(queries), semantic_hash, tuple(hashes))
         )
     _validate_decomposition_queries(value.get("queries"), topic, result)
-    return tuple(result)
+    return tuple(result), False
 
 
 def _validate_decomposition_queries(
@@ -1299,6 +1607,146 @@ def _valid_membership(value: Mapping[str, Any], selected: Mapping[str, SelectedD
     return origin_matches
 
 
+def _load_lane_score_provenance(
+    topic_root: Path,
+    output_dir: Path,
+    receipts: dict[str, str],
+    topic: Topic,
+    subnarratives: Sequence[SubnarrativeReport],
+    union_rows: Sequence[Mapping[str, Any]],
+    retrieval_artifacts: _RootRetrievalArtifacts,
+) -> Mapping[tuple[str, str], LaneScoreProvenanceReport]:
+    manifest_path = _safe_file(topic_root / "scoring" / "complete.json", output_dir)
+    manifest_digest = _sha256_file(manifest_path, _MAX_JSON_BYTES)
+    receipts[_portable_label(output_dir, manifest_path)] = manifest_digest
+    sealed_manifest_digests: set[str] = set()
+    for (topic_id, _docid), row in retrieval_artifacts.provenance.items():
+        if topic_id != topic.id:
+            continue
+        seals = row.get("source_seals")
+        digest = (
+            seals.get("scoring_manifest_sha256")
+            if isinstance(seals, Mapping)
+            else None
+        )
+        if not _is_sha256(digest):
+            raise ValueError("retrieval provenance scoring manifest seal is invalid")
+        sealed_manifest_digests.add(digest)
+    if sealed_manifest_digests != {manifest_digest}:
+        raise ValueError("scoring manifest differs from retrieval provenance seal")
+
+    manifest = _read_json_object(manifest_path, "scoring manifest")
+    artifact_rows = manifest.get("artifacts")
+    if (
+        manifest.get("schema_version") != "facet_pilot_v2"
+        or manifest.get("phase") != "score"
+        or manifest.get("topic_id") != topic.id
+        or not isinstance(artifact_rows, list)
+    ):
+        raise ValueError("scoring manifest identity or artifacts are invalid")
+    matches = [
+        row
+        for row in artifact_rows
+        if isinstance(row, Mapping)
+        and row.get("relative_path") == "scoring/lane_scores.jsonl"
+    ]
+    if len(matches) != 1:
+        raise ValueError("scoring manifest lane-score receipt is missing or duplicated")
+    artifact_receipt = matches[0]
+    if (
+        set(artifact_receipt) != {"relative_path", "bytes", "sha256"}
+        or type(artifact_receipt.get("bytes")) is not int
+        or artifact_receipt["bytes"] <= 0
+        or not _is_sha256(artifact_receipt.get("sha256"))
+    ):
+        raise ValueError("scoring manifest lane-score receipt is invalid")
+
+    lane_path = _safe_file(topic_root / "scoring" / "lane_scores.jsonl", output_dir)
+    expected_keys = {
+        (row["docid"], lane)
+        for row in union_rows
+        for lane in row["memberships"]
+    }
+    expected_query_hashes = {
+        "original": _text_sha256(topic.narrative, "official narrative"),
+        **{
+            f"facet:{row.subnarrative_id}:text": row.semantic_query_sha256
+            for row in subnarratives
+        },
+    }
+    result: dict[tuple[str, str], LaneScoreProvenanceReport] = {}
+    text_hash_by_docid: dict[str, str] = {}
+    with _open_receipted_file(
+        lane_path,
+        artifact_receipt,
+        label="scoring lane-score artifact",
+    ) as (source, lane_digest):
+        receipts[_portable_label(output_dir, lane_path)] = lane_digest
+        for value in _iter_strict_jsonl(source, "lane scores", path=lane_path):
+            docid, lane_name = value.get("docid"), value.get("lane_name")
+            key = (docid, lane_name)
+            expected_query_hash = expected_query_hashes.get(lane_name)
+            if (
+                set(value) != _LANE_SCORE_FIELDS
+                or value.get("topic_id") != topic.id
+                or key not in expected_keys
+                or key in result
+                or expected_query_hash is None
+                or value.get("bm25_query_sha256") != expected_query_hash
+                or value.get("semantic_query_sha256") != expected_query_hash
+                or value.get("score_representation") != "raw_logits"
+                or not _is_sha256(value.get("text_sha256"))
+            ):
+                raise ValueError("lane score identity or query provenance is invalid")
+            for field in ("bm25_rank", "aggregate_rank"):
+                if not _positive_int(value.get(field)):
+                    raise ValueError("lane score rank is invalid")
+            for field in (
+                "bm25_score",
+                "aggregate_score",
+                "long_document_raw_logit",
+                "weighted_passage_raw_logit",
+            ):
+                if not _finite_number(value.get(field)):
+                    raise ValueError("lane score value is not finite")
+            support = value.get("within_document_span_support")
+            passages = value.get("winning_passages")
+            if (
+                type(support) is not int
+                or support < 0
+                or not isinstance(passages, list)
+                or not passages
+            ):
+                raise ValueError("lane score span or passage provenance is invalid")
+            for passage in passages:
+                if (
+                    not isinstance(passage, Mapping)
+                    or set(passage) != _PASSAGE_FIELDS
+                    or type(passage.get("chunk_index")) is not int
+                    or passage["chunk_index"] < 0
+                    or type(passage.get("start_char")) is not int
+                    or type(passage.get("end_char")) is not int
+                    or not (0 <= passage["start_char"] < passage["end_char"])
+                    or not _positive_int(passage.get("weighted_rank"))
+                    or not _finite_number(passage.get("raw_logit"))
+                ):
+                    raise ValueError("lane score winning passage is invalid")
+            text_hash = value["text_sha256"]
+            if text_hash_by_docid.setdefault(docid, text_hash) != text_hash:
+                raise ValueError("lane scores disagree on document text hash")
+            result[key] = LaneScoreProvenanceReport(
+                lane_name=lane_name,
+                aggregate_rank=value["aggregate_rank"],
+                aggregate_score=float(value["aggregate_score"]),
+                bm25_rank=value["bm25_rank"],
+                bm25_score=float(value["bm25_score"]),
+                text_sha256=text_hash,
+            )
+    if set(result) != expected_keys:
+        raise ValueError("lane score coverage differs from selection union pool")
+    return MappingProxyType(result)
+
+
 def _load_audit_hashes(
     topic_root: Path,
     output_dir: Path,
@@ -1376,6 +1824,51 @@ def _load_audit_hashes(
     return MappingProxyType(hashes)
 
 
+def _iter_bounded_lines(
+    source: BinaryIO,
+    label: str,
+    *,
+    path: Path,
+) -> Iterator[bytes]:
+    number = 0
+    while True:
+        encoded = source.readline(_MAX_STREAM_RECORD_BYTES + 1)
+        if not encoded:
+            return
+        number += 1
+        if len(encoded) > _MAX_STREAM_RECORD_BYTES:
+            raise ValueError(
+                f"{label}:{number}: record exceeds bounded streaming limit: {path.name}"
+            )
+        if not encoded.endswith(b"\n"):
+            raise ValueError(f"{label}:{number}: record must end with LF")
+        if encoded == b"\n":
+            raise ValueError(f"{label}:{number}: blank row")
+        yield encoded
+
+
+def _iter_strict_jsonl(
+    source: BinaryIO,
+    label: str,
+    *,
+    path: Path,
+) -> Iterator[dict[str, Any]]:
+    for number, encoded in enumerate(
+        _iter_bounded_lines(source, label, path=path), start=1
+    ):
+        try:
+            value = json.loads(
+                encoded.decode("utf-8"),
+                object_pairs_hook=_no_duplicate_keys,
+                parse_constant=_reject_constant,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"{label}:{number}: invalid strict JSON object") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"{label}:{number}: JSONL row must be an object")
+        yield value
+
+
 def _read_json_object(path: Path, label: str) -> dict[str, Any]:
     raw = _read_bounded(path, _MAX_JSON_BYTES)
     try:
@@ -1387,8 +1880,12 @@ def _read_json_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def _read_jsonl(path: Path, label: str) -> tuple[dict[str, Any], ...]:
-    raw = _read_bounded(path, _MAX_JSONL_BYTES)
+def _read_jsonl(
+    path: Path, label: str, *, allow_empty: bool = False
+) -> tuple[dict[str, Any], ...]:
+    raw = _read_bounded(path, _MAX_JSONL_BYTES, allow_empty=allow_empty)
+    if not raw and allow_empty:
+        return ()
     if not raw.endswith(b"\n"):
         raise ValueError(f"{label} must end with LF")
     rows: list[dict[str, Any]] = []
@@ -1432,20 +1929,25 @@ def _safe_file(path: Path, output_dir: Path) -> Path:
     return resolved
 
 
-def _read_bounded(path: Path, maximum: int) -> bytes:
-    _bounded_size(path, maximum)
-    return path.read_bytes()
+def _read_bounded(path: Path, maximum: int, *, allow_empty: bool = False) -> bytes:
+    with path.open("rb") as source:
+        raw = source.read(maximum + 1)
+    if len(raw) > maximum or (not raw and not allow_empty):
+        raise ValueError(
+            f"artifact size is outside the bounded reader limit: {path.name}"
+        )
+    return raw
 
 
-def _bounded_size(path: Path, maximum: int) -> int:
+def _bounded_size(path: Path, maximum: int, *, allow_empty: bool = False) -> int:
     size = path.stat().st_size
-    if size <= 0 or size > maximum:
+    if size < 0 or (size == 0 and not allow_empty) or size > maximum:
         raise ValueError(f"artifact size is outside the bounded reader limit: {path.name}")
     return size
 
 
-def _sha256_file(path: Path, maximum: int) -> str:
-    _bounded_size(path, maximum)
+def _sha256_file(path: Path, maximum: int, *, allow_empty: bool = False) -> str:
+    _bounded_size(path, maximum, allow_empty=allow_empty)
     digest = sha256()
     total = 0
     with path.open("rb") as source:
@@ -1457,6 +1959,58 @@ def _sha256_file(path: Path, maximum: int) -> str:
                 )
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256_receipted_file(
+    path: Path,
+    receipt: Mapping[str, Any],
+    *,
+    label: str = "retrieval export artifact",
+) -> str:
+    with _open_receipted_file(path, receipt, label=label) as (_source, digest):
+        return digest
+
+
+@contextmanager
+def _open_receipted_file(
+    path: Path,
+    receipt: Mapping[str, Any],
+    *,
+    label: str = "retrieval export artifact",
+) -> Iterator[tuple[BinaryIO, str]]:
+    """Yield one descriptor whose exact receipted bytes were just hashed."""
+    with path.open("rb") as source:
+        digest = _sha256_receipted_stream(source, receipt, label=label)
+        source.seek(0)
+        yield source, digest
+        if os.fstat(source.fileno()).st_size != receipt["bytes"]:
+            raise ValueError(f"{label} receipt differs from stored artifact")
+
+
+def _sha256_receipted_stream(
+    source: BinaryIO,
+    receipt: Mapping[str, Any],
+    *,
+    label: str,
+) -> str:
+    expected_size = receipt["bytes"]
+    expected_digest = receipt["sha256"]
+    digest = sha256()
+    total = 0
+    if os.fstat(source.fileno()).st_size != expected_size:
+        raise ValueError(f"{label} receipt differs from stored artifact")
+    while True:
+        chunk = source.read(min(1024 * 1024, expected_size - total + 1))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > expected_size:
+            raise ValueError(f"{label} receipt differs from stored artifact")
+        digest.update(chunk)
+    observed_digest = digest.hexdigest()
+    if total != expected_size or observed_digest != expected_digest:
+        raise ValueError(f"{label} receipt differs from stored artifact")
+    return observed_digest
 
 
 def _portable_label(output_dir: Path, path: Path) -> str:
@@ -1644,15 +2198,29 @@ def _stage(prefix: str, suffix: str, title: str, body: str) -> str:
 
 
 def _render_narrative(topic: TopicReport, prefix: str) -> str:
+    fallback = ""
+    if topic.original_only_fallback:
+        fallback = (
+            '<p><span class="status status-fallback-extractive">'
+            "Original-only fallback</span> The sealed decomposition retained only "
+            "the official narrative.</p>"
+        )
     return _stage(
         prefix,
         "narrative",
         "Narrative",
-        f'<p class="break">{_html(topic.narrative)}</p><p>Source seal: <code>{_html(topic.narrative_sha256)}</code></p>',
+        f'<p class="break">{_html(topic.narrative)}</p><p>Source seal: <code>{_html(topic.narrative_sha256)}</code></p>{fallback}',
     )
 
 
 def _render_subnarratives(topic: TopicReport, prefix: str) -> str:
+    if not topic.subnarratives:
+        return _stage(
+            prefix,
+            "subnarratives",
+            "Subnarratives",
+            "<p>No generated subnarratives; the sealed run used the original-only fallback.</p>",
+        )
     rows = "".join(
         "<tr>"
         f"<th scope=\"row\">{_html(item.subnarrative_id)}</th>"
@@ -1671,22 +2239,47 @@ def _render_subnarratives(topic: TopicReport, prefix: str) -> str:
 
 
 def _render_new_documents(topic: TopicReport, prefix: str) -> str:
-    rows = "".join(
-        "<tr>"
-        f"<th scope=\"row\">{_html(item.docid)}</th>"
-        f"<td>{_html('Yes' if item.is_new else 'No')}</td>"
-        f"<td>{_html(item.first_seen_lane)}</td>"
-        f"<td class=\"break\">{_html(', '.join(item.memberships))}</td>"
-        f"<td><code>{_html(item.text_sha256 or 'Not stored')}</code></td>"
-        f"<td>{_detail_text('Document excerpt', item.excerpt)}</td>"
-        "</tr>"
-        for item in topic.new_documents
+    grouped: dict[str, list[NewDocumentReport]] = {}
+    for item in topic.new_documents:
+        grouped.setdefault(item.first_seen_lane, []).append(item)
+    groups: list[str] = []
+    for lane_name, items in grouped.items():
+        rows = "".join(
+            "<tr>"
+            f"<th scope=\"row\">{_html(item.docid)}</th>"
+            f"<td class=\"break\">{_html(', '.join(item.memberships))}</td>"
+            f"<td>{_detail_lane_provenance(item.lane_provenance)}</td>"
+            f"<td><code>{_html(item.text_sha256 or 'Not stored')}</code></td>"
+            f"<td>{_detail_text('Document excerpt', item.excerpt)}</td>"
+            "</tr>"
+            for item in items
+        )
+        groups.append(
+            '<section class="new-document-lane">'
+            f"<h3>{_html(lane_name)} — {_html(len(items))} documents</h3>"
+            + _table(
+                f"Facet-only documents first seen in {lane_name}",
+                (
+                    "DocID",
+                    "Memberships",
+                    "Lane rank and score provenance",
+                    "Text SHA-256",
+                    "Excerpt",
+                ),
+                rows,
+            )
+            + "</section>"
+        )
+    body = (
+        f"<p>{_html(len(topic.new_documents))} facet-only new documents; "
+        "counts are grouped by stored first-seen lane.</p>"
+        + "".join(groups)
     )
     return _stage(
         prefix,
         "new-documents",
         "New documents",
-        _table("Union-pool membership; new means no original lane membership", ("DocID", "New", "First-seen lane", "Memberships", "Text SHA-256", "Excerpt"), rows),
+        body,
     )
 
 
@@ -1726,6 +2319,13 @@ def _render_passage_rows(rankings: Sequence[PassageRankingReport]) -> str:
 
 
 def _render_passages(topic: TopicReport, prefix: str) -> str:
+    if not topic.subnarratives:
+        return _stage(
+            prefix,
+            "top-passages",
+            "Top passages",
+            "<p>No downstream passage rankings; original-only fallback bypassed downstream scoring.</p>",
+        )
     headings = ("Aggregate rank", "Subnarrative", "DocID", "Selection rank", "BM25 rank", "BM25 score", "Aggregate score", "Document raw logit", "Passage raw logit", "Span support", "Winning passages")
     groups: list[str] = []
     for subnarrative in topic.subnarratives:
@@ -1765,6 +2365,13 @@ def _render_passages(topic: TopicReport, prefix: str) -> str:
 
 
 def _render_nuggets(topic: TopicReport, prefix: str) -> str:
+    if topic.original_only_fallback and not topic.canonical_results:
+        return _stage(
+            prefix,
+            "final-selected-nuggets",
+            "Final selected nuggets",
+            "<p>No canonical result rows; original-only fallback performed no downstream canonical work.</p>",
+        )
     cluster_rows = "".join(
         "<tr>"
         f"<th scope=\"row\">{_html(item.subnarrative_id)}</th><td>{_html(item.selected_budget)}</td>"
@@ -1773,16 +2380,48 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
         f"<td>{_detail_evidence(item.evidence)}</td></tr>"
         for item in topic.evidence_clusters
     )
-    nugget_rows = "".join(
-        "<tr>"
-        f"<th scope=\"row\">{_html(item.canonical_nugget_id)}</th><td>{_html(item.subnarrative_id)}</td>"
-        f"<td><span class=\"status {_status_class(item.state)}\">{_html(item.state)}</span></td>"
-        f"<td>{_html(item.nugget_kind)}</td><td class=\"break\">{_html(item.claim_text)}</td>"
-        f"<td>{_detail_evidence(item.evidence)}</td></tr>"
-        for item in topic.canonical_nuggets
-    )
     body = _table("Selected evidence clusters", ("Subnarrative", "Budget", "Cluster", "Representative text", "Representative raw logit", "Evidence"), cluster_rows)
-    body += _table("Final canonical nuggets", ("Nugget ID", "Subnarrative", "State", "Kind", "Claim", "Supporting evidence"), nugget_rows)
+    result_groups: list[str] = []
+    for result in topic.canonical_results:
+        claims = tuple(
+            item
+            for item in topic.canonical_nuggets
+            if item.subnarrative_id == result.subnarrative_id
+        )
+        claim_rows = "".join(
+            "<tr>"
+            f"<th scope=\"row\">{_html(item.canonical_nugget_id)}</th>"
+            f"<td>{_html(item.nugget_kind)}</td>"
+            f"<td class=\"break\">{_html(item.claim_text)}</td>"
+            f"<td>{_detail_evidence(item.evidence)}</td></tr>"
+            for item in claims
+        )
+        claim_count = len(claims)
+        claim_label = f"{claim_count} canonical claim" + (
+            "" if claim_count == 1 else "s"
+        )
+        claims_body = (
+            _table(
+                f"Claims for {result.subnarrative_id}",
+                ("Nugget ID", "Kind", "Claim", "Supporting evidence"),
+                claim_rows,
+            )
+            if claims
+            else "<p>No canonical claims were retained for this result.</p>"
+        )
+        result_groups.append(
+            '<section class="canonical-result">'
+            f"<h3>{_html(result.subnarrative_id)} canonical result</h3>"
+            "<dl>"
+            f'<dt>State</dt><dd><span class="status {_status_class(result.state)}">{_html(result.state)}</span></dd>'
+            f"<dt>Selected budget</dt><dd>{_html(result.selected_budget)}</dd>"
+            f"<dt>Configured maximum claims</dt><dd>{_html(result.maximum_claims)}</dd>"
+            f"<dt>Configured maximum supporting documents per claim</dt><dd>{_html(result.maximum_supporting_documents)}</dd>"
+            f"<dt>Claims</dt><dd>{_html(claim_label)}</dd>"
+            "</dl>"
+            f"{claims_body}</section>"
+        )
+    body += "".join(result_groups)
     return _stage(prefix, "final-selected-nuggets", "Final selected nuggets", body)
 
 
@@ -1794,7 +2433,12 @@ def _render_retrieval(topic: TopicReport, prefix: str) -> str:
         f"<td>{_detail_retrieval_provenance(item)}</td><td>{_detail_text('Document excerpt', item.text)}</td></tr>"
         for item in topic.retrieval_output.documents
     )
-    intro = f"<p>Selected-pool depth: {_html(topic.retrieval_output.selected_pool_depth)}. Final supported depth: {_html(topic.retrieval_output.final_supported_depth)}.</p>"
+    projection = (
+        " Final retrieval uses the sealed original-only selected pool."
+        if topic.original_only_fallback
+        else ""
+    )
+    intro = f"<p>Selected-pool depth: {_html(topic.retrieval_output.selected_pool_depth)}. Final supported depth: {_html(topic.retrieval_output.final_supported_depth)}.{projection}</p>"
     return _stage(prefix, "final-retrieval", "Final retrieval", intro + _table("Organizer-facing retrieval rows", ("Rank", "DocID", "Score", "Selection rank", "Source lane", "Sealed provenance", "Document text"), rows))
 
 
@@ -1848,6 +2492,24 @@ def _detail_passages(passages: Sequence[WinningPassageReport]) -> str:
         for item in passages
     )
     return f'<details><summary>{_html(len(passages))} stored passage(s)</summary><ul>{items}</ul></details>'
+
+
+def _detail_lane_provenance(
+    lanes: Sequence[LaneScoreProvenanceReport],
+) -> str:
+    items = "".join(
+        "<li>"
+        f"{_html(item.lane_name)}: aggregate rank {_html(item.aggregate_rank)}, "
+        f"aggregate score {_html(_number(item.aggregate_score))}, "
+        f"BM25 rank {_html(item.bm25_rank)}, "
+        f"BM25 score {_html(_number(item.bm25_score))}"
+        "</li>"
+        for item in lanes
+    )
+    return (
+        "<details><summary>Sealed lane rank and score provenance</summary>"
+        f"<ul>{items}</ul></details>"
+    )
 
 
 def _detail_evidence(evidence: Sequence[CanonicalEvidenceReport]) -> str:

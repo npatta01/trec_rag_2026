@@ -20,6 +20,7 @@ from trec_rag.competition_debug_report import (
     load_debug_report_data,
     render_debug_report,
 )
+from trec_rag.topics import Topic
 
 
 def _json_bytes(value: object) -> bytes:
@@ -28,6 +29,16 @@ def _json_bytes(value: object) -> bytes:
 
 def _sha256(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
+
+
+def _file_receipt(path: Path) -> dict[str, int | str]:
+    digest = sha256()
+    size = 0
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    return {"bytes": size, "sha256": digest.hexdigest()}
 
 
 def _write_debug_run(tmp_path: Path) -> tuple[Path, Path]:
@@ -150,6 +161,83 @@ nuggets:
     (topic_root / "scoring" / "selected_documents.jsonl").write_bytes(
         b"".join(_json_bytes(row) for row in selected_rows)
     )
+    lane_scores = [
+        _lane_score(
+            narrative,
+            "rag2026-0",
+            "doc-original",
+            "original",
+            aggregate_rank=1,
+            aggregate_score=9.0,
+            bm25_rank=1,
+            bm25_score=8.0,
+            text_sha256=_sha256("Intro. Exact evidence sentence. Tail."),
+        ),
+        _lane_score(
+            narrative,
+            "rag2026-0",
+            "doc-both",
+            "original",
+            aggregate_rank=2,
+            aggregate_score=8.0,
+            bm25_rank=2,
+            bm25_score=7.0,
+            text_sha256=_sha256("Both-lane source."),
+        ),
+        _lane_score(
+            subnarrative,
+            "rag2026-0",
+            "doc-facet",
+            "facet:subnarrative-1:text",
+            aggregate_rank=1,
+            aggregate_score=7.0,
+            bm25_rank=2,
+            bm25_score=6.0,
+            text_sha256=_sha256("Facet selected source with <unsafe> text."),
+        ),
+        _lane_score(
+            subnarrative,
+            "rag2026-0",
+            "doc-discarded",
+            "facet:subnarrative-1:text",
+            aggregate_rank=2,
+            aggregate_score=6.0,
+            bm25_rank=3,
+            bm25_score=5.0,
+            text_sha256=_sha256("Discarded facet source."),
+        ),
+        _lane_score(
+            subnarrative,
+            "rag2026-0",
+            "doc-both",
+            "facet:subnarrative-1:text",
+            aggregate_rank=3,
+            aggregate_score=5.0,
+            bm25_rank=4,
+            bm25_score=4.0,
+            text_sha256=_sha256("Both-lane source."),
+        ),
+    ]
+    lane_scores_path = topic_root / "scoring" / "lane_scores.jsonl"
+    lane_scores_path.write_bytes(b"".join(_json_bytes(row) for row in lane_scores))
+    scoring_manifest_path = topic_root / "scoring" / "complete.json"
+    scoring_manifest_path.write_bytes(
+        _json_bytes(
+            {
+                "schema_version": "facet_pilot_v2",
+                "phase": "score",
+                "topic_id": "rag2026-0",
+                "artifacts": [
+                    {
+                        "relative_path": "scoring/lane_scores.jsonl",
+                        **_file_receipt(lane_scores_path),
+                    }
+                ],
+            }
+        )
+    )
+    scoring_manifest_sha256 = _file_receipt(scoring_manifest_path)["sha256"]
+    assert isinstance(scoring_manifest_sha256, str)
     audit = {
         "schema_version": "facet_pilot_v2",
         "topic_id": "rag2026-0",
@@ -175,8 +263,54 @@ nuggets:
     }
     (topic_root / "retrieval").mkdir()
     (topic_root / "retrieval" / "audit.json").write_bytes(_json_bytes(audit))
-    _write_task_2_artifacts(output, topic_root, narrative, subnarrative, query)
+    _write_task_2_artifacts(
+        output,
+        topic_root,
+        narrative,
+        subnarrative,
+        query,
+        scoring_manifest_sha256,
+    )
     return config_path, output
+
+
+def _lane_score(
+    query: str,
+    topic_id: str,
+    docid: str,
+    lane_name: str,
+    *,
+    aggregate_rank: int,
+    aggregate_score: float,
+    bm25_rank: int,
+    bm25_score: float,
+    text_sha256: str,
+) -> dict[str, object]:
+    return {
+        "topic_id": topic_id,
+        "lane_name": lane_name,
+        "bm25_query_sha256": _sha256(query),
+        "semantic_query_sha256": _sha256(query),
+        "docid": docid,
+        "bm25_rank": bm25_rank,
+        "bm25_score": bm25_score,
+        "aggregate_rank": aggregate_rank,
+        "aggregate_score": aggregate_score,
+        "long_document_raw_logit": aggregate_score - 1,
+        "weighted_passage_raw_logit": aggregate_score,
+        "within_document_span_support": 1,
+        "winning_passages": [
+            {
+                "chunk_index": 0,
+                "start_char": 0,
+                "end_char": 5,
+                "raw_logit": aggregate_score,
+                "weighted_rank": 1,
+            }
+        ],
+        "score_representation": "raw_logits",
+        "text_sha256": text_sha256,
+    }
 
 
 def _write_symlinked_debug_run(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -276,6 +410,18 @@ def _add_second_debug_topic(tmp_path: Path, output: Path) -> None:
     for path in target_root.rglob("*.jsonl"):
         rows = [rewrite(json.loads(line)) for line in path.read_text(encoding="utf-8").splitlines()]
         path.write_bytes(b"".join(_json_bytes(row) for row in rows))
+    target_lane_scores = target_root / "scoring" / "lane_scores.jsonl"
+    target_scoring_manifest_path = target_root / "scoring" / "complete.json"
+    target_scoring_manifest = json.loads(
+        target_scoring_manifest_path.read_text(encoding="utf-8")
+    )
+    target_scoring_manifest["artifacts"][0] = {
+        "relative_path": "scoring/lane_scores.jsonl",
+        **_file_receipt(target_lane_scores),
+    }
+    target_scoring_manifest_path.write_bytes(_json_bytes(target_scoring_manifest))
+    target_scoring_sha256 = _file_receipt(target_scoring_manifest_path)["sha256"]
+    assert isinstance(target_scoring_sha256, str)
     nuggets_path = target_root / "canonical" / "canonical-nuggets.jsonl"
     nugget_manifest_path = nuggets_path.with_name("canonical-nugget-manifest.json")
     nugget_manifest = json.loads(nugget_manifest_path.read_text(encoding="utf-8"))
@@ -289,6 +435,9 @@ def _add_second_debug_topic(tmp_path: Path, output: Path) -> None:
     provenance_path = output / "retrieval_provenance.jsonl"
     first_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     second_provenance = rewrite(first_provenance)
+    second_provenance["source_seals"][
+        "scoring_manifest_sha256"
+    ] = target_scoring_sha256
     provenance_path.write_bytes(
         _json_bytes(first_provenance) + _json_bytes(second_provenance)
     )
@@ -345,6 +494,7 @@ def _write_task_2_artifacts(
     narrative: str,
     subnarrative: str,
     query: str,
+    scoring_manifest_sha256: str,
 ) -> None:
     source = "Intro. Exact evidence sentence. Tail."
     start = 7
@@ -499,7 +649,7 @@ def _write_task_2_artifacts(
             "memberships": [{"lane_name": "original", "aggregate_rank": 1, "aggregate_score": 9.0, "bm25_rank": 1, "bm25_score": 8.0}],
             "subnarrative_scores": [scores[1]],
             "nuggets": [{"canonical_nugget_id": "canonical-1", "subnarrative_id": "subnarrative-1"}],
-            "source_seals": {"scoring_manifest_sha256": "c" * 64, "canonical_manifest_sha256": "d" * 64},
+            "source_seals": {"scoring_manifest_sha256": scoring_manifest_sha256, "canonical_manifest_sha256": "d" * 64},
         }
     )
     (output / "r_output_trec_rag_2026.tsv").write_bytes(run_body)
@@ -576,13 +726,44 @@ def test_new_document_classification_uses_union_membership_and_selected_excerpts
     config_path, _output = _write_debug_run(tmp_path)
 
     data = load_debug_report_data(config_path)
-    documents = {row.docid: row for row in data.topics[0].new_documents}
+    rows = data.topics[0].new_documents
+    documents = {row.docid: row for row in rows}
 
+    assert [row.docid for row in rows] == ["doc-facet", "doc-discarded"]
     assert documents["doc-facet"].is_new is True
     assert documents["doc-discarded"].is_new is True
-    assert documents["doc-both"].is_new is False
+    assert "doc-original" not in documents
+    assert "doc-both" not in documents
     assert documents["doc-discarded"].excerpt is None
     assert documents["doc-facet"].excerpt == "Facet selected source with <unsafe> text."
+    assert documents["doc-facet"].text_sha256 == _sha256(
+        "Facet selected source with <unsafe> text."
+    )
+    assert [
+        (
+            lane.lane_name,
+            lane.aggregate_rank,
+            lane.aggregate_score,
+            lane.bm25_rank,
+            lane.bm25_score,
+        )
+        for lane in documents["doc-discarded"].lane_provenance
+    ] == [("facet:subnarrative-1:text", 2, 6.0, 3, 5.0)]
+
+
+def test_new_documents_render_first_seen_lane_groups_counts_and_score_provenance(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+
+    rendered = render_debug_report(load_debug_report_data(config_path))
+
+    assert "2 facet-only new documents" in rendered
+    assert rendered.count('class="new-document-lane"') == 1
+    assert "facet:subnarrative-1:text — 2 documents" in rendered
+    assert "Sealed lane rank and score provenance" in rendered
+    assert "aggregate rank 2" in rendered
+    assert "BM25 rank 3" in rendered
 
 
 @pytest.mark.parametrize(
@@ -679,6 +860,266 @@ def test_oversized_artifact_is_rejected_before_receipt_hashing(
         load_debug_report_data(config_path)
 
 
+def test_read_bounded_uses_one_descriptor_and_maximum_plus_one_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "bounded.json"
+    path.write_bytes(b"stable\n")
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(b"x" * 9)
+    original_open = Path.open
+    original_stat = Path.stat
+    open_count = 0
+    stat_count = 0
+    read_sizes: list[int] = []
+
+    class TrackingReader:
+        def __init__(self, source: object) -> None:
+            self.source = source
+
+        def __enter__(self) -> "TrackingReader":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.source.close()  # type: ignore[attr-defined]
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            return self.source.read(size)  # type: ignore[attr-defined,no-any-return]
+
+    def tracking_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal open_count
+        source = original_open(candidate, *args, **kwargs)
+        if candidate == path:
+            open_count += 1
+            return TrackingReader(source)
+        return source
+
+    def racing_stat(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal stat_count
+        result = original_stat(candidate, *args, **kwargs)
+        if candidate == path:
+            stat_count += 1
+            replacement.replace(path)
+        return result
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+    monkeypatch.setattr(Path, "stat", racing_stat)
+
+    assert debug_report._read_bounded(path, 8) == b"stable\n"
+    assert stat_count == 0
+    assert open_count == 1
+    assert read_sizes == [9]
+
+
+def test_receipted_hash_stops_at_declared_bytes_when_open_file_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "receipted.jsonl"
+    path.write_bytes(b"abc")
+    receipt = {"bytes": 3, "sha256": sha256(b"abc").hexdigest()}
+    original_open = Path.open
+    read_sizes: list[int] = []
+
+    class GrowingReader:
+        def __init__(self, source: object) -> None:
+            self.source = source
+            self.payload = b"abcx"
+            self.offset = 0
+
+        def __enter__(self) -> "GrowingReader":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.source.close()  # type: ignore[attr-defined]
+
+        def fileno(self) -> int:
+            return self.source.fileno()  # type: ignore[attr-defined,no-any-return]
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            if size > receipt["bytes"] + 1:
+                raise AssertionError("receipt reader exceeded bytes plus sentinel")
+            end = len(self.payload) if size < 0 else self.offset + size
+            chunk = self.payload[self.offset:end]
+            self.offset += len(chunk)
+            return chunk
+
+    def growing_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        source = original_open(candidate, *args, **kwargs)
+        return GrowingReader(source) if candidate == path else source
+
+    monkeypatch.setattr(Path, "open", growing_open)
+
+    with pytest.raises(ValueError, match="receipt differs"):
+        debug_report._sha256_receipted_file(path, receipt)
+    assert read_sizes == [4]
+
+
+def test_root_provenance_receipt_and_parse_share_one_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "retrieval_provenance.jsonl"
+    replacement = tmp_path / "replacement-provenance.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    row["score"] = 9
+    replacement.write_bytes(_json_bytes(row))
+    original_open = Path.open
+    open_count = 0
+
+    def racing_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal open_count
+        if candidate.resolve() == path.resolve() and args[:1] == ("rb",):
+            open_count += 1
+            if open_count == 2:
+                replacement.replace(path)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    document = load_debug_report_data(config_path).topics[0].retrieval_output.documents[0]
+
+    assert document.score == 1.0
+    assert open_count == 1
+
+
+def test_lane_score_receipt_and_parse_share_one_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "scoring" / "lane_scores.jsonl"
+    replacement = tmp_path / "replacement-lane-scores.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    discarded = next(row for row in rows if row["docid"] == "doc-discarded")
+    discarded["aggregate_score"] = 6.5
+    replacement.write_bytes(b"".join(_json_bytes(row) for row in rows))
+    original_open = Path.open
+    open_count = 0
+
+    def racing_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        nonlocal open_count
+        if candidate.resolve() == path.resolve() and args[:1] == ("rb",):
+            open_count += 1
+            if open_count == 2:
+                replacement.replace(path)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    topic = load_debug_report_data(config_path).topics[0]
+    document = next(row for row in topic.new_documents if row.docid == "doc-discarded")
+
+    assert document.lane_provenance[0].aggregate_score == 6.0
+    assert open_count == 1
+
+
+def test_root_export_streams_valid_full_scale_artifacts_and_retains_topic_subset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whole-file buffering or fixed two-topic ceilings must fail this 119-topic export."""
+    output = tmp_path / "full-scale-export"
+    output.mkdir()
+    topics = tuple(
+        Topic(
+            id=f"rag2026-{index}",
+            title=f"Topic {index}",
+            narrative=f"Official narrative {index}",
+        )
+        for index in range(119)
+    )
+    run_path = output / "r_output_trec_rag_2026.tsv"
+    provenance_path = output / "retrieval_provenance.jsonl"
+    archive_path = output / "retrieval_with_text.jsonl.zip"
+
+    with run_path.open("wb") as run, provenance_path.open("wb") as provenance:
+        for index, topic in enumerate(topics):
+            docid = f"doc-{index}"
+            run.write(f"{topic.id} Q0 {docid} 1 1 scale-run\n".encode())
+            provenance.write(
+                _json_bytes(
+                    {
+                        "topic_id": topic.id,
+                        "docid": docid,
+                        "rank": 1,
+                        "score": 1,
+                        "sealed_padding": "p" * 150_000,
+                    }
+                )
+            )
+
+    with zipfile.ZipFile(
+        archive_path, "w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
+        with archive.open("retrieval_with_text.jsonl", "w") as member:
+            for index, topic in enumerate(topics):
+                member.write(
+                    _json_bytes(
+                        {
+                            "query": {"qid": topic.id, "text": topic.narrative},
+                            "candidates": [
+                                {
+                                    "docid": f"doc-{index}",
+                                    "rank": 1,
+                                    "score": 1,
+                                    "doc": "scale " * 100_000,
+                                    "index": "fixture-index",
+                                    "stage": "canonical_supported",
+                                }
+                            ],
+                        }
+                    )
+                )
+
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.getinfo("retrieval_with_text.jsonl").file_size > 64 * 1024 * 1024
+    assert provenance_path.stat().st_size > 16 * 1024 * 1024
+
+    manifest = {
+        "official_row_count": 119,
+        "topic_depths": {
+            topic.id: {"official": 1, "candidate_pool": 1} for topic in topics
+        },
+        "artifacts": {
+            path.name: _file_receipt(path)
+            for path in (run_path, provenance_path, archive_path)
+        },
+    }
+    guarded = {path.resolve() for path in (run_path, provenance_path, archive_path)}
+    original_read_bytes = Path.read_bytes
+
+    def reject_whole_file_reads(path: Path) -> bytes:
+        if path.resolve() in guarded:
+            raise AssertionError("full-scale root artifacts must be streamed")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_whole_file_reads)
+    receipts: dict[str, str] = {}
+
+    loaded = debug_report._load_root_retrieval_artifacts(
+        output,
+        manifest,
+        topics,
+        receipts,
+        retained_topic_ids={topics[0].id},
+    )
+
+    assert tuple(loaded.run_docids) == tuple(topic.id for topic in topics)
+    assert set(loaded.provenance) == {(topics[0].id, "doc-0")}
+    assert set(loaded.document_text) == {(topics[0].id, "doc-0")}
+    assert len(loaded.document_text[(topics[0].id, "doc-0")]) == 600_000
+    assert set(receipts) == {
+        "r_output_trec_rag_2026.tsv",
+        "retrieval_provenance.jsonl",
+        "retrieval_with_text.jsonl.zip",
+    }
+
+
 def test_passage_rankings_retain_stored_ranks_logits_and_exact_source_spans(
     tmp_path: Path,
 ) -> None:
@@ -708,6 +1149,106 @@ def test_nugget_join_uses_configured_budget_selected_clusters_and_evidence_docid
     assert topic.canonical_nuggets[0].evidence[0].cluster_id == "cluster-1"
     assert topic.canonical_nuggets[0].maximum_claims == 2
     assert topic.canonical_nuggets[0].maximum_supporting_documents == 1
+
+
+def test_empty_canonical_result_retains_state_budget_caps_and_zero_claims(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    report_topic = loaded.topics[0]
+    canonical = output / "rag2026-0" / "canonical"
+    selection_path = canonical / "subnarrative-selections.jsonl"
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection.update(
+        {
+            "candidate_count": 0,
+            "exact_group_count": 0,
+            "precluster_count": 0,
+            "semantic_cluster_count": 0,
+            "clusters": [],
+            "snapshots": [{"budget": 2, "cluster_ids": [], "exhausted": True}],
+        }
+    )
+    selection_path.write_bytes(_json_bytes(selection))
+    result = {
+        "schema_version": "canonical_nugget_result_v1",
+        "topic_id": "rag2026-0",
+        "subnarrative_id": "subnarrative-1",
+        "selected_budget": 2,
+        "request_sha256": "e" * 64,
+        "state": "empty",
+        "nuggets": [],
+        "metadata": {},
+        "error": None,
+    }
+    nugget_path = canonical / "canonical-nuggets.jsonl"
+    nugget_path.write_bytes(_json_bytes(result))
+    manifest_path = canonical / "canonical-nugget-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "state_counts": {"empty": 1},
+            "request_sha256s": ["e" * 64],
+            "canonical_nuggets_sha256": _file_receipt(nugget_path)["sha256"],
+        }
+    )
+    manifest_path.write_bytes(_json_bytes(manifest))
+
+    config = debug_report.load_facet_pilot_config(config_path)
+    topic = debug_report.select_configured_topics(config)[0]
+    clusters, nuggets, results = debug_report._load_canonical_projection(
+        config,
+        output / "rag2026-0",
+        output,
+        {},
+        topic,
+        report_topic.subnarratives,
+        report_topic.selected_documents,
+    )
+
+    assert clusters == ()
+    assert nuggets == ()
+    assert len(results) == 1
+    summary = results[0]
+    assert summary.subnarrative_id == "subnarrative-1"
+    assert summary.state == "empty"
+    assert summary.selected_budget == 2
+    assert summary.maximum_claims == 2
+    assert summary.maximum_supporting_documents == 1
+    assert summary.nuggets == ()
+
+    rendered = render_debug_report(
+        replace(
+            loaded,
+            topics=(
+                replace(
+                    report_topic,
+                    evidence_clusters=clusters,
+                    canonical_nuggets=nuggets,
+                    canonical_results=results,
+                ),
+            ),
+        )
+    )
+    assert "empty" in rendered
+    assert "0 canonical claims" in rendered
+
+
+def test_canonical_result_renderer_shows_caps_and_nests_claims_by_subnarrative(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+
+    rendered = render_debug_report(load_debug_report_data(config_path))
+    result_group = rendered.split('<section class="canonical-result"', 1)[1]
+
+    assert "subnarrative-1 canonical result" in result_group
+    assert "Selected budget</dt><dd>2" in result_group
+    assert "Configured maximum claims</dt><dd>2" in result_group
+    assert "Configured maximum supporting documents per claim</dt><dd>1" in result_group
+    assert "The exact evidence is supported." in result_group
+    assert "1 canonical claim" in result_group
 
 
 def test_canonical_nugget_preserves_distinct_same_document_evidence_aliases(
@@ -790,6 +1331,20 @@ def test_retrieval_projection_explains_selected_depth_versus_supported_depth(
     assert [row.docid for row in retrieval.documents] == ["doc-original"]
     assert retrieval.documents[0].text == "Intro. Exact evidence sentence. Tail."
     assert retrieval.documents[0].canonical_nugget_ids == ("canonical-1",)
+
+
+def test_root_provenance_memberships_must_equal_sealed_selection(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "retrieval_provenance.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    row["memberships"][0]["lane_name"] = "facet:subnarrative-1:text"
+    path.write_bytes(_json_bytes(row))
+    _rewrite_export_artifact_receipt(output, path.name)
+
+    with pytest.raises(ValueError, match="membership differs from sealed selection"):
+        load_debug_report_data(config_path)
 
 
 def test_candidate_ledger_and_network_are_outside_the_bounded_report_path(
