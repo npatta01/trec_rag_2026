@@ -218,7 +218,10 @@ sources.
 
 ## Retrieval Decision Policy
 
-At every step, the agent records a motivating open need or facet.
+Every non-stop action records a motivating open need or facet. A completion
+stop records no motivating IDs because no open need remains. A saturation stop
+records the unresolved need or facet IDs whose eligible actions stopped adding
+grounded nuggets.
 
 1. Prefer an explicit narrative need that remains `unaddressed`; do not keep
    deepening an already productive need while another has no grounded nugget.
@@ -294,8 +297,9 @@ Keep verification targeted:
    reversible status changes.
 5. A compact-view test proves the default projection omits full snippet text
    and remains bounded while need/document views expose requested evidence.
-6. An action-record test proves every search, extraction, pagination, refocus,
-   and stop decision names an open motivating need or facet at decision time.
+6. An action-record test proves every search, extraction, pagination, and
+   refocus decision names an open motivating need or facet at decision time;
+   completion-stop and saturation-stop follow their explicit rules above.
 7. A topic-224 smoke run compares the previous trace with the new run for need
    coverage, nugget grounding, documented abandonment, pagination decisions,
    unresolved gaps, and follow-up queries.
