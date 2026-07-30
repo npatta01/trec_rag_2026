@@ -741,6 +741,8 @@ def _load_canonical_projection(
                 or _CONTROL.search(error) is not None
             ):
                 raise ValueError("canonical nugget fallback state semantics are invalid")
+            if not values:
+                raise ValueError("canonical fallback must retain one exact evidence claim")
             expected_kind = "extractive_fallback"
         states[state] = states.get(state, 0) + 1
         for nugget in values:

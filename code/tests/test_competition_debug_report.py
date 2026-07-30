@@ -680,3 +680,17 @@ def test_official_row_count_must_equal_trec_rows(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="official row count"):
         load_debug_report_data(config_path)
+
+
+def test_canonical_fallback_rejects_an_empty_exact_evidence_set(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+
+    def mutate(row: dict[str, object]) -> None:
+        row["state"] = "fallback_extractive"
+        row["nuggets"] = []
+        row["error"] = "provider failed"
+
+    _rewrite_canonical_result(output, mutate)
+
+    with pytest.raises(ValueError, match="fallback.*exact evidence"):
+        load_debug_report_data(config_path)
