@@ -175,7 +175,7 @@ from trec_rag.topics import load_topic_narrative
 
 provided_narrative = load_topic_narrative(
     "224",
-    Path("trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv"),
+    Path("trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv"),
 )
 ```
 
