@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from hashlib import sha256
+import html
 import json
 from pathlib import Path
 import socket
@@ -11,7 +13,7 @@ import zipfile
 
 import pytest
 
-from trec_rag.competition_debug_report import load_debug_report_data
+from trec_rag.competition_debug_report import load_debug_report_data, render_debug_report
 
 
 def _json_bytes(value: object) -> bytes:
@@ -694,3 +696,92 @@ def test_canonical_fallback_rejects_an_empty_exact_evidence_set(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="fallback.*exact evidence"):
         load_debug_report_data(config_path)
+
+
+def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_text(
+    tmp_path: Path,
+) -> None:
+    """A renderer change that omitted an escape or HTML landmark would fail here."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    narrative = '<script>alert("narrative")</script>'
+    claim = '</script><img src=x onerror=alert(1)>'
+    hostile_nugget = replace(topic.canonical_nuggets[0], claim_text=claim)
+    rankings = tuple(
+        replace(
+            topic.passage_rankings[0],
+            docid=f"ranked-doc-{rank}",
+            aggregate_rank=rank,
+            winning_passages=(
+                replace(topic.passage_rankings[0].winning_passages[0], text=f"passage {rank}"),
+            ),
+        )
+        for rank in range(1, 8)
+    )
+    data = replace(
+        loaded,
+        topics=(
+            replace(
+                topic,
+                narrative=narrative,
+                passage_rankings=rankings,
+                canonical_nuggets=(hostile_nugget,),
+            ),
+        ),
+    )
+
+    rendered = render_debug_report(data)
+
+    assert rendered.count("<!doctype html>") == 1
+    assert '<html lang="en">' in rendered
+    assert 'name="viewport"' in rendered
+    assert 'name="color-scheme"' in rendered
+    assert "<main" in rendered and "<nav" in rendered
+    assert '<section id="topic-rag2026-0"' in rendered
+    headings = (
+        "Narrative",
+        "Subnarratives",
+        "New documents",
+        "Selected documents",
+        "Top passages",
+        "Final selected nuggets",
+        "Final retrieval",
+        "Final RAG",
+    )
+    positions = [rendered.index(f">{heading}<") for heading in headings]
+    assert positions == sorted(positions)
+    assert "<caption>" in rendered
+    assert 'scope="col"' in rendered
+    assert ":focus-visible" in rendered
+    assert "prefers-reduced-motion" in rendered
+    assert "http://" not in rendered and "https://" not in rendered
+    assert "<script" not in rendered
+    assert '<link rel="stylesheet"' not in rendered
+    assert "<img" not in rendered and "@font-face" not in rendered
+    assert narrative not in rendered and claim not in rendered
+    assert html.escape(narrative, quote=True) in rendered
+    assert html.escape(claim, quote=True) in rendered
+
+
+def test_html_renderer_discloses_passage_rankings_after_the_first_five(tmp_path: Path) -> None:
+    """A renderer change that hides or truncates stored passages would fail here."""
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
+    rankings = tuple(
+        replace(topic.passage_rankings[0], docid=f"ranked-doc-{rank}", aggregate_rank=rank)
+        for rank in range(1, 8)
+    )
+
+    rendered = render_debug_report(replace(loaded, topics=(replace(topic, passage_rankings=rankings),)))
+    passage_section = rendered.split('<section id="stage-rag2026-0-top-passages"', 1)[1].split(
+        '<section id="stage-rag2026-0-final-selected-nuggets"', 1
+    )[0]
+    visible, remainder = passage_section.split('<details class="passage-remainder">', 1)
+
+    for rank in range(1, 6):
+        assert f"ranked-doc-{rank}" in visible
+    for rank in range(6, 8):
+        assert f"ranked-doc-{rank}" not in visible
+        assert f"ranked-doc-{rank}" in remainder

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import html
 import json
 import math
 from pathlib import Path
@@ -1356,3 +1357,294 @@ def _positive_int(value: object) -> bool:
 
 def _finite_number(value: object) -> bool:
     return type(value) in {int, float} and math.isfinite(value)
+
+
+def render_debug_report(data: DebugReportData) -> str:
+    """Render sealed report data as one deterministic, dependency-free HTML document.
+
+    This is deliberately a presentation boundary: all source-derived text is
+    escaped here, rather than relying on the strict artifact readers to make
+    stored corpus text safe for an HTML context.
+    """
+    topic_links = "".join(
+        f'<li><a href="#topic-{_topic_anchor(topic.topic_id)}">{_html(topic.topic_id)}</a></li>'
+        for topic in data.topics
+    )
+    topics = "".join(_render_topic(topic) for topic in data.topics)
+    source_rows = "".join(
+        f"<tr><th scope=\"row\">{_html(label)}</th><td><code>{_html(digest)}</code></td></tr>"
+        for label, digest in sorted(data.source_sha256s.items())
+    )
+    return f'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Competition retrieval debug report</title>
+<style>
+:root {{ color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }}
+body {{ margin: 0; background: Canvas; color: CanvasText; }}
+header, main, footer {{ max-width: 76rem; margin: auto; padding: 1rem; }}
+header {{ border-bottom: 1px solid GrayText; }}
+nav ul {{ display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding-left: 1.25rem; }}
+section {{ margin: 1.5rem 0; padding: 1rem; border: 1px solid GrayText; border-radius: .4rem; }}
+section section {{ border-color: color-mix(in srgb, GrayText 55%, transparent); }}
+.table-wrap {{ overflow-x: auto; }}
+table {{ width: 100%; border-collapse: collapse; min-width: 38rem; }}
+caption {{ text-align: left; font-weight: 700; padding: .4rem 0; }}
+th, td {{ text-align: left; vertical-align: top; border: 1px solid GrayText; padding: .45rem; }}
+code, .break {{ overflow-wrap: anywhere; word-break: break-word; }}
+details {{ margin: .75rem 0; padding: .5rem; border-inline-start: .25rem solid GrayText; }}
+summary {{ cursor: pointer; font-weight: 650; }}
+.status {{ display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-weight: 700; }}
+.status-complete {{ color: #063; background: #d8f3df; }}
+.status-empty {{ color: #735400; background: #fff0bd; }}
+.status-fallback-extractive {{ color: #7a2300; background: #ffe0d2; }}
+a:focus-visible, summary:focus-visible {{ outline: .22rem solid Highlight; outline-offset: .2rem; }}
+@media (max-width: 42rem) {{ header, main, footer {{ padding: .75rem; }} section {{ padding: .75rem; }} }}
+@media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }} }}
+</style>
+</head>
+<body>
+<header>
+<h1>Competition retrieval debug report</h1>
+<p>Read-only rendering of sealed retrieval artifacts. Corpus text and identifiers may be sensitive.</p>
+<nav aria-label="Topic navigation"><ul>{topic_links}</ul></nav>
+</header>
+<main>
+{topics}
+<section aria-labelledby="source-receipts"><h2 id="source-receipts">Source receipts</h2>
+<div class="table-wrap"><table><caption>Bounded artifact SHA-256 receipts</caption><thead><tr><th scope="col">Artifact</th><th scope="col">SHA-256</th></tr></thead><tbody>{source_rows}</tbody></table></div>
+</section>
+</main>
+<footer><p>Generated deterministically from sealed report data; no retrieval, model, or network calls were made.</p></footer>
+</body>
+</html>'''
+
+
+def _render_topic(topic: TopicReport) -> str:
+    anchor = _topic_anchor(topic.topic_id)
+    prefix = f"stage-{anchor}"
+    stages = (
+        _render_narrative(topic, prefix),
+        _render_subnarratives(topic, prefix),
+        _render_new_documents(topic, prefix),
+        _render_selected_documents(topic, prefix),
+        _render_passages(topic, prefix),
+        _render_nuggets(topic, prefix),
+        _render_retrieval(topic, prefix),
+        _render_final_rag(prefix),
+    )
+    return f'<section id="topic-{anchor}" aria-labelledby="topic-title-{anchor}"><h1 id="topic-title-{anchor}">Topic {_html(topic.topic_id)}</h1>{"".join(stages)}</section>'
+
+
+def _stage(prefix: str, suffix: str, title: str, body: str) -> str:
+    identifier = f"{prefix}-{suffix}"
+    return f'<section id="{identifier}" aria-labelledby="{identifier}-title"><h2 id="{identifier}-title">{title}</h2>{body}</section>'
+
+
+def _render_narrative(topic: TopicReport, prefix: str) -> str:
+    return _stage(
+        prefix,
+        "narrative",
+        "Narrative",
+        f'<p class="break">{_html(topic.narrative)}</p><p>Source seal: <code>{_html(topic.narrative_sha256)}</code></p>',
+    )
+
+
+def _render_subnarratives(topic: TopicReport, prefix: str) -> str:
+    rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.subnarrative_id)}</th>"
+        f"<td class=\"break\">{_html(item.text)}</td>"
+        f"<td>{_html('; '.join(item.bm25_queries))}</td>"
+        f"<td><code>{_html(item.semantic_query_sha256)}</code></td>"
+        "</tr>"
+        for item in topic.subnarratives
+    )
+    body = _table(
+        "Stored decomposition and BM25 query text",
+        ("ID", "Subnarrative", "BM25 queries", "Semantic-query SHA-256"),
+        rows,
+    )
+    return _stage(prefix, "subnarratives", "Subnarratives", body)
+
+
+def _render_new_documents(topic: TopicReport, prefix: str) -> str:
+    rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.docid)}</th>"
+        f"<td>{_html('Yes' if item.is_new else 'No')}</td>"
+        f"<td>{_html(item.first_seen_lane)}</td>"
+        f"<td class=\"break\">{_html(', '.join(item.memberships))}</td>"
+        f"<td><code>{_html(item.text_sha256 or 'Not stored')}</code></td>"
+        f"<td>{_detail_text('Selected-document excerpt', item.excerpt)}</td>"
+        "</tr>"
+        for item in topic.new_documents
+    )
+    return _stage(
+        prefix,
+        "new-documents",
+        "New documents",
+        _table("Union-pool membership; new means no original lane membership", ("DocID", "New", "First-seen lane", "Memberships", "Text SHA-256", "Excerpt"), rows),
+    )
+
+
+def _render_selected_documents(topic: TopicReport, prefix: str) -> str:
+    rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.selection_rank)}</th>"
+        f"<td>{_html(item.docid)}</td><td>{_html(item.selected_from_lane)}</td>"
+        f"<td>{_html(item.selected_from_lane_rank)}</td>"
+        f"<td><code>{_html(item.text_sha256)}</code></td>"
+        f"<td>{_detail_text('Stored document text', item.text)}</td></tr>"
+        for item in topic.selected_documents
+    )
+    return _stage(
+        prefix,
+        "selected-documents",
+        "Selected documents",
+        _table("Selected pool in stored selection order", ("Selection rank", "DocID", "Selected from lane", "Lane rank", "Text SHA-256", "Document text"), rows),
+    )
+
+
+def _render_passage_rows(rankings: Sequence[PassageRankingReport]) -> str:
+    return "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.aggregate_rank)}</th><td>{_html(item.subnarrative_id)}</td>"
+        f"<td>{_html(item.docid)}</td><td>{_html(item.selection_rank)}</td>"
+        f"<td>{_html(item.bm25_rank)}</td><td>{_html(_number(item.bm25_score))}</td>"
+        f"<td>{_html(_number(item.aggregate_score))}</td>"
+        f"<td>{_html(_number(item.long_document_raw_logit))}</td>"
+        f"<td>{_html(_number(item.weighted_passage_raw_logit))}</td>"
+        f"<td>{_html(item.within_document_span_support)}</td>"
+        f"<td>{_detail_passages(item.winning_passages)}</td></tr>"
+        for item in rankings
+    )
+
+
+def _render_passages(topic: TopicReport, prefix: str) -> str:
+    headings = ("Aggregate rank", "Subnarrative", "DocID", "Selection rank", "BM25 rank", "BM25 score", "Aggregate score", "Document raw logit", "Passage raw logit", "Span support", "Winning passages")
+    visible = _table("Top stored passage rankings", headings, _render_passage_rows(topic.passage_rankings[:5]))
+    remainder = topic.passage_rankings[5:]
+    disclosure = ""
+    if remainder:
+        disclosure = f'<details class="passage-remainder"><summary>Show remaining {len(remainder)} stored passage rankings</summary>{_table("Remaining stored passage rankings", headings, _render_passage_rows(remainder))}</details>'
+    return _stage(prefix, "top-passages", "Top passages", visible + disclosure)
+
+
+def _render_nuggets(topic: TopicReport, prefix: str) -> str:
+    cluster_rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.subnarrative_id)}</th><td>{_html(item.selected_budget)}</td>"
+        f"<td>{_html(item.cluster_id)}</td><td class=\"break\">{_html(item.representative_text)}</td>"
+        f"<td>{_html(_number(item.representative_raw_logit))}</td>"
+        f"<td>{_detail_evidence(item.evidence)}</td></tr>"
+        for item in topic.evidence_clusters
+    )
+    nugget_rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.canonical_nugget_id)}</th><td>{_html(item.subnarrative_id)}</td>"
+        f"<td><span class=\"status {_status_class(item.state)}\">{_html(item.state)}</span></td>"
+        f"<td>{_html(item.nugget_kind)}</td><td class=\"break\">{_html(item.claim_text)}</td>"
+        f"<td>{_detail_evidence(item.evidence)}</td></tr>"
+        for item in topic.canonical_nuggets
+    )
+    body = _table("Selected evidence clusters", ("Subnarrative", "Budget", "Cluster", "Representative text", "Representative raw logit", "Evidence"), cluster_rows)
+    body += _table("Final canonical nuggets", ("Nugget ID", "Subnarrative", "State", "Kind", "Claim", "Supporting evidence"), nugget_rows)
+    return _stage(prefix, "final-selected-nuggets", "Final selected nuggets", body)
+
+
+def _render_retrieval(topic: TopicReport, prefix: str) -> str:
+    rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html(item.rank)}</th><td>{_html(item.docid)}</td><td>{_html(_number(item.score))}</td>"
+        f"<td>{_html(item.selection_rank)}</td><td>{_html(item.selected_from_lane)}</td>"
+        f"<td>{_detail_retrieval_provenance(item)}</td><td>{_detail_text('Stored retrieval document text', item.text)}</td></tr>"
+        for item in topic.retrieval_output.documents
+    )
+    intro = f"<p>Selected-pool depth: {_html(topic.retrieval_output.selected_pool_depth)}. Final supported depth: {_html(topic.retrieval_output.final_supported_depth)}.</p>"
+    return _stage(prefix, "final-retrieval", "Final retrieval", intro + _table("Organizer-facing retrieval rows", ("Rank", "DocID", "Score", "Selection rank", "Source lane", "Sealed provenance", "Document text"), rows))
+
+
+def _render_final_rag(prefix: str) -> str:
+    return _stage(prefix, "final-rag", "Final RAG", "<p><span class=\"status status-empty\">Not included</span> This bounded retrieval report does not load RAG artifacts.</p>")
+
+
+def _table(caption: str, headings: Sequence[str], rows: str) -> str:
+    header = "".join(f'<th scope="col">{_html(heading)}</th>' for heading in headings)
+    return f'<div class="table-wrap"><table><caption>{_html(caption)}</caption><thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table></div>'
+
+
+def _detail_text(summary: str, value: str | None) -> str:
+    if value is None:
+        return "Not stored"
+    return f'<details><summary>{_html(summary)}</summary><p class="break">{_html(value)}</p></details>'
+
+
+def _detail_passages(passages: Sequence[WinningPassageReport]) -> str:
+    items = "".join(
+        f'<li>Chunk {_html(item.chunk_index)}, offsets {_html(item.start_char)}–{_html(item.end_char)}, raw logit {_html(_number(item.raw_logit))}: <span class="break">{_html(item.text)}</span></li>'
+        for item in passages
+    )
+    return f'<details><summary>{_html(len(passages))} stored passage(s)</summary><ul>{items}</ul></details>'
+
+
+def _detail_evidence(evidence: Sequence[CanonicalEvidenceReport]) -> str:
+    items = "".join(
+        f'<li><code>{_html(item.docid)}</code>: <span class="break">{_html(item.text)}</span></li>'
+        for item in evidence
+    )
+    return f'<details><summary>{_html(len(evidence))} evidence item(s)</summary><ul>{items}</ul></details>'
+
+
+def _detail_retrieval_provenance(item: RetrievalDocumentReport) -> str:
+    memberships = "; ".join(
+        _membership_text(value) for value in item.memberships
+    ) or "None"
+    scores = "; ".join(_score_text(value) for value in item.subnarrative_scores) or "None"
+    nuggets = ", ".join(item.canonical_nugget_ids) or "None"
+    seals = "; ".join(f"{key}: {value}" for key, value in sorted(item.source_seals.items())) or "None"
+    return (
+        "<details><summary>Memberships, scores, nuggets, and seals</summary><dl>"
+        f"<dt>Memberships</dt><dd class=\"break\">{_html(memberships)}</dd>"
+        f"<dt>Subnarrative scores</dt><dd class=\"break\">{_html(scores)}</dd>"
+        f"<dt>Canonical nugget IDs</dt><dd class=\"break\">{_html(nuggets)}</dd>"
+        f"<dt>Source seals</dt><dd class=\"break\">{_html(seals)}</dd></dl></details>"
+    )
+
+
+def _membership_text(value: Mapping[str, Any]) -> str:
+    return ", ".join(
+        f"{key}={value[key]}" for key in ("lane_name", "aggregate_rank", "aggregate_score", "bm25_rank", "bm25_score") if key in value
+    )
+
+
+def _score_text(value: Mapping[str, Any]) -> str:
+    return ", ".join(
+        f"{key}={value[key]}" for key in ("subnarrative_id", "aggregate_rank", "aggregate_score", "weighted_passage_raw_logit") if key in value
+    )
+
+
+def _number(value: int | float) -> str:
+    return format(value, ".12g")
+
+
+def _topic_anchor(topic_id: str) -> str:
+    """Return a stable HTML-safe anchor token without trusting stored text."""
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", topic_id):
+        return topic_id
+    return f"topic-{sha256(topic_id.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _status_class(state: str) -> str:
+    return {
+        "complete": "status-complete",
+        "empty": "status-empty",
+        "fallback_extractive": "status-fallback-extractive",
+    }.get(state, "status-empty")
+
+
+def _html(value: object) -> str:
+    return html.escape(str(value), quote=True)
