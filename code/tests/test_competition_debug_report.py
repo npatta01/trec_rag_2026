@@ -1719,13 +1719,21 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
 
     def dump_dom(document: str, fragment: str, name: str) -> str:
         path = tmp_path / name
-        path.write_text(document, encoding="utf-8")
+        hash_recorder = (
+            '<script>setTimeout(() => document.documentElement.setAttribute('
+            '"data-final-hash", location.hash), 50);</script>'
+        )
+        path.write_text(
+            document.replace("</body>", f"{hash_recorder}</body>"),
+            encoding="utf-8",
+        )
         completed = subprocess.run(
             [
                 chrome,
                 "--headless=new",
                 "--no-sandbox",
                 "--disable-gpu",
+                "--virtual-time-budget=250",
                 "--dump-dom",
                 f"{path.as_uri()}#{fragment}",
             ],
@@ -1752,6 +1760,9 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     assert 'role="tabpanel"' in second_panel.group()
     assert 'aria-labelledby="topic-tab-literal-rag2026-1"' in second_panel.group()
     assert 'id="topic-summary-literal-rag2026-1" hidden=""' in deep_link_dom
+    assert (
+        'data-final-hash="#stage-literal-rag2026-1-narrative"' in deep_link_dom
+    )
 
     second_initially_open = rendered.replace(
         'id="topic-literal-rag2026-0" open',
@@ -1769,6 +1780,7 @@ def test_topic_switcher_restores_descendant_fragments_and_preserves_unknown_hash
     )
     assert first_panel is not None and " open" not in first_panel.group()
     assert second_panel is not None and " open" in second_panel.group()
+    assert 'data-final-hash="#unknown-anchor"' in unknown_dom
 
 
 def test_html_validation_configuration_and_receipts_are_collapsed(

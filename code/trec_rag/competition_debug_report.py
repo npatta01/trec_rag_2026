@@ -2315,8 +2315,8 @@ a:focus-visible, button:focus-visible, summary:focus-visible {{ outline: .22rem 
   }});
   panels.forEach((panel) => panel.addEventListener("toggle", () => {{
     if (synchronizing) return;
-    if (panel.open) activate(panel, true, false);
-    else if (!panels.some((candidate) => candidate.open)) activate(panel, true, false);
+    if (panel.open) activate(panel, false, false);
+    else if (!panels.some((candidate) => candidate.open)) activate(panel, false, false);
   }}));
   window.addEventListener("hashchange", restoreHash);
   tablist.setAttribute("role", "tablist");
