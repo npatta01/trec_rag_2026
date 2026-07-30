@@ -127,6 +127,42 @@ and the evidence commit:**
 - Retrieval and generation were not rerun. No portal, submodule, push, or PR state
   was changed.
 
+### Final artifact refresh after reviewed hardening
+
+- The final refresh began from a clean tracked worktree at reviewed commit
+  `a49a4d471181a0e8e9f82c53dffaabe1ed146ddb`. The organizer submodules were
+  clean and detached at `a6255c10119a2984a874f46172d94045168ab1f3` and
+  `f281e88f61252662033c681df8b1ed2d0ceda97e`; the official retrieval TSV and
+  RAG JSONL retained SHA-256 values
+  `17855f3ace3b662b67db4a6ff2bb31c7be857f26ff5be2b0d78644287cef5c71`
+  and `65d2efae3dd54d0428f9bf49ed9fb2666996453418128d6df2a400b89ea076af`.
+- Only the post-run debug-report CLI was invoked. Its receipt reported
+  `rag_included: true`, topic IDs `rag2026-0` and `rag2026-1`, the unchanged
+  official hashes, and the newly authenticated canonical checkpoint and
+  selection-manifest receipts. Retrieval and RAG generation were not invoked.
+- The fresh debug-report module passed with `95 passed in 1.99s`; the reviewed
+  commit's immediately preceding full repository run remains `665 passed in
+  28.92s`.
+- Chrome passed at 1440×1000 and true emulated 390×844 viewports: one visible
+  topic/control, stage order `[0,1,2,3,4,5,6,7,8]`, exact overall and
+  per-subnarrative funnels, 38 citations with zero broken targets, topic-2
+  citation navigation into the open reference disclosure, ten direct selected
+  documents plus the closed remaining-90 disclosure, and exact page widths
+  `1440 == 1440` and `390 == 390`. Each compact selected-document summary had
+  four distinct fields with a computed `10.4px` inline-start gap at both
+  viewports. Fresh isolated light-mode story, funnel, and selected-document
+  screenshots were visually inspected at both widths.
+- Three unique local `.env` values were checked with zero embedded in the
+  report. The HTML has zero external script, stylesheet, or image dependencies.
+- The final source report, mode-0600 rendered copy, and live HTTPS response are
+  byte-identical at SHA-256
+  `ec897ac66d6d4c4e66ff27818775d7e0bc71803c8aa2e64930dc48a0abbfbc50`;
+  live HTTPS returned 200. Tailscale Serve and Funnel status showed only the
+  authorized `tailnet only` Serve mapping and no public Funnel mapping.
+- Post-refresh input hashes, submodule SHAs/cleanliness, and private-only Serve
+  state exactly matched the pre-refresh baseline. No push, PR, or submodule
+  action occurred.
+
 ---
 
 ### Task 1: Add deterministic funnel projections and the funnel stage
