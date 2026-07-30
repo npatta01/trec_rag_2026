@@ -20,6 +20,7 @@ from trec_rag.deepagent_evidence import (
     DocumentObservation,
     EvidenceCoverageReport,
     EvidenceCoverageState,
+    RetrievalStateDelta,
 )
 from trec_rag.deepagent_snippets import (
     InvalidSnippetCursorError,
@@ -312,7 +313,7 @@ class AgentToolset:
     search_climbmix: Callable[[str], str]
     extract_relevant_snippets: Callable[[str, str, str | None], str]
     view_retrieval_state: Callable[[str], str]
-    update_retrieval_state: Callable[[dict[str, Any]], str]
+    update_retrieval_state: Callable[[RetrievalStateDelta], str]
     choose_next_action: Callable[[str, str, str | None, list[str], str], str]
 
 
@@ -807,8 +808,8 @@ class DeepAgentRetriever:
                 return json.dumps({"error": "invalid state scope"}, sort_keys=True)
             return coverage_state.view(scope)
 
-        def update_retrieval_state(delta: dict[str, Any]) -> str:
-            """Add grounded needs, facets, nuggets, evidence, and coverage judgments."""
+        def update_retrieval_state(delta: RetrievalStateDelta) -> str:
+            """Record delta rows: add_needs/facets/nuggets/evidence, statuses, supersession, or abandonment."""
             return json.dumps(
                 coverage_state.apply_delta(delta).as_dict(), sort_keys=True
             )

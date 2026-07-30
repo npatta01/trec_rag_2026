@@ -112,6 +112,17 @@ def test_needs_must_be_anchored_in_the_untouched_narrative() -> None:
     assert tuple(need.need_id for need in state.report().needs) == ("n1", "n2")
 
 
+def test_unknown_only_delta_is_rejected() -> None:
+    state = _state_with_snippet()
+
+    result = state.apply_delta({"make_up_a_section": []})
+
+    assert result.accepted_ids == ()
+    assert [(item.section, item.index, item.code) for item in result.rejected] == [
+        ("make_up_a_section", 0, "UNKNOWN_SECTION")
+    ]
+
+
 def test_ungrounded_quote_rejects_only_its_nugget() -> None:
     state = _state_with_snippet()
     _add_need_and_facet(state)

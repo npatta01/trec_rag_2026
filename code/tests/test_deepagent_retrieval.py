@@ -18,6 +18,7 @@ from deepagents.backends import StateBackend
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openrouter import ChatOpenRouter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -1529,6 +1530,42 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
     unrelated_agent.invoke({"messages": [{"role": "user", "content": "unrelated"}]})
 
     assert {"ls", "task", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
+
+
+def test_nested_state_update_tool_exposes_model_facing_delta_sections() -> None:
+    captured: list[deepagent_retrieval.AgentToolset] = []
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        captured.append(toolset)
+        return FakeAgent(
+            lambda _payload: {
+                "messages": [{"role": "assistant", "content": "Done."}]
+            }
+        )
+
+    _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    schema = convert_to_openai_tool(captured[0].update_retrieval_state)
+    delta = schema["function"]["parameters"]["properties"]["delta"]
+
+    assert {
+        "add_needs",
+        "add_facets",
+        "add_nuggets",
+        "add_evidence",
+        "set_facet_status",
+        "set_need_status",
+        "supersede_nuggets",
+        "abandon_documents",
+    } <= set(delta["properties"])
+    assert {"need_id", "narrative_span", "question"} <= set(
+        delta["properties"]["add_needs"]["items"]["properties"]
+    )
+    assert {"need_id", "narrative_span", "question"} <= set(
+        delta["properties"]["add_needs"]["items"]["required"]
+    )
 
 
 def test_retrieve_requires_recorded_actions_for_agent_retrieval_tools() -> None:

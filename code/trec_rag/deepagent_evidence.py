@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 import json
 from threading import Lock
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict
 
 from trec_rag.deepagent_snippets import SnippetPage
 
@@ -29,6 +29,79 @@ _DELTA_SECTIONS = (
     "supersede_nuggets",
     "abandon_documents",
 )
+
+
+class NeedDelta(TypedDict):
+    need_id: str
+    narrative_span: str
+    question: str
+
+
+class FacetDelta(TypedDict):
+    facet_id: str
+    need_ids: list[str]
+    dimension: str
+    value: str
+    origin: Literal["narrative", "snippet"]
+    origin_snippet_id: NotRequired[str | None]
+
+
+class EvidenceDelta(TypedDict):
+    snippet_id: str
+    quote: str
+
+
+class NuggetDelta(TypedDict):
+    nugget_id: str
+    text: str
+    need_ids: list[str]
+    facet_ids: list[str]
+    evidence: list[EvidenceDelta]
+    contradicts: NotRequired[list[str]]
+
+
+class AddEvidenceDelta(TypedDict):
+    nugget_id: str
+    snippet_id: str
+    quote: str
+
+
+class FacetStatusDelta(TypedDict):
+    facet_id: str
+    status: Literal["open", "covered", "dropped"]
+    status_reason: NotRequired[str]
+    supporting_nugget_ids: NotRequired[list[str]]
+
+
+class NeedStatusDelta(TypedDict):
+    need_id: str
+    status: NeedStatus
+    remaining_gap: str
+    draft_answer: NotRequired[str]
+    draft_nugget_ids: NotRequired[list[str]]
+
+
+class SupersedeNuggetDelta(TypedDict):
+    nugget_id: str
+    superseded_by: str
+
+
+class AbandonDocumentDelta(TypedDict):
+    document_id: str
+    reason: str
+
+
+class RetrievalStateDelta(TypedDict, total=False):
+    """The model-facing delta accepted by :meth:`EvidenceCoverageState.apply_delta`."""
+
+    add_needs: list[NeedDelta]
+    add_facets: list[FacetDelta]
+    add_nuggets: list[NuggetDelta]
+    add_evidence: list[AddEvidenceDelta]
+    set_facet_status: list[FacetStatusDelta]
+    set_need_status: list[NeedStatusDelta]
+    supersede_nuggets: list[SupersedeNuggetDelta]
+    abandon_documents: list[AbandonDocumentDelta]
 
 
 @dataclass(frozen=True)
@@ -512,6 +585,23 @@ class EvidenceCoverageState:
         with self._lock:
             if not isinstance(delta, Mapping):
                 return StateUpdateResult((), (self._rejection("delta", 0, "INVALID_DELTA"),), self._state_version, self._hash())
+            unknown_sections = [
+                section
+                for section in delta
+                if not isinstance(section, str) or section not in _DELTA_SECTIONS
+            ]
+            if unknown_sections:
+                rejected.extend(
+                    self._rejection(str(section), 0, "UNKNOWN_SECTION")
+                    for section in unknown_sections
+                )
+            if not delta:
+                return StateUpdateResult(
+                    (),
+                    (self._rejection("delta", 0, "EMPTY_DELTA"),),
+                    self._state_version,
+                    self._hash(),
+                )
             for section in _DELTA_SECTIONS:
                 rows = delta.get(section, [])
                 if not isinstance(rows, (list, tuple)):
