@@ -173,6 +173,19 @@ def _model_scores(values: Any, *, expected_count: int) -> tuple[float, ...]:
     return scores
 
 
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
 class LocalMixedbreadSnippetRanker:
     """Lazy, cache-aware local Mixedbread cross-encoder snippet ranker."""
 
@@ -277,6 +290,19 @@ class LocalMixedbreadSnippetRanker:
 
     def _get_model(self) -> Any:
         if self._model is None:
+            if self._model_loader is _load_local_cross_encoder:
+                try:
+                    installed_backend_version = version("sentence-transformers")
+                except PackageNotFoundError as exc:
+                    raise RuntimeError(
+                        "sentence-transformers is required for local snippet ranking. "
+                        "Run code/tools/setup_env.sh and pre-cache the pinned model revision."
+                    ) from exc
+                if installed_backend_version != self._backend_version:
+                    raise RuntimeError(
+                        "installed sentence-transformers version does not match the "
+                        "snippet ranker cache identity"
+                    )
             self._model = self._model_loader(
                 model_name=self._model_name,
                 revision=self._model_revision,
@@ -366,31 +392,49 @@ class SmallLLMSnippetRanker:
                 for chunk in batch
             )
         return tuple(
-            ScoredTextChunk(
-                chunk,
-                scores[self._score_cache.cache_key(query_text=focus_query, text=chunk.text)],
+            sorted(
+                (
+                    ScoredTextChunk(
+                        chunk,
+                        scores[
+                            self._score_cache.cache_key(
+                                query_text=focus_query, text=chunk.text
+                            )
+                        ],
+                    )
+                    for chunk in rows
+                ),
+                key=lambda row: (-row.relevance_score, row.chunk.chunk_id),
             )
-            for chunk in rows
         )
 
     def _invoke_scores(self, focus_query: str, chunks: Sequence[TextChunk]) -> dict[str, float]:
-        prompt = json.dumps(
-            {
-                "focus_query": focus_query,
-                "chunks": [
-                    {"chunk_id": chunk.chunk_id, "text": chunk.text} for chunk in chunks
-                ],
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
+        prompt = (
+            "Score each chunk's relevance to the focus query. Return only strict JSON "
+            'matching {"scores":[{"chunk_id":"...","score":0.0}]}.\n'
+            + json.dumps(
+                {
+                    "focus_query": focus_query,
+                    "chunks": [
+                        {"chunk_id": chunk.chunk_id, "text": chunk.text}
+                        for chunk in chunks
+                    ],
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         )
         reply = self._chat_model.invoke(prompt)
         content = reply if isinstance(reply, str) else getattr(reply, "content", None)
         if not isinstance(content, str):
             raise ValueError("small-LLM score response must be JSON text")
         try:
-            payload = json.loads(content)
-        except json.JSONDecodeError as exc:
+            payload = json.loads(
+                content,
+                object_pairs_hook=_strict_json_object,
+                parse_constant=_reject_json_constant,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
             raise ValueError("small-LLM score response must be valid JSON") from exc
         if not isinstance(payload, dict) or set(payload) != {"scores"} or not isinstance(payload["scores"], list):
             raise ValueError("small-LLM score response must contain scores")

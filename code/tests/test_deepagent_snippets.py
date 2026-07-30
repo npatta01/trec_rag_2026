@@ -444,7 +444,7 @@ def test_local_ranker_identity_and_partial_cache_miss_are_exact(tmp_path: Path) 
 
 
 def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: Path) -> None:
-    chat = FakeChatModel(['{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"doc-a:0001","score":0.2}]}'])
+    chat = FakeChatModel(['{"scores":[{"chunk_id":"doc-a:0000","score":0.2},{"chunk_id":"doc-a:0001","score":0.8}]}'])
     ranker = SmallLLMSnippetRanker(
         chat_model=chat,
         score_cache_root=tmp_path,
@@ -463,9 +463,16 @@ def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: 
         "batch_size": 2,
         "implementation_version": 1,
     }
+    assert [row.chunk.chunk_id for row in ranker.rank("query", ADAPTER_CHUNKS)] == [
+        "doc-a:0001",
+        "doc-a:0000",
+    ]
     assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
-    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [0.8, 0.2]
-    assert [json.loads(prompt) for prompt in chat.prompts] == [
+    assert chat.prompts[0].startswith(
+        "Score each chunk's relevance to the focus query. Return only strict JSON "
+        'matching {"scores":[{"chunk_id":"...","score":0.0}]}.\n'
+    )
+    assert [json.loads(prompt.rsplit("\n", 1)[1]) for prompt in chat.prompts] == [
         {
             "focus_query": "query",
             "chunks": [
@@ -484,6 +491,7 @@ def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: 
         '{"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"unknown","score":0.2}]}',
         '{"scores":[{"chunk_id":"doc-a:0000","score":true},{"chunk_id":"doc-a:0001","score":0.2}]}',
         '{"scores":[{"chunk_id":"doc-a:0000","score":NaN},{"chunk_id":"doc-a:0001","score":0.2}]}',
+        '{"scores":[],"scores":[{"chunk_id":"doc-a:0000","score":0.8},{"chunk_id":"doc-a:0001","score":0.2}]}',
     ],
 )
 def test_small_llm_ranker_rejects_invalid_score_sets(tmp_path: Path, response: str) -> None:
