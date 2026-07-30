@@ -220,8 +220,8 @@ The agent maintains three distinct stores, each with a different job:
   remaining gaps, statuses, and any draft answer.
 - The mechanical **retrieval ledger** records searches, inspected pages,
   document/focus pagination state, residual signals, and consumed actions.
-- The grounded **nugget store** holds only concise claims linked to exact quote
-  evidence from returned snippets.
+- The grounded **nugget store** holds only concise claims linked to
+  whitespace-normalized quote evidence from returned snippets.
 
 Use `view_retrieval_state` to inspect a compact frontier or a bounded state
 view, `update_retrieval_state` to add needs, facets, nuggets, evidence, and
@@ -245,12 +245,13 @@ Agent-facing search and snippet behavior is deliberately narrow:
   `pages_estimated`; these scores describe continuity only within that page's
   ranking, never calibrated relevance or comparability across documents or
   focus queries.
-- A nugget is admitted only when its submitted quote occurs exactly in a
-  returned snippet. A need becomes `answerable` only with a nonblank draft
-  answer and grounded nugget IDs; otherwise it remains unaddressed, partial,
-  or conflicted. A nugget's `single_document` or `multi_document` support
-  label describes the observed support count only; it does not establish
-  source independence.
+- A nugget is admitted only when its submitted quote text matches text in the
+  referenced returned snippet after whitespace normalization; the submitted
+  quote itself is preserved. A need becomes `answerable` only with a nonblank
+  draft answer and grounded nugget IDs; otherwise it remains unaddressed,
+  partial, or conflicted. A nugget's `single_document` or `multi_document`
+  support label describes the observed support count only; it does not
+  establish source independence.
 - The search transport and snippet extractor own their respective caches. The
   model receives no cache keys, paths, bypass switches, or other cache controls.
 - Deep Agents may spill oversized tool results or temporary notes into
