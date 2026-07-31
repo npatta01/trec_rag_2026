@@ -24,6 +24,7 @@ from trec_rag.experiments.organizer_pi.event_trace import (
     DEFAULT_PROJECT_NAME,
     build_fixed_trace,
     build_piika_trace,
+    is_native_failure_event,
     load_pi_events,
 )
 from trec_rag.tracing.models import (
@@ -312,17 +313,7 @@ def _verify_native_user_prompt(events: Sequence[Mapping[str, object]], rendered:
 def _has_explicit_native_failure(
     events: Sequence[Mapping[str, object]],
 ) -> bool:
-    for event in events:
-        event_type = event.get("type")
-        if event_type == "extension_error":
-            return True
-        if event_type == "auto_retry_end" and (
-            event.get("success") is False
-            or event.get("error") is not None
-            or event.get("finalError") is not None
-        ):
-            return True
-    return False
+    return any(is_native_failure_event(event) for event in events)
 
 
 def _has_native_user_message(events: Sequence[Mapping[str, object]]) -> bool:

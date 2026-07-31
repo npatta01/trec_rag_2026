@@ -409,6 +409,19 @@ def _failure_event_span(
     )
 
 
+def is_native_failure_event(event: Mapping[str, object]) -> bool:
+    """Return whether a native Pi event explicitly records terminal failure."""
+    event_type = event.get("type")
+    return event_type == "extension_error" or (
+        event_type == "auto_retry_end"
+        and (
+            event.get("success") is False
+            or event.get("error") is not None
+            or event.get("finalError") is not None
+        )
+    )
+
+
 def _prompt_span(
     *,
     topic: OrganizerTopic,
@@ -709,14 +722,7 @@ def _native_spans(
                     _tool_span(start_event, event, start_ns, timestamp_ns),
                 )
             )
-        elif event_type == "extension_error" or (
-            event_type == "auto_retry_end"
-            and (
-                event.get("success") is False
-                or event.get("error") is not None
-                or event.get("finalError") is not None
-            )
-        ):
+        elif is_native_failure_event(event):
             spans.append((index, _failure_event_span(event, timestamp_ns)))
         elif event_type == "message_end" and _message_role(event) in {
             "user",
@@ -1017,5 +1023,6 @@ __all__ = [
     "LoadedPiEvents",
     "build_fixed_trace",
     "build_piika_trace",
+    "is_native_failure_event",
     "load_pi_events",
 ]

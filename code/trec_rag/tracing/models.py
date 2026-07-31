@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import json
 import math
@@ -9,7 +10,7 @@ import os
 from pathlib import Path
 import tempfile
 from types import MappingProxyType
-from typing import Literal, Mapping, TypeAlias
+from typing import Literal, TypeAlias
 
 
 AttributeScalar: TypeAlias = str | bool | int | float
@@ -21,7 +22,7 @@ DEFAULT_BUNDLE_MAX_BYTES = 256 * 1024 * 1024
 def canonical_json_dumps(value: object) -> str:
     """Encode a value as deterministic strict JSON."""
     return json.dumps(
-        value,
+        _json_value(value),
         allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -40,37 +41,61 @@ def _immutable(*args: object, **kwargs: object) -> None:
     raise TypeError("trace payloads are immutable")
 
 
-class _FrozenDict(dict):
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    __ior__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable
-    setdefault = _immutable
-    update = _immutable
+class _FrozenMapping(Mapping[str, object]):
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Iterable[tuple[str, object]]) -> None:
+        object.__setattr__(self, "_values", MappingProxyType(dict(values)))
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __repr__(self) -> str:
+        return repr(dict(self._values))
+
+    __setattr__ = _immutable
+    __delattr__ = _immutable
 
 
-class _FrozenList(list):
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    __iadd__ = _immutable
-    __imul__ = _immutable
-    append = _immutable
-    clear = _immutable
-    extend = _immutable
-    insert = _immutable
-    pop = _immutable
-    remove = _immutable
-    reverse = _immutable
-    sort = _immutable
+class _FrozenSequence(Sequence[object]):
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Iterable[object]) -> None:
+        object.__setattr__(self, "_values", tuple(values))
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Sequence) or isinstance(
+            other, str | bytes | bytearray
+        ):
+            return False
+        return list(self._values) == list(other)
+
+    def __repr__(self) -> str:
+        return repr(list(self._values))
+
+    __setattr__ = _immutable
+    __delattr__ = _immutable
 
 
 def _freeze_payload(value: object) -> object:
     if isinstance(value, Mapping):
-        return _FrozenDict((key, _freeze_payload(item)) for key, item in value.items())
+        return _FrozenMapping(
+            (key, _freeze_payload(item)) for key, item in value.items()
+        )
     if isinstance(value, list):
-        return _FrozenList(_freeze_payload(item) for item in value)
+        return _FrozenSequence(_freeze_payload(item) for item in value)
     if isinstance(value, tuple):
         return tuple(_freeze_payload(item) for item in value)
     return value
@@ -158,7 +183,7 @@ def _json_value(value: object) -> object:
         if any(not isinstance(key, str) for key in value):
             raise TypeError("JSON object keys must be strings")
         return {key: _json_value(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return [_json_value(item) for item in value]
     return value
 

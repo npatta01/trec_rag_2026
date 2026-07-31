@@ -61,10 +61,14 @@ def test_trace_bundle_is_immutable_and_strict_json_round_trips_atomically(tmp_pa
     with pytest.raises(TypeError):
         restored.root.attributes["topic.id"] = "changed"
     documents = restored.root.children[0].input_value["documents"]
-    with pytest.raises(TypeError):
+    with pytest.raises(AttributeError):
         documents.append({"rank": 2, "docid": "d2", "text": "other"})
     with pytest.raises(TypeError):
         documents[0]["text"] = "changed"
+    with pytest.raises(TypeError):
+        list.append(documents, {"rank": 2, "docid": "d2", "text": "other"})
+    with pytest.raises(TypeError):
+        dict.__setitem__(documents[0], "text", "changed")
 
     original_bytes = path.read_bytes()
     path.write_text('{"project_name":"first","project_name":"second"}', encoding="utf-8")
