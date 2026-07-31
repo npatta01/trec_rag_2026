@@ -412,6 +412,33 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             status="error",
         )
 
+    def _invalid_task(self, request: ToolCallRequest) -> ToolMessage:
+        tool_call_id = request.tool_call.get("id")
+        if not isinstance(tool_call_id, str):
+            raise ValueError("task call requires an id")
+        return ToolMessage(
+            content=json.dumps(
+                {
+                    "budget_snapshot": self._budget.snapshot().as_dict(),
+                    "code": "INVALID_RESEARCH_TASK",
+                    "description_format": {
+                        "research_task_id": "R1-N1",
+                        "round_index": 1,
+                        "depth": "focused",
+                        "motivating_ids": ["N1"],
+                        "goal": "Find grounded evidence for N1",
+                        "known_evidence": "",
+                        "remaining_gap": "No grounded evidence yet",
+                    },
+                    "must_stop": False,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            tool_call_id=tool_call_id,
+            status="error",
+        )
+
     @staticmethod
     def _task_failure(
         request: ToolCallRequest,
@@ -441,7 +468,12 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
     ) -> Any:
         if request.tool_call.get("name") != "task":
             return handler(request)
-        envelope = self._envelope(request)
+        try:
+            envelope = self._envelope(request)
+        except PermissionError:
+            raise
+        except ValueError:
+            return self._invalid_task(request)
         context = self._context(envelope)
         with self._trace_task(context) as span:
             decision = self._budget.reserve_task(context)
@@ -468,7 +500,12 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
     ) -> Any:
         if request.tool_call.get("name") != "task":
             return await handler(request)
-        envelope = self._envelope(request)
+        try:
+            envelope = self._envelope(request)
+        except PermissionError:
+            raise
+        except ValueError:
+            return self._invalid_task(request)
         context = self._context(envelope)
         with self._trace_task(context) as span:
             decision = self._budget.reserve_task(context)

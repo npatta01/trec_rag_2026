@@ -56,6 +56,7 @@ from trec_rag.retrievers import PyseriniRemoteRetriever, Retriever
 
 
 DEFAULT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
+OPENROUTER_REQUEST_TIMEOUT_MS = 120_000
 MAX_FOLLOWUP_SEARCHES = 8
 HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
@@ -70,6 +71,9 @@ Delegate retrieval only through `task` using compact ResearchTaskEnvelope JSON
 and subagent_type "researcher". Batch independent task calls in parallel. After
 each batch, merge the returned evidence bundles with exactly one batched
 update_retrieval_state semantic delta, then call complete_research_round once.
+Set task.description to a JSON-encoded object with exactly this shape:
+{"research_task_id":"R1-N1","round_index":1,"depth":"focused","motivating_ids":["N1"],"goal":"Find grounded evidence for N1","known_evidence":"","remaining_gap":"No grounded evidence yet"}.
+Do not put prose before or after that JSON object.
 Do not call retrieval tools directly. Stop whenever a budget response says
 must_stop. After soft_deadline_reached becomes true, do not launch a new survey
 task; focused or deep tasks may still close a specific gap, and already-running
@@ -471,6 +475,8 @@ def _create_agent(
     )
     from deepagents.backends import StateBackend
     from langchain_openrouter import ChatOpenRouter
+    from openrouter import OpenRouter
+    from openrouter.utils import BackoffStrategy, RetryConfig
 
     prefix = "openrouter:"
     if not isinstance(model, str) or not model.startswith(prefix):
@@ -478,10 +484,27 @@ def _create_agent(
     model_id = model[len(prefix) :]
     if not model_id or model_id != model_id.strip():
         raise ValueError("model must match openrouter:<model-id>")
+    no_retries = RetryConfig(
+        strategy="none",
+        backoff=BackoffStrategy(
+            initial_interval=500,
+            max_interval=60_000,
+            exponent=1.5,
+            max_elapsed_time=0,
+            jitter_ms=0,
+        ),
+        retry_connection_errors=False,
+    )
+    sdk_client = OpenRouter(
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        timeout_ms=OPENROUTER_REQUEST_TIMEOUT_MS,
+        retry_config=no_retries,
+    )
     provider_model = ChatOpenRouter(
         model=model_id,
+        client=sdk_client,
         max_retries=0,
-        timeout=120,
+        timeout=OPENROUTER_REQUEST_TIMEOUT_MS,
     )
     register_harness_profile(
         model,

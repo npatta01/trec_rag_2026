@@ -252,6 +252,37 @@ def test_task_middleware_requires_the_researcher_subagent() -> None:
         )
 
 
+@pytest.mark.parametrize("is_async", [False, True])
+def test_task_middleware_returns_recoverable_error_for_prose_description(
+    is_async: bool,
+) -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    middleware = ResearchTaskBudgetMiddleware(budget)
+    request = task_request(description="Research N1 and find evidence.")
+
+    if is_async:
+
+        async def async_handler(_request: ToolCallRequest) -> ToolMessage:
+            pytest.fail("invalid task must not run")
+
+        result = asyncio.run(middleware.awrap_tool_call(request, async_handler))
+    else:
+
+        def sync_handler(_request: ToolCallRequest) -> ToolMessage:
+            pytest.fail("invalid task must not run")
+
+        result = middleware.wrap_tool_call(request, sync_handler)
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    payload = json.loads(result.content)
+    assert payload["code"] == "INVALID_RESEARCH_TASK"
+    assert payload["must_stop"] is False
+    assert payload["description_format"]["research_task_id"] == "R1-N1"
+    assert budget.snapshot().remaining_researchers == 10
+    assert budget.snapshot().active_researchers == 0
+
+
 def test_task_budget_refusal_preserves_a_transient_concurrency_decision() -> None:
     budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
     assert budget.reserve_task(ResearchTaskContext("existing", 1, "survey", ("N1",))).ok

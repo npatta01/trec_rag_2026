@@ -952,3 +952,23 @@ outside this review's changed files (for example in
 `all_topic_tethered_evaluate.py`, `build_all_topic_tethered_report.py`, and
 unrelated tests/scripts). Those unrelated findings were not changed in this
 POC-small review pass. `git diff --check` completed with no output.
+
+### Topic-224 timeout correction and completed live pass — 2026-07-31
+
+- Corrected the OpenRouter request timeout from `120` milliseconds to
+  `120_000` milliseconds and supplied an explicit SDK `strategy="none"` retry
+  configuration. This removes the SDK's hidden default exponential retry loop.
+- Converted malformed prose in `task.description` into a nonterminal,
+  non-disclosing `INVALID_RESEARCH_TASK` tool result and added the exact JSON
+  envelope shape to the coordinator prompt. One pre-fix attempt reached that
+  validation error after 53.442 seconds; it was not counted as the completed
+  pass.
+- One post-fix topic-224 SDK pass completed in 193.084 seconds with
+  `trace_flush_succeeded=true`. It returned `stopping_reason="agent_completed"`,
+  seven needs, zero nuggets, and seven unresolved needs. Two researcher tasks
+  and one round completed, but the researchers made zero follow-up search or
+  snippet calls; only the deterministic untouched-narrative search appears in
+  the result. This verifies live termination and Phoenix export, but **does not
+  validate researcher retrieval effectiveness**.
+- Post-fix targeted verification before the live pass: 289 tests passed and
+  changed-file Ruff plus `git diff --check` were clean.

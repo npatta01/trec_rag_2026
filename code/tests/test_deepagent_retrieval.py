@@ -1564,7 +1564,11 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     assert isinstance(kwargs["model"], ChatOpenRouter)
     assert kwargs["model"].model_name == "deepseek/test-model"
     assert kwargs["model"].max_retries == 0
-    assert kwargs["model"].request_timeout == 120
+    assert kwargs["model"].request_timeout == 120_000
+    sdk_config = kwargs["model"].client.sdk_configuration
+    assert sdk_config.timeout_ms == 120_000
+    assert sdk_config.retry_config.strategy == "none"
+    assert sdk_config.retry_config.retry_connection_errors is False
     assert kwargs["tools"] == [
         view_tool,
         update_tool,
@@ -1843,6 +1847,7 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
         constructor_calls.append(dict(kwargs))
         return model
 
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr("langchain_openrouter.ChatOpenRouter", fake_openrouter)
     fake_retriever = FakeRetriever()
 
@@ -1852,9 +1857,15 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
         tracing=FakeTracing(),
     ).retrieve("narrative")
 
-    assert constructor_calls == [
-        {"model": "test/offline-coordinator", "max_retries": 0, "timeout": 120}
-    ]
+    assert len(constructor_calls) == 1
+    constructor = constructor_calls[0]
+    assert constructor["model"] == "test/offline-coordinator"
+    assert constructor["max_retries"] == 0
+    assert constructor["timeout"] == 120_000
+    sdk_config = constructor["client"].sdk_configuration
+    assert sdk_config.timeout_ms == 120_000
+    assert sdk_config.retry_config.strategy == "none"
+    assert sdk_config.retry_config.retry_connection_errors is False
     assert [query.query_text for query in fake_retriever.queries] == [
         "narrative",
         "focused researcher query",
