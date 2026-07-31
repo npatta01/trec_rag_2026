@@ -72,9 +72,9 @@ Depth is selected automatically by the main agent per task:
   productive snippet pagination.
 
 Depth controls the researcher's success criteria and prompt, not a hard number
-of searches, documents, pages, or snippets. There is no global semantic action
-budget. A runtime timeout and maximum concurrent researcher count may remain
-configuration safeguards, but they do not determine coverage or saturation.
+of searches, documents, pages, or snippets. Semantic completion remains
+evidence-driven, while separate configurable circuit breakers place absolute
+upper bounds on runtime and cost.
 
 A typical run is:
 
@@ -85,8 +85,70 @@ A typical run is:
 4. The run stops when every required need is answerable/conflicted or when the
    frontier has no plausible action that is still producing novel evidence.
 
-The current global three-follow-up-search limit is removed from semantic
-stopping because it is incompatible with independent multi-round researchers.
+The current global three-follow-up-search limit is removed. It is replaced by
+the shared invocation budget below, which covers the complete multi-researcher
+run instead of one tool closure.
+
+## Shared Research Budget
+
+One invocation-local, concurrency-safe budget is shared by the main agent and
+all researchers. Framework call-limit middleware enforces per-agent limits,
+while the shared controller accounts across separate subagent runs. Budget
+checks happen before work is admitted, and attempted calls count even when
+their arguments are malformed so repeated self-correction cannot evade a cap.
+
+The POC defaults are SDK configuration values:
+
+| Guard | Default |
+| --- | ---: |
+| Researcher invocations across all rounds | 10 |
+| Research rounds | 4 |
+| Concurrent researchers | 3 |
+| Combined search and snippet calls | 100 |
+| All tool calls per researcher | 20 |
+| Search calls per researcher | 8 |
+| Snippet calls per researcher | 16 |
+| Model calls per researcher | 30 |
+| Main-agent model calls | 25 |
+| Soft elapsed-time threshold | 10 minutes |
+| Hard admission deadline | 30 minutes |
+| Individual model request timeout | 2 minutes |
+
+The per-tool limits are nested inside the per-researcher total: reaching any
+one limit blocks the next matching call. At most one main-agent model call is
+reserved for finalization so exhaustion can still produce a grounded partial
+result. Parallel task reservations are atomic; a simultaneous batch cannot
+push the shared task or concurrency count over its limit.
+
+Every task, search, and snippet response includes a compact snapshot with
+remaining researcher invocations, research calls, rounds, and wall time. Once
+the soft threshold passes, responses set `soft_deadline_reached=true`. The main
+agent finishes the current round and does not begin new broad survey work; it
+may still merge completed bundles and finalize. At the hard admission deadline,
+new researcher, search, and snippet calls return a structured
+`BUDGET_EXHAUSTED` result. Already-running synchronous calls are not forcibly
+terminated by the admission controller. The two-minute model request timeout
+and existing 30-second ClimbMix transport timeout independently bound those
+network operations; a completed local snippet call is rejected if the hard
+deadline passed while it ran. The main agent then uses its reserved call to
+return the grounded partial result with
+`stopping_reason="budget_exhausted"`. The POC guarantees termination of agent
+loops, but does not claim it can preempt uncooperative native code inside an
+already-running local snippet call.
+
+Budget exhaustion is a safety stop, not evidence saturation and not successful
+coverage. Remaining gaps stay explicit.
+
+Two adaptive rules normally stop work before the hard caps:
+
+- a researcher returns its bundle after three consecutive retrieval calls add
+  no new useful document, snippet, or grounded candidate evidence; and
+- the main agent stops after two consecutive completed rounds add neither an
+  accepted nugget nor a need/facet coverage improvement.
+
+These no-yield counters reset only on mechanically observed new retrieval yield
+or an accepted grounded semantic update, respectively. A model cannot reset
+them merely by claiming progress.
 
 ## Atomic Fixed-Tool Contract
 
@@ -112,7 +174,9 @@ normally returns 5–10 ranked snippets; productive pagination may continue.
 The tools reject invalid motivations before execution. Ordinary search,
 extraction, refocus, and pagination no longer require a preceding
 `choose_next_action` call or exact duplicate target string. Stop/saturation
-validation remains a separate main-agent decision.
+validation remains a separate main-agent decision. Budget admission occurs
+before fixed-tool execution and before any cache lookup; cache hits still count
+because they consume agent steps and context.
 
 ## EvidenceBundle
 
@@ -143,7 +207,14 @@ Each researcher returns a structured bundle containing:
   "conflicts": [],
   "unresolved_gaps": ["..."],
   "suggested_followups": ["..."],
-  "stopping_reason": "goal_satisfied"
+  "stopping_reason": "goal_satisfied",
+  "budget_snapshot": {
+    "remaining_researchers": 9,
+    "remaining_research_calls": 94,
+    "remaining_rounds": 3,
+    "soft_deadline_reached": false,
+    "hard_deadline_reached": false
+  }
 }
 ```
 
@@ -176,7 +247,8 @@ subagent memory.
 Phoenix spans identify the agent role, `research_task_id`, round, depth, and
 actual fixed-tool arguments. Existing trace-content configuration determines
 whether inputs and outputs are visible; the POC does not intentionally redact
-them. Trace flushing remains unchanged.
+them. Trace spans also record the current budget snapshot and the exact guard
+responsible for a blocked call or stopped run. Trace flushing remains unchanged.
 
 Expected failure behavior:
 
@@ -198,7 +270,8 @@ Expected failure behavior:
 - ClimbMix titles are not invented or added when the endpoint does not return
   them.
 - Researchers cannot recursively delegate.
-- No global limit on evidence, snippets, documents, pages, or research rounds.
+- Safety budgets cap operations and elapsed time but never masquerade as
+  evidence completeness.
 
 ## Implementation Boundary
 
@@ -222,6 +295,9 @@ Keep verification proportional to the POC:
 - one test for concurrent independent bundles followed by serialized merge;
 - one test for a later autonomous query-rephrasing round;
 - bundle grounding tests for exact quotes and partial-row rejection;
+- deterministic tests for atomic parallel reservations, per-agent and shared
+  caps, soft warning, hard admission refusal, reserved finalization, and
+  adaptive no-yield stopping;
 - existing Deep Agent retrieval tests and Ruff; and
 - one instrumented topic-224 SDK run using `.venv/bin/python-rocm`.
 
@@ -229,4 +305,6 @@ The live pass succeeds when it initializes the five topic-224 needs, completes
 at least one researcher bundle, records the queries actually executed without
 action-mismatch errors, merges grounded nuggets, reports remaining gaps or a
 grounded stopping reason, flushes its Phoenix trace, and returns within the
-bounded diagnostic run.
+bounded diagnostic run. A second small diagnostic with deliberately tiny
+budgets must terminate as `budget_exhausted` while preserving its partial
+grounded evidence and remaining gaps.
