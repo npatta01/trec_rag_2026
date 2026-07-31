@@ -18,7 +18,7 @@ import json
 import os
 import sys
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 from phoenix.client import Client
 
@@ -43,6 +43,7 @@ DEFAULT_TOPIC_ID = "224"
 EXPECTED_BUNDLES = 5
 EXPECTED_BASELINE_NUGGETS = 6
 EXPECTED_SNIPPETS = 16
+InputSource = Literal["researcher", "ledger"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class TraceSnapshot:
 
 @dataclass(frozen=True)
 class PreparedProbe:
+    input_source: InputSource
     snapshot: TraceSnapshot
     provisional: tuple[GroundedClaim, ...]
     request: CanonicalNuggetRequest
@@ -251,17 +253,27 @@ def grounding_failures(
     return tuple(failures)
 
 
-def prepare_probe(snapshot: TraceSnapshot, *, topic_id: str) -> PreparedProbe:
+def prepare_probe(
+    snapshot: TraceSnapshot,
+    *,
+    topic_id: str,
+    input_source: InputSource = "researcher",
+) -> PreparedProbe:
     provisional: list[GroundedClaim] = []
-    for bundle in snapshot.bundles:
-        for index, candidate in enumerate(bundle.candidate_nuggets, start=1):
-            provisional.append(
-                GroundedClaim(
-                    f"{bundle.research_task_id}:p{index:03d}",
-                    candidate.claim,
-                    tuple(item.model_dump() for item in candidate.evidence),
+    if input_source == "researcher":
+        for bundle in snapshot.bundles:
+            for index, candidate in enumerate(bundle.candidate_nuggets, start=1):
+                provisional.append(
+                    GroundedClaim(
+                        f"{bundle.research_task_id}:p{index:03d}",
+                        candidate.claim,
+                        tuple(item.model_dump() for item in candidate.evidence),
+                    )
                 )
-            )
+    elif input_source == "ledger":
+        provisional.extend(snapshot.baseline)
+    else:
+        raise ValueError(f"unsupported input source: {input_source!r}")
 
     failures = (
         *grounding_failures(snapshot.baseline, snapshot.snippets),
@@ -320,6 +332,7 @@ def prepare_probe(snapshot: TraceSnapshot, *, topic_id: str) -> PreparedProbe:
         request_sha256=sha256(body).hexdigest(),
     )
     return PreparedProbe(
+        input_source,
         snapshot,
         tuple(provisional),
         request,
@@ -385,6 +398,7 @@ def comparison(
         "topic_id": topic_id,
         "trace_id": trace_id,
         "model": OPENROUTER_DEEPSEEK_MODEL,
+        "input_source": prepared.input_source,
         "preflight": {
             "passed": preflight_passed,
             "researcher_bundles": len(prepared.snapshot.bundles),
@@ -493,7 +507,13 @@ def _client_from_env() -> tuple[Client, str]:
     return Client(base_url=endpoint, api_key=api_key), project
 
 
-def run(*, trace_id: str, topic_id: str, dry_run: bool) -> dict[str, object]:
+def run(
+    *,
+    trace_id: str,
+    topic_id: str,
+    input_source: InputSource,
+    dry_run: bool,
+) -> dict[str, object]:
     client, project = _client_from_env()
     spans = client.spans.get_spans(
         project_identifier=project,
@@ -502,7 +522,11 @@ def run(*, trace_id: str, topic_id: str, dry_run: bool) -> dict[str, object]:
         timeout=20,
     )
     snapshot = reconstruct_trace(spans)
-    prepared = prepare_probe(snapshot, topic_id=topic_id)
+    prepared = prepare_probe(
+        snapshot,
+        topic_id=topic_id,
+        input_source=input_source,
+    )
     if dry_run:
         return comparison(
             prepared,
@@ -533,6 +557,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace-id", default=DEFAULT_TRACE_ID)
     parser.add_argument("--topic-id", default=DEFAULT_TOPIC_ID)
     parser.add_argument(
+        "--input-source",
+        choices=("researcher", "ledger"),
+        default="researcher",
+        help="canonicalize raw researcher claims or mechanically grounded ledger nuggets",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="reconstruct and validate the trace without calling OpenRouter",
@@ -546,6 +576,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run(
             trace_id=arguments.trace_id,
             topic_id=arguments.topic_id,
+            input_source=arguments.input_source,
             dry_run=arguments.dry_run,
         )
     except Exception as exc:

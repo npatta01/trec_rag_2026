@@ -72,19 +72,37 @@ canonical-nugget contract, OpenRouter DeepSeek V4 Flash, standard-library JSON.
 - Modify: `code/trec_rag/post_batch_nuggetizer_probe.py`
 - Modify: `docs/superpowers/plans/2026-07-31-deepagent-post-batch-nuggetizer-probe.md`
 
-- [ ] Add an explicit `--input-source ledger` mode that builds the canonical
+- [x] Add an explicit `--input-source ledger` mode that builds the canonical
   request from the same trace's six accepted ledger nuggets. Preserve
   `--input-source researcher` as the failing diagnostic path; never repair or
   accept its two invalid citations.
-- [ ] Dry-run ledger mode and require 5 bundles, 6 inputs, 6 baseline nuggets,
+- [x] Dry-run ledger mode and require 5 bundles, 6 inputs, 6 baseline nuggets,
   16 snippets, zero grounding failures, and zero hosted calls.
-- [ ] Source the existing OpenRouter environment and run ledger mode once with
+- [x] Source the existing OpenRouter environment and run ledger mode once with
   a 150-second outer process limit. Require at most one adapter transport call;
   do not retry.
-- [ ] Inspect the sanitized mapping for claim loss, evidence orphans, exact
+- [x] Inspect the sanitized mapping for claim loss, evidence orphans, exact
   duplicates, and materially incorrect merges. Record the result below.
-- [ ] Run a fresh syntax/import check and `git diff --check`, then commit only
+- [x] Run a fresh syntax/import check and `git diff --check`, then commit only
   the approved POC files.
+
+### Grounded-ledger result
+
+- State: `complete`.
+- Backend: `deepseek/deepseek-v4-flash-20260423` via AtlasCloud.
+- Hosted calls: 1; no retry.
+- Hosted latency: 3.104 seconds.
+- Usage: 585 prompt tokens, 217 completion tokens, 802 total tokens; reported
+  cost `$0.00014266`.
+- Input/output: 6 grounded claims to 6 canonical claims, with identical text.
+- Provenance: all 6 evidence aliases retained; 0 orphaned and 0 unknown.
+- Deduplication: 0 normalized input duplicates, 0 output duplicates, and 0
+  paraphrase merges.
+- Verdict: the adapter safely preserved this batch, but topic 224 does not
+  contain duplicate grounded claims and therefore does not demonstrate the
+  value of a canonicalization stage.
+- Final verification: ledger dry-run passed with zero hosted calls; syntax and
+  import check passed; existing canonical-nugget contract suite passed 21/21.
 
 ## Verification Evidence
 
