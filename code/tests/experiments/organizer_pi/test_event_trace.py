@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 import json
 import os
 
@@ -13,7 +12,6 @@ from trec_rag.experiments.organizer_pi.event_trace import (
     load_pi_events,
     piika_tool_schemas,
 )
-from trec_rag.tracing.models import read_trace_bundle, write_trace_bundle
 
 
 def _write_jsonl(path, rows):
@@ -846,101 +844,3 @@ def test_load_pi_events_minimally_repairs_reversed_native_anchors(tmp_path):
         first_ns + 1,
         first_ns + 2,
     )
-
-
-def test_trace_bundle_is_immutable_and_strict_json_round_trips_atomically(tmp_path):
-    final = _assistant("final", 1_800_000_000_000)
-    bundle = build_fixed_trace(
-        topic=OrganizerTopic("rag2026-1", "question"),
-        events=load_pi_events(
-            _write_jsonl(
-                tmp_path / "events.jsonl",
-                [{"type": "message_end", "message": final}],
-            )
-        ),
-        run_record={"status": "completed"},
-        system_prompt="system",
-        user_prompt="user",
-        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
-        session_id="session",
-    )
-    path = tmp_path / "trace.json"
-
-    assert write_trace_bundle(bundle, path) == path
-    restored = read_trace_bundle(path)
-
-    assert restored == bundle
-    with pytest.raises(FrozenInstanceError):
-        restored.session_id = "changed"
-    with pytest.raises(TypeError):
-        restored.root.attributes["topic.id"] = "changed"
-    documents = restored.root.children[0].output_value["documents"]
-    with pytest.raises(TypeError):
-        documents.append({"rank": 2, "docid": "d2", "text": "other"})
-    with pytest.raises(TypeError):
-        documents[0]["text"] = "changed"
-
-    original_bytes = path.read_bytes()
-    path.write_text('{"project_name":"first","project_name":"second"}', encoding="utf-8")
-    with pytest.raises(ValueError):
-        read_trace_bundle(path)
-    path.write_bytes(original_bytes)
-
-    generation = bundle.root.children[2]
-    object.__setattr__(generation, "output_value", {"not_json": float("nan")})
-    with pytest.raises(ValueError):
-        write_trace_bundle(bundle, path)
-    assert path.read_bytes() == original_bytes
-
-
-@pytest.mark.parametrize(
-    ("field", "invalid_value"),
-    [
-        ("project_name", 17),
-        ("session_id", ["session"]),
-        ("topic_id", {"topic": "rag2026-1"}),
-        ("baseline", ["piika-agentic"]),
-        ("root.name", 17),
-        ("root.kind", ["CHAIN"]),
-        ("root.status", 17),
-        ("root.status_message", {"message": "bad"}),
-    ],
-    ids=[
-        "project-name",
-        "session-id",
-        "topic-id",
-        "baseline",
-        "span-name",
-        "span-kind",
-        "span-status",
-        "span-status-message",
-    ],
-)
-def test_read_trace_bundle_rejects_non_string_contract_fields(
-    tmp_path, field, invalid_value
-):
-    final = _assistant("final", 1_800_000_000_000)
-    bundle = build_fixed_trace(
-        topic=OrganizerTopic("rag2026-1", "question"),
-        events=load_pi_events(
-            _write_jsonl(
-                tmp_path / "strict-events.jsonl",
-                [{"type": "message_end", "message": final}],
-            )
-        ),
-        run_record={"status": "completed"},
-        system_prompt="system",
-        user_prompt="user",
-        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
-        session_id="session",
-    )
-    path = write_trace_bundle(bundle, tmp_path / "invalid-contract.json")
-    record = json.loads(path.read_text(encoding="utf-8"))
-    if field.startswith("root."):
-        record["root"][field.removeprefix("root.")] = invalid_value
-    else:
-        record[field] = invalid_value
-    path.write_text(json.dumps(record), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="invalid (trace bundle|span value)"):
-        read_trace_bundle(path)

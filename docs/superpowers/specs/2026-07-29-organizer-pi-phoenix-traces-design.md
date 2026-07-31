@@ -1,7 +1,7 @@
 # Organizer Pi Baselines: Single-Topic Phoenix Trace Design
 
-**Date:** 2026-07-29  
-**Status:** Approved with Phoenix Cloud delivery  
+**Date:** 2026-07-29
+**Status:** Approved with Phoenix Cloud delivery
 **Topic:** `rag2026-1`
 
 ## Objective
