@@ -2305,6 +2305,108 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
     )
 
 
+def test_run_wide_budget_stop_maps_to_public_budget_exhausted_reason() -> None:
+    tracing = FakeTracing()
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        return FakeAgent(
+            lambda _payload: (
+                _authorized_search(toolset, "one tiny-budget query"),
+                {"messages": [{"role": "assistant", "content": "Partial."}]},
+            )[1]
+        )
+
+    result = DeepAgentRetriever(
+        retriever=FakeRetriever(),
+        agent_factory=agent_factory,
+        tracing=tracing,
+        model="test-model",
+        snippet_extractor=RecordingSnippetExtractor(),
+        budget_config=ResearchBudgetConfig(max_retrieval_calls=1),
+    ).retrieve("narrative")
+
+    assert result.stopping_reason == "budget_exhausted"
+    assert result.coverage_report.terminal_reason is None
+    assert result.budget_snapshot.stop_code == "RETRIEVAL_BUDGET_EXHAUSTED"
+    assert tracing.result_records[0]["stopping_reason"] == "budget_exhausted"
+    assert (
+        tracing.result_records[0]["budget_stop_code"]
+        == "RETRIEVAL_BUDGET_EXHAUSTED"
+    )
+
+
+def test_snippet_finishing_after_hard_deadline_is_not_recorded_or_yielded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClock:
+        def __init__(self) -> None:
+            self.seconds = 0.0
+
+        def __call__(self) -> float:
+            return self.seconds
+
+    clock = FakeClock()
+    real_budget = ResearchBudget
+    tracing = FakeTracing()
+    tool_payload: dict[str, object] = {}
+
+    class DeadlineCrossingExtractor(RecordingSnippetExtractor):
+        def extract(
+            self,
+            document_id: str,
+            document_text: str,
+            focus_query: str,
+            cursor: str | None = None,
+        ) -> SnippetExtractionResult:
+            result = super().extract(
+                document_id, document_text, focus_query, cursor
+            )
+            clock.seconds = 2.0
+            return result
+
+    monkeypatch.setattr(
+        deepagent_retrieval,
+        "ResearchBudget",
+        lambda config: real_budget(config, clock=clock),
+    )
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            tool_payload.update(
+                json.loads(
+                    _authorized_snippet(
+                        toolset, "original-doc-1", "deadline focus", None
+                    )
+                )
+            )
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = DeepAgentRetriever(
+        retriever=FakeRetriever(),
+        agent_factory=agent_factory,
+        tracing=tracing,
+        model="test-model",
+        snippet_extractor=DeadlineCrossingExtractor(),
+        budget_config=ResearchBudgetConfig(soft_seconds=0, hard_seconds=1),
+    ).retrieve("narrative")
+
+    assert tool_payload["ok"] is False
+    assert tool_payload["code"] == "HARD_DEADLINE_REACHED"
+    assert tool_payload["must_stop"] is True
+    assert "snippets" not in tool_payload
+    assert result.coverage_report.inspected_page_count == 0
+    assert result.coverage_report.documents == ()
+    assert tracing.snippet_records == []
+    assert result.stopping_reason == "budget_exhausted"
+    assert result.budget_snapshot.stop_code == "HARD_DEADLINE_REACHED"
+
+
 def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_others() -> (
     None
 ):

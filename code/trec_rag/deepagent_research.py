@@ -36,6 +36,8 @@ extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
 write state, or use filesystem mutation tools. Return a compact EvidenceBundle:
 each candidate claim must cite exact document, snippet, page, and quote
 coordinates; report conflicts and remaining gaps rather than inventing support.
+If any tool response says must_stop=true, call no more tools and immediately
+return the structured EvidenceBundle with grounded work completed so far.
 """
 
 
@@ -247,6 +249,41 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
     )
     _PARALLEL_TOOL_CALLS = False
 
+    def __init__(self, budget: ResearchBudget | None = None) -> None:
+        self._budget = budget
+
+    def _filter_tools(self, request: ModelRequest) -> ModelRequest:
+        filtered = super()._filter_tools(request)
+        envelope = current_research_task()
+        if self._budget is None or envelope is None:
+            return filtered
+        context = ResearchTaskContext(
+            research_task_id=envelope.research_task_id,
+            round_index=envelope.round_index,
+            depth=envelope.depth,
+            motivating_ids=tuple(envelope.motivating_ids),
+        )
+        snapshot = self._budget.snapshot()
+        task_stop_code = self._budget.task_stop_code(context)
+        if task_stop_code is None and snapshot.stop_code is None:
+            return filtered
+        stop_code = task_stop_code or snapshot.stop_code
+        instruction = (
+            "A budget response now has must_stop=true "
+            f"({stop_code}). Return the structured EvidenceBundle immediately "
+            "with grounded work completed so far; do not call more tools."
+        )
+        existing = request.system_message
+        content = f"{existing.content}\n\n{instruction}" if existing else instruction
+        return filtered.override(
+            tools=[],
+            system_message=SystemMessage(content=content),
+            model_settings={
+                **(filtered.model_settings or {}),
+                "parallel_tool_calls": False,
+            },
+        )
+
 
 class ResearchTaskBudgetMiddleware(AgentMiddleware):
     """Reserve and bind each researcher task for one top-level invocation."""
@@ -375,6 +412,30 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             status="error",
         )
 
+    @staticmethod
+    def _task_failure(
+        request: ToolCallRequest,
+        envelope: ResearchTaskEnvelope,
+        snapshot: BudgetSnapshot,
+    ) -> ToolMessage:
+        tool_call_id = request.tool_call.get("id")
+        if not isinstance(tool_call_id, str):
+            raise ValueError("task call requires an id")
+        return ToolMessage(
+            content=json.dumps(
+                {
+                    "budget_snapshot": snapshot.as_dict(),
+                    "code": "RESEARCH_TASK_FAILED",
+                    "must_stop": False,
+                    "research_task_id": envelope.research_task_id,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            tool_call_id=tool_call_id,
+            status="error",
+        )
+
     def wrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]
     ) -> Any:
@@ -389,7 +450,12 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                 return self._refusal(request, decision)
             try:
                 with bind_research_task(envelope):
-                    result = handler(request)
+                    try:
+                        result = handler(request)
+                    except Exception:
+                        return self._task_failure(
+                            request, envelope, self._budget.snapshot()
+                        )
                 return self._append_snapshot(result, self._budget.snapshot())
             finally:
                 self._budget.finish_task(context)
@@ -411,7 +477,12 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                 return self._refusal(request, decision)
             try:
                 with bind_research_task(envelope):
-                    result = await handler(request)
+                    try:
+                        result = await handler(request)
+                    except Exception:
+                        return self._task_failure(
+                            request, envelope, self._budget.snapshot()
+                        )
                 return self._append_snapshot(result, self._budget.snapshot())
             finally:
                 self._budget.finish_task(context)
@@ -422,6 +493,7 @@ def build_research_subagent(
     *,
     model: BaseChatModel,
     tools: Sequence[Callable[..., object]],
+    budget: ResearchBudget,
     budget_config: ResearchBudgetConfig,
 ) -> SubAgent:
     """Build the only delegable, non-recursive retrieval researcher."""
@@ -453,7 +525,7 @@ def build_research_subagent(
                     run_limit=budget_config.max_snippets_per_researcher,
                     exit_behavior="continue",
                 ),
-                ResearcherToolFilterMiddleware(),
+                ResearcherToolFilterMiddleware(budget),
             ],
             "response_format": EvidenceBundle,
         },

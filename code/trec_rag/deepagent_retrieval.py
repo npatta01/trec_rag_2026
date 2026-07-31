@@ -71,7 +71,10 @@ and subagent_type "researcher". Batch independent task calls in parallel. After
 each batch, merge the returned evidence bundles with exactly one batched
 update_retrieval_state semantic delta, then call complete_research_round once.
 Do not call retrieval tools directly. Stop whenever a budget response says
-must_stop.
+must_stop. After soft_deadline_reached becomes true, do not launch a new survey
+task; focused or deep tasks may still close a specific gap, and already-running
+tasks may finish. Merge completed bundles and finalize even after the soft
+deadline.
 Mark a need answerable only with a draft answer and grounded nugget IDs. Report
 conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
 for oversized output or temporary notes. The state filesystem is ephemeral.
@@ -493,6 +496,7 @@ def _create_agent(
             toolset.extract_relevant_snippets,
             toolset.view_retrieval_state,
         ],
+        budget=toolset.budget,
         budget_config=toolset.budget_config,
     )
 
@@ -1063,6 +1067,20 @@ class DeepAgentRetriever:
                         focus_query,
                         cursor,
                     )
+                    snapshot = budget.snapshot()
+                    if snapshot.hard_deadline_reached:
+                        return json.dumps(
+                            budget_payload(
+                                BudgetDecision(
+                                    ok=False,
+                                    code="HARD_DEADLINE_REACHED",
+                                    snapshot=snapshot,
+                                    must_stop=True,
+                                ),
+                                error="retrieval budget refused",
+                            ),
+                            sort_keys=True,
+                        )
                     coverage_state.record_snippet_page(result.page)
                     latency_ms = (monotonic() - started_at) * 1_000
                     if span is not None:
@@ -1245,7 +1263,11 @@ class DeepAgentRetriever:
                 budget_snapshot = budget.snapshot()
                 stopping_reason = (
                     coverage_report.terminal_reason
-                    or budget_snapshot.stop_code
+                    or (
+                        "budget_exhausted"
+                        if budget_snapshot.stop_code is not None
+                        else None
+                    )
                     or "agent_completed"
                 )
                 if agent_span is not None:

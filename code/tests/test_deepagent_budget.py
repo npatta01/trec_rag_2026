@@ -220,7 +220,7 @@ def test_hard_deadline_and_no_progress_override_global_cap_stop_codes() -> None:
         ),
         clock=clock,
     )
-    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+    context = ResearchTaskContext("T1", 1, "focused", ("N1",))
     assert budget.reserve_task(context).ok
 
     assert (
@@ -294,16 +294,39 @@ def test_per_task_tool_cap_refuses_first_call_after_limit(
     assert budget.snapshot().stop_code is None
 
 
-def test_soft_deadline_warns_but_allows_work() -> None:
+def test_soft_deadline_refuses_new_survey_but_allows_focused_and_deep_work() -> None:
     clock = FakeClock()
-    budget = ResearchBudget(ResearchBudgetConfig(), clock=clock)
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=3), clock=clock)
     clock.advance(600)
 
-    decision = budget.reserve_task(ResearchTaskContext("T1", 1, "survey", ("N1",)))
+    survey = budget.reserve_task(ResearchTaskContext("T1", 1, "survey", ("N1",)))
+    focused = budget.reserve_task(ResearchTaskContext("T2", 1, "focused", ("N1",)))
+    deep = budget.reserve_task(ResearchTaskContext("T3", 1, "deep", ("N1",)))
+
+    assert survey.ok is False
+    assert survey.code == "SOFT_DEADLINE_REACHED"
+    assert survey.must_stop is False
+    assert focused.ok is True
+    assert focused.code == "SOFT_DEADLINE_REACHED"
+    assert deep.ok is True
+    assert deep.code == "SOFT_DEADLINE_REACHED"
+    assert deep.snapshot.active_researchers == 2
+    assert deep.snapshot.stop_code is None
+
+
+def test_survey_already_active_at_soft_deadline_can_finish_and_use_retrieval() -> None:
+    clock = FakeClock()
+    budget = ResearchBudget(ResearchBudgetConfig(), clock=clock)
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+    assert budget.reserve_task(context).ok
+    clock.advance(600)
+
+    decision = budget.reserve_retrieval(context, "search_climbmix")
+    budget.finish_task(context)
 
     assert decision.ok is True
     assert decision.code == "SOFT_DEADLINE_REACHED"
-    assert decision.snapshot.active_researchers == 1
+    assert budget.snapshot().completed_researchers == 1
 
 
 def test_finishing_task_releases_its_concurrency_slot() -> None:

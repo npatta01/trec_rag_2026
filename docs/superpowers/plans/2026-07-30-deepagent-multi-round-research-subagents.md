@@ -904,3 +904,51 @@ raw full documents, or cache contents.
 
   The original normal and tiny-budget live-run boundaries are unchanged and no
   live provider invocation was made in this fix round.
+
+### Final whole-change review fixes — 2026-07-31
+
+- Normalized every run-wide budget stop in the public
+  `AgentRetrievalResult.stopping_reason` to `budget_exhausted`, while preserving
+  coverage-terminal precedence and retaining the exact guard in
+  `budget_snapshot.stop_code` and Phoenix `budget_stop_code`.
+- Added the post-extraction hard-deadline gate before snippet-page recording,
+  trace page recording, or retrieval-yield recording.
+- Made the soft deadline refuse only new `survey` tasks. Focused/deep tasks and
+  tasks admitted before the threshold may still finish; refusals are
+  nonterminal.
+- Made the researcher model boundary hide every tool and append an immediate
+  structured-bundle instruction after the current task reaches its local
+  three-call no-yield stop. The check uses the context-bound task ID and the
+  concurrency-safe shared budget.
+- Converted ordinary sync/async researcher handler exceptions to a fixed,
+  non-disclosing `RESEARCH_TASK_FAILED` tool result and verified context/slot
+  cleanup plus a successful sibling task. `BaseException` remains uncaught.
+- Corrected the README statement that still described
+  `choose_next_action` as authorizing ordinary retrieval.
+- No live provider, ClimbMix, reranker, or Phoenix export call was made for this
+  review pass.
+
+Fresh verification:
+
+```console
+$ .venv/bin/python -m pytest -q \
+    code/tests/test_deepagent_snippets.py \
+    code/tests/test_deepagent_budget.py \
+    code/tests/test_deepagent_research.py \
+    code/tests/test_deepagent_evidence.py \
+    code/tests/test_deepagent_retrieval.py \
+    code/tests/test_deepagent_tracing.py
+287 passed in 6.72s
+
+$ /home/npatta01/anaconda3/bin/ruff check <the same six source/test targets>
+All checks passed!
+
+$ .venv/bin/python -m pytest -q
+750 passed in 33.80s
+```
+
+Repository-wide Ruff was also attempted. It reported 25 pre-existing findings
+outside this review's changed files (for example in
+`all_topic_tethered_evaluate.py`, `build_all_topic_tethered_report.py`, and
+unrelated tests/scripts). Those unrelated findings were not changed in this
+POC-small review pass. `git diff --check` completed with no output.

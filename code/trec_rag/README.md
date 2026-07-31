@@ -266,11 +266,12 @@ The agent maintains three distinct stores, each with a different job:
   whitespace-normalized quote evidence from returned snippets.
 
 Use `view_retrieval_state` to inspect a compact frontier or a bounded state
-view, `update_retrieval_state` to add needs, facets, nuggets, evidence, and
-coverage judgments, and `choose_next_action` to record the coverage gap that
-authorizes one search, extraction, refocus, pagination, or terminal stop. The
-SDK owns this state for one retrieval invocation; it is not a persistent cache
-or a replacement for the final result's immutable `coverage_report`.
+view and `update_retrieval_state` to add needs, facets, nuggets, evidence, and
+coverage judgments. Researcher search and snippet calls atomically record their
+own actual arguments; they do not require `choose_next_action` authorization.
+The remaining `choose_next_action` path records only a terminal stop. The SDK
+owns this state for one retrieval invocation; it is not a persistent cache or
+a replacement for the final result's immutable `coverage_report`.
 
 `update_retrieval_state(delta)` is the universal append/update entry point for
 the three stores. Its model-facing delta accepts these eight optional lists:

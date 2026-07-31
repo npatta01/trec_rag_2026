@@ -24,6 +24,7 @@ from trec_rag.deepagent_research import (
     ResearchTaskBudgetMiddleware,
     ResearchTaskEnvelope,
     ResearcherToolFilterMiddleware,
+    bind_research_task,
     build_research_subagent,
     current_research_task,
 )
@@ -62,7 +63,23 @@ def budget_payload() -> dict[str, object]:
     ).as_dict()
 
 
-def visible_tools(middleware: object, names: Sequence[str]) -> set[str]:
+class FakeClock:
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        self.seconds += seconds
+
+
+def visible_tools(
+    middleware: object,
+    names: Sequence[str],
+    *,
+    envelope: ResearchTaskEnvelope | None = None,
+) -> set[str]:
     request = ModelRequest(
         model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
         messages=[],
@@ -75,7 +92,11 @@ def visible_tools(middleware: object, names: Sequence[str]) -> set[str]:
         seen.extend(tool["name"] for tool in filtered.tools if isinstance(tool, dict))
         return AIMessage(content="ok")
 
-    middleware.wrap_model_call(request, handler)  # type: ignore[attr-defined]
+    if envelope is None:
+        middleware.wrap_model_call(request, handler)  # type: ignore[attr-defined]
+    else:
+        with bind_research_task(envelope):
+            middleware.wrap_model_call(request, handler)  # type: ignore[attr-defined]
     return set(seen)
 
 
@@ -92,12 +113,16 @@ def task_request(*, description: str, subagent_type: str = "researcher") -> Tool
     )
 
 
-def task_description() -> str:
+def task_description(
+    *,
+    research_task_id: str = "R1-N1",
+    depth: str = "survey",
+) -> str:
     return json.dumps(
         {
-            "research_task_id": "R1-N1",
+            "research_task_id": research_task_id,
             "round_index": 1,
-            "depth": "survey",
+            "depth": depth,
             "motivating_ids": ["N1"],
             "goal": "Find evidence for N1.",
         }
@@ -275,6 +300,184 @@ def test_async_task_middleware_matches_sync_behavior() -> None:
     assert budget.snapshot().completed_researchers == 1
 
 
+def test_task_middleware_refuses_new_survey_after_soft_deadline() -> None:
+    clock = FakeClock()
+    budget = ResearchBudget(ResearchBudgetConfig(soft_seconds=1), clock=clock)
+    middleware = ResearchTaskBudgetMiddleware(budget)
+    clock.advance(1)
+
+    result = middleware.wrap_tool_call(
+        task_request(description=task_description()),
+        lambda _request: pytest.fail("soft-deadline survey must not run"),
+    )
+
+    assert isinstance(result, ToolMessage)
+    payload = json.loads(result.content)
+    assert payload["code"] == "SOFT_DEADLINE_REACHED"
+    assert payload["must_stop"] is False
+    assert budget.snapshot().active_researchers == 0
+    assert budget.snapshot().stop_code is None
+
+
+def test_async_task_middleware_allows_focused_work_after_soft_deadline() -> None:
+    clock = FakeClock()
+    budget = ResearchBudget(ResearchBudgetConfig(soft_seconds=1), clock=clock)
+    middleware = ResearchTaskBudgetMiddleware(budget)
+    clock.advance(1)
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        assert current_research_task() is not None
+        return ToolMessage(content="bundle", tool_call_id="task-call")
+
+    result = asyncio.run(
+        middleware.awrap_tool_call(
+            task_request(description=task_description(depth="focused")),
+            handler,
+        )
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert budget.snapshot().completed_researchers == 1
+    assert budget.snapshot().stop_code is None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
+    is_async: bool,
+) -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
+    middleware = ResearchTaskBudgetMiddleware(budget)
+    request = task_request(description=task_description())
+
+    if is_async:
+
+        async def async_handler(_request: ToolCallRequest) -> ToolMessage:
+            raise RuntimeError("private provider detail")
+
+        result = asyncio.run(middleware.awrap_tool_call(request, async_handler))
+    else:
+
+        def sync_handler(_request: ToolCallRequest) -> ToolMessage:
+            raise RuntimeError("private provider detail")
+
+        result = middleware.wrap_tool_call(request, sync_handler)
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    payload = json.loads(result.content)
+    assert set(payload) == {
+        "budget_snapshot",
+        "code",
+        "must_stop",
+        "research_task_id",
+    }
+    assert payload["code"] == "RESEARCH_TASK_FAILED"
+    assert payload["must_stop"] is False
+    assert payload["research_task_id"] == "R1-N1"
+    assert payload["budget_snapshot"]["active_researchers"] == 1
+    assert payload["budget_snapshot"]["completed_researchers"] == 0
+    assert payload["budget_snapshot"]["stop_code"] is None
+    assert "private provider detail" not in result.content
+    assert current_research_task() is None
+    assert budget.snapshot().active_researchers == 0
+    assert budget.snapshot().completed_researchers == 1
+
+    sibling = middleware.wrap_tool_call(
+        task_request(
+            description=task_description(
+                research_task_id="R1-N2",
+                depth="focused",
+            )
+        ),
+        lambda _request: ToolMessage(content="bundle", tool_call_id="task-call"),
+    )
+    assert isinstance(sibling, ToolMessage)
+    assert sibling.status == "success"
+    assert str(sibling.content).startswith("bundle")
+
+
+def test_task_middleware_does_not_catch_base_exception() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    middleware = ResearchTaskBudgetMiddleware(budget)
+
+    with pytest.raises(KeyboardInterrupt):
+        middleware.wrap_tool_call(
+            task_request(description=task_description()),
+            lambda _request: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+
+    assert current_research_task() is None
+    assert budget.snapshot().active_researchers == 0
+
+
+def test_researcher_filter_forces_bundle_after_task_local_no_yield_stop() -> None:
+    config = ResearchBudgetConfig(no_yield_calls=3)
+    budget = ResearchBudget(config)
+    context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
+    envelope = ResearchTaskEnvelope.model_validate_json(task_description())
+    assert budget.reserve_task(context).ok
+    for _ in range(3):
+        assert budget.reserve_retrieval(context, "search_climbmix").ok
+        budget.record_yield(context, ())
+    middleware = ResearcherToolFilterMiddleware(budget)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+    )
+    observed: dict[str, object] = {}
+
+    def handler(filtered: ModelRequest[object]) -> AIMessage:
+        observed["tools"] = filtered.tools
+        observed["system"] = (
+            filtered.system_message.content if filtered.system_message else ""
+        )
+        return AIMessage(content="bundle")
+
+    with bind_research_task(envelope):
+        middleware.wrap_model_call(request, handler)
+
+    assert observed["tools"] == []
+    assert "structured EvidenceBundle immediately" in str(observed["system"])
+    assert "must_stop" in str(observed["system"])
+
+
+def test_researcher_filter_stop_is_task_local_under_concurrent_contexts() -> None:
+    config = ResearchBudgetConfig(no_yield_calls=1, max_concurrent=2)
+    budget = ResearchBudget(config)
+    stopped_context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
+    active_context = ResearchTaskContext("R1-N2", 1, "focused", ("N1",))
+    assert budget.reserve_task(stopped_context).ok
+    assert budget.reserve_task(active_context).ok
+    assert budget.reserve_retrieval(stopped_context, "search_climbmix").ok
+    budget.record_yield(stopped_context, ())
+    middleware = ResearcherToolFilterMiddleware(budget)
+
+    stopped = visible_tools(
+        middleware,
+        ALL_TOOLS,
+        envelope=ResearchTaskEnvelope.model_validate_json(
+            task_description(research_task_id="R1-N1")
+        ),
+    )
+    active = visible_tools(
+        middleware,
+        ALL_TOOLS,
+        envelope=ResearchTaskEnvelope.model_validate_json(
+            task_description(research_task_id="R1-N2", depth="focused")
+        ),
+    )
+
+    assert stopped == set()
+    assert active == {
+        "search_climbmix",
+        "extract_relevant_snippets",
+        "view_retrieval_state",
+        "read_file",
+    }
+
+
 def test_async_task_middleware_traces_compact_outcome_and_cleans_up() -> None:
     created: list[tuple[str, int, str]] = []
     outcomes: list[dict[str, object]] = []
@@ -321,8 +524,12 @@ def test_async_task_middleware_traces_compact_outcome_and_cleans_up() -> None:
 def test_researcher_spec_keeps_the_main_model_and_excludes_todos() -> None:
     model = FakeMessagesListChatModel(responses=[AIMessage(content="unused")])
     tools: list[Callable[..., object]] = []
+    budget = ResearchBudget(ResearchBudgetConfig())
     spec = build_research_subagent(
-        model=model, tools=tools, budget_config=ResearchBudgetConfig()
+        model=model,
+        tools=tools,
+        budget=budget,
+        budget_config=ResearchBudgetConfig(),
     )
 
     assert spec["model"] is model

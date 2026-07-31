@@ -163,6 +163,11 @@ class ResearchBudget:
                 return self._refusal(stopping, must_stop=True)
             if context.research_task_id in self._active_tasks:
                 return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
+            if (
+                context.depth == "survey"
+                and self._elapsed_seconds() >= self._config.soft_seconds
+            ):
+                return self._refusal("SOFT_DEADLINE_REACHED")
             if self._reserved_researchers >= self._config.max_researcher_invocations:
                 return self._refusal("TASK_BUDGET_EXHAUSTED", must_stop=True)
             if context.round_index > self._config.max_rounds:
