@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 from trec_rag.deepagent_budget import (
     ResearchBudget,
@@ -37,6 +40,36 @@ def test_parallel_task_reservations_never_exceed_concurrency() -> None:
 
     assert [decision.ok for decision in decisions] == [True, True, True, False]
     assert decisions[-1].code == "CONCURRENCY_BUDGET_EXHAUSTED"
+
+
+def test_simultaneous_task_reservations_never_exceed_concurrency() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=3))
+    barrier = Barrier(4)
+    contexts = [ResearchTaskContext(f"T{index}", 1, "survey", ("N1",)) for index in range(4)]
+
+    def reserve(context: ResearchTaskContext) -> bool:
+        barrier.wait()
+        return budget.reserve_task(context).ok
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        admitted = list(executor.map(reserve, contexts))
+
+    assert admitted.count(True) == 3
+    assert admitted.count(False) == 1
+    assert budget.snapshot().active_researchers == 3
+
+
+def test_duplicate_active_task_is_refused_without_consuming_an_invocation() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=2))
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+    assert budget.reserve_task(context).ok
+
+    duplicate = budget.reserve_task(context)
+    budget.finish_task(context)
+
+    assert duplicate.ok is False
+    assert duplicate.snapshot.remaining_researchers == 9
+    assert budget.snapshot().completed_researchers == 1
 
 
 def test_hard_deadline_refuses_work_but_preserves_snapshot() -> None:
@@ -106,6 +139,31 @@ def test_hundredth_retrieval_is_admitted_and_next_is_refused() -> None:
 
     assert all(decision.ok for decision in decisions[:100])
     assert decisions[-1].code == "RETRIEVAL_BUDGET_EXHAUSTED"
+
+
+def test_retrieval_requires_the_exact_active_task_context() -> None:
+    budget, context = active_budget()
+    different_context = ResearchTaskContext("T1", 2, "focused", ("N2",))
+
+    with pytest.raises(ValueError, match="active task context"):
+        budget.reserve_retrieval(different_context, "search_climbmix")
+    budget.finish_task(context)
+    with pytest.raises(ValueError, match="active task context"):
+        budget.reserve_retrieval(context, "search_climbmix")
+
+    assert budget.snapshot().remaining_retrieval_calls == 100
+
+
+def test_admitted_retrieval_is_charged_before_downstream_validation() -> None:
+    budget, context = active_budget()
+
+    decision = budget.reserve_retrieval(context, "search_climbmix")
+
+    assert decision.ok
+    assert decision.snapshot.remaining_retrieval_calls == 99
+    with pytest.raises(ValueError, match="malformed query"):
+        raise ValueError("malformed query")
+    assert budget.snapshot().remaining_retrieval_calls == 99
 
 
 @pytest.mark.parametrize(
@@ -194,6 +252,50 @@ def test_state_hash_change_without_semantic_progress_does_not_reset_stop_streak(
     assert second.code == "NO_PROGRESS_STOP"
     assert second.must_stop is True
     assert decision.code == "NO_PROGRESS_STOP"
+
+
+def test_report_excludes_rejected_nuggets_from_semantic_progress() -> None:
+    state = EvidenceCoverageState("What changed?")
+
+    result = state.apply_delta(
+        {
+            "add_nuggets": [
+                {
+                    "nugget_id": "rejected",
+                    "text": "Unsupported claim.",
+                    "need_ids": [],
+                    "facet_ids": [],
+                    "evidence": [],
+                    "contradicts": [],
+                }
+            ]
+        }
+    )
+
+    assert result.accepted_ids == ()
+    assert tuple(nugget.nugget_id for nugget in state.report().nuggets) == ()
+
+
+def test_duplicate_round_completion_is_idempotent() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    report = EvidenceCoverageState("What changed?").report()
+
+    first = budget.complete_round(1, report)
+    duplicate = budget.complete_round(1, report)
+
+    assert duplicate == first
+    assert budget.snapshot().completed_rounds == 1
+
+
+def test_round_completion_requires_the_next_round_index() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    report = EvidenceCoverageState("What changed?").report()
+
+    with pytest.raises(ValueError, match="next incomplete round"):
+        budget.complete_round(2, report)
+    assert budget.complete_round(1, report).ok
+    with pytest.raises(ValueError, match="next incomplete round"):
+        budget.complete_round(3, report)
 
 
 @pytest.mark.parametrize(

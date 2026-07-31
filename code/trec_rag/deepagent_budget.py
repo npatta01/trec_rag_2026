@@ -9,6 +9,8 @@ from threading import Lock
 from time import monotonic
 from typing import Literal, Protocol
 
+from trec_rag.deepagent_evidence import FacetReport, NeedReport, NuggetReport
+
 ResearchDepth = Literal["survey", "focused", "deep"]
 BudgetCode = Literal[
     "OK",
@@ -29,6 +31,8 @@ _SNIPPET_TOOL = "extract_relevant_snippets"
 
 @dataclass(frozen=True)
 class ResearchBudgetConfig:
+    """Budget limits, including model limits enforced by later middleware."""
+
     max_researcher_invocations: int = 10
     max_rounds: int = 4
     max_concurrent: int = 3
@@ -108,9 +112,11 @@ class BudgetDecision:
 
 
 class _CoverageReport(Protocol):
-    nuggets: Iterable[object]
-    needs: Iterable[object]
-    facets: Iterable[object]
+    """The accepted-only report surface needed for semantic progress."""
+
+    nuggets: tuple[NuggetReport, ...]
+    needs: tuple[NeedReport, ...]
+    facets: tuple[FacetReport, ...]
 
 
 class ResearchBudget:
@@ -128,7 +134,7 @@ class ResearchBudget:
         self._lock = Lock()
         self._reserved_researchers = 0
         self._reserved_retrieval_calls = 0
-        self._active_task_ids: set[str] = set()
+        self._active_tasks: dict[str, ResearchTaskContext] = {}
         self._completed_researchers = 0
         self._completed_round_indexes: set[int] = set()
         self._task_tool_counts: dict[str, int] = {}
@@ -137,6 +143,7 @@ class ResearchBudget:
         self._seen_yield_ids: dict[str, set[str]] = {}
         self._no_yield_streaks: dict[str, int] = {}
         self._round_progress: dict[int, tuple[frozenset[str], ...]] = {}
+        self._round_decisions: dict[int, BudgetDecision] = {}
         self._no_progress_streak = 0
 
     def reserve_task(self, context: ResearchTaskContext) -> BudgetDecision:
@@ -145,15 +152,17 @@ class ResearchBudget:
             stopping = self._global_stop_code()
             if stopping is not None:
                 return self._refusal(stopping, must_stop=True)
+            if context.research_task_id in self._active_tasks:
+                return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
             if self._reserved_researchers >= self._config.max_researcher_invocations:
                 return self._refusal("TASK_BUDGET_EXHAUSTED")
             if context.round_index > self._config.max_rounds:
                 return self._refusal("ROUND_BUDGET_EXHAUSTED")
-            if len(self._active_task_ids) >= self._config.max_concurrent:
+            if len(self._active_tasks) >= self._config.max_concurrent:
                 return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
 
             self._reserved_researchers += 1
-            self._active_task_ids.add(context.research_task_id)
+            self._active_tasks[context.research_task_id] = context
             self._task_tool_counts.setdefault(context.research_task_id, 0)
             self._task_search_counts.setdefault(context.research_task_id, 0)
             self._task_snippet_counts.setdefault(context.research_task_id, 0)
@@ -164,12 +173,14 @@ class ResearchBudget:
     def reserve_retrieval(
         self, context: ResearchTaskContext, tool_name: str
     ) -> BudgetDecision:
-        """Reserve one retrieval call and its task-local tool allowance."""
+        """Reserve a call before downstream tool-argument validation occurs."""
         with self._lock:
+            task_id = context.research_task_id
+            if self._active_tasks.get(task_id) != context:
+                raise ValueError("retrieval requires the exact active task context")
             stopping = self._global_stop_code()
             if stopping is not None:
                 return self._refusal(stopping, must_stop=True)
-            task_id = context.research_task_id
             if self._no_yield_streaks.get(task_id, 0) >= self._config.no_yield_calls:
                 return self._refusal("NO_YIELD_STOP", must_stop=True)
             if self._reserved_retrieval_calls >= self._config.max_retrieval_calls:
@@ -204,9 +215,14 @@ class ResearchBudget:
     def finish_task(self, context: ResearchTaskContext) -> None:
         """Release a previously reserved task slot; safe to call from ``finally``."""
         with self._lock:
-            if context.research_task_id in self._active_task_ids:
-                self._active_task_ids.remove(context.research_task_id)
-                self._completed_researchers += 1
+            task_id = context.research_task_id
+            active_context = self._active_tasks.get(task_id)
+            if active_context is None:
+                return
+            if active_context != context:
+                raise ValueError("finish requires the exact active task context")
+            del self._active_tasks[task_id]
+            self._completed_researchers += 1
 
     def record_yield(
         self, context: ResearchTaskContext, identifiers: Iterable[str]
@@ -229,6 +245,12 @@ class ResearchBudget:
         with self._lock:
             if round_index > self._config.max_rounds:
                 return self._refusal("ROUND_BUDGET_EXHAUSTED")
+            existing_decision = self._round_decisions.get(round_index)
+            if existing_decision is not None:
+                return existing_decision
+            expected_round_index = len(self._round_decisions) + 1
+            if round_index != expected_round_index:
+                raise ValueError("round completion requires the next incomplete round")
 
             progress = self._semantic_progress(report)
             previous = self._round_progress.get(round_index - 1, (frozenset(),) * 3)
@@ -240,8 +262,11 @@ class ResearchBudget:
             else:
                 self._no_progress_streak += 1
             if self._no_progress_streak >= self._config.no_progress_rounds:
-                return self._refusal("NO_PROGRESS_STOP", must_stop=True)
-            return self._admission()
+                decision = self._refusal("NO_PROGRESS_STOP", must_stop=True)
+            else:
+                decision = self._admission()
+            self._round_decisions[round_index] = decision
+            return decision
 
     def snapshot(self) -> BudgetSnapshot:
         """Return an immutable view of the current invocation-local state."""
@@ -300,7 +325,7 @@ class ResearchBudget:
             remaining_retrieval_calls=max(
                 0, self._config.max_retrieval_calls - self._reserved_retrieval_calls
             ),
-            active_researchers=len(self._active_task_ids),
+            active_researchers=len(self._active_tasks),
             completed_researchers=self._completed_researchers,
             completed_rounds=len(self._completed_round_indexes),
             soft_deadline_reached=elapsed_seconds >= self._config.soft_seconds,
