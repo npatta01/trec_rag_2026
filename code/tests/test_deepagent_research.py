@@ -587,7 +587,7 @@ def test_researcher_filter_forces_bundle_after_task_local_no_yield_stop() -> Non
     assert "must_stop" in str(observed["system"])
 
 
-def test_researcher_filter_mechanically_forces_first_search() -> None:
+def test_researcher_filter_mechanically_forces_search_then_snippets() -> None:
     budget = ResearchBudget(ResearchBudgetConfig())
     context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
     envelope = ResearchTaskEnvelope.model_validate_json(
@@ -621,6 +621,15 @@ def test_researcher_filter_mechanically_forces_first_search() -> None:
     assert "first action" in str(observed["system"])
 
     assert budget.reserve_retrieval(context, "search_climbmix").ok
+    with bind_research_task(envelope):
+        middleware.wrap_model_call(request, handler)
+    assert observed["tools"] == ["extract_relevant_snippets"]
+    assert observed["settings"]["parallel_tool_calls"] is False
+    assert observed["response_format"] is None
+    assert observed["tool_choice"] == "extract_relevant_snippets"
+    assert "most relevant document" in str(observed["system"])
+
+    assert budget.reserve_retrieval(context, "extract_relevant_snippets").ok
     with bind_research_task(envelope):
         middleware.wrap_model_call(request, handler)
     assert set(observed["tools"]) == {

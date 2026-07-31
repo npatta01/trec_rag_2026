@@ -36,10 +36,12 @@ extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
 write state, or use filesystem mutation tools. Return a compact EvidenceBundle:
 each candidate claim must cite exact document, snippet, page, and quote
 coordinates; report conflicts and remaining gaps rather than inventing support.
-Your first action must be search_climbmix. Do not inspect state, read spill
-files, or return EvidenceBundle until you have attempted at least one targeted
-search, unless a budget response says must_stop=true. After search, inspect
-relevant documents with extract_relevant_snippets before claiming evidence.
+Your first action must be search_climbmix. From its returned documents, your
+next action must call extract_relevant_snippets on the most relevant document.
+Do not inspect state, read spill files, or return EvidenceBundle until you have
+attempted both steps, unless a budget response says must_stop=true. Afterward,
+refine queries and inspect more documents or snippet pages as the evidence gap
+requires; do not claim evidence that you have not inspected.
 If any tool response says must_stop=true, call no more tools and immediately
 return the structured EvidenceBundle with grounded work completed so far.
 """
@@ -326,6 +328,30 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
                 response_format=None,
                 system_message=SystemMessage(content=content),
                 tool_choice="search_climbmix",
+                model_settings={
+                    **(filtered.model_settings or {}),
+                    "parallel_tool_calls": False,
+                },
+            )
+        if not self._budget.task_has_snippet_attempt(context):
+            instruction = (
+                "Use the search result you just received. Select its most relevant "
+                "document_id and call extract_relevant_snippets now for the stated "
+                "research gap. Do not return EvidenceBundle yet."
+            )
+            existing = request.system_message
+            content = (
+                f"{existing.content}\n\n{instruction}" if existing else instruction
+            )
+            return filtered.override(
+                tools=[
+                    tool
+                    for tool in filtered.tools
+                    if _tool_name(tool) == "extract_relevant_snippets"
+                ],
+                response_format=None,
+                system_message=SystemMessage(content=content),
+                tool_choice="extract_relevant_snippets",
                 model_settings={
                     **(filtered.model_settings or {}),
                     "parallel_tool_calls": False,

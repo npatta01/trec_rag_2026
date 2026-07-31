@@ -1753,6 +1753,12 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
         sort_keys=True,
     )
     bundle_snapshot = ResearchBudget(ResearchBudgetConfig()).snapshot().as_dict()
+    followup_document_id = (
+        "followup-"
+        + hashlib.sha256(b"focused researcher query").hexdigest()[:16]
+        + "-doc-1"
+    )
+    snippet_extractor = RecordingSnippetExtractor()
     model = CaptureChatModel(
         responses=[
             AIMessage(
@@ -1806,6 +1812,21 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
                 content="",
                 tool_calls=[
                     {
+                        "name": "extract_relevant_snippets",
+                        "args": {
+                            "document_id": followup_document_id,
+                            "focus_query": "evidence answering N1",
+                            "motivating_ids": ["N1"],
+                            "rationale": "Inspect the most relevant search result",
+                        },
+                        "id": "research-snippets",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
                         "name": "EvidenceBundle",
                         "args": {
                             "research_task_id": "R1-N1",
@@ -1819,10 +1840,10 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
                                     "facet_ids": [],
                                     "evidence": [
                                         {
-                                            "document_id": "followup-doc",
-                                            "snippet_id": "snippet-1",
+                                            "document_id": followup_document_id,
+                                            "snippet_id": "chunk-1",
                                             "page_index": 0,
-                                            "quote": "Exact supporting quote.",
+                                            "quote": "focused researcher query excerpt 1",
                                         }
                                     ],
                                     "contradicts_claims": [],
@@ -1855,6 +1876,7 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
         retriever=fake_retriever,
         model="openrouter:test/offline-coordinator",
         tracing=FakeTracing(),
+        snippet_extractor=snippet_extractor,
     ).retrieve("narrative")
 
     assert len(constructor_calls) == 1
@@ -1870,9 +1892,14 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
         "narrative",
         "focused researcher query",
     ]
-    action = result.coverage_report.actions[-1]
-    assert action.research_task_id == "R1-N1"
-    assert action.target == "focused researcher query"
+    search_action, snippet_action = result.coverage_report.actions[-2:]
+    assert search_action.research_task_id == "R1-N1"
+    assert search_action.target == "focused researcher query"
+    assert snippet_action.research_task_id == "R1-N1"
+    assert snippet_action.target == followup_document_id
+    assert len(snippet_extractor.calls) == 1
+    assert snippet_extractor.calls[0][0] == followup_document_id
+    assert result.coverage_report.inspected_page_count == 1
     assert result.budget_snapshot.completed_researchers == 1
     assert result.rationale == "Final grounded response after researcher bundle."
 

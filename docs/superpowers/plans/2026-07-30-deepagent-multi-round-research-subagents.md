@@ -1017,3 +1017,28 @@ POC-small review pass. `git diff --check` completed with no output.
   The run completed two rounds with `NO_PROGRESS_STOP`, zero inspected snippet
   pages, and zero nuggets; snippet inspection remains the next effectiveness
   gap rather than a dispatch/tracing failure.
+
+### Enforced researcher snippet inspection — 2026-07-31
+
+- The search-only trace showed that this was not solely prompt drift. After the
+  forced first search, LangChain restored the structured `EvidenceBundle` tool,
+  allowing the researcher to finish before inspecting any document. The
+  researcher boundary now has three mechanical phases: force
+  `search_climbmix`, force `extract_relevant_snippets` on a returned document,
+  then restore the normal bounded tools and structured completion format.
+- The researcher prompt now states the same search-then-inspect protocol and
+  directs the model to select the most relevant returned `document_id`. After
+  its first snippet attempt it remains free to refine queries, inspect more
+  documents, and paginate snippets within the existing tool budgets.
+- Fresh verification: the focused red/green regression reproduced the old
+  premature-completion boundary; 149 DeepAgent tests and all 758 repository
+  tests pass, changed-file Ruff passes, and `git diff --check` is clean.
+- One topic-224 live pass completed in 222.998 seconds with
+  `stopping_reason="agent_completed"` and trace flush success. Five completed
+  researchers made five follow-up searches and inspected four snippet pages
+  across four documents, yielding six nuggets. Phoenix trace
+  `f9d00a71e02ac6f940deb75a5090db5b` contains five researcher `AGENT` spans,
+  seven dispatch spans, six `climbmix.retrieve` spans (original plus five
+  follow-ups), and four `deepagent.extract_relevant_snippets` spans. All five
+  needs remain unresolved, which is now a downstream coverage-state synthesis
+  gap rather than missing researcher retrieval.

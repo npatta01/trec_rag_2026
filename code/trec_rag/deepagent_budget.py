@@ -283,6 +283,13 @@ class ResearchBudget:
                 return False
             return self._task_search_counts.get(context.research_task_id, 0) > 0
 
+    def task_has_snippet_attempt(self, context: ResearchTaskContext) -> bool:
+        """Return whether this active researcher has attempted snippet extraction."""
+        with self._lock:
+            if self._active_tasks.get(context.research_task_id) != context:
+                return False
+            return self._task_snippet_counts.get(context.research_task_id, 0) > 0
+
     def authorize_round_completion(self, round_index: int) -> BudgetDecision:
         """Require one finished researcher before a coordinator can close a round."""
         with self._lock:
