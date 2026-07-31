@@ -22,8 +22,8 @@
 Recorded on 2026-07-30 from linked worktree
 `/tmp/trec-rag-competition-paths` on
 `codex/competition-retrieval-rag`. This evidence covers Tasks 1-3 and Task 4
-Steps 1, 2, and 4. The controller-owned whole-fix review and PR push remain
-pending; this section does not claim either is complete.
+Steps 1-4. The PR push remains pending; this section does not claim it is
+complete.
 
 ### TDD and scoped-review record
 
@@ -36,6 +36,14 @@ pending; this section does not claim either is complete.
   `6 passed, 96 deselected in 0.07s`, followed by
   `102 passed in 0.24s`. Scoped spec and quality review were clean after commit
   `3ff0f35`.
+- Whole-fix review subsequently reproduced a mixed percent/Unicode encoding
+  bypass. The fix in `f9bb019` added two RED regressions, then passed the five
+  focused cases, 15 redaction-selection cases, and all 104 RAG module tests.
+  A final scoped review identified one remaining depth-exhaustion case: a key
+  nested behind more than 32 encoding layers can still persist. The project
+  owner explicitly accepted and parked that temporary credential-persistence
+  risk on 2026-07-30 and will rotate the key after the project; it is not being
+  represented as fixed.
 - Task 2 initial RED was `3 failed, 95 deselected in 0.34s`, reproducing a
   hash/parse replacement race, dead direct-DocID navigation, and uncaught CLI
   failures. Initial GREEN was `3 passed, 95 deselected in 0.11s`; the module
@@ -55,7 +63,9 @@ pending; this section does not claim either is complete.
 
 ### Complete verification and sealed post-run refresh
 
-- Fresh repository verification passed: `676 passed in 29.12s`.
+- Fresh repository verification passed before the final redaction fix:
+  `676 passed in 29.12s`; verification after that fix passed with
+  `678 passed in 30.13s`.
   `git diff --check origin/master...HEAD` exited 0 with no output.
 - Only `trec_rag.competition_debug_report` was invoked. Retrieval, reranking,
   decomposition, canonicalization, and RAG generation were not invoked. The
@@ -254,9 +264,12 @@ git diff --check origin/master...HEAD
 
 Regenerate from the existing two-topic configs without invoking retrieval or generation. Verify both topic IDs, organizer input hashes, direct-docid citation targets, desktop/mobile overflow, and source/rendered/live byte identity before replacing the tailnet-only portal copy.
 
-- [ ] **Step 3: Run scoped and whole-fix review gates**
+- [x] **Step 3: Run scoped and whole-fix review gates**
 
-Review each task commit for spec and code quality, then review the complete `d378352..HEAD` fix range. Resolve every Critical/Important finding before continuing.
+Review each task commit for spec and code quality, then review the complete
+`d378352..HEAD` fix range. All valid findings were fixed except the explicitly
+documented 32-round redaction depth-exhaustion risk, which the project owner
+accepted and parked pending post-project key rotation.
 
 - [x] **Step 4: Record evidence and commit the plan**
 
