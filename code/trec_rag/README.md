@@ -9,9 +9,9 @@ boundaries:
 
 - `trec_rag.tracing.models` defines the immutable `SpanSpec` and `TraceBundle`
   records.
-- `trec_rag.tracing.openai_semantics` converts Pi and fixed-retrieval
-  `SpanSpec` payloads into normalized messages, authoritative Pi tool schemas,
-  OpenAI request/response envelopes, and OpenInference LLM attributes.
+- `trec_rag.tracing.openai_semantics` converts `SpanSpec` payloads into
+  normalized messages, captured generic tool schemas, OpenAI request/response
+  envelopes, and OpenInference LLM attributes.
 - `trec_rag.tracing.phoenix_export` exports a saved `TraceBundle`; normalized
   envelopes populate generic input/output fields while complete strict JSON is
   retained under `pi.native.input_json` and `pi.native.output_json`.
@@ -20,8 +20,9 @@ boundaries:
 
 `trec_rag.experiments.organizer_pi` is a temporary experimental reproduction
 harness, not a main production path. Its `inputs` module prepares byte-faithful
-single-topic inputs, `event_trace` constructs durable trace bundles from native
-organizer artifacts, and `cli` builds and exports those bundles. A partial
+single-topic inputs, `event_trace` owns `piika_tool_schemas()` and constructs
+durable trace bundles from native organizer artifacts, and `cli` builds and
+exports those bundles. A partial
 fixed-run failure record retains the selected `query_id`; native failures and
 validation become error-status spans. Native Pi JSONL events are authoritative;
 the bundle and Phoenix view are derived records. Keep native events, normalized
@@ -40,10 +41,10 @@ complete native response remains under `pi.native.output_json`.
 
 ```bash
 .venv/bin/python -m pytest \
-  code/tests/test_openai_trace_semantics.py \
-  code/tests/test_phoenix_trace_export.py \
-  code/tests/test_pi_event_trace.py \
-  code/tests/test_organizer_pi_trace.py -q
+  code/tests/tracing/test_openai_semantics.py \
+  code/tests/tracing/test_phoenix_export.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py \
+  code/tests/experiments/organizer_pi/test_cli.py -q
 ```
 
 Choose ignored local paths first. The CLI rejects bundle and receipt paths that

@@ -31,8 +31,9 @@
 
 **Interfaces:**
 - Consumes: immutable `SpanSpec` input/output values produced by `trec_rag.experiments.organizer_pi.event_trace`.
-- Produces: `piika_tool_schemas() -> tuple[Mapping[str, object], ...]`, `openai_request_envelope(spec: SpanSpec) -> Mapping[str, object]`, `openai_response_envelope(spec: SpanSpec) -> Mapping[str, object]`, and `openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]`.
-- `phoenix_trace_export._export_span` uses OpenAI envelopes for LLM `input.value`/`output.value` and keeps strict JSON copies under `pi.native.input_json` and `pi.native.output_json`.
+- Produces from `trec_rag.experiments.organizer_pi.event_trace`: `piika_tool_schemas() -> tuple[Mapping[str, object], ...]`.
+- Produces from `trec_rag.tracing.openai_semantics`: `openai_request_envelope(spec: SpanSpec) -> Mapping[str, object]`, `openai_response_envelope(spec: SpanSpec) -> Mapping[str, object]`, and `openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]`.
+- `trec_rag.tracing.phoenix_export._export_span` uses OpenAI envelopes for LLM `input.value`/`output.value` and keeps strict JSON copies under `pi.native.input_json` and `pi.native.output_json`.
 
 - [ ] **Step 1: Write failing message/tool compatibility tests**
 
@@ -114,17 +115,24 @@ Expected: failures specifically naming missing OpenAI request/response envelopes
 
 - [ ] **Step 5: Implement the pure adapter**
 
-Implement these boundaries in `trec_rag.tracing.openai_semantics`:
+Implement the source-specific schema boundary in
+`trec_rag.experiments.organizer_pi.event_trace`:
 
 ```python
 def piika_tool_schemas() -> tuple[Mapping[str, object], ...]: ...
+```
+
+Implement the generic normalization boundaries in
+`trec_rag.tracing.openai_semantics`:
+
+```python
 def normalize_openai_message(message: Mapping[str, object]) -> dict[str, object]: ...
 def openai_request_envelope(spec: SpanSpec) -> Mapping[str, object]: ...
 def openai_response_envelope(spec: SpanSpec) -> Mapping[str, object]: ...
 def openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]: ...
 ```
 
-The schemas must encode the organizer source contracts for this captured `pyserini-rest-2tool` run: `search` requires `reason` and `query`, with optional numeric `hits`; paginated `read_document` requires `reason` and `docid`, with optional numeric `offset`/`limit`. Preserve the source descriptions and required lists faithfully. Normalize only captured values. Join text-only tool-result parts into scalar `message.content`; retain ordered reasoning in OpenInference content attributes; keep tool calls in `message.tool_calls` with canonical JSON argument strings.
+The experimental schema helper must encode the organizer source contracts for this captured `pyserini-rest-2tool` run: `search` requires `reason` and `query`, with optional numeric `hits`; paginated `read_document` requires `reason` and `docid`, with optional numeric `offset`/`limit`. Preserve the source descriptions and required lists faithfully. The reusable adapter normalizes only captured values. Join text-only tool-result parts into scalar `message.content`; retain ordered reasoning in OpenInference content attributes; keep tool calls in `message.tool_calls` with canonical JSON argument strings.
 
 - [ ] **Step 6: Connect trace topology and exporter**
 
@@ -180,7 +188,7 @@ Review Task 1 against the design and official OpenAI request/response extractors
 
 - [ ] **Step 2: Rebuild without executing organizers/models**
 
-Run the existing `organizer_pi_trace build` command once for each preserved event/record pair, targeting the v3 bundle paths and session `rag2026-1-comparison-openai-v3`.
+Run `python -m trec_rag.experiments.organizer_pi.cli build` once for each preserved event/record pair, targeting the v3 bundle paths and session `rag2026-1-comparison-openai-v3`.
 
 - [ ] **Step 3: Offline schema gate**
 
