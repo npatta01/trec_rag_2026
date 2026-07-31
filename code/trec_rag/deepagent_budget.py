@@ -21,6 +21,7 @@ BudgetCode = Literal[
     "CONCURRENCY_BUDGET_EXHAUSTED",
     "RETRIEVAL_BUDGET_EXHAUSTED",
     "TASK_TOOL_BUDGET_EXHAUSTED",
+    "ROUND_RESEARCH_REQUIRED",
     "NO_YIELD_STOP",
     "NO_PROGRESS_STOP",
 ]
@@ -143,6 +144,8 @@ class ResearchBudget:
         self._reserved_retrieval_calls = 0
         self._active_tasks: dict[str, ResearchTaskContext] = {}
         self._completed_researchers = 0
+        self._completed_researcher_rounds: set[int] = set()
+        self._required_research_round: int | None = None
         self._completed_round_indexes: set[int] = set()
         self._task_tool_counts: dict[str, int] = {}
         self._task_search_counts: dict[str, int] = {}
@@ -242,6 +245,9 @@ class ResearchBudget:
                 raise ValueError("finish requires the exact active task context")
             del self._active_tasks[task_id]
             self._completed_researchers += 1
+            self._completed_researcher_rounds.add(context.round_index)
+            if self._required_research_round == context.round_index:
+                self._required_research_round = None
             if (
                 self._reserved_researchers
                 >= self._config.max_researcher_invocations
@@ -269,6 +275,37 @@ class ResearchBudget:
         """Return a researcher-local stop without changing the run-wide snapshot."""
         with self._lock:
             return self._task_stop_codes.get(context.research_task_id)
+
+    def task_has_search_attempt(self, context: ResearchTaskContext) -> bool:
+        """Return whether this active researcher has attempted its first search."""
+        with self._lock:
+            if self._active_tasks.get(context.research_task_id) != context:
+                return False
+            return self._task_search_counts.get(context.research_task_id, 0) > 0
+
+    def authorize_round_completion(self, round_index: int) -> BudgetDecision:
+        """Require one finished researcher before a coordinator can close a round."""
+        with self._lock:
+            stopping = self._global_stop_code()
+            if stopping is not None:
+                return self._refusal(stopping, must_stop=True)
+            if round_index > self._config.max_rounds:
+                return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
+            existing_decision = self._round_decisions.get(round_index)
+            if existing_decision is not None:
+                return self._admission()
+            expected_round_index = len(self._round_decisions) + 1
+            if round_index != expected_round_index:
+                raise ValueError("round completion requires the next incomplete round")
+            if round_index in self._completed_researcher_rounds:
+                return self._admission()
+            self._required_research_round = round_index
+            return self._refusal("ROUND_RESEARCH_REQUIRED")
+
+    def required_research_round(self) -> int | None:
+        """Return the round whose empty completion attempt requires delegation."""
+        with self._lock:
+            return self._required_research_round
 
     def complete_round(
         self, round_index: int, report: _CoverageReport

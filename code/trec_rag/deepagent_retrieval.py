@@ -71,6 +71,9 @@ Delegate retrieval only through `task` using compact ResearchTaskEnvelope JSON
 and subagent_type "researcher". Batch independent task calls in parallel. After
 each batch, merge the returned evidence bundles with exactly one batched
 update_retrieval_state semantic delta, then call complete_research_round once.
+Every round must finish at least one researcher before it can close. If round
+completion returns ROUND_RESEARCH_REQUIRED, the next action must delegate a
+researcher for that same round.
 Set task.description to a JSON-encoded object with exactly this shape:
 {"research_task_id":"R1-N1","round_index":1,"depth":"focused","motivating_ids":["N1"],"goal":"Find grounded evidence for N1","known_evidence":"","remaining_gap":"No grounded evidence yet"}.
 Do not put prose before or after that JSON object.
@@ -1199,7 +1202,9 @@ class DeepAgentRetriever:
 
         def complete_research_round(round_index: int) -> str:
             """Close one coordinator round after applying its batched semantic delta."""
-            decision = budget.complete_round(round_index, coverage_state.report())
+            decision = budget.authorize_round_completion(round_index)
+            if decision.ok:
+                decision = budget.complete_round(round_index, coverage_state.report())
             return json.dumps(
                 {
                     "ok": decision.ok,

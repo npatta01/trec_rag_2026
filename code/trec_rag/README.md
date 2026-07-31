@@ -227,8 +227,12 @@ POC experiment; they are not environment variables.
 The original narrative is never rewritten for its deterministic first search.
 Each researcher receives compact task JSON containing its task ID, round,
 depth, motivating need IDs, and gap; it can formulate and refine its own
-queries. The coordinator merges completed evidence bundles with one semantic
-state update per batch, then closes the round. A researcher that has three
+queries. Its first model action is mechanically restricted to
+`search_climbmix`; after that attempt, snippet and compact-state tools become
+available. The coordinator merges completed evidence bundles with one semantic
+state update per batch, then closes the round. An empty round is refused without
+consuming the round, and the next coordinator action is mechanically restricted
+to a researcher `task`. A researcher that has three
 successive retrieval calls with no novel evidence must return its bundle; two
 successive rounds with no accepted coverage progress stop further research.
 

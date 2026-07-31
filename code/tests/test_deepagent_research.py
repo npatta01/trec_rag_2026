@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 import pytest
 from deepagents.middleware.subagents import TaskToolSchema
-from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
+from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
@@ -188,6 +188,35 @@ def test_role_filters_expose_only_approved_tools() -> None:
         "view_retrieval_state",
         "read_file",
     }
+
+
+def test_main_filter_forces_research_after_empty_round_attempt() -> None:
+    config = ResearchBudgetConfig()
+    budget = ResearchBudget(config)
+    assert budget.authorize_round_completion(1).code == "ROUND_RESEARCH_REQUIRED"
+    middleware = MainToolFilterMiddleware(budget, config)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": 2},
+    )
+    observed: dict[str, object] = {}
+
+    def handler(filtered: ModelRequest) -> ModelResponse:
+        observed["tools"] = [_tool["name"] for _tool in filtered.tools]
+        observed["settings"] = filtered.model_settings
+        observed["system"] = filtered.system_message
+        observed["tool_choice"] = filtered.tool_choice
+        return ModelResponse(result=[AIMessage(content="unused")])
+
+    middleware.wrap_model_call(request, handler)
+
+    assert observed["tools"] == ["task"]
+    assert observed["settings"]["parallel_tool_calls"] is False
+    assert observed["tool_choice"] == "task"
+    assert "Round 1 cannot close" in str(observed["system"])
 
 
 def test_task_schema_has_exactly_description_and_subagent_type() -> None:
@@ -474,6 +503,50 @@ def test_researcher_filter_forces_bundle_after_task_local_no_yield_stop() -> Non
     assert "must_stop" in str(observed["system"])
 
 
+def test_researcher_filter_mechanically_forces_first_search() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
+    envelope = ResearchTaskEnvelope.model_validate_json(
+        task_description(depth="focused")
+    )
+    assert budget.reserve_task(context).ok
+    middleware = ResearcherToolFilterMiddleware(budget)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+    )
+    observed: dict[str, object] = {}
+
+    def handler(filtered: ModelRequest) -> ModelResponse:
+        observed["tools"] = [_tool["name"] for _tool in filtered.tools]
+        observed["settings"] = filtered.model_settings
+        observed["response_format"] = filtered.response_format
+        observed["system"] = filtered.system_message
+        observed["tool_choice"] = filtered.tool_choice
+        return ModelResponse(result=[AIMessage(content="unused")])
+
+    with bind_research_task(envelope):
+        middleware.wrap_model_call(request, handler)
+
+    assert observed["tools"] == ["search_climbmix"]
+    assert observed["settings"]["parallel_tool_calls"] is False
+    assert observed["response_format"] is None
+    assert observed["tool_choice"] == "search_climbmix"
+    assert "first action" in str(observed["system"])
+
+    assert budget.reserve_retrieval(context, "search_climbmix").ok
+    with bind_research_task(envelope):
+        middleware.wrap_model_call(request, handler)
+    assert set(observed["tools"]) == {
+        "search_climbmix",
+        "extract_relevant_snippets",
+        "view_retrieval_state",
+        "read_file",
+    }
+
+
 def test_researcher_filter_stop_is_task_local_under_concurrent_contexts() -> None:
     config = ResearchBudgetConfig(no_yield_calls=1, max_concurrent=2)
     budget = ResearchBudget(config)
@@ -501,12 +574,7 @@ def test_researcher_filter_stop_is_task_local_under_concurrent_contexts() -> Non
     )
 
     assert stopped == set()
-    assert active == {
-        "search_climbmix",
-        "extract_relevant_snippets",
-        "view_retrieval_state",
-        "read_file",
-    }
+    assert active == {"search_climbmix"}
 
 
 def test_async_task_middleware_traces_compact_outcome_and_cleans_up() -> None:

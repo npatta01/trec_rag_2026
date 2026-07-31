@@ -972,3 +972,27 @@ POC-small review pass. `git diff --check` completed with no output.
   validate researcher retrieval effectiveness**.
 - Post-fix targeted verification before the live pass: 289 tests passed and
   changed-file Ruff plus `git diff --check` were clean.
+
+### Topic-224 enforced delegation and first-search follow-up — 2026-07-31
+
+- Added a researcher model boundary that temporarily disables structured-output
+  binding on its first turn, exposes only `search_climbmix`, and sets that exact
+  tool choice. After the first search attempt, the normal retrieval tools and
+  `EvidenceBundle` response format return. This avoids LangChain's competing
+  structured-output `tool_choice="any"` binding while making the first search
+  mechanical rather than prompt-only.
+- One topic-224 pass was run after the first-search change. It completed in
+  196.864 seconds with `trace_flush_succeeded=true`, five needs, zero nuggets,
+  zero inspected pages, and `stopping_reason="budget_exhausted"` with
+  `NO_PROGRESS_STOP`. The Phoenix trace
+  `d62974a987eb1de3e95d63542e218504` contained 23 model calls, two round
+  completions, and no researcher-task, follow-up-search, or snippet spans. The
+  coordinator therefore never reached the researcher boundary.
+- Added a coordinator-side invariant in response to that trace: an attempted
+  empty round returns nonterminal `ROUND_RESEARCH_REQUIRED` without consuming
+  the round. The following coordinator model turn exposes only `task` and sets
+  that exact tool choice. Finishing a researcher for the required round clears
+  the gate and restores normal coordination.
+- No second live provider pass was made after the coordinator gate. Fresh local
+  verification after both gates: 292 targeted tests passed, 755 repository-wide
+  tests passed, changed-file Ruff passed, and `git diff --check` passed.

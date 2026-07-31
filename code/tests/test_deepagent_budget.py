@@ -207,6 +207,25 @@ def test_last_round_completion_persists_run_wide_exhaustion() -> None:
     assert decision.snapshot.stop_code == "ROUND_BUDGET_EXHAUSTED"
 
 
+def test_empty_round_requires_a_finished_researcher_before_completion() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+
+    refused = budget.authorize_round_completion(1)
+
+    assert refused.ok is False
+    assert refused.code == "ROUND_RESEARCH_REQUIRED"
+    assert refused.must_stop is False
+    assert budget.required_research_round() == 1
+    assert budget.snapshot().completed_rounds == 0
+
+    context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
+    assert budget.reserve_task(context).ok
+    budget.finish_task(context)
+
+    assert budget.required_research_round() is None
+    assert budget.authorize_round_completion(1).ok is True
+
+
 def test_hard_deadline_and_no_progress_override_global_cap_stop_codes() -> None:
     clock = FakeClock()
     budget = ResearchBudget(

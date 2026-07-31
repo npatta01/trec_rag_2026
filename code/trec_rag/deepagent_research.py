@@ -36,6 +36,10 @@ extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
 write state, or use filesystem mutation tools. Return a compact EvidenceBundle:
 each candidate claim must cite exact document, snippet, page, and quote
 coordinates; report conflicts and remaining gaps rather than inventing support.
+Your first action must be search_climbmix. Do not inspect state, read spill
+files, or return EvidenceBundle until you have attempted at least one targeted
+search, unless a budget response says must_stop=true. After search, inspect
+relevant documents with extract_relevant_snippets before claiming evidence.
 If any tool response says must_stop=true, call no more tools and immediately
 return the structured EvidenceBundle with grounded work completed so far.
 """
@@ -219,6 +223,26 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             self._budget.snapshot().stop_code is not None
             or run_count >= self._budget_config.max_main_models - 1
         )
+        required_round = self._budget.required_research_round()
+        if required_round is not None and not final_turn:
+            instruction = (
+                f"Round {required_round} cannot close without a completed researcher. "
+                "Your next action must call task with subagent_type=\"researcher\" "
+                f"and round_index={required_round} in its JSON description."
+            )
+            existing = request.system_message
+            content = (
+                f"{existing.content}\n\n{instruction}" if existing else instruction
+            )
+            return filtered.override(
+                tools=[tool for tool in filtered.tools if _tool_name(tool) == "task"],
+                system_message=SystemMessage(content=content),
+                tool_choice="task",
+                model_settings={
+                    **(filtered.model_settings or {}),
+                    "parallel_tool_calls": False,
+                },
+            )
         if not final_turn:
             return filtered
         instruction = (
@@ -265,24 +289,49 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
         )
         snapshot = self._budget.snapshot()
         task_stop_code = self._budget.task_stop_code(context)
-        if task_stop_code is None and snapshot.stop_code is None:
-            return filtered
-        stop_code = task_stop_code or snapshot.stop_code
-        instruction = (
-            "A budget response now has must_stop=true "
-            f"({stop_code}). Return the structured EvidenceBundle immediately "
-            "with grounded work completed so far; do not call more tools."
-        )
-        existing = request.system_message
-        content = f"{existing.content}\n\n{instruction}" if existing else instruction
-        return filtered.override(
-            tools=[],
-            system_message=SystemMessage(content=content),
-            model_settings={
-                **(filtered.model_settings or {}),
-                "parallel_tool_calls": False,
-            },
-        )
+        if task_stop_code is not None or snapshot.stop_code is not None:
+            stop_code = task_stop_code or snapshot.stop_code
+            instruction = (
+                "A budget response now has must_stop=true "
+                f"({stop_code}). Return the structured EvidenceBundle immediately "
+                "with grounded work completed so far; do not call more tools."
+            )
+            existing = request.system_message
+            content = (
+                f"{existing.content}\n\n{instruction}" if existing else instruction
+            )
+            return filtered.override(
+                tools=[],
+                system_message=SystemMessage(content=content),
+                model_settings={
+                    **(filtered.model_settings or {}),
+                    "parallel_tool_calls": False,
+                },
+            )
+        if not self._budget.task_has_search_attempt(context):
+            instruction = (
+                "Your first action for this task must be search_climbmix. "
+                "Do not view state, read files, or return EvidenceBundle yet."
+            )
+            existing = request.system_message
+            content = (
+                f"{existing.content}\n\n{instruction}" if existing else instruction
+            )
+            return filtered.override(
+                tools=[
+                    tool
+                    for tool in filtered.tools
+                    if _tool_name(tool) == "search_climbmix"
+                ],
+                response_format=None,
+                system_message=SystemMessage(content=content),
+                tool_choice="search_climbmix",
+                model_settings={
+                    **(filtered.model_settings or {}),
+                    "parallel_tool_calls": False,
+                },
+            )
+        return filtered
 
 
 class ResearchTaskBudgetMiddleware(AgentMiddleware):
