@@ -133,6 +133,10 @@ def _validate_output_identity(
         metadata = _metadata(output) or _metadata(record)
     if metadata is None:
         if _is_explicit_failure_record(record):
+            if record.get("query_id") != topic.topic_id:
+                raise ValueError(
+                    "failed output record query_id does not match selected topic"
+                )
             return
         raise ValueError(
             f"{baseline} completed output record is missing valid topic identity metadata"
@@ -286,8 +290,9 @@ def _verify_native_user_prompt(events: Sequence[Mapping[str, object]], rendered:
         if not isinstance(message, Mapping) or message.get("role") != "user":
             continue
         text = _message_text(message)
-        if text is not None:
-            native_prompts.append(text)
+        if text is None:
+            raise ValueError("native Pi user event has unsupported prompt content")
+        native_prompts.append(text)
     def matches(native: str) -> bool:
         if native == rendered:
             return True
@@ -317,7 +322,7 @@ def _has_explicit_native_failure(
     return False
 
 
-def _has_native_user_prompt(events: Sequence[Mapping[str, object]]) -> bool:
+def _has_native_user_message(events: Sequence[Mapping[str, object]]) -> bool:
     for event in events:
         if event.get("type") not in {"message_start", "message_end"}:
             continue
@@ -325,7 +330,6 @@ def _has_native_user_prompt(events: Sequence[Mapping[str, object]]) -> bool:
         if (
             isinstance(message, Mapping)
             and message.get("role") == "user"
-            and _message_text(message) is not None
         ):
             return True
     return False
@@ -356,7 +360,7 @@ def _build_bundle(arguments: argparse.Namespace) -> TraceBundle:
     if not (
         _is_explicit_failure_record(record)
         and _has_explicit_native_failure(events)
-        and not _has_native_user_prompt(events)
+        and not _has_native_user_message(events)
     ):
         _verify_native_user_prompt(events, rendered)
     return build_fixed_trace(

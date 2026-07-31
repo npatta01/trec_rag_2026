@@ -459,6 +459,19 @@ def test_fixed_build_retains_partial_failure_record_as_an_error_trace(tmp_path):
     }
 
 
+def test_fixed_build_rejects_metadata_free_failure_without_selected_query_id(
+    tmp_path,
+):
+    args = _fixed_args(tmp_path)
+    _write_json(
+        tmp_path / "fixed-record.json",
+        {"status": "failed", "error": "failed before recording topic identity"},
+    )
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
 def test_fixed_build_rejects_native_user_prompt_mismatch(tmp_path):
     args = _fixed_args(tmp_path)
     _write_events(tmp_path / "fixed-events.jsonl", user_prompt="modified prompt")
@@ -537,6 +550,82 @@ def test_failed_fixed_build_still_rejects_a_wrong_native_user_prompt(tmp_path):
             )
             + "\n"
         )
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+def test_failed_fixed_build_rejects_a_malformed_native_user_prompt(tmp_path):
+    args = _fixed_args(tmp_path)
+    _write_json(
+        tmp_path / "fixed-record.json",
+        {
+            "status": "failed",
+            "query_id": TOPIC,
+            "error": "extension failed after malformed prompt emission",
+        },
+    )
+    rows = [
+        {
+            "type": "message_end",
+            "message": {
+                "role": "user",
+                "content": [{"type": "image", "url": "unsupported://prompt"}],
+                "timestamp": 1_800_000_000_000,
+            },
+        },
+        {
+            "type": "extension_error",
+            "timestamp": 1_800_000_000_001,
+            "error": "extension failed after malformed prompt emission",
+        },
+    ]
+    (tmp_path / "fixed-events.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+def test_failed_fixed_build_rejects_mixed_valid_and_malformed_user_prompts(tmp_path):
+    args = _fixed_args(tmp_path)
+    _, _, _, rendered = _fixed_inputs(tmp_path)
+    _write_json(
+        tmp_path / "fixed-record.json",
+        {
+            "status": "failed",
+            "query_id": TOPIC,
+            "error": "extension failed after malformed prompt emission",
+        },
+    )
+    event_path = _write_events(
+        tmp_path / "fixed-events.jsonl", user_prompt=rendered
+    )
+    rows = [json.loads(line) for line in event_path.read_text().splitlines()]
+    rows.insert(
+        2,
+        {
+            "type": "message_end",
+            "message": {
+                "role": "user",
+                "content": [{"type": "image", "url": "unsupported://prompt"}],
+                "timestamp": 1_800_000_000_050,
+            },
+        },
+    )
+    rows.append(
+        {
+            "type": "extension_error",
+            "timestamp": 1_800_000_000_200,
+            "error": "extension failed after malformed prompt emission",
+        }
+    )
+    event_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
     assert main(args, ignored_checker=_ignored) == 1
     assert not (tmp_path / "fixed-trace.json").exists()
