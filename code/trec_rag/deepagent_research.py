@@ -20,7 +20,12 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
-from trec_rag.deepagent_budget import BudgetSnapshot, ResearchBudget, ResearchBudgetConfig
+from trec_rag.deepagent_budget import (
+    BudgetDecision,
+    BudgetSnapshot,
+    ResearchBudget,
+    ResearchBudgetConfig,
+)
 
 
 RESEARCHER_SYSTEM_PROMPT = """You are a bounded retrieval researcher.
@@ -274,16 +279,16 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                 return json.dumps(payload, separators=(",", ":"), sort_keys=True)
         return content
 
-    def _refusal(self, request: ToolCallRequest, code: str, snapshot: BudgetSnapshot) -> ToolMessage:
+    def _refusal(self, request: ToolCallRequest, decision: BudgetDecision) -> ToolMessage:
         tool_call_id = request.tool_call.get("id")
         if not isinstance(tool_call_id, str):
             raise ValueError("task call requires an id")
         return ToolMessage(
             content=json.dumps(
                 {
-                    "budget_snapshot": snapshot.as_dict(),
-                    "code": code,
-                    "must_stop": True,
+                    "budget_snapshot": decision.snapshot.as_dict(),
+                    "code": decision.code,
+                    "must_stop": decision.must_stop,
                 },
                 separators=(",", ":"),
                 sort_keys=True,
@@ -301,7 +306,7 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
         context = self._context(envelope)
         decision = self._budget.reserve_task(context)
         if not decision.ok:
-            return self._refusal(request, decision.code, decision.snapshot)
+            return self._refusal(request, decision)
         try:
             with bind_research_task(envelope):
                 result = handler(request)
@@ -320,7 +325,7 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
         context = self._context(envelope)
         decision = self._budget.reserve_task(context)
         if not decision.ok:
-            return self._refusal(request, decision.code, decision.snapshot)
+            return self._refusal(request, decision)
         try:
             with bind_research_task(envelope):
                 result = await handler(request)

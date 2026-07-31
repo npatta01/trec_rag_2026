@@ -10,7 +10,12 @@ from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
-from trec_rag.deepagent_budget import BudgetSnapshot, ResearchBudget, ResearchBudgetConfig
+from trec_rag.deepagent_budget import (
+    BudgetSnapshot,
+    ResearchBudget,
+    ResearchBudgetConfig,
+    ResearchTaskContext,
+)
 from trec_rag.deepagent_research import (
     BundleEvidence,
     EvidenceBundle,
@@ -191,6 +196,22 @@ def test_task_middleware_requires_the_researcher_subagent() -> None:
             task_request(description=task_description(), subagent_type="general-purpose"),
             lambda _request: ToolMessage(content="unexpected", tool_call_id="task-call"),
         )
+
+
+def test_task_budget_refusal_preserves_a_transient_concurrency_decision() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
+    assert budget.reserve_task(ResearchTaskContext("existing", 1, "survey", ("N1",))).ok
+    middleware = ResearchTaskBudgetMiddleware(budget)
+
+    result = middleware.wrap_tool_call(
+        task_request(description=task_description()),
+        lambda _request: pytest.fail("refused task must not invoke its handler"),
+    )
+
+    assert isinstance(result, ToolMessage)
+    payload = json.loads(result.content)
+    assert payload["code"] == "CONCURRENCY_BUDGET_EXHAUSTED"
+    assert payload["must_stop"] is False
 
 
 def test_task_middleware_leaves_non_task_calls_unchanged() -> None:
