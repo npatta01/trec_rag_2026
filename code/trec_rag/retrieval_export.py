@@ -652,7 +652,7 @@ def _load_topic_projection(
     lane_scores = _load_lane_scores(
         topic_root / "scoring" / "lane_scores.jsonl", topic.id
     )
-    from trec_rag.official_run import validate_scoring_selection
+    from trec_rag.competition_retrieval import validate_scoring_selection
 
     memberships = validate_scoring_selection(
         (topic_root / "scoring" / "selection.json").read_bytes(),
@@ -865,7 +865,7 @@ def _validate_retrieval_source_chain(
     if _validate_receipts(topic_root, retrieval) != _RETRIEVAL_ARTIFACTS:
         raise ValueError("retrieval checkpoint artifact set changed")
 
-    from trec_rag.official_run import (
+    from trec_rag.competition_retrieval import (
         decode_retrieval_audit,
         decode_retrieval_decomposition,
         load_validated_decomposition,
@@ -1087,11 +1087,21 @@ def _validate_receipts(topic_root: Path, manifest: Mapping[str, object]) -> set[
             raise ValueError("checkpoint artifact byte count changed")
         if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
             raise ValueError("checkpoint artifact digest changed")
-        body = path.read_bytes()
-        if len(body) != byte_count or sha256(body).hexdigest() != digest:
+        actual_bytes, actual_digest = _streamed_file_identity(path)
+        if actual_bytes != byte_count or actual_digest != digest:
             raise ValueError("checkpoint artifact hash changed")
         seen.add(relative)
     return seen
+
+
+def _streamed_file_identity(path: Path) -> tuple[int, str]:
+    digest = sha256()
+    byte_count = 0
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            byte_count += len(chunk)
+            digest.update(chunk)
+    return byte_count, digest.hexdigest()
 
 
 def _load_selected_documents(path: Path, topic_id: str) -> tuple[_SelectedDocument, ...]:
@@ -1554,7 +1564,7 @@ def _load_allowed_canonical_evidence(
         "contexts_file": contexts_path.name,
     }
     digests = {
-        "candidates_sha256": sha256(candidates_path.read_bytes()).hexdigest(),
+        "candidates_sha256": _streamed_file_identity(candidates_path)[1],
         "candidate_manifest_sha256": sha256(
             candidate_manifest_path.read_bytes()
         ).hexdigest(),
@@ -1581,18 +1591,9 @@ def _load_allowed_canonical_evidence(
         selection_by_id[context.subnarrative_id] = selection
     if set(selection_by_id) != set(expected_subnarratives):
         raise ValueError("canonical selection set is incomplete")
-    documents = {row.docid: row.text for row in selected}
-    candidates = load_validated_candidate_artifacts(
-        candidates_path,
-        candidate_manifest_path,
-        documents=documents,
-        subnarratives=expected_subnarratives,
-    )
-    allowed: set[tuple[object, ...]] = set()
+    selected_members: list[tuple[str, str, Any]] = []
     for subnarrative_id, selection in selection_by_id.items():
-        snapshots = {
-            snapshot.budget: snapshot for snapshot in selection.snapshots
-        }
+        snapshots = {snapshot.budget: snapshot for snapshot in selection.snapshots}
         snapshot = snapshots.get(selected_budget)
         if snapshot is None:
             raise ValueError("canonical selection lacks configured budget")
@@ -1601,32 +1602,44 @@ def _load_allowed_canonical_evidence(
             cluster = clusters.get(cluster_id)
             if cluster is None:
                 raise ValueError("canonical selection snapshot names an unknown cluster")
-            for member in cluster.supports:
-                candidate = candidates.get(
-                    (subnarrative_id, member.candidate_nugget_id)
-                )
-                if (
-                    candidate is None
-                    or member.candidate_kind != candidate.candidate_kind
-                    or member.text != candidate.text
-                    or member.docid != candidate.docid
-                    or member.document_sha256 != candidate.document_sha256
-                    or member.raw_logit != candidate.sentence_cross_encoder_score
-                ):
-                    raise ValueError(
-                        "canonical selection member differs from sealed candidate"
-                    )
-                allowed.add(
-                    (
-                        subnarrative_id,
-                        cluster_id,
-                        candidate.candidate_nugget_id,
-                        candidate.candidate_kind,
-                        candidate.text,
-                        candidate.docid,
-                        candidate.document_sha256,
-                    )
-                )
+            selected_members.extend(
+                (subnarrative_id, cluster_id, member)
+                for member in cluster.supports
+            )
+    documents = {row.docid: row.text for row in selected}
+    candidates = load_validated_candidate_artifacts(
+        candidates_path,
+        candidate_manifest_path,
+        documents=documents,
+        subnarratives=expected_subnarratives,
+        required_candidate_keys=frozenset(
+            (subnarrative_id, member.candidate_nugget_id)
+            for subnarrative_id, _cluster_id, member in selected_members
+        ),
+    )
+    allowed: set[tuple[object, ...]] = set()
+    for subnarrative_id, cluster_id, member in selected_members:
+        candidate = candidates.get((subnarrative_id, member.candidate_nugget_id))
+        if (
+            candidate is None
+            or member.candidate_kind != candidate.candidate_kind
+            or member.text != candidate.text
+            or member.docid != candidate.docid
+            or member.document_sha256 != candidate.document_sha256
+            or member.raw_logit != candidate.sentence_cross_encoder_score
+        ):
+            raise ValueError("canonical selection member differs from sealed candidate")
+        allowed.add(
+            (
+                subnarrative_id,
+                cluster_id,
+                candidate.candidate_nugget_id,
+                candidate.candidate_kind,
+                candidate.text,
+                candidate.docid,
+                candidate.document_sha256,
+            )
+        )
     requests = tuple(
         build_canonical_nugget_request(
             selection,

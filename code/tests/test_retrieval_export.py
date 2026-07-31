@@ -27,7 +27,7 @@ from trec_rag.facet_evidence import (
 )
 from trec_rag.facet_extraction import BackendReply, plan_facet_queries
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
-from trec_rag.official_run import (
+from trec_rag.competition_retrieval import (
     _plan_payload,
     _retrieve_topic,
     _score_topic,
@@ -933,6 +933,35 @@ def test_export_writes_exact_variable_depth_official_and_candidate_runs(
         b"rag2026-0 Q0 doc-a 2 2 demo-candidate-pool\n"
         b"rag2026-0 Q0 doc-c 3 1 demo-candidate-pool\n"
     )
+
+
+def test_export_streams_the_sealed_candidate_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, topics = _config_and_topics(tmp_path)
+    _write_sealed_topic(
+        config.output_dir,
+        topics[0],
+        selected=("doc-a",),
+        supported=("doc-a",),
+        source_commit="a" * 40,
+    )
+    candidate_path = (
+        config.output_dir / topics[0].id / "canonical" / "candidates.jsonl"
+    ).resolve()
+    original_read_bytes = Path.read_bytes
+
+    def reject_whole_candidate_read(path: Path) -> bytes:
+        if path.resolve() == candidate_path:
+            raise AssertionError("sealed candidate ledgers must be streamed")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_whole_candidate_read)
+
+    receipt = export_retrieval_run(config, topics, code_commit="a" * 40)
+
+    assert receipt.official_run.read_text() == "rag2026-0 Q0 doc-a 1 1 demo\n"
 
 
 def test_export_writes_deterministic_full_text_provenance_and_manifest(

@@ -55,7 +55,7 @@ from trec_rag.facet_evidence import (
 from trec_rag.topics import Topic
 
 if TYPE_CHECKING:
-    from trec_rag.official_run import ValidatedDecomposition
+    from trec_rag.competition_retrieval import ValidatedDecomposition
 
 
 REQUEST_SCHEMA_VERSION = "extractive_candidate_request_v1"
@@ -1247,10 +1247,10 @@ def load_validated_candidate_artifacts(
     *,
     documents: Mapping[str, str],
     subnarratives: Mapping[str, str],
+    required_candidate_keys: frozenset[tuple[str, str]] | None = None,
 ) -> Mapping[tuple[str, str], ExtractiveCandidate]:
-    """Load sealed candidate artifacts and validate every official source span."""
+    """Stream a sealed ledger and source-validate the candidates a caller needs."""
     candidates_path, manifest_path = Path(candidates_path), Path(manifest_path)
-    candidate_bytes = candidates_path.read_bytes()
     manifest = _strict_selection_json_object(
         manifest_path.read_bytes(), manifest_path, 1
     )
@@ -1258,40 +1258,65 @@ def load_validated_candidate_artifacts(
         manifest, _CANDIDATE_MANIFEST_FIELDS, "candidate manifest"
     )
     _validate_candidate_manifest_identity(manifest, candidates_path)
-    scanned = _ScannedCandidates(
-        len(candidate_bytes.splitlines()), sha256(candidate_bytes).hexdigest()
-    )
-    _reconcile_candidate_manifest(manifest, scanned)
-    if candidate_bytes and not candidate_bytes.endswith(b"\n"):
-        raise ValueError("candidate JSONL must end with LF")
+    if required_candidate_keys is not None and (
+        not isinstance(required_candidate_keys, frozenset)
+        or any(
+            not isinstance(key, tuple)
+            or len(key) != 2
+            or any(not isinstance(part, str) or not part for part in key)
+            for key in required_candidate_keys
+        )
+    ):
+        raise TypeError("required_candidate_keys must be a frozenset of string pairs")
+    digest = sha256()
+    candidate_count = 0
+    seen_keys: set[tuple[str, str]] = set()
     result: dict[tuple[str, str], ExtractiveCandidate] = {}
-    for line_number, raw in enumerate(candidate_bytes.splitlines(), start=1):
-        if not raw:
-            raise ValueError("candidate JSONL contains a blank row")
-        value = _strict_selection_json_object(raw, candidates_path, line_number)
-        docid = value.get("docid")
-        subnarrative_id = value.get("subnarrative_id")
-        document_text = documents.get(docid) if isinstance(docid, str) else None
-        subnarrative_text = (
-            subnarratives.get(subnarrative_id)
-            if isinstance(subnarrative_id, str)
-            else None
-        )
-        if document_text is None:
-            raise ValueError(
-                "canonical evidence document is absent from selected documents"
+    with candidates_path.open("rb") as candidate_file:
+        for line_number, encoded_line in enumerate(candidate_file, start=1):
+            digest.update(encoded_line)
+            candidate_count += 1
+            if not encoded_line.endswith(b"\n"):
+                raise ValueError("candidate JSONL must end with LF")
+            raw = encoded_line[:-1]
+            if raw.endswith(b"\r"):
+                raw = raw[:-1]
+            if not raw:
+                raise ValueError("candidate JSONL contains a blank row")
+            value = _strict_selection_json_object(raw, candidates_path, line_number)
+            subnarrative_id = value.get("subnarrative_id")
+            candidate_nugget_id = value.get("candidate_nugget_id")
+            if (
+                not isinstance(subnarrative_id, str)
+                or not subnarrative_id
+                or not isinstance(candidate_nugget_id, str)
+                or not candidate_nugget_id
+            ):
+                raise ValueError("candidate artifact has an invalid candidate identity")
+            key = (subnarrative_id, candidate_nugget_id)
+            if key in seen_keys:
+                raise ValueError("candidate artifact contains a duplicate candidate ID")
+            seen_keys.add(key)
+            docid = value.get("docid")
+            document_text = documents.get(docid) if isinstance(docid, str) else None
+            subnarrative_text = subnarratives.get(subnarrative_id)
+            if document_text is None:
+                raise ValueError(
+                    "canonical evidence document is absent from selected documents"
+                )
+            if subnarrative_text is None:
+                raise ValueError("candidate subnarrative is absent from canonical plan")
+            candidate = decode_extractive_candidate(
+                raw,
+                document_text=document_text,
+                subnarrative_text=subnarrative_text,
             )
-        if subnarrative_text is None:
-            raise ValueError("candidate subnarrative is absent from canonical plan")
-        candidate = decode_extractive_candidate(
-            raw,
-            document_text=document_text,
-            subnarrative_text=subnarrative_text,
-        )
-        key = (candidate.subnarrative_id, candidate.candidate_nugget_id)
-        if key in result:
-            raise ValueError("candidate artifact contains a duplicate candidate ID")
-        result[key] = candidate
+            if required_candidate_keys is None or key in required_candidate_keys:
+                result[key] = candidate
+    _reconcile_candidate_manifest(
+        manifest,
+        _ScannedCandidates(candidate_count, digest.hexdigest()),
+    )
     return MappingProxyType(result)
 
 

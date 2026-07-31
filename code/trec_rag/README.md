@@ -2,14 +2,14 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
-## Experimental facet official run
+## Experimental competition retrieval run
 
-`trec_rag.official_run` is the only supported interface for the
+`trec_rag.competition_retrieval` is the only supported interface for the
 organizer-compatible facet experiment. Run it with the strict checked-in
 configuration:
 
 ```bash
-.venv/bin/python -m trec_rag.official_run configs/facet_pilot_v1.yaml
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
 ```
 
 The command runs all official topics by default. Repeat `--topic ID` for an
@@ -84,6 +84,150 @@ that generated decompositions improve retrieval or that canonical claims are
 entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
+
+## Competition fixed-retrieval RAG inputs
+
+`trec_rag.competition_rag` strictly loads the organizer-facing inputs for fixed
+retrieval answer generation. Its checked-in configuration is
+`configs/rag26_competition_rag_gpt_sol_v1.yaml`. By default it selects all 119
+canonical topics and joins these three files:
+
+- the headerless `narrative_id<TAB>narrative` organizer topic TSV;
+- `outputs/facet-deepseek-b40-v1/r_output_trec_rag_2026.tsv`, a six-field TREC
+  run; and
+- `outputs/facet-deepseek-b40-v1/retrieval_with_text.jsonl.zip`, whose required
+  core is `query.qid`, `candidates[].docid`, and `candidates[].doc`.
+
+The ZIP is a generation sidecar, not a TREC submission. Retrieval submits only
+`r_output_trec_rag_2026.tsv`; generation submits only its final JSONL. The
+deterministic generation destination is
+`outputs/rag26_competition_rag_gpt_sol_v1/rag_output_trec_rag_2026.jsonl`.
+
+Set up the environment once, then run the two paths independently with their
+canonical configurations. Generation consumes the three files above after
+retrieval has published its TSV and ZIP; it never reads retrieval manifests or
+per-topic checkpoints.
+
+```bash
+code/tools/setup_env.sh
+
+# Publish the full retrieval TSV and full-text ZIP.
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+
+# Generate the full organizer JSONL from those files.
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+```
+
+For a two-topic smoke run, keep the checked-in configurations and their full
+exports unchanged. Repository-relative paths are resolved from the checkout
+containing the config, so put local variants under the ignored
+`configs/local/` directory, not `/tmp`:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_retrieval_v1.yaml configs/local/rag26_competition_retrieval_two_topic_smoke.yaml
+cp configs/rag26_competition_rag_gpt_sol_v1.yaml configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+```
+
+In `configs/local/rag26_competition_retrieval_two_topic_smoke.yaml`, replace
+the complete `experiment` block with this distinct retrieval namespace; leave
+all other blocks identical to the checked-in retrieval config:
+
+```yaml
+experiment:
+  id: facet-deepseek-b40-v1-two-topic-smoke
+```
+
+In `configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml`, replace
+the complete `experiment` and `inputs` blocks with the following. The generation
+output and both retrieval inputs now point to smoke-only directories, while
+`inputs.topic_ids` restores the requested IDs to canonical TSV order:
+
+```yaml
+experiment:
+  id: rag26-competition-rag-gpt-sol-two-topic-smoke
+  output_dir: outputs/rag26-competition-rag-gpt-sol-two-topic-smoke
+  mode: create
+
+inputs:
+  queries: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+  run: outputs/facet-deepseek-b40-v1-two-topic-smoke/r_output_trec_rag_2026.tsv
+  documents: outputs/facet-deepseek-b40-v1-two-topic-smoke/retrieval_with_text.jsonl.zip
+  archive_member: null
+  topic_ids: [rag2026-0, rag2026-1]
+```
+
+Run the two paths with those local configs. The repeated retrieval selectors
+bound the expensive retrieval work; the generation config independently bounds
+the downstream join:
+
+```bash
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/local/rag26_competition_retrieval_two_topic_smoke.yaml --topic rag2026-0 --topic rag2026-1
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+```
+
+These commands publish only under
+`outputs/facet-deepseek-b40-v1-two-topic-smoke/` and
+`outputs/rag26-competition-rag-gpt-sol-two-topic-smoke/`; they never replace
+the full canonical exports.
+
+`experiment.mode: create` refuses an existing generation output or work tree.
+For an interrupted generation, switch the local config to `resume`; valid
+per-topic rows are reused and missing rows are generated. To replace a
+generation result, use `overwrite`: it removes only that generation JSONL and
+its dedicated `work/` directory before starting again, never the retrieval TSV
+or ZIP inputs.
+
+Raw provider responses are retained only when safely available: parsed JSON is
+stored as a recursively sanitized structured envelope with no duplicate raw
+body. Opaque non-JSON bodies are never persisted, for any HTTP status including
+a 2xx semantic failure; their artifacts contain only the status when available,
+an omission marker, UTF-8 byte length, and SHA-256. Run the module's targeted
+contract suite with the repository environment already set up:
+
+```bash
+uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q
+```
+
+## Private post-run competition debug report
+
+`trec_rag.competition_debug_report` explains an already completed competition
+run from its standard retrieval config and, optionally, its matching standard
+RAG config. A retrieval-only report uses:
+
+```bash
+uv run --no-sync .venv/bin/python \
+  -m trec_rag.competition_debug_report \
+  --retrieval-config configs/rag26_competition_retrieval_v1.yaml
+```
+
+Include validated final answers by supplying the RAG config rather than a raw
+output path:
+
+```bash
+uv run --no-sync .venv/bin/python \
+  -m trec_rag.competition_debug_report \
+  --retrieval-config configs/rag26_competition_retrieval_v1.yaml \
+  --rag-config configs/rag26_competition_rag_gpt_sol_v1.yaml
+```
+
+Repeat `--topic ID` to select exported topics in official order. Use `--output
+PATH` only for an existing parent directory inside this repository. Otherwise,
+the report is atomically written to
+`<retrieval-output>/competition_debug_report.html`. Output overrides must end
+in `.html`; symbolic links and existing files not generated by this report
+command are rejected so organizer, checkpoint, and publication artifacts stay
+read-only.
+
+This command is a read-only, post-run validator and renderer: it makes no
+retrieval, API, network, or model calls and does not scan the large candidate
+ledgers. It reads only bounded sealed artifacts, validates every RAG output
+record with the production submission validator, and emits exactly one compact
+JSON receipt on stdout after successful replacement.
+
+**Keep the HTML private.** It contains raw corpus text, generated claims,
+answers, and document identifiers. It is not a sanitized publication artifact
+and must not be uploaded or shared without an explicit privacy review.
 
 ## Remote Pyserini Helpers
 
