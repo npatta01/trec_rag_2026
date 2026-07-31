@@ -2,35 +2,31 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
-## Organizer Pi single-topic inputs
+## Reusable tracing modules
 
-`trec_rag.organizer_pi_inputs` prepares byte-faithful inputs for comparing both
-organizer Pi paths on one selected topic. It selects one narrative into a
-one-row topic TSV and filters a fixed-retrieval TREC run to the required 100
-ranked rows. Callers must use `sha256_file` to verify published source digests
-before invoking either filtering function. The helper validates the selected
-topic and run ranks strictly, then atomically replaces its outputs. It does not
-copy or transform document text.
+`trec_rag.tracing` contains the reusable trace model and Phoenix-export
+boundaries:
 
-### Build and export organizer Pi traces
+- `trec_rag.tracing.models` defines the immutable `SpanSpec` and `TraceBundle`
+  records.
+- `trec_rag.tracing.openai_semantics` converts Pi and fixed-retrieval
+  `SpanSpec` payloads into normalized messages, authoritative Pi tool schemas,
+  OpenAI request/response envelopes, and OpenInference LLM attributes.
+- `trec_rag.tracing.phoenix_export` exports a saved `TraceBundle`; normalized
+  envelopes populate generic input/output fields while complete strict JSON is
+  retained under `pi.native.input_json` and `pi.native.output_json`.
 
-`trec_rag.organizer_pi_trace` converts one completed or failed native organizer
-run into a durable strict-JSON trace bundle before any Phoenix configuration or
-network access is needed. A partial fixed-run failure record must retain the
-selected `query_id`; its native failures and validation result become
-error-status spans. Native Pi JSONL events are authoritative; the bundle and
-the Phoenix view are derived records. Keep native events, normalized output
-records, bundles, and receipts together so the derived trace can always be
-checked against its source.
+## Temporary organizer Pi reproduction harness
 
-### OpenAI trace semantics
-
-`trec_rag.openai_trace_semantics` consumes immutable Pi and fixed-retrieval
-`SpanSpec` payloads. It produces normalized messages, the authoritative Pi
-search and paginated-document tool schemas, OpenAI request/response envelopes,
-and OpenInference LLM attributes. During export, the normalized envelopes
-populate the generic input/output fields while the original strict JSON remains
-available under `pi.native.input_json` and `pi.native.output_json`.
+`trec_rag.experiments.organizer_pi` is a temporary experimental reproduction
+harness, not a main production path. Its `inputs` module prepares byte-faithful
+single-topic inputs, `event_trace` constructs durable trace bundles from native
+organizer artifacts, and `cli` builds and exports those bundles. A partial
+fixed-run failure record retains the selected `query_id`; native failures and
+validation become error-status spans. Native Pi JSONL events are authoritative;
+the bundle and Phoenix view are derived records. Keep native events, normalized
+output records, bundles, and receipts together so the derived trace can always
+be checked against its source.
 
 The adapter emits only captured messages and known invocation parameters. In
 particular, it does not fabricate the Pi system prompt when that prompt was not
@@ -62,7 +58,7 @@ Build the Piika agentic bundle from its one-topic TSV, native events, and
 normalized per-query run artifact:
 
 ```bash
-.venv/bin/python -m trec_rag.organizer_pi_trace build \
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
   --baseline piika-agentic \
   --topic rag2026-1 \
   --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
@@ -79,7 +75,7 @@ run, published document ZIP, and unmodified organizer script:
 DOCUMENT_ZIP="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/retrieval/bm25_climbmix_top1000_with_text.jsonl.zip"
 ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/code/ragnarok_style_ag.py"
 
-.venv/bin/python -m trec_rag.organizer_pi_trace build \
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
   --baseline ragnarok-fixed \
   --topic rag2026-1 \
   --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
@@ -110,11 +106,11 @@ PHOENIX_PROJECT_NAME=trec-rag-2026-pi-baselines
 Then export each saved bundle:
 
 ```bash
-.venv/bin/python -m trec_rag.organizer_pi_trace export \
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli export \
   --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json" \
   --receipt "$TRACE_ROOT/piika/phoenix-receipt.json"
 
-.venv/bin/python -m trec_rag.organizer_pi_trace export \
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli export \
   --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json" \
   --receipt "$TRACE_ROOT/fixed/phoenix-receipt.json"
 ```

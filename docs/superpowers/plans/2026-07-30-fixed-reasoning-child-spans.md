@@ -26,16 +26,16 @@
 ### Task 1: Fixed reasoning extraction and presentation
 
 **Files:**
-- Modify: `code/trec_rag/pi_event_trace.py`
-- Modify: `code/trec_rag/openai_trace_semantics.py`
-- Modify: `code/tests/test_pi_event_trace.py`
-- Modify: `code/tests/test_openai_trace_semantics.py`
-- Modify: `code/tests/test_phoenix_trace_export.py`
+- Modify: `code/trec_rag/experiments/organizer_pi/event_trace.py`
+- Modify: `code/trec_rag/tracing/openai_semantics.py`
+- Modify: `code/tests/experiments/organizer_pi/test_event_trace.py`
+- Modify: `code/tests/tracing/test_openai_semantics.py`
+- Modify: `code/tests/tracing/test_phoenix_export.py`
 - Modify: `code/trec_rag/README.md`
 
 **Interfaces:**
 - Consumes: a fixed generation `SpanSpec` whose `output_value` is the unchanged captured assistant mapping and whose LLM start/end nanoseconds are known.
-- Produces: `_reasoning_summary_children(message: object, *, start_ns: int, end_ns: int) -> tuple[SpanSpec, ...]` in `pi_event_trace.py` and presentation filtering keyed by `pi.reasoning.extracted_to_children=True` in `openai_trace_semantics.py`.
+- Produces: `_reasoning_summary_children(message: object, *, start_ns: int, end_ns: int) -> tuple[SpanSpec, ...]` in `trec_rag.experiments.organizer_pi.event_trace` and presentation filtering keyed by `pi.reasoning.extracted_to_children=True` in `trec_rag.tracing.openai_semantics`.
 - Each reasoning child has `name="Reasoning summary <index>"`, `kind="CHAIN"`, exact string `output_value`, and attributes `pi.reasoning.block.index`, `pi.reasoning.block.count`, `pi.reasoning.source`, `pi.reasoning.timing_method`, and `trace.timing_reconstructed`.
 
 - [ ] **Step 1: Write failing trace-construction tests**
@@ -83,8 +83,8 @@ Run:
 
 ```bash
 .venv/bin/python -m pytest \
-  code/tests/test_pi_event_trace.py::test_fixed_trace_extracts_native_reasoning_into_three_children \
-  code/tests/test_pi_event_trace.py::test_fixed_trace_without_thinking_keeps_existing_topology -q
+  code/tests/experiments/organizer_pi/test_event_trace.py::test_fixed_trace_extracts_native_reasoning_into_three_children \
+  code/tests/experiments/organizer_pi/test_event_trace.py::test_fixed_trace_without_thinking_keeps_existing_topology -q
 ```
 
 Expected: assertions fail because fixed generation currently has no reasoning children or extraction attributes.
@@ -112,15 +112,15 @@ Run:
 
 ```bash
 .venv/bin/python -m pytest \
-  code/tests/test_openai_trace_semantics.py::test_extracted_reasoning_is_omitted_only_from_llm_presentation \
-  code/tests/test_phoenix_trace_export.py::test_export_separates_reasoning_children_without_changing_native_llm_payload -q
+  code/tests/tracing/test_openai_semantics.py::test_extracted_reasoning_is_omitted_only_from_llm_presentation \
+  code/tests/tracing/test_phoenix_export.py::test_export_separates_reasoning_children_without_changing_native_llm_payload -q
 ```
 
 Expected: failures show thinking content remains in the rich attributes or the expected reasoning children do not exist.
 
 - [ ] **Step 5: Implement deterministic reasoning child construction**
 
-In `pi_event_trace.py`, implement `_reasoning_summary_children`. Accept only non-empty string values from ordered content mappings whose type is `thinking`. Compute `base_duration, remainder = divmod(end_ns - start_ns, count)` and create consecutive child intervals; add the remainder to the final child. Return no children for a non-mapping message, missing content, or zero captured thinking blocks.
+In `trec_rag.experiments.organizer_pi.event_trace`, implement `_reasoning_summary_children`. Accept only non-empty string values from ordered content mappings whose type is `thinking`. Compute `base_duration, remainder = divmod(end_ns - start_ns, count)` and create consecutive child intervals; add the remainder to the final child. Return no children for a non-mapping message, missing content, or zero captured thinking blocks.
 
 In `build_fixed_trace`, construct the final LLM start/end first, create reasoning children from `generation_message`, append them after any observed attempt/failure children, and add these LLM attributes only when reasoning children exist:
 
@@ -133,7 +133,7 @@ Keep `generation.output_value=generation_message` unchanged.
 
 - [ ] **Step 6: Implement presentation-only reasoning filtering**
 
-In `openai_trace_semantics.py`, add a private helper that shallow-copies the output mapping and removes only content items of type `thinking` or `reasoning` when `spec.attributes.get("pi.reasoning.extracted_to_children") is True`. Use that presented mapping in both `openai_response_envelope` and the output-message branch of `openai_llm_attributes`. Do not mutate `SpanSpec.output_value`; model, provider, response ID, stop reason, usage, text, and tool calls remain available.
+In `trec_rag.tracing.openai_semantics`, add a private helper that shallow-copies the output mapping and removes only content items of type `thinking` or `reasoning` when `spec.attributes.get("pi.reasoning.extracted_to_children") is True`. Use that presented mapping in both `openai_response_envelope` and the output-message branch of `openai_llm_attributes`. Do not mutate `SpanSpec.output_value`; model, provider, response ID, stop reason, usage, text, and tool calls remain available.
 
 - [ ] **Step 7: Document the behavior**
 
@@ -145,15 +145,15 @@ Run:
 
 ```bash
 .venv/bin/python -m pytest \
-  code/tests/test_openai_trace_semantics.py \
-  code/tests/test_phoenix_trace_export.py \
-  code/tests/test_pi_event_trace.py \
-  code/tests/test_organizer_pi_trace.py -q
+  code/tests/tracing/test_openai_semantics.py \
+  code/tests/tracing/test_phoenix_export.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py \
+  code/tests/experiments/organizer_pi/test_cli.py -q
 .venv/bin/python -m py_compile \
-  code/trec_rag/openai_trace_semantics.py \
-  code/trec_rag/pi_event_trace.py \
-  code/trec_rag/phoenix_trace_export.py \
-  code/trec_rag/organizer_pi_trace.py
+  code/trec_rag/tracing/openai_semantics.py \
+  code/trec_rag/experiments/organizer_pi/event_trace.py \
+  code/trec_rag/tracing/phoenix_export.py \
+  code/trec_rag/experiments/organizer_pi/cli.py
 git diff --check
 ```
 
@@ -166,9 +166,9 @@ Build an ignored bundle at `outputs/organizer-pi-phoenix/rag2026-1/fixed/rag2026
 - [ ] **Step 10: Commit**
 
 ```bash
-git add code/trec_rag/pi_event_trace.py code/trec_rag/openai_trace_semantics.py \
-  code/tests/test_pi_event_trace.py code/tests/test_openai_trace_semantics.py \
-  code/tests/test_phoenix_trace_export.py code/trec_rag/README.md
+git add code/trec_rag/experiments/organizer_pi/event_trace.py code/trec_rag/tracing/openai_semantics.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py code/tests/tracing/test_openai_semantics.py \
+  code/tests/tracing/test_phoenix_export.py code/trec_rag/README.md
 git commit -m "separate fixed reasoning into child spans"
 ```
 

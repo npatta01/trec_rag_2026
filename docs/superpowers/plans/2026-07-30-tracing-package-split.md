@@ -32,7 +32,7 @@
 - Create: `code/tests/tracing/test_package_direction.py`
 
 **Interfaces:**
-- Produces: `trec_rag.tracing.models.{SpanSpec,TraceSpec,TraceBundle,read_trace_bundle,write_trace_bundle}`.
+- Produces: `trec_rag.tracing.models.{SpanSpec,TraceBundle,read_trace_bundle,write_trace_bundle}`.
 - Produces: `trec_rag.tracing.openai_semantics` normalization and OpenInference attribute helpers.
 - Produces: `trec_rag.tracing.phoenix_export.{PhoenixSettings,ExportReceipt,SecretStr,export_trace_bundle}`.
 

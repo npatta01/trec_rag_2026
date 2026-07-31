@@ -51,7 +51,7 @@ strict bundle serialization, OpenAI/OpenInference presentation helpers, Phoenix
 configuration, bundle export, and export receipts. It must not import from
 `trec_rag.experiments`.
 
-`models.py` owns `SpanSpec`, `TraceSpec`, and `TraceBundle`, including strict
+`models.py` owns `SpanSpec` and `TraceBundle`, including strict
 JSON reading and atomic writing. `phoenix_export.py` consumes those records and
 exports them without knowing how a source run was captured. Generic OpenAI
 message/envelope normalization stays in `openai_semantics.py`.

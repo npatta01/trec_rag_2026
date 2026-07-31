@@ -6,6 +6,14 @@ Make the three reasoning-summary blocks captured in the fixed-retrieval model
 response individually visible in Phoenix without misrepresenting them as three
 model calls.
 
+## Current package location
+
+The immutable records, OpenAI presentation, and Phoenix export belong to
+`trec_rag.tracing.{models,openai_semantics,phoenix_export}`. Fixed-run event
+construction belongs to `trec_rag.experiments.organizer_pi.event_trace`, part
+of a temporary experimental reproduction harness rather than a main production
+path.
+
 ## Verified Source Shape
 
 The saved fixed `Pi generation` response is one assistant response from one

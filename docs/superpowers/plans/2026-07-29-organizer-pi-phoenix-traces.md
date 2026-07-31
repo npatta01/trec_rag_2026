@@ -26,8 +26,8 @@
 ### Task 1: Single-topic organizer input preparation
 
 **Files:**
-- Create: `code/trec_rag/organizer_pi_inputs.py`
-- Create: `code/tests/test_organizer_pi_inputs.py`
+- Create: `code/trec_rag/experiments/organizer_pi/inputs.py`
+- Create: `code/tests/experiments/organizer_pi/test_inputs.py`
 - Modify: `code/trec_rag/README.md`
 
 **Interfaces:**
@@ -64,9 +64,9 @@ Also cover missing/duplicate topic IDs, duplicate/non-positive/non-contiguous ra
 
 - [ ] **Step 2: Run the focused test and confirm the red state**
 
-Run: `.venv/bin/python -m pytest code/tests/test_organizer_pi_inputs.py -q`
+Run: `.venv/bin/python -m pytest code/tests/experiments/organizer_pi/test_inputs.py -q`
 
-Expected: FAIL during import because `trec_rag.organizer_pi_inputs` does not exist.
+Expected: FAIL during import because `trec_rag.experiments.organizer_pi.inputs` does not exist.
 
 - [ ] **Step 3: Implement the strict input module**
 
@@ -92,7 +92,7 @@ Write outputs through a same-directory temporary file and `Path.replace()`. For 
 
 - [ ] **Step 4: Run the input tests**
 
-Run: `.venv/bin/python -m pytest code/tests/test_organizer_pi_inputs.py -q`
+Run: `.venv/bin/python -m pytest code/tests/experiments/organizer_pi/test_inputs.py -q`
 
 Expected: PASS.
 
@@ -103,16 +103,16 @@ Document that the module creates a one-row topic file for both organizer paths a
 - [ ] **Step 6: Commit the input-preparation unit**
 
 ```bash
-git add code/trec_rag/organizer_pi_inputs.py code/tests/test_organizer_pi_inputs.py code/trec_rag/README.md
+git add code/trec_rag/experiments/organizer_pi/inputs.py code/tests/experiments/organizer_pi/test_inputs.py code/trec_rag/README.md
 git commit -m "add organizer single-topic input preparation"
 ```
 
 ### Task 2: Native Pi event normalization and trace trees
 
 **Files:**
-- Create: `code/trec_rag/pi_trace_models.py`
-- Create: `code/trec_rag/pi_event_trace.py`
-- Create: `code/tests/test_pi_event_trace.py`
+- Create: `code/trec_rag/tracing/models.py`
+- Create: `code/trec_rag/experiments/organizer_pi/event_trace.py`
+- Create: `code/tests/experiments/organizer_pi/test_event_trace.py`
 
 **Interfaces:**
 - Consumes: native Pi JSONL events, normalized organizer run record, topic narrative, and for the fixed path the rendered system/user prompts plus ordered document records.
@@ -163,7 +163,7 @@ For `build_fixed_trace`, assert one `RETRIEVER` span contains all 100 ordered fu
 
 - [ ] **Step 2: Run the focused tests and confirm the red state**
 
-Run: `.venv/bin/python -m pytest code/tests/test_pi_event_trace.py -q`
+Run: `.venv/bin/python -m pytest code/tests/experiments/organizer_pi/test_event_trace.py -q`
 
 Expected: FAIL during import because the trace modules do not exist.
 
@@ -181,22 +181,22 @@ Build children in this order: fixed evidence `RETRIEVER`, prompt construction `C
 
 - [ ] **Step 6: Run trace-tree tests**
 
-Run: `.venv/bin/python -m pytest code/tests/test_pi_event_trace.py -q`
+Run: `.venv/bin/python -m pytest code/tests/experiments/organizer_pi/test_event_trace.py -q`
 
 Expected: PASS.
 
 - [ ] **Step 7: Commit the event-normalization unit**
 
 ```bash
-git add code/trec_rag/pi_trace_models.py code/trec_rag/pi_event_trace.py code/tests/test_pi_event_trace.py
+git add code/trec_rag/tracing/models.py code/trec_rag/experiments/organizer_pi/event_trace.py code/tests/experiments/organizer_pi/test_event_trace.py
 git commit -m "normalize organizer Pi events into trace trees"
 ```
 
 ### Task 3: Credential-safe Phoenix Cloud exporter
 
 **Files:**
-- Create: `code/trec_rag/phoenix_trace_export.py`
-- Create: `code/tests/test_phoenix_trace_export.py`
+- Create: `code/trec_rag/tracing/phoenix_export.py`
+- Create: `code/tests/tracing/test_phoenix_export.py`
 - Modify: `pyproject.toml`
 - Modify: `uv.lock`
 
@@ -228,9 +228,9 @@ Use a fake tracer/provider to assert recursive parent-child relationships, expli
 
 - [ ] **Step 2: Run the exporter tests and confirm the red state**
 
-Run: `.venv/bin/python -m pytest code/tests/test_phoenix_trace_export.py -q`
+Run: `.venv/bin/python -m pytest code/tests/tracing/test_phoenix_export.py -q`
 
-Expected: FAIL during import because `trec_rag.phoenix_trace_export` does not exist.
+Expected: FAIL during import because `trec_rag.tracing.phoenix_export` does not exist.
 
 - [ ] **Step 3: Add the observability dependency group**
 
@@ -255,27 +255,27 @@ Register with `project_name=settings.project_name`, `endpoint=settings.collector
 
 - [ ] **Step 6: Run exporter tests and the combined focused suite**
 
-Run: `.venv/bin/python -m pytest code/tests/test_phoenix_trace_export.py code/tests/test_pi_event_trace.py code/tests/test_organizer_pi_inputs.py -q`
+Run: `.venv/bin/python -m pytest code/tests/tracing/test_phoenix_export.py code/tests/experiments/organizer_pi/test_event_trace.py code/tests/experiments/organizer_pi/test_inputs.py -q`
 
 Expected: PASS.
 
 - [ ] **Step 7: Commit the Phoenix exporter unit**
 
 ```bash
-git add code/trec_rag/phoenix_trace_export.py code/tests/test_phoenix_trace_export.py pyproject.toml uv.lock
+git add code/trec_rag/tracing/phoenix_export.py code/tests/tracing/test_phoenix_export.py pyproject.toml uv.lock
 git commit -m "export organizer Pi traces to Phoenix Cloud"
 ```
 
 ### Task 4: Reusable trace import CLI
 
 **Files:**
-- Create: `code/trec_rag/organizer_pi_trace.py`
-- Create: `code/tests/test_organizer_pi_trace.py`
+- Create: `code/trec_rag/experiments/organizer_pi/cli.py`
+- Create: `code/tests/experiments/organizer_pi/test_cli.py`
 - Modify: `code/trec_rag/README.md`
 
 **Interfaces:**
 - Consumes: `--baseline`, `--topic-tsv`, native events, normalized output record, and baseline-specific full-content inputs.
-- Produces: `python -m trec_rag.organizer_pi_trace build ...`, a local strict-JSON `TraceBundle`; and `python -m trec_rag.organizer_pi_trace export --bundle ...`, a JSON receipt written only after successful Phoenix flush.
+- Produces: `python -m trec_rag.experiments.organizer_pi.cli build ...`, a local strict-JSON `TraceBundle`; and `python -m trec_rag.experiments.organizer_pi.cli export --bundle ...`, a JSON receipt written only after successful Phoenix flush. This remains a temporary experimental reproduction harness, not a production CLI.
 
 - [ ] **Step 1: Write failing CLI contract tests**
 
@@ -300,7 +300,7 @@ Cover mutually required fixed-path arguments (`--ranked-run`, `--documents`, `--
 
 - [ ] **Step 2: Run the CLI tests and confirm the red state**
 
-Run: `.venv/bin/python -m pytest code/tests/test_organizer_pi_trace.py -q`
+Run: `.venv/bin/python -m pytest code/tests/experiments/organizer_pi/test_cli.py -q`
 
 Expected: FAIL during import because the CLI module does not exist.
 
@@ -314,14 +314,14 @@ Document both CLI forms, the Phoenix project name, full-content transmission, ig
 
 - [ ] **Step 5: Run the CLI and regression tests**
 
-Run: `.venv/bin/python -m pytest code/tests/test_organizer_pi_trace.py code/tests/test_phoenix_trace_export.py code/tests/test_pi_event_trace.py code/tests/test_organizer_pi_inputs.py code/tests/test_remote_pyserini.py -q`
+Run: `.venv/bin/python -m pytest code/tests/experiments/organizer_pi/test_cli.py code/tests/tracing/test_phoenix_export.py code/tests/experiments/organizer_pi/test_event_trace.py code/tests/experiments/organizer_pi/test_inputs.py code/tests/test_remote_pyserini.py -q`
 
 Expected: PASS.
 
 - [ ] **Step 6: Commit the import CLI unit**
 
 ```bash
-git add code/trec_rag/organizer_pi_trace.py code/tests/test_organizer_pi_trace.py code/trec_rag/README.md
+git add code/trec_rag/experiments/organizer_pi/cli.py code/tests/experiments/organizer_pi/test_cli.py code/trec_rag/README.md
 git commit -m "add organizer Pi trace import CLI"
 ```
 

@@ -6,6 +6,14 @@ Re-export the preserved `rag2026-1` Piika and fixed-retrieval runs so Phoenix
 receives the same OpenInference shape produced by OpenAI client
 auto-instrumentation. Do not rerun either organizer, retrieval, Pi, or model.
 
+## Current package location
+
+OpenAI semantics and Phoenix export are reusable modules at
+`trec_rag.tracing.{models,openai_semantics,phoenix_export}`. Pi-specific event
+normalization remains in the temporary experimental reproduction harness
+`trec_rag.experiments.organizer_pi.{inputs,event_trace,cli}`; it is not a main
+production path.
+
 ## Trace topology
 
 Keep exactly two traces in a new comparison session:

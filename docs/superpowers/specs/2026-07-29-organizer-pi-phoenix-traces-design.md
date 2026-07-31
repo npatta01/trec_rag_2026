@@ -36,6 +36,14 @@ patches with different runtimes and could change the code being reproduced. A
 Pi executable proxy was rejected because it would lose organizer-level context
 and be sensitive to Pi CLI protocol changes.
 
+## Current package location
+
+The preserved design is implemented with reusable records and export boundaries
+in `trec_rag.tracing.{models,openai_semantics,phoenix_export}`. The organizer
+Pi capture workflow lives in the temporary experimental reproduction harness
+`trec_rag.experiments.organizer_pi.{inputs,event_trace,cli}`, not a main
+production path.
+
 ## Execution Inputs
 
 ### Piika agentic BM25

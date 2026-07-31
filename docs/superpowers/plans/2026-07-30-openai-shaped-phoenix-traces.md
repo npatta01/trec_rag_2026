@@ -22,15 +22,15 @@
 ### Task 1: OpenAI/OpenInference semantic adapter
 
 **Files:**
-- Create: `code/trec_rag/openai_trace_semantics.py`
-- Create: `code/tests/test_openai_trace_semantics.py`
-- Modify: `code/trec_rag/pi_event_trace.py`
-- Modify: `code/trec_rag/phoenix_trace_export.py`
-- Modify: `code/tests/test_pi_event_trace.py`
-- Modify: `code/tests/test_phoenix_trace_export.py`
+- Create: `code/trec_rag/tracing/openai_semantics.py`
+- Create: `code/tests/tracing/test_openai_semantics.py`
+- Modify: `code/trec_rag/experiments/organizer_pi/event_trace.py`
+- Modify: `code/trec_rag/tracing/phoenix_export.py`
+- Modify: `code/tests/experiments/organizer_pi/test_event_trace.py`
+- Modify: `code/tests/tracing/test_phoenix_export.py`
 
 **Interfaces:**
-- Consumes: immutable `SpanSpec` input/output values produced by `pi_event_trace`.
+- Consumes: immutable `SpanSpec` input/output values produced by `trec_rag.experiments.organizer_pi.event_trace`.
 - Produces: `piika_tool_schemas() -> tuple[Mapping[str, object], ...]`, `openai_request_envelope(spec: SpanSpec) -> Mapping[str, object]`, `openai_response_envelope(spec: SpanSpec) -> Mapping[str, object]`, and `openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]`.
 - `phoenix_trace_export._export_span` uses OpenAI envelopes for LLM `input.value`/`output.value` and keeps strict JSON copies under `pi.native.input_json` and `pi.native.output_json`.
 
@@ -71,7 +71,7 @@ Add separate tests for parallel tool calls, reasoning plus tool calls, scalar to
 Run:
 
 ```bash
-.venv/bin/python -m pytest code/tests/test_openai_trace_semantics.py -q
+.venv/bin/python -m pytest code/tests/tracing/test_openai_semantics.py -q
 ```
 
 Expected: collection or assertion failures because the adapter and OpenAI-shaped attributes do not exist.
@@ -107,14 +107,14 @@ For the fixed fixture, assert exactly two request messages containing the byte-e
 Run:
 
 ```bash
-.venv/bin/python -m pytest code/tests/test_openai_trace_semantics.py -q
+.venv/bin/python -m pytest code/tests/tracing/test_openai_semantics.py -q
 ```
 
 Expected: failures specifically naming missing OpenAI request/response envelopes.
 
 - [ ] **Step 5: Implement the pure adapter**
 
-Implement these boundaries in `openai_trace_semantics.py`:
+Implement these boundaries in `trec_rag.tracing.openai_semantics`:
 
 ```python
 def piika_tool_schemas() -> tuple[Mapping[str, object], ...]: ...
@@ -128,9 +128,9 @@ The schemas must encode the organizer source contracts for this captured `pyseri
 
 - [ ] **Step 6: Connect trace topology and exporter**
 
-In `pi_event_trace.py`, change the two baseline roots from `CHAIN` to `AGENT`, attach `piika_tool_schemas()` to each Pi LLM input, and record `pi.system_prompt.captured=False`. Do not add a system message.
+In `trec_rag.experiments.organizer_pi.event_trace`, change the two baseline roots from `CHAIN` to `AGENT`, attach `piika_tool_schemas()` to each Pi LLM input, and record `pi.system_prompt.captured=False`. Do not add a system message.
 
-In `phoenix_trace_export.py`, delegate LLM semantic attributes to `openai_llm_attributes`. For LLM spans only, serialize `openai_request_envelope` and `openai_response_envelope` into generic input/output fields, while retaining the original strict JSON under `pi.native.input_json` and `pi.native.output_json`. Non-LLM payload behavior remains unchanged.
+In `trec_rag.tracing.phoenix_export`, delegate LLM semantic attributes to `openai_llm_attributes`. For LLM spans only, serialize `openai_request_envelope` and `openai_response_envelope` into generic input/output fields, while retaining the original strict JSON under `pi.native.input_json` and `pi.native.output_json`. Non-LLM payload behavior remains unchanged.
 
 - [ ] **Step 7: Run focused tests and verify GREEN**
 
@@ -138,10 +138,10 @@ Run:
 
 ```bash
 .venv/bin/python -m pytest \
-  code/tests/test_openai_trace_semantics.py \
-  code/tests/test_phoenix_trace_export.py \
-  code/tests/test_pi_event_trace.py \
-  code/tests/test_organizer_pi_trace.py -q
+  code/tests/tracing/test_openai_semantics.py \
+  code/tests/tracing/test_phoenix_export.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py \
+  code/tests/experiments/organizer_pi/test_cli.py -q
 ```
 
 Expected: all tests pass with no warnings.
@@ -153,9 +153,9 @@ Rebuild both bundles to temporary ignored paths and assert: Pi has one AGENT roo
 - [ ] **Step 9: Commit**
 
 ```bash
-git add code/trec_rag/openai_trace_semantics.py code/tests/test_openai_trace_semantics.py \
-  code/trec_rag/pi_event_trace.py code/trec_rag/phoenix_trace_export.py \
-  code/tests/test_pi_event_trace.py code/tests/test_phoenix_trace_export.py
+git add code/trec_rag/tracing/openai_semantics.py code/tests/tracing/test_openai_semantics.py \
+  code/trec_rag/experiments/organizer_pi/event_trace.py code/trec_rag/tracing/phoenix_export.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py code/tests/tracing/test_phoenix_export.py
 git commit -m "match OpenAI Phoenix trace semantics"
 ```
 
