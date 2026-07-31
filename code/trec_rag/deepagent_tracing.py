@@ -295,8 +295,18 @@ class _AgentSpan(_SafeSpan):
         {
             "agent_completed",
             "search_budget_exhausted",
+            "budget_exhausted",
             "coverage_complete",
             "evidence_saturated",
+        }
+    )
+    _BUDGET_STOP_CODES = frozenset(
+        {
+            "HARD_DEADLINE_REACHED",
+            "TASK_BUDGET_EXHAUSTED",
+            "ROUND_BUDGET_EXHAUSTED",
+            "RETRIEVAL_BUDGET_EXHAUSTED",
+            "NO_PROGRESS_STOP",
         }
     )
 
@@ -312,6 +322,10 @@ class _AgentSpan(_SafeSpan):
         unresolved_need_count: int,
         nugget_count: int,
         action_count: int,
+        researcher_invocation_count: int,
+        research_round_count: int,
+        retrieval_call_count: int,
+        budget_stop_code: str | None,
     ) -> None:
         ids = _validated_strings(
             "fused_document_ids",
@@ -345,12 +359,26 @@ class _AgentSpan(_SafeSpan):
             ),
             "nugget_count": _non_negative_integer("nugget_count", nugget_count),
             "action_count": _non_negative_integer("action_count", action_count),
+            "researcher_invocation_count": _non_negative_integer(
+                "researcher_invocation_count", researcher_invocation_count
+            ),
+            "research_round_count": _non_negative_integer(
+                "research_round_count", research_round_count
+            ),
+            "retrieval_call_count": _non_negative_integer(
+                "retrieval_call_count", retrieval_call_count
+            ),
         }
+        if budget_stop_code is not None and budget_stop_code not in self._BUDGET_STOP_CODES:
+            raise ValueError("budget_stop_code is not safe for retrieval tracing")
         self._set("retrieval.fused_document_ids", ids)
         self._set("retrieval.stopping_reason", stopping_reason)
         self._set("coverage.state_hash", coverage_state_hash)
         for name, count in counts.items():
-            self._set(f"coverage.{name}", count)
+            prefix = "deepagent" if name.startswith(("researcher_", "research_", "retrieval_")) else "coverage"
+            self._set(f"{prefix}.{name}", count)
+        if budget_stop_code is not None:
+            self._set("deepagent.budget_stop_code", budget_stop_code)
 
 
 def _normalize_otlp_http_endpoint(endpoint: str) -> str:

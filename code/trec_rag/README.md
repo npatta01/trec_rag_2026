@@ -192,27 +192,66 @@ Inputs and configuration:
   the OpenRouter client with `max_retries=0`; it does not silently retry model,
   Pyserini, or Phoenix calls.
 
-The SDK first retrieves the untouched narrative, then gives the agent at most
-three targeted follow-up searches. Each search returns at most ten ClimbMix
-candidates. Results are document-ID deduplicated with deterministic reciprocal
-rank fusion (RRF, `k=60`) and return at most twenty candidates; raw BM25 scores
-from different queries are never compared. `AgentRetrievalResult` contains the
-input `narrative`, completed `searches` (`AgentSearch` records), fused
-`candidates` (`RankedCandidate` records with per-search provenance), the
-agent's `rationale`, a `stopping_reason`, immutable `coverage_report`, and
-immutable `trace_flush_succeeded`. Inspect the coverage report through the
-Python SDK when deciding whether the evidence is ready for a downstream draft:
+The SDK first retrieves the untouched narrative deterministically, then the
+main coordinator delegates bounded research tasks. Each ClimbMix search returns
+at most ten candidates; results are document-ID deduplicated with deterministic
+reciprocal-rank fusion (RRF, `k=60`) and return at most twenty candidates. Raw
+BM25 scores from different queries are never compared.
+
+| Role | Available capabilities | Deliberately unavailable |
+| --- | --- | --- |
+| Main coordinator | `task`, compact retrieval-state read/update, round completion, `read_file` for automatic spill | Direct search/snippet tools, recursive general-purpose subagents, filesystem mutation, `write_todos` |
+| Researcher | ClimbMix search, bounded snippet extraction, compact state read, `read_file` for automatic spill | `task`, semantic state updates, filesystem mutation, `write_todos` |
+
+There is one restricted `researcher` subagent type and no default
+general-purpose subagent. `write_todos` is intentionally not installed: the
+need/facet/nugget state and immutable result are the retrieval workflow's
+auditable state, not a general task tracker.
+
+### Fixed researcher budget
+
+The following invocation-local limits are fixed defaults. Pass a
+`ResearchBudgetConfig` to the constructor or `from_env` only for a deliberate
+POC experiment; they are not environment variables.
+
+| Limit | Default |
+| --- | ---: |
+| Researcher invocations / research rounds / concurrent researchers | 10 / 4 / 3 |
+| Combined researcher search + snippet attempts | 100 |
+| Tool calls / searches / snippets per researcher | 20 / 8 / 16 |
+| Model calls, researcher / main coordinator | 30 / 25 |
+| Soft warning / hard admission deadline | 10 min / 30 min |
+| Consecutive no-yield calls per researcher | 3 |
+| Consecutive no-progress rounds | 2 |
+
+The original narrative is never rewritten for its deterministic first search.
+Each researcher receives compact task JSON containing its task ID, round,
+depth, motivating need IDs, and gap; it can formulate and refine its own
+queries. The coordinator merges completed evidence bundles with one semantic
+state update per batch, then closes the round. A researcher that has three
+successive retrieval calls with no novel evidence must return its bundle; two
+successive rounds with no accepted coverage progress stop further research.
+
+`AgentRetrievalResult` contains the input `narrative`, completed `searches`
+(`AgentSearch` records), fused `candidates` (`RankedCandidate` records with
+per-search provenance), the agent's `rationale`, `stopping_reason`, immutable
+`coverage_report`, immutable `budget_snapshot`, and immutable
+`trace_flush_succeeded`. Inspect the coverage and budget through the Python SDK
+when deciding whether the evidence is ready for a downstream draft:
 
 ```python
 coverage = result.coverage_report
 print(coverage.state_hash, coverage.unresolved_need_ids)
+print(result.budget_snapshot.as_dict())
 for need in coverage.needs:
     print(need.need_id, need.status, need.draft_answer)
 ```
 
 `trace_flush_succeeded` is `True` when configured tracing flushes successfully
 or tracing is disabled and no export is required; it is `False` when export
-fails. Export failure does not retry or change retrieval.
+fails. Export failure does not retry or change retrieval. Budget exhaustion is
+an honest grounded partial result: completed searches, snippets, actions, and
+coverage gaps are returned, but exhaustion never claims coverage is complete.
 
 The agent maintains three distinct stores, each with a different job:
 
@@ -314,14 +353,14 @@ boundary, unknown documents, blank queries, invalid cursors, and extraction
 failures likewise return fixed errors without internal cache, model, or path
 details.
 
-The three retrieval bounds are explicit keyword-only constructor and
+The retrieval presentation bounds are explicit keyword-only constructor and
 `from_env` options. They accept positive integers only (booleans are rejected)
 and are not environment variables:
 
 ```python
 retriever = DeepAgentRetriever.from_env(
     hits_per_search=10,
-    max_followup_searches=3,
+    max_followup_searches=8,
     fused_result_limit=20,
 )
 result = retriever.retrieve(provided_narrative)
@@ -329,9 +368,11 @@ result = retriever.retrieve(provided_narrative)
 
 `hits_per_search` controls the remote request depth and model candidate view;
 trace evidence is additionally subject to an absolute safety ceiling.
-`max_followup_searches` controls the serialized follow-up budget, and
-`fused_result_limit` controls the deterministic final RRF depth. Defaults remain
-10, 3, and 20 respectively.
+`max_followup_searches` controls the per-researcher search cap when no explicit
+`ResearchBudgetConfig` is supplied, and `fused_result_limit` controls the
+deterministic final RRF depth. Defaults are 10, 8, and 20 respectively. Run
+live retrieval or local snippet/reranker work on this ROCm host with
+`.venv/bin/python-rocm`, rather than `uv run` or an unconfigured interpreter.
 
 Phoenix tracing is optional. Search spans contain document lengths rather than
 document text. Snippet-page spans contain bounded IDs, offsets, relevance

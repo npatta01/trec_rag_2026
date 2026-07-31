@@ -2580,6 +2580,10 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
             "unresolved_need_count": 1,
             "nugget_count": 0,
             "action_count": 1,
+            "researcher_invocation_count": 1,
+            "research_round_count": 0,
+            "retrieval_call_count": 1,
+            "budget_stop_code": None,
         }
     ]
     assert tracing.flushes == 1
@@ -2686,6 +2690,9 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
         "coverage.unresolved_need_count",
         "coverage.nugget_count",
         "coverage.action_count",
+        "deepagent.researcher_invocation_count",
+        "deepagent.research_round_count",
+        "deepagent.retrieval_call_count",
     }
     assert root_span.attributes["input.value"] == (
         "private narrative" if trace_content else REDACTED_CONTENT
@@ -2702,6 +2709,9 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     assert root_span.attributes["coverage.unresolved_need_count"] == 1
     assert root_span.attributes["coverage.nugget_count"] == 0
     assert root_span.attributes["coverage.action_count"] == 1
+    assert root_span.attributes["deepagent.researcher_invocation_count"] == 1
+    assert root_span.attributes["deepagent.research_round_count"] == 0
+    assert root_span.attributes["deepagent.retrieval_call_count"] == 1
     assert [candidate.docid for candidate in result.candidates] == [
         "original-doc-1",
         "original-doc-2",

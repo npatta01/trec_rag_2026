@@ -808,3 +808,60 @@ Append the sanitized result summary, Phoenix trace identifier when available,
 elapsed time, model, package versions, exact test commands, and any remaining
 unknowns under `## Verification Evidence` in this plan. Do not record API keys,
 raw full documents, or cache contents.
+
+## Verification Evidence
+
+### Task 4 — 2026-07-30
+
+- Added bounded Phoenix root-span attributes only: researcher invocation count,
+  completed research-round count, combined retrieval-call count, and a validated
+  terminal budget stop code. The attributes contain no task payloads, queries,
+  snippets, documents, cache paths, or credentials.
+- Updated the SDK documentation with the coordinator/researcher capability
+  matrix, fixed budget defaults, query-refinement and round semantics,
+  intentional no-`write_todos` boundary, `budget_snapshot`, ROCm interpreter
+  requirement, and the grounded-partial exhaustion rule.
+- Fresh targeted verification completed with the ROCm helper:
+
+  ```console
+  $ .venv/bin/python-rocm -m pytest -q \
+      code/tests/test_deepagent_snippets.py \
+      code/tests/test_deepagent_budget.py \
+      code/tests/test_deepagent_research.py \
+      code/tests/test_deepagent_evidence.py \
+      code/tests/test_deepagent_retrieval.py \
+      code/tests/test_deepagent_tracing.py
+  272 passed in 9.78s
+
+  $ /home/npatta01/anaconda3/bin/ruff check \
+      code/trec_rag/deepagent_snippets.py \
+      code/trec_rag/deepagent_budget.py \
+      code/trec_rag/deepagent_research.py \
+      code/trec_rag/deepagent_evidence.py \
+      code/trec_rag/deepagent_retrieval.py \
+      code/trec_rag/deepagent_tracing.py \
+      code/tests/test_deepagent_snippets.py \
+      code/tests/test_deepagent_budget.py \
+      code/tests/test_deepagent_research.py \
+      code/tests/test_deepagent_evidence.py \
+      code/tests/test_deepagent_retrieval.py \
+      code/tests/test_deepagent_tracing.py
+  All checks passed!
+  ```
+
+- `git diff --check` completed with no output.
+- The normal topic-224 SDK run was started once through `from_env` with the
+  configured OpenRouter, ClimbMix, and Phoenix integration. Its practical outer
+  cap interrupted it safely at `retrieve` after 718.296 seconds. It produced no
+  result, so no topic outcome, trace flush status, or Phoenix trace identifier
+  is available. It was not retried.
+- The specified tiny-budget topic-224 diagnostic was started once with the
+  requested `ResearchBudgetConfig` and a separate 180-second outer cap. It was
+  likewise interrupted safely at `retrieve` after 178.388 seconds. Therefore
+  live graceful-budget termination remains unverified; the deterministic budget
+  and retrieval regression contracts above remain the available evidence.
+- Non-secret local configuration evidence: model
+  `openrouter:deepseek/deepseek-v4-flash`; `deepagents` 0.7.0; `langchain`
+  1.3.14; `langchain-openrouter` 0.2.7; `arize-phoenix-client` 2.13.0;
+  `arize-phoenix-otel` 0.16.1; `openinference-instrumentation-langchain`
+  0.1.67.

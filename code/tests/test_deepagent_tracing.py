@@ -211,6 +211,10 @@ def test_agent_trace_exports_only_bounded_coverage_summary(
             unresolved_need_count=1,
             nugget_count=14,
             action_count=19,
+            researcher_invocation_count=4,
+            research_round_count=2,
+            retrieval_call_count=11,
+            budget_stop_code="NO_PROGRESS_STOP",
         )
 
     exported = span_exporter.get_finished_spans()[0]
@@ -221,6 +225,10 @@ def test_agent_trace_exports_only_bounded_coverage_summary(
     assert exported.attributes["coverage.unresolved_need_count"] == 1
     assert exported.attributes["coverage.nugget_count"] == 14
     assert exported.attributes["coverage.action_count"] == 19
+    assert exported.attributes["deepagent.researcher_invocation_count"] == 4
+    assert exported.attributes["deepagent.research_round_count"] == 2
+    assert exported.attributes["deepagent.retrieval_call_count"] == 11
+    assert exported.attributes["deepagent.budget_stop_code"] == "NO_PROGRESS_STOP"
     assert not {
         "coverage.narrative",
         "coverage.nuggets",
@@ -332,6 +340,10 @@ def test_agent_trace_rejects_invalid_coverage_summary(
         "unresolved_need_count": 1,
         "nugget_count": 0,
         "action_count": 0,
+        "researcher_invocation_count": 0,
+        "research_round_count": 0,
+        "retrieval_call_count": 0,
+        "budget_stop_code": None,
     }
     evidence[field] = value
 

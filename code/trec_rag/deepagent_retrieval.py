@@ -275,6 +275,10 @@ class _AgentTraceSpan(Protocol):
         unresolved_need_count: int,
         nugget_count: int,
         action_count: int,
+        researcher_invocation_count: int,
+        research_round_count: int,
+        retrieval_call_count: int,
+        budget_stop_code: str | None,
     ) -> None: ...
 
 
@@ -1191,6 +1195,8 @@ class DeepAgentRetriever:
                             "completion": "coverage_complete",
                             "saturation": "evidence_saturated",
                         }.get(stopping_reason, stopping_reason)
+                        if budget_snapshot.stop_code is not None:
+                            trace_stopping_reason = "budget_exhausted"
                         agent_span.record_result(
                             fused_document_ids=tuple(
                                 candidate.docid
@@ -1212,6 +1218,16 @@ class DeepAgentRetriever:
                             ),
                             nugget_count=len(coverage_report.nuggets),
                             action_count=len(coverage_report.actions),
+                            researcher_invocation_count=(
+                                self._budget_config.max_researcher_invocations
+                                - budget_snapshot.remaining_researchers
+                            ),
+                            research_round_count=budget_snapshot.completed_rounds,
+                            retrieval_call_count=(
+                                self._budget_config.max_retrieval_calls
+                                - budget_snapshot.remaining_retrieval_calls
+                            ),
+                            budget_stop_code=budget_snapshot.stop_code,
                         )
                     except Exception:
                         pass
