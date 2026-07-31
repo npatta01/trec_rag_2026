@@ -11,6 +11,7 @@ from trec_rag.experiments.organizer_pi.event_trace import (
     build_fixed_trace,
     build_piika_trace,
     load_pi_events,
+    piika_tool_schemas,
 )
 from trec_rag.tracing.models import read_trace_bundle, write_trace_bundle
 
@@ -32,6 +33,17 @@ def _assistant(text, timestamp, *, stop_reason="stop"):
         "stopReason": stop_reason,
         "timestamp": timestamp,
     }
+
+
+def test_piika_tool_schemas_preserve_captured_search_and_document_contract():
+    schemas = piika_tool_schemas()
+
+    assert [schema["function"]["name"] for schema in schemas] == [
+        "search",
+        "read_document",
+    ]
+    assert schemas[0]["function"]["parameters"]["required"] == ["reason", "query"]
+    assert schemas[1]["function"]["parameters"]["required"] == ["reason", "docid"]
 
 
 def test_piika_events_become_ordered_full_content_spans(tmp_path):

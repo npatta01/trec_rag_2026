@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import tomllib
 from pathlib import Path
@@ -9,6 +10,25 @@ def test_reusable_tracing_does_not_import_experiments():
     tracing_root = Path(__file__).parents[2] / "trec_rag" / "tracing"
     sources = "\n".join(path.read_text() for path in tracing_root.glob("*.py"))
     assert "trec_rag.experiments" not in sources
+
+
+def test_reusable_tracing_tests_do_not_import_experiments():
+    tracing_tests_root = Path(__file__).parent
+    experiment_imports = []
+    for path in tracing_tests_root.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                modules = [node.module]
+            elif isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            else:
+                continue
+            experiment_imports.extend(
+                module
+                for module in modules
+                if module is not None and module.startswith("trec_rag.experiments")
+            )
+    assert experiment_imports == []
 
 
 def test_reusable_trace_models_are_available_from_the_tracing_package():

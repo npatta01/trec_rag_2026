@@ -7,8 +7,23 @@ from trec_rag.tracing.openai_semantics import (
     openai_request_envelope,
     openai_response_envelope,
 )
-from trec_rag.experiments.organizer_pi.event_trace import piika_tool_schemas
 from trec_rag.tracing.models import SpanSpec
+
+
+_TOOL_SCHEMAS = (
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a record.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+)
 
 
 def _llm_span(*, input_value, output_value):
@@ -48,12 +63,8 @@ def _tool_turn_spec():
                         {
                             "type": "toolCall",
                             "id": "call-1",
-                            "name": "search",
-                            "arguments": {
-                                "reason": "find evidence",
-                                "query": "evidence",
-                                "hits": 8,
-                            },
+                            "name": "lookup",
+                            "arguments": {"query": "evidence"},
                         }
                     ],
                 },
@@ -63,22 +74,22 @@ def _tool_turn_spec():
                     "content": [{"type": "text", "text": "ranked results"}],
                 },
             ],
-            "tools": list(piika_tool_schemas()),
+            "tools": list(_TOOL_SCHEMAS),
         },
         output_value=_assistant_payload(
             content=[
                 {
                     "type": "toolCall",
                     "id": "call-2",
-                    "name": "read_document",
-                    "arguments": {"reason": "verify", "docid": "d1"},
+                    "name": "lookup",
+                    "arguments": {"query": "details"},
                 }
             ]
         ),
     )
 
 
-def test_pi_tool_turn_matches_openai_message_and_tool_result_contract():
+def test_tool_turn_matches_openai_message_and_tool_result_contract():
     attrs = openai_llm_attributes(_tool_turn_spec())
 
     assert attrs["llm.system"] == "openai"
@@ -87,11 +98,7 @@ def test_pi_tool_turn_matches_openai_message_and_tool_result_contract():
     assert attrs["llm.input_messages.2.message.role"] == "tool"
     assert attrs["llm.input_messages.2.message.tool_call_id"] == "call-1"
     assert attrs["llm.input_messages.2.message.content"] == "ranked results"
-    assert json.loads(attrs["llm.tools.0.tool.json_schema"])["function"]["name"] == "search"
-    assert (
-        json.loads(attrs["llm.tools.1.tool.json_schema"])["function"]["name"]
-        == "read_document"
-    )
+    assert json.loads(attrs["llm.tools.0.tool.json_schema"])["function"]["name"] == "lookup"
 
 
 def test_parallel_tool_calls_and_ordered_reasoning_are_preserved():
@@ -103,15 +110,15 @@ def test_parallel_tool_calls_and_ordered_reasoning_are_preserved():
                 {
                     "type": "toolCall",
                     "id": "call-a",
-                    "name": "search",
-                    "arguments": {"query": "a", "reason": "first"},
+                    "name": "lookup",
+                    "arguments": {"query": "a"},
                 },
                 {"type": "thinking", "thinking": "second reason"},
                 {
                     "type": "toolCall",
                     "id": "call-b",
-                    "name": "search",
-                    "arguments": {"query": "b", "reason": "second"},
+                    "name": "lookup",
+                    "arguments": {"query": "b"},
                 },
             ]
         ),
@@ -200,7 +207,7 @@ def test_provider_identity_and_known_invocation_parameters_preserve_provenance()
     }
 
 
-def test_pi_request_has_no_fabricated_system_message():
+def test_native_request_has_no_fabricated_system_message():
     request = openai_request_envelope(_tool_turn_spec())
     assert [message["role"] for message in request["messages"]] == [
         "user",
@@ -223,15 +230,15 @@ def test_openai_request_and_response_envelopes_match_chat_completion_shapes():
                         "id": "call-1",
                         "type": "function",
                         "function": {
-                            "name": "search",
-                            "arguments": '{"hits":8,"query":"evidence","reason":"find evidence"}',
+                            "name": "lookup",
+                            "arguments": '{"query":"evidence"}',
                         },
                     }
                 ],
             },
             {"role": "tool", "tool_call_id": "call-1", "content": "ranked results"},
         ],
-        "tools": list(piika_tool_schemas()),
+        "tools": list(_TOOL_SCHEMAS),
     }
     response = openai_response_envelope(spec)
     assert response["id"] == "resp-1"
