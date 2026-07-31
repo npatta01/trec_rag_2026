@@ -73,6 +73,17 @@ declared effective from claim-count reduction alone.
 - Do not write snippets, raw trace payloads, credentials, or cloud responses to
   the repository.
 
+## Approved grounded-ledger continuation
+
+The raw researcher-bundle preflight found two quote/snippet mismatches and
+therefore made zero hosted calls. The approved continuation changes only path
+B's input boundary: use the six mechanically accepted, grounded ledger nuggets
+from the same trace as the provisional batch. This tests centralized
+canonicalization after grounding rather than trusting researcher-authored
+coordinates. Keep the same evidence aliases, one-call limit, model, timeout,
+sanitized output, and no-persistence policy. Do not repair, infer, or silently
+accept the two invalid researcher citations.
+
 ## Scope exclusions
 
 - Entailment verification.

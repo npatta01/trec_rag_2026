@@ -66,6 +66,26 @@ canonical-nugget contract, OpenRouter DeepSeek V4 Flash, standard-library JSON.
 - [ ] Re-run a no-cloud syntax/import check, inspect the diff and git status,
   and commit only the probe and plan.
 
+## Task 3: Grounded-Ledger Continuation
+
+**Files:**
+- Modify: `code/trec_rag/post_batch_nuggetizer_probe.py`
+- Modify: `docs/superpowers/plans/2026-07-31-deepagent-post-batch-nuggetizer-probe.md`
+
+- [ ] Add an explicit `--input-source ledger` mode that builds the canonical
+  request from the same trace's six accepted ledger nuggets. Preserve
+  `--input-source researcher` as the failing diagnostic path; never repair or
+  accept its two invalid citations.
+- [ ] Dry-run ledger mode and require 5 bundles, 6 inputs, 6 baseline nuggets,
+  16 snippets, zero grounding failures, and zero hosted calls.
+- [ ] Source the existing OpenRouter environment and run ledger mode once with
+  a 150-second outer process limit. Require at most one adapter transport call;
+  do not retry.
+- [ ] Inspect the sanitized mapping for claim loss, evidence orphans, exact
+  duplicates, and materially incorrect merges. Record the result below.
+- [ ] Run a fresh syntax/import check and `git diff --check`, then commit only
+  the approved POC files.
+
 ## Verification Evidence
 
 - Dry-run: 5 bundles, 6 provisional nuggets, 6 baseline nuggets, 16 snippets,
