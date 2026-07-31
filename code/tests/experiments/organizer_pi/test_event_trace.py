@@ -438,6 +438,53 @@ def test_fixed_trace_keeps_100_ordered_documents_and_complete_prompts(tmp_path):
     assert not any(child.kind == "LLM" for child in generation.children)
 
 
+def test_fixed_trace_marks_every_derived_interval_as_reconstructed(tmp_path):
+    native_timestamp_ms = 1_800_000_000_000
+    aborted = _assistant(
+        "partial attempt", native_timestamp_ms, stop_reason="aborted"
+    )
+    final = _assistant("fixed final", native_timestamp_ms + 100)
+    events = load_pi_events(
+        _write_jsonl(
+            tmp_path / "fixed-native-timing.jsonl",
+            [
+                {
+                    "type": "message_end",
+                    "message": aborted,
+                },
+                {"type": "message_end", "message": final},
+                {
+                    "type": "extension_error",
+                    "timestamp": native_timestamp_ms + 200,
+                    "error": "post-generation failure",
+                },
+            ],
+        )
+    )
+    assert events.timing_reconstructed is False
+
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=events,
+        run_record={"status": "completed"},
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    evidence, prompts, generation, validation = bundle.root.children
+    assert generation.start_ns == native_timestamp_ms * 1_000_000
+    attempt, failure = generation.children
+    assert attempt.start_ns == native_timestamp_ms * 1_000_000
+    assert failure.start_ns == (native_timestamp_ms + 200) * 1_000_000
+    assert bundle.root.attributes["trace.timing_reconstructed"] is True
+    assert all(
+        span.attributes["trace.timing_reconstructed"] is True
+        for span in (evidence, prompts, generation, validation, attempt, failure)
+    )
+
+
 def _walk_spans(span):
     yield span
     for child in span.children:

@@ -16,16 +16,10 @@ import subprocess
 import sys
 import tempfile
 from types import ModuleType
-from typing import BinaryIO, Iterator
+from typing import TYPE_CHECKING, BinaryIO, Iterator
 import zipfile
 
 from trec_rag.experiments.organizer_pi.inputs import OrganizerTopic, select_topic
-from trec_rag.tracing.phoenix_export import (
-    ExportReceipt,
-    PhoenixSettings,
-    assert_no_secrets,
-    export_trace_bundle,
-)
 from trec_rag.experiments.organizer_pi.event_trace import (
     DEFAULT_PROJECT_NAME,
     build_fixed_trace,
@@ -39,6 +33,9 @@ from trec_rag.tracing.models import (
     write_trace_bundle,
 )
 from trec_rag.repo_env import find_repo_root, load_repo_env
+
+if TYPE_CHECKING:
+    from trec_rag.tracing.phoenix_export import ExportReceipt, PhoenixSettings
 
 
 FIXED_DOCUMENT_COUNT = 100
@@ -118,6 +115,10 @@ def _metadata(value: object) -> Mapping[str, object] | None:
     return metadata if isinstance(metadata, Mapping) else None
 
 
+def _is_explicit_failure_record(record: Mapping[str, object]) -> bool:
+    return record.get("status") in {"failed", "error"}
+
+
 def _validate_output_identity(
     record: Mapping[str, object], topic: OrganizerTopic, *, baseline: str
 ) -> None:
@@ -131,11 +132,11 @@ def _validate_output_identity(
             raise ValueError("output record query_id does not match selected topic")
         metadata = _metadata(output) or _metadata(record)
     if metadata is None:
-        if baseline == "ragnarok-fixed":
-            if record.get("query_id") == topic.topic_id and record.get("status") != "completed":
-                return
-            raise ValueError("fixed output record is missing topic identity metadata")
-        return
+        if _is_explicit_failure_record(record):
+            return
+        raise ValueError(
+            f"{baseline} completed output record is missing valid topic identity metadata"
+        )
     if metadata.get("narrative_id") != topic.topic_id:
         raise ValueError("output record narrative_id does not match selected topic")
     if metadata.get("narrative") != topic.narrative:
@@ -300,6 +301,36 @@ def _verify_native_user_prompt(events: Sequence[Mapping[str, object]], rendered:
         raise ValueError("rendered organizer prompt does not match native Pi user event")
 
 
+def _has_explicit_native_failure(
+    events: Sequence[Mapping[str, object]],
+) -> bool:
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "extension_error":
+            return True
+        if event_type == "auto_retry_end" and (
+            event.get("success") is False
+            or event.get("error") is not None
+            or event.get("finalError") is not None
+        ):
+            return True
+    return False
+
+
+def _has_native_user_prompt(events: Sequence[Mapping[str, object]]) -> bool:
+    for event in events:
+        if event.get("type") not in {"message_start", "message_end"}:
+            continue
+        message = event.get("message")
+        if (
+            isinstance(message, Mapping)
+            and message.get("role") == "user"
+            and _message_text(message) is not None
+        ):
+            return True
+    return False
+
+
 def _build_bundle(arguments: argparse.Namespace) -> TraceBundle:
     topic = select_topic(arguments.topic_tsv, arguments.topic)
     events = load_pi_events(arguments.events)
@@ -322,7 +353,12 @@ def _build_bundle(arguments: argparse.Namespace) -> TraceBundle:
     rendered = organizer.prompt(topic.narrative, docids, texts)
     if not isinstance(rendered, str):
         raise ValueError("organizer script prompt must return a string")
-    _verify_native_user_prompt(events, rendered)
+    if not (
+        _is_explicit_failure_record(record)
+        and _has_explicit_native_failure(events)
+        and not _has_native_user_prompt(events)
+    ):
+        _verify_native_user_prompt(events, rendered)
     return build_fixed_trace(
         topic=topic,
         events=events,
@@ -391,10 +427,8 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     bundle_loader: Callable[[Path], TraceBundle] = read_trace_bundle,
-    settings_loader: Callable[[], PhoenixSettings] = PhoenixSettings.from_env,
-    exporter: Callable[
-        [TraceBundle, PhoenixSettings], ExportReceipt
-    ] = export_trace_bundle,
+    settings_loader: Callable[[], PhoenixSettings] | None = None,
+    exporter: Callable[[TraceBundle, PhoenixSettings], ExportReceipt] | None = None,
     ignored_checker: Callable[[Path], bool] | None = None,
     environment_loader: Callable[[], None] = _load_repository_environment,
     credential_loader: Callable[[PhoenixSettings], Sequence[object]] = _credential_values,
@@ -423,16 +457,29 @@ def main(
             write_trace_bundle(_build_bundle(arguments), arguments.bundle)
             return 0
 
+        from trec_rag.tracing.phoenix_export import (
+            ExportReceipt,
+            PhoenixSettings,
+            assert_no_secrets,
+            export_trace_bundle,
+        )
+
         _require_ignored(arguments.bundle, checker)
         _require_ignored(arguments.receipt, checker)
         environment_loader()
-        settings = settings_loader()
+        settings = (
+            settings_loader() if settings_loader is not None else PhoenixSettings.from_env()
+        )
         bundle = bundle_loader(arguments.bundle)
         if bundle.project_name != settings.project_name:
             raise ValueError("bundle project does not match PHOENIX_PROJECT_NAME")
         assert_no_secrets(bundle, credential_loader(settings))
         with _staged_atomic_json(arguments.receipt) as temporary_receipt:
-            receipt = exporter(bundle, settings)
+            receipt = (
+                exporter(bundle, settings)
+                if exporter is not None
+                else export_trace_bundle(bundle, settings)
+            )
             if not isinstance(receipt, ExportReceipt):
                 raise TypeError("exporter must return ExportReceipt")
             _write_json(temporary_receipt, asdict(receipt))

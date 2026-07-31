@@ -4,6 +4,9 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -225,6 +228,67 @@ def _bundle(path: Path):
     return bundle
 
 
+def _core_cli_environment() -> tuple[Path, dict[str, str]]:
+    repo_root = Path(__file__).resolve().parents[4]
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(repo_root / "code")
+    return repo_root, environment
+
+
+def test_core_only_cli_help_does_not_import_observability_dependencies():
+    repo_root, environment = _core_cli_environment()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-m",
+            "trec_rag.experiments.organizer_pi.cli",
+            "--help",
+        ],
+        cwd=repo_root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "{build,export}" in completed.stdout
+
+
+def test_core_only_cli_build_writes_bundle_without_observability_dependencies(
+    tmp_path,
+):
+    repo_root, environment = _core_cli_environment()
+    output_root = repo_root / "outputs" / f".core-cli-{tmp_path.name}"
+    bundle_path = output_root / "trace.json"
+    args = _piika_args(tmp_path)
+    args[args.index("--bundle") + 1] = str(bundle_path)
+
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-m",
+                "trec_rag.experiments.organizer_pi.cli",
+                *args,
+            ],
+            cwd=repo_root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+        bundle = read_trace_bundle(bundle_path)
+        assert bundle.baseline == "piika-agentic"
+        assert bundle.topic_id == TOPIC
+    finally:
+        shutil.rmtree(output_root, ignore_errors=True)
+
+
 def test_build_piika_writes_durable_bundle_without_loading_phoenix(tmp_path):
     def unexpected_settings():
         raise AssertionError("build must not load Phoenix settings")
@@ -290,6 +354,43 @@ def test_build_rejects_output_record_for_a_different_topic(tmp_path):
 
     assert main(args, ignored_checker=_ignored) == 1
     assert not (tmp_path / "trace.json").exists()
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"status": "completed", "query_id": TOPIC},
+        {
+            "status": "completed",
+            "query_id": TOPIC,
+            "trec_rag_output": {"metadata": "malformed"},
+        },
+    ],
+    ids=["missing-output", "malformed-metadata"],
+)
+def test_piika_build_rejects_completed_record_without_valid_result_metadata(
+    tmp_path, record
+):
+    args = _piika_args(tmp_path)
+    _write_json(tmp_path / "record.json", record)
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "trace.json").exists()
+
+
+def test_piika_build_retains_explicit_failure_without_result_metadata(tmp_path):
+    args = _piika_args(tmp_path)
+    failure = {
+        "status": "failed",
+        "query_id": TOPIC,
+        "error": "agent failed before producing a result",
+    }
+    _write_json(tmp_path / "record.json", failure)
+
+    assert main(args, ignored_checker=_ignored) == 0
+    bundle = read_trace_bundle(tmp_path / "trace.json")
+    assert bundle.root.status == "ERROR"
+    assert bundle.root.children[-1].output_value == failure
 
 
 def test_fixed_build_rejects_output_narrative_mismatch(tmp_path):
@@ -376,9 +477,66 @@ def test_fixed_build_accepts_pi_file_envelope_around_exact_native_prompt(tmp_pat
     assert (tmp_path / "fixed-trace.json").is_file()
 
 
-def test_fixed_build_rejects_events_without_a_native_user_prompt(tmp_path):
+def test_completed_fixed_build_rejects_events_without_a_native_user_prompt(tmp_path):
     args = _fixed_args(tmp_path)
     _write_events(tmp_path / "fixed-events.jsonl")
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+def test_fixed_build_retains_early_native_failure_without_a_user_prompt(tmp_path):
+    args = _fixed_args(tmp_path)
+    failure = {
+        "status": "failed",
+        "query_id": TOPIC,
+        "error": "extension failed before prompt emission",
+    }
+    _write_json(tmp_path / "fixed-record.json", failure)
+    (tmp_path / "fixed-events.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "extension_error",
+                "timestamp": 1_800_000_000_000,
+                "error": "extension failed before prompt emission",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(args, ignored_checker=_ignored) == 0
+    bundle = read_trace_bundle(tmp_path / "fixed-trace.json")
+    assert bundle.root.status == "ERROR"
+    assert bundle.root.children[2].status == "ERROR"
+    assert bundle.root.children[-1].status == "ERROR"
+    assert bundle.root.children[-1].output_value == failure
+
+
+def test_failed_fixed_build_still_rejects_a_wrong_native_user_prompt(tmp_path):
+    args = _fixed_args(tmp_path)
+    _write_json(
+        tmp_path / "fixed-record.json",
+        {
+            "status": "failed",
+            "query_id": TOPIC,
+            "error": "extension failed after prompt emission",
+        },
+    )
+    event_path = _write_events(
+        tmp_path / "fixed-events.jsonl", user_prompt="wrong native prompt"
+    )
+    with event_path.open("a", encoding="utf-8") as output:
+        output.write(
+            json.dumps(
+                {
+                    "type": "extension_error",
+                    "timestamp": 1_800_000_000_200,
+                    "error": "extension failed after prompt emission",
+                }
+            )
+            + "\n"
+        )
 
     assert main(args, ignored_checker=_ignored) == 1
     assert not (tmp_path / "fixed-trace.json").exists()

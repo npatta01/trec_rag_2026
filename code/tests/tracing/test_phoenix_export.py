@@ -330,6 +330,26 @@ class _ProviderFactory:
         return self.provider
 
 
+def test_export_rejects_project_mismatch_before_constructing_provider():
+    bundle = TraceBundle(
+        project_name="bundle-project",
+        session_id="shared-session",
+        topic_id="rag2026-1",
+        baseline="piika-agentic",
+        root=_span(),
+    )
+    provider = _FakeProvider()
+    factory = _ProviderFactory(provider)
+
+    with pytest.raises(ValueError, match="bundle project does not match settings"):
+        export_trace_bundle(bundle, _settings(), provider_factory=factory)
+
+    assert factory.calls == []
+    assert provider.tracer.spans == []
+    assert provider.flush_calls == 0
+    assert provider.shutdown_calls == 0
+
+
 def test_export_recursively_preserves_trace_semantics_and_returns_public_ids():
     grandchild = _span(
         name="generation",

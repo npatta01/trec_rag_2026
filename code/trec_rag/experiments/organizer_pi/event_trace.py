@@ -14,8 +14,6 @@ from trec_rag.tracing.models import (
     SpanSpec,
     TraceBundle,
     _strict_json_loads,
-    read_trace_bundle,
-    write_trace_bundle,
 )
 
 
@@ -583,6 +581,7 @@ def _validation_span(
     topic: OrganizerTopic,
     run_record: Mapping[str, object],
     timestamp_ns: int,
+    timing_reconstructed: bool = False,
 ) -> SpanSpec:
     completed = run_record.get("status") == "completed"
     diagnostic = None if completed else _diagnostic(run_record)
@@ -593,7 +592,14 @@ def _validation_span(
         kind="CHAIN",
         start_ns=timestamp_ns,
         end_ns=timestamp_ns + 1,
-        attributes={"organizer.run.status": str(run_record.get("status", "missing"))},
+        attributes={
+            "organizer.run.status": str(run_record.get("status", "missing")),
+            **(
+                {"trace.timing_reconstructed": True}
+                if timing_reconstructed
+                else {}
+            ),
+        },
         input_value={"topic_id": topic.topic_id},
         output_value=dict(run_record),
         status="OK" if completed else "ERROR",
@@ -836,7 +842,13 @@ def build_fixed_trace(
     )
     assistant_spans = [span for _, span in native_spans if span.kind == "LLM"]
     failure_children = [
-        span
+        replace(
+            span,
+            attributes={
+                **span.attributes,
+                "trace.timing_reconstructed": True,
+            },
+        )
         for _, span in native_spans
         if span.kind != "LLM" and span.status == "ERROR"
     ]
@@ -845,7 +857,11 @@ def build_fixed_trace(
             span,
             name="Pi assistant attempt",
             kind="CHAIN",
-            attributes={**span.attributes, "pi.original.span.kind": "LLM"},
+            attributes={
+                **span.attributes,
+                "pi.original.span.kind": "LLM",
+                "trace.timing_reconstructed": True,
+            },
         )
         for span in assistant_spans[:-1]
     ]
@@ -887,7 +903,10 @@ def build_fixed_trace(
         kind="RETRIEVER",
         start_ns=evidence_start,
         end_ns=evidence_start + 1,
-        attributes={"retrieval.document_count": len(documents)},
+        attributes={
+            "retrieval.document_count": len(documents),
+            "trace.timing_reconstructed": True,
+        },
         input_value={"topic_id": topic.topic_id, "narrative": topic.narrative},
         output_value={"documents": [dict(document) for document in documents]},
         status="OK",
@@ -897,7 +916,10 @@ def build_fixed_trace(
         kind="CHAIN",
         start_ns=evidence.end_ns,
         end_ns=max(evidence.end_ns + 1, generation_start),
-        attributes={"content.capture": "full"},
+        attributes={
+            "content.capture": "full",
+            "trace.timing_reconstructed": True,
+        },
         input_value={"documents": [dict(document) for document in documents]},
         output_value={"system_prompt": system_prompt, "user_prompt": user_prompt},
         status="OK",
@@ -912,6 +934,7 @@ def build_fixed_trace(
     generation_attributes: dict[str, object] = {
         "pi.event.end_type": "message_end",
         "pi.assistant.attempt_count": len(assistant_spans),
+        "trace.timing_reconstructed": True,
         "trace.end_time.source": (
             assistant_spans[-1].attributes.get("trace.end_time.source", "unknown")
             if assistant_spans
@@ -942,6 +965,7 @@ def build_fixed_trace(
         topic=topic,
         run_record=run_record,
         timestamp_ns=max(observed_start_ns, observed_end_ns - 1),
+        timing_reconstructed=True,
     )
     children = [evidence, prompts, generation, validation]
     return TraceBundle(
@@ -953,7 +977,7 @@ def build_fixed_trace(
             name="Ragnarok fixed-retrieval baseline",
             topic=topic,
             children=children,
-            reconstructed=reconstructed,
+            reconstructed=True,
             unknown_count=unknown_count,
             observed_start_ns=observed_start_ns,
             observed_end_ns=observed_end_ns,
@@ -965,11 +989,7 @@ def build_fixed_trace(
 
 __all__ = [
     "LoadedPiEvents",
-    "SpanSpec",
-    "TraceBundle",
     "build_fixed_trace",
     "build_piika_trace",
     "load_pi_events",
-    "read_trace_bundle",
-    "write_trace_bundle",
 ]

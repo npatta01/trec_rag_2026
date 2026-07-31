@@ -361,6 +361,8 @@ def export_trace_bundle(
         raise TypeError("bundle must be a TraceBundle")
     if not isinstance(settings, PhoenixSettings):
         raise TypeError("settings must be PhoenixSettings")
+    if bundle.project_name != settings.project_name:
+        raise ValueError("bundle project does not match settings project")
     assert_no_secrets(bundle, (settings.api_key,))
 
     if provider_factory is None:
@@ -368,7 +370,7 @@ def export_trace_bundle(
 
         provider_factory = register
     provider = provider_factory(
-        project_name=settings.project_name,
+        project_name=bundle.project_name,
         endpoint=settings.collector_endpoint,
         api_key=settings.api_key.reveal(),
         batch=False,
@@ -407,7 +409,7 @@ def export_trace_bundle(
 
     context = root_span.get_span_context()
     return ExportReceipt(
-        project_name=settings.project_name,
+        project_name=bundle.project_name,
         trace_id=f"{context.trace_id:032x}",
         root_span_id=f"{context.span_id:016x}",
         exported_span_count=exported_count,

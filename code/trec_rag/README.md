@@ -92,15 +92,18 @@ ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/
 The fixed builder streams the ZIP, retains only the selected 100 document IDs,
 and independently applies the organizer's 1,000-word cap to each document. It
 imports `SYSTEM_PROMPT` and `prompt()` from the supplied organizer script to
-reconstruct the exact prompts and rejects a mismatch with a native Pi user
-message when one is present.
+reconstruct the exact prompts. Completed runs require a matching native Pi user
+message. An explicit failed run with a native failure event can still produce a
+partial error-status bundle when failure occurred before prompt emission.
 
-Export is a separate command. Put these values in the repository's ignored
-`.env` or `.env.local`; never put an API key on the command line:
+Export is a separate command and requires the optional `observability`
+dependency group (`uv sync --group observability`). Put these values in the
+repository's ignored `.env` or `.env.local`; never put an API key on the command
+line:
 
 ```text
 PHOENIX_API_KEY=<secret>
-PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com
+PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com/s/<space>
 PHOENIX_PROJECT_NAME=trec-rag-2026-pi-baselines
 ```
 
