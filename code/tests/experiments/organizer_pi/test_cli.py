@@ -8,12 +8,12 @@ import zipfile
 
 import pytest
 
-import trec_rag.organizer_pi_trace as trace_cli
-from trec_rag.organizer_pi_trace import main
+import trec_rag.experiments.organizer_pi.cli as trace_cli
+from trec_rag.experiments.organizer_pi.cli import main
 from trec_rag.tracing.phoenix_export import ExportReceipt, PhoenixSettings, SecretStr
-from trec_rag.pi_event_trace import build_piika_trace
+from trec_rag.experiments.organizer_pi.event_trace import build_piika_trace
 from trec_rag.tracing.models import read_trace_bundle, write_trace_bundle
-from trec_rag.organizer_pi_inputs import OrganizerTopic
+from trec_rag.experiments.organizer_pi.inputs import OrganizerTopic
 
 
 TOPIC = "rag2026-1"

@@ -19,14 +19,14 @@ from types import ModuleType
 from typing import BinaryIO, Iterator
 import zipfile
 
-from trec_rag.organizer_pi_inputs import OrganizerTopic, select_topic
+from trec_rag.experiments.organizer_pi.inputs import OrganizerTopic, select_topic
 from trec_rag.tracing.phoenix_export import (
     ExportReceipt,
     PhoenixSettings,
     assert_no_secrets,
     export_trace_bundle,
 )
-from trec_rag.pi_event_trace import (
+from trec_rag.experiments.organizer_pi.event_trace import (
     DEFAULT_PROJECT_NAME,
     build_fixed_trace,
     build_piika_trace,

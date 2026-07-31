@@ -6,8 +6,8 @@ from trec_rag.tracing.openai_semantics import (
     openai_llm_attributes,
     openai_request_envelope,
     openai_response_envelope,
-    piika_tool_schemas,
 )
+from trec_rag.experiments.organizer_pi.event_trace import piika_tool_schemas
 from trec_rag.tracing.models import SpanSpec
 
 

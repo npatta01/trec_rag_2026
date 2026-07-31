@@ -1,5 +1,8 @@
+import importlib.util
 import tomllib
 from pathlib import Path
+
+import pytest
 
 
 def test_reusable_tracing_does_not_import_experiments():
@@ -29,3 +32,15 @@ def test_openai_semantics_dependency_is_declared_for_core_installs():
         dependency.startswith("openinference-semantic-conventions")
         for dependency in metadata["project"]["dependencies"]
     )
+
+
+@pytest.mark.parametrize("name", [
+    "trec_rag.pi_trace_models",
+    "trec_rag.openai_trace_semantics",
+    "trec_rag.phoenix_trace_export",
+    "trec_rag.organizer_pi_inputs",
+    "trec_rag.pi_event_trace",
+    "trec_rag.organizer_pi_trace",
+])
+def test_old_top_level_trace_modules_are_removed(name):
+    assert importlib.util.find_spec(name) is None

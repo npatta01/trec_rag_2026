@@ -9,8 +9,7 @@ from pathlib import Path
 import time
 from typing import Iterable, Mapping, Sequence
 
-from trec_rag.organizer_pi_inputs import OrganizerTopic
-from trec_rag.tracing.openai_semantics import piika_tool_schemas
+from trec_rag.experiments.organizer_pi.inputs import OrganizerTopic
 from trec_rag.tracing.models import (
     SpanSpec,
     TraceBundle,
@@ -41,6 +40,79 @@ _KNOWN_EVENT_TYPES = {
     "auto_retry_end",
     "extension_error",
 }
+
+
+def piika_tool_schemas() -> tuple[Mapping[str, object], ...]:
+    """Return the two paginated pyserini-rest tools advertised in the capture."""
+    return (
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": (
+                    "Search the configured backend and return ranked hits directly. "
+                    "The first argument must be reason, a brief rationale of at most 100 words."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": (
+                                "Brief rationale for this search, maximum 100 words. Put the specific clue "
+                                "or follow-up goal first."
+                            ),
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Raw query string. Use concise lexical clues instead of long natural-language rewrites.",
+                        },
+                        "hits": {
+                            "type": "number",
+                            "description": "Maximum number of hits to return directly in this search call. Defaults to 5.",
+                        },
+                    },
+                    "required": ["reason", "query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_document",
+                "description": (
+                    "Read a retrieved document by docid. Supports offset and limit for paginated "
+                    "line-based reading, similar to the built-in read tool. The first argument must "
+                    "be reason, a brief rationale of at most 100 words."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": (
+                                "Brief rationale for opening this document, maximum 100 words. State the "
+                                "candidate clue or fact you expect to verify in this doc."
+                            ),
+                        },
+                        "docid": {
+                            "type": "string",
+                            "description": "Document id to retrieve",
+                        },
+                        "offset": {
+                            "type": "number",
+                            "description": "Line number to start reading from (1-indexed).",
+                        },
+                        "limit": {
+                            "type": "number",
+                            "description": "Maximum number of lines to read.",
+                        },
+                    },
+                    "required": ["reason", "docid"],
+                },
+            },
+        },
+    )
 
 class LoadedPiEvents(tuple):
     """Ordered native event records plus loader-derived timing metadata."""

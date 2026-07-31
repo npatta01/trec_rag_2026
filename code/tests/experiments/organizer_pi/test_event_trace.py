@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from trec_rag.organizer_pi_inputs import OrganizerTopic
-from trec_rag.pi_event_trace import (
+from trec_rag.experiments.organizer_pi.inputs import OrganizerTopic
+from trec_rag.experiments.organizer_pi.event_trace import (
     build_fixed_trace,
     build_piika_trace,
     load_pi_events,

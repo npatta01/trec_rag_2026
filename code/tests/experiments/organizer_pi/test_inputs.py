@@ -5,7 +5,7 @@ from hashlib import sha256
 
 import pytest
 
-from trec_rag.organizer_pi_inputs import (
+from trec_rag.experiments.organizer_pi.inputs import (
     OrganizerTopic,
     select_topic,
     sha256_file,
