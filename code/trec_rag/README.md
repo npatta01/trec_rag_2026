@@ -2,6 +2,145 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
+## Reusable tracing modules
+
+`trec_rag.tracing` contains the reusable trace model and Phoenix-export
+boundaries:
+
+- `trec_rag.tracing.models` defines the immutable `SpanSpec` and `TraceBundle`
+  records.
+- `trec_rag.tracing.openai_semantics` converts `SpanSpec` payloads into
+  normalized messages, captured generic tool schemas, OpenAI request/response
+  envelopes, and OpenInference LLM attributes.
+- `trec_rag.tracing.phoenix_export` exports a saved `TraceBundle`; normalized
+  envelopes populate generic input/output fields while complete strict JSON is
+  retained under `pi.native.input_json` and `pi.native.output_json`.
+  These attributes use canonical JSON encoding and preserve every parsed value,
+  including exact string contents. Native JSONL remains authoritative for
+  source bytes such as whitespace and object-key order.
+
+## Temporary organizer Pi reproduction harness
+
+`trec_rag.experiments.organizer_pi` is a temporary experimental reproduction
+harness, not a main production path. Its `inputs` module prepares byte-faithful
+single-topic inputs, `event_trace` owns `piika_tool_schemas()` and constructs
+durable trace bundles from native organizer artifacts, and `cli` builds and
+exports those bundles. A partial
+fixed-run failure record retains the selected `query_id`; native failures and
+validation become error-status spans. Native Pi JSONL events are authoritative;
+the bundle and Phoenix view are derived records. Keep native events, normalized
+output records, bundles, and receipts together so the derived trace can always
+be checked against its source.
+
+The adapter emits only captured messages and known invocation parameters. In
+particular, it does not fabricate the Pi system prompt when that prompt was not
+captured. Validate semantic, export, and event-normalization behavior together:
+
+For fixed traces with captured native thinking, the trace exposes one `CHAIN`
+child per native block while retaining one LLM/cost span. Child timing is a
+reconstructed equal partition of the generation interval; the extracted
+reasoning is omitted from the LLM presentation to avoid duplication, while the
+complete native response value remains canonically encoded under
+`pi.native.output_json`.
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/tracing/test_openai_semantics.py \
+  code/tests/tracing/test_phoenix_export.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py \
+  code/tests/experiments/organizer_pi/test_cli.py -q
+```
+
+Choose ignored local paths first. The CLI rejects bundle and receipt paths that
+Git would track:
+
+```bash
+TRACE_ROOT=outputs/organizer-pi-phoenix/rag2026-1
+git check-ignore "$TRACE_ROOT/probe"
+```
+
+Build the Piika agentic bundle from its one-topic TSV, native events, and
+normalized per-query run artifact:
+
+```bash
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
+  --baseline piika-agentic \
+  --topic rag2026-1 \
+  --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
+  --events "$TRACE_ROOT/piika/merged/raw-events/rag2026-1.jsonl" \
+  --record "$TRACE_ROOT/piika/merged/rag2026-1.json" \
+  --session rag2026-1-comparison \
+  --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json"
+```
+
+Build the fixed-retrieval bundle from the same topic plus the filtered 100-row
+run, published document ZIP, and unmodified organizer script:
+
+```bash
+DOCUMENT_ZIP="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/retrieval/bm25_climbmix_top1000_with_text.jsonl.zip"
+ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/code/ragnarok_style_ag.py"
+ORGANIZER_SCRIPT_SHA256="<pinned lowercase SHA-256 from source provenance>"
+
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
+  --baseline ragnarok-fixed \
+  --topic rag2026-1 \
+  --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
+  --events "$TRACE_ROOT/fixed/raw/rag2026-1.events.jsonl" \
+  --record "$TRACE_ROOT/fixed/rows/rag2026-1.json" \
+  --ranked-run "$TRACE_ROOT/inputs/rag2026-1.top100.trec" \
+  --documents "$DOCUMENT_ZIP" \
+  --organizer-script "$ORGANIZER_SCRIPT" \
+  --organizer-script-sha256 "$ORGANIZER_SCRIPT_SHA256" \
+  --session rag2026-1-comparison \
+  --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json"
+```
+
+The fixed builder streams the ZIP, retains only the selected 100 document IDs,
+and independently applies the organizer's 1,000-word cap to each document. It
+imports `SYSTEM_PROMPT` and `prompt()` from the supplied organizer script only
+after it matches the separately pinned SHA-256. Completed runs require a
+matching native Pi user message. An explicit failed run with a native failure
+event can still produce a partial error-status bundle when failure occurred
+before prompt emission; that bundle omits evidence and prompt spans that were
+not actually reached.
+
+The captured comparison used only `rag2026-1`. The reusable converter accepts
+another topic ID only when all supplied single-topic artifacts agree on that
+same ID; this does not broaden the original hosted experiment.
+
+Export is a separate command and requires the optional `observability`
+dependency group (`uv sync --group observability`). Put these values in the
+repository's ignored `.env` or `.env.local`; never put an API key on the command
+line:
+
+```text
+PHOENIX_API_KEY=<secret>
+PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com/s/<space>
+PHOENIX_PROJECT_NAME=trec-rag-2026-pi-baselines
+```
+
+Then export each saved bundle:
+
+```bash
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli export \
+  --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json" \
+  --receipt "$TRACE_ROOT/piika/phoenix-receipt.json"
+
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli export \
+  --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json" \
+  --receipt "$TRACE_ROOT/fixed/phoenix-receipt.json"
+```
+
+The Phoenix project is `trec-rag-2026-pi-baselines`. Export sends the complete
+narrative, prompts, search/tool inputs and outputs, selected document text,
+assistant messages, and validation record to the configured hosted collector.
+This full-content transmission is intentional and must use only data authorized
+for that Phoenix project. The CLI scans configured credential values before
+export and writes the public project name, trace ID, root span ID, and span count
+to the receipt only after every span export and the provider flush succeed. A
+failed export leaves the durable bundle intact and does not create a new
+receipt.
+
 ## Experimental competition retrieval run
 
 `trec_rag.competition_retrieval` is the only supported interface for the

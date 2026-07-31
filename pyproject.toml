@@ -9,11 +9,16 @@ dependencies = [
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
     "nuggetizer==0.0.5",
+    "openinference-semantic-conventions==0.1.30",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
+]
+observability = [
+    "arize-phoenix-client",
+    "arize-phoenix-otel>=0.16.0",
 ]
 rocm = [
     "numpy ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
