@@ -312,10 +312,85 @@ def test_task_middleware_returns_recoverable_error_for_prose_description(
     assert budget.snapshot().active_researchers == 0
 
 
+def test_task_middleware_accepts_json_envelope_followed_by_research_instructions() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    middleware = ResearchTaskBudgetMiddleware(budget)
+    description = (
+        task_description(depth="focused")
+        + "\nResearch the stated gap. Rephrase the query if the first search is weak."
+    )
+    seen: list[ResearchTaskEnvelope | None] = []
+
+    def handler(_request: ToolCallRequest) -> ToolMessage:
+        seen.append(current_research_task())
+        return ToolMessage(content="bundle", tool_call_id="task-call")
+
+    result = middleware.wrap_tool_call(
+        task_request(description=description),
+        handler,
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.status == "success"
+    assert seen == [
+        ResearchTaskEnvelope.model_validate_json(task_description(depth="focused"))
+    ]
+    assert budget.snapshot().completed_researchers == 1
+
+
+def test_invalid_task_records_a_rejected_dispatch_without_task_content() -> None:
+    outcomes: list[dict[str, object]] = []
+
+    class Span:
+        def record_outcome(self, **kwargs: object) -> None:
+            outcomes.append(kwargs)
+
+    class Tracing:
+        @contextmanager
+        def researcher_dispatch_span(self):
+            yield Span()
+
+    middleware = ResearchTaskBudgetMiddleware(
+        ResearchBudget(ResearchBudgetConfig()), tracing=Tracing()
+    )
+
+    result = middleware.wrap_tool_call(
+        task_request(description="Research N1 and find evidence."),
+        lambda _request: pytest.fail("invalid task must not run"),
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert outcomes == [
+        {
+            "code": "INVALID_RESEARCH_TASK",
+            "outcome": "rejected",
+            "research_task_id": None,
+            "round_index": None,
+            "depth": None,
+        }
+    ]
+
+
 def test_task_budget_refusal_preserves_a_transient_concurrency_decision() -> None:
     budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
     assert budget.reserve_task(ResearchTaskContext("existing", 1, "survey", ("N1",))).ok
-    middleware = ResearchTaskBudgetMiddleware(budget)
+    dispatch_outcomes: list[dict[str, object]] = []
+
+    class DispatchSpan:
+        def record_outcome(self, **kwargs: object) -> None:
+            dispatch_outcomes.append(kwargs)
+
+    class Tracing:
+        @contextmanager
+        def researcher_dispatch_span(self):
+            yield DispatchSpan()
+
+        @contextmanager
+        def researcher_task_span(self, *_args: object):
+            pytest.fail("refused dispatch must not create a researcher AGENT span")
+            yield
+
+    middleware = ResearchTaskBudgetMiddleware(budget, tracing=Tracing())
 
     result = middleware.wrap_tool_call(
         task_request(description=task_description()),
@@ -326,6 +401,15 @@ def test_task_budget_refusal_preserves_a_transient_concurrency_decision() -> Non
     payload = json.loads(result.content)
     assert payload["code"] == "CONCURRENCY_BUDGET_EXHAUSTED"
     assert payload["must_stop"] is False
+    assert dispatch_outcomes == [
+        {
+            "code": "CONCURRENCY_BUDGET_EXHAUSTED",
+            "outcome": "refused",
+            "research_task_id": "R1-N1",
+            "round_index": 1,
+            "depth": "survey",
+        }
+    ]
 
 
 def test_task_middleware_leaves_non_task_calls_unchanged() -> None:

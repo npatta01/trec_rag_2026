@@ -240,6 +240,50 @@ def test_research_context_trace_uses_only_compact_task_and_budget_fields(
         assert "deepagent.snippet" not in exported.attributes
 
 
+def test_researcher_dispatch_and_execution_are_visually_distinct(
+    span_exporter: InMemorySpanExporter, provider: TracerProvider
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+    snapshot = {
+        "remaining_researchers": 9,
+        "remaining_rounds": 4,
+        "remaining_retrieval_calls": 100,
+        "active_researchers": 1,
+        "completed_researchers": 0,
+        "completed_rounds": 0,
+        "soft_deadline_reached": False,
+        "hard_deadline_reached": False,
+        "stop_code": None,
+    }
+
+    with tracing.researcher_dispatch_span() as dispatch_span:
+        dispatch_span.record_outcome(
+            code="INVALID_RESEARCH_TASK",
+            outcome="rejected",
+            research_task_id=None,
+            round_index=None,
+            depth=None,
+        )
+    with tracing.researcher_task_span("R1-N1", 1, "focused") as task_span:
+        task_span.record_budget_outcome(
+            code="OK", must_stop=False, snapshot=snapshot
+        )
+
+    spans = {span.name: span for span in span_exporter.get_finished_spans()}
+    dispatch = spans["deepagent.researcher.dispatch"]
+    task = spans["deepagent.researcher.R1-N1"]
+    assert dispatch.attributes["openinference.span.kind"] == "TOOL"
+    assert dispatch.attributes["deepagent.role"] == "researcher"
+    assert dispatch.attributes["deepagent.phase"] == "dispatch"
+    assert dispatch.attributes["deepagent.dispatch_outcome"] == "rejected"
+    assert dispatch.attributes["deepagent.dispatch_code"] == "INVALID_RESEARCH_TASK"
+    assert dispatch.status.status_code.name == "ERROR"
+    assert task.attributes["openinference.span.kind"] == "AGENT"
+    assert task.attributes["deepagent.role"] == "researcher"
+    assert task.attributes["deepagent.phase"] == "execution"
+    assert task.attributes["deepagent.research_task_id"] == "R1-N1"
+
+
 @pytest.mark.parametrize(
     "stopping_reason", ["coverage_complete", "evidence_saturated"]
 )

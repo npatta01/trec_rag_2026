@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from opentelemetry import trace
 from opentelemetry.trace.status import Status, StatusCode
-from openinference.instrumentation import OITracer, TraceConfig
+from openinference.instrumentation import OITracer, TraceConfig, using_attributes
 from openinference.instrumentation.langchain import LangChainInstrumentor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from phoenix.otel import register as phoenix_register
@@ -108,6 +108,7 @@ _BUDGET_CODES = frozenset(
         "CONCURRENCY_BUDGET_EXHAUSTED",
         "RETRIEVAL_BUDGET_EXHAUSTED",
         "TASK_TOOL_BUDGET_EXHAUSTED",
+        "ROUND_RESEARCH_REQUIRED",
         "NO_YIELD_STOP",
         "NO_PROGRESS_STOP",
     }
@@ -119,14 +120,11 @@ _RESEARCH_SNAPSHOT_COUNT_FIELDS = (
 )
 
 
-def _research_context_attributes(
+def _research_identity_attributes(
     *,
     research_task_id: object,
     round_index: object,
     depth: object,
-    code: object,
-    must_stop: object,
-    snapshot: Mapping[str, object],
 ) -> dict[str, object]:
     if (
         not isinstance(research_task_id, str)
@@ -139,6 +137,27 @@ def _research_context_attributes(
         raise TypeError("round_index must be a positive integer")
     if depth not in _RESEARCH_DEPTHS:
         raise ValueError("research depth is not safe for retrieval tracing")
+    return {
+        "deepagent.research_task_id": research_task_id,
+        "deepagent.research_round_index": round_index,
+        "deepagent.research_depth": depth,
+    }
+
+
+def _research_context_attributes(
+    *,
+    research_task_id: object,
+    round_index: object,
+    depth: object,
+    code: object,
+    must_stop: object,
+    snapshot: Mapping[str, object],
+) -> dict[str, object]:
+    identity = _research_identity_attributes(
+        research_task_id=research_task_id,
+        round_index=round_index,
+        depth=depth,
+    )
     if code not in _BUDGET_CODES:
         raise ValueError("budget code is not safe for retrieval tracing")
     if not isinstance(must_stop, bool):
@@ -151,9 +170,7 @@ def _research_context_attributes(
     if stop_code is not None and stop_code not in _BUDGET_CODES:
         raise ValueError("budget stop_code is not safe for retrieval tracing")
     return {
-        "deepagent.research_task_id": research_task_id,
-        "deepagent.research_round_index": round_index,
-        "deepagent.research_depth": depth,
+        **identity,
         "deepagent.budget_code": code,
         "deepagent.budget_must_stop": must_stop,
         **{f"deepagent.{name}": value for name, value in counts.items()},
@@ -476,6 +493,8 @@ class _ResearchTaskSpan(_SafeSpan):
         self._research_task_id = research_task_id
         self._round_index = round_index
         self._depth = depth
+        self._set("deepagent.role", "researcher")
+        self._set("deepagent.phase", "execution")
 
     def record_budget_outcome(
         self, *, code: str, must_stop: bool, snapshot: Mapping[str, object]
@@ -489,6 +508,54 @@ class _ResearchTaskSpan(_SafeSpan):
             snapshot=snapshot,
         ).items():
             self._set(key, value)
+
+
+class _ResearchDispatchSpan(_SafeSpan):
+    """Expose a safe, visible outcome for every attempted researcher dispatch."""
+
+    _OUTCOMES = frozenset({"completed", "failed", "refused", "rejected"})
+    _CODES = _BUDGET_CODES.union(
+        {"INVALID_RESEARCH_TASK", "RESEARCH_TASK_FAILED", "RESEARCHER_TYPE_DENIED"}
+    )
+
+    def __init__(self, wrapped: object, *, trace_content: bool) -> None:
+        super().__init__(wrapped, trace_content=trace_content)
+        self._set("deepagent.role", "researcher")
+        self._set("deepagent.phase", "dispatch")
+
+    def record_outcome(
+        self,
+        *,
+        code: str,
+        outcome: str,
+        research_task_id: str | None,
+        round_index: int | None,
+        depth: str | None,
+    ) -> None:
+        if outcome not in self._OUTCOMES:
+            raise ValueError("research dispatch outcome is not safe for tracing")
+        if code not in self._CODES:
+            raise ValueError("research dispatch code is not safe for tracing")
+        identity = (research_task_id, round_index, depth)
+        if any(value is None for value in identity):
+            if any(value is not None for value in identity):
+                raise ValueError("research dispatch identity must be complete or absent")
+        else:
+            attributes = _research_identity_attributes(
+                research_task_id=research_task_id,
+                round_index=round_index,
+                depth=depth,
+            )
+            for key in (
+                "deepagent.research_task_id",
+                "deepagent.research_round_index",
+                "deepagent.research_depth",
+            ):
+                self._set(key, attributes[key])
+        self._set("deepagent.dispatch_outcome", outcome)
+        self._set("deepagent.dispatch_code", code)
+        if outcome != "completed":
+            self._wrapped.set_status(Status(StatusCode.ERROR))  # type: ignore[attr-defined]
 
 
 def _normalize_otlp_http_endpoint(endpoint: str) -> str:
@@ -612,16 +679,39 @@ class RetrievalTracing:
     def researcher_task_span(
         self, research_task_id: str, round_index: int, depth: str
     ) -> Iterator[_ResearchTaskSpan]:
+        identity = _research_identity_attributes(
+            research_task_id=research_task_id,
+            round_index=round_index,
+            depth=depth,
+        )
+        with using_attributes(
+            metadata={"deepagent.role": "researcher", **identity},
+            tags=[
+                "deepagent:researcher",
+                f"research-task:{research_task_id}",
+                f"research-round:{round_index}",
+                f"research-depth:{depth}",
+            ],
+        ):
+            with self._span(
+                f"deepagent.researcher.{research_task_id}",
+                "",
+                OpenInferenceSpanKindValues.AGENT,
+            ) as span:
+                yield _ResearchTaskSpan(
+                    span,
+                    trace_content=self._trace_content,
+                    research_task_id=research_task_id,
+                    round_index=round_index,
+                    depth=depth,
+                )
+
+    @contextmanager
+    def researcher_dispatch_span(self) -> Iterator[_ResearchDispatchSpan]:
         with self._span(
-            "deepagent.researcher_task", "", OpenInferenceSpanKindValues.AGENT
+            "deepagent.researcher.dispatch", "", OpenInferenceSpanKindValues.TOOL
         ) as span:
-            yield _ResearchTaskSpan(
-                span,
-                trace_content=self._trace_content,
-                research_task_id=research_task_id,
-                round_index=round_index,
-                depth=depth,
-            )
+            yield _ResearchDispatchSpan(span, trace_content=self._trace_content)
 
     def force_flush(self) -> bool:
         """Flush a configured exporter without raising from an optional sink."""

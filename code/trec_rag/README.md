@@ -227,7 +227,9 @@ POC experiment; they are not environment variables.
 The original narrative is never rewritten for its deterministic first search.
 Each researcher receives compact task JSON containing its task ID, round,
 depth, motivating need IDs, and gap; it can formulate and refine its own
-queries. Its first model action is mechanically restricted to
+queries. The JSON envelope must begin `task.description`; optional detailed
+research instructions can follow after a newline. Its first model action is
+mechanically restricted to
 `search_climbmix`; after that attempt, snippet and compact-state tools become
 available. The coordinator merges completed evidence bundles with one semantic
 state update per batch, then closes the round. An empty round is refused without

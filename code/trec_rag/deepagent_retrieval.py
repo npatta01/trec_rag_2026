@@ -76,7 +76,8 @@ completion returns ROUND_RESEARCH_REQUIRED, the next action must delegate a
 researcher for that same round.
 Set task.description to a JSON-encoded object with exactly this shape:
 {"research_task_id":"R1-N1","round_index":1,"depth":"focused","motivating_ids":["N1"],"goal":"Find grounded evidence for N1","known_evidence":"","remaining_gap":"No grounded evidence yet"}.
-Do not put prose before or after that JSON object.
+The JSON object must come first. Optional research instructions may follow it
+after a newline; never put prose before the JSON object.
 Do not call retrieval tools directly. Stop whenever a budget response says
 must_stop. After soft_deadline_reached becomes true, do not launch a new survey
 task; focused or deep tasks may still close a specific gap, and already-running
@@ -363,6 +364,8 @@ class _Tracing(Protocol):
     def researcher_task_span(
         self, research_task_id: str, round_index: int, depth: str
     ) -> AbstractContextManager[object]: ...
+
+    def researcher_dispatch_span(self) -> AbstractContextManager[object]: ...
 
     def force_flush(self) -> bool: ...
 

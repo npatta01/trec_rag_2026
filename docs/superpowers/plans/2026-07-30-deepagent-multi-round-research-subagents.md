@@ -996,3 +996,24 @@ POC-small review pass. `git diff --check` completed with no output.
 - No second live provider pass was made after the coordinator gate. Fresh local
   verification after both gates: 292 targeted tests passed, 755 repository-wide
   tests passed, changed-file Ruff passed, and `git diff --check` passed.
+
+### Researcher dispatch recovery and Phoenix hierarchy — 2026-07-31
+
+- Replayed all ten rejected task descriptions from trace
+  `d62974a987eb1de3e95d63542e218504`. Each contained a valid leading compact
+  JSON envelope followed by newline-separated research instructions; strict
+  whole-string decoding rejected the suffix as extra data. The task protocol
+  now validates the leading JSON object and permits optional instructions only
+  after whitespace. All ten captured envelopes replay successfully.
+- Added `deepagent.researcher.dispatch` `TOOL` spans before validation and
+  dynamic `deepagent.researcher.<task-id>` `AGENT` spans only after admission.
+  Dispatch spans record compact completed/refused/rejected/failed outcomes and
+  set error status for non-completion. Researcher execution spans carry role,
+  phase, task, round, depth, metadata, and tags without task content.
+- One post-fix topic-224 pass completed in 175.497 seconds with trace flush
+  success. Trace `98b9827c6f93531b37014937307bc908` contains ten dispatches:
+  eight completed and two budget-refused. Eight researchers completed eight
+  follow-up searches, proving delegation and forced first-search execution.
+  The run completed two rounds with `NO_PROGRESS_STOP`, zero inspected snippet
+  pages, and zero nuggets; snippet inspection remains the next effectiveness
+  gap rather than a dispatch/tracing failure.

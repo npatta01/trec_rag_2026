@@ -371,6 +371,32 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             except Exception:
                 pass
 
+    @contextmanager
+    def _trace_dispatch(self) -> Any:
+        tracing = self._tracing
+        if tracing is None:
+            yield None
+            return
+        try:
+            manager = tracing.researcher_dispatch_span()
+            span = manager.__enter__()
+        except Exception:
+            yield None
+            return
+        try:
+            yield span
+        except BaseException as exc:
+            try:
+                manager.__exit__(type(exc), exc, exc.__traceback__)
+            except Exception:
+                pass
+            raise
+        else:
+            try:
+                manager.__exit__(None, None, None)
+            except Exception:
+                pass
+
     @staticmethod
     def _record_trace_outcome(
         span: object | None, decision: BudgetDecision, snapshot: BudgetSnapshot
@@ -387,6 +413,27 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             pass
 
     @staticmethod
+    def _record_dispatch_outcome(
+        span: object | None,
+        *,
+        code: str,
+        outcome: str,
+        context: ResearchTaskContext | None = None,
+    ) -> None:
+        if span is None:
+            return
+        try:
+            span.record_outcome(
+                code=code,
+                outcome=outcome,
+                research_task_id=(context.research_task_id if context else None),
+                round_index=(context.round_index if context else None),
+                depth=(context.depth if context else None),
+            )
+        except Exception:
+            pass
+
+    @staticmethod
     def _envelope(request: ToolCallRequest) -> ResearchTaskEnvelope:
         args = request.tool_call.get("args")
         if not isinstance(args, Mapping):
@@ -396,7 +443,15 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
         description = args.get("description")
         if not isinstance(description, str):
             raise ValueError("task description must be compact JSON")
-        return ResearchTaskEnvelope.model_validate_json(description)
+        stripped = description.lstrip()
+        try:
+            payload, end_index = json.JSONDecoder().raw_decode(stripped)
+        except json.JSONDecodeError:
+            raise ValueError("task description must begin with compact JSON") from None
+        suffix = stripped[end_index:]
+        if suffix and not suffix[0].isspace():
+            raise ValueError("task instructions must follow JSON after whitespace")
+        return ResearchTaskEnvelope.model_validate(payload)
 
     @staticmethod
     def _context(envelope: ResearchTaskEnvelope):
@@ -479,6 +534,10 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                         "known_evidence": "",
                         "remaining_gap": "No grounded evidence yet",
                     },
+                    "description_protocol": (
+                        "Begin with the JSON object; optional research instructions "
+                        "may follow after a newline"
+                    ),
                     "must_stop": False,
                 },
                 separators=(",", ":"),
@@ -517,30 +576,56 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
     ) -> Any:
         if request.tool_call.get("name") != "task":
             return handler(request)
-        try:
-            envelope = self._envelope(request)
-        except PermissionError:
-            raise
-        except ValueError:
-            return self._invalid_task(request)
-        context = self._context(envelope)
-        with self._trace_task(context) as span:
-            decision = self._budget.reserve_task(context)
-            self._record_trace_outcome(span, decision, decision.snapshot)
-            if not decision.ok:
-                return self._refusal(request, decision)
+        with self._trace_dispatch() as dispatch_span:
             try:
-                with bind_research_task(envelope):
-                    try:
-                        result = handler(request)
-                    except Exception:
-                        return self._task_failure(
-                            request, envelope, self._budget.snapshot()
-                        )
-                return self._append_snapshot(result, self._budget.snapshot())
-            finally:
-                self._budget.finish_task(context)
-                self._record_trace_outcome(span, decision, self._budget.snapshot())
+                envelope = self._envelope(request)
+            except PermissionError:
+                self._record_dispatch_outcome(
+                    dispatch_span, code="RESEARCHER_TYPE_DENIED", outcome="rejected"
+                )
+                raise
+            except ValueError:
+                self._record_dispatch_outcome(
+                    dispatch_span, code="INVALID_RESEARCH_TASK", outcome="rejected"
+                )
+                return self._invalid_task(request)
+            context = self._context(envelope)
+            decision = self._budget.reserve_task(context)
+            if not decision.ok:
+                self._record_dispatch_outcome(
+                    dispatch_span,
+                    code=decision.code,
+                    outcome="refused",
+                    context=context,
+                )
+                return self._refusal(request, decision)
+            with self._trace_task(context) as span:
+                self._record_trace_outcome(span, decision, decision.snapshot)
+                try:
+                    with bind_research_task(envelope):
+                        try:
+                            result = handler(request)
+                        except Exception:
+                            self._record_dispatch_outcome(
+                                dispatch_span,
+                                code="RESEARCH_TASK_FAILED",
+                                outcome="failed",
+                                context=context,
+                            )
+                            return self._task_failure(
+                                request, envelope, self._budget.snapshot()
+                            )
+                    completed = self._append_snapshot(result, self._budget.snapshot())
+                    self._record_dispatch_outcome(
+                        dispatch_span,
+                        code=decision.code,
+                        outcome="completed",
+                        context=context,
+                    )
+                    return completed
+                finally:
+                    self._budget.finish_task(context)
+                    self._record_trace_outcome(span, decision, self._budget.snapshot())
 
     async def awrap_tool_call(
         self,
@@ -549,30 +634,56 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
     ) -> Any:
         if request.tool_call.get("name") != "task":
             return await handler(request)
-        try:
-            envelope = self._envelope(request)
-        except PermissionError:
-            raise
-        except ValueError:
-            return self._invalid_task(request)
-        context = self._context(envelope)
-        with self._trace_task(context) as span:
-            decision = self._budget.reserve_task(context)
-            self._record_trace_outcome(span, decision, decision.snapshot)
-            if not decision.ok:
-                return self._refusal(request, decision)
+        with self._trace_dispatch() as dispatch_span:
             try:
-                with bind_research_task(envelope):
-                    try:
-                        result = await handler(request)
-                    except Exception:
-                        return self._task_failure(
-                            request, envelope, self._budget.snapshot()
-                        )
-                return self._append_snapshot(result, self._budget.snapshot())
-            finally:
-                self._budget.finish_task(context)
-                self._record_trace_outcome(span, decision, self._budget.snapshot())
+                envelope = self._envelope(request)
+            except PermissionError:
+                self._record_dispatch_outcome(
+                    dispatch_span, code="RESEARCHER_TYPE_DENIED", outcome="rejected"
+                )
+                raise
+            except ValueError:
+                self._record_dispatch_outcome(
+                    dispatch_span, code="INVALID_RESEARCH_TASK", outcome="rejected"
+                )
+                return self._invalid_task(request)
+            context = self._context(envelope)
+            decision = self._budget.reserve_task(context)
+            if not decision.ok:
+                self._record_dispatch_outcome(
+                    dispatch_span,
+                    code=decision.code,
+                    outcome="refused",
+                    context=context,
+                )
+                return self._refusal(request, decision)
+            with self._trace_task(context) as span:
+                self._record_trace_outcome(span, decision, decision.snapshot)
+                try:
+                    with bind_research_task(envelope):
+                        try:
+                            result = await handler(request)
+                        except Exception:
+                            self._record_dispatch_outcome(
+                                dispatch_span,
+                                code="RESEARCH_TASK_FAILED",
+                                outcome="failed",
+                                context=context,
+                            )
+                            return self._task_failure(
+                                request, envelope, self._budget.snapshot()
+                            )
+                    completed = self._append_snapshot(result, self._budget.snapshot())
+                    self._record_dispatch_outcome(
+                        dispatch_span,
+                        code=decision.code,
+                        outcome="completed",
+                        context=context,
+                    )
+                    return completed
+                finally:
+                    self._budget.finish_task(context)
+                    self._record_trace_outcome(span, decision, self._budget.snapshot())
 
 
 def build_research_subagent(
