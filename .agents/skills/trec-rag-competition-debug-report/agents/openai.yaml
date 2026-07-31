@@ -1,0 +1,4 @@
+interface:
+  display_name: "Competition Debug Report"
+  short_description: "Explain a completed TREC RAG run"
+  default_prompt: "Use $trec-rag-competition-debug-report to create a private HTML explanation of this completed competition run."

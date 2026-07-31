@@ -18,6 +18,8 @@ implementation patterns.
 - `configs/` - checked-in experiment configurations.
 - `code/` - reusable helpers for remote Pyserini access, topic loading, and the
   config-driven BM25 RAG pipeline.
+- `.agents/skills/trec-rag-competition-debug-report/` - repo-local agent skill
+  for privately explaining completed competition retrieval and RAG runs.
 
 ## Upstream Inputs
 
@@ -25,7 +27,8 @@ Official TREC RAG inputs are tracked as git submodules:
 
 - `trec-rag-data/` - development and test data used by configs and reports.
 - `trec-rag-skills/` - official task, Pyserini, and corpus-creation reference
-  material used as source provenance.
+  material used as source provenance. Repository-specific agent workflows live
+  under `.agents/skills/` and do not depend on unpublished submodule revisions.
 
 After cloning, initialize them with:
 

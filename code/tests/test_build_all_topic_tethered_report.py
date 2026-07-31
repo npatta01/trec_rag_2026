@@ -23,6 +23,17 @@ from trec_rag.build_all_topic_tethered_report import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOT = REPO_ROOT / "outputs/all_topic_tethered_facet_validation_v1"
+pytestmark = pytest.mark.skipif(
+    not (SOURCE_ROOT / "rankings_v3/SEALED.json").is_file(),
+    reason=(
+        "private sealed fixture unavailable; restore "
+        "cache/experiments/all_topic_tethered_facet_validation_v1_sources_v3.tar.zst "
+        "at the repository root with `tar --zstd -xf "
+        "cache/experiments/all_topic_tethered_facet_validation_v1_sources_v3.tar.zst "
+        "-C .` after verifying "
+        "the pinned SHA-256 in reports/experiments/all_topic_tethered_facet_validation_v1/README.md"
+    ),
+)
 TOPICS = {
     "14", "31", "37", "58", "72", "84", "144", "161", "200", "213",
     "219", "224", "225", "233", "273", "300", "407", "477", "499",
