@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -182,6 +183,8 @@ def _fixed_args(tmp_path: Path) -> list[str]:
         str(archive),
         "--organizer-script",
         str(script),
+        "--organizer-script-sha256",
+        hashlib.sha256(script.read_bytes()).hexdigest(),
         "--bundle",
         str(tmp_path / "fixed-trace.json"),
     ]
@@ -330,7 +333,38 @@ def test_fixed_build_streams_selected_documents_and_reconstructs_exact_prompts(t
     }
 
 
-@pytest.mark.parametrize("missing", ["--ranked-run", "--documents", "--organizer-script"])
+def test_fixed_build_rejects_organizer_script_hash_mismatch(tmp_path):
+    args = _fixed_args(tmp_path)
+    script = tmp_path / "organizer.py"
+    script.write_text(
+        "SYSTEM_PROMPT = 'modified system prompt'\n"
+        "def prompt(question, docids, texts):\n"
+        "    return 'modified prompt'\n",
+        encoding="utf-8",
+    )
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+def test_fixed_build_rejects_malformed_organizer_script_hash(tmp_path):
+    args = _fixed_args(tmp_path)
+    digest_index = args.index("--organizer-script-sha256") + 1
+    args[digest_index] = "not-a-sha256"
+
+    assert main(args, ignored_checker=_ignored) == 1
+    assert not (tmp_path / "fixed-trace.json").exists()
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "--ranked-run",
+        "--documents",
+        "--organizer-script",
+        "--organizer-script-sha256",
+    ],
+)
 def test_fixed_build_requires_all_full_content_arguments_together(tmp_path, missing):
     args = _fixed_args(tmp_path)
     index = args.index(missing)

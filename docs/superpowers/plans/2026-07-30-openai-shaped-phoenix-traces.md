@@ -156,7 +156,7 @@ Expected: all tests pass with no warnings.
 
 - [ ] **Step 8: Inspect preserved captures offline**
 
-Rebuild both bundles to temporary ignored paths and assert: Pi has one AGENT root, 10 LLM spans, 13 retriever spans, 13 tool spans, linked tool-call/result IDs, two advertised tool schemas per LLM, and no fabricated system message; fixed has one AGENT root, one LLM span, exact prompts, and 100 documents. Assert the immutable source-event hashes remain stable and every original per-span native payload is retained byte-for-byte under its namespaced attribute; OpenAI-shaped bundle/span hashes are expected to change.
+Rebuild both bundles to temporary ignored paths and assert: Pi has one AGENT root, 10 LLM spans, 13 retriever spans, 13 tool spans, linked tool-call/result IDs, two advertised tool schemas per LLM, and no fabricated system message; fixed has one AGENT root, one LLM span, exact prompts, and 100 documents. Assert the immutable source-event hashes remain stable and every original per-span native payload value is retained as canonical JSON under its namespaced attribute; OpenAI-shaped bundle/span hashes are expected to change.
 
 - [ ] **Step 9: Commit**
 
@@ -204,7 +204,7 @@ Query project/session through the Phoenix client. Assert exactly two root traces
 
 - [ ] **Step 6: Verify payload, timing, and secret safety**
 
-Compare generic OpenAI request/response envelopes and namespaced native payloads with the local adapter byte-for-byte. Re-run focused tests, `py_compile`, `git diff --check`, direct trace-link HTTP checks, and configured-secret scans over tracked and generated task artifacts.
+Compare generic OpenAI request/response envelopes and namespaced native payload values with the local adapter. Re-run focused tests, `py_compile`, `git diff --check`, direct trace-link HTTP checks, and configured-secret scans over tracked and generated task artifacts.
 
 - [ ] **Step 7: Write sanitized evidence and hand off**
 

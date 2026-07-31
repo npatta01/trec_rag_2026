@@ -15,6 +15,9 @@ boundaries:
 - `trec_rag.tracing.phoenix_export` exports a saved `TraceBundle`; normalized
   envelopes populate generic input/output fields while complete strict JSON is
   retained under `pi.native.input_json` and `pi.native.output_json`.
+  These attributes use canonical JSON encoding and preserve every parsed value,
+  including exact string contents. Native JSONL remains authoritative for
+  source bytes such as whitespace and object-key order.
 
 ## Temporary organizer Pi reproduction harness
 
@@ -37,7 +40,8 @@ For fixed traces with captured native thinking, the trace exposes one `CHAIN`
 child per native block while retaining one LLM/cost span. Child timing is a
 reconstructed equal partition of the generation interval; the extracted
 reasoning is omitted from the LLM presentation to avoid duplication, while the
-complete native response remains under `pi.native.output_json`.
+complete native response value remains canonically encoded under
+`pi.native.output_json`.
 
 ```bash
 .venv/bin/python -m pytest \
@@ -75,6 +79,7 @@ run, published document ZIP, and unmodified organizer script:
 ```bash
 DOCUMENT_ZIP="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/retrieval/bm25_climbmix_top1000_with_text.jsonl.zip"
 ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/code/ragnarok_style_ag.py"
+ORGANIZER_SCRIPT_SHA256="<pinned lowercase SHA-256 from source provenance>"
 
 .venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
   --baseline ragnarok-fixed \
@@ -85,16 +90,23 @@ ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/
   --ranked-run "$TRACE_ROOT/inputs/rag2026-1.top100.trec" \
   --documents "$DOCUMENT_ZIP" \
   --organizer-script "$ORGANIZER_SCRIPT" \
+  --organizer-script-sha256 "$ORGANIZER_SCRIPT_SHA256" \
   --session rag2026-1-comparison \
   --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json"
 ```
 
 The fixed builder streams the ZIP, retains only the selected 100 document IDs,
 and independently applies the organizer's 1,000-word cap to each document. It
-imports `SYSTEM_PROMPT` and `prompt()` from the supplied organizer script to
-reconstruct the exact prompts. Completed runs require a matching native Pi user
-message. An explicit failed run with a native failure event can still produce a
-partial error-status bundle when failure occurred before prompt emission.
+imports `SYSTEM_PROMPT` and `prompt()` from the supplied organizer script only
+after it matches the separately pinned SHA-256. Completed runs require a
+matching native Pi user message. An explicit failed run with a native failure
+event can still produce a partial error-status bundle when failure occurred
+before prompt emission; that bundle omits evidence and prompt spans that were
+not actually reached.
+
+The captured comparison used only `rag2026-1`. The reusable converter accepts
+another topic ID only when all supplied single-topic artifacts agree on that
+same ID; this does not broaden the original hosted experiment.
 
 Export is a separate command and requires the optional `observability`
 dependency group (`uv sync --group observability`). Put these values in the

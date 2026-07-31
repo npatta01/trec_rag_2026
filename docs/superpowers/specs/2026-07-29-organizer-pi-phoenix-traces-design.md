@@ -14,7 +14,9 @@ The comparison covers the Piika agentic BM25 path and the fixed-retrieval
 ## Scope
 
 - Use the organizers' published source revisions and inputs.
-- Run only `rag2026-1`.
+- Run only `rag2026-1` for this captured comparison. The reusable single-topic
+  converter may accept another explicitly selected topic when all of its input
+  artifacts agree on that topic.
 - Preserve each baseline's native Pi JSONL events and normal output artifacts.
 - Export full-content traces to Phoenix Cloud, including the official narrative,
   prompts, search queries, search results, retrieved passage text, opened
@@ -58,7 +60,8 @@ production path.
 
 ### Fixed-retrieval Pi generation
 
-- Source: the organizer's `ragnarok_style_ag.py`.
+- Source: the organizer's `ragnarok_style_ag.py`, verified against a separately
+  supplied pinned SHA-256 before it is imported.
 - Input: the same one-row topic TSV, the published six-column ranked run, and
   the published document archive.
 - Retrieval depth and document truncation follow the published baseline

@@ -6,6 +6,7 @@ import pytest
 from trec_rag.tracing.models import (
     SpanSpec,
     TraceBundle,
+    canonical_json_dumps,
     read_trace_bundle,
     write_trace_bundle,
 )
@@ -39,6 +40,12 @@ def _bundle() -> TraceBundle:
             children=(child,),
         ),
     )
+
+
+def test_canonical_json_dumps_is_deterministic_strict_json():
+    assert canonical_json_dumps({"z": "☃", "a": [2, 1]}) == '{"a":[2,1],"z":"☃"}'
+    with pytest.raises(ValueError):
+        canonical_json_dumps({"not_finite": float("nan")})
 
 
 def test_trace_bundle_is_immutable_and_strict_json_round_trips_atomically(tmp_path):

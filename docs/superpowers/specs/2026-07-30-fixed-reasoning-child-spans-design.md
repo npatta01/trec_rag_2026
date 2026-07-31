@@ -67,9 +67,12 @@ response envelope show only the final assistant text. This prevents the same
 reasoning summaries from appearing both in the LLM panel and in the child
 spans.
 
-The original response, including all three native thinking items, remains
-byte-for-byte available under `pi.native.output_json`. The child spans provide a
-second, presentation-oriented view of those exact captured blocks. Input
+The original parsed response, including all three native thinking items, remains
+available under `pi.native.output_json` as deterministic canonical JSON. Every
+value and the exact contents of every string are preserved; the native JSONL
+remains authoritative for source-level bytes such as whitespace and key order.
+The child spans provide a second, presentation-oriented view of those exact
+captured blocks. Input
 messages, prompts, 100 documents, final answer, model metadata, usage, cost,
 finish reason, and validation output remain unchanged.
 
@@ -105,7 +108,8 @@ Tests and offline inspection must prove:
 - child timing partitions are ordered, non-overlapping, contained by the LLM,
   and marked reconstructed;
 - the rich/generic LLM output contains only the final assistant text;
-- `pi.native.output_json` retains the original complete response byte-for-byte;
+- `pi.native.output_json` retains the complete response value and exact string
+  contents in canonical JSON;
 - prompts, 100 documents, final answer, usage, cost, and validation remain
   unchanged; and
 - the hosted session gains exactly one new eight-span fixed trace with the

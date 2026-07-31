@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import json
 
 from openinference.semconv.trace import SpanAttributes
 
-from trec_rag.tracing.models import SpanSpec
-
-
-def _json_string(value: object) -> str:
-    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+from trec_rag.tracing.models import SpanSpec, canonical_json_dumps
 
 
 def _text_parts(content: object) -> list[str]:
@@ -46,7 +41,9 @@ def _tool_calls(content: object) -> list[dict[str, object]]:
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": _json_string(arguments if arguments is not None else {}),
+                    "arguments": canonical_json_dumps(
+                        arguments if arguments is not None else {}
+                    ),
                 },
             }
         )
@@ -244,14 +241,18 @@ def openai_llm_attributes(spec: SpanSpec) -> Mapping[str, object]:
         if isinstance(tools, Sequence) and not isinstance(tools, str | bytes | bytearray):
             for index, tool in enumerate(tools):
                 if isinstance(tool, Mapping):
-                    attributes[f"{SpanAttributes.LLM_TOOLS}.{index}.tool.json_schema"] = _json_string(tool)
+                    attributes[
+                        f"{SpanAttributes.LLM_TOOLS}.{index}.tool.json_schema"
+                    ] = canonical_json_dumps(tool)
         invocation = {
             key: value
             for key, value in spec.input_value.items()
             if key in _KNOWN_INVOCATION_PARAMETERS
         }
         if invocation:
-            attributes[SpanAttributes.LLM_INVOCATION_PARAMETERS] = _json_string(invocation)
+            attributes[SpanAttributes.LLM_INVOCATION_PARAMETERS] = (
+                canonical_json_dumps(invocation)
+            )
     model = output.get("model")
     if isinstance(model, str):
         attributes[SpanAttributes.LLM_MODEL_NAME] = model

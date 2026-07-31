@@ -13,7 +13,9 @@
 - Preserve exactly one cost-bearing LLM span and one provider response in the revised fixed trace.
 - Create exactly three reasoning children for the three captured native `thinking` items; do not split the seven headings.
 - Preserve each thinking string byte-for-byte and in native order.
-- Preserve the complete original response byte-for-byte under `pi.native.output_json`.
+- Preserve the complete original response value and exact string contents as
+  canonical JSON under `pi.native.output_json`; retain native JSONL as the
+  byte-authoritative source.
 - Keep prompts, 100 documents, final answer, model, usage, cost, finish reason, and validation unchanged.
 - Mark child timing as reconstructed equal partitions contained within the LLM interval.
 - Apply the behavior only to fixed trace construction; do not change the Pi agentic trace.
@@ -161,7 +163,7 @@ Expected: all focused tests pass, compilation exits zero, and `git diff --check`
 
 - [ ] **Step 9: Rebuild the saved fixed bundle offline and inspect it**
 
-Build an ignored bundle at `outputs/organizer-pi-phoenix/rag2026-1/fixed/rag2026-1.reasoning-v4.trace.json` using the existing fixed build command and session `rag2026-1-comparison-openai-v3`. Assert eight spans, one LLM, three direct CHAIN children named in order, exact thinking block hashes, contained timing, 100 documents, exact prompts, unchanged final text/usage/cost/validation, presentation-only final text, and byte-for-byte native output retention. Do not export in this task.
+Build an ignored bundle at `outputs/organizer-pi-phoenix/rag2026-1/fixed/rag2026-1.reasoning-v4.trace.json` using the existing fixed build command and session `rag2026-1-comparison-openai-v3`. Assert eight spans, one LLM, three direct CHAIN children named in order, exact thinking block hashes, contained timing, 100 documents, exact prompts, unchanged final text/usage/cost/validation, presentation-only final text, and complete canonical native output retention. Do not export in this task.
 
 - [ ] **Step 10: Commit**
 

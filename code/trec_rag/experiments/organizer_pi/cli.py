@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict
-import importlib.util
+import hashlib
 import io
 import json
 import os
@@ -68,6 +68,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--ranked-run", type=Path)
     build.add_argument("--documents", type=Path)
     build.add_argument("--organizer-script", type=Path)
+    build.add_argument("--organizer-script-sha256")
 
     export = commands.add_parser("export", help="export a saved bundle to Phoenix")
     export.add_argument("--bundle", type=Path, required=True)
@@ -252,12 +253,14 @@ def _load_documents(path: Path, docids: Sequence[str]) -> list[dict[str, object]
     ]
 
 
-def _load_organizer_script(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("_trec_rag_fixed_organizer", path)
-    if spec is None or spec.loader is None:
-        raise ValueError("organizer script cannot be imported")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def _load_organizer_script(path: Path, expected_sha256: str) -> ModuleType:
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise ValueError("organizer script SHA-256 must be lowercase hexadecimal")
+    source = Path(path).read_bytes()
+    if hashlib.sha256(source).hexdigest() != expected_sha256:
+        raise ValueError("organizer script SHA-256 does not match pinned source")
+    module = ModuleType("_trec_rag_fixed_organizer")
+    exec(compile(source, str(path), "exec"), module.__dict__)
     if not isinstance(getattr(module, "SYSTEM_PROMPT", None), str):
         raise ValueError("organizer script SYSTEM_PROMPT must be a string")
     if not callable(getattr(module, "prompt", None)):
@@ -352,7 +355,10 @@ def _build_bundle(arguments: argparse.Namespace) -> TraceBundle:
 
     docids = _ranked_docids(arguments.ranked_run, topic.topic_id)
     documents = _load_documents(arguments.documents, docids)
-    organizer = _load_organizer_script(arguments.organizer_script)
+    organizer = _load_organizer_script(
+        arguments.organizer_script,
+        arguments.organizer_script_sha256,
+    )
     texts = {str(document["docid"]): str(document["text"]) for document in documents}
     rendered = organizer.prompt(topic.narrative, docids, texts)
     if not isinstance(rendered, str):
@@ -447,10 +453,12 @@ def main(
                 arguments.ranked_run,
                 arguments.documents,
                 arguments.organizer_script,
+                arguments.organizer_script_sha256,
             )
             if arguments.baseline == "ragnarok-fixed" and not all(fixed_values):
                 raise _UsageError(
-                    "ragnarok-fixed requires --ranked-run, --documents, and --organizer-script"
+                    "ragnarok-fixed requires --ranked-run, --documents, "
+                    "--organizer-script, and --organizer-script-sha256"
                 )
             if arguments.baseline == "piika-agentic" and any(fixed_values):
                 raise _UsageError(

@@ -15,7 +15,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace.status import Status, StatusCode
 
-from trec_rag.tracing.models import SpanSpec, TraceBundle
+from trec_rag.tracing.models import SpanSpec, TraceBundle, canonical_json_dumps
 from trec_rag.tracing.openai_semantics import (
     openai_llm_attributes,
     openai_request_envelope,
@@ -231,13 +231,7 @@ def _payload_attributes(prefix: str, value: object | None) -> dict[str, str]:
         encoded = value
         mime_type = _TEXT_MIME_TYPE
     else:
-        encoded = json.dumps(
-            _json_compatible(value),
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        encoded = canonical_json_dumps(_json_compatible(value))
         mime_type = _JSON_MIME_TYPE
     return {
         getattr(SpanAttributes, f"{prefix}_VALUE"): encoded,
@@ -246,13 +240,7 @@ def _payload_attributes(prefix: str, value: object | None) -> dict[str, str]:
 
 
 def _json_string(value: object) -> str:
-    return json.dumps(
-        _json_compatible(value),
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    return canonical_json_dumps(_json_compatible(value))
 
 
 def _retrieval_attributes(output_value: object | None) -> dict[str, object]:

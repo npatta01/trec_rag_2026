@@ -18,6 +18,17 @@ AttributeValue: TypeAlias = AttributeScalar | tuple[AttributeScalar, ...]
 DEFAULT_BUNDLE_MAX_BYTES = 256 * 1024 * 1024
 
 
+def canonical_json_dumps(value: object) -> str:
+    """Encode a value as deterministic strict JSON."""
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
 def _require_non_empty_string(value: object, label: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")
@@ -206,13 +217,7 @@ def write_trace_bundle(bundle: TraceBundle, path: Path) -> Path:
     if not isinstance(bundle, TraceBundle):
         raise TypeError("bundle must be a TraceBundle")
     destination = Path(path)
-    body = json.dumps(
-        _bundle_to_dict(bundle),
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8") + b"\n"
+    body = canonical_json_dumps(_bundle_to_dict(bundle)).encode("utf-8") + b"\n"
 
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", dir=destination.parent
