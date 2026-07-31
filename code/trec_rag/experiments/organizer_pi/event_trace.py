@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import math
 from pathlib import Path
@@ -135,6 +135,17 @@ class LoadedPiEvents(tuple):
         instance.observed_end_ns = observed_end_ns
         instance.observed_end_source = observed_end_source
         return instance
+
+
+@dataclass(frozen=True)
+class _NativeSpanResult:
+    spans: tuple[tuple[int, SpanSpec], ...]
+    timestamps: tuple[int, ...]
+    timing_reconstructed: bool
+    unknown_count: int
+    observed_start_ns: int
+    observed_end_ns: int
+    observed_end_source: str
 
 
 def _parse_timestamp_ns(value: object) -> int | None:
@@ -499,6 +510,7 @@ def _assistant_span(
     *,
     input_messages: Sequence[Mapping[str, object]],
     end_time_source: str,
+    timing_reconstructed: bool,
 ) -> SpanSpec:
     message = end_event.get("message")
     output = dict(message) if isinstance(message, Mapping) else message
@@ -515,6 +527,11 @@ def _assistant_span(
             "pi.event.end_type": "message_end",
             "trace.end_time.source": end_time_source,
             "trace.end_time.upper_bound": True,
+            **(
+                {"trace.timing_reconstructed": True}
+                if timing_reconstructed
+                else {}
+            ),
         },
         input_value={
             "messages": [dict(message) for message in input_messages],
@@ -611,7 +628,7 @@ def _native_spans(
     *,
     topic: OrganizerTopic,
     events: Sequence[Mapping[str, object]],
-) -> tuple[list[tuple[int, SpanSpec]], tuple[int, ...], bool, int, int, int, str]:
+) -> _NativeSpanResult:
     (
         records,
         timestamps,
@@ -663,6 +680,9 @@ def _native_spans(
                         max(start_ns + 1, next_boundary),
                         input_messages=conversation,
                         end_time_source=end_source,
+                        timing_reconstructed=(
+                            end_source == "event_file_mtime_upper_bound"
+                        ),
                     ),
                 )
             )
@@ -721,14 +741,16 @@ def _native_spans(
         )
     spans.sort(key=lambda item: item[0])
     unknown_count = sum(event.get("type") not in _KNOWN_EVENT_TYPES for event in records)
-    return (
-        spans,
-        timestamps,
-        reconstructed,
-        unknown_count,
-        timestamps[0],
-        observed_end_ns,
-        observed_end_source,
+    return _NativeSpanResult(
+        spans=tuple(spans),
+        timestamps=timestamps,
+        timing_reconstructed=(
+            reconstructed or observed_end_source == "event_file_mtime"
+        ),
+        unknown_count=unknown_count,
+        observed_start_ns=timestamps[0],
+        observed_end_ns=observed_end_ns,
+        observed_end_source=observed_end_source,
     )
 
 
@@ -781,23 +803,14 @@ def build_piika_trace(
     project_name: str = DEFAULT_PROJECT_NAME,
 ) -> TraceBundle:
     """Build an agentic Piika trace from paired native Pi events."""
-    (
-        native_spans,
-        timestamps,
-        reconstructed,
-        unknown_count,
-        observed_start_ns,
-        observed_end_ns,
-        observed_end_source,
-    ) = _native_spans(
-        topic=topic, events=events
-    )
+    native = _native_spans(topic=topic, events=events)
     validation = _validation_span(
         topic=topic,
         run_record=run_record,
-        timestamp_ns=max(observed_start_ns, observed_end_ns - 1),
+        timestamp_ns=max(native.observed_start_ns, native.observed_end_ns - 1),
+        timing_reconstructed=native.observed_end_source == "event_file_mtime",
     )
-    children = [span for _, span in native_spans] + [validation]
+    children = [span for _, span in native.spans] + [validation]
     return TraceBundle(
         project_name=project_name,
         session_id=session_id,
@@ -807,11 +820,11 @@ def build_piika_trace(
             name="Piika agentic baseline",
             topic=topic,
             children=children,
-            reconstructed=reconstructed,
-            unknown_count=unknown_count,
-            observed_start_ns=observed_start_ns,
-            observed_end_ns=observed_end_ns,
-            observed_end_source=observed_end_source,
+            reconstructed=native.timing_reconstructed,
+            unknown_count=native.unknown_count,
+            observed_start_ns=native.observed_start_ns,
+            observed_end_ns=native.observed_end_ns,
+            observed_end_source=native.observed_end_source,
             system_prompt_captured=False,
         ),
     )
@@ -829,18 +842,8 @@ def build_fixed_trace(
     project_name: str = DEFAULT_PROJECT_NAME,
 ) -> TraceBundle:
     """Build a fixed-retrieval trace without collapsing evidence or prompts."""
-    (
-        native_spans,
-        timestamps,
-        reconstructed,
-        unknown_count,
-        observed_start_ns,
-        observed_end_ns,
-        observed_end_source,
-    ) = _native_spans(
-        topic=topic, events=events
-    )
-    assistant_spans = [span for _, span in native_spans if span.kind == "LLM"]
+    native = _native_spans(topic=topic, events=events)
+    assistant_spans = [span for _, span in native.spans if span.kind == "LLM"]
     failure_children = [
         replace(
             span,
@@ -849,7 +852,7 @@ def build_fixed_trace(
                 "trace.timing_reconstructed": True,
             },
         )
-        for _, span in native_spans
+        for _, span in native.spans
         if span.kind != "LLM" and span.status == "ERROR"
     ]
     attempt_children = [
@@ -866,7 +869,36 @@ def build_fixed_trace(
         for span in assistant_spans[:-1]
     ]
     generation_children = attempt_children + failure_children
-    base_ns = timestamps[0] if timestamps else time.time_ns()
+    validation = _validation_span(
+        topic=topic,
+        run_record=run_record,
+        timestamp_ns=max(native.observed_start_ns, native.observed_end_ns - 1),
+        timing_reconstructed=True,
+    )
+    prompt_work_observed = any(
+        "pi.prompt.event_count" in span.attributes for _, span in native.spans
+    )
+    if failure_children and not assistant_spans and not prompt_work_observed:
+        children = [*failure_children, validation]
+        return TraceBundle(
+            project_name=project_name,
+            session_id=session_id,
+            topic_id=topic.topic_id,
+            baseline="ragnarok-fixed",
+            root=_root_span(
+                name="Ragnarok fixed-retrieval baseline",
+                topic=topic,
+                children=children,
+                reconstructed=True,
+                unknown_count=native.unknown_count,
+                observed_start_ns=native.observed_start_ns,
+                observed_end_ns=native.observed_end_ns,
+                observed_end_source=native.observed_end_source,
+                system_prompt_captured=True,
+            ),
+        )
+
+    base_ns = native.timestamps[0] if native.timestamps else time.time_ns()
     generation_start = (
         assistant_spans[-1].start_ns if assistant_spans else base_ns + 2
     )
@@ -961,12 +993,6 @@ def build_fixed_trace(
         status_message=generation_diagnostic,
         children=tuple(generation_children) + reasoning_children,
     )
-    validation = _validation_span(
-        topic=topic,
-        run_record=run_record,
-        timestamp_ns=max(observed_start_ns, observed_end_ns - 1),
-        timing_reconstructed=True,
-    )
     children = [evidence, prompts, generation, validation]
     return TraceBundle(
         project_name=project_name,
@@ -978,10 +1004,10 @@ def build_fixed_trace(
             topic=topic,
             children=children,
             reconstructed=True,
-            unknown_count=unknown_count,
-            observed_start_ns=observed_start_ns,
-            observed_end_ns=observed_end_ns,
-            observed_end_source=observed_end_source,
+            unknown_count=native.unknown_count,
+            observed_start_ns=native.observed_start_ns,
+            observed_end_ns=native.observed_end_ns,
+            observed_end_source=native.observed_end_source,
             system_prompt_captured=True,
         ),
     )

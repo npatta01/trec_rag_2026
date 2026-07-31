@@ -234,17 +234,19 @@ def test_piika_trace_uses_native_conversation_and_observed_completion_timing(tmp
         tmp_path / "real-pattern.jsonl",
         [
             {"type": "session", "timestamp": "2027-01-15T08:00:00Z"},
-            {"type": "message_end", "message": user},
-            {"type": "message_start", "message": first},
-            {"type": "message_end", "message": first},
+            {"type": "message_end", "timestamp": user_ms, "message": user},
+            {"type": "message_start", "timestamp": first_ms, "message": first},
+            {"type": "message_end", "timestamp": first_ms + 1, "message": first},
             {
                 "type": "tool_execution_start",
+                "timestamp": first_ms + 2,
                 "toolCallId": "call-1",
                 "toolName": "search",
                 "args": {"query": "q"},
             },
             {
                 "type": "tool_execution_end",
+                "timestamp": tool_result_ms - 1,
                 "toolCallId": "call-1",
                 "toolName": "search",
                 "result": {
@@ -253,17 +255,22 @@ def test_piika_trace_uses_native_conversation_and_observed_completion_timing(tmp
                 },
                 "isError": False,
             },
-            {"type": "message_end", "message": tool_result},
-            {"type": "turn_end", "message": first},
-            {"type": "message_start", "message": final},
-            {"type": "message_end", "message": final},
-            {"type": "turn_end", "message": final},
-            {"type": "agent_end"},
+            {
+                "type": "message_end",
+                "timestamp": tool_result_ms,
+                "message": tool_result,
+            },
+            {"type": "turn_end", "timestamp": tool_result_ms + 1, "message": first},
+            {"type": "message_start", "timestamp": final_ms, "message": final},
+            {"type": "message_end", "timestamp": final_ms + 1, "message": final},
+            {"type": "turn_end", "timestamp": final_ms + 2, "message": final},
+            {"type": "agent_end", "timestamp": final_ms + 3},
         ],
     )
     os.utime(path, ns=(completion_ns, completion_ns))
 
     events = load_pi_events(path)
+    assert events.timing_reconstructed is False
     bundle = build_piika_trace(
         topic=OrganizerTopic("rag2026-1", "narrative must not be fabricated as every turn"),
         events=events,
@@ -285,6 +292,11 @@ def test_piika_trace_uses_native_conversation_and_observed_completion_timing(tmp
     assert llms[1].start_ns == final_ms * 1_000_000
     assert llms[1].end_ns == completion_ns
     assert llms[1].attributes["trace.end_time.source"] == "event_file_mtime_upper_bound"
+    assert llms[1].attributes["trace.timing_reconstructed"] is True
+    assert bundle.root.attributes["trace.timing_reconstructed"] is True
+    assert (
+        bundle.root.children[-1].attributes["trace.timing_reconstructed"] is True
+    )
     assert llms[1].input_value["messages"] == [user, first, tool_result]
     assert [tool["function"]["name"] for tool in llms[1].input_value["tools"]] == [
         "search",
@@ -642,6 +654,49 @@ def test_fixed_trace_nests_native_failures_under_generation(tmp_path):
     assert len(generation.children) == 1
     assert generation.children[0].name == "Pi extension_error"
     assert generation.children[0].output_value["error"] == "fixed extension failed"
+    assert bundle.root.status == "ERROR"
+
+
+def test_fixed_trace_early_native_failure_omits_unreached_success_spans(tmp_path):
+    events = load_pi_events(
+        _write_jsonl(
+            tmp_path / "fixed-early-failure.jsonl",
+            [
+                {
+                    "type": "extension_error",
+                    "timestamp": 1_800_000_000_000,
+                    "error": "fixed extension failed before prompt construction",
+                }
+            ],
+        )
+    )
+
+    bundle = build_fixed_trace(
+        topic=OrganizerTopic("rag2026-1", "question"),
+        events=events,
+        run_record={
+            "status": "failed",
+            "error": "fixed extension failed before prompt construction",
+        },
+        system_prompt="system",
+        user_prompt="user",
+        documents=[{"rank": 1, "docid": "d1", "text": "full text"}],
+        session_id="session",
+    )
+
+    assert [span.name for span in bundle.root.children] == [
+        "Pi extension_error",
+        "organizer validation",
+    ]
+    failure, validation = bundle.root.children
+    assert failure.status == "ERROR"
+    assert failure.output_value["error"] == (
+        "fixed extension failed before prompt construction"
+    )
+    assert validation.status == "ERROR"
+    assert validation.status_message == (
+        "fixed extension failed before prompt construction"
+    )
     assert bundle.root.status == "ERROR"
 
 

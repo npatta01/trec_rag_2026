@@ -521,9 +521,14 @@ def test_fixed_build_retains_early_native_failure_without_a_user_prompt(tmp_path
     assert main(args, ignored_checker=_ignored) == 0
     bundle = read_trace_bundle(tmp_path / "fixed-trace.json")
     assert bundle.root.status == "ERROR"
-    assert bundle.root.children[2].status == "ERROR"
-    assert bundle.root.children[-1].status == "ERROR"
-    assert bundle.root.children[-1].output_value == failure
+    assert [span.name for span in bundle.root.children] == [
+        "Pi extension_error",
+        "organizer validation",
+    ]
+    native_failure, validation = bundle.root.children
+    assert native_failure.status == "ERROR"
+    assert validation.status == "ERROR"
+    assert validation.output_value == failure
 
 
 def test_failed_fixed_build_still_rejects_a_wrong_native_user_prompt(tmp_path):
