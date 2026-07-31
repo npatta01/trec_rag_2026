@@ -877,3 +877,30 @@ raw full documents, or cache contents.
   code. No task description, query, snippet, document, cache path, or secret is
   added.
 - No live provider run was performed for this fix round.
+
+### Task 4 fix round 2 — async task span regression
+
+- Added a focused asynchronous task-middleware tracing contract. It verifies
+  compact task-span creation/context, final budget outcome, span cleanup, task
+  context reset, and researcher-slot release.
+- Fresh verification, with no live provider rerun:
+
+  ```console
+  $ .venv/bin/python-rocm -m pytest -q \
+      code/tests/test_deepagent_snippets.py \
+      code/tests/test_deepagent_budget.py \
+      code/tests/test_deepagent_research.py \
+      code/tests/test_deepagent_evidence.py \
+      code/tests/test_deepagent_retrieval.py \
+      code/tests/test_deepagent_tracing.py
+  277 passed in 9.75s
+
+  $ /home/npatta01/anaconda3/bin/ruff check <the same six source/test targets>
+  All checks passed!
+
+  $ git diff --check
+  # exit 0; no output
+  ```
+
+  The original normal and tiny-budget live-run boundaries are unchanged and no
+  live provider invocation was made in this fix round.

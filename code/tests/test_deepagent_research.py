@@ -275,6 +275,49 @@ def test_async_task_middleware_matches_sync_behavior() -> None:
     assert budget.snapshot().completed_researchers == 1
 
 
+def test_async_task_middleware_traces_compact_outcome_and_cleans_up() -> None:
+    created: list[tuple[str, int, str]] = []
+    outcomes: list[dict[str, object]] = []
+    closed: list[bool] = []
+
+    class Span:
+        def record_budget_outcome(self, **kwargs: object) -> None:
+            outcomes.append(kwargs)
+
+    class Tracing:
+        @contextmanager
+        def researcher_task_span(
+            self, task_id: str, round_index: int, depth: str
+        ):
+            created.append((task_id, round_index, depth))
+            try:
+                yield Span()
+            finally:
+                closed.append(True)
+
+    budget = ResearchBudget(ResearchBudgetConfig())
+    middleware = ResearchTaskBudgetMiddleware(budget, tracing=Tracing())
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        assert current_research_task() == ResearchTaskEnvelope.model_validate_json(
+            task_description()
+        )
+        return ToolMessage(content="bundle", tool_call_id="task-call")
+
+    result = asyncio.run(
+        middleware.awrap_tool_call(task_request(description=task_description()), handler)
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert created == [("R1-N1", 1, "survey")]
+    assert closed == [True]
+    assert outcomes[-1]["code"] == "OK"
+    assert outcomes[-1]["must_stop"] is False
+    assert outcomes[-1]["snapshot"]["completed_researchers"] == 1
+    assert current_research_task() is None
+    assert budget.snapshot().active_researchers == 0
+
+
 def test_researcher_spec_keeps_the_main_model_and_excludes_todos() -> None:
     model = FakeMessagesListChatModel(responses=[AIMessage(content="unused")])
     tools: list[Callable[..., object]] = []
