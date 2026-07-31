@@ -357,6 +357,17 @@ def test_document_zip_normalizes_non_utf8_member_failure(tmp_path: Path) -> None
         load_documents(archive_path, None, {"climbmix-a"}, 100)
 
 
+def test_plain_document_input_normalizes_non_utf8_failure(tmp_path: Path) -> None:
+    documents_path = tmp_path / "non-utf8-documents.jsonl"
+    documents_path.write_bytes(b"\xff\n")
+
+    with pytest.raises(
+        ValueError,
+        match=r"non-utf8-documents\.jsonl: document input is not valid UTF-8",
+    ):
+        load_documents(documents_path, None, {"climbmix-a"}, 100)
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -439,6 +450,19 @@ def _generated_record() -> dict[str, Any]:
             {"text": "The second source adds a limitation.", "citations": [1]},
         ],
     }
+
+
+def test_provider_schema_uses_supported_strict_cardinality_constraints() -> None:
+    schema = competition_rag.output_schema()
+    references = schema["properties"]["references"]
+    answer = schema["properties"]["answer"]
+    citations = answer["items"]["properties"]["citations"]
+
+    assert references["minItems"] == 1
+    assert answer["minItems"] == 1
+    assert citations["minItems"] == 1
+    assert citations["maxItems"] == 3
+    assert "uniqueItems" not in json.dumps(schema)
 
 
 def _submission_record() -> dict[str, Any]:
@@ -819,6 +843,47 @@ def test_resume_reuses_valid_rows_without_model_calls(tmp_path: Path) -> None:
     assert config.output_path.exists()
 
 
+def test_resume_regenerates_row_with_non_strict_metadata(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path)
+    initial = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["climbmix-a"], "A supports it."),
+            "rag2026-2": _topic_output(["climbmix-c"], "C supports it."),
+        }
+    )
+    asyncio.run(run_generation(config, initial))
+    row_path = next(
+        path
+        for path in (config.work_dir / "rows").glob("*.json")
+        if json.loads(path.read_text(encoding="utf-8"))["metadata"]["narrative_id"]
+        == "rag2026-1"
+    )
+    row = json.loads(row_path.read_text(encoding="utf-8"))
+    row["metadata"]["participant_note"] = "organizer-valid but not generated-profile"
+    row_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    resumed = FakeGenerator(
+        {"rag2026-1": _topic_output(["climbmix-a"], "Regenerated strict row.")}
+    )
+
+    asyncio.run(run_generation(replace(config, resume=True), resumed))
+
+    assert [call["topic_id"] for call in resumed.calls] == ["rag2026-1"]
+    output_rows = [
+        json.loads(line)
+        for line in config.output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    regenerated = next(
+        item for item in output_rows if item["metadata"]["narrative_id"] == "rag2026-1"
+    )
+    assert set(regenerated["metadata"]) == {
+        "team_id",
+        "narrative_id",
+        "narrative",
+        "run_id",
+        "run_desc",
+    }
+
+
 def test_generation_limits_parallel_model_calls_to_configured_concurrency(
     tmp_path: Path,
 ) -> None:
@@ -1082,6 +1147,32 @@ def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> N
 
     assert not config.output_path.exists()
     assert list((config.work_dir / "errors").glob("*.txt"))
+
+
+@pytest.mark.parametrize(
+    ("references", "citations"),
+    [
+        pytest.param(["climbmix-a"], [], id="empty-citations"),
+        pytest.param(["climbmix-a"], [0, 0], id="duplicate-citations"),
+        pytest.param(["climbmix-a"], ["climbmix-a"], id="direct-docid-citation"),
+        pytest.param(["climbmix-a", "climbmix-b"], [0], id="uncited-reference"),
+    ],
+)
+def test_generation_rejects_organizer_valid_rows_outside_strict_profile(
+    tmp_path: Path,
+    references: list[str],
+    citations: list[int | str],
+) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": references,
+        "answer": [{"text": "Generated answer.", "citations": citations}],
+    }
+
+    with pytest.raises(RuntimeError, match="1 topic"):
+        asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    assert not config.output_path.exists()
 
 
 def test_persisted_raw_responses_and_errors_redact_configured_api_key(

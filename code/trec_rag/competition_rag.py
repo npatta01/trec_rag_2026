@@ -318,7 +318,12 @@ def _document_lines(path: Path, archive_member: str | None) -> Iterator[TextIO]:
         if archive_member is not None:
             raise ValueError("archive_member requires a ZIP document input")
         with document_path.open(encoding="utf-8") as handle:
-            yield handle
+            try:
+                yield handle
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"{document_path}: document input is not valid UTF-8"
+                ) from exc
         return
     try:
         with zipfile.ZipFile(document_path) as archive:
@@ -550,16 +555,26 @@ def output_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["references", "answer"],
         "properties": {
-            "references": {"type": "array", "items": {"type": "string"}},
+            "references": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
             "answer": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["text", "citations"],
                     "properties": {
                         "text": {"type": "string"},
-                        "citations": {"type": "array", "items": {"type": "integer"}},
+                        "citations": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "minItems": 1,
+                            "maxItems": 3,
+                        },
                     },
                 },
             },
@@ -868,6 +883,50 @@ def validate_submission_record(
         raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
 
 
+def _validate_generated_submission_record(
+    record: dict[str, Any],
+    *,
+    topic_id: str,
+    narrative: str,
+    allowed_docids: list[str],
+    team_id: str,
+    run_id: str,
+    run_desc: str,
+) -> None:
+    """Enforce this generator's strict organizer-baseline output profile."""
+    validate_submission_record(
+        record,
+        topic_id=topic_id,
+        narrative=narrative,
+        allowed_docids=allowed_docids,
+        team_id=team_id,
+        run_id=run_id,
+        run_desc=run_desc,
+    )
+    if set(record["metadata"]) != {
+        "team_id",
+        "narrative_id",
+        "narrative",
+        "run_id",
+        "run_desc",
+    }:
+        raise ValueError(f"{topic_id}: generated metadata must contain exactly five fields")
+    used: set[int] = set()
+    for index, item in enumerate(record["answer"]):
+        citations = item["citations"]
+        if (
+            not 1 <= len(citations) <= 3
+            or any(type(citation) is not int for citation in citations)
+            or len(citations) != len(set(citations))
+        ):
+            raise ValueError(
+                f"{topic_id}: answer[{index}] must have 1-3 unique integer citations"
+            )
+        used.update(citations)
+    if used != set(range(len(record["references"]))):
+        raise ValueError(f"{topic_id}: generated answer has uncited references")
+
+
 def _safe_topic_name(topic_id: str) -> str:
     prefix = "".join(
         character if character.isalnum() or character in "-_." else "_"
@@ -989,7 +1048,7 @@ def _saved_record(
         record = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(record, dict):
             return None
-        validate_submission_record(
+        _validate_generated_submission_record(
             record,
             topic_id=topic_id,
             narrative=narrative,
@@ -1037,7 +1096,7 @@ async def _generate_topic(
             run_id=config.run_id,
             run_desc=config.run_desc,
         )
-        validate_submission_record(
+        _validate_generated_submission_record(
             record,
             topic_id=topic_id,
             narrative=narrative,
