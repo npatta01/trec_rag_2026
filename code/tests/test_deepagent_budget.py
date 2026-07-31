@@ -40,6 +40,8 @@ def test_parallel_task_reservations_never_exceed_concurrency() -> None:
 
     assert [decision.ok for decision in decisions] == [True, True, True, False]
     assert decisions[-1].code == "CONCURRENCY_BUDGET_EXHAUSTED"
+    assert decisions[-1].must_stop is False
+    assert budget.snapshot().stop_code is None
 
 
 def test_simultaneous_task_reservations_never_exceed_concurrency() -> None:
@@ -97,17 +99,22 @@ def test_three_no_yield_calls_block_a_fourth_retrieval() -> None:
 
     assert decision.code == "NO_YIELD_STOP"
     assert decision.must_stop is True
-    assert decision.snapshot.stop_code == "NO_YIELD_STOP"
+    assert decision.snapshot.stop_code is None
 
 
-def test_third_no_yield_persists_run_stop_before_another_reservation() -> None:
+def test_third_no_yield_stops_only_that_researcher() -> None:
     budget, context = active_budget()
 
     for _ in range(3):
         assert budget.reserve_retrieval(context, "search_climbmix").ok
         budget.record_yield(context, ())
 
-    assert budget.snapshot().stop_code == "NO_YIELD_STOP"
+    budget.finish_task(context)
+    other = ResearchTaskContext("T2", 1, "survey", ("N2",))
+
+    assert budget.snapshot().stop_code is None
+    assert budget.reserve_task(other).ok
+    assert budget.reserve_retrieval(other, "search_climbmix").ok
 
 
 def test_tenth_task_is_admitted_and_eleventh_is_refused() -> None:
@@ -122,6 +129,20 @@ def test_tenth_task_is_admitted_and_eleventh_is_refused() -> None:
 
     assert [decision.ok for decision in decisions] == [True] * 10 + [False]
     assert decisions[-1].code == "TASK_BUDGET_EXHAUSTED"
+    assert decisions[-1].must_stop is True
+    assert decisions[-1].snapshot.stop_code == "TASK_BUDGET_EXHAUSTED"
+
+
+def test_last_finished_researcher_persists_run_wide_exhaustion() -> None:
+    budget = ResearchBudget(
+        ResearchBudgetConfig(max_researcher_invocations=1, max_concurrent=1)
+    )
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+    assert budget.reserve_task(context).ok
+
+    budget.finish_task(context)
+
+    assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
 
 
 def test_fourth_round_is_admitted_and_fifth_is_refused() -> None:
@@ -133,6 +154,8 @@ def test_fourth_round_is_admitted_and_fifth_is_refused() -> None:
     decision = budget.reserve_task(ResearchTaskContext("T5", 5, "deep", ("N1",)))
 
     assert decision.code == "ROUND_BUDGET_EXHAUSTED"
+    assert decision.must_stop is True
+    assert decision.snapshot.stop_code == "ROUND_BUDGET_EXHAUSTED"
 
 
 def test_hundredth_retrieval_is_admitted_and_next_is_refused() -> None:
@@ -150,6 +173,69 @@ def test_hundredth_retrieval_is_admitted_and_next_is_refused() -> None:
 
     assert all(decision.ok for decision in decisions[:100])
     assert decisions[-1].code == "RETRIEVAL_BUDGET_EXHAUSTED"
+    assert decisions[-1].must_stop is True
+    assert decisions[-1].snapshot.stop_code == "RETRIEVAL_BUDGET_EXHAUSTED"
+
+
+def test_last_combined_retrieval_is_admitted_with_terminal_snapshot() -> None:
+    budget = ResearchBudget(
+        ResearchBudgetConfig(
+            max_retrieval_calls=1,
+            max_tools_per_researcher=2,
+            max_searches_per_researcher=2,
+        )
+    )
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+    assert budget.reserve_task(context).ok
+
+    decision = budget.reserve_retrieval(context, "search_climbmix")
+
+    assert decision.ok is True
+    assert decision.code == "RETRIEVAL_BUDGET_EXHAUSTED"
+    assert decision.must_stop is True
+    assert decision.snapshot.stop_code == "RETRIEVAL_BUDGET_EXHAUSTED"
+
+
+def test_last_round_completion_persists_run_wide_exhaustion() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_rounds=1))
+    report = EvidenceCoverageState("What changed?").report()
+
+    decision = budget.complete_round(1, report)
+
+    assert decision.code == "ROUND_BUDGET_EXHAUSTED"
+    assert decision.must_stop is True
+    assert decision.snapshot.stop_code == "ROUND_BUDGET_EXHAUSTED"
+
+
+def test_hard_deadline_and_no_progress_override_global_cap_stop_codes() -> None:
+    clock = FakeClock()
+    budget = ResearchBudget(
+        ResearchBudgetConfig(
+            max_retrieval_calls=1,
+            max_tools_per_researcher=2,
+            max_searches_per_researcher=2,
+            no_progress_rounds=1,
+            soft_seconds=0,
+            hard_seconds=1,
+        ),
+        clock=clock,
+    )
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+    assert budget.reserve_task(context).ok
+
+    assert (
+        budget.reserve_retrieval(context, "search_climbmix").snapshot.stop_code
+        == "RETRIEVAL_BUDGET_EXHAUSTED"
+    )
+    assert (
+        budget.complete_round(
+            1, EvidenceCoverageState("What changed?").report()
+        ).snapshot.stop_code
+        == "NO_PROGRESS_STOP"
+    )
+    clock.advance(1)
+
+    assert budget.snapshot().stop_code == "HARD_DEADLINE_REACHED"
 
 
 def test_retrieval_requires_the_exact_active_task_context() -> None:

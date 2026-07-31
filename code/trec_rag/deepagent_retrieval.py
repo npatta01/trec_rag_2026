@@ -769,7 +769,7 @@ class DeepAgentRetriever:
             payload: dict[str, object] = {
                 "ok": decision.ok,
                 "code": code or decision.code,
-                "must_stop": decision.must_stop or snapshot.stop_code is not None,
+                "must_stop": decision.must_stop or task_must_stop(snapshot),
                 "budget_snapshot": snapshot.as_dict(),
             }
             if error is not None:
@@ -778,6 +778,12 @@ class DeepAgentRetriever:
 
         def record_no_yield(context: ResearchTaskContext) -> None:
             budget.record_yield(context, ())
+
+        def task_must_stop(snapshot: BudgetSnapshot) -> bool:
+            context = task_context()
+            return snapshot.stop_code is not None or (
+                context is not None and budget.task_stop_code(context) is not None
+            )
 
         def search_climbmix(
             query: str,
@@ -862,7 +868,7 @@ class DeepAgentRetriever:
                     {
                         "ok": True,
                         "code": decision.code,
-                        "must_stop": snapshot.stop_code is not None,
+                        "must_stop": decision.must_stop or task_must_stop(snapshot),
                         "budget_snapshot": snapshot.as_dict(),
                         "documents": _candidate_metadata(
                             search.candidates, limit=self._hits_per_search
@@ -1059,7 +1065,7 @@ class DeepAgentRetriever:
                 {
                     "ok": True,
                     "code": decision.code,
-                    "must_stop": snapshot.stop_code is not None,
+                    "must_stop": decision.must_stop or task_must_stop(snapshot),
                     "budget_snapshot": snapshot.as_dict(),
                 }
             )

@@ -27,6 +27,13 @@ BudgetCode = Literal[
 
 _SEARCH_TOOL = "search_climbmix"
 _SNIPPET_TOOL = "extract_relevant_snippets"
+_RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
+    "ROUND_BUDGET_EXHAUSTED": 10,
+    "TASK_BUDGET_EXHAUSTED": 20,
+    "RETRIEVAL_BUDGET_EXHAUSTED": 30,
+    "NO_PROGRESS_STOP": 90,
+    "HARD_DEADLINE_REACHED": 100,
+}
 
 
 @dataclass(frozen=True)
@@ -142,6 +149,7 @@ class ResearchBudget:
         self._task_snippet_counts: dict[str, int] = {}
         self._seen_yield_ids: dict[str, set[str]] = {}
         self._no_yield_streaks: dict[str, int] = {}
+        self._task_stop_codes: dict[str, BudgetCode] = {}
         self._round_progress: dict[int, tuple[frozenset[str], ...]] = {}
         self._round_decisions: dict[int, BudgetDecision] = {}
         self._no_progress_streak = 0
@@ -156,9 +164,9 @@ class ResearchBudget:
             if context.research_task_id in self._active_tasks:
                 return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
             if self._reserved_researchers >= self._config.max_researcher_invocations:
-                return self._refusal("TASK_BUDGET_EXHAUSTED")
+                return self._refusal("TASK_BUDGET_EXHAUSTED", must_stop=True)
             if context.round_index > self._config.max_rounds:
-                return self._refusal("ROUND_BUDGET_EXHAUSTED")
+                return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
             if len(self._active_tasks) >= self._config.max_concurrent:
                 return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
 
@@ -182,10 +190,13 @@ class ResearchBudget:
             stopping = self._global_stop_code()
             if stopping is not None:
                 return self._refusal(stopping, must_stop=True)
-            if self._no_yield_streaks.get(task_id, 0) >= self._config.no_yield_calls:
-                return self._refusal("NO_YIELD_STOP", must_stop=True)
+            task_stopping = self._task_stop_codes.get(task_id)
+            if task_stopping is not None:
+                return self._task_refusal(task_stopping)
             if self._reserved_retrieval_calls >= self._config.max_retrieval_calls:
-                return self._refusal("RETRIEVAL_BUDGET_EXHAUSTED")
+                return self._refusal(
+                    "RETRIEVAL_BUDGET_EXHAUSTED", must_stop=True
+                )
             if self._task_tool_counts.get(task_id, 0) >= self._config.max_tools_per_researcher:
                 return self._refusal("TASK_TOOL_BUDGET_EXHAUSTED")
             if (
@@ -211,6 +222,8 @@ class ResearchBudget:
                 self._task_snippet_counts[task_id] = (
                     self._task_snippet_counts.get(task_id, 0) + 1
                 )
+            if self._reserved_retrieval_calls >= self._config.max_retrieval_calls:
+                return self._terminal_admission("RETRIEVAL_BUDGET_EXHAUSTED")
             return self._admission()
 
     def finish_task(self, context: ResearchTaskContext) -> None:
@@ -224,6 +237,12 @@ class ResearchBudget:
                 raise ValueError("finish requires the exact active task context")
             del self._active_tasks[task_id]
             self._completed_researchers += 1
+            if (
+                self._reserved_researchers
+                >= self._config.max_researcher_invocations
+                and not self._active_tasks
+            ):
+                self._persist_stop("TASK_BUDGET_EXHAUSTED")
 
     def record_yield(
         self, context: ResearchTaskContext, identifiers: Iterable[str]
@@ -239,7 +258,12 @@ class ResearchBudget:
             else:
                 self._no_yield_streaks[task_id] = self._no_yield_streaks.get(task_id, 0) + 1
                 if self._no_yield_streaks[task_id] >= self._config.no_yield_calls:
-                    self._persist_stop("NO_YIELD_STOP")
+                    self._task_stop_codes[task_id] = "NO_YIELD_STOP"
+
+    def task_stop_code(self, context: ResearchTaskContext) -> BudgetCode | None:
+        """Return a researcher-local stop without changing the run-wide snapshot."""
+        with self._lock:
+            return self._task_stop_codes.get(context.research_task_id)
 
     def complete_round(
         self, round_index: int, report: _CoverageReport
@@ -247,7 +271,7 @@ class ResearchBudget:
         """Record semantic coverage progress and enforce the no-progress stop."""
         with self._lock:
             if round_index > self._config.max_rounds:
-                return self._refusal("ROUND_BUDGET_EXHAUSTED")
+                return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
             existing_decision = self._round_decisions.get(round_index)
             if existing_decision is not None:
                 return existing_decision
@@ -266,6 +290,8 @@ class ResearchBudget:
                 self._no_progress_streak += 1
             if self._no_progress_streak >= self._config.no_progress_rounds:
                 decision = self._refusal("NO_PROGRESS_STOP", must_stop=True)
+            elif len(self._completed_round_indexes) >= self._config.max_rounds:
+                decision = self._terminal_admission("ROUND_BUDGET_EXHAUSTED")
             else:
                 decision = self._admission()
             self._round_decisions[round_index] = decision
@@ -296,13 +322,13 @@ class ResearchBudget:
     def _global_stop_code(self) -> BudgetCode | None:
         if self._elapsed_seconds() >= self._config.hard_seconds:
             self._persist_stop("HARD_DEADLINE_REACHED")
-            return "HARD_DEADLINE_REACHED"
         return self._stop_code
 
     def _persist_stop(self, code: BudgetCode) -> None:
-        """Persist a true run-stop decision while preserving hard-deadline priority."""
+        """Persist the highest-priority true run-stop decision."""
 
-        if self._stop_code is None or code == "HARD_DEADLINE_REACHED":
+        current_priority = _RUN_STOP_PRIORITY.get(self._stop_code, -1)
+        if _RUN_STOP_PRIORITY.get(code, -1) > current_priority:
             self._stop_code = code
 
     def _admission(self) -> BudgetDecision:
@@ -319,6 +345,23 @@ class ResearchBudget:
             code=code,
             snapshot=self._snapshot(),
             must_stop=must_stop,
+        )
+
+    def _task_refusal(self, code: BudgetCode) -> BudgetDecision:
+        return BudgetDecision(
+            ok=False,
+            code=code,
+            snapshot=self._snapshot(),
+            must_stop=True,
+        )
+
+    def _terminal_admission(self, code: BudgetCode) -> BudgetDecision:
+        self._persist_stop(code)
+        return BudgetDecision(
+            ok=True,
+            code=code,
+            snapshot=self._snapshot(),
+            must_stop=True,
         )
 
     def _snapshot(self) -> BudgetSnapshot:

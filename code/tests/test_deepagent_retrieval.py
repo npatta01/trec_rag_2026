@@ -1088,7 +1088,9 @@ def test_retrieve_concurrent_blank_followups_are_budgeted_as_no_yield() -> None:
         json.loads(item)["code"] == "NO_YIELD_STOP"
         for item in successful_results
     )
-    assert result.stopping_reason == "NO_YIELD_STOP"
+    assert all(json.loads(item)["must_stop"] is True for item in successful_results)
+    assert result.budget_snapshot.stop_code is None
+    assert result.stopping_reason == "agent_completed"
 
 
 def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order() -> (
@@ -1149,8 +1151,10 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
         item["query"] for item in result.candidates[0].provenance
     ] == recorded_queries
     assert all(json.loads(item)["ok"] for item in tool_results)
-    assert json.loads(tool_results[-1])["must_stop"] is True
-    assert result.stopping_reason == "NO_YIELD_STOP"
+    last_payload = json.loads(tool_results[-1])
+    assert last_payload["must_stop"] is True
+    assert last_payload["budget_snapshot"]["stop_code"] is None
+    assert result.stopping_reason == "agent_completed"
 
 
 def test_retrieve_rejects_blank_and_original_duplicate_followups_with_budget_charge() -> (
@@ -1611,7 +1615,7 @@ def test_main_tool_filter_reserves_the_last_model_turn_for_finalization() -> Non
     assert "grounded partial result immediately" in str(observed["system"])
 
 
-def test_main_tool_filter_sees_shared_no_yield_stop_immediately() -> None:
+def test_main_tool_filter_keeps_tools_after_task_local_no_yield_stop() -> None:
     config = ResearchBudgetConfig(no_yield_calls=1)
     budget = ResearchBudget(config)
     context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
@@ -1634,8 +1638,11 @@ def test_main_tool_filter_sees_shared_no_yield_stop_immediately() -> None:
 
     middleware.wrap_model_call(request, handler)
 
-    assert budget.snapshot().stop_code == "NO_YIELD_STOP"
-    assert observed["tools"] == []
+    assert budget.snapshot().stop_code is None
+    assert observed["tools"] == [
+        {"name": "task"},
+        {"name": "view_retrieval_state"},
+    ]
 
 
 @pytest.mark.parametrize(
