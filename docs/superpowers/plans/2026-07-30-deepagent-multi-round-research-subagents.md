@@ -865,3 +865,15 @@ raw full documents, or cache contents.
   1.3.14; `langchain-openrouter` 0.2.7; `arize-phoenix-client` 2.13.0;
   `arize-phoenix-otel` 0.16.1; `openinference-instrumentation-langchain`
   0.1.67.
+
+### Task 4 fix round 1 — Phoenix precedence and compact task context
+
+- The Phoenix root span now preserves the exact returned `stopping_reason`.
+  `budget_stop_code` is a separate compact attribute and does not override a
+  coverage-terminal reason.
+- Existing manual ClimbMix, snippet, and researcher-task spans now receive
+  only sanitized task ID, round, depth, budget decision/must-stop state,
+  remaining researcher/round/retrieval counts, and an optional terminal budget
+  code. No task description, query, snippet, document, cache path, or secret is
+  added.
+- No live provider run was performed for this fix round.

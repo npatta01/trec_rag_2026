@@ -26,6 +26,7 @@ MAX_TRACE_DOCUMENT_ID_CHARACTERS = 512
 MAX_TRACE_SNIPPETS = 10
 MAX_TRACE_SNIPPET_TEXT_CHARACTERS = 3_500
 MAX_TRACE_RANKER_BACKEND_CHARACTERS = 512
+MAX_TRACE_RESEARCH_TASK_ID_CHARACTERS = 128
 _CLOUD_HOST = "app.phoenix.arize.com"
 _LIVE_PROVIDER_CACHE: dict[tuple[str, str, str | None], _TracerProvider] = {}
 _ACTIVE_INSTRUMENTATION: tuple[object, ...] | None = None
@@ -96,10 +97,82 @@ def _optional_finite_score(name: str, value: object) -> float | None:
     return float(value)
 
 
+_RESEARCH_DEPTHS = frozenset({"survey", "focused", "deep"})
+_BUDGET_CODES = frozenset(
+    {
+        "OK",
+        "SOFT_DEADLINE_REACHED",
+        "HARD_DEADLINE_REACHED",
+        "TASK_BUDGET_EXHAUSTED",
+        "ROUND_BUDGET_EXHAUSTED",
+        "CONCURRENCY_BUDGET_EXHAUSTED",
+        "RETRIEVAL_BUDGET_EXHAUSTED",
+        "TASK_TOOL_BUDGET_EXHAUSTED",
+        "NO_YIELD_STOP",
+        "NO_PROGRESS_STOP",
+    }
+)
+_RESEARCH_SNAPSHOT_COUNT_FIELDS = (
+    "remaining_researchers",
+    "remaining_rounds",
+    "remaining_retrieval_calls",
+)
+
+
+def _research_context_attributes(
+    *,
+    research_task_id: object,
+    round_index: object,
+    depth: object,
+    code: object,
+    must_stop: object,
+    snapshot: Mapping[str, object],
+) -> dict[str, object]:
+    if (
+        not isinstance(research_task_id, str)
+        or not research_task_id
+        or len(research_task_id) > MAX_TRACE_RESEARCH_TASK_ID_CHARACTERS
+        or any(not (character.isalnum() or character in "._:-") for character in research_task_id)
+    ):
+        raise ValueError("research_task_id is not safe for retrieval tracing")
+    if isinstance(round_index, bool) or not isinstance(round_index, int) or round_index < 1:
+        raise TypeError("round_index must be a positive integer")
+    if depth not in _RESEARCH_DEPTHS:
+        raise ValueError("research depth is not safe for retrieval tracing")
+    if code not in _BUDGET_CODES:
+        raise ValueError("budget code is not safe for retrieval tracing")
+    if not isinstance(must_stop, bool):
+        raise TypeError("budget must_stop must be a boolean")
+    counts = {
+        name: _non_negative_integer(name, snapshot.get(name))
+        for name in _RESEARCH_SNAPSHOT_COUNT_FIELDS
+    }
+    stop_code = snapshot.get("stop_code")
+    if stop_code is not None and stop_code not in _BUDGET_CODES:
+        raise ValueError("budget stop_code is not safe for retrieval tracing")
+    return {
+        "deepagent.research_task_id": research_task_id,
+        "deepagent.research_round_index": round_index,
+        "deepagent.research_depth": depth,
+        "deepagent.budget_code": code,
+        "deepagent.budget_must_stop": must_stop,
+        **{f"deepagent.{name}": value for name, value in counts.items()},
+        **(
+            {"deepagent.budget_stop_code": stop_code}
+            if stop_code is not None
+            else {}
+        ),
+    }
+
+
 class _RetrieverSpan(_SafeSpan):
     """Allow only the bounded, typed evidence for one retrieval operation."""
 
     _CACHE_STATUSES = frozenset({"hit", "miss", "bypass", "not_reported"})
+
+    def record_research_context(self, **kwargs: object) -> None:
+        for key, value in _research_context_attributes(**kwargs).items():
+            self._set(key, value)
 
     def record_search(
         self,
@@ -168,6 +241,10 @@ class _SnippetSpan(_SafeSpan):
     ) -> None:
         super().__init__(wrapped, trace_content=trace_content)
         self._document_id = document_id
+
+    def record_research_context(self, **kwargs: object) -> None:
+        for key, value in _research_context_attributes(**kwargs).items():
+            self._set(key, value)
 
     def record_page(
         self,
@@ -296,10 +373,12 @@ class _AgentSpan(_SafeSpan):
             "agent_completed",
             "search_budget_exhausted",
             "budget_exhausted",
+            "completion",
+            "saturation",
             "coverage_complete",
             "evidence_saturated",
         }
-    )
+    ).union(_BUDGET_CODES)
     _BUDGET_STOP_CODES = frozenset(
         {
             "HARD_DEADLINE_REACHED",
@@ -379,6 +458,37 @@ class _AgentSpan(_SafeSpan):
             self._set(f"{prefix}.{name}", count)
         if budget_stop_code is not None:
             self._set("deepagent.budget_stop_code", budget_stop_code)
+
+
+class _ResearchTaskSpan(_SafeSpan):
+    """Allow compact task admission/outcome evidence without task content."""
+
+    def __init__(
+        self,
+        wrapped: object,
+        *,
+        trace_content: bool,
+        research_task_id: str,
+        round_index: int,
+        depth: str,
+    ) -> None:
+        super().__init__(wrapped, trace_content=trace_content)
+        self._research_task_id = research_task_id
+        self._round_index = round_index
+        self._depth = depth
+
+    def record_budget_outcome(
+        self, *, code: str, must_stop: bool, snapshot: Mapping[str, object]
+    ) -> None:
+        for key, value in _research_context_attributes(
+            research_task_id=self._research_task_id,
+            round_index=self._round_index,
+            depth=self._depth,
+            code=code,
+            must_stop=must_stop,
+            snapshot=snapshot,
+        ).items():
+            self._set(key, value)
 
 
 def _normalize_otlp_http_endpoint(endpoint: str) -> str:
@@ -496,6 +606,21 @@ class RetrievalTracing:
         ) as span:
             yield _SnippetSpan(
                 span, trace_content=self._trace_content, document_id=document_id
+            )
+
+    @contextmanager
+    def researcher_task_span(
+        self, research_task_id: str, round_index: int, depth: str
+    ) -> Iterator[_ResearchTaskSpan]:
+        with self._span(
+            "deepagent.researcher_task", "", OpenInferenceSpanKindValues.AGENT
+        ) as span:
+            yield _ResearchTaskSpan(
+                span,
+                trace_content=self._trace_content,
+                research_task_id=research_task_id,
+                round_index=round_index,
+                depth=depth,
             )
 
     def force_flush(self) -> bool:

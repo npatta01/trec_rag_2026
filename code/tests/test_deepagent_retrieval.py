@@ -2244,6 +2244,67 @@ def test_recorded_terminal_stop_controls_result_stopping_reason() -> None:
     assert result.coverage_report.actions[-1].state == "terminal"
 
 
+def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None:
+    tracing = FakeTracing()
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _authorized_snippet(
+                toolset, "original-doc-1", "test need evidence", None
+            )
+            toolset.update_retrieval_state(
+                {
+                    "add_nuggets": [
+                        {
+                            "nugget_id": "nugget-1",
+                            "text": "Grounded test evidence.",
+                            "need_ids": ["test-need"],
+                            "facet_ids": [],
+                            "evidence": [
+                                {
+                                    "snippet_id": "chunk-1",
+                                    "quote": "narrative excerpt 1",
+                                }
+                            ],
+                        }
+                    ],
+                    "set_need_status": [
+                        {
+                            "need_id": "test-need",
+                            "status": "answerable",
+                            "remaining_gap": "",
+                            "draft_answer": "Grounded test answer.",
+                            "draft_nugget_ids": ["nugget-1"],
+                        }
+                    ],
+                }
+            )
+            toolset.choose_next_action(
+                "stop", "completion", None, [], "coverage is complete"
+            )
+            return {"messages": [{"role": "assistant", "content": "Complete."}]}
+
+        return FakeAgent(invoke)
+
+    result = DeepAgentRetriever(
+        retriever=FakeRetriever(),
+        agent_factory=agent_factory,
+        tracing=tracing,
+        model="test-model",
+        snippet_extractor=RecordingSnippetExtractor(),
+        budget_config=ResearchBudgetConfig(max_retrieval_calls=1),
+    ).retrieve("narrative")
+
+    assert result.stopping_reason == "completion"
+    assert result.budget_snapshot.stop_code == "RETRIEVAL_BUDGET_EXHAUSTED"
+    assert tracing.result_records[0]["stopping_reason"] == result.stopping_reason
+    assert tracing.result_records[0]["budget_stop_code"] == (
+        "RETRIEVAL_BUDGET_EXHAUSTED"
+    )
+
+
 def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_others() -> (
     None
 ):
@@ -2678,6 +2739,14 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     assert "snippet.residual_top_score" not in snippet_span.attributes
     assert snippet_span.attributes["snippet.returned_min_score"] == 0.75
     assert snippet_span.attributes["snippet.pages_estimated"] == 1
+    assert snippet_span.attributes["deepagent.research_task_id"].startswith(
+        "test-research-"
+    )
+    assert snippet_span.attributes["deepagent.research_round_index"] == 1
+    assert snippet_span.attributes["deepagent.research_depth"] == "focused"
+    assert snippet_span.attributes["deepagent.budget_code"] == "OK"
+    assert snippet_span.attributes["deepagent.budget_must_stop"] is False
+    assert snippet_span.attributes["deepagent.remaining_retrieval_calls"] == 99
     assert set(root_span.attributes) == {
         "input.value",
         "openinference.span.kind",
@@ -2716,6 +2785,39 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
         "original-doc-1",
         "original-doc-2",
     ]
+
+
+def test_retrieve_traces_research_context_on_followup_search(
+    isolated_real_tracing: None,
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+
+    _sdk(
+        FakeRetriever(),
+        lambda _model, toolset: FakeAgent(
+            lambda _payload: (
+                _authorized_search(toolset, "safe refined query"),
+                {"messages": [{"role": "assistant", "content": "Done."}]},
+            )[1]
+        ),
+        tracing=tracing,
+    ).retrieve("private narrative")
+
+    search_spans = [
+        span for span in exporter.get_finished_spans() if span.name == "climbmix.retrieve"
+    ]
+    assert len(search_spans) == 2
+    followup_span = search_spans[1]
+    assert followup_span.attributes["deepagent.research_task_id"].startswith(
+        "test-research-"
+    )
+    assert followup_span.attributes["deepagent.research_round_index"] == 1
+    assert followup_span.attributes["deepagent.research_depth"] == "focused"
+    assert followup_span.attributes["deepagent.budget_code"] == "OK"
+    assert followup_span.attributes["deepagent.remaining_retrieval_calls"] == 99
 
 
 def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(

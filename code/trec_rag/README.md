@@ -252,6 +252,9 @@ or tracing is disabled and no export is required; it is `False` when export
 fails. Export failure does not retry or change retrieval. Budget exhaustion is
 an honest grounded partial result: completed searches, snippets, actions, and
 coverage gaps are returned, but exhaustion never claims coverage is complete.
+When a coverage terminal reason and a budget stop coexist, `stopping_reason`
+retains the coverage reason; inspect `budget_snapshot.stop_code` for the
+independent budget outcome.
 
 The agent maintains three distinct stores, each with a different job:
 

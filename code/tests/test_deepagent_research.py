@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 
 import pytest
 from deepagents.middleware.subagents import TaskToolSchema
@@ -186,6 +187,34 @@ def test_task_middleware_binds_context_appends_snapshot_and_releases_task() -> N
     assert budget.snapshot().active_researchers == 0
     assert budget.snapshot().completed_researchers == 1
     assert '"active_researchers":1' in result.content
+
+
+def test_task_middleware_records_compact_task_budget_outcome() -> None:
+    records: list[dict[str, object]] = []
+
+    class Span:
+        def record_budget_outcome(self, **kwargs: object) -> None:
+            records.append(kwargs)
+
+    class Tracing:
+        @contextmanager
+        def researcher_task_span(
+            self, task_id: str, round_index: int, depth: str
+        ):
+            assert (task_id, round_index, depth) == ("R1-N1", 1, "survey")
+            yield Span()
+
+    middleware = ResearchTaskBudgetMiddleware(
+        ResearchBudget(ResearchBudgetConfig()), tracing=Tracing()
+    )
+    middleware.wrap_tool_call(
+        task_request(description=task_description()),
+        lambda _request: ToolMessage(content="bundle", tool_call_id="task-call"),
+    )
+
+    assert records[-1]["code"] == "OK"
+    assert records[-1]["must_stop"] is False
+    assert records[-1]["snapshot"]["completed_researchers"] == 1
 
 
 def test_task_middleware_requires_the_researcher_subagent() -> None:

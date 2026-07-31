@@ -25,6 +25,7 @@ from trec_rag.deepagent_budget import (
     BudgetSnapshot,
     ResearchBudget,
     ResearchBudgetConfig,
+    ResearchTaskContext,
 )
 
 
@@ -250,8 +251,54 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
 class ResearchTaskBudgetMiddleware(AgentMiddleware):
     """Reserve and bind each researcher task for one top-level invocation."""
 
-    def __init__(self, budget: ResearchBudget) -> None:
+    def __init__(self, budget: ResearchBudget, *, tracing: object | None = None) -> None:
         self._budget = budget
+        self._tracing = tracing
+
+    @contextmanager
+    def _trace_task(
+        self, context: ResearchTaskContext
+    ) -> Any:
+        tracing = self._tracing
+        if tracing is None:
+            yield None
+            return
+        try:
+            manager = tracing.researcher_task_span(
+                context.research_task_id, context.round_index, context.depth
+            )
+            span = manager.__enter__()
+        except Exception:
+            yield None
+            return
+        try:
+            yield span
+        except BaseException as exc:
+            try:
+                manager.__exit__(type(exc), exc, exc.__traceback__)
+            except Exception:
+                pass
+            raise
+        else:
+            try:
+                manager.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _record_trace_outcome(
+        span: object | None, decision: BudgetDecision, snapshot: BudgetSnapshot
+    ) -> None:
+        if span is None:
+            return
+        try:
+            span.record_budget_outcome(
+                code=decision.code,
+                must_stop=decision.must_stop or snapshot.stop_code is not None,
+                snapshot=snapshot.as_dict(),
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _envelope(request: ToolCallRequest) -> ResearchTaskEnvelope:
@@ -267,8 +314,6 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
 
     @staticmethod
     def _context(envelope: ResearchTaskEnvelope):
-        from trec_rag.deepagent_budget import ResearchTaskContext
-
         return ResearchTaskContext(
             research_task_id=envelope.research_task_id,
             round_index=envelope.round_index,
@@ -337,15 +382,18 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             return handler(request)
         envelope = self._envelope(request)
         context = self._context(envelope)
-        decision = self._budget.reserve_task(context)
-        if not decision.ok:
-            return self._refusal(request, decision)
-        try:
-            with bind_research_task(envelope):
-                result = handler(request)
-            return self._append_snapshot(result, self._budget.snapshot())
-        finally:
-            self._budget.finish_task(context)
+        with self._trace_task(context) as span:
+            decision = self._budget.reserve_task(context)
+            self._record_trace_outcome(span, decision, decision.snapshot)
+            if not decision.ok:
+                return self._refusal(request, decision)
+            try:
+                with bind_research_task(envelope):
+                    result = handler(request)
+                return self._append_snapshot(result, self._budget.snapshot())
+            finally:
+                self._budget.finish_task(context)
+                self._record_trace_outcome(span, decision, self._budget.snapshot())
 
     async def awrap_tool_call(
         self,
@@ -356,15 +404,18 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             return await handler(request)
         envelope = self._envelope(request)
         context = self._context(envelope)
-        decision = self._budget.reserve_task(context)
-        if not decision.ok:
-            return self._refusal(request, decision)
-        try:
-            with bind_research_task(envelope):
-                result = await handler(request)
-            return self._append_snapshot(result, self._budget.snapshot())
-        finally:
-            self._budget.finish_task(context)
+        with self._trace_task(context) as span:
+            decision = self._budget.reserve_task(context)
+            self._record_trace_outcome(span, decision, decision.snapshot)
+            if not decision.ok:
+                return self._refusal(request, decision)
+            try:
+                with bind_research_task(envelope):
+                    result = await handler(request)
+                return self._append_snapshot(result, self._budget.snapshot())
+            finally:
+                self._budget.finish_task(context)
+                self._record_trace_outcome(span, decision, self._budget.snapshot())
 
 
 def build_research_subagent(

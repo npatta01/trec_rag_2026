@@ -283,6 +283,17 @@ class _AgentTraceSpan(Protocol):
 
 
 class _RetrieverTraceSpan(Protocol):
+    def record_research_context(
+        self,
+        *,
+        research_task_id: str,
+        round_index: int,
+        depth: str,
+        code: str,
+        must_stop: bool,
+        snapshot: Mapping[str, object],
+    ) -> None: ...
+
     def record_search(
         self,
         *,
@@ -296,6 +307,17 @@ class _RetrieverTraceSpan(Protocol):
 
 
 class _SnippetTraceSpan(Protocol):
+    def record_research_context(
+        self,
+        *,
+        research_task_id: str,
+        round_index: int,
+        depth: str,
+        code: str,
+        must_stop: bool,
+        snapshot: Mapping[str, object],
+    ) -> None: ...
+
     def record_page(
         self,
         *,
@@ -327,6 +349,10 @@ class _Tracing(Protocol):
     def snippet_span(
         self, document_id: str, focus_query: str
     ) -> AbstractContextManager[_SnippetTraceSpan]: ...
+
+    def researcher_task_span(
+        self, research_task_id: str, round_index: int, depth: str
+    ) -> AbstractContextManager[object]: ...
 
     def force_flush(self) -> bool: ...
 
@@ -373,6 +399,7 @@ class AgentToolset:
     choose_next_action: Callable[[str, str, str | None, list[str], str], str]
     budget: ResearchBudget
     budget_config: ResearchBudgetConfig
+    tracing: _Tracing | None = None
 
 
 AgentFactory = Callable[[str, AgentToolset], _Agent]
@@ -489,7 +516,7 @@ def _create_agent(
                     run_limit=toolset.budget_config.max_researcher_invocations,
                     exit_behavior="continue",
                 ),
-                ResearchTaskBudgetMiddleware(toolset.budget),
+                ResearchTaskBudgetMiddleware(toolset.budget, tracing=toolset.tracing),
                 MainToolFilterMiddleware(toolset.budget, toolset.budget_config),
             ],
             subagents=[researcher],
@@ -694,12 +721,29 @@ class DeepAgentRetriever:
                         documents[candidate.docid] = candidate.text
 
         def run_search(
-            query: str, kind: Literal["original", "followup"], variant: str
+            query: str,
+            kind: Literal["original", "followup"],
+            variant: str,
+            *,
+            context: ResearchTaskContext | None = None,
+            decision: BudgetDecision | None = None,
         ) -> AgentSearch:
             before = _cache_counts(self._retriever)
             with _isolated_trace_span(
                 lambda: self._tracing.retriever_span(query)
             ) as span:
+                if span is not None and context is not None and decision is not None:
+                    try:
+                        span.record_research_context(
+                            research_task_id=context.research_task_id,
+                            round_index=context.round_index,
+                            depth=context.depth,
+                            code=decision.code,
+                            must_stop=decision.must_stop,
+                            snapshot=decision.snapshot.as_dict(),
+                        )
+                    except Exception:
+                        pass
                 started_at = monotonic()
                 candidates = tuple(
                     self._retriever.retrieve(
@@ -862,6 +906,8 @@ class DeepAgentRetriever:
                     query,
                     "followup",
                     "followup-" + sha256(query.encode()).hexdigest()[:16],
+                    context=context,
+                    decision=decision,
                 )
                 searches.append(search)
                 budget.record_yield(
@@ -992,6 +1038,18 @@ class DeepAgentRetriever:
                 with _isolated_trace_span(
                     lambda: self._tracing.snippet_span(document_id, focus_query)
                 ) as span:
+                    if span is not None:
+                        try:
+                            span.record_research_context(
+                                research_task_id=context.research_task_id,
+                                round_index=context.round_index,
+                                depth=context.depth,
+                                code=decision.code,
+                                must_stop=decision.must_stop,
+                                snapshot=decision.snapshot.as_dict(),
+                            )
+                        except Exception:
+                            pass
                     with self._snippet_extractor_lock:
                         if self._snippet_extractor is None:
                             self._snippet_extractor = create_default_snippet_extractor(
@@ -1155,6 +1213,7 @@ class DeepAgentRetriever:
                         choose_next_action=choose_next_action,
                         budget=budget,
                         budget_config=self._budget_config,
+                        tracing=self._tracing,
                     ),
                 )
                 initial_results = json.dumps(
@@ -1191,18 +1250,12 @@ class DeepAgentRetriever:
                 )
                 if agent_span is not None:
                     try:
-                        trace_stopping_reason = {
-                            "completion": "coverage_complete",
-                            "saturation": "evidence_saturated",
-                        }.get(stopping_reason, stopping_reason)
-                        if budget_snapshot.stop_code is not None:
-                            trace_stopping_reason = "budget_exhausted"
                         agent_span.record_result(
                             fused_document_ids=tuple(
                                 candidate.docid
                                 for candidate in candidates[:MAX_TRACE_DOCUMENTS]
                             ),
-                            stopping_reason=trace_stopping_reason,
+                            stopping_reason=stopping_reason,
                             coverage_state_hash=coverage_report.state_hash,
                             need_count=len(coverage_report.needs),
                             answerable_need_count=sum(

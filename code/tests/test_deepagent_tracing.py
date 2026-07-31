@@ -190,6 +190,56 @@ def test_injected_provider_captures_bounded_redacted_snippet_page(
     } & set(exported.attributes)
 
 
+def test_research_context_trace_uses_only_compact_task_and_budget_fields(
+    span_exporter: InMemorySpanExporter, provider: TracerProvider
+) -> None:
+    tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
+    snapshot = {
+        "remaining_researchers": 9,
+        "remaining_rounds": 3,
+        "remaining_retrieval_calls": 99,
+        "active_researchers": 1,
+        "completed_researchers": 0,
+        "completed_rounds": 1,
+        "soft_deadline_reached": False,
+        "hard_deadline_reached": False,
+        "stop_code": None,
+    }
+
+    with tracing.researcher_task_span("R1-N1", 1, "focused") as task_span:
+        task_span.record_budget_outcome(
+            code="OK", must_stop=False, snapshot=snapshot
+        )
+    with tracing.retriever_span("private query") as search_span:
+        search_span.record_research_context(
+            research_task_id="R1-N1",
+            round_index=1,
+            depth="focused",
+            code="OK",
+            must_stop=False,
+            snapshot=snapshot,
+        )
+    with tracing.snippet_span("doc-a", "private focus") as snippet_span:
+        snippet_span.record_research_context(
+            research_task_id="R1-N1",
+            round_index=1,
+            depth="focused",
+            code="OK",
+            must_stop=False,
+            snapshot=snapshot,
+        )
+
+    for exported in span_exporter.get_finished_spans():
+        assert exported.attributes["deepagent.research_task_id"] == "R1-N1"
+        assert exported.attributes["deepagent.research_round_index"] == 1
+        assert exported.attributes["deepagent.research_depth"] == "focused"
+        assert exported.attributes["deepagent.budget_code"] == "OK"
+        assert exported.attributes["deepagent.budget_must_stop"] is False
+        assert exported.attributes["deepagent.remaining_retrieval_calls"] == 99
+        assert "deepagent.query" not in exported.attributes
+        assert "deepagent.snippet" not in exported.attributes
+
+
 @pytest.mark.parametrize(
     "stopping_reason", ["coverage_complete", "evidence_saturated"]
 )
