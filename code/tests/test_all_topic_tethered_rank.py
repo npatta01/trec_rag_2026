@@ -10,6 +10,22 @@ import trec_rag.all_topic_tethered_rank as module
 from trec_rag.all_topic_tethered_rank import ARMS, build_rankings
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CANONICAL_RANKINGS = (
+    REPO_ROOT / "outputs/all_topic_tethered_facet_validation_v1/rankings_v3"
+)
+REQUIRES_SEALED_FIXTURE = pytest.mark.skipif(
+    not (CANONICAL_RANKINGS / "SEALED.json").is_file(),
+    reason=(
+        "private sealed fixture unavailable; restore "
+        "cache/experiments/all_topic_tethered_facet_validation_v1_sources_v3.tar.zst "
+        "at the repository root with `tar --zstd -xf "
+        "cache/experiments/all_topic_tethered_facet_validation_v1_sources_v3.tar.zst "
+        "-C .` after verifying "
+        "the pinned SHA-256 in reports/experiments/all_topic_tethered_facet_validation_v1/README.md"
+    ),
+)
+
 DESIGN_ARMS = (
     "RRF",
     "RRF100-STATIC-DUAL",
@@ -246,9 +262,10 @@ def test_parameters_are_derived_from_local_pins() -> None:
 
 
 @pytest.mark.parametrize("field", ["network_calls", "model_loads", "inference_calls"])
+@REQUIRES_SEALED_FIXTURE
 def test_summary_counter_counterfeit_is_rejected(field: str) -> None:
     summary = json.loads(
-        Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v3/summary.json").read_text()
+        (CANONICAL_RANKINGS / "summary.json").read_text()
     )
     summary[field] = 1
     with pytest.raises(ValueError, match="counter|safety"):
@@ -270,8 +287,9 @@ def test_audit_counterfeit_missing_objective_is_rejected() -> None:
         module._validate_selection_audit(row, {"doc"})
 
 
+@REQUIRES_SEALED_FIXTURE
 def test_resealed_canonical_counterfeits_are_rejected(tmp_path: Path) -> None:
-    source = Path("outputs/all_topic_tethered_facet_validation_v1/rankings_v3")
+    source = CANONICAL_RANKINGS
     counterfeit = tmp_path / "rankings"
     shutil.copytree(source, counterfeit)
 
