@@ -230,8 +230,10 @@ evidence; contradictions and supersessions remain explicit.
 ## Context and State Boundaries
 
 Researcher isolation prevents search results and long documents from polluting
-the main agent context. A researcher may use its ephemeral scratch space when
-tool output spills out of context, but scratch is not canonical state.
+the main agent context. Deep Agents' filesystem middleware automatically moves
+oversized tool results into the ephemeral `StateBackend`. Researchers receive
+`read_file` only so they can inspect those spills; they cannot manually write,
+edit, delete, search, or execute files. Spill storage is not canonical state.
 
 The main agent passes only the goal, motivating IDs, depth, relevant known
 evidence summary, and unresolved gap to a researcher. It receives only the
@@ -280,10 +282,27 @@ researcher. The main-agent prompt must place `research_task_id`, motivations,
 round, depth, known evidence, and the goal in the task description. The
 researcher's structured response format enforces `EvidenceBundle` output.
 
-The main middleware allows `task` only for the main agent. Researcher
-middleware exposes the fixed research tools but removes `task`, filesystem,
-shell, and unrelated tools. The existing three stores are retained; only the
-ordinary action authorization path and orchestration layer change.
+The default general-purpose subagent is disabled so `task` can launch only the
+custom researcher. The agent capability matrix is:
+
+| Capability | Main agent | Researcher |
+| --- | --- | --- |
+| `task` custom researcher | allowed | denied |
+| Need/facet/nugget state | read and update | compact read only |
+| Search and snippet tools | denied | allowed |
+| `read_file` for automatic result spill | allowed | allowed |
+| Write, edit, delete, grep, glob, or execute | denied | denied |
+| `write_todos` | not installed | not installed |
+
+Deep Agents' built-in filesystem/offload, summarization, and interrupted-call
+repair middleware remain enabled. LangChain's `ModelCallLimitMiddleware` and
+`ToolCallLimitMiddleware` enforce the per-agent caps; the shared budget
+controller enforces cross-researcher task, retrieval-call, round, concurrency,
+and elapsed-time caps. Retries, fallback, tool selection, context editing, PII,
+human approval, skills, memory, and todo middleware are omitted from the POC.
+
+The existing three stores are retained. Only the ordinary action authorization
+path, tool ownership, capability filtering, and orchestration layer change.
 
 ## Verification
 
