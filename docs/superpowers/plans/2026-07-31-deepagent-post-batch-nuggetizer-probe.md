@@ -36,18 +36,23 @@ canonical-nugget contract, OpenRouter DeepSeek V4 Flash, standard-library JSON.
 - Create: `code/trec_rag/post_batch_nuggetizer_probe.py`
 - Modify: `docs/superpowers/plans/2026-07-31-deepagent-post-batch-nuggetizer-probe.md`
 
-- [ ] Add typed in-memory records and pure helpers that locate the five
+- [x] Add typed in-memory records and pure helpers that locate the five
   researcher task outputs, reconstruct the final six ledger nuggets, join
   evidence references to snippet observations, and build stable aliases.
-- [ ] Build one `CanonicalNuggetRequest` with the exact topic narrative,
+- [x] Build one `CanonicalNuggetRequest` with the exact topic narrative,
   provisional claim text, and grounded evidence. Preserve each provisional
   nugget as fallback path A.
-- [ ] Add comparison helpers for normalized duplicates, evidence retention,
+- [x] Add comparison helpers for normalized duplicates, evidence retention,
   provisional-to-canonical mapping, distinct documents, and grounding errors.
-- [ ] Add a thin runner with `--dry-run`. It must query Phoenix but make no
+- [x] Add a thin runner with `--dry-run`. It must query Phoenix but make no
   hosted call in dry-run mode.
-- [ ] Run the dry-run and require exactly five bundles, six baseline nuggets,
+- [x] Run the dry-run and require exactly five bundles, six baseline nuggets,
   sixteen observed snippets, zero grounding failures, and zero hosted calls.
+
+  Result: the structural counts passed and hosted calls remained zero, but the
+  safety gate failed because `R1-N1:p003:e1` and `R1-N1:p004:e1` cite quotes
+  not contained in their stated snippets. Per the approved failure policy, the
+  hosted stage stopped before constructing the OpenRouter backend.
 
 ## Task 2: Execute One Hosted Comparison
 
@@ -63,6 +68,10 @@ canonical-nugget contract, OpenRouter DeepSeek V4 Flash, standard-library JSON.
 
 ## Verification Evidence
 
-- Dry-run: pending.
-- Hosted comparison: pending.
-- Final syntax/import check: pending.
+- Dry-run: 5 bundles, 6 provisional nuggets, 6 baseline nuggets, 16 snippets,
+  2 ungrounded researcher citations, and 0 hosted calls.
+- Hosted comparison: deliberately not run; blocked by the pre-cloud grounding
+  gate in the approved design.
+- Final syntax/import check: passed with `.venv/bin/python`; `git diff --check`
+  also passed. The fresh dry-run reproduced the same two grounding failures in
+  5.1 seconds with zero hosted calls.
