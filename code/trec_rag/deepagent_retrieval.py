@@ -13,14 +13,32 @@ from threading import Lock
 from time import monotonic
 from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ModelCallLimitMiddleware,
+    ToolCallLimitMiddleware,
+)
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
+from trec_rag.deepagent_budget import (
+    BudgetCode,
+    BudgetDecision,
+    BudgetSnapshot,
+    ResearchBudget,
+    ResearchBudgetConfig,
+    ResearchTaskContext,
+)
 from trec_rag.deepagent_evidence import (
     ActionKind,
     DocumentObservation,
     EvidenceCoverageReport,
     EvidenceCoverageState,
     RetrievalStateDelta,
+)
+from trec_rag.deepagent_research import (
+    MainToolFilterMiddleware,
+    ResearchTaskBudgetMiddleware,
+    build_research_subagent,
+    current_research_task,
 )
 from trec_rag.deepagent_snippets import (
     InvalidSnippetCursorError,
@@ -39,27 +57,26 @@ from trec_rag.retrievers import PyseriniRemoteRetriever, Retriever
 
 
 DEFAULT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
-MAX_FOLLOWUP_SEARCHES = 3
+MAX_FOLLOWUP_SEARCHES = 8
 HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
 
-RETRIEVAL_SYSTEM_PROMPT = """You are a retrieval-only research assistant.
+RETRIEVAL_SYSTEM_PROMPT = """You are the main retrieval research coordinator.
 The supplied narrative has already been searched exactly as provided.
 First decompose the untouched narrative into explicit needs and record them
 with update_retrieval_state under delta.add_needs, using the exact outer shape
 {"delta":{"add_needs":[{"need_id":"N1","narrative_span":"<exact text copied from the untouched narrative>","question":"<question derived from that span>"}]}}.
 Preserve each need's exact narrative span.
-Before every search or document inspection, view the frontier and record one
-matching next action with its open motivating need or facet. After every
-snippet page, add only claims grounded by exact returned quotes, update gaps,
-and then choose whether to inspect another document, refocus, paginate, search,
-or stop. A next_cursor alone is not a reason to paginate: use residual count,
-within-ranking score continuity, novel nugget yield, and the remaining gap.
+Delegate retrieval only through `task` using compact ResearchTaskEnvelope JSON
+and subagent_type "researcher". Batch independent task calls in parallel. After
+each batch, merge the returned evidence bundles with exactly one batched
+update_retrieval_state semantic delta, then call complete_research_round once.
+Do not call retrieval tools directly. Stop whenever a budget response says
+must_stop.
 Mark a need answerable only with a draft answer and grounded nugget IDs. Report
 conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
-for oversized output or temporary notes.
-The state filesystem is ephemeral. Do not use execute, task, or unrelated
-tools."""
+for oversized output or temporary notes. The state filesystem is ephemeral.
+Only read_file is available from it."""
 
 _VALID_DELTA_SECTIONS = (
     "add_needs",
@@ -112,6 +129,7 @@ class AgentRetrievalResult:
     rationale: str
     stopping_reason: str
     coverage_report: EvidenceCoverageReport
+    budget_snapshot: BudgetSnapshot
     trace_flush_succeeded: bool
 
 
@@ -342,11 +360,16 @@ def _isolated_trace_span(
 
 @dataclass(frozen=True)
 class AgentToolset:
-    search_climbmix: Callable[[str], str]
-    extract_relevant_snippets: Callable[[str, str, str | None], str]
+    search_climbmix: Callable[[str, list[str], str], str]
+    extract_relevant_snippets: Callable[
+        [str, str, list[str], str, str | None], str
+    ]
     view_retrieval_state: Callable[[str], str]
     update_retrieval_state: Callable[[RetrievalStateDelta], str]
+    complete_research_round: Callable[[int], str]
     choose_next_action: Callable[[str, str, str | None, list[str], str], str]
+    budget: ResearchBudget
+    budget_config: ResearchBudgetConfig
 
 
 AgentFactory = Callable[[str, AgentToolset], _Agent]
@@ -407,7 +430,12 @@ def _create_agent(
     toolset: AgentToolset,
 ) -> _Agent:
     """Keep the Deep Agents 0.7 construction surface intentionally narrow."""
-    from deepagents import create_deep_agent
+    from deepagents import (
+        GeneralPurposeSubagentProfile,
+        HarnessProfile,
+        create_deep_agent,
+        register_harness_profile,
+    )
     from deepagents.backends import StateBackend
     from langchain_openrouter import ChatOpenRouter
 
@@ -417,21 +445,51 @@ def _create_agent(
     model_id = model[len(prefix) :]
     if not model_id or model_id != model_id.strip():
         raise ValueError("model must match openrouter:<model-id>")
-    provider_model = ChatOpenRouter(model=model_id, max_retries=0)
+    provider_model = ChatOpenRouter(
+        model=model_id,
+        max_retries=0,
+        timeout=120,
+    )
+    register_harness_profile(
+        model,
+        HarnessProfile(
+            general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
+        ),
+    )
+    researcher = build_research_subagent(
+        model=provider_model,
+        tools=[
+            toolset.search_climbmix,
+            toolset.extract_relevant_snippets,
+            toolset.view_retrieval_state,
+        ],
+        budget_config=toolset.budget_config,
+    )
 
     return cast(
         _Agent,
         create_deep_agent(
             model=provider_model,
             tools=[
-                toolset.search_climbmix,
-                toolset.extract_relevant_snippets,
                 toolset.view_retrieval_state,
                 toolset.update_retrieval_state,
-                toolset.choose_next_action,
+                toolset.complete_research_round,
             ],
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
-            middleware=[_RetrievalOnlyMiddleware()],
+            middleware=[
+                ModelCallLimitMiddleware(
+                    run_limit=toolset.budget_config.max_main_models,
+                    exit_behavior="end",
+                ),
+                ToolCallLimitMiddleware(
+                    tool_name="task",
+                    run_limit=toolset.budget_config.max_researcher_invocations,
+                    exit_behavior="continue",
+                ),
+                ResearchTaskBudgetMiddleware(toolset.budget),
+                MainToolFilterMiddleware(toolset.budget, toolset.budget_config),
+            ],
+            subagents=[researcher],
             backend=StateBackend(),
         ),
     )
@@ -479,10 +537,6 @@ def _validated_action_kind(action: object) -> ActionKind | None:
     }:
         return None
     return cast(ActionKind, action)
-
-
-def _matching_action_error() -> str:
-    return json.dumps({"error": "matching next action required"}, sort_keys=True)
 
 
 def _candidate_metadata(
@@ -535,6 +589,7 @@ class DeepAgentRetriever:
         hits_per_search: int = HITS_PER_SEARCH,
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
+        budget_config: ResearchBudgetConfig | None = None,
     ) -> None:
         self._hits_per_search = _positive_int(hits_per_search, name="hits_per_search")
         self._max_followup_searches = _positive_int(
@@ -542,6 +597,9 @@ class DeepAgentRetriever:
         )
         self._fused_result_limit = _positive_int(
             fused_result_limit, name="fused_result_limit"
+        )
+        self._budget_config = budget_config or ResearchBudgetConfig(
+            max_searches_per_researcher=self._max_followup_searches
         )
         self._retriever = retriever
         self._model = model
@@ -562,6 +620,7 @@ class DeepAgentRetriever:
         hits_per_search: int = HITS_PER_SEARCH,
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
+        budget_config: ResearchBudgetConfig | None = None,
     ) -> "DeepAgentRetriever":
         """Build the isolated SDK using the existing remote retriever and cache."""
         validated_hits = _positive_int(hits_per_search, name="hits_per_search")
@@ -601,6 +660,7 @@ class DeepAgentRetriever:
             hits_per_search=validated_hits,
             max_followup_searches=validated_followups,
             fused_result_limit=validated_fused_limit,
+            budget_config=budget_config,
         )
 
     def retrieve(self, narrative: str) -> AgentRetrievalResult:
@@ -610,9 +670,10 @@ class DeepAgentRetriever:
 
         topic_component = sha256(narrative.encode()).hexdigest()[:16]
         coverage_state = EvidenceCoverageState(narrative)
+        budget = ResearchBudget(self._budget_config)
         searches: list[AgentSearch] = []
         documents: dict[str, str] = {}
-        exhausted = False
+        budget_stop_code: BudgetCode | None = None
         followup_lock = Lock()
         document_lock = Lock()
 
@@ -689,29 +750,106 @@ class DeepAgentRetriever:
                 cache_status=cache_status,
             )
 
-        def search_climbmix(query: str) -> str:
+        def task_context() -> ResearchTaskContext | None:
+            envelope = current_research_task()
+            if envelope is None:
+                return None
+            return ResearchTaskContext(
+                envelope.research_task_id,
+                envelope.round_index,
+                envelope.depth,
+                tuple(envelope.motivating_ids),
+            )
+
+        def budget_payload(
+            decision: BudgetDecision,
+            *,
+            error: str | None = None,
+            code: str | None = None,
+        ) -> dict[str, object]:
+            payload: dict[str, object] = {
+                "ok": decision.ok,
+                "code": code or decision.code,
+                "must_stop": decision.must_stop,
+                "budget_snapshot": decision.snapshot.as_dict(),
+            }
+            if error is not None:
+                payload["error"] = error
+            return payload
+
+        def record_no_yield(context: ResearchTaskContext) -> None:
+            budget.record_yield(context, ())
+
+        def search_climbmix(
+            query: str,
+            motivating_ids: list[str],
+            rationale: str,
+        ) -> str:
             """Search ClimbMix for a targeted, previously uncovered narrative aspect."""
-            nonlocal exhausted
+            nonlocal budget_stop_code
+            context = task_context()
+            if context is None:
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "code": "RESEARCH_TASK_REQUIRED",
+                        "must_stop": True,
+                        "budget_snapshot": budget.snapshot().as_dict(),
+                        "error": "research task context required",
+                    },
+                    sort_keys=True,
+                )
+            decision = budget.reserve_retrieval(context, "search_climbmix")
+            if not decision.ok:
+                budget_stop_code = decision.code
+                return json.dumps(
+                    budget_payload(decision, error="retrieval budget refused"),
+                    sort_keys=True,
+                )
             with followup_lock:
                 if not isinstance(query, str) or not query.strip():
+                    record_no_yield(context)
                     return json.dumps(
-                        {"error": "query must be non-empty text"}, sort_keys=True
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="query must be non-empty text",
+                            code="INVALID_QUERY",
+                        ),
+                        sort_keys=True,
                     )
-                authorization_error = coverage_state.require_pending_action(
+                action_error = coverage_state.record_retrieval_action(
                     action="search",
                     target=query,
                     focus_query=None,
+                    motivating_ids=motivating_ids,
+                    rationale=rationale,
+                    context=context,
                 )
-                if authorization_error is not None:
-                    return _matching_action_error()
-                if any(search.query == query for search in searches):
+                if action_error is not None:
+                    record_no_yield(context)
                     return json.dumps(
-                        {"error": "duplicate follow-up query"}, sort_keys=True
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="retrieval action rejected",
+                            code=action_error,
+                        ),
+                        sort_keys=True,
                     )
-                if len(searches) - 1 >= self._max_followup_searches:
-                    exhausted = True
+                if any(search.query == query for search in searches):
+                    record_no_yield(context)
                     return json.dumps(
-                        {"error": "search budget exhausted"}, sort_keys=True
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="duplicate follow-up query",
+                            code="DUPLICATE_QUERY",
+                        ),
+                        sort_keys=True,
                     )
                 search = run_search(
                     query,
@@ -719,13 +857,20 @@ class DeepAgentRetriever:
                     "followup-" + sha256(query.encode()).hexdigest()[:16],
                 )
                 searches.append(search)
+                budget.record_yield(
+                    context, (candidate.docid for candidate in search.candidates)
+                )
+                snapshot = budget.snapshot()
                 return json.dumps(
                     {
+                        "ok": True,
+                        "code": decision.code,
+                        "must_stop": decision.must_stop,
+                        "budget_snapshot": snapshot.as_dict(),
                         "documents": _candidate_metadata(
                             search.candidates, limit=self._hits_per_search
                         ),
-                        "remaining_budget": self._max_followup_searches
-                        - (len(searches) - 1),
+                        "remaining_budget": snapshot.remaining_retrieval_calls,
                     },
                     sort_keys=True,
                 )
@@ -733,47 +878,111 @@ class DeepAgentRetriever:
         def extract_relevant_snippets(
             document_id: str,
             focus_query: str,
+            motivating_ids: list[str],
+            rationale: str,
             cursor: str | None = None,
         ) -> str:
             """Return one relevance-ranked snippet page for a retrieved document."""
-            if not isinstance(document_id, str) or not document_id.strip():
-                return json.dumps({"error": "unknown document_id"}, sort_keys=True)
-            if not isinstance(focus_query, str) or not focus_query.strip():
+            nonlocal budget_stop_code
+            context = task_context()
+            if context is None:
                 return json.dumps(
-                    {"error": "focus_query must be non-empty text"}, sort_keys=True
+                    {
+                        "ok": False,
+                        "code": "RESEARCH_TASK_REQUIRED",
+                        "must_stop": True,
+                        "budget_snapshot": budget.snapshot().as_dict(),
+                        "error": "research task context required",
+                    },
+                    sort_keys=True,
+                )
+            decision = budget.reserve_retrieval(
+                context, "extract_relevant_snippets"
+            )
+            if not decision.ok:
+                budget_stop_code = decision.code
+                return json.dumps(
+                    budget_payload(decision, error="retrieval budget refused"),
+                    sort_keys=True,
+                )
+            if not isinstance(document_id, str) or not document_id.strip():
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="unknown document_id",
+                        code="INVALID_DOCUMENT",
+                    ),
+                    sort_keys=True,
+                )
+            if not isinstance(focus_query, str) or not focus_query.strip():
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="focus_query must be non-empty text",
+                        code="INVALID_FOCUS_QUERY",
+                    ),
+                    sort_keys=True,
                 )
             if cursor is not None and (
                 not isinstance(cursor, str) or not cursor.strip()
             ):
-                return json.dumps({"error": "invalid cursor"}, sort_keys=True)
-            with document_lock:
-                document_text = documents.get(document_id)
-            if document_text is None:
-                return json.dumps({"error": "unknown document_id"}, sort_keys=True)
-            expected_action = coverage_state.expected_snippet_action(
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="invalid cursor",
+                        code="INVALID_CURSOR",
+                    ),
+                    sort_keys=True,
+                )
+            action = coverage_state.expected_snippet_action(
                 document_id=document_id,
                 focus_query=focus_query,
                 cursor=cursor,
             )
-            if expected_action is None:
-                authorization_error = coverage_state.require_pending_action(
-                    action="paginate",
-                    target=document_id,
-                    focus_query=focus_query,
-                )
-                if authorization_error is not None:
-                    return _matching_action_error()
-                return json.dumps(
-                    {"error": "pagination requires prior snippet page"},
-                    sort_keys=True,
-                )
-            authorization_error = coverage_state.require_pending_action(
-                action=expected_action,
+            action_kind = "paginate" if cursor is not None else action or "extract"
+            action_error = coverage_state.record_retrieval_action(
+                action=action_kind,
                 target=document_id,
                 focus_query=focus_query,
+                motivating_ids=motivating_ids,
+                rationale=rationale,
+                context=context,
             )
-            if authorization_error is not None:
-                return _matching_action_error()
+            if action_error is not None:
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="retrieval action rejected",
+                        code=action_error,
+                    ),
+                    sort_keys=True,
+                )
+            with document_lock:
+                document_text = documents.get(document_id)
+            if document_text is None:
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="unknown document_id",
+                        code="UNKNOWN_DOCUMENT",
+                    ),
+                    sort_keys=True,
+                )
+            if cursor is not None and action is None:
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="pagination requires prior snippet page",
+                        code="INVALID_CURSOR",
+                    ),
+                    sort_keys=True,
+                )
             try:
                 with _isolated_trace_span(
                     lambda: self._tracing.snippet_span(document_id, focus_query)
@@ -827,12 +1036,38 @@ class DeepAgentRetriever:
                         except Exception:
                             pass
             except InvalidSnippetCursorError:
-                return json.dumps({"error": "invalid cursor"}, sort_keys=True)
-            except Exception:
+                record_no_yield(context)
                 return json.dumps(
-                    {"error": "snippet extraction failed"}, sort_keys=True
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="invalid cursor",
+                        code="INVALID_CURSOR",
+                    ),
+                    sort_keys=True,
                 )
-            return json.dumps(result.page.as_dict(), sort_keys=True)
+            except Exception:
+                record_no_yield(context)
+                return json.dumps(
+                    budget_payload(
+                        BudgetDecision(False, decision.code, budget.snapshot()),
+                        error="snippet extraction failed",
+                        code="SNIPPET_EXTRACTION_FAILED",
+                    ),
+                    sort_keys=True,
+                )
+            budget.record_yield(
+                context, (snippet.chunk_id for snippet in result.page.snippets)
+            )
+            payload = result.page.as_dict()
+            payload.update(
+                {
+                    "ok": True,
+                    "code": decision.code,
+                    "must_stop": decision.must_stop,
+                    "budget_snapshot": budget.snapshot().as_dict(),
+                }
+            )
+            return json.dumps(payload, sort_keys=True)
 
         def view_retrieval_state(scope: str = "frontier") -> str:
             """View compact invocation-local needs, gaps, evidence, or document state."""
@@ -857,6 +1092,19 @@ class DeepAgentRetriever:
                 payload.update(_delta_error_guidance())
             return json.dumps(payload, sort_keys=True)
 
+        def complete_research_round(round_index: int) -> str:
+            """Close one coordinator round after applying its batched semantic delta."""
+            decision = budget.complete_round(round_index, coverage_state.report())
+            return json.dumps(
+                {
+                    "ok": decision.ok,
+                    "code": decision.code,
+                    "must_stop": decision.must_stop,
+                    "budget_snapshot": decision.snapshot.as_dict(),
+                },
+                sort_keys=True,
+            )
+
         def choose_next_action(
             action: str,
             target: str,
@@ -869,7 +1117,7 @@ class DeepAgentRetriever:
             invalid_focus = focus_query is not None and (
                 not isinstance(focus_query, str) or not focus_query.strip()
             )
-            if validated_action is None or invalid_focus:
+            if validated_action != "stop" or invalid_focus:
                 return json.dumps(
                     {"ok": False, "code": "INVALID_ACTION"}, sort_keys=True
                 )
@@ -897,7 +1145,10 @@ class DeepAgentRetriever:
                         extract_relevant_snippets=extract_relevant_snippets,
                         view_retrieval_state=view_retrieval_state,
                         update_retrieval_state=update_retrieval_state,
+                        complete_research_round=complete_research_round,
                         choose_next_action=choose_next_action,
+                        budget=budget,
+                        budget_config=self._budget_config,
                     ),
                 )
                 initial_results = json.dumps(
@@ -926,8 +1177,12 @@ class DeepAgentRetriever:
                     searches, limit=self._fused_result_limit
                 )
                 coverage_report = coverage_state.report()
-                stopping_reason = coverage_report.terminal_reason or (
-                    "search_budget_exhausted" if exhausted else "agent_completed"
+                budget_snapshot = budget.snapshot()
+                stopping_reason = (
+                    coverage_report.terminal_reason
+                    or budget_snapshot.stop_code
+                    or budget_stop_code
+                    or "agent_completed"
                 )
                 if agent_span is not None:
                     try:
@@ -978,5 +1233,6 @@ class DeepAgentRetriever:
             rationale=rationale,
             stopping_reason=stopping_reason,
             coverage_report=coverage_report,
+            budget_snapshot=budget_snapshot,
             trace_flush_succeeded=trace_flush_succeeded,
         )

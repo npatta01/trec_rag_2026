@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from trec_rag.deepagent_budget import ResearchTaskContext
 from trec_rag.deepagent_evidence import (
     MAX_FRONTIER_CHARACTERS,
     SATURATION_ZERO_YIELD_PAGES,
@@ -85,6 +86,57 @@ def _grounded_nugget_delta(nugget_id: str = "g1") -> dict[str, object]:
             }
         ]
     }
+
+
+def test_record_retrieval_action_records_actual_arguments_atomically() -> None:
+    state = EvidenceCoverageState("Why do people migrate?")
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "N1",
+                    "narrative_span": "Why do people migrate?",
+                    "question": "What evidence explains migration?",
+                }
+            ]
+        }
+    )
+    context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
+
+    error = state.record_retrieval_action(
+        action="search",
+        target="actual refined query",
+        focus_query=None,
+        motivating_ids=["N1"],
+        rationale="N1 has no grounded driver evidence",
+        context=context,
+    )
+
+    assert error is None
+    action = state.report().actions[-1]
+    assert action.target == "actual refined query"
+    assert action.motivating_ids == ("N1",)
+    assert action.state == "consumed"
+    assert action.research_task_id == "R1-N1"
+    assert action.round_index == 1
+    assert action.depth == "focused"
+
+
+def test_record_retrieval_action_rejects_unknown_motivation_without_an_action() -> None:
+    state = EvidenceCoverageState("Why do people migrate?")
+    context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
+
+    error = state.record_retrieval_action(
+        action="search",
+        target="query",
+        focus_query=None,
+        motivating_ids=["UNKNOWN"],
+        rationale="find evidence",
+        context=context,
+    )
+
+    assert error == "UNKNOWN_MOTIVATION"
+    assert state.report().actions == ()
 
 
 def test_needs_must_be_anchored_in_the_untouched_narrative() -> None:

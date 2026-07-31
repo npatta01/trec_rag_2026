@@ -7,11 +7,14 @@ from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 import json
 from threading import Lock
-from typing import Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from pydantic import ConfigDict
 
 from trec_rag.deepagent_snippets import SnippetPage
+
+if TYPE_CHECKING:
+    from trec_rag.deepagent_budget import ResearchTaskContext
 
 
 NeedStatus = Literal["unaddressed", "partial", "answerable", "conflicted"]
@@ -191,6 +194,9 @@ class ActionReport:
     motivating_ids: tuple[str, ...]
     rationale: str
     state: Literal["pending", "consumed", "terminal"]
+    research_task_id: str | None = None
+    round_index: int | None = None
+    depth: Literal["survey", "focused", "deep"] | None = None
 
 
 @dataclass(frozen=True)
@@ -303,6 +309,9 @@ class _Action:
     motivating_ids: list[str]
     rationale: str
     state: Literal["pending", "consumed", "terminal"]
+    research_task_id: str | None = None
+    round_index: int | None = None
+    depth: Literal["survey", "focused", "deep"] | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +408,9 @@ class EvidenceCoverageState:
                     tuple(item.motivating_ids),
                     item.rationale,
                     item.state,
+                    item.research_task_id,
+                    item.round_index,
+                    item.depth,
                 )
             )
             for item in self._actions
@@ -480,6 +492,9 @@ class EvidenceCoverageState:
                         tuple(item.motivating_ids),
                         item.rationale,
                         item.state,
+                        item.research_task_id,
+                        item.round_index,
+                        item.depth,
                     )
                     for item in self._actions
                 ),
@@ -849,6 +864,70 @@ class EvidenceCoverageState:
 
     def _action_error(self, code: str) -> Mapping[str, object]:
         return {"ok": False, "code": code, "state_version": self._state_version, "state_hash": self._hash()}
+
+    def record_retrieval_action(
+        self,
+        *,
+        action: Literal["search", "extract", "paginate", "refocus"],
+        target: str,
+        focus_query: str | None,
+        motivating_ids: Sequence[str],
+        rationale: str,
+        context: ResearchTaskContext,
+    ) -> str | None:
+        """Append one consumed action using the fixed tool's actual arguments."""
+
+        with self._lock:
+            if self._terminal_reason is not None:
+                return "TERMINAL_STATE"
+            if action not in {"search", "extract", "paginate", "refocus"}:
+                return "INVALID_ACTION"
+            if _nonblank(target) is None or _nonblank(rationale) is None:
+                return "INVALID_ACTION"
+            if action == "search":
+                if focus_query is not None:
+                    return "INVALID_ACTION"
+            elif _nonblank(focus_query) is None:
+                return "INVALID_ACTION"
+
+            ids = _string_ids(motivating_ids)
+            if ids is None:
+                return "INVALID_MOTIVATION"
+            if not ids:
+                return "MISSING_MOTIVATION"
+            for item_id in ids:
+                error = self._open_motivation(item_id)
+                if error is not None:
+                    return error
+
+            context_ids = _string_ids(context.motivating_ids)
+            if (
+                _nonblank(context.research_task_id) is None
+                or isinstance(context.round_index, bool)
+                or not isinstance(context.round_index, int)
+                or context.round_index < 1
+                or context.depth not in {"survey", "focused", "deep"}
+                or context_ids is None
+                or not context_ids
+                or any(item_id not in context_ids for item_id in ids)
+            ):
+                return "CONTEXT_MISMATCH"
+
+            self._actions.append(
+                _Action(
+                    action,
+                    target,
+                    focus_query,
+                    list(ids),
+                    rationale,
+                    "consumed",
+                    context.research_task_id,
+                    context.round_index,
+                    context.depth,
+                )
+            )
+            self._changed()
+            return None
 
     def choose_action(
         self,

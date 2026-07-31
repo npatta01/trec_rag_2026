@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from threading import Barrier, Event, Lock
 from typing import Callable, Sequence
 from unittest.mock import ANY
+from uuid import uuid4
 
 import pytest
 import trec_rag.deepagent_retrieval as deepagent_retrieval
@@ -28,6 +29,17 @@ from openinference.instrumentation.langchain import LangChainInstrumentor
 from pydantic import Field
 
 import trec_rag.deepagent_tracing as deepagent_tracing
+from trec_rag.deepagent_budget import (
+    ResearchBudget,
+    ResearchBudgetConfig,
+    ResearchTaskContext,
+)
+from trec_rag.deepagent_research import (
+    MainToolFilterMiddleware,
+    ResearchTaskBudgetMiddleware,
+    ResearchTaskEnvelope,
+    bind_research_task,
+)
 from trec_rag.deepagent_retrieval import (
     AgentRetrievalError,
     AgentSearch,
@@ -184,6 +196,31 @@ def _seed_test_need(
     )
 
 
+_TEST_CONTEXT_LOCK = Lock()
+
+
+def _test_research_context(
+    toolset: deepagent_retrieval.AgentToolset,
+) -> tuple[ResearchTaskContext, ResearchTaskEnvelope]:
+    with _TEST_CONTEXT_LOCK:
+        existing = getattr(toolset, "_test_research_context", None)
+        if existing is not None:
+            return existing
+        task_id = f"test-research-{uuid4().hex}"
+        context = ResearchTaskContext(task_id, 1, "focused", ("test-need",))
+        envelope = ResearchTaskEnvelope(
+            research_task_id=task_id,
+            round_index=1,
+            depth="focused",
+            motivating_ids=["test-need"],
+            goal="Close the test need.",
+        )
+        assert toolset.budget.reserve_task(context).ok
+        existing = (context, envelope)
+        object.__setattr__(toolset, "_test_research_context", existing)
+        return existing
+
+
 def _authorized_search(
     toolset: deepagent_retrieval.AgentToolset,
     query: str,
@@ -191,10 +228,11 @@ def _authorized_search(
     narrative_span: str = "narrative",
 ) -> str:
     _seed_test_need(toolset, narrative_span=narrative_span)
-    toolset.choose_next_action(
-        "search", query, None, ["test-need"], "test need remains open"
-    )
-    return toolset.search_climbmix(query)
+    _, envelope = _test_research_context(toolset)
+    with bind_research_task(envelope):
+        return toolset.search_climbmix(
+            query, ["test-need"], "test need remains open"
+        )
 
 
 def _authorized_snippet(
@@ -207,14 +245,15 @@ def _authorized_snippet(
     narrative_span: str = "narrative",
 ) -> str:
     _seed_test_need(toolset, narrative_span=narrative_span)
-    toolset.choose_next_action(
-        action,
-        document_id,
-        focus_query,
-        ["test-need"],
-        "test need remains open",
-    )
-    return toolset.extract_relevant_snippets(document_id, focus_query, cursor)
+    _, envelope = _test_research_context(toolset)
+    with bind_research_task(envelope):
+        return toolset.extract_relevant_snippets(
+            document_id,
+            focus_query,
+            ["test-need"],
+            "test need remains open",
+            cursor,
+        )
 
 
 class FakeTracing:
@@ -419,6 +458,107 @@ def _sdk(
     )
 
 
+def test_search_records_actual_query_motivation_and_task_context_in_one_call() -> None:
+    fake_retriever = FakeRetriever()
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            toolset.update_retrieval_state(
+                {
+                    "add_needs": [
+                        {
+                            "need_id": "N1",
+                            "narrative_span": "narrative",
+                            "question": "What evidence closes N1?",
+                        }
+                    ]
+                }
+            )
+            envelope = ResearchTaskEnvelope(
+                research_task_id="R1-N1",
+                round_index=1,
+                depth="focused",
+                motivating_ids=["N1"],
+                goal="Close N1.",
+            )
+            context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
+            assert toolset.budget.reserve_task(context).ok
+            try:
+                with bind_research_task(envelope):
+                    payload = json.loads(
+                        toolset.search_climbmix(
+                            "actual refined query",
+                            ["N1"],
+                            "N1 has no grounded driver evidence",
+                        )
+                    )
+            finally:
+                toolset.budget.finish_task(context)
+            assert "error" not in payload
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
+
+    action = result.coverage_report.actions[-1]
+    assert action.target == "actual refined query"
+    assert action.motivating_ids == ("N1",)
+    assert action.research_task_id == "R1-N1"
+    assert result.budget_snapshot.remaining_retrieval_calls == 99
+
+
+def test_invalid_motivation_is_rejected_before_retrieval() -> None:
+    fake_retriever = FakeRetriever()
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            toolset.update_retrieval_state(
+                {
+                    "add_needs": [
+                        {
+                            "need_id": "N1",
+                            "narrative_span": "narrative",
+                            "question": "What evidence closes N1?",
+                        }
+                    ]
+                }
+            )
+            envelope = ResearchTaskEnvelope(
+                research_task_id="R1-N1",
+                round_index=1,
+                depth="survey",
+                motivating_ids=["N1"],
+                goal="Close N1.",
+            )
+            context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
+            assert toolset.budget.reserve_task(context).ok
+            try:
+                with bind_research_task(envelope):
+                    observed.update(
+                        json.loads(
+                            toolset.search_climbmix(
+                                "query", ["UNKNOWN"], "find missing evidence"
+                            )
+                        )
+                    )
+            finally:
+                toolset.budget.finish_task(context)
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    _sdk(fake_retriever, agent_factory).retrieve("narrative")
+
+    assert observed["code"] == "UNKNOWN_MOTIVATION"
+    assert [query.query_text for query in fake_retriever.queries] == ["narrative"]
+
+
 def test_fusion_deduplicates_and_sums_reciprocal_ranks() -> None:
     searches = (
         AgentSearch(
@@ -621,6 +761,10 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
     assert all(
         set(payload)
         == {
+            "ok",
+            "code",
+            "must_stop",
+            "budget_snapshot",
             "document_id",
             "focus_query",
             "snippets",
@@ -656,10 +800,10 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
             tool_payloads.extend(
                 (
                     json.loads(
-                        toolset.extract_relevant_snippets("unknown-doc", "focus", None)
+                        _authorized_snippet(toolset, "unknown-doc", "focus", None)
                     ),
                     json.loads(
-                        toolset.extract_relevant_snippets("original-doc-1", "   ", None)
+                        _authorized_snippet(toolset, "original-doc-1", "   ", None)
                     ),
                 )
             )
@@ -698,13 +842,14 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
         "narrative"
     )
 
-    assert tool_payloads == [
-        {"error": "unknown document_id"},
-        {"error": "focus_query must be non-empty text"},
-        {"error": "invalid cursor"},
-        {"error": "snippet extraction failed"},
-        {"error": "snippet extraction failed"},
+    assert [payload["error"] for payload in tool_payloads] == [
+        "unknown document_id",
+        "focus_query must be non-empty text",
+        "invalid cursor",
+        "snippet extraction failed",
+        "snippet extraction failed",
     ]
+    assert all("budget_snapshot" in payload for payload in tool_payloads)
     assert "/private/" not in json.dumps(tool_payloads)
 
 
@@ -753,7 +898,7 @@ def test_retrieve_rejects_empty_narrative_before_external_calls() -> None:
     assert factory_calls == []
 
 
-def test_retrieve_limits_successful_followups_to_three_and_marks_budget_exhaustion() -> (
+def test_retrieve_default_budget_admits_four_followups() -> (
     None
 ):
     fake_retriever = FakeRetriever()
@@ -782,15 +927,17 @@ def test_retrieve_limits_successful_followups_to_three_and_marks_budget_exhausti
         "query 0",
         "query 1",
         "query 2",
+        "query 3",
     ]
     assert [search.kind for search in result.searches] == [
         "original",
         "followup",
         "followup",
         "followup",
+        "followup",
     ]
-    assert json.loads(tool_results[-1])["error"] == "search budget exhausted"
-    assert result.stopping_reason == "search_budget_exhausted"
+    assert all(json.loads(item)["ok"] for item in tool_results)
+    assert result.stopping_reason == "agent_completed"
 
 
 def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
@@ -807,20 +954,11 @@ def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
             started = [Event() for _query in range(4)]
 
             def authorize(query: str) -> None:
-                action = json.loads(
-                    toolset.choose_next_action(
-                        "search",
-                        query,
-                        None,
-                        ["test-need"],
-                        "test need remains open",
-                    )
-                )
-                assert action["state"] == "pending"
+                assert query
 
             def call_tool(index: int, query: str) -> str:
                 started[index].set()
-                return toolset.search_climbmix(query)
+                return _authorized_search(toolset, query)
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 authorize(queries[0])
@@ -854,19 +992,17 @@ def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
     result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
     payloads = [json.loads(item) for item in tool_results]
 
-    assert len(fake_retriever.queries) == 4
-    assert len(result.searches) == 4
+    assert len(fake_retriever.queries) == 5
+    assert len(result.searches) == 5
     assert [search.kind for search in result.searches] == [
         "original",
         "followup",
         "followup",
         "followup",
+        "followup",
     ]
-    assert (
-        sum(payload.get("error") == "search budget exhausted" for payload in payloads)
-        == 1
-    )
-    assert result.stopping_reason == "search_budget_exhausted"
+    assert all(payload["ok"] for payload in payloads)
+    assert result.stopping_reason == "agent_completed"
 
 
 def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
@@ -882,28 +1018,19 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
             query = "same concurrent query"
 
             def authorize() -> None:
-                action = json.loads(
-                    toolset.choose_next_action(
-                        "search",
-                        query,
-                        None,
-                        ["test-need"],
-                        "test need remains open",
-                    )
-                )
-                assert action["state"] == "pending"
+                return None
 
             second_started = Event()
             with ThreadPoolExecutor(max_workers=2) as pool:
                 authorize()
-                first = pool.submit(toolset.search_climbmix, query)
+                first = pool.submit(_authorized_search, toolset, query)
                 assert fake_retriever.first_entered.wait(timeout=2)
 
                 authorize()
 
                 def call_second() -> str:
                     second_started.set()
-                    return toolset.search_climbmix(query)
+                    return _authorized_search(toolset, query)
 
                 second = pool.submit(call_second)
                 assert second_started.wait(timeout=2)
@@ -926,7 +1053,7 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
     assert result.stopping_reason == "agent_completed"
 
 
-def test_retrieve_concurrent_blank_followups_do_not_use_budget() -> None:
+def test_retrieve_concurrent_blank_followups_are_budgeted_as_no_yield() -> None:
     fake_retriever = FakeRetriever()
     blank_results = []
     successful_results = []
@@ -940,7 +1067,7 @@ def test_retrieve_concurrent_blank_followups_do_not_use_budget() -> None:
 
             def call_blank(number: int) -> str:
                 barrier.wait(timeout=2)
-                return toolset.search_climbmix(" " * (number + 1))
+                return _authorized_search(toolset, " " * (number + 1))
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 blank_results.extend(pool.map(call_blank, range(4)))
@@ -953,22 +1080,15 @@ def test_retrieve_concurrent_blank_followups_do_not_use_budget() -> None:
 
     result = _sdk(fake_retriever, agent_factory).retrieve("narrative")
 
-    assert [query.query_text for query in fake_retriever.queries] == [
-        "narrative",
-        "query 0",
-        "query 1",
-        "query 2",
-    ]
+    assert [query.query_text for query in fake_retriever.queries] == ["narrative"]
+    assert {
+        json.loads(item)["error"] for item in blank_results
+    } <= {"query must be non-empty text", "retrieval budget refused"}
     assert all(
-        json.loads(item) == {"error": "query must be non-empty text"}
-        for item in blank_results
+        json.loads(item)["code"] == "NO_YIELD_STOP"
+        for item in successful_results
     )
-    assert [json.loads(item)["remaining_budget"] for item in successful_results] == [
-        2,
-        1,
-        0,
-    ]
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "NO_YIELD_STOP"
 
 
 def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order() -> (
@@ -985,28 +1105,19 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
             _seed_test_need(toolset)
 
             def authorize(query: str) -> None:
-                action = json.loads(
-                    toolset.choose_next_action(
-                        "search",
-                        query,
-                        None,
-                        ["test-need"],
-                        "test need remains open",
-                    )
-                )
-                assert action["state"] == "pending"
+                assert query
 
             authorize("failing query")
             queued_started = Event()
             with ThreadPoolExecutor(max_workers=2) as pool:
-                failed = pool.submit(toolset.search_climbmix, "failing query")
+                failed = pool.submit(_authorized_search, toolset, "failing query")
                 assert fake_retriever.failure_started.wait(timeout=2)
 
                 authorize("query 0")
 
                 def call_queued_success() -> str:
                     queued_started.set()
-                    return toolset.search_climbmix("query 0")
+                    return _authorized_search(toolset, "query 0")
 
                 successful = pool.submit(call_queued_success)
                 assert queued_started.wait(timeout=2)
@@ -1032,23 +1143,16 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
 
     assert fake_retriever.attempted_queries[0:2] == ["narrative", "failing query"]
     assert "failing query" not in recorded_queries
-    assert len(recorded_queries) == 4
+    assert len(recorded_queries) == 5
     assert [search.query for search in result.searches] == recorded_queries
     assert [
         item["query"] for item in result.candidates[0].provenance
     ] == recorded_queries
-    assert sorted(
-        json.loads(item)["remaining_budget"] for item in tool_results[:3]
-    ) == [
-        0,
-        1,
-        2,
-    ]
-    assert json.loads(tool_results[-1]) == {"error": "search budget exhausted"}
-    assert result.stopping_reason == "search_budget_exhausted"
+    assert all(json.loads(item)["ok"] for item in tool_results)
+    assert result.stopping_reason == "agent_completed"
 
 
-def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_budget() -> (
+def test_retrieve_rejects_blank_and_original_duplicate_followups_with_budget_charge() -> (
     None
 ):
     fake_retriever = FakeRetriever()
@@ -1061,7 +1165,7 @@ def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_b
         def invoke(_payload: dict[str, object]) -> object:
             tool_results.extend(
                 [
-                    toolset.search_climbmix("   "),
+                    _authorized_search(toolset, "   "),
                     _authorized_search(toolset, "narrative"),
                     _authorized_search(toolset, "query 0"),
                     _authorized_search(toolset, "query 1"),
@@ -1080,11 +1184,12 @@ def test_retrieve_rejects_blank_and_original_duplicate_followups_without_using_b
         "query 0",
         "query 1",
         "query 2",
+        "query 3",
     ]
     assert json.loads(tool_results[0])["error"] == "query must be non-empty text"
     assert json.loads(tool_results[1])["error"] == "duplicate follow-up query"
-    assert json.loads(tool_results[-1])["error"] == "search budget exhausted"
-    assert result.stopping_reason == "search_budget_exhausted"
+    assert json.loads(tool_results[-1])["ok"] is True
+    assert result.stopping_reason == "agent_completed"
 
 
 def test_retrieve_uses_stable_hashes_for_private_cache_variants() -> None:
@@ -1380,19 +1485,30 @@ def test_snippet_span_lifecycle_failure_does_not_change_tool_result(
 
 def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> None:
     calls = []
+    profiles = []
 
     def fake_create_deep_agent(*args: object, **kwargs: object) -> object:
         calls.append((args, kwargs))
         return object()
 
     monkeypatch.setattr("deepagents.create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(
+        "deepagents.register_harness_profile",
+        lambda key, profile: profiles.append((key, profile)),
+    )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
-    def search_tool(_query: str) -> str:
+    def search_tool(
+        _query: str, _motivating_ids: list[str], _rationale: str
+    ) -> str:
         return "{}"
 
     def snippet_tool(
-        _document_id: str, _focus_query: str, _cursor: str | None = None
+        _document_id: str,
+        _focus_query: str,
+        _motivating_ids: list[str],
+        _rationale: str,
+        _cursor: str | None = None,
     ) -> str:
         return "{}"
 
@@ -1400,6 +1516,9 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
         return "{}"
 
     def update_tool(_delta: dict[str, object]) -> str:
+        return "{}"
+
+    def complete_round_tool(_round_index: int) -> str:
         return "{}"
 
     def action_tool(
@@ -1411,12 +1530,17 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     ) -> str:
         return "{}"
 
+    budget_config = ResearchBudgetConfig()
+    budget = ResearchBudget(budget_config)
     toolset = deepagent_retrieval.AgentToolset(
         search_climbmix=search_tool,
         extract_relevant_snippets=snippet_tool,
         view_retrieval_state=view_tool,
         update_retrieval_state=update_tool,
+        complete_research_round=complete_round_tool,
         choose_next_action=action_tool,
+        budget=budget,
+        budget_config=budget_config,
     )
     agent = _create_agent("openrouter:deepseek/test-model", toolset)
 
@@ -1424,23 +1548,66 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     assert len(calls) == 1
     args, kwargs = calls[0]
     assert args == ()
-    assert set(kwargs) == {"model", "tools", "system_prompt", "middleware", "backend"}
+    assert set(kwargs) == {
+        "model",
+        "tools",
+        "system_prompt",
+        "middleware",
+        "subagents",
+        "backend",
+    }
     assert isinstance(kwargs["model"], ChatOpenRouter)
     assert kwargs["model"].model_name == "deepseek/test-model"
     assert kwargs["model"].max_retries == 0
+    assert kwargs["model"].request_timeout == 120
     assert kwargs["tools"] == [
+        view_tool,
+        update_tool,
+        complete_round_tool,
+    ]
+    assert kwargs["system_prompt"] == ANY
+    assert len(kwargs["subagents"]) == 1
+    assert kwargs["subagents"][0]["name"] == "researcher"
+    assert kwargs["subagents"][0]["model"] is kwargs["model"]
+    assert kwargs["subagents"][0]["tools"] == [
         search_tool,
         snippet_tool,
         view_tool,
-        update_tool,
-        action_tool,
     ]
-    assert kwargs["system_prompt"] == ANY
-    assert len(kwargs["middleware"]) == 1
+    assert len(kwargs["middleware"]) == 4
+    assert isinstance(kwargs["middleware"][2], ResearchTaskBudgetMiddleware)
+    assert isinstance(kwargs["middleware"][3], MainToolFilterMiddleware)
+    assert profiles[0][0] == "openrouter:deepseek/test-model"
+    assert profiles[0][1].general_purpose_subagent.enabled is False
     assert isinstance(
-        kwargs["middleware"][0], deepagent_retrieval._RetrievalOnlyMiddleware
+        kwargs["middleware"][0],
+        deepagent_retrieval.ModelCallLimitMiddleware,
     )
     assert isinstance(kwargs["backend"], StateBackend)
+
+
+def test_main_tool_filter_reserves_the_last_model_turn_for_finalization() -> None:
+    config = ResearchBudgetConfig(max_main_models=4)
+    middleware = MainToolFilterMiddleware(ResearchBudget(config), config)
+    model = CaptureChatModel(responses=[AIMessage(content="unused")])
+    request = ModelRequest(
+        model=model,
+        messages=[],
+        tools=[{"name": "task"}, {"name": "view_retrieval_state"}],
+        state={"messages": [], "run_model_call_count": 3},
+    )
+    observed: dict[str, object] = {}
+
+    def handler(filtered: ModelRequest[object]) -> AIMessage:
+        observed["tools"] = filtered.tools
+        observed["system"] = (
+            filtered.system_message.content if filtered.system_message else ""
+        )
+        return AIMessage(content="partial")
+
+    assert middleware.wrap_model_call(request, handler).content == "partial"
+    assert observed["tools"] == []
+    assert "grounded partial result immediately" in str(observed["system"])
 
 
 @pytest.mark.parametrize(
@@ -1460,17 +1627,22 @@ def test_factory_rejects_invalid_openrouter_specs_before_agent_construction(
         _create_agent(
             model,
             deepagent_retrieval.AgentToolset(
-                search_climbmix=lambda _query: "{}",
+                search_climbmix=lambda _query, _ids, _rationale: "{}",
                 extract_relevant_snippets=lambda _document_id,
                 _focus_query,
+                _ids,
+                _rationale,
                 _cursor=None: "{}",
                 view_retrieval_state=lambda _scope="frontier": "{}",
                 update_retrieval_state=lambda _delta: "{}",
+                complete_research_round=lambda _round_index: "{}",
                 choose_next_action=lambda _action,
                 _target,
                 _focus_query,
                 _motivating_ids,
                 _rationale: "{}",
+                budget=ResearchBudget(ResearchBudgetConfig()),
+                budget_config=ResearchBudgetConfig(),
             ),
         )
 
@@ -1498,24 +1670,16 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
 
     assert result.rationale == "Coverage is sufficient."
     assert set(sdk_model.captured_tool_names) == {
-        "search_climbmix",
-        "extract_relevant_snippets",
+        "task",
         "view_retrieval_state",
         "update_retrieval_state",
-        "choose_next_action",
-        "ls",
+        "complete_research_round",
         "read_file",
-        "write_file",
-        "edit_file",
-        "delete",
-        "glob",
-        "grep",
     }
-    assert "task" not in sdk_model.captured_tool_names
     assert "execute" not in sdk_model.captured_tool_names
     assert sdk_model.captured_bind_settings
     assert all(
-        settings["parallel_tool_calls"] is False
+        settings["parallel_tool_calls"] is True
         for settings in sdk_model.captured_bind_settings
     )
 
@@ -1530,7 +1694,7 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
     )
     unrelated_agent.invoke({"messages": [{"role": "user", "content": "unrelated"}]})
 
-    assert {"ls", "task", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
+    assert {"ls", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
 
 
 def test_nested_state_update_tool_exposes_model_facing_delta_sections() -> None:
@@ -1774,149 +1938,6 @@ def test_structured_state_tool_allows_nullable_status_fields_to_reach_state() ->
     assert need["rejected"] == []
 
 
-def test_retrieve_requires_recorded_actions_for_agent_retrieval_tools() -> None:
-    retriever = FakeRetriever()
-    extractor = RecordingSnippetExtractor()
-    observed: dict[str, object] = {}
-
-    def agent_factory(
-        _model: str, toolset: deepagent_retrieval.AgentToolset
-    ) -> FakeAgent:
-        def invoke(payload: dict[str, object]) -> object:
-            observed["initial_message"] = payload["messages"][0]["content"]
-            observed["unauthorized_search"] = json.loads(
-                toolset.search_climbmix("targeted follow-up")
-            )
-            observed["calls_after_unauthorized_search"] = len(retriever.queries)
-            observed["need_update"] = json.loads(
-                toolset.update_retrieval_state(
-                    {
-                        "add_needs": [
-                            {
-                                "need_id": "n1",
-                                "narrative_span": "narrative",
-                                "question": "What evidence answers the narrative?",
-                            }
-                        ]
-                    }
-                )
-            )
-            observed["invalid_action_input"] = json.loads(
-                toolset.choose_next_action(
-                    "extract",
-                    "original-doc-1",
-                    object(),  # type: ignore[arg-type]
-                    ["n1"],
-                    "invalid focus must remain a safe tool error",
-                )
-            )
-            observed["search_action"] = json.loads(
-                toolset.choose_next_action(
-                    "search",
-                    "targeted follow-up",
-                    None,
-                    ["n1"],
-                    "the need remains open",
-                )
-            )
-            observed["authorized_search"] = json.loads(
-                toolset.search_climbmix("targeted follow-up")
-            )
-            observed["replayed_search"] = json.loads(
-                toolset.search_climbmix("targeted follow-up")
-            )
-
-            observed["unauthorized_extract"] = json.loads(
-                toolset.extract_relevant_snippets("original-doc-1", "first focus", None)
-            )
-            toolset.choose_next_action(
-                "extract",
-                "original-doc-1",
-                "first focus",
-                ["n1"],
-                "inspect the first result",
-            )
-            observed["authorized_extract"] = json.loads(
-                toolset.extract_relevant_snippets("original-doc-1", "first focus", None)
-            )
-
-            observed["unauthorized_refocus"] = json.loads(
-                toolset.extract_relevant_snippets("original-doc-1", "new focus", None)
-            )
-            toolset.choose_next_action(
-                "refocus",
-                "original-doc-1",
-                "new focus",
-                ["n1"],
-                "inspect a distinct gap",
-            )
-            observed["authorized_refocus"] = json.loads(
-                toolset.extract_relevant_snippets("original-doc-1", "new focus", None)
-            )
-
-            observed["unauthorized_paginate"] = json.loads(
-                toolset.extract_relevant_snippets(
-                    "original-doc-1", "first focus", "page-two"
-                )
-            )
-            toolset.choose_next_action(
-                "paginate",
-                "original-doc-1",
-                "first focus",
-                ["n1"],
-                "the stored focus still has a gap",
-            )
-            observed["authorized_paginate"] = json.loads(
-                toolset.extract_relevant_snippets(
-                    "original-doc-1", "first focus", "page-two"
-                )
-            )
-            return {"messages": [{"role": "assistant", "content": "Stopped early."}]}
-
-        return FakeAgent(invoke)
-
-    result = _sdk(retriever, agent_factory, snippet_extractor=extractor).retrieve(
-        "narrative"
-    )
-
-    required_error = {"error": "matching next action required"}
-    assert observed["initial_message"] == (
-        "The untouched narrative is:\n"
-        "narrative\n\n"
-        "It has already been searched. Bounded original results:\n"
-        '[{"docid": "original-doc-1", "rank": 1, "score": 99.0, '
-        '"text_length": 19}]'
-    )
-    assert observed["unauthorized_search"] == required_error
-    assert observed["calls_after_unauthorized_search"] == 1
-    assert observed["invalid_action_input"] == {
-        "code": "INVALID_ACTION",
-        "ok": False,
-    }
-    assert "documents" in observed["authorized_search"]
-    assert observed["replayed_search"] == required_error
-    assert observed["unauthorized_extract"] == required_error
-    assert "snippets" in observed["authorized_extract"]
-    assert observed["unauthorized_refocus"] == required_error
-    assert "snippets" in observed["authorized_refocus"]
-    assert observed["unauthorized_paginate"] == required_error
-    assert "snippets" in observed["authorized_paginate"]
-    assert len(extractor.calls) == 3
-    assert [search.kind for search in result.searches] == ["original", "followup"]
-    assert [
-        (search.query, search.kind) for search in result.coverage_report.searches
-    ] == [
-        ("narrative", "original"),
-        ("targeted follow-up", "followup"),
-    ]
-    assert [action.action for action in result.coverage_report.actions] == [
-        "search",
-        "extract",
-        "refocus",
-        "paginate",
-    ]
-
-
 def test_choose_next_action_rejects_unhashable_action_kinds_as_safe_json() -> None:
     observed: list[dict[str, object]] = []
 
@@ -1956,19 +1977,13 @@ def test_paginate_rejects_unseen_document_focus_before_extractor_work() -> None:
         _model: str, toolset: deepagent_retrieval.AgentToolset
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            _seed_test_need(toolset)
-            observed["action"] = json.loads(
-                toolset.choose_next_action(
-                    "paginate",
+            observed["page"] = json.loads(
+                _authorized_snippet(
+                    toolset,
                     "original-doc-1",
                     "unseen focus",
-                    ["test-need"],
-                    "attempt pagination before inspection",
-                )
-            )
-            observed["page"] = json.loads(
-                toolset.extract_relevant_snippets(
-                    "original-doc-1", "unseen focus", "opaque-page-two"
+                    "opaque-page-two",
+                    action="paginate",
                 )
             )
             return {"messages": [{"role": "assistant", "content": "Stopped."}]}
@@ -1979,8 +1994,8 @@ def test_paginate_rejects_unseen_document_focus_before_extractor_work() -> None:
         "narrative"
     )
 
-    assert observed["action"]["state"] == "pending"
-    assert observed["page"] == {"error": "pagination requires prior snippet page"}
+    assert observed["page"]["code"] == "INVALID_CURSOR"
+    assert observed["page"]["error"] == "pagination requires prior snippet page"
     assert extractor.calls == []
     assert result.coverage_report.actions[-1].state == "consumed"
     assert result.coverage_report.inspected_page_count == 0
@@ -2199,7 +2214,7 @@ def test_tool_returns_bounded_metadata_but_result_retains_all_candidates() -> No
         for candidate in tool_payloads[0]["documents"]
     )
     assert len(result.searches[1].candidates) == 11
-    assert tool_payloads[0]["remaining_budget"] == 2
+    assert tool_payloads[0]["remaining_budget"] == 99
 
 
 def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> None:
@@ -2237,9 +2252,9 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
     assert len(fake_retriever.queries) == 2
     assert "original-doc-3" not in json.dumps(initial_payloads[0], sort_keys=True)
     assert len(tool_payloads[0]["documents"]) == 2
-    assert tool_payloads[0]["remaining_budget"] == 0
-    assert tool_payloads[1] == {"error": "search budget exhausted"}
-    assert result.stopping_reason == "search_budget_exhausted"
+    assert tool_payloads[0]["remaining_budget"] == 99
+    assert tool_payloads[1]["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
+    assert result.stopping_reason == "TASK_TOOL_BUDGET_EXHAUSTED"
     assert len(result.candidates) == 1
     assert len(result.searches[0].candidates) == 4
     assert len(result.searches[1].candidates) == 4

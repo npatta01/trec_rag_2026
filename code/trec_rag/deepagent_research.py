@@ -17,7 +17,7 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 from trec_rag.deepagent_budget import (
@@ -198,6 +198,39 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         }
     )
     _PARALLEL_TOOL_CALLS = True
+
+    def __init__(
+        self,
+        budget: ResearchBudget | None = None,
+        budget_config: ResearchBudgetConfig | None = None,
+    ) -> None:
+        self._budget = budget
+        self._budget_config = budget_config
+
+    def _filter_tools(self, request: ModelRequest) -> ModelRequest:
+        filtered = super()._filter_tools(request)
+        if self._budget is None or self._budget_config is None:
+            return filtered
+        run_count = request.state.get("run_model_call_count", 0)
+        final_turn = (
+            self._budget.snapshot().stop_code is not None
+            or run_count >= self._budget_config.max_main_models - 1
+        )
+        if not final_turn:
+            return filtered
+        instruction = (
+            "Return the grounded partial result immediately. Do not call more tools."
+        )
+        existing = request.system_message
+        content = f"{existing.content}\n\n{instruction}" if existing else instruction
+        return filtered.override(
+            tools=[],
+            system_message=SystemMessage(content=content),
+            model_settings={
+                **(filtered.model_settings or {}),
+                "parallel_tool_calls": False,
+            },
+        )
 
 
 class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
