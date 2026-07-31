@@ -20,7 +20,6 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from trec_rag.deepagent_budget import (
-    BudgetCode,
     BudgetDecision,
     BudgetSnapshot,
     ResearchBudget,
@@ -673,7 +672,6 @@ class DeepAgentRetriever:
         budget = ResearchBudget(self._budget_config)
         searches: list[AgentSearch] = []
         documents: dict[str, str] = {}
-        budget_stop_code: BudgetCode | None = None
         followup_lock = Lock()
         document_lock = Lock()
 
@@ -767,11 +765,12 @@ class DeepAgentRetriever:
             error: str | None = None,
             code: str | None = None,
         ) -> dict[str, object]:
+            snapshot = decision.snapshot
             payload: dict[str, object] = {
                 "ok": decision.ok,
                 "code": code or decision.code,
-                "must_stop": decision.must_stop,
-                "budget_snapshot": decision.snapshot.as_dict(),
+                "must_stop": decision.must_stop or snapshot.stop_code is not None,
+                "budget_snapshot": snapshot.as_dict(),
             }
             if error is not None:
                 payload["error"] = error
@@ -786,7 +785,6 @@ class DeepAgentRetriever:
             rationale: str,
         ) -> str:
             """Search ClimbMix for a targeted, previously uncovered narrative aspect."""
-            nonlocal budget_stop_code
             context = task_context()
             if context is None:
                 return json.dumps(
@@ -801,7 +799,6 @@ class DeepAgentRetriever:
                 )
             decision = budget.reserve_retrieval(context, "search_climbmix")
             if not decision.ok:
-                budget_stop_code = decision.code
                 return json.dumps(
                     budget_payload(decision, error="retrieval budget refused"),
                     sort_keys=True,
@@ -865,7 +862,7 @@ class DeepAgentRetriever:
                     {
                         "ok": True,
                         "code": decision.code,
-                        "must_stop": decision.must_stop,
+                        "must_stop": snapshot.stop_code is not None,
                         "budget_snapshot": snapshot.as_dict(),
                         "documents": _candidate_metadata(
                             search.candidates, limit=self._hits_per_search
@@ -883,7 +880,6 @@ class DeepAgentRetriever:
             cursor: str | None = None,
         ) -> str:
             """Return one relevance-ranked snippet page for a retrieved document."""
-            nonlocal budget_stop_code
             context = task_context()
             if context is None:
                 return json.dumps(
@@ -900,7 +896,6 @@ class DeepAgentRetriever:
                 context, "extract_relevant_snippets"
             )
             if not decision.ok:
-                budget_stop_code = decision.code
                 return json.dumps(
                     budget_payload(decision, error="retrieval budget refused"),
                     sort_keys=True,
@@ -1058,13 +1053,14 @@ class DeepAgentRetriever:
             budget.record_yield(
                 context, (snippet.chunk_id for snippet in result.page.snippets)
             )
+            snapshot = budget.snapshot()
             payload = result.page.as_dict()
             payload.update(
                 {
                     "ok": True,
                     "code": decision.code,
-                    "must_stop": decision.must_stop,
-                    "budget_snapshot": budget.snapshot().as_dict(),
+                    "must_stop": snapshot.stop_code is not None,
+                    "budget_snapshot": snapshot.as_dict(),
                 }
             )
             return json.dumps(payload, sort_keys=True)
@@ -1181,7 +1177,6 @@ class DeepAgentRetriever:
                 stopping_reason = (
                     coverage_report.terminal_reason
                     or budget_snapshot.stop_code
-                    or budget_stop_code
                     or "agent_completed"
                 )
                 if agent_span is not None:

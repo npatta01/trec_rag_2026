@@ -145,6 +145,7 @@ class ResearchBudget:
         self._round_progress: dict[int, tuple[frozenset[str], ...]] = {}
         self._round_decisions: dict[int, BudgetDecision] = {}
         self._no_progress_streak = 0
+        self._stop_code: BudgetCode | None = None
 
     def reserve_task(self, context: ResearchTaskContext) -> BudgetDecision:
         """Reserve one researcher slot if all global admission checks allow it."""
@@ -237,6 +238,8 @@ class ResearchBudget:
                 self._no_yield_streaks[task_id] = 0
             else:
                 self._no_yield_streaks[task_id] = self._no_yield_streaks.get(task_id, 0) + 1
+                if self._no_yield_streaks[task_id] >= self._config.no_yield_calls:
+                    self._persist_stop("NO_YIELD_STOP")
 
     def complete_round(
         self, round_index: int, report: _CoverageReport
@@ -292,10 +295,15 @@ class ResearchBudget:
 
     def _global_stop_code(self) -> BudgetCode | None:
         if self._elapsed_seconds() >= self._config.hard_seconds:
+            self._persist_stop("HARD_DEADLINE_REACHED")
             return "HARD_DEADLINE_REACHED"
-        if self._no_progress_streak >= self._config.no_progress_rounds:
-            return "NO_PROGRESS_STOP"
-        return None
+        return self._stop_code
+
+    def _persist_stop(self, code: BudgetCode) -> None:
+        """Persist a true run-stop decision while preserving hard-deadline priority."""
+
+        if self._stop_code is None or code == "HARD_DEADLINE_REACHED":
+            self._stop_code = code
 
     def _admission(self) -> BudgetDecision:
         code: BudgetCode = "OK"
@@ -304,6 +312,8 @@ class ResearchBudget:
         return BudgetDecision(ok=True, code=code, snapshot=self._snapshot())
 
     def _refusal(self, code: BudgetCode, *, must_stop: bool = False) -> BudgetDecision:
+        if must_stop:
+            self._persist_stop(code)
         return BudgetDecision(
             ok=False,
             code=code,
@@ -314,6 +324,8 @@ class ResearchBudget:
     def _snapshot(self) -> BudgetSnapshot:
         elapsed_seconds = self._elapsed_seconds()
         hard_deadline_reached = elapsed_seconds >= self._config.hard_seconds
+        if hard_deadline_reached:
+            self._persist_stop("HARD_DEADLINE_REACHED")
         return BudgetSnapshot(
             elapsed_seconds=elapsed_seconds,
             remaining_researchers=max(
@@ -330,13 +342,7 @@ class ResearchBudget:
             completed_rounds=len(self._completed_round_indexes),
             soft_deadline_reached=elapsed_seconds >= self._config.soft_seconds,
             hard_deadline_reached=hard_deadline_reached,
-            stop_code=(
-                "HARD_DEADLINE_REACHED"
-                if hard_deadline_reached
-                else "NO_PROGRESS_STOP"
-                if self._no_progress_streak >= self._config.no_progress_rounds
-                else None
-            ),
+            stop_code=self._stop_code,
         )
 
     def _elapsed_seconds(self) -> float:

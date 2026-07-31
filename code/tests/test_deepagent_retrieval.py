@@ -1149,7 +1149,8 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
         item["query"] for item in result.candidates[0].provenance
     ] == recorded_queries
     assert all(json.loads(item)["ok"] for item in tool_results)
-    assert result.stopping_reason == "agent_completed"
+    assert json.loads(tool_results[-1])["must_stop"] is True
+    assert result.stopping_reason == "NO_YIELD_STOP"
 
 
 def test_retrieve_rejects_blank_and_original_duplicate_followups_with_budget_charge() -> (
@@ -1610,6 +1611,33 @@ def test_main_tool_filter_reserves_the_last_model_turn_for_finalization() -> Non
     assert "grounded partial result immediately" in str(observed["system"])
 
 
+def test_main_tool_filter_sees_shared_no_yield_stop_immediately() -> None:
+    config = ResearchBudgetConfig(no_yield_calls=1)
+    budget = ResearchBudget(config)
+    context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
+    assert budget.reserve_task(context).ok
+    assert budget.reserve_retrieval(context, "search_climbmix").ok
+    budget.record_yield(context, ())
+    middleware = MainToolFilterMiddleware(budget, config)
+    model = CaptureChatModel(responses=[AIMessage(content="unused")])
+    request = ModelRequest(
+        model=model,
+        messages=[],
+        tools=[{"name": "task"}, {"name": "view_retrieval_state"}],
+        state={"messages": [], "run_model_call_count": 1},
+    )
+    observed: dict[str, object] = {}
+
+    def handler(filtered: ModelRequest[object]) -> AIMessage:
+        observed["tools"] = filtered.tools
+        return AIMessage(content="partial")
+
+    middleware.wrap_model_call(request, handler)
+
+    assert budget.snapshot().stop_code == "NO_YIELD_STOP"
+    assert observed["tools"] == []
+
+
 @pytest.mark.parametrize(
     "model",
     ["test:model", "openrouter:", "openrouter:   ", " openrouter:test/model"],
@@ -1695,6 +1723,140 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
     unrelated_agent.invoke({"messages": [{"role": "user", "content": "unrelated"}]})
 
     assert {"ls", "unrelated_tool"} <= set(unrelated_model.captured_tool_names)
+
+
+def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
+    monkeypatch,
+) -> None:
+    task_description = json.dumps(
+        {
+            "research_task_id": "R1-N1",
+            "round_index": 1,
+            "depth": "focused",
+            "motivating_ids": ["N1"],
+            "goal": "Find one source for N1.",
+            "known_evidence": "",
+            "remaining_gap": "No grounded source yet.",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    bundle_snapshot = ResearchBudget(ResearchBudgetConfig()).snapshot().as_dict()
+    model = CaptureChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "update_retrieval_state",
+                        "args": {
+                            "delta": {
+                                "add_needs": [
+                                    {
+                                        "need_id": "N1",
+                                        "narrative_span": "narrative",
+                                        "question": "What evidence answers the narrative?",
+                                    }
+                                ]
+                            }
+                        },
+                        "id": "seed-needs",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "description": task_description,
+                            "subagent_type": "researcher",
+                        },
+                        "id": "delegate-research",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "search_climbmix",
+                        "args": {
+                            "query": "focused researcher query",
+                            "motivating_ids": ["N1"],
+                            "rationale": "N1 has no grounded source",
+                        },
+                        "id": "research-search",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "EvidenceBundle",
+                        "args": {
+                            "research_task_id": "R1-N1",
+                            "round_index": 1,
+                            "depth": "focused",
+                            "motivating_need_ids": ["N1"],
+                            "candidate_nuggets": [
+                                {
+                                    "claim": "The retrieved source addresses N1.",
+                                    "need_ids": ["N1"],
+                                    "facet_ids": [],
+                                    "evidence": [
+                                        {
+                                            "document_id": "followup-doc",
+                                            "snippet_id": "snippet-1",
+                                            "page_index": 0,
+                                            "quote": "Exact supporting quote.",
+                                        }
+                                    ],
+                                    "contradicts_claims": [],
+                                }
+                            ],
+                            "conflicts": [],
+                            "unresolved_gaps": [],
+                            "suggested_followups": [],
+                            "stopping_reason": "goal_satisfied",
+                            "budget_snapshot": bundle_snapshot,
+                        },
+                        "id": "structured-bundle",
+                    }
+                ],
+            ),
+            AIMessage(content="Final grounded response after researcher bundle."),
+        ]
+    )
+    constructor_calls: list[dict[str, object]] = []
+
+    def fake_openrouter(**kwargs: object) -> CaptureChatModel:
+        constructor_calls.append(dict(kwargs))
+        return model
+
+    monkeypatch.setattr("langchain_openrouter.ChatOpenRouter", fake_openrouter)
+    fake_retriever = FakeRetriever()
+
+    result = DeepAgentRetriever(
+        retriever=fake_retriever,
+        model="openrouter:test/offline-coordinator",
+        tracing=FakeTracing(),
+    ).retrieve("narrative")
+
+    assert constructor_calls == [
+        {"model": "test/offline-coordinator", "max_retries": 0, "timeout": 120}
+    ]
+    assert [query.query_text for query in fake_retriever.queries] == [
+        "narrative",
+        "focused researcher query",
+    ]
+    action = result.coverage_report.actions[-1]
+    assert action.research_task_id == "R1-N1"
+    assert action.target == "focused researcher query"
+    assert result.budget_snapshot.completed_researchers == 1
+    assert result.rationale == "Final grounded response after researcher bundle."
 
 
 def test_nested_state_update_tool_exposes_model_facing_delta_sections() -> None:
@@ -2254,7 +2416,7 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
     assert len(tool_payloads[0]["documents"]) == 2
     assert tool_payloads[0]["remaining_budget"] == 99
     assert tool_payloads[1]["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
-    assert result.stopping_reason == "TASK_TOOL_BUDGET_EXHAUSTED"
+    assert result.stopping_reason == "agent_completed"
     assert len(result.candidates) == 1
     assert len(result.searches[0].candidates) == 4
     assert len(result.searches[1].candidates) == 4

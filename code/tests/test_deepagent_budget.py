@@ -97,6 +97,17 @@ def test_three_no_yield_calls_block_a_fourth_retrieval() -> None:
 
     assert decision.code == "NO_YIELD_STOP"
     assert decision.must_stop is True
+    assert decision.snapshot.stop_code == "NO_YIELD_STOP"
+
+
+def test_third_no_yield_persists_run_stop_before_another_reservation() -> None:
+    budget, context = active_budget()
+
+    for _ in range(3):
+        assert budget.reserve_retrieval(context, "search_climbmix").ok
+        budget.record_yield(context, ())
+
+    assert budget.snapshot().stop_code == "NO_YIELD_STOP"
 
 
 def test_tenth_task_is_admitted_and_eleventh_is_refused() -> None:
@@ -193,6 +204,8 @@ def test_per_task_tool_cap_refuses_first_call_after_limit(
 
     assert all(decision.ok for decision in decisions[:limit])
     assert decisions[-1].code == "TASK_TOOL_BUDGET_EXHAUSTED"
+    assert decisions[-1].must_stop is False
+    assert budget.snapshot().stop_code is None
 
 
 def test_soft_deadline_warns_but_allows_work() -> None:
