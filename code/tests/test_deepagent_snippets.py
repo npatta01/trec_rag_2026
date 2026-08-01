@@ -1094,7 +1094,7 @@ def test_local_ranker_scores_only_cache_misses_and_loads_lazily(tmp_path: Path) 
         {
             "model_name": DEFAULT_SNIPPET_MODEL,
             "revision": DEFAULT_SNIPPET_MODEL_REVISION,
-            "max_length": 512,
+            "max_length": 1024,
             "device": "cpu",
         }
     ]
@@ -1122,7 +1122,7 @@ def test_local_ranker_identity_and_partial_cache_miss_are_exact(tmp_path: Path) 
         "model": DEFAULT_SNIPPET_MODEL,
         "model_revision": DEFAULT_SNIPPET_MODEL_REVISION,
         "score_representation": "raw_logits",
-        "max_length": 512,
+        "max_length": 1024,
         "batch_size": 32,
         "device": "cpu",
         "implementation_version": 1,

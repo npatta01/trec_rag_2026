@@ -34,7 +34,18 @@ RESULT_SCHEMA_VERSION = 3
 IMPLEMENTATION_VERSION = 3
 DEFAULT_SNIPPET_MODEL = "mixedbread-ai/mxbai-rerank-base-v2"
 DEFAULT_SNIPPET_MODEL_REVISION = "3ea9d4dffa7d12a4f366be8e275c349de9fc9865"
-_SNIPPET_MAX_LENGTH = 512
+# The model is Qwen2-based with max_position_embeddings=32768, so 512 was our
+# cap, not its limit. At 512 a chunk's tail was truncated before scoring while
+# still being returned to the agent with citable spans over it, so an agent
+# could cite sentences the scorer never read and the score was not a claim
+# about them. Measured: an answering sentence at 98% of a 3,500-character chunk
+# scored exactly the filler baseline at 512 and recovers fully at 1024.
+#
+# 1024 covers every chunk this config produces (a 3,500-character chunk reaches
+# ~838 tokens), and 2048 measured byte-identical, so more only costs time.
+# This buys correctness, not accuracy: ranking quality was unchanged within
+# noise and reranking costs about 75% more.
+_SNIPPET_MAX_LENGTH = 1024
 _SNIPPET_BATCH_SIZE = 32
 _SNIPPET_SCORE_KIND = "snippet_relevance_v1"
 _SMALL_LLM_SCORE_REPRESENTATION = "json_scalar"
