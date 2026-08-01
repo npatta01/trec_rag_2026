@@ -1,0 +1,60 @@
+experiment:
+  id: dev4_paired_prompt_profile_v1
+  run_date: 2026-08-01
+  split: development
+  status: paired_comparison_trade_off_identified
+  description: >-
+    Four development topics generated under both prompt profiles and scored on
+    nugget coverage and citation support with a single judge. Supersedes the
+    two-topic comparison recorded in dev_ragdoll_nugget_eval_spike_v1.
+
+code:
+  branch: claude/ragdoll-eval-spike
+  ragdoll_submodule: 1f0671908ab6dc581a61648463e3566ba413b480
+  pi_version: 0.83.0
+
+config:
+  retriever: archived_pyserini_bm25_responses
+  index: climbmix-400b
+  query_source: original_narrative
+  hits: 1000_archived_truncated_to_100
+  ranking: none_raw_bm25_order
+
+runtime:
+  topic_ids: ["58", "72", "144", "200"]
+  generator_model: openai/gpt-5.6-sol
+  generator_reasoning_effort: medium
+  arms: ["default", "atomic_claims"]
+  judge_model: openrouter/deepseek/deepseek-v4-flash
+  assigner_mode: support_grade_3
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 4
+  gold_nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  gold_nugget_count: 261
+  qrels_at_runtime: false
+
+metrics:
+  ndcg_at_10: null
+  recall_at_100: null
+
+tracked_record_files:
+  metrics: metrics.json
+  notes: notes.md
+
+local_artifacts:
+  root: outputs/dev22-ragdoll
+  output_dir: outputs/dev22-ragdoll/paired
+  cache_dir: cache/retrieval/pyserini_remote
+  committed_raw_documents: false
+  committed_model_responses: false
+  committed_generated_answers: false
+  note: >-
+    Answers, document text and judge raw events remain ignored. Generation for the
+    remaining 18 topics was deliberately stopped on cost grounds; only topics
+    completed under both arms are analysed here.
+
+notes: >-
+  Atomic answer objects trade nugget coverage for citation support. Both effects are
+  consistent across all four topics and point in opposite directions. See notes.md.

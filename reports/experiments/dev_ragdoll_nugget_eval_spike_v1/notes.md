@@ -150,3 +150,9 @@ two topics wide and should be treated as noise until it is run over all 22.
 Arm B also produced more references (14 per topic against 8 and 9), which means more
 citations to get right. Two citations landed at No Support in arm B against none in arm A —
 a small precision risk that grows with object count and is worth watching at scale.
+
+
+> **Superseded.** The A/B section above rests on two topics. A four-topic paired run with a
+> single judge (`dev4_paired_prompt_profile_v1`) reverses the coverage conclusion: atomic
+> objects *lose* 0.065 strict_vital across all four topics while still winning citation
+> support. Treat the support finding here as sound and the coverage finding as withdrawn.

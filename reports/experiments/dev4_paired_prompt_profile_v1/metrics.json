@@ -1,0 +1,92 @@
+{
+  "caveats": [
+    "Four topics; consistent direction but not a significance test.",
+    "Generation is high variance: the same default config produced 9 and then 28 answer objects for topic 58 in different runs.",
+    "Judge changed from gpt-5.5 to DeepSeek V4 Flash, so absolute values are not comparable across records; the A/B contrast within this record is consistent.",
+    "Automated assignment scores above NIST manual assignment."
+  ],
+  "citation_support": {
+    "arm_a_default": {
+      "hard_precision": 0.071,
+      "labels": {
+        "FS": 4,
+        "NS": 51,
+        "PS": 116,
+        "unparsed": 4
+      },
+      "weighted_precision_all_judged_citations": 0.415,
+      "weighted_precision_first_citation": 0.475
+    },
+    "arm_b_atomic": {
+      "hard_precision": 0.383,
+      "labels": {
+        "FS": 48,
+        "NS": 18,
+        "PS": 92,
+        "unparsed": 2
+      },
+      "weighted_precision_all_judged_citations": 0.622,
+      "weighted_precision_first_citation": 0.671
+    },
+    "delta_b_minus_a": {
+      "hard_precision": 0.312,
+      "weighted_precision_all_judged_citations": 0.207,
+      "weighted_precision_first_citation": 0.196
+    },
+    "topics_favouring_a": 0,
+    "topics_favouring_b": 4
+  },
+  "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
+  "judge_model": "openrouter/deepseek/deepseek-v4-flash",
+  "length": {
+    "note": "Neither arm approaches the cap. Nugget scoring is pure recall with no length penalty.",
+    "pearson_r_words_vs_strict_vital": 0.704,
+    "word_cap": 1024,
+    "words": {
+      "144": {
+        "a": 747,
+        "b": 756
+      },
+      "200": {
+        "a": 935,
+        "b": 772
+      },
+      "58": {
+        "a": 770,
+        "b": 514
+      },
+      "72": {
+        "a": 653,
+        "b": 344
+      }
+    }
+  },
+  "nugget_coverage": {
+    "arm_a_default": {
+      "all_score": 0.653528,
+      "strict_all_score": 0.585388,
+      "strict_vital_score": 0.634783,
+      "vital_score": 0.699082
+    },
+    "arm_b_atomic": {
+      "all_score": 0.620867,
+      "strict_all_score": 0.537461,
+      "strict_vital_score": 0.569799,
+      "vital_score": 0.653012
+    },
+    "delta_b_minus_a": {
+      "strict_all_score": -0.047927,
+      "strict_vital_score": -0.064984
+    },
+    "topics_favouring_a": 4,
+    "topics_favouring_b": 0
+  },
+  "schema": "ragdoll_paired_prompt_profile_v1",
+  "supersedes": "The two-topic comparison in dev_ragdoll_nugget_eval_spike_v1, which reported atomic as neutral-to-better on coverage.",
+  "topics": [
+    "58",
+    "72",
+    "144",
+    "200"
+  ]
+}
