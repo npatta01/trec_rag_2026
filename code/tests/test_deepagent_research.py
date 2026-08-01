@@ -130,7 +130,7 @@ def task_description(
     )
 
 
-def test_research_bundle_requires_exact_evidence_coordinates() -> None:
+def test_research_bundle_carries_citations_not_transcribed_evidence() -> None:
     bundle = EvidenceBundle.model_validate(
         {
             "research_task_id": "R1-N1",
@@ -142,14 +142,7 @@ def test_research_bundle_requires_exact_evidence_coordinates() -> None:
                     "claim": "Claim.",
                     "need_ids": ["N1"],
                     "facet_ids": [],
-                    "evidence": [
-                        {
-                            "document_id": "D1",
-                            "snippet_id": "S1",
-                            "page_index": 0,
-                            "quote": "Exact quote.",
-                        }
-                    ],
+                    "evidence": [{"cite": "S3.2"}],
                     "contradicts_claims": [],
                 }
             ],
@@ -161,10 +154,10 @@ def test_research_bundle_requires_exact_evidence_coordinates() -> None:
         }
     )
 
-    assert bundle.candidate_nuggets[0].evidence[0].snippet_id == "S1"
-    with pytest.raises(ValidationError):
+    assert bundle.candidate_nuggets[0].evidence[0].cite == "S3.2"
+    with pytest.raises(ValidationError, match="extra_forbidden"):
         BundleEvidence.model_validate(
-            {"document_id": "D1", "snippet_id": "", "page_index": -1, "quote": ""}
+            {"cite": "S3.2", "quote": "a researcher may not transcribe evidence"}
         )
 
 

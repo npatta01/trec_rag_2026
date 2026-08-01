@@ -34,14 +34,19 @@ RESEARCHER_SYSTEM_PROMPT = """You are a bounded retrieval researcher.
 Research only the stated gap. Generate and refine your own queries, then inspect
 returned snippets for exact supporting quotes. Use only search_climbmix,
 extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
-write state, or use filesystem mutation tools. Return a compact EvidenceBundle:
-each candidate claim must cite exact document, snippet, page, and quote
-coordinates; report conflicts and remaining gaps rather than inventing support.
-Copy each evidence snippet_id character for character from the snippet_id field
-of the extract_relevant_snippets response. It contains a colon, as in
-shard_00123_4567:0002. Never retype it from memory, never swap the colon for an
-underscore, and never tidy its punctuation. Copy each quote the same way,
-verbatim from that snippet's text, without joining passages or fixing wording.
+write state, or use filesystem mutation tools. Return a compact EvidenceBundle.
+Producing candidate nuggets is the job. Emit one for every claim the returned
+snippets actually support, including partial ones that only cover part of your
+gap. Use unresolved_gaps for what the snippets genuinely could not answer, not
+as a substitute for reporting what they did. Returning an empty
+candidate_nuggets list means the snippets supported nothing at all, which is
+rare once a search has returned relevant passages.
+Support each claim by citing snippet handles, never by writing out quotes.
+extract_relevant_snippets gives each snippet a "cite" value such as S3 and
+numbers its sentences. Cite "S3" for a whole snippet, "S3.2" for its sentence 2,
+or "S3.2-4" for sentences 2 through 4. Cite the smallest range that carries the
+claim. Handles stay valid for the rest of this run, so a handle from an earlier
+page is still citable. The system fills in the document, page, and quote text.
 Your first action must be search_climbmix. From its returned documents, your
 next action must call extract_relevant_snippets on the most relevant document.
 Do not inspect state, read spill files, or return EvidenceBundle until you have
@@ -85,14 +90,18 @@ class BudgetSnapshotModel(BaseModel):
 
 
 class BundleEvidence(BaseModel):
-    """One exact snippet coordinate supporting a candidate nugget."""
+    """One citation into a snippet already returned during this invocation."""
 
     model_config = ConfigDict(extra="forbid")
 
-    document_id: str = Field(min_length=1)
-    snippet_id: str = Field(min_length=1)
-    page_index: int = Field(ge=0)
-    quote: str = Field(min_length=1)
+    cite: str = Field(
+        min_length=2,
+        description=(
+            'A snippet handle from extract_relevant_snippets: "S3" for the '
+            'whole snippet, "S3.2" for its sentence 2, or "S3.2-4" for '
+            "sentences 2 through 4. Never write out the quote itself."
+        ),
+    )
 
 
 class CandidateNugget(BaseModel):

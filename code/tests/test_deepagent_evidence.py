@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from trec_rag.deepagent_budget import ResearchTaskContext
 from trec_rag.deepagent_evidence import (
     MAX_FRONTIER_CHARACTERS,
@@ -43,6 +44,34 @@ def _state_with_snippet() -> EvidenceCoverageState:
     return state
 
 
+def _state_with_sentences() -> EvidenceCoverageState:
+    """One snippet whose text splits into exactly three sentences."""
+    state = EvidenceCoverageState("Why do people migrate?")
+    state.record_search(
+        query="Why do people migrate?",
+        kind="original",
+        documents=(DocumentObservation("doc-a", 1),),
+    )
+    text = (
+        "Conflict displaces people. Persecution forces flight. "
+        "Drought removes livelihoods."
+    )
+    state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="migration drivers",
+            snippets=(RelevantSnippet("doc-a:0001", 0, len(text), text, 0.9),),
+            next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.9,
+            pages_estimated=1,
+        )
+    )
+    return state
+
+
 def _add_need_and_facet(state: EvidenceCoverageState) -> None:
     result = state.apply_delta(
         {
@@ -76,12 +105,7 @@ def _grounded_nugget_delta(nugget_id: str = "g1") -> dict[str, object]:
                 "text": "Conflict and persecution force displacement.",
                 "need_ids": ["n1"],
                 "facet_ids": ["f1"],
-                "evidence": [
-                    {
-                        "snippet_id": "doc-a:0001",
-                        "quote": "Conflict and persecution force people to flee.",
-                    }
-                ],
+                "evidence": [{"cite": "S1"}],
                 "contradicts": [],
             }
         ]
@@ -175,7 +199,7 @@ def test_unknown_only_delta_is_rejected() -> None:
     ]
 
 
-def test_ungrounded_quote_rejects_only_its_nugget() -> None:
+def test_unknown_handle_rejects_only_its_nugget() -> None:
     state = _state_with_snippet()
     _add_need_and_facet(state)
     delta = _grounded_nugget_delta()
@@ -186,7 +210,7 @@ def test_ungrounded_quote_rejects_only_its_nugget() -> None:
             "text": "A fabricated claim.",
             "need_ids": ["n1"],
             "facet_ids": ["f1"],
-            "evidence": [{"snippet_id": "doc-a:0001", "quote": "Invented quotation."}],
+            "evidence": [{"cite": "S9"}],
             "contradicts": [],
         },
     ]
@@ -194,8 +218,119 @@ def test_ungrounded_quote_rejects_only_its_nugget() -> None:
     result = state.apply_delta(delta)
 
     assert result.accepted_ids == ("g1",)
-    assert result.rejected[0].code == "UNGROUNDED_QUOTE"
+    assert result.rejected[0].code == "UNKNOWN_CITATION"
     assert tuple(nugget.nugget_id for nugget in state.report().nuggets) == ("g1",)
+
+
+def test_citations_resolve_to_stored_sentences() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    def claim(nugget_id: str, cite: str) -> dict[str, object]:
+        return {
+            "add_nuggets": [
+                {
+                    "nugget_id": nugget_id,
+                    "text": "A claim.",
+                    "need_ids": ["n1"],
+                    "facet_ids": ["f1"],
+                    "evidence": [{"cite": cite}],
+                    "contradicts": [],
+                }
+            ]
+        }
+
+    assert state.apply_delta(claim("a", "S1.2")).accepted_ids == ("a",)
+    assert state.apply_delta(claim("b", "S1.2-3")).accepted_ids == ("b",)
+    assert state.apply_delta(claim("c", "S1")).accepted_ids == ("c",)
+
+    quotes = {item.nugget_id: item.evidence[0].quote for item in state.report().nuggets}
+    assert quotes["a"] == "Persecution forces flight."
+    assert quotes["b"] == "Persecution forces flight. Drought removes livelihoods."
+    assert quotes["c"] == (
+        "Conflict displaces people. Persecution forces flight. "
+        "Drought removes livelihoods."
+    )
+    for reference in state.report().nuggets[0].evidence:
+        assert reference.document_id == "doc-a"
+        assert reference.snippet_id == "doc-a:0001"
+        assert reference.page_index == 0
+
+
+@pytest.mark.parametrize("cite", ["S1.0", "S1.4", "S1.3-2", "S1.2.3", "SS1", "1.2", ""])
+def test_malformed_or_out_of_range_citations_are_rejected(cite: str) -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    result = state.apply_delta(
+        {
+            "add_nuggets": [
+                {
+                    "nugget_id": "g9",
+                    "text": "A claim.",
+                    "need_ids": ["n1"],
+                    "facet_ids": ["f1"],
+                    "evidence": [{"cite": cite}],
+                    "contradicts": [],
+                }
+            ]
+        }
+    )
+
+    assert result.accepted_ids == ()
+    assert result.rejected[0].code == "INVALID_CITATION"
+
+
+def test_handles_are_invocation_scoped_and_stable_across_pages() -> None:
+    state = _state_with_snippet()
+
+    second = state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="migration drivers",
+            snippets=(
+                RelevantSnippet("doc-a:0001", 0, 45, "Conflict and persecution force people to flee.", 0.9),
+                RelevantSnippet("doc-a:0002", 0, 16, "Another support.", 0.8),
+            ),
+            next_cursor=None,
+            page_index=1,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.8,
+            pages_estimated=2,
+        )
+    )
+
+    assert [item.handle for item in second] == ["S1", "S2"], (
+        "a re-observed snippet keeps its handle; a new one continues the run's count"
+    )
+    assert second[0].snippet_id == "doc-a:0001"
+    assert second[1].snippet_id == "doc-a:0002"
+
+
+def test_a_snippet_without_terminators_is_still_one_citable_sentence() -> None:
+    state = EvidenceCoverageState("Why do people migrate?")
+    state.record_search(
+        query="migration",
+        kind="original",
+        documents=(DocumentObservation("doc-a", 1),),
+    )
+
+    handles = state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="migration drivers",
+            snippets=(RelevantSnippet("doc-a:0001", 0, 20, "no terminator here", 0.9),),
+            next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.9,
+            pages_estimated=1,
+        )
+    )
+
+    assert handles[0].sentences == ("no terminator here",)
 
 
 def test_answerable_requires_a_grounded_draft() -> None:
@@ -259,8 +394,7 @@ def test_support_tracks_documents_not_claimed_independence() -> None:
             "add_evidence": [
                 {
                     "nugget_id": "g1",
-                    "snippet_id": "doc-a:0002",
-                    "quote": "Another support.",
+                    "cite": "S2",
                 }
             ]
         }
@@ -285,8 +419,7 @@ def test_support_tracks_documents_not_claimed_independence() -> None:
             "add_evidence": [
                 {
                     "nugget_id": "g1",
-                    "snippet_id": "doc-b:0001",
-                    "quote": "Outside support.",
+                    "cite": "S3",
                 }
             ]
         }
@@ -332,8 +465,7 @@ def test_contradictions_are_symmetric_and_supersession_keeps_both_nuggets() -> N
             "add_evidence": [
                 {
                     "nugget_id": "g2",
-                    "snippet_id": "doc-a:0001",
-                    "quote": "Conflict and persecution force people to flee.",
+                    "cite": "S1",
                 }
             ],
             "supersede_nuggets": [{"nugget_id": "g1", "superseded_by": "g2"}],
@@ -349,8 +481,7 @@ def test_contradictions_are_symmetric_and_supersession_keeps_both_nuggets() -> N
                     "facet_ids": ["f1"],
                     "evidence": [
                         {
-                            "snippet_id": "doc-a:0001",
-                            "quote": "Conflict and persecution force people to flee.",
+                            "cite": "S1",
                         }
                     ],
                     "contradicts": ["g1"],
@@ -395,8 +526,7 @@ def test_conflicted_requires_an_explicit_link_between_grounded_nuggets() -> None
                     "facet_ids": ["f1"],
                     "evidence": [
                         {
-                            "snippet_id": "doc-a:0001",
-                            "quote": "Conflict and persecution force people to flee.",
+                            "cite": "S1",
                         }
                     ],
                     "contradicts": ["g1"],
@@ -539,8 +669,7 @@ def test_duplicate_evidence_is_a_version_preserving_noop() -> None:
             "add_evidence": [
                 {
                     "nugget_id": "g1",
-                    "snippet_id": "doc-a:0001",
-                    "quote": "Conflict and persecution force people to flee.",
+                    "cite": "S1",
                 }
             ]
         }
@@ -587,8 +716,7 @@ def test_evidence_attachment_does_not_reset_zero_yield_saturation() -> None:
             "add_evidence": [
                 {
                     "nugget_id": "g1",
-                    "snippet_id": "doc-b:0001",
-                    "quote": "Outside support.",
+                    "cite": "S2",
                 }
             ]
         }

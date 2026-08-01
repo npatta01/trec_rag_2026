@@ -33,6 +33,7 @@ from trec_rag.deepagent_evidence import (
     EvidenceCoverageReport,
     EvidenceCoverageState,
     RetrievalStateDelta,
+    SnippetHandle,
 )
 from trec_rag.deepagent_research import (
     MainToolFilterMiddleware,
@@ -94,10 +95,11 @@ Every merge delta must also update need status with set_need_status. Move a need
 to "partial" with a refreshed remaining_gap as soon as it has grounded nuggets,
 and to "answerable" only with a draft_answer and grounded draft_nugget_ids.
 Leaving a need "unaddressed" after its researchers returned is a reporting
-error. If add_nuggets rows come back rejected, those claims never entered the
-ledger: leave the cited needs unsupported, never repair the quotes yourself, and
-delegate researchers for them again requiring verbatim snippet quotes. Report
-conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
+error. Nugget evidence is a list of citations such as
+[{"cite":"S3.2"}]; pass through the handles a researcher returned and never
+write quote text yourself. If add_nuggets rows come back rejected, those claims
+never entered the ledger: leave the cited needs unsupported and delegate
+researchers for them again. Report conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
 for oversized output or temporary notes. The state filesystem is ephemeral.
 Only read_file is available from it."""
 
@@ -134,35 +136,34 @@ def _delta_error_guidance() -> dict[str, object]:
 
 _EVIDENCE_REJECTION_CODES = frozenset(
     {
-        "UNGROUNDED_QUOTE",
-        "INVALID_EVIDENCE",
-        "MISSING_EVIDENCE",
-        "UNKNOWN_SNIPPET",
-        "UNKNOWN_DOCUMENT",
+        "UNKNOWN_CITATION",
+        "INVALID_CITATION",
         "DUPLICATE_EVIDENCE",
     }
 )
 
 
-def _model_facing_snippets(rows: object) -> list[dict[str, object]]:
-    """Expose each snippet under `snippet_id`, the exact key evidence must cite.
+def _model_facing_snippets(
+    handles: Sequence[SnippetHandle],
+) -> list[dict[str, object]]:
+    """Show each snippet as a citable handle with numbered sentences.
 
-    The stored page keeps `chunk_id` so cached responses stay readable; only the
-    model-facing copy is renamed, so no agent has to translate the field name
-    and retype its value.
+    Agents never receive raw snippet identifiers or echo passage text back, so
+    the only thing they transport is a short handle.
     """
-    if not isinstance(rows, list):
-        return []
-    renamed: list[dict[str, object]] = []
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        entry: dict[str, object] = {
-            key: value for key, value in row.items() if key != "chunk_id"
+    return [
+        {
+            # Named "cite" so it matches the evidence field an agent must fill,
+            # and so sort_keys renders the handle above its own sentences.
+            "cite": handle.handle,
+            "relevance_score": handle.relevance_score,
+            "sentences": [
+                {"n": index, "text": sentence}
+                for index, sentence in enumerate(handle.sentences, start=1)
+            ],
         }
-        entry["snippet_id"] = row.get("chunk_id")
-        renamed.append(entry)
-    return renamed
+        for handle in handles
+    ]
 
 
 def _rejection_summary(rejected: Sequence[DeltaRejection]) -> dict[str, int]:
@@ -179,10 +180,10 @@ def _evidence_rejection_guidance(sections: Iterable[str]) -> dict[str, object]:
         "evidence_rejection_notice": (
             "These rows were NOT admitted. The needs they cited gained no "
             "grounded evidence from this round, so treat those needs as still "
-            "lacking support. Never rewrite, trim, or repair a rejected quote. "
-            "Delegate a researcher for those needs again and require every quote "
-            "to be copied verbatim from extract_relevant_snippets output under "
-            "the snippet_id that returned it."
+            "lacking support. Evidence must cite a snippet handle returned "
+            'during this run, as "S3", "S3.2", or "S3.2-4". Do not invent a '
+            "handle and do not write quote text. Delegate a researcher for "
+            "those needs again if no valid handle covers the claim."
         ),
     }
 
@@ -1178,7 +1179,7 @@ class DeepAgentRetriever:
                             ),
                             sort_keys=True,
                         )
-                    coverage_state.record_snippet_page(result.page)
+                    observed_handles = coverage_state.record_snippet_page(result.page)
                     latency_ms = (monotonic() - started_at) * 1_000
                     if span is not None:
                         try:
@@ -1238,7 +1239,7 @@ class DeepAgentRetriever:
             )
             snapshot = budget.snapshot()
             payload = result.page.as_dict()
-            payload["snippets"] = _model_facing_snippets(payload.get("snippets"))
+            payload["snippets"] = _model_facing_snippets(observed_handles)
             payload.update(
                 {
                     "ok": True,

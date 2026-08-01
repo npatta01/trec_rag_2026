@@ -278,7 +278,8 @@ The agent maintains three distinct stores, each with a different job:
 - The mechanical **retrieval ledger** records searches, inspected pages,
   document/focus pagination state, residual signals, and consumed actions.
 - The grounded **nugget store** holds only concise claims linked to
-  whitespace-normalized quote evidence from returned snippets.
+  resolved citations into returned snippets. It stores the cited span, not a
+  copy of the passage, so a reported quote cannot disagree with its snippet.
 
 Use `view_retrieval_state` to inspect a compact frontier or a bounded state
 view and `update_retrieval_state` to add needs, facets, nuggets, evidence, and
@@ -295,8 +296,8 @@ the three stores. Its model-facing delta accepts these eight optional lists:
 | --- | --- |
 | `add_needs` | `need_id`, exact `narrative_span`, `question` |
 | `add_facets` | `facet_id`, `need_ids`, `dimension`, `value`, `origin`, optional `origin_snippet_id` |
-| `add_nuggets` | `nugget_id`, `text`, `need_ids`, `facet_ids`, grounded `evidence`, optional `contradicts` |
-| `add_evidence` | `nugget_id`, `snippet_id`, exact returned `quote` |
+| `add_nuggets` | `nugget_id`, `text`, `need_ids`, `facet_ids`, `evidence` as a list of `{"cite": "S3.2"}`, optional `contradicts` |
+| `add_evidence` | `nugget_id`, `cite` |
 | `set_facet_status` | `facet_id`, `status`, optional `status_reason` and `supporting_nugget_ids` |
 | `set_need_status` | `need_id`, `status`, `remaining_gap`, optional `draft_answer` and `draft_nugget_ids` |
 | `supersede_nuggets` | `nugget_id`, `superseded_by` |
@@ -308,13 +309,11 @@ The result reports `accepted_ids`, row-level `rejected` entries,
 no accepted rows and no other rejection is reported as `EMPTY_DELTA`, including
 an empty recognized list such as `{"add_needs": []}`.
 
-Any rejection also adds a `rejected_summary` count by code. When a row fails
-evidence grounding (`UNGROUNDED_QUOTE`, `INVALID_EVIDENCE`, `MISSING_EVIDENCE`,
-`UNKNOWN_SNIPPET`, `UNKNOWN_DOCUMENT`, `DUPLICATE_EVIDENCE`), the result adds
-`unadmitted_sections` and an `evidence_rejection_notice` stating that the claim
-never entered the ledger, that the cited needs remain unsupported, and that the
-only recovery is delegating a researcher again for verbatim quotes. Quotes are
-never repaired for the model.
+Any rejection also adds a `rejected_summary` count by code. When a citation
+fails to resolve (`UNKNOWN_CITATION`, `INVALID_CITATION`, `DUPLICATE_EVIDENCE`),
+the result adds `unadmitted_sections` and an `evidence_rejection_notice` stating
+that the claim never entered the ledger, that the cited needs remain
+unsupported, and that the only recovery is delegating a researcher again.
 
 Agent-facing search and snippet behavior is deliberately narrow:
 
@@ -331,9 +330,14 @@ Agent-facing search and snippet behavior is deliberately narrow:
   `pages_estimated`; these scores describe continuity only within that page's
   ranking, never calibrated relevance or comparability across documents or
   focus queries.
-- A nugget is admitted only when its submitted quote text matches text in the
-  referenced returned snippet after whitespace normalization; the submitted
-  quote itself is preserved. A need becomes `answerable` only with a nonblank
+- Agents cite evidence by handle and never transcribe it. Each returned
+  snippet carries a handle such as `S3` and numbered sentences; evidence is
+  `S3` for a whole snippet, `S3.2` for one sentence, or `S3.2-4` for a
+  contiguous range. The SDK resolves the handle against stored sentence spans
+  and derives the reported `document_id`, `snippet_id`, `page_index`, and
+  `quote`, so an ungrounded quote is not a reachable outcome. Handles are
+  assigned once per invocation and stay valid across pages and rounds. A need
+  becomes `answerable` only with a nonblank
   draft answer and grounded nugget IDs; otherwise it remains unaddressed,
   partial, or conflicted. A nugget's `single_document` or `multi_document`
   support label describes the observed support count only; it does not

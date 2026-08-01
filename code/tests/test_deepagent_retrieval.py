@@ -40,6 +40,7 @@ from trec_rag.deepagent_research import (
     ResearchTaskEnvelope,
     bind_research_task,
 )
+from trec_rag.deepagent_evidence import SnippetHandle
 from trec_rag.deepagent_retrieval import (
     AgentRetrievalError,
     AgentSearch,
@@ -559,35 +560,32 @@ def test_invalid_motivation_is_rejected_before_retrieval() -> None:
     assert [query.query_text for query in fake_retriever.queries] == ["narrative"]
 
 
-def test_model_facing_snippets_use_the_key_evidence_must_cite() -> None:
-    rows = [
+def test_model_facing_snippets_show_handles_and_numbered_sentences() -> None:
+    handles = (
+        SnippetHandle(
+            handle="S3",
+            snippet_id="shard_00123_4567:0002",
+            relevance_score=0.5,
+            sentences=("First sentence.", "Second sentence."),
+        ),
+    )
+
+    rows = deepagent_retrieval._model_facing_snippets(handles)
+
+    assert rows == [
         {
-            "chunk_id": "shard_00123_4567:0002",
-            "text": "passage text",
-            "start_char": 0,
-            "end_char": 12,
+            "cite": "S3",
             "relevance_score": 0.5,
+            "sentences": [
+                {"n": 1, "text": "First sentence."},
+                {"n": 2, "text": "Second sentence."},
+            ],
         }
     ]
-
-    renamed = deepagent_retrieval._model_facing_snippets(rows)
-
-    assert renamed == [
-        {
-            "snippet_id": "shard_00123_4567:0002",
-            "text": "passage text",
-            "start_char": 0,
-            "end_char": 12,
-            "relevance_score": 0.5,
-        }
-    ]
-    assert "chunk_id" not in renamed[0], "a second name invites the model to retype it"
-    assert rows[0]["chunk_id"] == "shard_00123_4567:0002", "stored page is untouched"
-
-
-def test_model_facing_snippets_tolerate_unexpected_shapes() -> None:
-    assert deepagent_retrieval._model_facing_snippets(None) == []
-    assert deepagent_retrieval._model_facing_snippets(["not-a-mapping"]) == []
+    serialised = json.dumps(rows)
+    assert "shard_00123_4567" not in serialised, (
+        "an agent that never sees a raw identifier cannot retype one"
+    )
 
 
 def _seed_need(toolset: deepagent_retrieval.AgentToolset) -> None:
@@ -604,7 +602,7 @@ def _seed_need(toolset: deepagent_retrieval.AgentToolset) -> None:
     )
 
 
-def test_ungrounded_nugget_rejection_is_reported_as_unadmitted() -> None:
+def test_unknown_citation_rejection_is_reported_as_unadmitted() -> None:
     observed: dict[str, object] = {}
 
     def agent_factory(
@@ -622,12 +620,7 @@ def test_ungrounded_nugget_rejection_is_reported_as_unadmitted() -> None:
                                     "text": "A claim whose citation was invented.",
                                     "need_ids": ["N1"],
                                     "facet_ids": [],
-                                    "evidence": [
-                                        {
-                                            "snippet_id": "never_observed:0001",
-                                            "quote": "a quote nobody returned",
-                                        }
-                                    ],
+                                    "evidence": [{"cite": "S9"}],
                                 }
                             ]
                         }
@@ -641,7 +634,7 @@ def test_ungrounded_nugget_rejection_is_reported_as_unadmitted() -> None:
     result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
 
     assert observed["accepted_ids"] == []
-    assert observed["rejected_summary"] == {"UNKNOWN_SNIPPET": 1}
+    assert observed["rejected_summary"] == {"UNKNOWN_CITATION": 1}
     assert observed["unadmitted_sections"] == ["add_nuggets"]
     assert "NOT admitted" in str(observed["evidence_rejection_notice"])
     assert result.coverage_report.nuggets == ()
@@ -900,7 +893,15 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
         for payload in snippet_payloads
     )
     assert all(
-        sentinel in payload["snippets"][0]["text"] for payload in snippet_payloads
+        sentinel
+        in " ".join(
+            row["text"] for row in payload["snippets"][0]["sentences"]
+        )
+        for payload in snippet_payloads
+    )
+    assert all(
+        payload["snippets"][0]["cite"].startswith("S")
+        for payload in snippet_payloads
     )
     assert all("cache_status" not in payload for payload in snippet_payloads)
     assert all("ranker_backend" not in payload for payload in snippet_payloads)
@@ -1960,14 +1961,7 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
                                     "claim": "The retrieved source addresses N1.",
                                     "need_ids": ["N1"],
                                     "facet_ids": [],
-                                    "evidence": [
-                                        {
-                                            "document_id": followup_document_id,
-                                            "snippet_id": "chunk-1",
-                                            "page_index": 0,
-                                            "quote": "focused researcher query excerpt 1",
-                                        }
-                                    ],
+                                    "evidence": [{"cite": "S1"}],
                                     "contradicts_claims": [],
                                 }
                             ],
@@ -2422,12 +2416,7 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
                             "text": "Grounded test evidence.",
                             "need_ids": ["test-need"],
                             "facet_ids": [],
-                            "evidence": [
-                                {
-                                    "snippet_id": "chunk-1",
-                                    "quote": "narrative excerpt 1",
-                                }
-                            ],
+                            "evidence": [{"cite": "S1"}],
                         }
                     ],
                     "set_need_status": [

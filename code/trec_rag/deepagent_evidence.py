@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 import json
+import re
 from threading import Lock
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
@@ -24,6 +25,48 @@ ActionKind = Literal["search", "extract", "paginate", "refocus", "stop"]
 
 MAX_FRONTIER_CHARACTERS = 2_000
 SATURATION_ZERO_YIELD_PAGES = 3
+MAX_SENTENCE_CHARACTERS = 600
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?:\s+|$)")
+_CITATION = re.compile(r"^S(\d+)(?:\.(\d+)(?:-(\d+))?)?$")
+
+
+def _capped_spans(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """Trim one segment and split it so no sentence exceeds the length cap."""
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    if start >= end:
+        return []
+    spans: list[tuple[int, int]] = []
+    while end - start > MAX_SENTENCE_CHARACTERS:
+        limit = start + MAX_SENTENCE_CHARACTERS
+        cut = text.rfind(" ", start, limit)
+        if cut <= start:
+            cut = limit
+        spans.append((start, cut))
+        start = cut
+        while start < end and text[start].isspace():
+            start += 1
+    if start < end:
+        spans.append((start, end))
+    return spans
+
+
+def _sentence_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Split snippet text into deterministic, length-capped sentence spans.
+
+    Splitting happens once, when a snippet is first observed. Citations resolve
+    against the stored spans and never re-split, so a handle cannot drift.
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in _SENTENCE_END.finditer(text):
+        spans.extend(_capped_spans(text, start, match.end()))
+        start = match.end()
+    if start < len(text):
+        spans.extend(_capped_spans(text, start, len(text)))
+    return tuple(spans) or ((0, len(text)),)
 _DELTA_SECTIONS = (
     "add_needs",
     "add_facets",
@@ -52,8 +95,7 @@ class FacetDelta(TypedDict):
 
 
 class EvidenceDelta(TypedDict):
-    snippet_id: str
-    quote: str
+    cite: str
 
 
 class NuggetDelta(TypedDict):
@@ -123,6 +165,25 @@ class EvidenceReference:
     snippet_id: str
     page_index: int
     quote: str
+
+
+@dataclass(frozen=True)
+class SnippetHandle:
+    """One observed snippet as an agent may cite it: a handle and its sentences."""
+
+    handle: str
+    snippet_id: str
+    relevance_score: float
+    sentences: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _EvidenceSpan:
+    """A resolved citation. The quote is derived from this, never stored."""
+
+    snippet_id: str
+    first_sentence: int
+    last_sentence: int
 
 
 @dataclass(frozen=True)
@@ -271,7 +332,7 @@ class _Nugget:
     text: str
     need_ids: list[str]
     facet_ids: list[str]
-    evidence: list[EvidenceReference]
+    evidence: list[_EvidenceSpan]
     contradicts: list[str]
     superseded_by: str | None = None
 
@@ -284,6 +345,8 @@ class _SnippetObservation:
     text: str
     focus_query: str
     page_yield_index: int
+    handle: str
+    sentence_spans: tuple[tuple[int, int], ...]
 
 
 @dataclass
@@ -350,6 +413,7 @@ class EvidenceCoverageState:
         self._facets: dict[str, _Facet] = {}
         self._nuggets: dict[str, _Nugget] = {}
         self._snippets: dict[str, _SnippetObservation] = {}
+        self._handles: dict[str, str] = {}
         self._documents: dict[tuple[str, str], _DocumentFocus] = {}
         self._searches: list[SearchReport] = []
         self._actions: list[_Action] = []
@@ -439,13 +503,18 @@ class EvidenceCoverageState:
         }
 
     def _nugget_report(self, item: _Nugget) -> NuggetReport:
-        support = "multi_document" if len({row.document_id for row in item.evidence}) > 1 else "single_document"
+        references = tuple(self._evidence_reference(span) for span in item.evidence)
+        support = (
+            "multi_document"
+            if len({row.document_id for row in references}) > 1
+            else "single_document"
+        )
         return NuggetReport(
             item.nugget_id,
             item.text,
             tuple(item.need_ids),
             tuple(item.facet_ids),
-            tuple(item.evidence),
+            references,
             tuple(item.contradicts),
             support,
             item.superseded_by,
@@ -533,7 +602,12 @@ class EvidenceCoverageState:
             self._searches.append(SearchReport(query, kind, tuple(item.document_id for item in documents)))
             self._changed()
 
-    def record_snippet_page(self, page: SnippetPage) -> None:
+    def record_snippet_page(self, page: SnippetPage) -> tuple[SnippetHandle, ...]:
+        """Observe one page and return how an agent may cite each snippet.
+
+        Handles are assigned monotonically and scoped to the whole invocation,
+        so pagination never reuses one and concurrent researchers never collide.
+        """
         with self._lock:
             yield_index = len(self._page_yields)
             self._page_yields.append(False)
@@ -554,42 +628,94 @@ class EvidenceCoverageState:
             elif page.next_cursor is None:
                 focus.state = "exhausted"
                 focus.state_reason = "no snippets or next page remain"
+            observed: list[SnippetHandle] = []
             for snippet in page.snippets:
-                self._snippets[snippet.chunk_id] = _SnippetObservation(
-                    page.document_id,
-                    snippet.chunk_id,
-                    page.page_index,
-                    snippet.text,
-                    page.focus_query,
-                    yield_index,
+                existing = self._snippets.get(snippet.chunk_id)
+                if existing is None:
+                    spans = _sentence_spans(snippet.text)
+                    handle = f"S{len(self._handles) + 1}"
+                    self._handles[handle] = snippet.chunk_id
+                    self._snippets[snippet.chunk_id] = _SnippetObservation(
+                        page.document_id,
+                        snippet.chunk_id,
+                        page.page_index,
+                        snippet.text,
+                        page.focus_query,
+                        yield_index,
+                        handle,
+                        spans,
+                    )
+                else:
+                    # A re-observed snippet keeps its original handle so an
+                    # earlier citation never changes meaning mid-invocation.
+                    handle = existing.handle
+                    spans = existing.sentence_spans
+                observation = self._snippets[snippet.chunk_id]
+                observed.append(
+                    SnippetHandle(
+                        handle,
+                        snippet.chunk_id,
+                        snippet.relevance_score,
+                        tuple(
+                            observation.text[start:end] for start, end in spans
+                        ),
+                    )
                 )
             self._changed()
+            return tuple(observed)
 
     def _rejection(self, section: str, index: int, code: str) -> DeltaRejection:
         return DeltaRejection(section, index, code)
 
-    def _ground_evidence(self, value: object) -> tuple[EvidenceReference, ...] | str:
+    def _resolve_citations(self, value: object) -> tuple[_EvidenceSpan, ...] | str:
+        """Resolve agent citations such as ``S3``, ``S3.2``, or ``S3.2-4``.
+
+        Nothing the agent writes becomes evidence text. A citation either names
+        stored sentences or it is rejected, so an ungrounded quote is not a
+        reachable outcome.
+        """
         if not isinstance(value, (list, tuple)) or not value:
-            return "MISSING_EVIDENCE"
-        references: list[EvidenceReference] = []
+            return "INVALID_CITATION"
+        spans: list[_EvidenceSpan] = []
         for row in value:
             if not isinstance(row, Mapping):
-                return "INVALID_EVIDENCE"
-            snippet_id = _nonblank(row.get("snippet_id"))
-            quote = _nonblank(row.get("quote"))
-            if snippet_id is None or quote is None:
-                return "INVALID_EVIDENCE"
-            snippet = self._snippets.get(snippet_id)
-            if snippet is None:
-                return "UNKNOWN_SNIPPET"
-            if _normalised_whitespace(quote) not in _normalised_whitespace(snippet.text):
-                return "UNGROUNDED_QUOTE"
-            references.append(
-                EvidenceReference(snippet.document_id, snippet_id, snippet.page_index, quote)
-            )
-        return tuple(references)
+                return "INVALID_CITATION"
+            cite = _nonblank(row.get("cite"))
+            if cite is None:
+                return "INVALID_CITATION"
+            match = _CITATION.match(cite.strip())
+            if match is None:
+                return "INVALID_CITATION"
+            snippet_id = self._handles.get(f"S{int(match.group(1))}")
+            if snippet_id is None:
+                return "UNKNOWN_CITATION"
+            observation = self._snippets[snippet_id]
+            sentence_count = len(observation.sentence_spans)
+            if match.group(2) is None:
+                first, last = 1, sentence_count
+            else:
+                first = int(match.group(2))
+                last = int(match.group(3)) if match.group(3) is not None else first
+            if first < 1 or last < first or last > sentence_count:
+                return "INVALID_CITATION"
+            spans.append(_EvidenceSpan(snippet_id, first, last))
+        return tuple(spans)
 
-    def _record_grounded_yield(self, evidence: Sequence[EvidenceReference], nugget_id: str) -> None:
+    def _evidence_reference(self, span: _EvidenceSpan) -> EvidenceReference:
+        """Derive the reported quote from stored sentences, never from an agent."""
+        observation = self._snippets[span.snippet_id]
+        selected = observation.sentence_spans[span.first_sentence - 1 : span.last_sentence]
+        quote = " ".join(
+            observation.text[start:end] for start, end in selected
+        )
+        return EvidenceReference(
+            observation.document_id,
+            span.snippet_id,
+            observation.page_index,
+            quote,
+        )
+
+    def _record_grounded_yield(self, evidence: Sequence[_EvidenceSpan], nugget_id: str) -> None:
         for reference in evidence:
             snippet = self._snippets[reference.snippet_id]
             self._page_yields[snippet.page_yield_index] = True
@@ -699,7 +825,7 @@ class EvidenceCoverageState:
             return "UNKNOWN_FACET"
         if any(other_id not in self._nuggets for other_id in contradicts):
             return "UNKNOWN_NUGGET"
-        evidence = self._ground_evidence(row.get("evidence"))
+        evidence = self._resolve_citations(row.get("evidence"))
         if isinstance(evidence, str):
             return evidence
         self._nuggets[nugget_id] = _Nugget(nugget_id, text, list(need_ids), list(facet_ids), list(evidence), list(contradicts))
@@ -714,7 +840,7 @@ class EvidenceCoverageState:
         nugget_id = _nonblank(row.get("nugget_id"))
         if nugget_id is None or nugget_id not in self._nuggets:
             return "UNKNOWN_NUGGET"
-        evidence = self._ground_evidence([row])
+        evidence = self._resolve_citations([row])
         if isinstance(evidence, str):
             return evidence
         nugget = self._nuggets[nugget_id]
