@@ -235,6 +235,13 @@ Outputs:
   selection, evidence, nugget, and trace-reference records
 - deterministic JSON-compatible dictionaries through `to_dict()` /
   `from_dict()`
+- deterministic downstream projections through `to_trec_run(selection_id=...)`,
+  `to_document_records(selection_id=...)`, and
+  `to_fixed_rag_context(selection_id=...)`
+- `write_fixed_rag_inputs(output_dir, selection_id=...)`, which writes an
+  organizer-compatible six-column run, `retrieval_with_text.jsonl`, a
+  deterministic `retrieval_with_text.jsonl.zip`, and a fixed-bundle context
+  JSONL without performing retrieval or hosted generation
 
 Validation:
 - every identifier and SHA-256 hash is checked

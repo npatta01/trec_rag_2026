@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from hashlib import sha256
 import json
+from pathlib import Path
+import zipfile
 
 import pytest
 
 from trec_rag.evidence_bundle import (
+    BundleSelection,
     BundleNugget,
     EvidenceBundle,
     EvidenceSpan,
@@ -272,3 +275,288 @@ def test_round_trip_canonicalizes_unsorted_retrieval_events() -> None:
     ]
     assert round_tripped == bundle
     assert round_tripped.to_dict() == payload
+
+
+def _projection_bundle() -> EvidenceBundle:
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=[
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": "Explain the documented outcome.",
+                "docid": "doc-b",
+                "text": "Beta evidence lives here.",
+                "rank": 1,
+                "score": 10.0,
+                "retriever": "bm25",
+            },
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": "Explain the documented outcome.",
+                "docid": "doc-a",
+                "text": "Alpha evidence lives here.",
+                "rank": 2,
+                "score": 9.0,
+                "retriever": "bm25",
+            },
+            {
+                "lane_id": "agentic.a",
+                "lane_kind": "agentic",
+                "query_text": "Find corroborating evidence.",
+                "parent_lane_id": "narrative",
+                "producer": "agent-step-v1",
+                "docid": "doc-c",
+                "text": "Gamma corroborates alpha.",
+                "rank": 1,
+                "score": 8.0,
+                "retriever": "bm25",
+            },
+            {
+                "lane_id": "agentic.a",
+                "lane_kind": "agentic",
+                "query_text": "Find corroborating evidence.",
+                "parent_lane_id": "narrative",
+                "producer": "agent-step-v1",
+                "docid": "doc-a",
+                "text": "Alpha evidence lives here.",
+                "rank": 3,
+                "score": 7.0,
+                "retriever": "bm25",
+            },
+        ],
+    )
+    doc_a = next(document for document in bundle.documents if document.docid == "doc-a")
+    doc_b = next(document for document in bundle.documents if document.docid == "doc-b")
+    evidence = (
+        EvidenceSpan(
+            evidence_id="evidence.alpha",
+            docid="doc-a",
+            text="Alpha evidence",
+            text_sha256=_digest("Alpha evidence"),
+            start_char=0,
+            end_char=14,
+            lane_ids=("agentic.a", "narrative"),
+            selector="exact_span",
+            source_document_sha256=doc_a.text_sha256,
+        ),
+        EvidenceSpan(
+            evidence_id="evidence.beta",
+            docid="doc-b",
+            text="Beta evidence",
+            text_sha256=_digest("Beta evidence"),
+            start_char=0,
+            end_char=13,
+            lane_ids=("narrative",),
+            selector="exact_span",
+            source_document_sha256=doc_b.text_sha256,
+        ),
+    )
+    nuggets = (
+        BundleNugget(
+            nugget_id="nugget.alpha",
+            text="Alpha is directly supported.",
+            text_sha256=_digest("Alpha is directly supported."),
+            evidence_ids=("evidence.alpha",),
+            nugget_kind="direct",
+            subnarrative_id="sub.alpha",
+        ),
+        BundleNugget(
+            nugget_id="nugget.beta",
+            text="Beta is directly supported.",
+            text_sha256=_digest("Beta is directly supported."),
+            evidence_ids=("evidence.beta",),
+            nugget_kind="direct",
+        ),
+    )
+    selections = (
+        bundle.selections[0],
+        BundleSelection(
+            selection_id="agentic_only",
+            source_lane_ids=("agentic.a",),
+            input_document_ids=("doc-a", "doc-c"),
+            document_ids=("doc-a", "doc-c"),
+            input_count=2,
+            output_count=2,
+        ),
+    )
+    enriched = replace(bundle, evidence=evidence, nuggets=nuggets, selections=selections)
+    enriched.validate()
+    return enriched
+
+
+def test_to_trec_run_uses_explicit_selection_and_rank_order_without_top_100() -> None:
+    bundle = _projection_bundle()
+
+    assert bundle.to_trec_run(selection_id="agentic_only") == (
+        ("224", "doc-c", 1, 2, "agentic_only"),
+        ("224", "doc-a", 2, 1, "agentic_only"),
+    )
+
+
+def test_to_trec_run_preserves_natural_union_beyond_100_documents() -> None:
+    rows = [
+        {
+            "lane_id": "narrative",
+            "lane_kind": "narrative",
+            "query_text": "Explain the documented outcome.",
+            "docid": f"doc-{index:03d}",
+            "text": f"Document {index}",
+            "rank": index,
+            "score": float(1000 - index),
+            "retriever": "bm25",
+        }
+        for index in range(1, 102)
+    ]
+    bundle = EvidenceBundle.from_retrieval_rows(topic_id="224", rows=rows)
+
+    projected = bundle.to_trec_run(selection_id="natural_union")
+
+    assert len(projected) == 101
+    assert projected[0] == ("224", "doc-001", 1, 101, "natural_union")
+    assert projected[-1] == ("224", "doc-101", 101, 1, "natural_union")
+
+
+def test_to_document_records_emits_organizer_core_with_lane_metadata() -> None:
+    bundle = _projection_bundle()
+
+    records = bundle.to_document_records(selection_id="agentic_only")
+
+    assert records == (
+        {
+            "query": {"qid": "224", "selection_id": "agentic_only"},
+            "candidates": [
+                {
+                    "docid": "doc-c",
+                    "doc": "Gamma corroborates alpha.",
+                    "rank": 1,
+                    "score": 2,
+                    "lane_ids": ["agentic.a"],
+                    "text_sha256": _digest("Gamma corroborates alpha."),
+                },
+                {
+                    "docid": "doc-a",
+                    "doc": "Alpha evidence lives here.",
+                    "rank": 2,
+                    "score": 1,
+                    "lane_ids": ["agentic.a", "narrative"],
+                    "text_sha256": _digest("Alpha evidence lives here."),
+                },
+            ],
+        },
+    )
+
+
+def test_to_fixed_rag_context_orders_documents_evidence_and_nuggets() -> None:
+    bundle = _projection_bundle()
+
+    context = bundle.to_fixed_rag_context(selection_id="natural_union")
+
+    assert context == (
+        {
+            "topic_id": "224",
+            "selection_id": "natural_union",
+            "docid": "doc-b",
+            "rank": 1,
+            "score": 3,
+            "lane_ids": ["narrative"],
+            "document": {
+                "text": "Beta evidence lives here.",
+                "text_sha256": _digest("Beta evidence lives here."),
+            },
+            "evidence": [
+                {
+                    "evidence_id": "evidence.beta",
+                    "text": "Beta evidence",
+                    "text_sha256": _digest("Beta evidence"),
+                    "start_char": 0,
+                    "end_char": 13,
+                    "lane_ids": ["narrative"],
+                    "selector": "exact_span",
+                }
+            ],
+            "nuggets": [
+                {
+                    "nugget_id": "nugget.beta",
+                    "text": "Beta is directly supported.",
+                    "text_sha256": _digest("Beta is directly supported."),
+                    "nugget_kind": "direct",
+                    "subnarrative_id": None,
+                    "evidence_ids": ["evidence.beta"],
+                }
+            ],
+        },
+        {
+            "topic_id": "224",
+            "selection_id": "natural_union",
+            "docid": "doc-c",
+            "rank": 2,
+            "score": 2,
+            "lane_ids": ["agentic.a"],
+            "document": {
+                "text": "Gamma corroborates alpha.",
+                "text_sha256": _digest("Gamma corroborates alpha."),
+            },
+            "evidence": [],
+            "nuggets": [],
+        },
+        {
+            "topic_id": "224",
+            "selection_id": "natural_union",
+            "docid": "doc-a",
+            "rank": 3,
+            "score": 1,
+            "lane_ids": ["agentic.a", "narrative"],
+            "document": {
+                "text": "Alpha evidence lives here.",
+                "text_sha256": _digest("Alpha evidence lives here."),
+            },
+            "evidence": [
+                {
+                    "evidence_id": "evidence.alpha",
+                    "text": "Alpha evidence",
+                    "text_sha256": _digest("Alpha evidence"),
+                    "start_char": 0,
+                    "end_char": 14,
+                    "lane_ids": ["agentic.a", "narrative"],
+                    "selector": "exact_span",
+                }
+            ],
+            "nuggets": [
+                {
+                    "nugget_id": "nugget.alpha",
+                    "text": "Alpha is directly supported.",
+                    "text_sha256": _digest("Alpha is directly supported."),
+                    "nugget_kind": "direct",
+                    "subnarrative_id": "sub.alpha",
+                    "evidence_ids": ["evidence.alpha"],
+                }
+            ],
+        },
+    )
+
+
+def test_write_fixed_rag_inputs_writes_deterministic_run_and_document_sidecars(
+    tmp_path: Path,
+) -> None:
+    bundle = _projection_bundle()
+
+    outputs = bundle.write_fixed_rag_inputs(tmp_path, selection_id="agentic_only")
+
+    assert outputs["run"] == tmp_path / "r_output_trec_rag_2026.tsv"
+    assert outputs["documents_jsonl"] == tmp_path / "retrieval_with_text.jsonl"
+    assert outputs["documents_zip"] == tmp_path / "retrieval_with_text.jsonl.zip"
+    assert outputs["run"].read_text(encoding="utf-8") == (
+        "224 Q0 doc-c 1 2 agentic_only\n"
+        "224 Q0 doc-a 2 1 agentic_only\n"
+    )
+    assert outputs["documents_jsonl"].read_text(encoding="utf-8") == json.dumps(
+        bundle.to_document_records(selection_id="agentic_only")[0],
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ) + "\n"
+    with zipfile.ZipFile(outputs["documents_zip"]) as archive:
+        assert archive.namelist() == ["retrieval_with_text.jsonl"]
+        assert archive.read("retrieval_with_text.jsonl") == outputs["documents_jsonl"].read_bytes()

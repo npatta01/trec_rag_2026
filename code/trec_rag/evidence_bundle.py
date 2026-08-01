@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+import io
+import json
 import math
+import os
+from pathlib import Path
 import re
+import tempfile
 from typing import Any
+import zipfile
 
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -295,6 +301,135 @@ class EvidenceBundle:
                     raise ValueError(f"unknown evidence for nugget {nugget.nugget_id}: {evidence_id}")
             nugget_map[nugget.nugget_id] = nugget
 
+    def to_trec_run(self, *, selection_id: str) -> tuple[tuple[str, str, int, int, str], ...]:
+        selected = self._selected_documents(selection_id)
+        total = len(selected)
+        return tuple(
+            (self.topic_id, document.docid, rank, total - rank + 1, selection_id)
+            for rank, document in enumerate(selected, start=1)
+        )
+
+    def to_document_records(self, *, selection_id: str) -> tuple[dict[str, object], ...]:
+        selected = self._selected_documents(selection_id)
+        total = len(selected)
+        return (
+            {
+                "query": {"qid": self.topic_id, "selection_id": selection_id},
+                "candidates": [
+                    {
+                        "docid": document.docid,
+                        "doc": document.text,
+                        "rank": rank,
+                        "score": total - rank + 1,
+                        "lane_ids": list(document.lane_ids),
+                        "text_sha256": document.text_sha256,
+                    }
+                    for rank, document in enumerate(selected, start=1)
+                ],
+            },
+        )
+
+    def to_fixed_rag_context(self, *, selection_id: str) -> tuple[dict[str, object], ...]:
+        selected = self._selected_documents(selection_id)
+        evidence_by_doc: dict[str, list[EvidenceSpan]] = defaultdict(list)
+        for span in self.evidence:
+            evidence_by_doc[span.docid].append(span)
+        for spans in evidence_by_doc.values():
+            spans.sort(key=lambda row: (row.start_char, row.end_char, row.evidence_id))
+
+        nugget_by_id = {nugget.nugget_id: nugget for nugget in self.nuggets}
+        evidence_to_nuggets: dict[str, list[str]] = defaultdict(list)
+        for nugget in self.nuggets:
+            for evidence_id in nugget.evidence_ids:
+                evidence_to_nuggets[evidence_id].append(nugget.nugget_id)
+
+        context: list[dict[str, object]] = []
+        total = len(selected)
+        for rank, document in enumerate(selected, start=1):
+            spans = evidence_by_doc.get(document.docid, [])
+            seen_nuggets: set[str] = set()
+            ordered_nuggets: list[BundleNugget] = []
+            for span in spans:
+                for nugget_id in evidence_to_nuggets.get(span.evidence_id, ()):
+                    if nugget_id in seen_nuggets:
+                        continue
+                    seen_nuggets.add(nugget_id)
+                    ordered_nuggets.append(nugget_by_id[nugget_id])
+            ordered_nuggets.sort(
+                key=lambda row: (
+                    min(row.evidence_ids) if row.evidence_ids else "",
+                    row.nugget_id,
+                )
+            )
+            context.append(
+                {
+                    "topic_id": self.topic_id,
+                    "selection_id": selection_id,
+                    "docid": document.docid,
+                    "rank": rank,
+                    "score": total - rank + 1,
+                    "lane_ids": list(document.lane_ids),
+                    "document": {
+                        "text": document.text,
+                        "text_sha256": document.text_sha256,
+                    },
+                    "evidence": [
+                        {
+                            "evidence_id": span.evidence_id,
+                            "text": span.text,
+                            "text_sha256": span.text_sha256,
+                            "start_char": span.start_char,
+                            "end_char": span.end_char,
+                            "lane_ids": list(span.lane_ids),
+                            "selector": span.selector,
+                        }
+                        for span in spans
+                    ],
+                    "nuggets": [
+                        {
+                            "nugget_id": nugget.nugget_id,
+                            "text": nugget.text,
+                            "text_sha256": nugget.text_sha256,
+                            "nugget_kind": nugget.nugget_kind,
+                            "subnarrative_id": nugget.subnarrative_id,
+                            "evidence_ids": list(nugget.evidence_ids),
+                        }
+                        for nugget in ordered_nuggets
+                    ],
+                }
+            )
+        return tuple(context)
+
+    def write_fixed_rag_inputs(
+        self,
+        output_dir: Path,
+        *,
+        selection_id: str,
+    ) -> dict[str, Path]:
+        output_dir = Path(output_dir)
+        trec_rows = self.to_trec_run(selection_id=selection_id)
+        document_records = self.to_document_records(selection_id=selection_id)
+        context_records = self.to_fixed_rag_context(selection_id=selection_id)
+
+        run_path = output_dir / "r_output_trec_rag_2026.tsv"
+        documents_jsonl_path = output_dir / "retrieval_with_text.jsonl"
+        documents_zip_path = output_dir / "retrieval_with_text.jsonl.zip"
+        context_jsonl_path = output_dir / "fixed_rag_context.jsonl"
+
+        trec_body = _trec_bytes(trec_rows)
+        documents_body = _jsonl_bytes(document_records)
+        context_body = _jsonl_bytes(context_records)
+        _atomic_write(run_path, trec_body)
+        _atomic_write(documents_jsonl_path, documents_body)
+        _atomic_write(documents_zip_path, _deterministic_zip(documents_body))
+        _atomic_write(context_jsonl_path, context_body)
+        return {
+            "run": run_path,
+            "documents_jsonl": documents_jsonl_path,
+            "documents_zip": documents_zip_path,
+            "context_jsonl": context_jsonl_path,
+        }
+
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
@@ -474,6 +609,42 @@ class EvidenceBundle:
         bundle.validate()
         return bundle
 
+    def _selection(self, selection_id: str) -> BundleSelection:
+        self.validate()
+        for selection in self.selections:
+            if selection.selection_id == selection_id:
+                return selection
+        raise ValueError(f"unknown selection_id: {selection_id}")
+
+    def _selected_documents(self, selection_id: str) -> tuple[BundleDocument, ...]:
+        selection = self._selection(selection_id)
+        events = [
+            event
+            for event in self.retrieval_events
+            if event.lane_id in selection.source_lane_ids
+            and event.docid in selection.document_ids
+        ]
+        event_order: dict[str, tuple[int, float, str, str]] = {}
+        for event in events:
+            key = (event.rank, -event.score, event.lane_id, event.event_id)
+            previous = event_order.get(event.docid)
+            if previous is None or key < previous:
+                event_order[event.docid] = key
+        documents_by_id = {document.docid: document for document in self.documents}
+        return tuple(
+            documents_by_id[docid]
+            for docid in sorted(
+                selection.document_ids,
+                key=lambda docid: (
+                    event_order[docid][0],
+                    event_order[docid][1],
+                    event_order[docid][2],
+                    docid,
+                    event_order[docid][3],
+                ),
+            )
+        )
+
     @classmethod
     def from_retrieval_rows(
         cls,
@@ -594,3 +765,57 @@ def _expect_float(row: Mapping[str, object], key: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{key} must be finite")
     return number
+
+
+def _trec_bytes(rows: Sequence[tuple[str, str, int, int, str]]) -> bytes:
+    return "".join(
+        f"{topic_id} Q0 {docid} {rank} {score} {run_id}\n"
+        for topic_id, docid, rank, score, run_id in rows
+    ).encode("utf-8")
+
+
+def _jsonl_bytes(rows: Sequence[Mapping[str, object]]) -> bytes:
+    return b"".join(_canonical_json_bytes(row) for row in rows)
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _deterministic_zip(member_body: bytes) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as archive:
+        member = zipfile.ZipInfo(
+            "retrieval_with_text.jsonl", date_time=(1980, 1, 1, 0, 0, 0)
+        )
+        member.compress_type = zipfile.ZIP_DEFLATED
+        member.create_system = 3
+        member.external_attr = 0o100600 << 16
+        archive.writestr(member, member_body)
+    return buffer.getvalue()
+
+
+def _atomic_write(path: Path, body: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as sink:
+            sink.write(body)
+            sink.flush()
+            os.fsync(sink.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
