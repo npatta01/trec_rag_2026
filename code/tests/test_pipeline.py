@@ -648,7 +648,11 @@ def test_pyserini_429_requires_ticket_and_reserves_ledger_before_transport(tmp_p
         json.loads(line)
         for line in (tmp_path / "external-call-ledger.jsonl").read_text().splitlines()
     ]
-    assert ledger[-1]["continuation_of"] == ledger[0]["attempt_id"]
+    reserved_ids = [row["attempt_id"] for row in ledger if row["event"] == "reserved"]
+    # A short back-off is retried in place first, and each retry is separately
+    # reserved, so the ticket names the attempt that actually gave up.
+    assert any(row.get("retry_index") for row in ledger)
+    assert ledger[-1]["continuation_of"] in reserved_ids
     assert ledger[-1]["continuation_ticket_sha256"] == hashlib.sha256(ticket.encode()).hexdigest()
     assert ticket not in json.dumps(ledger)
     with pytest.raises(RuntimeError, match="invalid or has already been consumed"):
@@ -1282,3 +1286,54 @@ evaluation:
     assert reranker_cache["window_scores"]["sha256"] == hashlib.sha256(
         chunk_scores.read_bytes()
     ).hexdigest()
+
+
+def test_a_short_throttle_is_waited_out_instead_of_latching(tmp_path):
+    """Losing a whole run to a one-second back-off is a ruinous trade."""
+    query = QueryVariant("15", "original", "query", "topic")
+    config = RetrieverConfig(
+        name="bm25", type="pyserini_remote", query_variants=("original",),
+        hits=10, index="climbmix-400b",
+    )
+
+    class Client:
+        config = RemotePyseriniConfig("https://pyserini.test/search", None, 10, ())
+        def __init__(self): self.calls = 0
+        def search_raw(self, _query, *, raw_sink):
+            self.calls += 1
+            raw = b'{"candidates":[]}'
+            raw_sink(raw)
+            if self.calls == 1:
+                raise RemotePyseriniThrottled(1)
+            return RemoteSearchResponse(raw, {"candidates": []}, hashlib.sha256(raw).hexdigest())
+
+    slept: list[float] = []
+    retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=Client())
+    retriever._sleep = slept.append
+
+    retriever.retrieve(query)
+
+    assert slept == [1], "the short back-off is honoured, once"
+    assert not (tmp_path / "continuation-ticket.json").exists(), "no latch"
+
+
+def test_a_long_throttle_still_latches_with_a_ticket(tmp_path):
+    query = QueryVariant("15", "original", "query", "topic")
+    config = RetrieverConfig(
+        name="bm25", type="pyserini_remote", query_variants=("original",),
+        hits=10, index="climbmix-400b",
+    )
+
+    class Client:
+        config = RemotePyseriniConfig("https://pyserini.test/search", None, 10, ())
+        def search_raw(self, _query, *, raw_sink):
+            raw_sink(b"{}")
+            raise RemotePyseriniThrottled(600)
+
+    retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=Client())
+    retriever._sleep = lambda _seconds: pytest.fail("a long back-off must not be slept")
+
+    with pytest.raises(RemotePyseriniThrottled):
+        retriever.retrieve(query)
+
+    assert (tmp_path / "continuation-ticket.json").exists()

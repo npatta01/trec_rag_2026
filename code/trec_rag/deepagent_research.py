@@ -164,6 +164,26 @@ def _tool_name(tool: object) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _failure_reason(failure: BaseException | None) -> str:
+    """Classify a researcher failure without echoing provider text.
+
+    The coordinator needs to tell an outage from a silent model, but raw
+    exception messages carry provider internals into agent context and traces,
+    so the message is read to classify and never repeated.
+    """
+    if failure is None:
+        return "no_bundle_returned"
+    name = type(failure).__name__
+    detail = str(failure)
+    if name in {"RemotePyseriniThrottled", "RetrievalTransportError"} or (
+        "continuation required" in detail
+    ):
+        return "retrieval_unavailable"
+    if "StructuredOutput" in name or "Validation" in name:
+        return "invalid_structured_output"
+    return "researcher_error"
+
+
 class _RoleToolFilterMiddleware(AgentMiddleware):
     """Expose only a role's fixed tools and reject bypassed tool calls."""
 
@@ -681,17 +701,34 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         envelope: ResearchTaskEnvelope,
         snapshot: BudgetSnapshot,
+        failure: BaseException | None = None,
     ) -> ToolMessage:
+        """Return an empty but well-formed bundle naming why research failed.
+
+        A bare error tells the coordinator nothing, so an unreachable index and
+        a model that produced nothing look identical and its next dispatch is a
+        guess. The bundle shape also lets the merge step treat this like any
+        other empty result.
+        """
         tool_call_id = request.tool_call.get("id")
         if not isinstance(tool_call_id, str):
             raise ValueError("task call requires an id")
+        reason = _failure_reason(failure)
         return ToolMessage(
             content=json.dumps(
                 {
                     "budget_snapshot": snapshot.as_dict(),
+                    "candidate_nuggets": [],
                     "code": "RESEARCH_TASK_FAILED",
+                    "failure_reason": reason,
                     "must_stop": False,
                     "research_task_id": envelope.research_task_id,
+                    "retry_guidance": (
+                        "This researcher returned nothing because it failed, not "
+                        "because the need has no evidence. Treat the need as "
+                        "still uncovered and dispatch it again."
+                    ),
+                    "unresolved_gaps": [],
                 },
                 separators=(",", ":"),
                 sort_keys=True,
@@ -737,7 +774,7 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                     with bind_research_task(envelope):
                         try:
                             result = handler(request)
-                        except Exception:
+                        except Exception as exc:
                             self._record_dispatch_outcome(
                                 dispatch_span,
                                 code="RESEARCH_TASK_FAILED",
@@ -745,7 +782,7 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                                 context=context,
                             )
                             return self._task_failure(
-                                request, envelope, self._budget.snapshot()
+                                request, envelope, self._budget.snapshot(), exc
                             )
                     completed = self._append_snapshot(result, self._budget.snapshot())
                     self._record_dispatch_outcome(
@@ -798,7 +835,7 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                     with bind_research_task(envelope):
                         try:
                             result = await handler(request)
-                        except Exception:
+                        except Exception as exc:
                             self._record_dispatch_outcome(
                                 dispatch_span,
                                 code="RESEARCH_TASK_FAILED",
@@ -806,7 +843,7 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                                 context=context,
                             )
                             return self._task_failure(
-                                request, envelope, self._budget.snapshot()
+                                request, envelope, self._budget.snapshot(), exc
                             )
                     completed = self._append_snapshot(result, self._budget.snapshot())
                     self._record_dispatch_outcome(

@@ -421,6 +421,41 @@ def test_task_middleware_records_compact_task_budget_outcome() -> None:
     assert records[-1]["snapshot"]["completed_researchers"] == 1
 
 
+def test_failed_researcher_returns_an_empty_bundle_naming_the_cause() -> None:
+    """An outage and a silent model must not look identical to the coordinator."""
+    middleware = ResearchTaskBudgetMiddleware(ResearchBudget(ResearchBudgetConfig()))
+
+    def explode(_request: ToolCallRequest) -> ToolMessage:
+        raise RuntimeError("explicit continuation required; use ticket abc123")
+
+    message = middleware.wrap_tool_call(
+        task_request(description=task_description()), explode
+    )
+    payload = json.loads(message.content)
+
+    assert payload["code"] == "RESEARCH_TASK_FAILED"
+    assert payload["candidate_nuggets"] == [], "shaped like a bundle so merging works"
+    assert payload["must_stop"] is False
+    assert payload["failure_reason"] == "retrieval_unavailable"
+    assert "continuation required" not in message.content, "no provider text leaks"
+    assert "still uncovered" in payload["retry_guidance"]
+
+
+def test_failure_reason_survives_an_exception_with_no_message() -> None:
+    middleware = ResearchTaskBudgetMiddleware(ResearchBudget(ResearchBudgetConfig()))
+
+    def explode(_request: ToolCallRequest) -> ToolMessage:
+        raise ValueError()
+
+    payload = json.loads(
+        middleware.wrap_tool_call(
+            task_request(description=task_description()), explode
+        ).content
+    )
+
+    assert payload["failure_reason"] == "researcher_error"
+
+
 @pytest.mark.parametrize("subagent_type", ["general-purpose", None])
 def test_task_middleware_denies_a_non_researcher_without_killing_the_run(
     subagent_type: str | None,
@@ -687,9 +722,13 @@ def test_task_middleware_converts_ordinary_handler_failure_and_releases_slot(
     payload = json.loads(result.content)
     assert set(payload) == {
         "budget_snapshot",
+        "candidate_nuggets",
         "code",
+        "failure_reason",
         "must_stop",
         "research_task_id",
+        "retry_guidance",
+        "unresolved_gaps",
     }
     assert payload["code"] == "RESEARCH_TASK_FAILED"
     assert payload["must_stop"] is False
