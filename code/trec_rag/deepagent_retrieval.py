@@ -114,13 +114,24 @@ def _coordinator_prompt(config: ResearchBudgetConfig) -> str:
     Built from the live config rather than written into the prompt text, so the
     numbers an agent is told can never drift from the ones enforced.
     """
+    if config.max_concurrent == 1:
+        dispatch = (
+            "Exactly one researcher runs at a time. Issue a single task call per "
+            "turn and wait for its bundle before dispatching the next; a second "
+            "task call in the same turn is refused outright, and recovering from "
+            "that refusal costs a turn you need later."
+        )
+    else:
+        dispatch = (
+            f"At most {config.max_concurrent} researchers run at once. Never put "
+            f"more than {config.max_concurrent} task calls in one batch: the "
+            "extras are refused outright, and recovering from that refusal costs "
+            "turns you need for later rounds."
+        )
     return (
-        f"{RETRIEVAL_SYSTEM_PROMPT}\n"
-        f"At most {config.max_concurrent} researchers can run at once, and at "
-        f"most {config.max_researcher_invocations} may run in the whole "
-        f"invocation. Never put more than {config.max_concurrent} task calls in "
-        "one batch: the extras are refused outright, and recovering from that "
-        "refusal costs turns you need for later rounds."
+        f"{RETRIEVAL_SYSTEM_PROMPT}\n{dispatch} At most "
+        f"{config.max_researcher_invocations} researchers may run in the whole "
+        "invocation, so spend them on needs that still have no grounded evidence."
     )
 
 

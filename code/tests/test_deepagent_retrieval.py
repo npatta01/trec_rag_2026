@@ -565,9 +565,21 @@ def test_coordinator_prompt_states_the_enforced_dispatch_limits() -> None:
         ResearchBudgetConfig(max_concurrent=2, max_researcher_invocations=7)
     )
 
-    assert "At most 2 researchers can run at once" in prompt
-    assert "most 7 may run in the whole invocation" in prompt
+    assert "At most 2 researchers run at once" in prompt
+    assert "At most 7 researchers may run in the whole invocation" in prompt.replace(
+        "\n", " "
+    )
     assert "more than 2 task calls in one batch" in prompt.replace("\n", " ")
+
+
+def test_coordinator_prompt_reads_correctly_for_a_single_slot() -> None:
+    prompt = deepagent_retrieval._coordinator_prompt(
+        ResearchBudgetConfig(max_concurrent=1)
+    )
+
+    assert "Exactly one researcher runs at a time" in prompt
+    assert "single task call per turn" in prompt.replace("\n", " ")
+    assert "1 researchers" not in prompt, "the singular case must not be pluralised"
 
 
 def test_coordinator_prompt_tracks_a_changed_concurrency_limit() -> None:
@@ -578,7 +590,19 @@ def test_coordinator_prompt_tracks_a_changed_concurrency_limit() -> None:
     assert "At most 5 researchers" in relaxed, (
         "the stated limit must come from the config that enforces it"
     )
-    assert "At most 3 researchers" not in relaxed
+    assert "Exactly one researcher" not in relaxed
+
+
+def test_default_budget_lets_every_researcher_have_a_round() -> None:
+    config = ResearchBudgetConfig()
+
+    assert config.max_concurrent == 1
+    assert config.max_rounds >= config.max_researcher_invocations, (
+        "a round holds one researcher, so fewer rounds than researchers strands them"
+    )
+    assert config.max_main_models >= 3 * config.max_rounds, (
+        "each round costs the coordinator a dispatch, a merge, and a close"
+    )
 
 
 def test_model_facing_snippets_show_handles_and_numbered_sentences() -> None:

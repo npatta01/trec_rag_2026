@@ -145,8 +145,8 @@ def test_last_finished_researcher_persists_run_wide_exhaustion() -> None:
     assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
 
 
-def test_fourth_round_is_admitted_and_fifth_is_refused() -> None:
-    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1))
+def test_last_round_is_admitted_and_the_next_is_refused() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1, max_rounds=4))
     fourth = ResearchTaskContext("T4", 4, "deep", ("N1",))
 
     assert budget.reserve_task(fourth).ok
@@ -374,7 +374,7 @@ def test_new_yield_resets_the_no_yield_streak() -> None:
 
 
 def test_state_hash_change_without_semantic_progress_does_not_reset_stop_streak() -> None:
-    budget = ResearchBudget(ResearchBudgetConfig())
+    budget = ResearchBudget(ResearchBudgetConfig(no_progress_rounds=2))
     state = EvidenceCoverageState("What changed?")
     first_report = state.report()
     state.record_search(
