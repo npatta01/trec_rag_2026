@@ -294,6 +294,28 @@ def test_main_filter_releases_the_coordinator_once_the_round_is_closed() -> None
     assert released["tool_choice"] is None
 
 
+def test_a_stopped_run_still_gets_to_merge_and_close_its_last_round() -> None:
+    config = ResearchBudgetConfig(max_researcher_invocations=1)
+    budget = researched_round_budget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
+
+    merge_turn = observe_turn(middleware)
+    assert merge_turn["tools"] == ["update_retrieval_state"], (
+        "a stopped run must still merge the bundles its researchers returned"
+    )
+
+    close_turn = observe_turn(middleware)
+    assert close_turn["tools"] == ["complete_research_round"]
+
+    assert budget.authorize_round_completion(1).ok
+    budget.complete_round(1, EvidenceCoverageState("Why?").report())
+
+    wrap_up = observe_turn(middleware)
+    assert wrap_up["tools"] == [], "with nothing left to record, the run ends"
+
+
 def test_main_filter_stops_compelling_closure_on_the_final_turn() -> None:
     config = ResearchBudgetConfig(max_main_models=4)
     budget = researched_round_budget(config)

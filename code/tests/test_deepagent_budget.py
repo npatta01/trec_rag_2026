@@ -453,6 +453,28 @@ def test_traceable_budget_codes_match_the_budget_code_literal() -> None:
     assert set(get_args(BudgetCode)) == set(_BUDGET_CODES)
 
 
+def test_completed_rounds_never_exceed_completed_researchers() -> None:
+    """Rounds are bounded by researchers, which is why max_rounds cannot bind."""
+    config = ResearchBudgetConfig(
+        max_researcher_invocations=3, max_rounds=3, no_progress_rounds=9
+    )
+    budget = ResearchBudget(config)
+    report = EvidenceCoverageState("What changed?").report()
+
+    for index in range(1, 4):
+        context = ResearchTaskContext(f"T{index}", index, "focused", ("N1",))
+        assert budget.reserve_task(context).ok
+        budget.finish_task(context)
+        assert budget.authorize_round_completion(index).ok
+        budget.complete_round(index, report)
+        snapshot = budget.snapshot()
+        assert snapshot.completed_rounds <= snapshot.completed_researchers
+
+    # Researchers ran out first, so the next round has nothing left to spend.
+    assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
+    assert budget.authorize_round_completion(4).ok is False
+
+
 def test_main_model_exhaustion_is_recorded_as_a_run_stop() -> None:
     budget = ResearchBudget(ResearchBudgetConfig())
 
@@ -508,14 +530,23 @@ def test_pending_round_closure_ignores_rounds_without_finished_research() -> Non
     assert budget.pending_round_closure() == 2
 
 
-def test_pending_round_closure_yields_once_the_run_must_stop() -> None:
+def test_a_stopped_run_still_closes_the_round_it_already_researched() -> None:
+    """A run stop forbids new work; it must not discard finished work."""
     budget = ResearchBudget(ResearchBudgetConfig(max_researcher_invocations=1))
+    report = EvidenceCoverageState("What changed?").report()
     context = ResearchTaskContext("T1", 1, "survey", ("N1",))
 
     assert budget.reserve_task(context).ok
     budget.finish_task(context)
 
     assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
+    assert budget.pending_round_closure() == 1
+    assert budget.authorize_round_completion(1).ok
+    assert budget.complete_round(1, report).snapshot.completed_rounds == 1
+
+    # Starting anything new is still refused.
+    refused = budget.reserve_task(ResearchTaskContext("T2", 2, "survey", ("N1",)))
+    assert refused.code == "TASK_BUDGET_EXHAUSTED"
     assert budget.pending_round_closure() is None
 
 

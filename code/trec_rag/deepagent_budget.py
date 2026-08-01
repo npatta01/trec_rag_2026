@@ -44,12 +44,13 @@ _RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
 class ResearchBudgetConfig:
     """Budget limits, including model limits enforced by later middleware."""
 
-    # These are coupled. A round closes once no researcher is active, so
-    # max_concurrent decides how many researchers one round can hold, and
-    # max_rounds must cover ceil(max_researcher_invocations / max_concurrent)
-    # or the run ends with researchers unspent.
+    # Researcher invocations are the real limit on how much research happens.
+    # A round cannot close without a finished researcher, so completed rounds
+    # can never exceed completed researchers: max_rounds set at or above
+    # max_researcher_invocations is an unreachable backstop, and set below it
+    # only strands researchers the run was allowed to spend. Keep them equal.
     max_researcher_invocations: int = 10
-    max_rounds: int = 4
+    max_rounds: int = 10
     # Concurrency is per topic, not across topics. Hosted-search throttling has
     # come from running whole topics back to back, which this does not govern.
     max_concurrent: int = 3
@@ -305,9 +306,6 @@ class ResearchBudget:
     def authorize_round_completion(self, round_index: int) -> BudgetDecision:
         """Require one finished researcher before a coordinator can close a round."""
         with self._lock:
-            stopping = self._global_stop_code()
-            if stopping is not None:
-                return self._refusal(stopping, must_stop=True)
             if round_index > self._config.max_rounds:
                 return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
             existing_decision = self._round_decisions.get(round_index)
@@ -317,7 +315,13 @@ class ResearchBudget:
             if round_index != expected_round_index:
                 return self._refusal("ROUND_SEQUENCE_INVALID")
             if round_index in self._completed_researcher_rounds:
+                # Closing records research that already finished. A run stop
+                # forbids starting new work; it must not discard completed work,
+                # or the last batch's evidence is lost with the round.
                 return self._admission()
+            stopping = self._global_stop_code()
+            if stopping is not None:
+                return self._refusal(stopping, must_stop=True)
             self._required_research_round = round_index
             return self._refusal("ROUND_RESEARCH_REQUIRED")
 
@@ -334,7 +338,9 @@ class ResearchBudget:
     def pending_round_closure(self) -> int | None:
         """Return the finished-research round the coordinator has not closed yet."""
         with self._lock:
-            if self._active_tasks or self._global_stop_code() is not None:
+            # Deliberately not gated on the run stop: a stopped run must still
+            # record the round its finished researchers already produced.
+            if self._active_tasks:
                 return None
             expected_round_index = len(self._round_decisions) + 1
             if expected_round_index > self._config.max_rounds:

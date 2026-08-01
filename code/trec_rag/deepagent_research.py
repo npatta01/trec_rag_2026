@@ -244,23 +244,26 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             # The ceiling is ending this run, so the result must not read as a
             # voluntary agent_completed.
             self._budget.note_main_model_exhausted()
-        final_turn = stop_code is not None or model_limit_reached
-        if not final_turn:
-            required_round = self._budget.required_research_round()
-            if required_round is not None:
-                return self._directed(
-                    filtered,
-                    ["task"],
-                    "task",
-                    f"Round {required_round} cannot close without a completed "
-                    'researcher. Your next action must call task with subagent_type='
-                    f'"researcher" and round_index={required_round} in its JSON '
-                    "description.",
-                )
+        if not model_limit_reached:
+            if stop_code is None:
+                required_round = self._budget.required_research_round()
+                if required_round is not None:
+                    return self._directed(
+                        filtered,
+                        ["task"],
+                        "task",
+                        f"Round {required_round} cannot close without a completed "
+                        "researcher. Your next action must call task with "
+                        f'subagent_type="researcher" and round_index='
+                        f"{required_round} in its JSON description.",
+                    )
+            # Finalising an already-researched round outranks the run stop, so a
+            # stopped run still merges and records its last batch.
             pending_round = self._budget.pending_round_closure()
             if pending_round is not None:
                 return self._directed(filtered, *self._closure_directive(pending_round))
-            return filtered
+            if stop_code is None:
+                return filtered
         return self._directed(
             filtered,
             [],
