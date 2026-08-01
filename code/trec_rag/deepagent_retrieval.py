@@ -244,6 +244,10 @@ class AgentRetrievalResult:
     trace_flush_succeeded: bool
 
 
+class RetrievalTransportError(RuntimeError):
+    """The index could not be reached, as distinct from returning nothing."""
+
+
 class AgentRetrievalError(RuntimeError):
     """An agent-side failure with the searches completed before it occurred."""
 
@@ -879,16 +883,19 @@ class DeepAgentRetriever:
                     except Exception:
                         pass
                 started_at = monotonic()
-                candidates = tuple(
-                    self._retriever.retrieve(
-                        QueryVariant(
-                            topic_id=topic_component,
-                            variant_name=variant,
-                            query_text=query,
-                            source_type="deepagent_retrieval",
+                try:
+                    candidates = tuple(
+                        self._retriever.retrieve(
+                            QueryVariant(
+                                topic_id=topic_component,
+                                variant_name=variant,
+                                query_text=query,
+                                source_type="deepagent_retrieval",
+                            )
                         )
                     )
-                )
+                except Exception as exc:
+                    raise RetrievalTransportError(str(exc)) from exc
                 latency_ms = (monotonic() - started_at) * 1_000
                 cache_status = _cache_status(before, _cache_counts(self._retriever))
                 trace_candidates = candidates[
@@ -1036,13 +1043,31 @@ class DeepAgentRetriever:
                         ),
                         sort_keys=True,
                     )
-                search = run_search(
-                    query,
-                    "followup",
-                    "followup-" + sha256(query.encode()).hexdigest()[:16],
-                    context=context,
-                    decision=decision,
-                )
+                try:
+                    search = run_search(
+                        query,
+                        "followup",
+                        "followup-" + sha256(query.encode()).hexdigest()[:16],
+                        context=context,
+                        decision=decision,
+                    )
+                except RetrievalTransportError:
+                    # The index could not be reached. Record that distinctly, so
+                    # the result cannot be read as "this narrative had no
+                    # evidence" when it means "we never got to look". Errors
+                    # raised after retrieval still propagate.
+                    budget.note_retrieval_unavailable()
+                    record_no_yield(context)
+                    return json.dumps(
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), True
+                            ),
+                            error="climbmix search transport failed",
+                            code="RETRIEVAL_UNAVAILABLE",
+                        ),
+                        sort_keys=True,
+                    )
                 searches.append(search)
                 budget.record_yield(
                     context, (candidate.docid for candidate in search.candidates)
@@ -1405,7 +1430,12 @@ class DeepAgentRetriever:
                 coverage_report = coverage_state.report()
                 budget_snapshot = budget.snapshot()
                 stopping_reason = (
-                    coverage_report.terminal_reason
+                    # An unreachable index outranks the coverage story, which
+                    # would otherwise report an infrastructure outage as though
+                    # the narrative simply had no evidence.
+                    "retrieval_unavailable"
+                    if budget.retrieval_unavailable()
+                    else coverage_report.terminal_reason
                     or (
                         "budget_exhausted"
                         if budget_snapshot.stop_code is not None

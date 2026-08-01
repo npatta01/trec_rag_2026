@@ -657,6 +657,44 @@ def test_pyserini_429_requires_ticket_and_reserves_ledger_before_transport(tmp_p
         ).retrieve(QueryVariant("16", "original", "another query", "topic"))
 
 
+def test_only_throttling_latches_the_shared_retrieval_budget(tmp_path):
+    """A transport error fails its own request; it must not block later ones.
+
+    Latching every query behind a ticket bound to one query wedged the retriever
+    until somebody replayed a query they had no way to know.
+    """
+    query = QueryVariant("15", "original", "query", "topic")
+    other = QueryVariant("15", "original", "a different query", "topic")
+    config = RetrieverConfig(
+        name="bm25", type="pyserini_remote", query_variants=("original",),
+        hits=10, index="climbmix-400b",
+    )
+
+    class Client:
+        config = RemotePyseriniConfig("https://pyserini.test/search", None, 10, ())
+        mode = "error"
+        def search_raw(self, _query, *, raw_sink):
+            raw_sink(b"{}")
+            if self.mode == "error":
+                raise ConnectionError("transient network failure")
+            return RemoteSearchResponse(b"{}", {}, hashlib.sha256(b"{}").hexdigest())
+
+    client = Client()
+    with pytest.raises(ConnectionError):
+        PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(query)
+
+    assert not (tmp_path / "continuation-ticket.json").exists()
+    assert not (tmp_path / "continuation-in-progress.json").exists()
+
+    # An unrelated query still works: the failure did not latch the retriever.
+    client.mode = "success"
+    PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(other)
+
+    ledger = (tmp_path / "external-call-ledger.jsonl").read_text(encoding="utf-8")
+    assert '"event": "failed"' in ledger, "the failure is still recorded"
+    assert "ConnectionError" in ledger
+
+
 def test_failed_continuation_mints_new_explicit_recovery_ticket(tmp_path):
     query = QueryVariant("15", "original", "query", "topic")
     config = RetrieverConfig(
@@ -679,19 +717,18 @@ def test_failed_continuation_mints_new_explicit_recovery_ticket(tmp_path):
     with pytest.raises(RemotePyseriniThrottled) as first:
         PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(query)
     client.mode = "error"
-    with pytest.raises(ValueError) as second:
+    with pytest.raises(ValueError):
         PyseriniRemoteRetriever(
             config, cache_dir=tmp_path, client=client,
             continuation_ticket=first.value.continuation_ticket,
         ).retrieve(query)
-    assert second.value.continuation_ticket != first.value.continuation_ticket
+    # A failed continuation clears the latch rather than minting another
+    # ticket, so a transport blip cannot leave the retriever wedged.
     assert not (tmp_path / "continuation-in-progress.json").exists()
+    assert not (tmp_path / "continuation-ticket.json").exists()
 
     client.mode = "success"
-    PyseriniRemoteRetriever(
-        config, cache_dir=tmp_path, client=client,
-        continuation_ticket=second.value.continuation_ticket,
-    ).retrieve(query)
+    PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client).retrieve(query)
 
 
 def test_pyserini_remote_retriever_cache_false_bypasses_response_cache(tmp_path):

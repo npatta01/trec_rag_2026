@@ -23,6 +23,7 @@ BudgetCode = Literal[
     "ROUND_RESEARCH_REQUIRED",
     "ROUND_SEQUENCE_INVALID",
     "MAIN_MODEL_BUDGET_EXHAUSTED",
+    "RETRIEVAL_UNAVAILABLE",
     "NO_YIELD_STOP",
     "NO_PROGRESS_STOP",
 ]
@@ -162,6 +163,7 @@ class ResearchBudget:
         self._round_progress: dict[int, tuple[frozenset[str], ...]] = {}
         self._round_decisions: dict[int, BudgetDecision] = {}
         self._no_progress_streak = 0
+        self._retrieval_unavailable = False
         self._stop_code: BudgetCode | None = None
 
     def reserve_task(self, context: ResearchTaskContext) -> BudgetDecision:
@@ -318,6 +320,21 @@ class ResearchBudget:
         """Return the round whose empty completion attempt requires delegation."""
         with self._lock:
             return self._required_research_round
+
+    def note_retrieval_unavailable(self) -> None:
+        """Record that the index could not be reached, not that nothing was found.
+
+        Deliberately not a run stop. One transport blip must not cancel the
+        remaining retrieval; a sustained outage still ends the run through the
+        existing no-yield and no-progress guards.
+        """
+        with self._lock:
+            self._retrieval_unavailable = True
+
+    def retrieval_unavailable(self) -> bool:
+        """Whether any search failed to reach the index during this invocation."""
+        with self._lock:
+            return self._retrieval_unavailable
 
     def note_main_model_exhausted(self) -> None:
         """Record that the coordinator's model-call ceiling, not the agent, ended it."""

@@ -204,7 +204,12 @@ class PyseriniRemoteRetriever:
                 ticket = json.loads(ticket_file.read_bytes())
                 if self.continuation_ticket != ticket.get("ticket"):
                     raise RuntimeError(
-                        f"explicit continuation required; use ticket {ticket.get('ticket')}"
+                        "explicit continuation required: a throttled request is "
+                        "pending and blocks every other query. Inspect it with "
+                        "'python -m trec_rag.continuation', then --resume to "
+                        "retry it or --discard to drop it. "
+                        f"(ticket {ticket.get('ticket')}, "
+                        f"query {ticket.get('query')!r})"
                     )
                 if any(ticket.get(key) != value for key, value in identity.items()):
                     raise RuntimeError("continuation ticket request identity mismatch")
@@ -262,25 +267,27 @@ class PyseriniRemoteRetriever:
                 exc.continuation_ticket = ticket
                 raise
             except Exception as exc:
-                ticket = uuid.uuid4().hex
+                # Only an explicit throttle latches the shared budget. A
+                # transport failure fails its own request and is recorded, but
+                # must not gate every later request behind a ticket bound to
+                # this one query: the caller may never issue that query again,
+                # which wedges the retriever until someone replays it by hand.
                 with ledger_lock:
-                    ticket_file.write_text(
-                        json.dumps(
-                            {
-                                "ticket": ticket,
-                                "not_before_unix": time.time(),
-                                "retry_after_seconds": None,
-                                "failed_attempt_id": attempt_id,
-                                "failure_type": type(exc).__name__,
-                                **identity,
-                            },
-                            sort_keys=True,
-                            indent=2,
-                        ),
-                        encoding="utf-8",
-                    )
+                    with ledger_file.open("a", encoding="utf-8") as ledger:
+                        ledger.write(
+                            json.dumps(
+                                {
+                                    "event": "failed",
+                                    "attempt_id": attempt_id,
+                                    "failed_unix": time.time(),
+                                    "failure_type": type(exc).__name__,
+                                    **identity,
+                                },
+                                sort_keys=True,
+                            )
+                            + "\n"
+                        )
                     consumed_ticket_file.unlink(missing_ok=True)
-                setattr(exc, "continuation_ticket", ticket)
                 raise
             if self.config.cache:
                 cache_file.write_bytes(attempt_file.read_bytes())

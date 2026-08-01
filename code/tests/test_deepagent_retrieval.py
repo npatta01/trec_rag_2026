@@ -593,6 +593,54 @@ def test_coordinator_prompt_tracks_a_changed_concurrency_limit() -> None:
     assert "Exactly one researcher" not in relaxed
 
 
+def test_unreachable_index_is_not_reported_as_missing_evidence() -> None:
+    """An outage must not read as "this narrative had no evidence"."""
+
+    class BrokenRetriever(FakeRetriever):
+        def retrieve(self, query: object) -> list[RetrievedCandidate]:
+            if getattr(query, "variant_name", "").startswith("followup"):
+                raise RuntimeError("explicit continuation required")
+            return super().retrieve(query)
+
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _seed_need(toolset)
+            envelope = ResearchTaskEnvelope(
+                research_task_id="R1-N1",
+                round_index=1,
+                depth="survey",
+                motivating_ids=["N1"],
+                goal="Close N1.",
+            )
+            context = ResearchTaskContext("R1-N1", 1, "survey", ("N1",))
+            assert toolset.budget.reserve_task(context).ok
+            try:
+                with bind_research_task(envelope):
+                    observed.update(
+                        json.loads(
+                            toolset.search_climbmix("a query", ["N1"], "find evidence")
+                        )
+                    )
+            finally:
+                toolset.budget.finish_task(context)
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(BrokenRetriever(), agent_factory).retrieve("narrative")
+
+    assert observed["code"] == "RETRIEVAL_UNAVAILABLE"
+    assert observed["must_stop"] is True
+    assert result.stopping_reason == "retrieval_unavailable"
+    assert result.budget_snapshot.stop_code is None, (
+        "one unreachable search reports the outage without cancelling the run"
+    )
+
+
 def test_no_round_cap_exists_to_strand_researchers() -> None:
     config = ResearchBudgetConfig()
 
@@ -1295,8 +1343,12 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
                     "failing query",
                 ]
                 fake_retriever.release_failure.set()
-                with pytest.raises(RuntimeError, match="controlled retrieval failure"):
-                    failed.result(timeout=2)
+                # A transport failure is reported to the agent rather than
+                # raised, but it must still release the lock in order.
+                assert (
+                    json.loads(failed.result(timeout=2))["code"]
+                    == "RETRIEVAL_UNAVAILABLE"
+                )
                 tool_results.append(successful.result(timeout=2))
 
             tool_results.extend(
@@ -1321,7 +1373,9 @@ def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order()
     last_payload = json.loads(tool_results[-1])
     assert last_payload["must_stop"] is True
     assert last_payload["budget_snapshot"]["stop_code"] is None
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "retrieval_unavailable", (
+        "a run that could not reach the index says so, even though it continued"
+    )
 
 
 def test_retrieve_rejects_blank_and_original_duplicate_followups_with_budget_charge() -> (

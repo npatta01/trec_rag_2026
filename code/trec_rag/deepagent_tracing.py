@@ -110,6 +110,7 @@ _BUDGET_CODES = frozenset(
         "ROUND_RESEARCH_REQUIRED",
         "ROUND_SEQUENCE_INVALID",
         "MAIN_MODEL_BUDGET_EXHAUSTED",
+        "RETRIEVAL_UNAVAILABLE",
         "NO_YIELD_STOP",
         "NO_PROGRESS_STOP",
     }
@@ -390,6 +391,7 @@ class _AgentSpan(_SafeSpan):
             "agent_completed",
             "search_budget_exhausted",
             "budget_exhausted",
+            "retrieval_unavailable",
             "completion",
             "saturation",
             "coverage_complete",

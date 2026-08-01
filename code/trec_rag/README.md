@@ -103,6 +103,20 @@ cooperating processes and restarts share the budget. Override the interval or
 state location with `PYSERINI_MIN_INTERVAL_SECONDS` and
 `PYSERINI_LIMITER_STATE_PATH`; burst values other than `1` are rejected.
 
+Only an explicit throttle latches the shared budget. Any other transport
+failure is appended to the ledger as a `failed` event and raised to its caller,
+because gating every later query behind a ticket bound to one query wedges the
+retriever until somebody replays a query they may not know.
+
+A pending ticket blocks all other queries by design, so recovering never
+requires remembering what was in flight:
+
+```bash
+python -m trec_rag.continuation            # what is pending, and when it may retry
+python -m trec_rag.continuation --resume   # reissue it; makes one hosted call
+python -m trec_rag.continuation --discard  # drop it without a hosted call
+```
+
 Each transport entry is one immutable attempt: redirects and automatic retries
 are disabled and the timeout is 30 seconds. Before transport entry, an
 identity-complete reservation is appended to `external-call-ledger.jsonl`.
@@ -274,7 +288,12 @@ When a coverage terminal reason and a budget stop coexist, `stopping_reason`
 retains the coverage reason; inspect `budget_snapshot.stop_code` for the
 independent budget outcome. Reaching the coordinator's `max_main_models`
 ceiling records `MAIN_MODEL_BUDGET_EXHAUSTED`, so a run cut short by that
-ceiling reports `budget_exhausted` rather than claiming `agent_completed`.
+ceiling reports `budget_exhausted` rather than claiming `agent_completed`. A search that cannot reach the index
+reports `RETRIEVAL_UNAVAILABLE` to the agent and makes `stopping_reason`
+`retrieval_unavailable`, so an outage is never read as a narrative with no
+evidence. That is recorded, not enforced: one unreachable search does not
+cancel the remaining retrieval, and a sustained outage still ends the run
+through the no-yield and no-progress guards.
 
 The agent maintains three distinct stores, each with a different job:
 
