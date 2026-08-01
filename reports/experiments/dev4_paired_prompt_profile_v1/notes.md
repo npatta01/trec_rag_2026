@@ -110,3 +110,54 @@ advises against.
 Deterministically dropping uncited references and renumbering citations would make that
 failure mode impossible without changing any claim or its supporting document. At 119 topics a
 25% first-attempt failure rate means roughly 30 resumes at about $0.71 each.
+
+
+## Arm D: one citation per claim, constraints moved out of the prompt
+
+Two changes shipped together, because neither works alone:
+
+1. **Prompt**: dropped "cite every reference"; told the model to cite the single best supporting
+   document and add a second or third only when each independently supports the same object.
+2. **Pipeline**: `normalize_generated_record` rebuilds `references` from the citations actually
+   used, and `trim_to_word_limit` drops trailing objects over the cap. Both organizer
+   constraints are now enforced deterministically rather than asked for in the prompt.
+
+| arm | strict_vital | strict_all | wp first | wp all | hard prec | No Support | oracle wp first |
+|---|---|---|---|---|---|---|---|
+| A default | **0.635** | 0.585 | 0.475 | 0.415 | 0.071 | 30% | 0.537 |
+| B atomic | 0.570 | 0.537 | 0.671 | 0.622 | 0.383 | 11% | 0.696 |
+| C atomic + budget | 0.621 | **0.596** | 0.633 | 0.542 | 0.438 | 30% | 0.745 |
+| D focused citations | 0.588 | 0.569 | **0.692** | **0.692** | **0.481** | **9.6%** | **0.768** |
+
+The model complied exactly: **all 161 answer objects carry exactly one citation**, and reference
+sprawl collapsed — topic 58 went from 91 references to 15.
+
+**Why the citation rule mattered.** Measured on arm C, Full Support rate falls off a cliff as
+citations per object rise:
+
+| citations on the object | Full Support | No Support |
+|---|---|---|
+| 1 | 72.5% | 13.7% |
+| 2 | 27.9% | 21.3% |
+| 3 | 11.1% | 44.4% |
+
+The all-cited rule was the cause. To cover a 91-entry reference list across 33 objects the model
+must attach roughly three citations to nearly every one, and the trailing citations frequently
+do not support the claim. The rule manufactured the errors it was unrelated to.
+
+**Recommendation: arm D.** It wins every support metric as generated *and* at the oracle repair
+ceiling. Because every object carries exactly one citation, its `wp_all` equals `wp_first` by
+construction, so it cannot be diluted on the all-judged variant — a structural guarantee the
+other arms cannot obtain. It gives up 0.047 strict_vital against arm A in exchange for +0.217
+weighted precision and +0.410 hard precision.
+
+**Coverage is still unexplained.** Arm D is the longest arm (954 to 981 words) yet ranks third on
+coverage, so length is not the whole mechanism after all — constraining each claim to a single
+supporting document appears to narrow what the model will assert. Worth understanding before
+treating D as final.
+
+**Reliability.** Zero uncited-reference failures in arm D, against four across earlier runs:
+normalization removed that mode entirely. The word cap then became the dominant failure (three
+occurrences), which is why the deterministic trim was added. The pattern holds in both cases —
+a constraint enforced in the prompt costs failed generations, and the same constraint enforced
+in a post-processor costs nothing.

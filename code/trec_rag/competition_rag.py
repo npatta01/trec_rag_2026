@@ -100,10 +100,39 @@ Reference documents:
 Question: {question}
 """
 
+FOCUSED_CITATION_USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every reference document before writing. Aim for roughly 900 whitespace-separated words
+and never exceed 1,024, counting every answer object together. A longer answer is only better
+when the extra words carry new evidence, so keep adding distinct, answer-relevant points that
+the reference documents support, covering the question's different aspects, tradeoffs,
+constraints and uncertainty. Do not pad, repeat a point already made, or restate the
+question.
+
+Write each answer object as one self-contained sentence stating a single claim. Do not join
+several claims into one answer object and do not prefix an object with a section heading or
+label, because a cited document must be able to support the whole object on its own.
+
+Cite the single document that best supports each answer object. Add a second or third citation
+only when that document by itself also fully supports the same object, and order citations from
+strongest to weakest support. Never add a citation to spread coverage across documents: an
+extra citation that does not support the object on its own is worse than no extra citation.
+List a document in references only if some answer object cites it.
+
+Give each answer object one to three unique zero-based citation indexes into references. Return
+one JSON object with exactly references and answer; no Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
 PROMPT_PROFILES = {
     "default": USER_PROMPT,
     "atomic_claims": ATOMIC_USER_PROMPT,
     "atomic_claims_full_budget": FULL_BUDGET_USER_PROMPT,
+    "focused_citations": FOCUSED_CITATION_USER_PROMPT,
 }
 
 
@@ -963,6 +992,70 @@ def validate_submission_record(
         raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
 
 
+def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild ``references`` from the citations actually used, then re-index them.
+
+    The organizer baseline validator requires every reference to be cited. Asking the model to
+    satisfy that is the single largest source of first-attempt generation failures, and it also
+    drives citation padding: to cover a long reference list the model must attach two or three
+    citations to nearly every object, and the trailing ones frequently do not support the claim.
+
+    Deriving the reference list from the citations instead makes the constraint true by
+    construction. Answer text is never touched, and each citation keeps pointing at exactly the
+    document it pointed at before, so no claim changes its evidence.
+    """
+    references = record["references"]
+    answer = record["answer"]
+
+    order: list[int] = []
+    for item in answer:
+        for citation in item["citations"]:
+            if type(citation) is int and 0 <= citation < len(references) and citation not in order:
+                order.append(citation)
+    if not order:
+        raise ValueError("generated answer cites no valid reference")
+
+    remap = {old: new for new, old in enumerate(order)}
+    return {
+        **record,
+        "references": [references[old] for old in order],
+        "answer": [
+            {
+                "text": item["text"],
+                "citations": [remap[c] for c in item["citations"] if c in remap],
+            }
+            for item in answer
+        ],
+    }
+
+
+def trim_to_word_limit(record: dict[str, Any], *, max_words: int = 1024) -> dict[str, Any]:
+    """Drop trailing answer objects until the record fits the organizer word cap.
+
+    Models track a running word budget poorly: answers land at 950 to 1000 words and tip over
+    often enough that the cap is a leading cause of generation failure. Trimming the tail is
+    strictly better than discarding the whole topic, and later objects are the least load-bearing
+    because the answer is written most-important-first.
+
+    Runs before ``normalize_generated_record`` so that references orphaned by the trim are then
+    rebuilt away.
+    """
+    answer = record["answer"]
+    kept: list[dict[str, Any]] = []
+    words = 0
+    for item in answer:
+        length = len(item["text"].split())
+        if words + length > max_words:
+            break
+        kept.append(item)
+        words += length
+    if not kept:
+        raise ValueError("first answer object alone exceeds the word limit")
+    if len(kept) == len(answer):
+        return record
+    return {**record, "answer": kept}
+
+
 def _validate_generated_submission_record(
     record: dict[str, Any],
     *,
@@ -1170,13 +1263,17 @@ async def _generate_topic(
             work_dir / "raw" / f"{topic_name}.json",
             _redact(raw_response, secrets),
         )
-        record = build_submission_record(
-            generated,
-            topic_id=topic_id,
-            narrative=narrative,
-            team_id=config.team_id,
-            run_id=config.run_id,
-            run_desc=config.run_desc,
+        record = normalize_generated_record(
+            trim_to_word_limit(
+                build_submission_record(
+                generated,
+                topic_id=topic_id,
+                narrative=narrative,
+                team_id=config.team_id,
+                run_id=config.run_id,
+                    run_desc=config.run_desc,
+                )
+            )
         )
         _validate_generated_submission_record(
             record,

@@ -31,12 +31,80 @@
       "72": 850
     }
   },
+  "arm_d_focused_citations": {
+    "change": "Removed the 'cite every reference' instruction; told the model to cite the single best supporting document and add more only if each independently supports the object.",
+    "nugget": {
+      "all_score": 0.651032,
+      "strict_all_score": 0.568619,
+      "strict_vital_score": 0.588128,
+      "vital_score": 0.678082
+    },
+    "oracle_repaired_support": {
+      "weighted_precision_all_judged_citations": 0.768,
+      "weighted_precision_first_citation": 0.768
+    },
+    "pipeline_change": "Added trim_to_word_limit and normalize_generated_record, so the word cap and the all-cited rule are enforced deterministically instead of by prompt.",
+    "prompt_profile": "focused_citations",
+    "structure": {
+      "citations_per_object": "exactly 1 on all 161 objects",
+      "objects": {
+        "144": 34,
+        "200": 39,
+        "58": 42,
+        "72": 46
+      },
+      "references": {
+        "144": 13,
+        "200": 23,
+        "58": 15,
+        "72": 12
+      },
+      "words": {
+        "144": 954,
+        "200": 966,
+        "58": 981,
+        "72": 978
+      }
+    },
+    "support": {
+      "hard_precision": 0.481,
+      "labels": {
+        "FS": 74,
+        "NS": 15,
+        "PS": 68
+      },
+      "no_support_rate": 0.096,
+      "weighted_precision_all_judged_citations": 0.692,
+      "weighted_precision_first_citation": 0.692
+    }
+  },
   "caveats": [
     "Four topics; consistent direction but not a significance test.",
     "Generation is high variance: the same default config produced 9 and then 28 answer objects for topic 58 in different runs.",
     "Judge changed from gpt-5.5 to DeepSeek V4 Flash, so absolute values are not comparable across records; the A/B contrast within this record is consistent.",
     "Automated assignment scores above NIST manual assignment."
   ],
+  "citation_count_effect": {
+    "arm_c": {
+      "1_citation": {
+        "fs_rate": 0.725,
+        "n": 51,
+        "ns_rate": 0.137
+      },
+      "2_citations": {
+        "fs_rate": 0.279,
+        "n": 122,
+        "ns_rate": 0.213
+      },
+      "3_citations": {
+        "fs_rate": 0.111,
+        "n": 126,
+        "ns_rate": 0.444
+      }
+    },
+    "description": "Full Support rate collapses as citations per object rise; measured on arm C.",
+    "mechanism": "The all-cited rule forced long reference lists to be covered by padding two or three citations onto nearly every object; trailing citations frequently do not support the claim."
+  },
   "citation_support": {
     "arm_a_default": {
       "hard_precision": 0.071,
@@ -69,6 +137,46 @@
     "topics_favouring_b": 4
   },
   "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
+  "four_arm_summary": {
+    "caveat": "Four topics. Generation variance alone has produced 9 versus 28 objects for the same config, so coverage differences of this size are not resolved.",
+    "coverage_strict_vital": {
+      "a": 0.635,
+      "b": 0.57,
+      "c": 0.621,
+      "d": 0.588
+    },
+    "hard_precision": {
+      "a": 0.071,
+      "b": 0.383,
+      "c": 0.438,
+      "d": 0.481
+    },
+    "no_support_rate": {
+      "a": 0.298,
+      "b": 0.114,
+      "c": 0.301,
+      "d": 0.096
+    },
+    "oracle_wp_first": {
+      "a": 0.537,
+      "b": 0.696,
+      "c": 0.745,
+      "d": 0.768
+    },
+    "recommendation": "Arm D. It wins every citation-support metric both as generated and at the oracle repair ceiling, and because every object carries exactly one citation its wp_all equals wp_first by construction, so it cannot be diluted on the all-judged variant. It gives up 0.047 strict_vital against arm A for +0.217 weighted precision and +0.410 hard precision.",
+    "wp_all": {
+      "a": 0.415,
+      "b": 0.622,
+      "c": 0.542,
+      "d": 0.692
+    },
+    "wp_first": {
+      "a": 0.475,
+      "b": 0.671,
+      "c": 0.633,
+      "d": 0.692
+    }
+  },
   "generation_reliability": {
     "first_attempt_failures": {
       "arm_a_of_22": 7,
@@ -82,6 +190,12 @@
       "uncited_references": 4
     },
     "note": "Uncited-reference failures are self-imposed; the guidelines state uncited references do not hurt the score."
+  },
+  "generation_reliability_arm_d": {
+    "malformed_completion_failures": 1,
+    "note": "Normalization eliminated the uncited-reference mode entirely. The word cap became the dominant failure, which is why a deterministic trim was added.",
+    "uncited_reference_failures": 0,
+    "word_cap_failures": 3
   },
   "judge_model": "openrouter/deepseek/deepseek-v4-flash",
   "length": {

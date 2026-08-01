@@ -713,6 +713,105 @@ def test_full_budget_profile_keeps_atomic_wording_and_adds_budget_guidance() -> 
     assert "Do not pad" in full
 
 
+def test_normalizer_rebuilds_references_from_citations_without_touching_text() -> None:
+    record = {
+        "metadata": {"narrative_id": "58"},
+        # b and d are never cited; a and c are, out of order.
+        "references": ["doc-a", "doc-b", "doc-c", "doc-d"],
+        "answer": [
+            {"text": "Second reference first.", "citations": [2]},
+            {"text": "Then the first one.", "citations": [0, 2]},
+        ],
+    }
+
+    out = competition_rag.normalize_generated_record(record)
+
+    # References are exactly the cited docids, ordered by first use.
+    assert out["references"] == ["doc-c", "doc-a"]
+    # Every reference is now cited, which is what the strict profile demands.
+    used = {c for item in out["answer"] for c in item["citations"]}
+    assert used == set(range(len(out["references"])))
+    # Citations still point at the same documents they did before.
+    assert [out["references"][c] for c in out["answer"][0]["citations"]] == ["doc-c"]
+    assert [out["references"][c] for c in out["answer"][1]["citations"]] == ["doc-a", "doc-c"]
+    # Answer text is untouched.
+    assert [i["text"] for i in out["answer"]] == [i["text"] for i in record["answer"]]
+
+
+def test_normalized_record_satisfies_the_strict_profile(tmp_path: Path) -> None:
+    generated = {
+        "references": ["climbmix-a", "climbmix-b", "climbmix-c"],
+        "answer": [{"text": "A grounded claim.", "citations": [1]}],
+    }
+    record = competition_rag.normalize_generated_record(
+        competition_rag.build_submission_record(
+            generated,
+            topic_id="58",
+            narrative="Official question",
+            team_id="local-baseline",
+            run_id="dev-spike",
+            run_desc="development spike",
+        )
+    )
+
+    # Would have raised "uncited references" without normalization.
+    competition_rag._validate_generated_submission_record(
+        record,
+        topic_id="58",
+        narrative="Official question",
+        allowed_docids=["climbmix-a", "climbmix-b", "climbmix-c"],
+        team_id="local-baseline",
+        run_id="dev-spike",
+        run_desc="development spike",
+    )
+    assert record["references"] == ["climbmix-b"]
+
+
+def test_focused_profile_drops_the_cite_every_reference_rule() -> None:
+    focused = " ".join(
+        competition_rag.render_prompt(
+            "Narrative?", ["climbmix-a"], {"climbmix-a": "Evidence."}, "focused_citations"
+        ).split()
+    )
+    default = " ".join(
+        competition_rag.render_prompt(
+            "Narrative?", ["climbmix-a"], {"climbmix-a": "Evidence."}, "default"
+        ).split()
+    )
+
+    assert "cite every reference" in default
+    assert "cite every reference" not in focused
+    assert "single document that best supports" in focused
+
+
+def test_word_cap_trim_drops_trailing_objects_and_frees_their_references() -> None:
+    record = {
+        "metadata": {"narrative_id": "58"},
+        "references": ["doc-a", "doc-b"],
+        "answer": [
+            {"text": "word " * 900, "citations": [0]},
+            {"text": "word " * 200, "citations": [1]},
+        ],
+    }
+
+    trimmed = competition_rag.trim_to_word_limit(record)
+    assert len(trimmed["answer"]) == 1
+    assert sum(len(i["text"].split()) for i in trimmed["answer"]) <= 1024
+
+    # The reference only the dropped object cited is normalized away.
+    out = competition_rag.normalize_generated_record(trimmed)
+    assert out["references"] == ["doc-a"]
+
+
+def test_word_cap_trim_is_a_no_op_when_already_within_budget() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a"],
+        "answer": [{"text": "Short claim.", "citations": [0]}],
+    }
+    assert competition_rag.trim_to_word_limit(record) is record
+
+
 def test_unknown_prompt_profile_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported prompt profile"):
         competition_rag.render_prompt("Narrative?", [], {}, "nonexistent")
@@ -1201,7 +1300,6 @@ def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> N
         pytest.param(["climbmix-a"], [], id="empty-citations"),
         pytest.param(["climbmix-a"], [0, 0], id="duplicate-citations"),
         pytest.param(["climbmix-a"], ["climbmix-a"], id="direct-docid-citation"),
-        pytest.param(["climbmix-a", "climbmix-b"], [0], id="uncited-reference"),
     ],
 )
 def test_generation_rejects_organizer_valid_rows_outside_strict_profile(
@@ -1219,6 +1317,23 @@ def test_generation_rejects_organizer_valid_rows_outside_strict_profile(
         asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
 
     assert not config.output_path.exists()
+
+
+def test_generation_now_prunes_an_uncited_reference_instead_of_failing(tmp_path: Path) -> None:
+    """Uncited references used to fail the strict profile; they are normalized away."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a", "climbmix-b"],
+        "answer": [{"text": "Only the second source is cited.", "citations": [1]}],
+    }
+
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    rows = [json.loads(line) for line in config.output_path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["references"] == ["climbmix-b"]
+    assert rows[0]["answer"][0]["citations"] == [0]
+    assert rows[0]["answer"][0]["text"] == "Only the second source is cited."
 
 
 def test_persisted_raw_responses_and_errors_redact_configured_api_key(
