@@ -73,7 +73,13 @@ each batch, merge the returned evidence bundles with exactly one batched
 update_retrieval_state semantic delta, then call complete_research_round once.
 Every round must finish at least one researcher before it can close. If round
 completion returns ROUND_RESEARCH_REQUIRED, the next action must delegate a
-researcher for that same round.
+researcher for that same round. If it returns ROUND_SEQUENCE_INVALID, retry once
+with round_index equal to budget_snapshot.completed_rounds + 1.
+Closing a round is not the end of the run. While needs remain unresolved and no
+budget response says must_stop, open the next round with round_index incremented
+by one and delegate a new task batch aimed at those specific gaps. Give an empty
+bundle's need a materially different angle rather than repeating the goal that
+already returned nothing.
 Set task.description to a JSON-encoded object with exactly this shape:
 {"research_task_id":"R1-N1","round_index":1,"depth":"focused","motivating_ids":["N1"],"goal":"Find grounded evidence for N1","known_evidence":"","remaining_gap":"No grounded evidence yet"}.
 The JSON object must come first. Optional research instructions may follow it

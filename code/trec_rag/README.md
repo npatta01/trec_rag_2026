@@ -234,7 +234,12 @@ mechanically restricted to
 available. The coordinator merges completed evidence bundles with one semantic
 state update per batch, then closes the round. An empty round is refused without
 consuming the round, and the next coordinator action is mechanically restricted
-to a researcher `task`. A researcher that has three
+to a researcher `task`. Once a round's researchers have all finished, the
+coordinator cannot skip or abandon that round: its next turn is restricted to
+one `update_retrieval_state` merge and the turn after that to
+`complete_research_round`, so a round with completed research is always recorded
+before the run can end. Closing a round out of order is refused with
+`ROUND_SEQUENCE_INVALID` rather than raising. A researcher that has three
 successive retrieval calls with no novel evidence must return its bundle; two
 successive rounds with no accepted coverage progress stop further research.
 

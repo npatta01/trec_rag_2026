@@ -22,6 +22,7 @@ BudgetCode = Literal[
     "RETRIEVAL_BUDGET_EXHAUSTED",
     "TASK_TOOL_BUDGET_EXHAUSTED",
     "ROUND_RESEARCH_REQUIRED",
+    "ROUND_SEQUENCE_INVALID",
     "NO_YIELD_STOP",
     "NO_PROGRESS_STOP",
 ]
@@ -303,7 +304,7 @@ class ResearchBudget:
                 return self._admission()
             expected_round_index = len(self._round_decisions) + 1
             if round_index != expected_round_index:
-                raise ValueError("round completion requires the next incomplete round")
+                return self._refusal("ROUND_SEQUENCE_INVALID")
             if round_index in self._completed_researcher_rounds:
                 return self._admission()
             self._required_research_round = round_index
@@ -313,6 +314,18 @@ class ResearchBudget:
         """Return the round whose empty completion attempt requires delegation."""
         with self._lock:
             return self._required_research_round
+
+    def pending_round_closure(self) -> int | None:
+        """Return the finished-research round the coordinator has not closed yet."""
+        with self._lock:
+            if self._active_tasks or self._global_stop_code() is not None:
+                return None
+            expected_round_index = len(self._round_decisions) + 1
+            if expected_round_index > self._config.max_rounds:
+                return None
+            if expected_round_index not in self._completed_researcher_rounds:
+                return None
+            return expected_round_index
 
     def complete_round(
         self, round_index: int, report: _CoverageReport
@@ -326,7 +339,7 @@ class ResearchBudget:
                 return existing_decision
             expected_round_index = len(self._round_decisions) + 1
             if round_index != expected_round_index:
-                raise ValueError("round completion requires the next incomplete round")
+                return self._refusal("ROUND_SEQUENCE_INVALID")
 
             progress = self._semantic_progress(report)
             previous = self._round_progress.get(round_index - 1, (frozenset(),) * 3)

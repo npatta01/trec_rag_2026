@@ -17,6 +17,7 @@ from trec_rag.deepagent_budget import (
     ResearchBudgetConfig,
     ResearchTaskContext,
 )
+from trec_rag.deepagent_evidence import EvidenceCoverageState
 from trec_rag.deepagent_research import (
     BundleEvidence,
     EvidenceBundle,
@@ -217,6 +218,94 @@ def test_main_filter_forces_research_after_empty_round_attempt() -> None:
     assert observed["settings"]["parallel_tool_calls"] is False
     assert observed["tool_choice"] == "task"
     assert "Round 1 cannot close" in str(observed["system"])
+
+
+def observe_turn(
+    middleware: MainToolFilterMiddleware, run_model_call_count: int = 2
+) -> dict[str, object]:
+    """Run one coordinator model turn and capture what the middleware allowed."""
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": run_model_call_count},
+    )
+    observed: dict[str, object] = {}
+
+    def handler(filtered: ModelRequest) -> ModelResponse:
+        observed["tools"] = [_tool["name"] for _tool in filtered.tools]
+        observed["tool_choice"] = filtered.tool_choice
+        observed["system"] = str(filtered.system_message)
+        observed["settings"] = filtered.model_settings
+        return ModelResponse(result=[AIMessage(content="unused")])
+
+    middleware.wrap_model_call(request, handler)
+    return observed
+
+
+def researched_round_budget(
+    config: ResearchBudgetConfig,
+) -> ResearchBudget:
+    """Return a budget whose round 1 has finished research but was never closed."""
+    budget = ResearchBudget(config)
+    context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
+    assert budget.reserve_task(context).ok
+    budget.finish_task(context)
+    return budget
+
+
+def test_main_filter_compels_merge_then_close_for_a_researched_round() -> None:
+    config = ResearchBudgetConfig()
+    budget = researched_round_budget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    merge_turn = observe_turn(middleware)
+
+    assert merge_turn["tools"] == ["update_retrieval_state"]
+    assert merge_turn["tool_choice"] == "update_retrieval_state"
+    assert merge_turn["settings"]["parallel_tool_calls"] is False
+    assert "Round 1 research has finished" in str(merge_turn["system"])
+
+    close_turn = observe_turn(middleware)
+
+    assert close_turn["tools"] == ["complete_research_round"]
+    assert close_turn["tool_choice"] == "complete_research_round"
+    assert "complete_research_round with round_index=1" in str(close_turn["system"])
+
+
+def test_main_filter_releases_the_coordinator_once_the_round_is_closed() -> None:
+    config = ResearchBudgetConfig()
+    budget = researched_round_budget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+    observe_turn(middleware)
+    observe_turn(middleware)
+
+    assert budget.authorize_round_completion(1).ok
+    assert budget.complete_round(1, EvidenceCoverageState("Why?").report()).ok
+
+    released = observe_turn(middleware)
+
+    assert set(released["tools"]) == {
+        "task",
+        "view_retrieval_state",
+        "update_retrieval_state",
+        "complete_research_round",
+        "read_file",
+    }
+    assert released["tool_choice"] is None
+
+
+def test_main_filter_stops_compelling_closure_on_the_final_turn() -> None:
+    config = ResearchBudgetConfig(max_main_models=4)
+    budget = researched_round_budget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    final = observe_turn(middleware, run_model_call_count=3)
+
+    assert final["tools"] == []
+    assert final["tool_choice"] is None
+    assert "Return the grounded partial result" in str(final["system"])
 
 
 def test_task_schema_has_exactly_description_and_subagent_type() -> None:

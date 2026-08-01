@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
 import json
+from threading import Lock
 from typing import Any, Literal, cast
 
 from deepagents.middleware.subagents import SubAgent
@@ -215,6 +216,8 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
     ) -> None:
         self._budget = budget
         self._budget_config = budget_config
+        self._closure_lock = Lock()
+        self._merge_turns_granted: set[int] = set()
 
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
         filtered = super()._filter_tools(request)
@@ -225,41 +228,73 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             self._budget.snapshot().stop_code is not None
             or run_count >= self._budget_config.max_main_models - 1
         )
-        required_round = self._budget.required_research_round()
-        if required_round is not None and not final_turn:
-            instruction = (
-                f"Round {required_round} cannot close without a completed researcher. "
-                "Your next action must call task with subagent_type=\"researcher\" "
-                f"and round_index={required_round} in its JSON description."
-            )
-            existing = request.system_message
-            content = (
-                f"{existing.content}\n\n{instruction}" if existing else instruction
-            )
-            return filtered.override(
-                tools=[tool for tool in filtered.tools if _tool_name(tool) == "task"],
-                system_message=SystemMessage(content=content),
-                tool_choice="task",
-                model_settings={
-                    **(filtered.model_settings or {}),
-                    "parallel_tool_calls": False,
-                },
-            )
         if not final_turn:
+            required_round = self._budget.required_research_round()
+            if required_round is not None:
+                return self._directed(
+                    filtered,
+                    ["task"],
+                    "task",
+                    f"Round {required_round} cannot close without a completed "
+                    'researcher. Your next action must call task with subagent_type='
+                    f'"researcher" and round_index={required_round} in its JSON '
+                    "description.",
+                )
+            pending_round = self._budget.pending_round_closure()
+            if pending_round is not None:
+                return self._directed(filtered, *self._closure_directive(pending_round))
             return filtered
-        instruction = (
-            "Return the grounded partial result immediately. Do not call more tools."
+        return self._directed(
+            filtered,
+            [],
+            None,
+            "Return the grounded partial result immediately. Do not call more tools.",
         )
+
+    def _closure_directive(self, round_index: int) -> tuple[list[str], str, str]:
+        """Grant one merge turn per open round, then compel its explicit close."""
+        with self._closure_lock:
+            merge_turn_used = round_index in self._merge_turns_granted
+            self._merge_turns_granted.add(round_index)
+        if not merge_turn_used:
+            return (
+                ["update_retrieval_state"],
+                "update_retrieval_state",
+                f"Round {round_index} research has finished. Merge every returned "
+                "evidence bundle now with exactly one batched "
+                "update_retrieval_state delta.",
+            )
+        return (
+            ["complete_research_round"],
+            "complete_research_round",
+            f"Round {round_index} is merged. Call complete_research_round with "
+            f"round_index={round_index} now; no other action may precede it.",
+        )
+
+    def _directed(
+        self,
+        request: ModelRequest,
+        tool_names: Sequence[str],
+        tool_choice: str | None,
+        instruction: str,
+    ) -> ModelRequest:
+        """Restrict this turn to one instructed action the coordinator cannot skip."""
+        allowed = set(tool_names)
         existing = request.system_message
         content = f"{existing.content}\n\n{instruction}" if existing else instruction
-        return filtered.override(
-            tools=[],
-            system_message=SystemMessage(content=content),
-            model_settings={
-                **(filtered.model_settings or {}),
+        overrides: dict[str, Any] = {
+            "tools": [
+                tool for tool in request.tools if _tool_name(tool) in allowed
+            ],
+            "system_message": SystemMessage(content=content),
+            "model_settings": {
+                **(request.model_settings or {}),
                 "parallel_tool_calls": False,
             },
-        )
+        }
+        if tool_choice is not None:
+            overrides["tool_choice"] = tool_choice
+        return request.override(**overrides)
 
 
 class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):

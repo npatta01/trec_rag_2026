@@ -428,15 +428,85 @@ def test_duplicate_round_completion_is_idempotent() -> None:
     assert budget.snapshot().completed_rounds == 1
 
 
-def test_round_completion_requires_the_next_round_index() -> None:
+def test_round_completion_refuses_an_out_of_order_round_index() -> None:
     budget = ResearchBudget(ResearchBudgetConfig())
     report = EvidenceCoverageState("What changed?").report()
 
-    with pytest.raises(ValueError, match="next incomplete round"):
-        budget.complete_round(2, report)
+    skipped = budget.complete_round(2, report)
+    assert not skipped.ok
+    assert skipped.code == "ROUND_SEQUENCE_INVALID"
+    assert not skipped.must_stop
+    assert budget.snapshot().completed_rounds == 0
+
     assert budget.complete_round(1, report).ok
-    with pytest.raises(ValueError, match="next incomplete round"):
-        budget.complete_round(3, report)
+    assert budget.complete_round(3, report).code == "ROUND_SEQUENCE_INVALID"
+    assert budget.snapshot().completed_rounds == 1
+
+
+def test_traceable_budget_codes_match_the_budget_code_literal() -> None:
+    """deepagent_tracing duplicates BudgetCode because it may not import budget."""
+    from typing import get_args
+
+    from trec_rag.deepagent_budget import BudgetCode
+    from trec_rag.deepagent_tracing import _BUDGET_CODES
+
+    assert set(get_args(BudgetCode)) == set(_BUDGET_CODES)
+
+
+def test_pending_round_closure_tracks_the_unclosed_researched_round() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    report = EvidenceCoverageState("What changed?").report()
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+
+    assert budget.pending_round_closure() is None
+
+    assert budget.reserve_task(context).ok
+    assert budget.pending_round_closure() is None, "a running batch is not closable"
+
+    budget.finish_task(context)
+    assert budget.pending_round_closure() == 1
+
+    assert budget.complete_round(1, report).ok
+    assert budget.pending_round_closure() is None, "a closed round stays closed"
+
+
+def test_pending_round_closure_ignores_rounds_without_finished_research() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    report = EvidenceCoverageState("What changed?").report()
+    first = ResearchTaskContext("T1", 1, "survey", ("N1",))
+
+    assert budget.reserve_task(first).ok
+    budget.finish_task(first)
+    assert budget.complete_round(1, report).ok
+
+    # Round 2 has been opened by nobody, so nothing is owed a close.
+    assert budget.pending_round_closure() is None
+
+    second = ResearchTaskContext("T2", 2, "focused", ("N2",))
+    assert budget.reserve_task(second).ok
+    budget.finish_task(second)
+    assert budget.pending_round_closure() == 2
+
+
+def test_pending_round_closure_yields_once_the_run_must_stop() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(max_researcher_invocations=1))
+    context = ResearchTaskContext("T1", 1, "survey", ("N1",))
+
+    assert budget.reserve_task(context).ok
+    budget.finish_task(context)
+
+    assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
+    assert budget.pending_round_closure() is None
+
+
+def test_round_authorization_refuses_an_out_of_order_round_index() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+
+    decision = budget.authorize_round_completion(2)
+
+    assert not decision.ok
+    assert decision.code == "ROUND_SEQUENCE_INVALID"
+    assert budget.required_research_round() is None
 
 
 @pytest.mark.parametrize(
