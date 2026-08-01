@@ -445,6 +445,58 @@ Run validation:
 .venv/bin/python -m pytest code/tests/test_remote_pyserini.py -q
 ```
 
+## Passage-first retrieval selection
+
+`trec_rag.deepagent_passages` decides which passages a researcher sees. It
+exists because the agent used to choose a *document*: a measured run drew 63
+grounded nuggets from 5 documents, with per-need nugget counts exactly equal to
+per-document counts. Retrieving deeper alone would have made that worse, not
+better, since one document out of 1000 is a smaller share of the pool than one
+out of 10.
+
+**Inputs.** `PooledDocument(document_id, rank, text)` rows from a retrieval
+response, a focus query, a chunker, and a cross-encoder ranker.
+`PassageSelectionConfig` carries `pool_hits` (how deep to retrieve),
+`rerank_depth` (how deep to score), `top_k`, `per_document_cap`, and
+`min_distinct_documents`.
+
+**Outputs.** `score_document_pool` returns a `PoolScoringResult` with every
+scored passage plus the counts of what was scored and what was skipped.
+`select_diverse_passages` returns the passage set the agent sees.
+`selection_summary` reports what was dropped as well as what was kept, so a
+capped selection is never mistaken for an exhaustive one.
+
+**How diversity is enforced.** In code, never by asking the model. Selection
+runs in two deterministic phases: a breadth phase admits each document's single
+best passage, best documents first, until `min_distinct_documents` is reached;
+then a depth phase fills remaining slots in global score order subject to
+`per_document_cap`. A plain global top-K collapses onto one document, which
+`test_global_top_k_alone_would_have_collapsed_onto_one_document` asserts
+directly.
+
+**Validation.** `code/tests/test_deepagent_passages.py` covers the collapse
+case, breadth-before-depth ordering, graceful degradation when too few
+documents exist, determinism under input reordering, deterministic tie-breaks,
+the cap and top-K bounds, and rejection of unusable configurations. Selection
+is pure, so none of it needs a GPU or a live index.
+
+**Cost, measured on this ROCm host against a real depth-1000 pool.** About 12.6
+chunks per document and ~10ms per chunk:
+
+| rerank depth | chunks | scoring time |
+| ---: | ---: | ---: |
+| 50 | 594 | 6.1s |
+| 100 | 1,290 | 13.8s |
+| 250 | 3,518 | 44.1s |
+| 500 | 6,900 | 69.7s |
+| 1000 | 12,617 | 113.2s |
+
+The per-chunk score cache makes repeated chunks free across queries, so a run
+whose queries overlap pays much less than depth times searches. Note that these
+documents are roughly 3x longer than the 300-document sample used in the
+original design note (median 22,776 characters against 7,336), so per-document
+chunk counts there were low by about the same factor.
+
 ## Experimental Deep Agent retrieval SDK
 
 `trec_rag.deepagent_retrieval` is a small, narrative-only experimental SDK. It
