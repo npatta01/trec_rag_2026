@@ -42,8 +42,10 @@ USER_PROMPT = """Answer the question using only the reference documents below.
 Read every reference document before writing. Cover answer-relevant evidence,
 tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
 1,024 whitespace-separated words. Each answer object must have one to three unique zero-based
-citation indexes into references. Include each cited raw ClimbMix docid once in references, and
-cite every reference. Return one JSON object with exactly references and answer; no Markdown.
+citation indexes into references. When an answer object cites more than one reference, order its
+citation indexes from strongest to weakest support for that object. Include each cited raw
+ClimbMix docid once in references, and cite every reference. Return one JSON object with exactly
+references and answer; no Markdown.
 
 Reference documents:
 {documents}
