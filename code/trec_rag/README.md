@@ -218,11 +218,16 @@ post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
+provenance, fallback, and byte-stable resume behavior, but it does not establish
+that generated decompositions improve retrieval or that canonical claims are
+entailed. Promotion requires a frozen, held-out topic evaluation measuring
+retrieval coverage, evidence quality, claim grounding, redundancy, and failure
+rate.
 
 ## Evidence bundle boundary
 
-`trec_rag.evidence_bundle` defines the cross-stage canonical bundle records for
-Task 1 of the Evidence Bundle v1 plan.
+`trec_rag.evidence_bundle` defines the versioned cross-stage contract for the
+Evidence Bundle v1 plan.
 
 Inputs:
 - neutral retrieval rows with lane metadata, document text, rank, score,
@@ -232,33 +237,39 @@ Inputs:
 
 Outputs:
 - a validated `EvidenceBundle` with frozen lane, document, retrieval-event,
-  selection, evidence, nugget, and trace-reference records
+  selection, selection-member, evidence, nugget, and trace-reference records
 - deterministic JSON-compatible dictionaries through `to_dict()` /
   `from_dict()`, wrapped in a top-level `schema_version: evidence_bundle_v1`
-  marker so incompatible bundle envelopes fail closed while the internal lane,
-  document, event, selection, evidence, nugget, and trace-reference payload
-  shapes stay unchanged
+  marker; v1 decoding requires the complete relation/key shape and rejects
+  Boolean values in numeric scalar fields
 - deterministic downstream projections through `to_trec_run(selection_id=...)`,
   `to_document_records(selection_id=...)`, and
   `to_fixed_rag_context(selection_id=...)`
-- `write_fixed_rag_inputs(output_dir, selection_id=...)`, which writes an
-  organizer-compatible six-column run, `retrieval_with_text.jsonl`, a
-  deterministic `retrieval_with_text.jsonl.zip`, and a fixed-bundle context
-  JSONL without performing retrieval or hosted generation
+- `write_fixed_rag_package(bundles, output_dir, selection_id=...)`, which sorts
+  validated per-topic bundles by topic ID and writes one deterministic package:
+  `trec_rag_2026_queries.tsv`, an organizer-compatible six-column
+  `r_output_trec_rag_2026.tsv`, `retrieval_with_text.jsonl`, deterministic
+  `retrieval_with_text.jsonl.zip`, and `fixed_rag_context.jsonl`
 
 Validation:
-- every identifier and SHA-256 hash is checked
+- every identifier and text hash is checked, including each lane query hash;
+  document and query text may contain ordinary tabs and line breaks
 - every document/lane membership must have a corresponding retrieval event
-- every selection input must match the exact natural union implied by its
-  source lanes; if a selection names lanes with zero retrieval events, its
-  input union must be empty
-- every evidence span must resolve exactly inside its parent document text
-- every nugget support reference must resolve to a known evidence record
+- every selection member audits one input document with inclusion state,
+  optional output rank, and a rejection reason for excluded documents; the
+  member relation must match the exact union implied by its source lanes
+- the `natural_union` selection includes every unique document without output
+  ranks and is rejected by rank-bearing projections; named ranked selections
+  provide contiguous explicit ranks without an implicit top-100 limit
+- every evidence span has non-empty lane support and resolves exactly inside its
+  parent document text
+- every nugget has non-empty known evidence support, and an optional
+  `subnarrative_id` must resolve to a lane whose kind is `subnarrative`
 
 Downstream consumption:
 - fixed retrieval and fixed-bundle RAG consume deterministic projections from
-  the same validated bundle boundary rather than re-reading stage-local
-  artifacts
+  the same validated bundle boundary; document and fixed-context records carry
+  the topic query text and its hash alongside the selected evidence
 - agentic downstream work may consume the same bundle projections as read-only
   context, but any newly retrieved documents or agent-produced evidence must be
   recorded as a new bundle revision instead of being hidden only in trace logs

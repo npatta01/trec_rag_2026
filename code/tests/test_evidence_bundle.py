@@ -8,8 +8,10 @@ import zipfile
 
 import pytest
 
+from trec_rag import evidence_bundle as evidence_bundle_module
 from trec_rag.evidence_bundle import (
     BundleSelection,
+    BundleSelectionMember,
     BundleNugget,
     EvidenceBundle,
     EvidenceSpan,
@@ -137,8 +139,6 @@ def test_validation_rejects_selection_input_without_retrieval_event() -> None:
             replace(
                 selection,
                 source_lane_ids=("narrative",),
-                input_document_ids=("doc-shared", "doc-unique"),
-                input_count=2,
             ),
         ),
     )
@@ -294,10 +294,15 @@ def test_round_trip_preserves_explicit_selection_document_order() -> None:
             BundleSelection(
                 selection_id="ordered",
                 source_lane_ids=("agentic.a", "narrative"),
-                input_document_ids=("doc-shared", "doc-unique"),
-                document_ids=("doc-unique", "doc-shared"),
-                input_count=2,
-                output_count=2,
+                members=(
+                    BundleSelectionMember(
+                        docid="doc-shared", included=True, output_rank=2
+                    ),
+                    BundleSelectionMember(
+                        docid="doc-unique", included=True, output_rank=1
+                    ),
+                ),
+                policy="ranked_all",
             ),
         ),
     )
@@ -309,22 +314,27 @@ def test_round_trip_preserves_explicit_selection_document_order() -> None:
     assert round_tripped.selections[0].document_ids == ("doc-unique", "doc-shared")
 
 
-def test_validation_rejects_duplicate_selection_output_document_ids() -> None:
+def test_validation_rejects_duplicate_selection_member_document_ids() -> None:
     bundle = replace(
         _bundle(),
         selections=(
             BundleSelection(
                 selection_id="duplicate_output",
                 source_lane_ids=("agentic.a", "narrative"),
-                input_document_ids=("doc-shared", "doc-unique"),
-                document_ids=("doc-unique", "doc-unique"),
-                input_count=2,
-                output_count=2,
+                members=(
+                    BundleSelectionMember(
+                        docid="doc-unique", included=True, output_rank=1
+                    ),
+                    BundleSelectionMember(
+                        docid="doc-unique", included=True, output_rank=2
+                    ),
+                ),
+                policy="ranked_all",
             ),
         ),
     )
 
-    with pytest.raises(ValueError, match="selection document_ids must be unique"):
+    with pytest.raises(ValueError, match="selection members must have sorted unique docids"):
         bundle.validate()
 
 
@@ -426,13 +436,40 @@ def _projection_bundle() -> EvidenceBundle:
         BundleSelection(
             selection_id="agentic_only",
             source_lane_ids=("agentic.a",),
-            input_document_ids=("doc-a", "doc-c"),
-            document_ids=("doc-a", "doc-c"),
-            input_count=2,
-            output_count=2,
+            members=(
+                BundleSelectionMember(docid="doc-a", included=True, output_rank=1),
+                BundleSelectionMember(docid="doc-c", included=True, output_rank=2),
+            ),
+            policy="ranked_all",
+        ),
+        BundleSelection(
+            selection_id="ranked_all",
+            source_lane_ids=("agentic.a", "narrative"),
+            members=(
+                BundleSelectionMember(docid="doc-a", included=True, output_rank=1),
+                BundleSelectionMember(docid="doc-b", included=True, output_rank=2),
+                BundleSelectionMember(docid="doc-c", included=True, output_rank=3),
+            ),
+            policy="ranked_all",
         ),
     )
-    enriched = replace(bundle, evidence=evidence, nuggets=nuggets, selections=selections)
+    narrative_lane = next(lane for lane in bundle.lanes if lane.lane_id == "narrative")
+    subnarrative_text = "Explain alpha support."
+    subnarrative_lane = replace(
+        narrative_lane,
+        lane_id="sub.alpha",
+        lane_kind="subnarrative",
+        query_text=subnarrative_text,
+        query_text_sha256=_digest(subnarrative_text),
+        parent_lane_id="narrative",
+    )
+    enriched = replace(
+        bundle,
+        lanes=(*bundle.lanes, subnarrative_lane),
+        evidence=evidence,
+        nuggets=nuggets,
+        selections=selections,
+    )
     enriched.validate()
     return enriched
 
@@ -577,7 +614,7 @@ def test_to_trec_run_uses_explicit_selection_and_rank_order_without_top_100() ->
     )
 
 
-def test_to_trec_run_preserves_natural_union_beyond_100_documents() -> None:
+def test_natural_union_preserves_more_than_100_unranked_documents() -> None:
     rows = [
         {
             "lane_id": "narrative",
@@ -593,11 +630,12 @@ def test_to_trec_run_preserves_natural_union_beyond_100_documents() -> None:
     ]
     bundle = EvidenceBundle.from_retrieval_rows(topic_id="224", rows=rows)
 
-    projected = bundle.to_trec_run(selection_id="natural_union")
+    natural_union = bundle.selections[0]
 
-    assert len(projected) == 101
-    assert projected[0] == ("224", "doc-001", 1, 101, "natural_union")
-    assert projected[-1] == ("224", "doc-101", 101, 1, "natural_union")
+    assert natural_union.input_count == 101
+    assert natural_union.output_count == 101
+    assert all(member.included for member in natural_union.members)
+    assert all(member.output_rank is None for member in natural_union.members)
 
 
 def test_to_document_records_emits_organizer_core_with_lane_metadata() -> None:
@@ -607,7 +645,12 @@ def test_to_document_records_emits_organizer_core_with_lane_metadata() -> None:
 
     assert records == (
         {
-            "query": {"qid": "224", "selection_id": "agentic_only"},
+            "query": {
+                "qid": "224",
+                "selection_id": "agentic_only",
+                "text": "Explain the documented outcome.",
+                "text_sha256": _digest("Explain the documented outcome."),
+            },
             "candidates": [
                 {
                     "docid": "doc-a",
@@ -620,7 +663,6 @@ def test_to_document_records_emits_organizer_core_with_lane_metadata() -> None:
                 {
                     "docid": "doc-c",
                     "doc": "Gamma corroborates alpha.",
-                    "rank": 1,
                     "rank": 2,
                     "score": 1,
                     "lane_ids": ["agentic.a"],
@@ -634,12 +676,17 @@ def test_to_document_records_emits_organizer_core_with_lane_metadata() -> None:
 def test_to_fixed_rag_context_orders_documents_evidence_and_nuggets() -> None:
     bundle = _projection_bundle()
 
-    context = bundle.to_fixed_rag_context(selection_id="natural_union")
+    context = bundle.to_fixed_rag_context(selection_id="ranked_all")
 
     assert context == (
         {
             "topic_id": "224",
-            "selection_id": "natural_union",
+            "selection_id": "ranked_all",
+            "query": {
+                "qid": "224",
+                "text": "Explain the documented outcome.",
+                "text_sha256": _digest("Explain the documented outcome."),
+            },
             "docid": "doc-a",
             "rank": 1,
             "score": 3,
@@ -672,7 +719,12 @@ def test_to_fixed_rag_context_orders_documents_evidence_and_nuggets() -> None:
         },
         {
             "topic_id": "224",
-            "selection_id": "natural_union",
+            "selection_id": "ranked_all",
+            "query": {
+                "qid": "224",
+                "text": "Explain the documented outcome.",
+                "text_sha256": _digest("Explain the documented outcome."),
+            },
             "docid": "doc-b",
             "rank": 2,
             "score": 2,
@@ -705,7 +757,12 @@ def test_to_fixed_rag_context_orders_documents_evidence_and_nuggets() -> None:
         },
         {
             "topic_id": "224",
-            "selection_id": "natural_union",
+            "selection_id": "ranked_all",
+            "query": {
+                "qid": "224",
+                "text": "Explain the documented outcome.",
+                "text_sha256": _digest("Explain the documented outcome."),
+            },
             "docid": "doc-c",
             "rank": 3,
             "score": 1,
@@ -729,6 +786,11 @@ def test_to_fixed_rag_context_filters_support_to_selected_source_lanes() -> None
         {
             "topic_id": "224",
             "selection_id": "agentic_only",
+            "query": {
+                "qid": "224",
+                "text": "Explain the documented outcome.",
+                "text_sha256": _digest("Explain the documented outcome."),
+            },
             "docid": "doc-a",
             "rank": 1,
             "score": 2,
@@ -787,6 +849,11 @@ def test_to_fixed_rag_context_filters_support_to_selected_source_lanes() -> None
         {
             "topic_id": "224",
             "selection_id": "agentic_only",
+            "query": {
+                "qid": "224",
+                "text": "Explain the documented outcome.",
+                "text_sha256": _digest("Explain the documented outcome."),
+            },
             "docid": "doc-c",
             "rank": 2,
             "score": 1,
@@ -824,3 +891,282 @@ def test_write_fixed_rag_inputs_writes_deterministic_run_and_document_sidecars(
     with zipfile.ZipFile(outputs["documents_zip"]) as archive:
         assert archive.namelist() == ["retrieval_with_text.jsonl"]
         assert archive.read("retrieval_with_text.jsonl") == outputs["documents_jsonl"].read_bytes()
+
+
+def test_validation_rejects_evidence_without_lane_support() -> None:
+    bundle = _bundle()
+    shared = next(document for document in bundle.documents if document.docid == "doc-shared")
+    unsupported = EvidenceSpan(
+        evidence_id="evidence.unsupported",
+        docid="doc-shared",
+        text="Beta",
+        text_sha256=_digest("Beta"),
+        start_char=6,
+        end_char=10,
+        lane_ids=(),
+        selector="exact_span",
+        source_document_sha256=shared.text_sha256,
+    )
+
+    with pytest.raises(ValueError, match="at least one lane"):
+        replace(bundle, evidence=(unsupported,)).validate()
+
+
+def test_validation_rejects_nugget_without_evidence_support() -> None:
+    unsupported = BundleNugget(
+        nugget_id="nugget.unsupported",
+        text="This claim has no evidence.",
+        text_sha256=_digest("This claim has no evidence."),
+        evidence_ids=(),
+        nugget_kind="direct",
+    )
+
+    with pytest.raises(ValueError, match="at least one evidence"):
+        replace(_bundle(), nuggets=(unsupported,)).validate()
+
+
+@pytest.mark.parametrize("subnarrative_id", ["missing.subnarrative", "narrative"])
+def test_validation_requires_nugget_subnarrative_to_resolve_to_subnarrative_lane(
+    subnarrative_id: str,
+) -> None:
+    bundle = _bundle()
+    shared = next(document for document in bundle.documents if document.docid == "doc-shared")
+    evidence = EvidenceSpan(
+        evidence_id="evidence.beta",
+        docid="doc-shared",
+        text="Beta",
+        text_sha256=_digest("Beta"),
+        start_char=6,
+        end_char=10,
+        lane_ids=("narrative",),
+        selector="exact_span",
+        source_document_sha256=shared.text_sha256,
+    )
+    nugget = BundleNugget(
+        nugget_id="nugget.beta",
+        text="Beta is present.",
+        text_sha256=_digest("Beta is present."),
+        evidence_ids=("evidence.beta",),
+        nugget_kind="direct",
+        subnarrative_id=subnarrative_id,
+    )
+
+    with pytest.raises(ValueError, match="subnarrative lane"):
+        replace(bundle, evidence=(evidence,), nuggets=(nugget,)).validate()
+
+
+def test_selection_members_record_inclusion_rank_and_rejection_reason() -> None:
+    payload = _bundle().to_dict()
+    selection = payload["selections"][0]
+    selection.update(
+        {
+            "selection_id": "top_one",
+            "policy": "ranked_top_one",
+            "document_ids": ["doc-unique"],
+            "output_count": 1,
+            "members": [
+                {
+                    "docid": "doc-shared",
+                    "included": False,
+                    "output_rank": None,
+                    "rejection_reason": "context_budget",
+                },
+                {
+                    "docid": "doc-unique",
+                    "included": True,
+                    "output_rank": 1,
+                    "rejection_reason": None,
+                },
+            ],
+        }
+    )
+
+    round_tripped = EvidenceBundle.from_dict(payload)
+
+    assert [
+        (member.docid, member.included, member.output_rank, member.rejection_reason)
+        for member in round_tripped.selections[0].members
+    ] == [
+        ("doc-shared", False, None, "context_budget"),
+        ("doc-unique", True, 1, None),
+    ]
+    assert round_tripped.selections[0].document_ids == ("doc-unique",)
+    assert round_tripped.selections[0].input_count == 2
+    assert round_tripped.selections[0].output_count == 1
+    assert round_tripped.to_dict()["selections"][0]["members"] == selection["members"]
+
+
+def test_natural_union_is_an_unranked_relation_and_cannot_emit_trec_run() -> None:
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=[
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": "Question",
+                "docid": "doc-z",
+                "text": "First by retrieval rank.",
+                "rank": 1,
+                "score": 10.0,
+                "retriever": "bm25",
+            },
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": "Question",
+                "docid": "doc-a",
+                "text": "Second by retrieval rank.",
+                "rank": 2,
+                "score": 9.0,
+                "retriever": "bm25",
+            },
+        ],
+    )
+
+    assert [member.output_rank for member in bundle.selections[0].members] == [None, None]
+    with pytest.raises(ValueError, match="non-ranked selection"):
+        bundle.to_trec_run(selection_id="natural_union")
+
+
+def test_lane_query_hashes_round_trip_and_multiline_source_text_is_valid() -> None:
+    query_text = "Question first line.\nQuestion second line."
+    document_text = "Document first line.\n\nDocument second paragraph."
+
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=[
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": query_text,
+                "docid": "doc-multiline",
+                "text": document_text,
+                "rank": 1,
+                "score": 1.0,
+                "retriever": "bm25",
+            }
+        ],
+    )
+
+    assert bundle.lanes[0].query_text_sha256 == _digest(query_text)
+    assert bundle.documents[0].text == document_text
+    assert EvidenceBundle.from_dict(bundle.to_dict()) == bundle
+
+    broken_lane = replace(bundle.lanes[0], query_text_sha256="0" * 64)
+    with pytest.raises(ValueError, match="query_text_sha256 mismatch"):
+        replace(bundle, lanes=(broken_lane,)).validate()
+
+
+@pytest.mark.parametrize("relation_key", ["evidence", "nuggets", "trace_refs"])
+def test_v1_deserialization_requires_complete_relation_keys(relation_key: str) -> None:
+    payload = _bundle().to_dict()
+    del payload[relation_key]
+
+    with pytest.raises(ValueError, match="payload keys"):
+        EvidenceBundle.from_dict(payload)
+
+
+@pytest.mark.parametrize("field_name", ["rank", "score"])
+def test_v1_deserialization_rejects_boolean_retrieval_scalars(field_name: str) -> None:
+    payload = _bundle().to_dict()
+    payload["retrieval_events"][0][field_name] = True
+
+    with pytest.raises(ValueError, match=field_name):
+        EvidenceBundle.from_dict(payload)
+
+
+def test_v1_deserialization_rejects_boolean_selection_scalars() -> None:
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=[
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": "Question",
+                "docid": "doc-only",
+                "text": "Only document.",
+                "rank": 1,
+                "score": 1.0,
+                "retriever": "bm25",
+            }
+        ],
+    )
+    payload = bundle.to_dict()
+    payload["natural_document_count"] = True
+    payload["selections"][0]["input_count"] = True
+    payload["selections"][0]["output_count"] = True
+
+    with pytest.raises(ValueError, match="integer"):
+        EvidenceBundle.from_dict(payload)
+
+
+def test_write_fixed_rag_package_writes_one_deterministic_query_aware_multi_topic_package(
+    tmp_path: Path,
+) -> None:
+    first = _projection_bundle()
+    first_selection = next(
+        selection for selection in first.selections if selection.selection_id == "agentic_only"
+    )
+    second_query = "Summarize the second topic."
+    second = replace(
+        first,
+        topic_id="225",
+        lanes=tuple(
+            replace(
+                lane,
+                query_text=second_query,
+                query_text_sha256=_digest(second_query),
+            )
+            if lane.lane_kind == "narrative"
+            else lane
+            for lane in first.lanes
+        ),
+        selections=(first_selection,),
+    )
+    first = replace(first, selections=(first_selection,))
+
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    outputs = evidence_bundle_module.write_fixed_rag_package(
+        [second, first], first_dir, selection_id="agentic_only"
+    )
+    repeated = evidence_bundle_module.write_fixed_rag_package(
+        [first, second], second_dir, selection_id="agentic_only"
+    )
+
+    assert outputs == {
+        "queries": first_dir / "trec_rag_2026_queries.tsv",
+        "run": first_dir / "r_output_trec_rag_2026.tsv",
+        "documents_jsonl": first_dir / "retrieval_with_text.jsonl",
+        "documents_zip": first_dir / "retrieval_with_text.jsonl.zip",
+        "context_jsonl": first_dir / "fixed_rag_context.jsonl",
+    }
+    assert outputs["queries"].read_text(encoding="utf-8") == (
+        "224\tExplain the documented outcome.\n"
+        "225\tSummarize the second topic.\n"
+    )
+    assert outputs["run"].read_text(encoding="utf-8") == (
+        "224 Q0 doc-a 1 2 agentic_only\n"
+        "224 Q0 doc-c 2 1 agentic_only\n"
+        "225 Q0 doc-a 1 2 agentic_only\n"
+        "225 Q0 doc-c 2 1 agentic_only\n"
+    )
+    document_rows = [
+        json.loads(line) for line in outputs["documents_jsonl"].read_text(encoding="utf-8").splitlines()
+    ]
+    context_rows = [
+        json.loads(line) for line in outputs["context_jsonl"].read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["query"]["qid"] for row in document_rows] == ["224", "225"]
+    assert document_rows[0]["query"] == {
+        "qid": "224",
+        "selection_id": "agentic_only",
+        "text": "Explain the documented outcome.",
+        "text_sha256": _digest("Explain the documented outcome."),
+    }
+    assert [row["query"]["qid"] for row in context_rows] == ["224", "224", "225", "225"]
+    with zipfile.ZipFile(outputs["documents_zip"]) as archive:
+        assert archive.namelist() == ["retrieval_with_text.jsonl"]
+        assert archive.read("retrieval_with_text.jsonl") == outputs["documents_jsonl"].read_bytes()
+    for key, first_path in outputs.items():
+        assert first_path.read_bytes() == repeated[key].read_bytes()

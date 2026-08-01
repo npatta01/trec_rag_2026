@@ -20,6 +20,7 @@ import zipfile
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_UNSAFE_TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _BUNDLE_SCHEMA_VERSION = "evidence_bundle_v1"
 
 
@@ -38,8 +39,8 @@ def _require_sha256(value: str, *, field_name: str) -> None:
 
 
 def _require_text(value: str, *, field_name: str) -> None:
-    if not isinstance(value, str) or _CONTROL.search(value):
-        raise ValueError(f"{field_name} must be text without control characters")
+    if not isinstance(value, str) or _UNSAFE_TEXT_CONTROL.search(value):
+        raise ValueError(f"{field_name} must be text without unsafe control characters")
 
 
 def _require_docid(value: str) -> None:
@@ -60,6 +61,7 @@ class BundleLane:
     lane_id: str
     lane_kind: str
     query_text: str
+    query_text_sha256: str
     parent_lane_id: str | None = None
     producer: str | None = None
 
@@ -84,14 +86,41 @@ class RetrievalEvent:
 
 
 @dataclass(frozen=True)
+class BundleSelectionMember:
+    docid: str
+    included: bool
+    output_rank: int | None = None
+    rejection_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class BundleSelection:
     selection_id: str
     source_lane_ids: tuple[str, ...]
-    input_document_ids: tuple[str, ...]
-    document_ids: tuple[str, ...]
-    input_count: int
-    output_count: int
+    members: tuple[BundleSelectionMember, ...]
     policy: str = "natural_union"
+
+    @property
+    def input_document_ids(self) -> tuple[str, ...]:
+        return tuple(member.docid for member in self.members)
+
+    @property
+    def document_ids(self) -> tuple[str, ...]:
+        included = tuple(member for member in self.members if member.included)
+        if all(member.output_rank is None for member in included):
+            return tuple(member.docid for member in included)
+        return tuple(
+            member.docid
+            for member in sorted(included, key=lambda member: member.output_rank or 0)
+        )
+
+    @property
+    def input_count(self) -> int:
+        return len(self.members)
+
+    @property
+    def output_count(self) -> int:
+        return sum(member.included for member in self.members)
 
 
 @dataclass(frozen=True)
@@ -144,6 +173,9 @@ class EvidenceBundle:
             _require_identifier(lane.lane_id, field_name="lane_id")
             _require_identifier(lane.lane_kind, field_name="lane_kind")
             _require_text(lane.query_text, field_name="query_text")
+            _require_sha256(lane.query_text_sha256, field_name="query_text_sha256")
+            if _digest(lane.query_text) != lane.query_text_sha256:
+                raise ValueError(f"query_text_sha256 mismatch for {lane.lane_id}")
             if lane.parent_lane_id is not None:
                 _require_identifier(lane.parent_lane_id, field_name="parent_lane_id")
             if lane.producer is not None:
@@ -173,6 +205,8 @@ class EvidenceBundle:
                     raise ValueError(f"unknown lane {lane_id} in document {document.docid}")
             document_map[document.docid] = document
 
+        if type(self.natural_document_count) is not int:
+            raise ValueError("natural_document_count must be an integer")
         if self.natural_document_count != len(document_map):
             raise ValueError("natural union document count does not match unique documents")
 
@@ -197,9 +231,9 @@ class EvidenceBundle:
                 raise ValueError(f"unknown lane for retrieval event: {event.lane_id}")
             if event.docid not in document_map:
                 raise ValueError(f"unknown document for retrieval event: {event.docid}")
-            if not isinstance(event.rank, int) or event.rank < 1:
+            if type(event.rank) is not int or event.rank < 1:
                 raise ValueError("retrieval event rank must be a positive integer")
-            if not isinstance(event.score, (int, float)) or not math.isfinite(event.score):
+            if type(event.score) not in (int, float) or not math.isfinite(event.score):
                 raise ValueError("retrieval event score must be finite")
             if event.trace_ref_id is not None and event.trace_ref_id not in trace_map:
                 raise ValueError(f"unknown trace reference: {event.trace_ref_id}")
@@ -218,25 +252,39 @@ class EvidenceBundle:
             if selection.selection_id in selection_map:
                 raise ValueError(f"duplicate selection_id: {selection.selection_id}")
             source_lane_ids = _sorted_unique(selection.source_lane_ids)
-            input_document_ids = _sorted_unique(selection.input_document_ids)
             if source_lane_ids != selection.source_lane_ids:
                 raise ValueError(f"selection source_lane_ids must be sorted and unique for {selection.selection_id}")
-            if input_document_ids != selection.input_document_ids:
-                raise ValueError(f"selection input_document_ids must be sorted and unique for {selection.selection_id}")
-            if len(set(selection.document_ids)) != len(selection.document_ids):
-                raise ValueError(f"selection document_ids must be unique for {selection.selection_id}")
             for lane_id in selection.source_lane_ids:
                 if lane_id not in lane_map:
                     raise ValueError(f"unknown source lane {lane_id} in selection {selection.selection_id}")
-            for docid in selection.input_document_ids + selection.document_ids:
-                if docid not in document_map:
-                    raise ValueError(f"unknown document {docid} in selection {selection.selection_id}")
-            if not set(selection.document_ids).issubset(selection.input_document_ids):
-                raise ValueError(f"selection output must be a subset of the input union for {selection.selection_id}")
-            if selection.input_count != len(selection.input_document_ids):
-                raise ValueError(f"selection input count mismatch for {selection.selection_id}")
-            if selection.output_count != len(selection.document_ids):
-                raise ValueError(f"selection output count mismatch for {selection.selection_id}")
+            member_docids = tuple(member.docid for member in selection.members)
+            if member_docids != tuple(sorted(member_docids)) or len(set(member_docids)) != len(member_docids):
+                raise ValueError(f"selection members must have sorted unique docids for {selection.selection_id}")
+            output_ranks: list[int] = []
+            for member in selection.members:
+                _require_docid(member.docid)
+                if member.docid not in document_map:
+                    raise ValueError(f"unknown document {member.docid} in selection {selection.selection_id}")
+                if type(member.included) is not bool:
+                    raise ValueError(f"selection member included must be Boolean for {selection.selection_id}")
+                if member.included:
+                    if member.rejection_reason is not None:
+                        raise ValueError(f"included selection member cannot have a rejection reason for {selection.selection_id}")
+                    if member.output_rank is not None:
+                        if type(member.output_rank) is not int or member.output_rank < 1:
+                            raise ValueError(f"selection member output_rank must be a positive integer for {selection.selection_id}")
+                        output_ranks.append(member.output_rank)
+                else:
+                    if member.output_rank is not None:
+                        raise ValueError(f"rejected selection member cannot have an output rank for {selection.selection_id}")
+                    if not isinstance(member.rejection_reason, str) or not member.rejection_reason:
+                        raise ValueError(f"rejected selection member requires a rejection reason for {selection.selection_id}")
+                    _require_text(member.rejection_reason, field_name="selection rejection_reason")
+            if selection.policy == "natural_union":
+                if any(not member.included or member.output_rank is not None for member in selection.members):
+                    raise ValueError("natural_union selection must include every member without output ranks")
+            elif sorted(output_ranks) != list(range(1, selection.output_count + 1)):
+                raise ValueError(f"selection output ranks must be contiguous for {selection.selection_id}")
             expected_input = {
                 event.docid
                 for event in self.retrieval_events
@@ -260,6 +308,8 @@ class EvidenceBundle:
                 raise ValueError(f"unknown document for evidence span: {span.docid}")
             if _digest(span.text) != span.text_sha256:
                 raise ValueError(f"evidence text_sha256 mismatch for {span.evidence_id}")
+            if not span.lane_ids:
+                raise ValueError(f"evidence {span.evidence_id} requires at least one lane")
             if span.lane_ids != _sorted_unique(span.lane_ids):
                 raise ValueError(f"evidence lane_ids must be sorted and unique for {span.evidence_id}")
             document = document_map[span.docid]
@@ -271,8 +321,8 @@ class EvidenceBundle:
                 if lane_id not in document.lane_ids:
                     raise ValueError(f"evidence lane {lane_id} is not present in document membership for {span.evidence_id}")
             if (
-                not isinstance(span.start_char, int)
-                or not isinstance(span.end_char, int)
+                type(span.start_char) is not int
+                or type(span.end_char) is not int
                 or span.start_char < 0
                 or span.end_char <= span.start_char
                 or span.end_char > len(document.text)
@@ -290,10 +340,15 @@ class EvidenceBundle:
             _require_identifier(nugget.nugget_kind, field_name="nugget_kind")
             if nugget.subnarrative_id is not None:
                 _require_identifier(nugget.subnarrative_id, field_name="subnarrative_id")
+                subnarrative_lane = lane_map.get(nugget.subnarrative_id)
+                if subnarrative_lane is None or subnarrative_lane.lane_kind != "subnarrative":
+                    raise ValueError(f"nugget {nugget.nugget_id} must reference a known subnarrative lane")
             if nugget.nugget_id in nugget_map:
                 raise ValueError(f"duplicate nugget_id: {nugget.nugget_id}")
             if _digest(nugget.text) != nugget.text_sha256:
                 raise ValueError(f"nugget text_sha256 mismatch for {nugget.nugget_id}")
+            if not nugget.evidence_ids:
+                raise ValueError(f"nugget {nugget.nugget_id} requires at least one evidence ID")
             if nugget.evidence_ids != _sorted_unique(nugget.evidence_ids):
                 raise ValueError(f"nugget evidence_ids must be sorted and unique for {nugget.nugget_id}")
             for evidence_id in nugget.evidence_ids:
@@ -311,10 +366,16 @@ class EvidenceBundle:
 
     def to_document_records(self, *, selection_id: str) -> tuple[dict[str, object], ...]:
         selected = self._selected_documents(selection_id)
+        query = self._topic_query()
         total = len(selected)
         return (
             {
-                "query": {"qid": self.topic_id, "selection_id": selection_id},
+                "query": {
+                    "qid": self.topic_id,
+                    "selection_id": selection_id,
+                    "text": query.query_text,
+                    "text_sha256": query.query_text_sha256,
+                },
                 "candidates": [
                     {
                         "docid": document.docid,
@@ -332,6 +393,7 @@ class EvidenceBundle:
     def to_fixed_rag_context(self, *, selection_id: str) -> tuple[dict[str, object], ...]:
         selection = self._selection(selection_id)
         selected = self._selected_documents(selection_id)
+        query = self._topic_query()
         selected_source_lanes = set(selection.source_lane_ids)
         evidence_by_doc: dict[str, list[EvidenceSpan]] = defaultdict(list)
         for span in self.evidence:
@@ -377,6 +439,11 @@ class EvidenceBundle:
                 {
                     "topic_id": self.topic_id,
                     "selection_id": selection_id,
+                    "query": {
+                        "qid": self.topic_id,
+                        "text": query.query_text,
+                        "text_sha256": query.query_text_sha256,
+                    },
                     "docid": document.docid,
                     "rank": rank,
                     "score": total - rank + 1,
@@ -418,29 +485,10 @@ class EvidenceBundle:
         *,
         selection_id: str,
     ) -> dict[str, Path]:
-        output_dir = Path(output_dir)
-        trec_rows = self.to_trec_run(selection_id=selection_id)
-        document_records = self.to_document_records(selection_id=selection_id)
-        context_records = self.to_fixed_rag_context(selection_id=selection_id)
-
-        run_path = output_dir / "r_output_trec_rag_2026.tsv"
-        documents_jsonl_path = output_dir / "retrieval_with_text.jsonl"
-        documents_zip_path = output_dir / "retrieval_with_text.jsonl.zip"
-        context_jsonl_path = output_dir / "fixed_rag_context.jsonl"
-
-        trec_body = _trec_bytes(trec_rows)
-        documents_body = _jsonl_bytes(document_records)
-        context_body = _jsonl_bytes(context_records)
-        _atomic_write(run_path, trec_body)
-        _atomic_write(documents_jsonl_path, documents_body)
-        _atomic_write(documents_zip_path, _deterministic_zip(documents_body))
-        _atomic_write(context_jsonl_path, context_body)
-        return {
-            "run": run_path,
-            "documents_jsonl": documents_jsonl_path,
-            "documents_zip": documents_zip_path,
-            "context_jsonl": context_jsonl_path,
-        }
+        outputs = write_fixed_rag_package(
+            (self,), output_dir, selection_id=selection_id
+        )
+        return {key: value for key, value in outputs.items() if key != "queries"}
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -453,6 +501,7 @@ class EvidenceBundle:
                     "lane_id": lane.lane_id,
                     "lane_kind": lane.lane_kind,
                     "query_text": lane.query_text,
+                    "query_text_sha256": lane.query_text_sha256,
                     "parent_lane_id": lane.parent_lane_id,
                     "producer": lane.producer,
                 }
@@ -491,6 +540,15 @@ class EvidenceBundle:
                     "input_count": selection.input_count,
                     "output_count": selection.output_count,
                     "policy": selection.policy,
+                    "members": [
+                        {
+                            "docid": member.docid,
+                            "included": member.included,
+                            "output_rank": member.output_rank,
+                            "rejection_reason": member.rejection_reason,
+                        }
+                        for member in selection.members
+                    ],
                 }
                 for selection in sorted(self.selections, key=lambda row: row.selection_id)
             ],
@@ -531,94 +589,186 @@ class EvidenceBundle:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> EvidenceBundle:
-        if payload.get("schema_version") != _BUNDLE_SCHEMA_VERSION:
+        _require_payload_keys(
+            payload,
+            {
+                "schema_version",
+                "topic_id",
+                "natural_document_count",
+                "lanes",
+                "documents",
+                "retrieval_events",
+                "selections",
+                "evidence",
+                "nuggets",
+                "trace_refs",
+            },
+            owner="evidence bundle payload",
+        )
+        if payload["schema_version"] != _BUNDLE_SCHEMA_VERSION:
             raise ValueError("unsupported evidence bundle schema version")
+        lane_rows = _payload_rows(payload, "lanes")
+        document_rows = _payload_rows(payload, "documents")
+        retrieval_rows = _payload_rows(payload, "retrieval_events")
+        selection_rows = _payload_rows(payload, "selections")
+        evidence_rows = _payload_rows(payload, "evidence")
+        nugget_rows = _payload_rows(payload, "nuggets")
+        trace_rows = _payload_rows(payload, "trace_refs")
+        row_key_contracts = (
+            (
+                lane_rows,
+                {
+                    "lane_id",
+                    "lane_kind",
+                    "query_text",
+                    "query_text_sha256",
+                    "parent_lane_id",
+                    "producer",
+                },
+                "lane payload",
+            ),
+            (
+                document_rows,
+                {"docid", "text", "text_sha256", "lane_ids"},
+                "document payload",
+            ),
+            (
+                retrieval_rows,
+                {
+                    "event_id",
+                    "lane_id",
+                    "docid",
+                    "rank",
+                    "score",
+                    "retriever",
+                    "trace_ref_id",
+                },
+                "retrieval event payload",
+            ),
+            (
+                evidence_rows,
+                {
+                    "evidence_id",
+                    "docid",
+                    "text",
+                    "text_sha256",
+                    "start_char",
+                    "end_char",
+                    "lane_ids",
+                    "selector",
+                    "source_document_sha256",
+                },
+                "evidence payload",
+            ),
+            (
+                nugget_rows,
+                {
+                    "nugget_id",
+                    "text",
+                    "text_sha256",
+                    "evidence_ids",
+                    "nugget_kind",
+                    "subnarrative_id",
+                },
+                "nugget payload",
+            ),
+            (
+                trace_rows,
+                {"trace_ref_id", "trace_kind", "trace_sha256"},
+                "trace reference payload",
+            ),
+        )
+        for rows, expected_keys, owner in row_key_contracts:
+            for row in rows:
+                _require_payload_keys(row, expected_keys, owner=owner)
         bundle = cls(
-            topic_id=payload["topic_id"],
-            natural_document_count=payload["natural_document_count"],
+            topic_id=_payload_text(payload["topic_id"], "topic_id"),
+            natural_document_count=_payload_int(
+                payload["natural_document_count"], "natural_document_count"
+            ),
             lanes=tuple(
                 BundleLane(
-                    lane_id=row["lane_id"],
-                    lane_kind=row["lane_kind"],
-                    query_text=row["query_text"],
-                    parent_lane_id=row.get("parent_lane_id"),
-                    producer=row.get("producer"),
+                    lane_id=_payload_text(row["lane_id"], "lane_id"),
+                    lane_kind=_payload_text(row["lane_kind"], "lane_kind"),
+                    query_text=_payload_text(row["query_text"], "query_text"),
+                    query_text_sha256=_payload_text(
+                        row["query_text_sha256"], "query_text_sha256"
+                    ),
+                    parent_lane_id=_payload_optional_text(
+                        row["parent_lane_id"], "parent_lane_id"
+                    ),
+                    producer=_payload_optional_text(row["producer"], "producer"),
                 )
-                for row in payload["lanes"]
+                for row in lane_rows
             ),
             documents=tuple(
                 BundleDocument(
-                    docid=row["docid"],
-                    text=row["text"],
-                    text_sha256=row["text_sha256"],
-                    lane_ids=tuple(row["lane_ids"]),
+                    docid=_payload_text(row["docid"], "docid"),
+                    text=_payload_text(row["text"], "document text"),
+                    text_sha256=_payload_text(row["text_sha256"], "text_sha256"),
+                    lane_ids=_payload_text_tuple(row["lane_ids"], "lane_ids"),
                 )
-                for row in payload["documents"]
+                for row in document_rows
             ),
             retrieval_events=tuple(
                 RetrievalEvent(
-                    event_id=row["event_id"],
-                    lane_id=row["lane_id"],
-                    docid=row["docid"],
-                    rank=row["rank"],
-                    score=row["score"],
-                    retriever=row["retriever"],
-                    trace_ref_id=row.get("trace_ref_id"),
+                    event_id=_payload_text(row["event_id"], "event_id"),
+                    lane_id=_payload_text(row["lane_id"], "lane_id"),
+                    docid=_payload_text(row["docid"], "docid"),
+                    rank=_payload_int(row["rank"], "rank"),
+                    score=_payload_number(row["score"], "score"),
+                    retriever=_payload_text(row["retriever"], "retriever"),
+                    trace_ref_id=_payload_optional_text(
+                        row["trace_ref_id"], "trace_ref_id"
+                    ),
                 )
                 for row in sorted(
-                    payload["retrieval_events"],
+                    retrieval_rows,
                     key=lambda row: (
-                        row["rank"],
-                        row["lane_id"],
-                        row["docid"],
-                        row["event_id"],
+                        _payload_int(row["rank"], "rank"),
+                        _payload_text(row["lane_id"], "lane_id"),
+                        _payload_text(row["docid"], "docid"),
+                        _payload_text(row["event_id"], "event_id"),
                     ),
                 )
             ),
-            selections=tuple(
-                BundleSelection(
-                    selection_id=row["selection_id"],
-                    source_lane_ids=tuple(row["source_lane_ids"]),
-                    input_document_ids=tuple(row["input_document_ids"]),
-                    document_ids=tuple(row["document_ids"]),
-                    input_count=row["input_count"],
-                    output_count=row["output_count"],
-                    policy=row.get("policy", "natural_union"),
-                )
-                for row in payload["selections"]
-            ),
+            selections=tuple(_selection_from_payload(row) for row in selection_rows),
             evidence=tuple(
                 EvidenceSpan(
-                    evidence_id=row["evidence_id"],
-                    docid=row["docid"],
-                    text=row["text"],
-                    text_sha256=row["text_sha256"],
-                    start_char=row["start_char"],
-                    end_char=row["end_char"],
-                    lane_ids=tuple(row["lane_ids"]),
-                    selector=row["selector"],
-                    source_document_sha256=row["source_document_sha256"],
+                    evidence_id=_payload_text(row["evidence_id"], "evidence_id"),
+                    docid=_payload_text(row["docid"], "docid"),
+                    text=_payload_text(row["text"], "evidence text"),
+                    text_sha256=_payload_text(row["text_sha256"], "text_sha256"),
+                    start_char=_payload_int(row["start_char"], "start_char"),
+                    end_char=_payload_int(row["end_char"], "end_char"),
+                    lane_ids=_payload_text_tuple(row["lane_ids"], "lane_ids"),
+                    selector=_payload_text(row["selector"], "selector"),
+                    source_document_sha256=_payload_text(
+                        row["source_document_sha256"], "source_document_sha256"
+                    ),
                 )
-                for row in payload.get("evidence", ())
+                for row in evidence_rows
             ),
             nuggets=tuple(
                 BundleNugget(
-                    nugget_id=row["nugget_id"],
-                    text=row["text"],
-                    text_sha256=row["text_sha256"],
-                    evidence_ids=tuple(row["evidence_ids"]),
-                    nugget_kind=row["nugget_kind"],
-                    subnarrative_id=row.get("subnarrative_id"),
+                    nugget_id=_payload_text(row["nugget_id"], "nugget_id"),
+                    text=_payload_text(row["text"], "nugget text"),
+                    text_sha256=_payload_text(row["text_sha256"], "text_sha256"),
+                    evidence_ids=_payload_text_tuple(row["evidence_ids"], "evidence_ids"),
+                    nugget_kind=_payload_text(row["nugget_kind"], "nugget_kind"),
+                    subnarrative_id=_payload_optional_text(
+                        row["subnarrative_id"], "subnarrative_id"
+                    ),
                 )
-                for row in payload.get("nuggets", ())
+                for row in nugget_rows
             ),
             trace_refs=tuple(
                 TraceReference(
-                    trace_ref_id=row["trace_ref_id"],
-                    trace_kind=row["trace_kind"],
-                    trace_sha256=row["trace_sha256"],
+                    trace_ref_id=_payload_text(row["trace_ref_id"], "trace_ref_id"),
+                    trace_kind=_payload_text(row["trace_kind"], "trace_kind"),
+                    trace_sha256=_payload_text(row["trace_sha256"], "trace_sha256"),
                 )
-                for row in payload.get("trace_refs", ())
+                for row in trace_rows
             ),
         )
         bundle.validate()
@@ -633,8 +783,18 @@ class EvidenceBundle:
 
     def _selected_documents(self, selection_id: str) -> tuple[BundleDocument, ...]:
         selection = self._selection(selection_id)
+        if selection.policy == "natural_union" or any(
+            member.included and member.output_rank is None for member in selection.members
+        ):
+            raise ValueError(f"cannot rank non-ranked selection: {selection_id}")
         documents_by_id = {document.docid: document for document in self.documents}
         return tuple(documents_by_id[docid] for docid in selection.document_ids)
+
+    def _topic_query(self) -> BundleLane:
+        narrative_lanes = tuple(lane for lane in self.lanes if lane.lane_kind == "narrative")
+        if len(narrative_lanes) != 1:
+            raise ValueError(f"topic {self.topic_id} must have exactly one narrative lane")
+        return narrative_lanes[0]
 
     @classmethod
     def from_retrieval_rows(
@@ -665,6 +825,8 @@ class EvidenceBundle:
                 lane_id=lane_id,
                 lane_kind=lane_kind,
                 query_text=query_text,
+                query_text_sha256=_expect_optional_str(row, "query_text_sha256")
+                or _digest(query_text),
                 parent_lane_id=parent_lane_id,
                 producer=producer,
             )
@@ -713,16 +875,188 @@ class EvidenceBundle:
                 BundleSelection(
                     selection_id="natural_union",
                     source_lane_ids=lane_ids,
-                    input_document_ids=document_ids,
-                    document_ids=document_ids,
-                    input_count=len(document_ids),
-                    output_count=len(document_ids),
+                    members=tuple(
+                        BundleSelectionMember(docid=docid, included=True)
+                        for docid in document_ids
+                    ),
                 ),
             ),
             natural_document_count=len(document_ids),
         )
         bundle.validate()
         return bundle
+
+
+def _require_payload_keys(
+    payload: Mapping[str, Any], expected: set[str], *, owner: str
+) -> None:
+    if not isinstance(payload, Mapping) or not all(
+        isinstance(key, str) for key in payload
+    ):
+        raise ValueError(f"{owner} must be an object with text keys")
+    actual = set(payload)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        raise ValueError(
+            f"{owner} has invalid payload keys; missing={missing}, unexpected={unexpected}"
+        )
+
+
+def _payload_rows(payload: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:
+    value = payload[key]
+    if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
+        raise ValueError(f"{key} must be a list of objects")
+    return value
+
+
+def _payload_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be text")
+    return value
+
+
+def _payload_optional_text(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _payload_text(value, field_name)
+
+
+def _payload_int(value: object, field_name: str) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{field_name} must be an integer")
+    return value
+
+
+def _payload_number(value: object, field_name: str) -> int | float:
+    if type(value) not in (int, float):
+        raise ValueError(f"{field_name} must be numeric")
+    return value
+
+
+def _payload_bool(value: object, field_name: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{field_name} must be Boolean")
+    return value
+
+
+def _payload_text_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of text values")
+    return tuple(value)
+
+
+def _selection_from_payload(row: Mapping[str, Any]) -> BundleSelection:
+    _require_payload_keys(
+        row,
+        {
+            "selection_id",
+            "source_lane_ids",
+            "input_document_ids",
+            "document_ids",
+            "input_count",
+            "output_count",
+            "policy",
+            "members",
+        },
+        owner="selection payload",
+    )
+    member_rows = row["members"]
+    if not isinstance(member_rows, list) or not all(
+        isinstance(member, Mapping) for member in member_rows
+    ):
+        raise ValueError("selection members must be a list of objects")
+    members: list[BundleSelectionMember] = []
+    for member in member_rows:
+        _require_payload_keys(
+            member,
+            {"docid", "included", "output_rank", "rejection_reason"},
+            owner="selection member payload",
+        )
+        output_rank = member["output_rank"]
+        members.append(
+            BundleSelectionMember(
+                docid=_payload_text(member["docid"], "selection member docid"),
+                included=_payload_bool(member["included"], "selection member included"),
+                output_rank=None
+                if output_rank is None
+                else _payload_int(output_rank, "selection member output_rank"),
+                rejection_reason=_payload_optional_text(
+                    member["rejection_reason"], "selection member rejection_reason"
+                ),
+            )
+        )
+    selection = BundleSelection(
+        selection_id=_payload_text(row["selection_id"], "selection_id"),
+        source_lane_ids=_payload_text_tuple(row["source_lane_ids"], "source_lane_ids"),
+        members=tuple(members),
+        policy=_payload_text(row["policy"], "selection policy"),
+    )
+    input_document_ids = _payload_text_tuple(
+        row["input_document_ids"], "input_document_ids"
+    )
+    document_ids = _payload_text_tuple(row["document_ids"], "document_ids")
+    input_count = _payload_int(row["input_count"], "input_count")
+    output_count = _payload_int(row["output_count"], "output_count")
+    if input_document_ids != selection.input_document_ids:
+        raise ValueError("selection input_document_ids do not match members")
+    if document_ids != selection.document_ids:
+        raise ValueError("selection document_ids do not match members")
+    if input_count != selection.input_count:
+        raise ValueError("selection input_count does not match members")
+    if output_count != selection.output_count:
+        raise ValueError("selection output_count does not match members")
+    return selection
+
+
+def write_fixed_rag_package(
+    bundles: Sequence[EvidenceBundle],
+    output_dir: Path,
+    *,
+    selection_id: str,
+) -> dict[str, Path]:
+    """Write one deterministic, query-aware fixed-RAG package for many topics."""
+    ordered_bundles = tuple(sorted(bundles, key=lambda bundle: bundle.topic_id))
+    if not ordered_bundles:
+        raise ValueError("at least one evidence bundle is required")
+    topic_ids = tuple(bundle.topic_id for bundle in ordered_bundles)
+    if len(set(topic_ids)) != len(topic_ids):
+        raise ValueError("fixed-RAG package topic IDs must be unique")
+
+    query_rows: list[tuple[str, str]] = []
+    trec_rows: list[tuple[str, str, int, int, str]] = []
+    document_records: list[Mapping[str, object]] = []
+    context_records: list[Mapping[str, object]] = []
+    for bundle in ordered_bundles:
+        bundle.validate()
+        query = bundle._topic_query()
+        query_rows.append((bundle.topic_id, " ".join(query.query_text.split())))
+        trec_rows.extend(bundle.to_trec_run(selection_id=selection_id))
+        document_records.extend(bundle.to_document_records(selection_id=selection_id))
+        context_records.extend(bundle.to_fixed_rag_context(selection_id=selection_id))
+
+    output_dir = Path(output_dir)
+    outputs = {
+        "queries": output_dir / "trec_rag_2026_queries.tsv",
+        "run": output_dir / "r_output_trec_rag_2026.tsv",
+        "documents_jsonl": output_dir / "retrieval_with_text.jsonl",
+        "documents_zip": output_dir / "retrieval_with_text.jsonl.zip",
+        "context_jsonl": output_dir / "fixed_rag_context.jsonl",
+    }
+    query_body = "".join(f"{topic_id}\t{text}\n" for topic_id, text in query_rows).encode("utf-8")
+    trec_body = _trec_bytes(trec_rows)
+    documents_body = _jsonl_bytes(document_records)
+    context_body = _jsonl_bytes(context_records)
+
+    from trec_rag.retrieval_export import _validate_trec_bytes
+
+    _validate_trec_bytes(trec_body, trec_rows)
+    _atomic_write(outputs["queries"], query_body)
+    _atomic_write(outputs["run"], trec_body)
+    _atomic_write(outputs["documents_jsonl"], documents_body)
+    _atomic_write(outputs["documents_zip"], _deterministic_zip(documents_body))
+    _atomic_write(outputs["context_jsonl"], context_body)
+    return outputs
 
 
 def _expect_str(row: Mapping[str, object], key: str) -> str:
