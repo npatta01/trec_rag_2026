@@ -50,6 +50,8 @@ from trec_rag.facet_evidence import (
     select_subnarrative_candidates,
     validate_candidate_request,
     validate_extractive_candidate_source,
+    _SourceValidationCache,
+    _source_validation_cache,
     _canonical_identity,
 )
 from trec_rag.topics import Topic
@@ -1157,6 +1159,7 @@ def decode_extractive_candidate(
     *,
     document_text: str,
     subnarrative_text: str,
+    source_cache: _SourceValidationCache | None = None,
 ) -> ExtractiveCandidate:
     """Strictly decode and source-validate one sealed candidate row."""
     from trec_rag.facet_extraction import _decode_json
@@ -1237,6 +1240,7 @@ def decode_extractive_candidate(
         candidate,
         source=document_text,
         subnarrative_text=subnarrative_text,
+        _source_cache=source_cache,
     )
     return candidate
 
@@ -1272,6 +1276,7 @@ def load_validated_candidate_artifacts(
     candidate_count = 0
     seen_keys: set[tuple[str, str]] = set()
     result: dict[tuple[str, str], ExtractiveCandidate] = {}
+    source_caches: dict[str, _SourceValidationCache] = {}
     with candidates_path.open("rb") as candidate_file:
         for line_number, encoded_line in enumerate(candidate_file, start=1):
             digest.update(encoded_line)
@@ -1306,10 +1311,15 @@ def load_validated_candidate_artifacts(
                 )
             if subnarrative_text is None:
                 raise ValueError("candidate subnarrative is absent from canonical plan")
+            source_cache = source_caches.get(docid)
+            if source_cache is None:
+                source_cache = _source_validation_cache(document_text)
+                source_caches[docid] = source_cache
             candidate = decode_extractive_candidate(
                 raw,
                 document_text=document_text,
                 subnarrative_text=subnarrative_text,
+                source_cache=source_cache,
             )
             if required_candidate_keys is None or key in required_candidate_keys:
                 result[key] = candidate
