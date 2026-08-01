@@ -44,18 +44,15 @@ _RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
 class ResearchBudgetConfig:
     """Budget limits, including model limits enforced by later middleware."""
 
-    # These four are coupled. A round closes once no researcher is active, so
-    # max_concurrent decides how many researchers a round can hold. At one
-    # researcher per round, a round and a researcher are the same unit: rounds
-    # must match invocations or the run ends early with researchers unspent,
-    # and no_progress_rounds must rise because one dud round is now one dud
-    # researcher rather than three.
+    # These are coupled. A round closes once no researcher is active, so
+    # max_concurrent decides how many researchers one round can hold, and
+    # max_rounds must cover ceil(max_researcher_invocations / max_concurrent)
+    # or the run ends with researchers unspent.
     max_researcher_invocations: int = 10
-    max_rounds: int = 10
-    # One researcher at a time. Overlapping researchers concentrate hosted
-    # search requests, and every observed run wasted coordinator turns on
-    # dispatches refused for exceeding this limit.
-    max_concurrent: int = 1
+    max_rounds: int = 4
+    # Concurrency is per topic, not across topics. Hosted-search throttling has
+    # come from running whole topics back to back, which this does not govern.
+    max_concurrent: int = 3
     max_retrieval_calls: int = 100
     max_tools_per_researcher: int = 20
     max_searches_per_researcher: int = 8
@@ -64,11 +61,11 @@ class ResearchBudgetConfig:
     # The coordinator spends roughly three turns per round (dispatch, merge,
     # close) plus decomposition and recovery, so this must clear max_rounds
     # with margin or a productive run is cut off mid-round.
-    max_main_models: int = 55
+    max_main_models: int = 40
     soft_seconds: float = 600.0
     hard_seconds: float = 1800.0
     no_yield_calls: int = 3
-    no_progress_rounds: int = 3
+    no_progress_rounds: int = 2
 
     def __post_init__(self) -> None:
         positive_int_fields = (

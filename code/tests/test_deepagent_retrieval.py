@@ -593,12 +593,15 @@ def test_coordinator_prompt_tracks_a_changed_concurrency_limit() -> None:
     assert "Exactly one researcher" not in relaxed
 
 
-def test_default_budget_lets_every_researcher_have_a_round() -> None:
+def test_default_budget_can_spend_every_researcher() -> None:
     config = ResearchBudgetConfig()
 
-    assert config.max_concurrent == 1
-    assert config.max_rounds >= config.max_researcher_invocations, (
-        "a round holds one researcher, so fewer rounds than researchers strands them"
+    rounds_needed = -(
+        -config.max_researcher_invocations // config.max_concurrent
+    )
+
+    assert config.max_rounds >= rounds_needed, (
+        "a round holds max_concurrent researchers, so too few rounds strands them"
     )
     assert config.max_main_models >= 3 * config.max_rounds, (
         "each round costs the coordinator a dispatch, a merge, and a close"
