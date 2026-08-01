@@ -14,18 +14,22 @@ from trec_rag.facet_evidence import (
     SelectionCandidate,
     SelectionPolicy,
     SubnarrativeContext,
+    _byte_offsets,
+    _scoring_text_and_boundaries,
+    _word_before,
     extract_document_candidates,
     select_subnarrative_candidates,
 )
 from trec_rag.evidence_store import (
     CandidateArtifacts,
     generate_candidate_artifacts,
+    load_validated_candidate_artifacts,
     materialize_candidate_inputs,
     select_evidence_artifacts,
     write_candidate_jsonl,
 )
 from trec_rag.facet_extraction import FacetPlanningResult, plan_facet_queries
-from trec_rag.official_run import ValidatedDecomposition
+from trec_rag.competition_retrieval import ValidatedDecomposition
 from trec_rag.pipeline_models import QueryVariant
 from trec_rag.topics import Topic
 
@@ -94,6 +98,62 @@ def _request() -> ExtractiveCandidateRequest:
             ),
         ),
     )
+
+
+def test_word_before_scans_backward_without_copying_the_paragraph_prefix() -> None:
+    """Regress the quadratic prefix copy in sentence-boundary validation."""
+
+    class NoSliceText(str):
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                raise AssertionError("sentence splitting must not copy a text prefix")
+            return super().__getitem__(key)
+
+    text = NoSliceText("A long paragraph ends with e.g.")
+
+    assert _word_before(text, len(text) - 1) == "e.g"
+
+
+def test_source_coordinate_cache_reuses_document_offsets() -> None:
+    class CountedText(str):
+        iterations = 0
+
+        def __iter__(self):
+            type(self).iterations += 1
+            if type(self).iterations > 1:
+                raise AssertionError("document coordinates must be reused")
+            return super().__iter__()
+
+    source = CountedText("Repeated source text.")
+
+    assert _byte_offsets(source) == _byte_offsets(source)
+
+
+def test_bounded_document_projection_cache_retains_only_current_document() -> None:
+    """Document projection caches release superseded document text."""
+    _scoring_text_and_boundaries.cache_clear()
+    _byte_offsets.cache_clear()
+    try:
+        sources = (
+            "First\t document.",
+            "Second\n document.",
+            "Café  Ωmega.",
+        )
+
+        for source in sources:
+            _scoring_text_and_boundaries(source)
+            _byte_offsets(source)
+
+        assert _scoring_text_and_boundaries.cache_info().currsize == 1
+        assert _byte_offsets.cache_info().currsize == 1
+        assert _scoring_text_and_boundaries("Café  Ωmega.") == (
+            "Café Ωmega.",
+            (0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12),
+        )
+        assert _byte_offsets("Café  Ωmega.") == (0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14)
+    finally:
+        _scoring_text_and_boundaries.cache_clear()
+        _byte_offsets.cache_clear()
 
 
 def test_exact_extraction_keeps_character_byte_and_adjacent_evidence() -> None:
@@ -509,3 +569,86 @@ def test_original_only_pipeline_is_empty_and_never_constructs_local_models(
     assert candidate_manifest["hosted_llm_calls"] == 0
     assert selection_manifest["retrieval_network_calls"] == 0
     assert selection_manifest["hosted_llm_calls"] == 0
+
+
+def test_candidate_validation_streams_when_only_selected_candidates_are_required(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic, fallback=True)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=True)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+    )
+    artifacts = generate_candidate_artifacts(
+        handoff, score_cache_root=tmp_path / "score-cache", device="cpu"
+    )
+    original_read_bytes = Path.read_bytes
+
+    def reject_candidate_buffering(path: Path) -> bytes:
+        if path == artifacts.candidates_path:
+            raise AssertionError("candidate validation must stream the JSONL ledger")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_candidate_buffering)
+
+    assert load_validated_candidate_artifacts(
+        artifacts.candidates_path,
+        artifacts.manifest_path,
+        documents={},
+        subnarratives={},
+        required_candidate_keys=frozenset(),
+    ) == {}
+
+
+def test_candidate_validation_rejects_semantic_tamper_in_an_unselected_row(
+    tmp_path: Path,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=False)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+    )
+    artifacts = generate_candidate_artifacts(
+        handoff,
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        scorer=_FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+    )
+    rows = artifacts.candidates_path.read_bytes().splitlines()
+    tampered = json.loads(rows[0])
+    tampered["document_sha256"] = "0" * 64
+    rows[0] = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
+    candidate_bytes = b"\n".join(rows) + b"\n"
+    artifacts.candidates_path.write_bytes(candidate_bytes)
+    manifest = json.loads(artifacts.manifest_path.read_bytes())
+    manifest["candidates_sha256"] = _digest(candidate_bytes)
+    manifest["output_sha256"] = _digest(candidate_bytes)
+    artifacts.manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    request = json.loads(handoff.requests_path.read_bytes().splitlines()[0])
+
+    with pytest.raises(ValueError, match="document_sha256"):
+        load_validated_candidate_artifacts(
+            artifacts.candidates_path,
+            artifacts.manifest_path,
+            documents={request["document_id"]: request["source"]},
+            subnarratives={
+                row["subnarrative_id"]: row["text"]
+                for row in request["subnarratives"]
+            },
+            required_candidate_keys=frozenset(),
+        )

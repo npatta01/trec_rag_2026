@@ -2,14 +2,153 @@
 
 Reusable Python helpers for repository notebooks and experiments.
 
-## Experimental facet official run
+## Reusable tracing modules
 
-`trec_rag.official_run` is the only supported interface for the
+`trec_rag.tracing` contains the reusable trace model and Phoenix-export
+boundaries:
+
+- `trec_rag.tracing.models` defines the immutable `SpanSpec` and `TraceBundle`
+  records.
+- `trec_rag.tracing.openai_semantics` converts `SpanSpec` payloads into
+  normalized messages, captured generic tool schemas, OpenAI request/response
+  envelopes, and OpenInference LLM attributes.
+- `trec_rag.tracing.phoenix_export` exports a saved `TraceBundle`; normalized
+  envelopes populate generic input/output fields while complete strict JSON is
+  retained under `pi.native.input_json` and `pi.native.output_json`.
+  These attributes use canonical JSON encoding and preserve every parsed value,
+  including exact string contents. Native JSONL remains authoritative for
+  source bytes such as whitespace and object-key order.
+
+## Temporary organizer Pi reproduction harness
+
+`trec_rag.experiments.organizer_pi` is a temporary experimental reproduction
+harness, not a main production path. Its `inputs` module prepares byte-faithful
+single-topic inputs, `event_trace` owns `piika_tool_schemas()` and constructs
+durable trace bundles from native organizer artifacts, and `cli` builds and
+exports those bundles. A partial
+fixed-run failure record retains the selected `query_id`; native failures and
+validation become error-status spans. Native Pi JSONL events are authoritative;
+the bundle and Phoenix view are derived records. Keep native events, normalized
+output records, bundles, and receipts together so the derived trace can always
+be checked against its source.
+
+The adapter emits only captured messages and known invocation parameters. In
+particular, it does not fabricate the Pi system prompt when that prompt was not
+captured. Validate semantic, export, and event-normalization behavior together:
+
+For fixed traces with captured native thinking, the trace exposes one `CHAIN`
+child per native block while retaining one LLM/cost span. Child timing is a
+reconstructed equal partition of the generation interval; the extracted
+reasoning is omitted from the LLM presentation to avoid duplication, while the
+complete native response value remains canonically encoded under
+`pi.native.output_json`.
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/tracing/test_openai_semantics.py \
+  code/tests/tracing/test_phoenix_export.py \
+  code/tests/experiments/organizer_pi/test_event_trace.py \
+  code/tests/experiments/organizer_pi/test_cli.py -q
+```
+
+Choose ignored local paths first. The CLI rejects bundle and receipt paths that
+Git would track:
+
+```bash
+TRACE_ROOT=outputs/organizer-pi-phoenix/rag2026-1
+git check-ignore "$TRACE_ROOT/probe"
+```
+
+Build the Piika agentic bundle from its one-topic TSV, native events, and
+normalized per-query run artifact:
+
+```bash
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
+  --baseline piika-agentic \
+  --topic rag2026-1 \
+  --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
+  --events "$TRACE_ROOT/piika/merged/raw-events/rag2026-1.jsonl" \
+  --record "$TRACE_ROOT/piika/merged/rag2026-1.json" \
+  --session rag2026-1-comparison \
+  --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json"
+```
+
+Build the fixed-retrieval bundle from the same topic plus the filtered 100-row
+run, published document ZIP, and unmodified organizer script:
+
+```bash
+DOCUMENT_ZIP="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/retrieval/bm25_climbmix_top1000_with_text.jsonl.zip"
+ORGANIZER_SCRIPT="$TRACE_ROOT/sources/trec-rag-data/trec-rag-2026/baselines/rag/code/ragnarok_style_ag.py"
+ORGANIZER_SCRIPT_SHA256="<pinned lowercase SHA-256 from source provenance>"
+
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli build \
+  --baseline ragnarok-fixed \
+  --topic rag2026-1 \
+  --topic-tsv "$TRACE_ROOT/inputs/rag2026-1.tsv" \
+  --events "$TRACE_ROOT/fixed/raw/rag2026-1.events.jsonl" \
+  --record "$TRACE_ROOT/fixed/rows/rag2026-1.json" \
+  --ranked-run "$TRACE_ROOT/inputs/rag2026-1.top100.trec" \
+  --documents "$DOCUMENT_ZIP" \
+  --organizer-script "$ORGANIZER_SCRIPT" \
+  --organizer-script-sha256 "$ORGANIZER_SCRIPT_SHA256" \
+  --session rag2026-1-comparison \
+  --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json"
+```
+
+The fixed builder streams the ZIP, retains only the selected 100 document IDs,
+and independently applies the organizer's 1,000-word cap to each document. It
+imports `SYSTEM_PROMPT` and `prompt()` from the supplied organizer script only
+after it matches the separately pinned SHA-256. Completed runs require a
+matching native Pi user message. An explicit failed run with a native failure
+event can still produce a partial error-status bundle when failure occurred
+before prompt emission; that bundle omits evidence and prompt spans that were
+not actually reached.
+
+The captured comparison used only `rag2026-1`. The reusable converter accepts
+another topic ID only when all supplied single-topic artifacts agree on that
+same ID; this does not broaden the original hosted experiment.
+
+Export is a separate command and requires the optional `observability`
+dependency group (`uv sync --group observability`). Put these values in the
+repository's ignored `.env` or `.env.local`; never put an API key on the command
+line:
+
+```text
+PHOENIX_API_KEY=<secret>
+PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com/s/<space>
+PHOENIX_PROJECT_NAME=trec-rag-2026-pi-baselines
+```
+
+Then export each saved bundle:
+
+```bash
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli export \
+  --bundle "$TRACE_ROOT/piika/rag2026-1.trace.json" \
+  --receipt "$TRACE_ROOT/piika/phoenix-receipt.json"
+
+.venv/bin/python -m trec_rag.experiments.organizer_pi.cli export \
+  --bundle "$TRACE_ROOT/fixed/rag2026-1.trace.json" \
+  --receipt "$TRACE_ROOT/fixed/phoenix-receipt.json"
+```
+
+The Phoenix project is `trec-rag-2026-pi-baselines`. Export sends the complete
+narrative, prompts, search/tool inputs and outputs, selected document text,
+assistant messages, and validation record to the configured hosted collector.
+This full-content transmission is intentional and must use only data authorized
+for that Phoenix project. The CLI scans configured credential values before
+export and writes the public project name, trace ID, root span ID, and span count
+to the receipt only after every span export and the provider flush succeed. A
+failed export leaves the durable bundle intact and does not create a new
+receipt.
+
+## Experimental competition retrieval run
+
+`trec_rag.competition_retrieval` is the only supported interface for the
 organizer-compatible facet experiment. Run it with the strict checked-in
 configuration:
 
 ```bash
-.venv/bin/python -m trec_rag.official_run configs/facet_pilot_v1.yaml
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
 ```
 
 The command runs all official topics by default. Repeat `--topic ID` for an
@@ -84,6 +223,150 @@ that generated decompositions improve retrieval or that canonical claims are
 entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
+
+## Competition fixed-retrieval RAG inputs
+
+`trec_rag.competition_rag` strictly loads the organizer-facing inputs for fixed
+retrieval answer generation. Its checked-in configuration is
+`configs/rag26_competition_rag_gpt_sol_v1.yaml`. By default it selects all 119
+canonical topics and joins these three files:
+
+- the headerless `narrative_id<TAB>narrative` organizer topic TSV;
+- `outputs/facet-deepseek-b40-v1/r_output_trec_rag_2026.tsv`, a six-field TREC
+  run; and
+- `outputs/facet-deepseek-b40-v1/retrieval_with_text.jsonl.zip`, whose required
+  core is `query.qid`, `candidates[].docid`, and `candidates[].doc`.
+
+The ZIP is a generation sidecar, not a TREC submission. Retrieval submits only
+`r_output_trec_rag_2026.tsv`; generation submits only its final JSONL. The
+deterministic generation destination is
+`outputs/rag26_competition_rag_gpt_sol_v1/rag_output_trec_rag_2026.jsonl`.
+
+Set up the environment once, then run the two paths independently with their
+canonical configurations. Generation consumes the three files above after
+retrieval has published its TSV and ZIP; it never reads retrieval manifests or
+per-topic checkpoints.
+
+```bash
+code/tools/setup_env.sh
+
+# Publish the full retrieval TSV and full-text ZIP.
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+
+# Generate the full organizer JSONL from those files.
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+```
+
+For a two-topic smoke run, keep the checked-in configurations and their full
+exports unchanged. Repository-relative paths are resolved from the checkout
+containing the config, so put local variants under the ignored
+`configs/local/` directory, not `/tmp`:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_retrieval_v1.yaml configs/local/rag26_competition_retrieval_two_topic_smoke.yaml
+cp configs/rag26_competition_rag_gpt_sol_v1.yaml configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+```
+
+In `configs/local/rag26_competition_retrieval_two_topic_smoke.yaml`, replace
+the complete `experiment` block with this distinct retrieval namespace; leave
+all other blocks identical to the checked-in retrieval config:
+
+```yaml
+experiment:
+  id: facet-deepseek-b40-v1-two-topic-smoke
+```
+
+In `configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml`, replace
+the complete `experiment` and `inputs` blocks with the following. The generation
+output and both retrieval inputs now point to smoke-only directories, while
+`inputs.topic_ids` restores the requested IDs to canonical TSV order:
+
+```yaml
+experiment:
+  id: rag26-competition-rag-gpt-sol-two-topic-smoke
+  output_dir: outputs/rag26-competition-rag-gpt-sol-two-topic-smoke
+  mode: create
+
+inputs:
+  queries: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+  run: outputs/facet-deepseek-b40-v1-two-topic-smoke/r_output_trec_rag_2026.tsv
+  documents: outputs/facet-deepseek-b40-v1-two-topic-smoke/retrieval_with_text.jsonl.zip
+  archive_member: null
+  topic_ids: [rag2026-0, rag2026-1]
+```
+
+Run the two paths with those local configs. The repeated retrieval selectors
+bound the expensive retrieval work; the generation config independently bounds
+the downstream join:
+
+```bash
+uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/local/rag26_competition_retrieval_two_topic_smoke.yaml --topic rag2026-0 --topic rag2026-1
+uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+```
+
+These commands publish only under
+`outputs/facet-deepseek-b40-v1-two-topic-smoke/` and
+`outputs/rag26-competition-rag-gpt-sol-two-topic-smoke/`; they never replace
+the full canonical exports.
+
+`experiment.mode: create` refuses an existing generation output or work tree.
+For an interrupted generation, switch the local config to `resume`; valid
+per-topic rows are reused and missing rows are generated. To replace a
+generation result, use `overwrite`: it removes only that generation JSONL and
+its dedicated `work/` directory before starting again, never the retrieval TSV
+or ZIP inputs.
+
+Raw provider responses are retained only when safely available: parsed JSON is
+stored as a recursively sanitized structured envelope with no duplicate raw
+body. Opaque non-JSON bodies are never persisted, for any HTTP status including
+a 2xx semantic failure; their artifacts contain only the status when available,
+an omission marker, UTF-8 byte length, and SHA-256. Run the module's targeted
+contract suite with the repository environment already set up:
+
+```bash
+uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q
+```
+
+## Private post-run competition debug report
+
+`trec_rag.competition_debug_report` explains an already completed competition
+run from its standard retrieval config and, optionally, its matching standard
+RAG config. A retrieval-only report uses:
+
+```bash
+uv run --no-sync .venv/bin/python \
+  -m trec_rag.competition_debug_report \
+  --retrieval-config configs/rag26_competition_retrieval_v1.yaml
+```
+
+Include validated final answers by supplying the RAG config rather than a raw
+output path:
+
+```bash
+uv run --no-sync .venv/bin/python \
+  -m trec_rag.competition_debug_report \
+  --retrieval-config configs/rag26_competition_retrieval_v1.yaml \
+  --rag-config configs/rag26_competition_rag_gpt_sol_v1.yaml
+```
+
+Repeat `--topic ID` to select exported topics in official order. Use `--output
+PATH` only for an existing parent directory inside this repository. Otherwise,
+the report is atomically written to
+`<retrieval-output>/competition_debug_report.html`. Output overrides must end
+in `.html`; symbolic links and existing files not generated by this report
+command are rejected so organizer, checkpoint, and publication artifacts stay
+read-only.
+
+This command is a read-only, post-run validator and renderer: it makes no
+retrieval, API, network, or model calls and does not scan the large candidate
+ledgers. It reads only bounded sealed artifacts, validates every RAG output
+record with the production submission validator, and emits exactly one compact
+JSON receipt on stdout after successful replacement.
+
+**Keep the HTML private.** It contains raw corpus text, generated claims,
+answers, and document identifiers. It is not a sanitized publication artifact
+and must not be uploaded or shared without an explicit privacy review.
 
 ## Remote Pyserini Helpers
 

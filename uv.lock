@@ -2074,6 +2074,7 @@ dependencies = [
     { name = "langchain-openrouter" },
     { name = "nuggetizer" },
     { name = "openinference-instrumentation-langchain" },
+    { name = "openinference-semantic-conventions" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "requests-ratelimiter" },
@@ -2084,6 +2085,10 @@ dependencies = [
 dev = [
     { name = "arize-phoenix-client" },
     { name = "pytest" },
+]
+observability = [
+    { name = "arize-phoenix-client" },
+    { name = "arize-phoenix-otel" },
 ]
 rocm = [
     { name = "numpy", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -2101,6 +2106,7 @@ requires-dist = [
     { name = "langchain-openrouter", specifier = "==0.2.7" },
     { name = "nuggetizer", specifier = "==0.0.5" },
     { name = "openinference-instrumentation-langchain", specifier = "==0.1.67" },
+    { name = "openinference-semantic-conventions", specifier = "==0.1.30" },
     { name = "pyyaml" },
     { name = "requests", specifier = "==2.32.5" },
     { name = "requests-ratelimiter", specifier = "==0.7.0" },
@@ -2111,6 +2117,10 @@ requires-dist = [
 dev = [
     { name = "arize-phoenix-client", specifier = "==2.13.0" },
     { name = "pytest" },
+]
+observability = [
+    { name = "arize-phoenix-client" },
+    { name = "arize-phoenix-otel", specifier = ">=0.16.0" },
 ]
 rocm = [
     { name = "numpy", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'" },

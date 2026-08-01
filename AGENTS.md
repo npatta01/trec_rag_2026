@@ -57,6 +57,67 @@ coding agent working in this repository.
   `./cache/retrieval/...` and `./cache/reranker/...`.
 - Keep `.venv/` and generated activation helpers out of git.
 
+## Competition Retrieval and RAG Runs
+
+- Treat `trec-rag-skills/skills/trec-rag-2026-track-guidelines/SKILL.md`
+  as the canonical task and submission contract. Read its retrieval or RAG
+  reference before changing a runner, config, validator, or organizer-facing
+  output. Use
+  `trec-rag-skills/skills/pyserini-rest-api/SKILL.md` for API mechanics and
+  token-safety rules.
+- The supported competition workflow has two ordered commands. Retrieval must
+  finish first because RAG consumes its run TSV and full-text ZIP:
+
+  ```bash
+  .venv/bin/python-rocm -m trec_rag.competition_retrieval \
+    configs/rag26_competition_retrieval_v1.yaml
+
+  .venv/bin/python -m trec_rag.competition_rag \
+    --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+  ```
+
+- The checked-in configs are the canonical full-run configs and select all 119
+  test narratives by default. Do not use them for an exploratory one-, two-, or
+  three-topic run. Follow the two-topic smoke instructions in
+  `code/trec_rag/README.md`: copy both configs into ignored `configs/local/`,
+  assign unique experiment IDs/output directories, point the RAG inputs at the
+  smoke retrieval outputs, and set the RAG `inputs.topic_ids` to the same IDs.
+  Bound retrieval with one repeated selector per narrative:
+
+  ```bash
+  .venv/bin/python-rocm -m trec_rag.competition_retrieval \
+    configs/local/<retrieval-smoke-config>.yaml \
+    --topic rag2026-0 --topic rag2026-1
+
+  .venv/bin/python -m trec_rag.competition_rag \
+    --config configs/local/<rag-smoke-config>.yaml
+  ```
+
+- Before a live run, confirm submodules are at the commits recorded by the
+  superproject, the tracked worktree is clean, the selected narrative IDs and
+  output namespace are correct, and the required secrets are present without
+  printing them. Retrieval needs `INDEX_URL`, `PYSERINI_API_TOKEN`, and
+  `OPENROUTER_API_KEY`; fixed-retrieval generation needs
+  `OPENROUTER_API_KEY`. Load them from ignored `.env`/`.env.local` files.
+- Report the selected topic count, expected cache reuse or misses, hosted/model
+  calls, and output directories before starting a cache-miss or full live run.
+  Full retrieval performs remote planning, Pyserini retrieval, local GPU
+  reranking, and hosted canonicalization; full RAG makes hosted generation
+  calls. Do not start either full run without explicit user authorization.
+- Retrieval resumes only checkpoints whose schemas, source bytes, identities,
+  and hash chain validate. RAG `experiment.mode: create` refuses existing
+  generation state; use `resume` after interruption. Use `overwrite` only with
+  explicit user authorization because it deletes that RAG config's generation
+  JSONL and dedicated `work/` directory.
+- Verify retrieval by reading its manifest-last receipt and confirming
+  `r_output_trec_rag_2026.tsv` plus `retrieval_with_text.jsonl.zip`. Verify RAG
+  by validating `rag_output_trec_rag_2026.jsonl` against the official topic IDs,
+  narratives, document IDs, word limit, and citation rules.
+- Keep `outputs/`, caches, raw corpus text, generated claims, provider responses,
+  and debug reports private. Do not commit, publish, serve, or copy them into a
+  rendered-artifact directory without explicit authorization and a privacy
+  review.
+
 ## Verification
 
 - Run targeted tests after changes.
