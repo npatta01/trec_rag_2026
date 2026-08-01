@@ -222,6 +222,43 @@ def test_unknown_handle_rejects_only_its_nugget() -> None:
     assert tuple(nugget.nugget_id for nugget in state.report().nuggets) == ("g1",)
 
 
+def test_frontier_counts_grounded_nuggets_per_need() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+
+    empty = json.loads(state.view("frontier"))["needs"]
+    assert [item["grounded_nugget_count"] for item in empty] == [0]
+
+    state.apply_delta(_grounded_nugget_delta())
+
+    covered = json.loads(state.view("frontier"))["needs"]
+    assert [item["grounded_nugget_count"] for item in covered] == [1]
+
+
+def test_frontier_count_ignores_a_status_the_agent_got_wrong() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta())
+    state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "unaddressed",
+                    "remaining_gap": "claimed empty despite grounded evidence",
+                }
+            ]
+        }
+    )
+
+    need = json.loads(state.view("frontier"))["needs"][0]
+
+    assert need["status"] == "unaddressed"
+    assert need["grounded_nugget_count"] == 1, (
+        "the count comes from the ledger, not from the status an agent set"
+    )
+
+
 def test_citations_resolve_to_stored_sentences() -> None:
     state = _state_with_sentences()
     _add_need_and_facet(state)

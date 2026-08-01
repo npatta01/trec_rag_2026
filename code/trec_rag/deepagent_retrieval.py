@@ -79,9 +79,14 @@ researcher for that same round. If it returns ROUND_SEQUENCE_INVALID, retry once
 with round_index equal to budget_snapshot.completed_rounds + 1.
 Closing a round is not the end of the run. While needs remain unresolved and no
 budget response says must_stop, open the next round with round_index incremented
-by one and delegate a new task batch aimed at those specific gaps. Give an empty
-bundle's need a materially different angle rather than repeating the goal that
-already returned nothing.
+by one and delegate a new task batch aimed at those specific gaps.
+Spend researchers by priority. Every need whose grounded_nugget_count is 0 comes
+first: never deepen a need that already has evidence while another has none, and
+never send two researchers at the same need in one batch while an empty need is
+waiting. Once every need has some grounded evidence, keep going on the needs
+still marked partial, targeting each one's recorded remaining_gap; partial means
+unfinished, not done. Give an empty bundle's need a materially different angle
+rather than repeating the goal that already returned nothing.
 Set task.description to a JSON-encoded object with exactly this shape:
 {"research_task_id":"R1-N1","round_index":1,"depth":"focused","motivating_ids":["N1"],"goal":"Find grounded evidence for N1","known_evidence":"","remaining_gap":"No grounded evidence yet"}.
 The JSON object must come first. Optional research instructions may follow it

@@ -940,7 +940,15 @@ class EvidenceCoverageState:
             if scope == "frontier":
                 payload = {
                     "needs": [
-                        {"need_id": item.need_id, "status": item.status, "remaining_gap": item.remaining_gap}
+                        {
+                            "need_id": item.need_id,
+                            "status": item.status,
+                            "remaining_gap": item.remaining_gap,
+                            # Counted from the ledger, not from the status an
+                            # agent set, so an uncovered need is visible even
+                            # when its status is stale or wrong.
+                            "grounded_nugget_count": len(item.nugget_ids),
+                        }
                         for item in self._needs.values()
                         if item.status in {"unaddressed", "partial", "conflicted"}
                     ],
