@@ -59,8 +59,11 @@ class ResearchBudgetConfig:
     # close) plus decomposition and recovery, so this must clear one round
     # per researcher with margin or a productive run is cut off mid-round.
     max_main_models: int = 40
-    soft_seconds: float = 600.0
-    hard_seconds: float = 1800.0
+    # Pacing hosted search every six seconds puts a full run near eleven
+    # minutes before any thinking, so the old ten-minute soft deadline fired
+    # on healthy runs. These bound a runaway, not a normal one.
+    soft_seconds: float = 1800.0
+    hard_seconds: float = 3600.0
     no_yield_calls: int = 3
     no_progress_rounds: int = 2
 

@@ -308,7 +308,10 @@ def test_per_task_tool_cap_refuses_first_call_after_limit(
 
 def test_soft_deadline_refuses_new_survey_but_allows_focused_and_deep_work() -> None:
     clock = FakeClock()
-    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=3), clock=clock)
+    budget = ResearchBudget(
+        ResearchBudgetConfig(max_concurrent=3, soft_seconds=600, hard_seconds=1800),
+        clock=clock,
+    )
     clock.advance(600)
 
     survey = budget.reserve_task(ResearchTaskContext("T1", 1, "survey", ("N1",)))
@@ -328,7 +331,9 @@ def test_soft_deadline_refuses_new_survey_but_allows_focused_and_deep_work() -> 
 
 def test_survey_already_active_at_soft_deadline_can_finish_and_use_retrieval() -> None:
     clock = FakeClock()
-    budget = ResearchBudget(ResearchBudgetConfig(), clock=clock)
+    budget = ResearchBudget(
+        ResearchBudgetConfig(soft_seconds=600, hard_seconds=1800), clock=clock
+    )
     context = ResearchTaskContext("T1", 1, "survey", ("N1",))
     assert budget.reserve_task(context).ok
     clock.advance(600)
@@ -567,3 +572,12 @@ def test_round_authorization_refuses_an_out_of_order_round_index() -> None:
 def test_configuration_rejects_invalid_budget_values(config: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         ResearchBudgetConfig(**config)  # type: ignore[arg-type]
+
+
+def test_deadlines_clear_a_realistic_paced_run() -> None:
+    """A healthy run must not trip the soft deadline just from search pacing."""
+    config = ResearchBudgetConfig()
+
+    assert config.soft_seconds >= 1200.0
+    assert config.hard_seconds >= 2 * config.soft_seconds - 1
+    assert config.hard_seconds >= config.soft_seconds

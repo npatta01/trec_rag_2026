@@ -234,7 +234,7 @@ POC experiment; they are not environment variables.
 | Combined researcher search + snippet attempts | 100 |
 | Tool calls / searches / snippets per researcher | 20 / 8 / 16 |
 | Model calls, researcher / main coordinator | 30 / 40 |
-| Soft warning / hard admission deadline | 10 min / 30 min |
+| Soft warning / hard admission deadline | 30 min / 60 min |
 | Consecutive no-yield calls per researcher | 3 |
 | Consecutive no-progress rounds | 2 |
 
