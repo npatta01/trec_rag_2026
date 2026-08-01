@@ -21,9 +21,17 @@ deciding before implementation.
 
 ## Git state
 
-87 commits ahead of `master`, 123 behind, merge-base at PR #20. Master has since
-landed PRs 28/29/30. Nothing is merged, no PR is open. 74 commits were inherited
-from the Codex worktree; the rest are from this session.
+**Updated 2026-08-01 (later session): master is merged in.** The branch is now
+0 behind and 99 ahead. The reconcile was far cheaper than the numbers below
+suggested: of 38 files changed on this side and 64 on master, only
+`pyproject.toml` and `uv.lock` conflicted, and `code/trec_rag/README.md`
+auto-merged. Both openinference packages were kept, since
+`deepagent_tracing.py` imports both and a master test requires the
+semantic-conventions pin in `project.dependencies` specifically.
+
+Original state, for the record: 87 commits ahead of `master`, 123 behind,
+merge-base at PR #20. Master had landed PRs 28/29/30. 74 commits were inherited
+from the Codex worktree; the rest were from that session.
 
 Branch is pushed, so the work is no longer only on local disk.
 
@@ -190,25 +198,49 @@ python -m trec_rag.continuation --discard  # drop it, no hosted call
 PYTHONPATH=code .venv/bin/python -m pytest code/tests/ -q
 ```
 
-789 pass. **19 failures are pre-existing and environmental** — they live in
-`test_all_topic_tethered_rank.py` and `test_build_all_topic_tethered_report.py`
-and fail on a missing private `outputs/` directory. Confirm any new failure
-against that baseline before assuming you caused it; one full-suite run showed
-20 and it was a flake.
+**Updated 2026-08-01 (later session): the 19 failures are gone.** Master had
+already converted them to skips, so merging master fixed them. The baseline is
+now **1194 passed, 19 skipped, 0 failed**. Treat any failure as yours.
+
+Original note, for the record: 789 passed with 19 pre-existing environmental
+failures in `test_all_topic_tethered_rank.py` and
+`test_build_all_topic_tethered_report.py`, on a missing private `outputs/`
+directory.
 
 ## Next work
 
-1. **Implement the passage-first tool.** Spec is complete. Retrieve 1000,
-   cross-encoder score the pool, return a diversity-constrained passage set with
-   per-document caps enforced in code. Keep the document ledger internally.
-2. **Measure recall on agent-reformulated queries** at grade >= 3. The existing
-   curve is for the untouched narrative and is the optimistic end; the operator
-   has observed reformulated queries returning nothing relevant.
-3. **Make `answerable` reliable, or drop it.** The synthesis turn produced
-   answers in one run out of two. It forces which tool the coordinator calls but
-   not what it puts in the delta.
-4. **Decide the integration target.** 87 commits ahead, 123 behind, based on a
-   pre-PR-28 master. This grows more expensive the longer it waits.
+Items 1, 2 and 4 were done in a later session on 2026-08-01. Item 3 is open.
+
+1. ~~**Implement the passage-first tool.**~~ Done: `trec_rag.deepagent_passages`
+   plus `search_passages`, which is now the researcher's forced first action.
+   Diversity is enforced in code by a breadth phase and a per-document cap; the
+   document ledger, pagination and citation handles are unchanged. **Never run
+   live.** It passes unit and wiring tests only, and writing the wiring test
+   caught a bug that would have failed every live passage search, so assume
+   more of that class remains.
+2. ~~**Measure recall on agent-reformulated queries.**~~ Done, in
+   `reports/2026-08-01-reformulated-query-recall.md`. At depth 10, 65% of the
+   agent's own reformulations return no answering document, which confirms the
+   operator's observation. At depth 1000 that is 2%, so it is a depth problem,
+   not a query-quality problem. Pooled across 151 reformulations, recall of
+   answering documents reaches 0.952 at depth 1000 against 0.345 for the
+   untouched narrative: reformulations are worse per query and much better in
+   aggregate. The spec's worry was directionally wrong, and depth 1000 is
+   better supported than it argued. One topic; see the report's caveats.
+3. **Make `answerable` reliable, or drop it.** Still open. The synthesis turn
+   produced answers in one run out of two. It forces which tool the coordinator
+   calls but not what it puts in the delta.
+4. ~~**Decide the integration target.**~~ Done: master is merged in, 0 behind.
+
+### Corrections to the passage-first spec
+
+The spec's cost table came from a 300-document sample with median 7,336
+characters and assumed 4.33 chunks per document at 25ms each. A real depth-1000
+pool has median 22,776 characters and yields ~12.6 chunks per document, while
+this host scores at ~10ms per chunk. The two errors nearly cancel at depth
+1000 — measured 113s against the spec's estimated 108s — but the spec is
+increasingly optimistic in between, and "depth 50 is close to free" is wrong:
+it costs 6.1s, not the sub-6s that would hide inside the pacing window.
 
 ## What not to do
 
