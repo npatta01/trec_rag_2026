@@ -216,10 +216,10 @@ POC experiment; they are not environment variables.
 
 | Limit | Default |
 | --- | ---: |
-| Researcher invocations / research rounds / concurrent researchers | 10 / 4 / 3 |
+| Researcher invocations / concurrent researchers | 10 / 3 |
 | Combined researcher search + snippet attempts | 100 |
 | Tool calls / searches / snippets per researcher | 20 / 8 / 16 |
-| Model calls, researcher / main coordinator | 30 / 25 |
+| Model calls, researcher / main coordinator | 30 / 40 |
 | Soft warning / hard admission deadline | 10 min / 30 min |
 | Consecutive no-yield calls per researcher | 3 |
 | Consecutive no-progress rounds | 2 |
@@ -244,6 +244,11 @@ its researchers returned. Closing a round out of order is refused with
 `ROUND_SEQUENCE_INVALID` rather than raising. A researcher that has three
 successive retrieval calls with no novel evidence must return its bundle; two
 successive rounds with no accepted coverage progress stop further research.
+Rounds have no cap of their own: a round cannot close without a finished
+researcher, so researcher invocations already bound them and a separate limit
+could only strand researchers the run was allowed to spend. When research ends,
+the coordinator gets one final directed turn to record a synthesis: a draft
+answer and grounded nugget IDs for every need the evidence supports.
 
 `AgentRetrievalResult` contains the input `narrative`, completed `searches`
 (`AgentSearch` records), fused `candidates` (`RankedCandidate` records with

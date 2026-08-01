@@ -104,7 +104,6 @@ _BUDGET_CODES = frozenset(
         "SOFT_DEADLINE_REACHED",
         "HARD_DEADLINE_REACHED",
         "TASK_BUDGET_EXHAUSTED",
-        "ROUND_BUDGET_EXHAUSTED",
         "CONCURRENCY_BUDGET_EXHAUSTED",
         "RETRIEVAL_BUDGET_EXHAUSTED",
         "TASK_TOOL_BUDGET_EXHAUSTED",
@@ -117,7 +116,6 @@ _BUDGET_CODES = frozenset(
 )
 _RESEARCH_SNAPSHOT_COUNT_FIELDS = (
     "remaining_researchers",
-    "remaining_rounds",
     "remaining_retrieval_calls",
 )
 
@@ -402,8 +400,7 @@ class _AgentSpan(_SafeSpan):
         {
             "HARD_DEADLINE_REACHED",
             "TASK_BUDGET_EXHAUSTED",
-            "ROUND_BUDGET_EXHAUSTED",
-            "RETRIEVAL_BUDGET_EXHAUSTED",
+                "RETRIEVAL_BUDGET_EXHAUSTED",
             "MAIN_MODEL_BUDGET_EXHAUSTED",
             "NO_PROGRESS_STOP",
         }

@@ -196,7 +196,6 @@ def test_research_context_trace_uses_only_compact_task_and_budget_fields(
     tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
     snapshot = {
         "remaining_researchers": 9,
-        "remaining_rounds": 3,
         "remaining_retrieval_calls": 99,
         "active_researchers": 1,
         "completed_researchers": 0,
@@ -246,7 +245,6 @@ def test_researcher_dispatch_and_execution_are_visually_distinct(
     tracing = create_retrieval_tracing(environ={}, tracer_provider=provider)
     snapshot = {
         "remaining_researchers": 9,
-        "remaining_rounds": 4,
         "remaining_retrieval_calls": 100,
         "active_researchers": 1,
         "completed_researchers": 0,

@@ -53,7 +53,6 @@ def budget_payload() -> dict[str, object]:
     return BudgetSnapshot(
         elapsed_seconds=0.0,
         remaining_researchers=10,
-        remaining_rounds=4,
         remaining_retrieval_calls=100,
         active_researchers=0,
         completed_researchers=0,
@@ -312,8 +311,14 @@ def test_a_stopped_run_still_gets_to_merge_and_close_its_last_round() -> None:
     assert budget.authorize_round_completion(1).ok
     budget.complete_round(1, EvidenceCoverageState("Why?").report())
 
+    synthesis = observe_turn(middleware)
+    assert synthesis["tools"] == ["update_retrieval_state"], (
+        "an exhausted run writes up what it found before it ends"
+    )
+    assert "draft_answer" in str(synthesis["system"])
+
     wrap_up = observe_turn(middleware)
-    assert wrap_up["tools"] == [], "with nothing left to record, the run ends"
+    assert wrap_up["tools"] == [], "synthesis is granted once, then the run ends"
 
 
 def test_main_filter_stops_compelling_closure_on_the_final_turn() -> None:

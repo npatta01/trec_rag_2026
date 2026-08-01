@@ -145,19 +145,6 @@ def test_last_finished_researcher_persists_run_wide_exhaustion() -> None:
     assert budget.snapshot().stop_code == "TASK_BUDGET_EXHAUSTED"
 
 
-def test_last_round_is_admitted_and_the_next_is_refused() -> None:
-    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=1, max_rounds=4))
-    fourth = ResearchTaskContext("T4", 4, "deep", ("N1",))
-
-    assert budget.reserve_task(fourth).ok
-    budget.finish_task(fourth)
-    decision = budget.reserve_task(ResearchTaskContext("T5", 5, "deep", ("N1",)))
-
-    assert decision.code == "ROUND_BUDGET_EXHAUSTED"
-    assert decision.must_stop is True
-    assert decision.snapshot.stop_code == "ROUND_BUDGET_EXHAUSTED"
-
-
 def test_hundredth_retrieval_is_admitted_and_next_is_refused() -> None:
     budget = ResearchBudget(
         ResearchBudgetConfig(
@@ -196,15 +183,21 @@ def test_last_combined_retrieval_is_admitted_with_terminal_snapshot() -> None:
     assert decision.snapshot.stop_code == "RETRIEVAL_BUDGET_EXHAUSTED"
 
 
-def test_last_round_completion_persists_run_wide_exhaustion() -> None:
-    budget = ResearchBudget(ResearchBudgetConfig(max_rounds=1))
+def test_rounds_alone_never_stop_a_run() -> None:
+    """Rounds have no cap: only researchers running out ends the research."""
+    budget = ResearchBudget(ResearchBudgetConfig(max_researcher_invocations=6))
     report = EvidenceCoverageState("What changed?").report()
 
-    decision = budget.complete_round(1, report)
-
-    assert decision.code == "ROUND_BUDGET_EXHAUSTED"
-    assert decision.must_stop is True
-    assert decision.snapshot.stop_code == "ROUND_BUDGET_EXHAUSTED"
+    for index in range(1, 6):
+        context = ResearchTaskContext(f"T{index}", index, "focused", ("N1",))
+        assert budget.reserve_task(context).ok
+        budget.finish_task(context)
+        decision = budget.complete_round(index, report)
+        if decision.must_stop:
+            assert decision.code == "NO_PROGRESS_STOP"
+            break
+    else:
+        raise AssertionError("expected the no-progress guard, not a round cap")
 
 
 def test_empty_round_requires_a_finished_researcher_before_completion() -> None:
@@ -454,9 +447,9 @@ def test_traceable_budget_codes_match_the_budget_code_literal() -> None:
 
 
 def test_completed_rounds_never_exceed_completed_researchers() -> None:
-    """Rounds are bounded by researchers, which is why max_rounds cannot bind."""
+    """Rounds are bounded by researchers, so they need no cap of their own."""
     config = ResearchBudgetConfig(
-        max_researcher_invocations=3, max_rounds=3, no_progress_rounds=9
+        max_researcher_invocations=3, no_progress_rounds=9
     )
     budget = ResearchBudget(config)
     report = EvidenceCoverageState("What changed?").report()

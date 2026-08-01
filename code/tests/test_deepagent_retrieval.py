@@ -593,14 +593,11 @@ def test_coordinator_prompt_tracks_a_changed_concurrency_limit() -> None:
     assert "Exactly one researcher" not in relaxed
 
 
-def test_rounds_can_never_be_the_limit_that_stops_a_run() -> None:
+def test_no_round_cap_exists_to_strand_researchers() -> None:
     config = ResearchBudgetConfig()
 
-    # A round cannot close without a finished researcher, so rounds are already
-    # bounded by researchers. Anything lower only strands researchers, whatever
-    # the concurrency happens to be.
-    assert config.max_rounds >= config.max_researcher_invocations, (
-        "researcher invocations must run out before rounds do"
+    assert not hasattr(config, "max_rounds"), (
+        "rounds are bounded by researchers; a separate cap can only strand them"
     )
     assert config.max_main_models >= 3 * config.max_researcher_invocations, (
         "each round costs the coordinator a dispatch, a merge, and a close"

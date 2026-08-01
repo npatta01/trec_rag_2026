@@ -17,7 +17,6 @@ BudgetCode = Literal[
     "SOFT_DEADLINE_REACHED",
     "HARD_DEADLINE_REACHED",
     "TASK_BUDGET_EXHAUSTED",
-    "ROUND_BUDGET_EXHAUSTED",
     "CONCURRENCY_BUDGET_EXHAUSTED",
     "RETRIEVAL_BUDGET_EXHAUSTED",
     "TASK_TOOL_BUDGET_EXHAUSTED",
@@ -31,7 +30,6 @@ BudgetCode = Literal[
 _SEARCH_TOOL = "search_climbmix"
 _SNIPPET_TOOL = "extract_relevant_snippets"
 _RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
-    "ROUND_BUDGET_EXHAUSTED": 10,
     "TASK_BUDGET_EXHAUSTED": 20,
     "RETRIEVAL_BUDGET_EXHAUSTED": 30,
     "MAIN_MODEL_BUDGET_EXHAUSTED": 40,
@@ -44,13 +42,10 @@ _RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
 class ResearchBudgetConfig:
     """Budget limits, including model limits enforced by later middleware."""
 
-    # Researcher invocations are the real limit on how much research happens.
-    # A round cannot close without a finished researcher, so completed rounds
-    # can never exceed completed researchers: max_rounds set at or above
-    # max_researcher_invocations is an unreachable backstop, and set below it
-    # only strands researchers the run was allowed to spend. Keep them equal.
+    # Researcher invocations are the only limit on how much research happens.
+    # A round cannot close without a finished researcher, so rounds are already
+    # bounded by researchers and need no separate cap of their own.
     max_researcher_invocations: int = 10
-    max_rounds: int = 10
     # Concurrency is per topic, not across topics. Hosted-search throttling has
     # come from running whole topics back to back, which this does not govern.
     max_concurrent: int = 3
@@ -60,8 +55,8 @@ class ResearchBudgetConfig:
     max_snippets_per_researcher: int = 16
     max_models_per_researcher: int = 30
     # The coordinator spends roughly three turns per round (dispatch, merge,
-    # close) plus decomposition and recovery, so this must clear max_rounds
-    # with margin or a productive run is cut off mid-round.
+    # close) plus decomposition and recovery, so this must clear one round
+    # per researcher with margin or a productive run is cut off mid-round.
     max_main_models: int = 40
     soft_seconds: float = 600.0
     hard_seconds: float = 1800.0
@@ -71,7 +66,6 @@ class ResearchBudgetConfig:
     def __post_init__(self) -> None:
         positive_int_fields = (
             "max_researcher_invocations",
-            "max_rounds",
             "max_concurrent",
             "max_retrieval_calls",
             "max_tools_per_researcher",
@@ -111,7 +105,6 @@ class ResearchTaskContext:
 class BudgetSnapshot:
     elapsed_seconds: float
     remaining_researchers: int
-    remaining_rounds: int
     remaining_retrieval_calls: int
     active_researchers: int
     completed_researchers: int
@@ -186,8 +179,6 @@ class ResearchBudget:
                 return self._refusal("SOFT_DEADLINE_REACHED")
             if self._reserved_researchers >= self._config.max_researcher_invocations:
                 return self._refusal("TASK_BUDGET_EXHAUSTED", must_stop=True)
-            if context.round_index > self._config.max_rounds:
-                return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
             if len(self._active_tasks) >= self._config.max_concurrent:
                 return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
 
@@ -306,8 +297,6 @@ class ResearchBudget:
     def authorize_round_completion(self, round_index: int) -> BudgetDecision:
         """Require one finished researcher before a coordinator can close a round."""
         with self._lock:
-            if round_index > self._config.max_rounds:
-                return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
             existing_decision = self._round_decisions.get(round_index)
             if existing_decision is not None:
                 return self._admission()
@@ -343,8 +332,6 @@ class ResearchBudget:
             if self._active_tasks:
                 return None
             expected_round_index = len(self._round_decisions) + 1
-            if expected_round_index > self._config.max_rounds:
-                return None
             if expected_round_index not in self._completed_researcher_rounds:
                 return None
             return expected_round_index
@@ -354,8 +341,6 @@ class ResearchBudget:
     ) -> BudgetDecision:
         """Record semantic coverage progress and enforce the no-progress stop."""
         with self._lock:
-            if round_index > self._config.max_rounds:
-                return self._refusal("ROUND_BUDGET_EXHAUSTED", must_stop=True)
             existing_decision = self._round_decisions.get(round_index)
             if existing_decision is not None:
                 return existing_decision
@@ -374,8 +359,6 @@ class ResearchBudget:
                 self._no_progress_streak += 1
             if self._no_progress_streak >= self._config.no_progress_rounds:
                 decision = self._refusal("NO_PROGRESS_STOP", must_stop=True)
-            elif len(self._completed_round_indexes) >= self._config.max_rounds:
-                decision = self._terminal_admission("ROUND_BUDGET_EXHAUSTED")
             else:
                 decision = self._admission()
             self._round_decisions[round_index] = decision
@@ -457,9 +440,6 @@ class ResearchBudget:
             elapsed_seconds=elapsed_seconds,
             remaining_researchers=max(
                 0, self._config.max_researcher_invocations - self._reserved_researchers
-            ),
-            remaining_rounds=max(
-                0, self._config.max_rounds - len(self._completed_round_indexes)
             ),
             remaining_retrieval_calls=max(
                 0, self._config.max_retrieval_calls - self._reserved_retrieval_calls

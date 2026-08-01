@@ -79,7 +79,6 @@ class BudgetSnapshotModel(BaseModel):
 
     elapsed_seconds: float
     remaining_researchers: int
-    remaining_rounds: int
     remaining_retrieval_calls: int
     active_researchers: int
     completed_researchers: int
@@ -232,6 +231,7 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         self._budget_config = budget_config
         self._closure_lock = Lock()
         self._merge_turns_granted: set[int] = set()
+        self._synthesis_granted = False
 
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
         filtered = super()._filter_tools(request)
@@ -264,6 +264,22 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
                 return self._directed(filtered, *self._closure_directive(pending_round))
             if stop_code is None:
                 return filtered
+            if not self._synthesis_granted:
+                self._synthesis_granted = True
+                return self._directed(
+                    filtered,
+                    ["update_retrieval_state"],
+                    "update_retrieval_state",
+                    "Research is over; no further researchers can run. Write up "
+                    "what was actually found, in one update_retrieval_state "
+                    "delta. Give every need with grounded nuggets a "
+                    "set_need_status row carrying a draft_answer composed from "
+                    "those nuggets and draft_nugget_ids listing them: use "
+                    '"answerable" where the evidence answers the need and '
+                    '"partial" with an honest remaining_gap where it does not. '
+                    "Claim nothing the nuggets do not support. This is the last "
+                    "state you can record.",
+                )
         return self._directed(
             filtered,
             [],
