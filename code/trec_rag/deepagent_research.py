@@ -17,6 +17,7 @@ from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
 )
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
@@ -896,6 +897,20 @@ def build_research_subagent(
                 ),
                 ResearcherToolFilterMiddleware(budget),
             ],
-            "response_format": EvidenceBundle,
+            # A researcher whose searches misbehaved has returned an empty
+            # completion, which native structured output cannot parse and which
+            # kills the task. ToolStrategy feeds the parse failure back so the
+            # model can answer again, and says what an honest empty result looks
+            # like so "nothing to report" is expressible rather than silent.
+            "response_format": ToolStrategy(
+                EvidenceBundle,
+                handle_errors=(
+                    "Your EvidenceBundle did not parse. Return it again as valid "
+                    "JSON matching the schema. If you found nothing worth "
+                    "claiming, that is a valid answer: return candidate_nuggets "
+                    "as an empty list with your unresolved_gaps and a "
+                    "stopping_reason. Never return an empty response."
+                ),
+            ),
         },
     )

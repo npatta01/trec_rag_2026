@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import pytest
 from deepagents.middleware.subagents import TaskToolSchema
 from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
@@ -940,6 +941,13 @@ def test_researcher_spec_keeps_the_main_model_and_excludes_todos() -> None:
     )
 
     assert spec["model"] is model
-    assert spec["response_format"] is EvidenceBundle
+    response_format = spec["response_format"]
+    assert isinstance(response_format, ToolStrategy)
+    assert response_format.schema is EvidenceBundle
+    # An unparsable bundle is repaired by re-asking, not by killing the task.
+    assert "Never return an empty response" in str(response_format.handle_errors)
+    assert "candidate_nuggets" in str(response_format.handle_errors), (
+        "the retry must say what an honest empty result looks like"
+    )
     assert all(type(item).__name__ != "TodoListMiddleware" for item in spec["middleware"])
     assert "task" not in visible_tools(spec["middleware"][-1], ALL_TOOLS)
