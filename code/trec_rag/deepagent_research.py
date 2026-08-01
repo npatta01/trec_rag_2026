@@ -37,6 +37,11 @@ extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
 write state, or use filesystem mutation tools. Return a compact EvidenceBundle:
 each candidate claim must cite exact document, snippet, page, and quote
 coordinates; report conflicts and remaining gaps rather than inventing support.
+Copy each evidence snippet_id character for character from the snippet_id field
+of the extract_relevant_snippets response. It contains a colon, as in
+shard_00123_4567:0002. Never retype it from memory, never swap the colon for an
+underscore, and never tidy its punctuation. Copy each quote the same way,
+verbatim from that snippet's text, without joining passages or fixing wording.
 Your first action must be search_climbmix. From its returned documents, your
 next action must call extract_relevant_snippets on the most relevant document.
 Do not inspect state, read spill files, or return EvidenceBundle until you have

@@ -559,6 +559,37 @@ def test_invalid_motivation_is_rejected_before_retrieval() -> None:
     assert [query.query_text for query in fake_retriever.queries] == ["narrative"]
 
 
+def test_model_facing_snippets_use_the_key_evidence_must_cite() -> None:
+    rows = [
+        {
+            "chunk_id": "shard_00123_4567:0002",
+            "text": "passage text",
+            "start_char": 0,
+            "end_char": 12,
+            "relevance_score": 0.5,
+        }
+    ]
+
+    renamed = deepagent_retrieval._model_facing_snippets(rows)
+
+    assert renamed == [
+        {
+            "snippet_id": "shard_00123_4567:0002",
+            "text": "passage text",
+            "start_char": 0,
+            "end_char": 12,
+            "relevance_score": 0.5,
+        }
+    ]
+    assert "chunk_id" not in renamed[0], "a second name invites the model to retype it"
+    assert rows[0]["chunk_id"] == "shard_00123_4567:0002", "stored page is untouched"
+
+
+def test_model_facing_snippets_tolerate_unexpected_shapes() -> None:
+    assert deepagent_retrieval._model_facing_snippets(None) == []
+    assert deepagent_retrieval._model_facing_snippets(["not-a-mapping"]) == []
+
+
 def _seed_need(toolset: deepagent_retrieval.AgentToolset) -> None:
     toolset.update_retrieval_state(
         {

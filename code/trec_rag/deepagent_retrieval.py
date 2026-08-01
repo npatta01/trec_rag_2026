@@ -144,6 +144,27 @@ _EVIDENCE_REJECTION_CODES = frozenset(
 )
 
 
+def _model_facing_snippets(rows: object) -> list[dict[str, object]]:
+    """Expose each snippet under `snippet_id`, the exact key evidence must cite.
+
+    The stored page keeps `chunk_id` so cached responses stay readable; only the
+    model-facing copy is renamed, so no agent has to translate the field name
+    and retype its value.
+    """
+    if not isinstance(rows, list):
+        return []
+    renamed: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        entry: dict[str, object] = {
+            key: value for key, value in row.items() if key != "chunk_id"
+        }
+        entry["snippet_id"] = row.get("chunk_id")
+        renamed.append(entry)
+    return renamed
+
+
 def _rejection_summary(rejected: Sequence[DeltaRejection]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for rejection in rejected:
@@ -1217,6 +1238,7 @@ class DeepAgentRetriever:
             )
             snapshot = budget.snapshot()
             payload = result.page.as_dict()
+            payload["snippets"] = _model_facing_snippets(payload.get("snippets"))
             payload.update(
                 {
                     "ok": True,
