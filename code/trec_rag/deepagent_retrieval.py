@@ -41,10 +41,21 @@ from trec_rag.deepagent_research import (
     build_research_subagent,
     current_research_task,
 )
+from trec_rag.deepagent_passages import (
+    PassageSelectionConfig,
+    PooledDocument,
+    ScoredPassage,
+    group_by_document,
+    score_document_pool,
+    select_diverse_passages,
+    selection_summary,
+)
 from trec_rag.deepagent_snippets import (
     InvalidSnippetCursorError,
+    RelevantSnippet,
     RelevantSnippetExtractor,
     SnippetExtractionResult,
+    SnippetPage,
     create_default_snippet_extractor,
 )
 from trec_rag.deepagent_tracing import (
@@ -196,6 +207,30 @@ def _model_facing_snippets(
         }
         for handle in handles
     ]
+
+
+def _model_facing_passages(
+    handles: Sequence[SnippetHandle],
+    selected: Sequence[ScoredPassage],
+) -> list[dict[str, object]]:
+    """Show each passage as a citable handle plus the document it came from.
+
+    ``document_id`` is included so the agent can reason about breadth and can
+    deepen into a source it has already seen, but it is not a selection
+    surface: which passages appear was decided in code before this ran.
+    """
+    origin = {row.chunk_id: row.document_id for row in selected}
+    rows: list[dict[str, object]] = []
+    for handle, row in zip(_model_facing_snippets(handles), handles):
+        rows.append({**row_document(origin, row), **handle})
+    return rows
+
+
+def row_document(
+    origin: Mapping[str, str], handle: SnippetHandle
+) -> dict[str, object]:
+    document_id = origin.get(handle.chunk_id)
+    return {"document_id": document_id} if document_id else {}
 
 
 def _rejection_summary(rejected: Sequence[DeltaRejection]) -> dict[str, int]:
@@ -508,6 +543,7 @@ def _isolated_trace_span(
 @dataclass(frozen=True)
 class AgentToolset:
     search_climbmix: Callable[[str, list[str], str], str]
+    search_passages: Callable[[str, list[str], str], str]
     extract_relevant_snippets: Callable[
         [str, str, list[str], str, str | None], str
     ]
@@ -626,6 +662,7 @@ def _create_agent(
     researcher = build_research_subagent(
         model=provider_model,
         tools=[
+            toolset.search_passages,
             toolset.search_climbmix,
             toolset.extract_relevant_snippets,
             toolset.view_retrieval_state,
@@ -758,7 +795,9 @@ class DeepAgentRetriever:
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
         budget_config: ResearchBudgetConfig | None = None,
+        passage_config: PassageSelectionConfig | None = None,
     ) -> None:
+        self._passage_config = passage_config or PassageSelectionConfig()
         self._hits_per_search = _positive_int(hits_per_search, name="hits_per_search")
         self._max_followup_searches = _positive_int(
             max_followup_searches, name="max_followup_searches"
@@ -789,6 +828,7 @@ class DeepAgentRetriever:
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
         budget_config: ResearchBudgetConfig | None = None,
+        passage_config: PassageSelectionConfig | None = None,
     ) -> "DeepAgentRetriever":
         """Build the isolated SDK using the existing remote retriever and cache."""
         validated_hits = _positive_int(hits_per_search, name="hits_per_search")
@@ -802,11 +842,16 @@ class DeepAgentRetriever:
         load_repo_env(resolved_root)
         if not os.environ.get("OPENROUTER_API_KEY", "").strip():
             raise ValueError("OPENROUTER_API_KEY is required for Deep Agent retrieval")
+        resolved_passage_config = passage_config or PassageSelectionConfig()
+        # One request returns the whole pool: depth costs no extra rate-limit
+        # slot and no extra call, and recall of answering documents keeps
+        # climbing to 1000. `hits_per_search` still bounds how many documents
+        # the older document-selection tool shows the model.
         config = RetrieverConfig(
             name="deepagent_climbmix",
             type="pyserini_remote",
             query_variants=("original", "followup"),
-            hits=validated_hits,
+            hits=resolved_passage_config.pool_hits,
             index="climbmix-400b",
             cache=True,
         )
@@ -829,6 +874,7 @@ class DeepAgentRetriever:
             max_followup_searches=validated_followups,
             fused_result_limit=validated_fused_limit,
             budget_config=budget_config,
+            passage_config=resolved_passage_config,
         )
 
     def retrieve(self, narrative: str) -> AgentRetrievalResult:
@@ -845,8 +891,15 @@ class DeepAgentRetriever:
         document_lock = Lock()
 
         def register_documents(candidates: Sequence[RetrievedCandidate]) -> None:
+            # A depth-1000 pool is roughly 37MB of text per search. Only the
+            # documents shallow enough to be scored can ever be read from, so
+            # retaining the rest would cost gigabytes across a run to hold text
+            # nothing can reach.
+            retained = sorted(candidates, key=lambda item: item.rank)[
+                : self._passage_config.rerank_depth
+            ]
             with document_lock:
-                for candidate in candidates:
+                for candidate in retained:
                     if candidate.docid not in documents:
                         documents[candidate.docid] = candidate.text
                         continue
@@ -1086,6 +1139,196 @@ class DeepAgentRetriever:
                     },
                     sort_keys=True,
                 )
+
+        def search_passages(
+            query: str,
+            motivating_ids: list[str],
+            rationale: str,
+        ) -> str:
+            """Search ClimbMix and return the best passages across many documents."""
+            context = task_context()
+            if context is None:
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "code": "RESEARCH_TASK_REQUIRED",
+                        "must_stop": True,
+                        "budget_snapshot": budget.snapshot().as_dict(),
+                        "error": "research task context required",
+                    },
+                    sort_keys=True,
+                )
+            # A pooled scoring pass costs materially more than one snippet page,
+            # so it is charged as its own retrieval unit rather than reusing the
+            # per-snippet-call accounting.
+            decision = budget.reserve_retrieval(context, "search_passages")
+            if not decision.ok:
+                return json.dumps(
+                    budget_payload(decision, error="retrieval budget refused"),
+                    sort_keys=True,
+                )
+            with followup_lock:
+                if not isinstance(query, str) or not query.strip():
+                    record_no_yield(context)
+                    return json.dumps(
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="query must be non-empty text",
+                            code="INVALID_QUERY",
+                        ),
+                        sort_keys=True,
+                    )
+                action_error = coverage_state.record_retrieval_action(
+                    action="search",
+                    target=query,
+                    focus_query=None,
+                    motivating_ids=motivating_ids,
+                    rationale=rationale,
+                    context=context,
+                )
+                if action_error is not None:
+                    record_no_yield(context)
+                    return json.dumps(
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="retrieval action rejected",
+                            code=action_error,
+                        ),
+                        sort_keys=True,
+                    )
+                if any(search.query == query for search in searches):
+                    record_no_yield(context)
+                    return json.dumps(
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="duplicate follow-up query",
+                            code="DUPLICATE_QUERY",
+                        ),
+                        sort_keys=True,
+                    )
+                try:
+                    search = run_search(
+                        query,
+                        "followup",
+                        "followup-" + sha256(query.encode()).hexdigest()[:16],
+                        context=context,
+                        decision=decision,
+                    )
+                except RetrievalTransportError:
+                    budget.note_retrieval_unavailable()
+                    record_no_yield(context)
+                    return json.dumps(
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), True
+                            ),
+                            error="climbmix search transport failed",
+                            code="RETRIEVAL_UNAVAILABLE",
+                        ),
+                        sort_keys=True,
+                    )
+                searches.append(search)
+                try:
+                    with self._snippet_extractor_lock:
+                        if self._snippet_extractor is None:
+                            self._snippet_extractor = create_default_snippet_extractor(
+                                find_repo_root()
+                            )
+                        extractor = self._snippet_extractor
+                    scoring = score_document_pool(
+                        tuple(
+                            PooledDocument(
+                                document_id=candidate.docid,
+                                rank=candidate.rank,
+                                text=candidate.text,
+                            )
+                            for candidate in search.candidates
+                        ),
+                        query,
+                        chunker=extractor.chunker,
+                        ranker=extractor.ranker,
+                        config=self._passage_config,
+                    )
+                except Exception:
+                    # Classified, never the raw exception text: a scoring
+                    # failure must not be readable as "this query found
+                    # nothing", and raw text must not reach agent context.
+                    record_no_yield(context)
+                    return json.dumps(
+                        budget_payload(
+                            BudgetDecision(
+                                False, decision.code, budget.snapshot(), decision.must_stop
+                            ),
+                            error="passage scoring failed",
+                            code="PASSAGE_SCORING_FAILED",
+                        ),
+                        sort_keys=True,
+                    )
+                selected = select_diverse_passages(
+                    scoring.passages, self._passage_config
+                )
+                scored_by_document: dict[str, int] = {}
+                for row in scoring.passages:
+                    scored_by_document[row.document_id] = (
+                        scored_by_document.get(row.document_id, 0) + 1
+                    )
+                observed: list[SnippetHandle] = []
+                # One ledger page per contributing document, so pagination,
+                # exhaustion state and the single/multi document support label
+                # keep the meaning they had when the agent picked documents.
+                for document_id, rows in group_by_document(selected):
+                    page = SnippetPage(
+                        document_id=document_id,
+                        focus_query=query,
+                        snippets=tuple(
+                            RelevantSnippet(
+                                chunk_id=row.chunk_id,
+                                start_char=row.chunk.start_char,
+                                end_char=row.chunk.end_char,
+                                text=row.chunk.text,
+                                relevance_score=row.relevance_score,
+                            )
+                            for row in rows
+                        ),
+                        next_cursor=None,
+                        page_index=0,
+                        residual_count=max(
+                            0, scored_by_document.get(document_id, 0) - len(rows)
+                        ),
+                        residual_top_score=None,
+                        returned_min_score=min(
+                            (row.relevance_score for row in rows), default=None
+                        ),
+                        pages_estimated=1,
+                    )
+                    observed.extend(coverage_state.record_snippet_page(page))
+                budget.record_yield(context, (handle.chunk_id for handle in observed))
+                snapshot = budget.snapshot()
+                payload: dict[str, object] = {
+                    "ok": True,
+                    "code": decision.code,
+                    "must_stop": decision.must_stop or task_must_stop(snapshot),
+                    "budget_snapshot": snapshot.as_dict(),
+                    "focus_query": query,
+                    "passages": _model_facing_passages(observed, selected),
+                    "remaining_budget": snapshot.remaining_retrieval_calls,
+                }
+                payload.update(
+                    selection_summary(
+                        selected,
+                        scored_total=scoring.chunks_scored,
+                        documents_scored=scoring.documents_scored,
+                    )
+                )
+                payload["documents_retrieved"] = len(search.candidates)
+                payload["documents_not_scored"] = scoring.documents_skipped
+                return json.dumps(payload, sort_keys=True)
 
         def extract_relevant_snippets(
             document_id: str,
@@ -1392,6 +1635,7 @@ class DeepAgentRetriever:
                     self._model,
                     AgentToolset(
                         search_climbmix=search_climbmix,
+                        search_passages=search_passages,
                         extract_relevant_snippets=extract_relevant_snippets,
                         view_retrieval_state=view_retrieval_state,
                         update_retrieval_state=update_retrieval_state,

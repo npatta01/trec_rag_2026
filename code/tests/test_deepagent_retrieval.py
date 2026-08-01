@@ -29,6 +29,7 @@ from openinference.instrumentation.langchain import LangChainInstrumentor
 from pydantic import Field
 
 import trec_rag.deepagent_tracing as deepagent_tracing
+from trec_rag.deepagent_passages import PassageSelectionConfig
 from trec_rag.deepagent_budget import (
     ResearchBudget,
     ResearchBudgetConfig,
@@ -1744,6 +1745,9 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     def update_tool(_delta: dict[str, object]) -> str:
         return "{}"
 
+    def passages_tool(_query: str, _ids: list[str], _rationale: str) -> str:
+        return "{}"
+
     def complete_round_tool(_round_index: int) -> str:
         return "{}"
 
@@ -1760,6 +1764,7 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     budget = ResearchBudget(budget_config)
     toolset = deepagent_retrieval.AgentToolset(
         search_climbmix=search_tool,
+        search_passages=passages_tool,
         extract_relevant_snippets=snippet_tool,
         view_retrieval_state=view_tool,
         update_retrieval_state=update_tool,
@@ -1800,6 +1805,7 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     assert kwargs["subagents"][0]["name"] == "researcher"
     assert kwargs["subagents"][0]["model"] is kwargs["model"]
     assert kwargs["subagents"][0]["tools"] == [
+        passages_tool,
         search_tool,
         snippet_tool,
         view_tool,
@@ -1888,6 +1894,7 @@ def test_factory_rejects_invalid_openrouter_specs_before_agent_construction(
             model,
             deepagent_retrieval.AgentToolset(
                 search_climbmix=lambda _query, _ids, _rationale: "{}",
+                search_passages=lambda _query, _ids, _rationale: "{}",
                 extract_relevant_snippets=lambda _document_id,
                 _focus_query,
                 _ids,
@@ -2906,9 +2913,12 @@ def test_from_env_threads_nondefault_retrieval_bounds_into_remote_config(
         hits_per_search=7,
         max_followup_searches=2,
         fused_result_limit=5,
+        passage_config=PassageSelectionConfig(pool_hits=250, rerank_depth=25),
     )
 
-    assert created[0].config.hits == 7
+    # The remote request depth is the passage pool, not the number of documents
+    # the older document-selection tool shows the model.
+    assert created[0].config.hits == 250
     assert sdk._hits_per_search == 7
     assert sdk._max_followup_searches == 2
     assert sdk._fused_result_limit == 5
@@ -3214,7 +3224,7 @@ def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(
     assert created[0].config.name == "deepagent_climbmix"
     assert created[0].config.type == "pyserini_remote"
     assert created[0].config.query_variants == ("original", "followup")
-    assert created[0].config.hits == 10
+    assert created[0].config.hits == 1000
     assert created[0].config.index == "climbmix-400b"
     assert created[0].config.cache is True
     assert created[0].cache_dir == tmp_path / "cache" / "retrieval" / "pyserini_remote"

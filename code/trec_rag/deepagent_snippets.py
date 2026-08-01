@@ -943,6 +943,20 @@ class RelevantSnippetExtractor:
         self._ranker_identity = self._validated_ranker_identity(ranker.identity)
         self._chunker_identity = self._validated_chunker_identity(chunker)
 
+    @property
+    def ranker(self) -> SnippetRanker:
+        """The scorer, so a cross-document pass scores on the same scale."""
+        return self._ranker
+
+    @property
+    def chunker(self) -> TextChunker:
+        """The chunker, so cross-document chunk ids match the per-document ones.
+
+        Sharing this instance is what lets the global per-chunk score cache hit
+        across queries instead of scoring identical text twice.
+        """
+        return self._chunker
+
     @staticmethod
     def _validated_ranker_identity(value: Mapping[str, object]) -> dict[str, object]:
         identity = dict(value)
