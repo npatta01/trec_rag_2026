@@ -1,4 +1,70 @@
 {
+  "ab_answer_object_granularity": {
+    "arm_a": {
+      "nugget": {
+        "all_score": 0.748333,
+        "strict_all_score": 0.619231,
+        "strict_vital_score": 0.600529,
+        "vital_score": 0.731746
+      },
+      "objects": {
+        "213": 8,
+        "58": 9
+      },
+      "prompt_profile": "default",
+      "support": {
+        "hard_precision": 0.0,
+        "hard_recall": 0.0,
+        "weighted_precision_first_citation": 0.5,
+        "weighted_recall_first_citation": 0.5
+      },
+      "support_labels": {
+        "FS": 0,
+        "NS": 0,
+        "PS": 31
+      },
+      "words": {
+        "213": 696,
+        "58": 652
+      }
+    },
+    "arm_b": {
+      "nugget": {
+        "all_score": 0.745385,
+        "strict_all_score": 0.634872,
+        "strict_vital_score": 0.633333,
+        "vital_score": 0.73254
+      },
+      "objects": {
+        "213": 18,
+        "58": 23
+      },
+      "prompt_profile": "atomic_claims",
+      "support": {
+        "hard_precision": 0.4395,
+        "hard_recall": 0.4395,
+        "weighted_precision_first_citation": 0.709,
+        "weighted_recall_first_citation": 0.709
+      },
+      "support_labels": {
+        "FS": 26,
+        "NS": 2,
+        "PS": 45
+      },
+      "words": {
+        "213": 444,
+        "58": 587
+      }
+    },
+    "delta_b_minus_a": {
+      "hard_precision": 0.4395,
+      "strict_all_score": 0.015641,
+      "strict_vital_score": 0.032804,
+      "weighted_precision_first_citation": 0.209
+    },
+    "design": "Same topics, retrieval, generator model and judge. Only the prompt profile changed.",
+    "reading": "Atomic answer objects win on citation support by a wide margin and are not worse on nugget coverage, while using fewer words. Two topics only, so treat the nugget delta as noise-sized and the support delta as structural."
+  },
   "citation_support": {
     "finding": {
       "controlled_probe": {

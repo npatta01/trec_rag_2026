@@ -114,3 +114,39 @@ profile's 1-3 citations per object both still apply.
 Caveat: reference text was resolved offline from the local documents file and truncated
 to the same 1,000-word view the generator saw, rather than resolved from the index. That
 is stricter than organizer behaviour and can only understate support.
+
+## A/B: fused versus atomic answer objects
+
+Everything held fixed except the prompt profile — same topics, same archived retrieval, same
+generator model and reasoning effort, same judge.
+
+| | A `default` | B `atomic_claims` |
+|---|---|---|
+| answer objects (58 / 213) | 9 / 8 | 23 / 18 |
+| words (58 / 213) | 652 / 696 | 587 / 444 |
+| strict_vital | 0.6005 | **0.6333** |
+| strict_all | 0.6192 | **0.6349** |
+| vital | 0.7317 | 0.7325 |
+| all | **0.7483** | 0.7454 |
+| weighted precision, first citation | 0.500 | **0.709** |
+| hard precision | 0.000 | **0.4395** |
+| support labels | 0 FS / 31 PS / 0 NS | 26 FS / 45 PS / 2 NS |
+
+**Atomic objects win on citation support decisively and cost nothing on nugget coverage.**
+Weighted precision rises 0.21 and hard precision goes from zero to 0.44, because a
+single-claim object can actually be fully supported by one cited document. Nugget scores
+move within noise: strict_vital +0.033, `all` -0.003.
+
+Arm B also spends *fewer* words (587 and 444 against 652 and 696), so it buys the support
+improvement while leaving more of the 1,024-word budget unused. That headroom is the next
+thing to exploit, since nugget scoring is pure recall with no length penalty.
+
+### How much to trust this
+
+The support difference is structural, understood, and independently demonstrated by the
+controlled probe above, so it is unlikely to be an artifact. The nugget difference is
+two topics wide and should be treated as noise until it is run over all 22.
+
+Arm B also produced more references (14 per topic against 8 and 9), which means more
+citations to get right. Two citations landed at No Support in arm B against none in arm A —
+a small precision risk that grows with object count and is worth watching at scale.

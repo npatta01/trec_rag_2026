@@ -53,6 +53,30 @@ Reference documents:
 Question: {question}
 """
 
+ATOMIC_USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every reference document before writing. Cover answer-relevant evidence,
+tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
+1,024 whitespace-separated words.
+
+Write each answer object as one self-contained sentence stating a single claim. Do not join
+several claims into one answer object and do not prefix an object with a section heading or
+label, because a cited document must be able to support the whole object on its own.
+
+Each answer object must have one to three unique zero-based citation indexes into references.
+When an answer object cites more than one reference, order its citation indexes from strongest
+to weakest support for that object. Include each cited raw ClimbMix docid once in references,
+and cite every reference. Return one JSON object with exactly references and answer; no
+Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
+PROMPT_PROFILES = {"default": USER_PROMPT, "atomic_claims": ATOMIC_USER_PROMPT}
+
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
     """Safe YAML loader that rejects duplicate keys at every mapping depth."""
@@ -106,6 +130,7 @@ class RagGenerationConfig:
     api_key_env: str
     model: str
     reasoning_effort: str
+    prompt_profile: str
     temperature: float | None
     max_tokens: int
     timeout_seconds: float
@@ -165,6 +190,20 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "api_key_env",
             "model",
             "reasoning_effort",
+            "prompt_profile",
+            "temperature",
+            "max_tokens",
+            "timeout_seconds",
+            "transport_max_attempts",
+            "concurrency",
+        },
+        # prompt_profile is optional so existing configs keep the default prompt.
+        required={
+            "type",
+            "api_base",
+            "api_key_env",
+            "model",
+            "reasoning_effort",
             "temperature",
             "max_tokens",
             "timeout_seconds",
@@ -177,6 +216,9 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     reasoning_effort = _text(generation, "reasoning_effort", "generation").lower()
     if reasoning_effort not in _REASONING_EFFORTS:
         raise ValueError("generation.reasoning_effort is unsupported")
+    prompt_profile = _optional_text(generation, "prompt_profile", "generation") or "default"
+    if prompt_profile not in PROMPT_PROFILES:
+        raise ValueError("generation.prompt_profile is unsupported")
 
     return RagGenerationConfig(
         schema_version=_SCHEMA_VERSION,
@@ -200,6 +242,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         api_key_env=_text(generation, "api_key_env", "generation"),
         model=_text(generation, "model", "generation"),
         reasoning_effort=reasoning_effort,
+        prompt_profile=prompt_profile,
         temperature=_optional_finite_float(generation, "temperature", "generation"),
         max_tokens=_positive_int(generation, "max_tokens", "generation"),
         timeout_seconds=_positive_float(generation, "timeout_seconds", "generation"),
@@ -765,13 +808,19 @@ def _message_text(content: object) -> str:
 
 
 def render_prompt(
-    narrative: str, ranked_docids: list[str], documents: dict[str, str]
+    narrative: str,
+    ranked_docids: list[str],
+    documents: dict[str, str],
+    prompt_profile: str = "default",
 ) -> str:
+    template = PROMPT_PROFILES.get(prompt_profile)
+    if template is None:
+        raise ValueError(f"unsupported prompt profile: {prompt_profile}")
     context = "\n\n".join(
         f"Reference document docid: {docid}\n{documents[docid]}"
         for docid in ranked_docids
     )
-    return USER_PROMPT.format(documents=context, question=narrative)
+    return template.format(documents=context, question=narrative)
 
 
 def parse_generated_json(text: str) -> dict[str, Any]:
@@ -1083,7 +1132,9 @@ async def _generate_topic(
                 generator.complete_json,
                 topic_id=topic_id,
                 system_prompt=SYSTEM_PROMPT,
-                user_prompt=render_prompt(narrative, ranked_docids, documents),
+                user_prompt=render_prompt(
+                    narrative, ranked_docids, documents, config.prompt_profile
+                ),
                 response_schema=output_schema(),
             )
         _write_json(

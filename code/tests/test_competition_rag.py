@@ -672,6 +672,32 @@ def test_prompt_labels_documents_by_docid_without_numeric_pseudo_citations() -> 
     assert "[2] docid:" not in prompt
 
 
+def test_prompt_profiles_differ_and_default_is_unchanged() -> None:
+    documents = {"climbmix-a": "Evidence A."}
+
+    default = competition_rag.render_prompt("Narrative?", ["climbmix-a"], documents)
+    atomic = competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "atomic_claims"
+    )
+
+    assert default == competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "default"
+    )
+    assert "one self-contained sentence" in atomic
+    assert "one self-contained sentence" not in default
+    # Both profiles keep the organizer-facing constraints (templates are line-wrapped).
+    for prompt in (default, atomic):
+        flat = " ".join(prompt.split())
+        assert "one to three unique zero-based citation indexes" in flat
+        assert "strongest to weakest support" in flat
+        assert "Reference document docid: climbmix-a" in prompt
+
+
+def test_unknown_prompt_profile_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported prompt profile"):
+        competition_rag.render_prompt("Narrative?", [], {}, "nonexistent")
+
+
 def test_configuration_mode_guidance_uses_config_values_not_cli_flags(tmp_path: Path) -> None:
     existing = _pipeline_config(tmp_path)
     existing.output_path.parent.mkdir(parents=True, exist_ok=True)
