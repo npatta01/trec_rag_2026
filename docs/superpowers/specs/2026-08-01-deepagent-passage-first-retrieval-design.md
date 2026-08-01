@@ -54,14 +54,52 @@ costs 5.38s, so it fits inside a wait the run already takes. Depth 50 is close
 to free in wall-clock terms; depth 100 exceeds the window and starts costing
 real time.
 
+## Measured recall (22 judged dev topics, umbrela qrels)
+
+BM25 on the untouched narrative, graded against
+`rag25-climbmix-umbrela-qwen3.5-9b-v2.qrels`. Threshold matters enormously:
+UMBRELA grade 1 means "related but does not answer", and 86% of all judgements
+are grade >= 1, so that threshold is uninformative. Grade >= 3 is the set that
+actually answers, averaging 193 documents per topic.
+
+| Depth | Recall (grade >= 3) | Recall (grade >= 2) |
+| ---: | ---: | ---: |
+| 10 | 0.016 | 0.010 |
+| 100 | 0.142 | 0.097 |
+| 250 | 0.194 | 0.139 |
+| 500 | 0.254 | 0.188 |
+| 1000 | 0.326 | 0.250 |
+
+Depth 100 to 1000 more than doubles recall of answering documents, the largest
+absolute gain on the curve, and efficiency does not decay: the fraction of the
+achievable ceiling holds near 31%-33% across the whole range. There is no
+saturation point in reach, so **retrieve 1000**.
+
+An earlier reading of this data concluded the opposite, that BM25 saturates by
+depth 10. That was measured at grade >= 1 and was an artefact of the permissive
+threshold. At grade >= 3 depth 10 captures 1.6% of the answering documents.
+
+The reranker is what selects from the pool, so retrieving 1000 only pays if the
+cross-encoder sees the pool. Reranking 50 of 1000 leaves recall at 0.067.
+
+| Rerank depth | Recall (>=3) | Per search | Per topic (~25 searches) |
+| ---: | ---: | ---: | ---: |
+| 100 | 0.142 | 10.8s | ~4.5 min |
+| 250 | 0.194 | 27s | ~11 min |
+| 1000 | 0.326 | 108s | ~45 min |
+
+Caveats: 22 topics; LLM-generated judgements; measured on the untouched
+narrative, while researchers issue narrower reformulations whose recall is
+likely worse. Depth is therefore justified as a floor, not a tuned optimum.
+
 ## Design
 
 One combined tool replaces the agent-facing document-selection step:
 
-- retrieve `hits=100` from BM25 in a single request, which costs no extra
+- retrieve `hits=1000` from BM25 in a single request, which costs no extra
   rate-limit slot and no extra call;
-- cross-encoder score the chunks of the top **50** documents against the focus
-  query;
+- cross-encoder score the chunks of the pool against the focus query, as deep
+  as the run's time budget allows; recall keeps climbing to 1000;
 - return a **diversity-constrained top-K passage set**, each row carrying its
   invocation handle, sentences, score, and `document_id`.
 
