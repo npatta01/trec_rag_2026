@@ -559,6 +559,97 @@ def test_invalid_motivation_is_rejected_before_retrieval() -> None:
     assert [query.query_text for query in fake_retriever.queries] == ["narrative"]
 
 
+def _seed_need(toolset: deepagent_retrieval.AgentToolset) -> None:
+    toolset.update_retrieval_state(
+        {
+            "add_needs": [
+                {
+                    "need_id": "N1",
+                    "narrative_span": "narrative",
+                    "question": "What evidence closes N1?",
+                }
+            ]
+        }
+    )
+
+
+def test_ungrounded_nugget_rejection_is_reported_as_unadmitted() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _seed_need(toolset)
+            observed.update(
+                json.loads(
+                    toolset.update_retrieval_state(
+                        {
+                            "add_nuggets": [
+                                {
+                                    "nugget_id": "NUG-1",
+                                    "text": "A claim whose citation was invented.",
+                                    "need_ids": ["N1"],
+                                    "facet_ids": [],
+                                    "evidence": [
+                                        {
+                                            "snippet_id": "never_observed:0001",
+                                            "quote": "a quote nobody returned",
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    )
+                )
+            )
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert observed["accepted_ids"] == []
+    assert observed["rejected_summary"] == {"UNKNOWN_SNIPPET": 1}
+    assert observed["unadmitted_sections"] == ["add_nuggets"]
+    assert "NOT admitted" in str(observed["evidence_rejection_notice"])
+    assert result.coverage_report.nuggets == ()
+    assert result.coverage_report.needs[0].status == "unaddressed"
+
+
+def test_accepted_delta_carries_no_rejection_notice() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            observed.update(
+                json.loads(
+                    toolset.update_retrieval_state(
+                        {
+                            "add_needs": [
+                                {
+                                    "need_id": "N1",
+                                    "narrative_span": "narrative",
+                                    "question": "What evidence closes N1?",
+                                }
+                            ]
+                        }
+                    )
+                )
+            )
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert observed["accepted_ids"] == ["N1"]
+    assert "rejected_summary" not in observed
+    assert "evidence_rejection_notice" not in observed
+
+
 def test_fusion_deduplicates_and_sums_reciprocal_ranks() -> None:
     searches = (
         AgentSearch(

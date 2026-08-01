@@ -110,6 +110,7 @@ _BUDGET_CODES = frozenset(
         "TASK_TOOL_BUDGET_EXHAUSTED",
         "ROUND_RESEARCH_REQUIRED",
         "ROUND_SEQUENCE_INVALID",
+        "MAIN_MODEL_BUDGET_EXHAUSTED",
         "NO_YIELD_STOP",
         "NO_PROGRESS_STOP",
     }
@@ -403,6 +404,7 @@ class _AgentSpan(_SafeSpan):
             "TASK_BUDGET_EXHAUSTED",
             "ROUND_BUDGET_EXHAUSTED",
             "RETRIEVAL_BUDGET_EXHAUSTED",
+            "MAIN_MODEL_BUDGET_EXHAUSTED",
             "NO_PROGRESS_STOP",
         }
     )

@@ -23,6 +23,7 @@ BudgetCode = Literal[
     "TASK_TOOL_BUDGET_EXHAUSTED",
     "ROUND_RESEARCH_REQUIRED",
     "ROUND_SEQUENCE_INVALID",
+    "MAIN_MODEL_BUDGET_EXHAUSTED",
     "NO_YIELD_STOP",
     "NO_PROGRESS_STOP",
 ]
@@ -33,6 +34,7 @@ _RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
     "ROUND_BUDGET_EXHAUSTED": 10,
     "TASK_BUDGET_EXHAUSTED": 20,
     "RETRIEVAL_BUDGET_EXHAUSTED": 30,
+    "MAIN_MODEL_BUDGET_EXHAUSTED": 40,
     "NO_PROGRESS_STOP": 90,
     "HARD_DEADLINE_REACHED": 100,
 }
@@ -314,6 +316,11 @@ class ResearchBudget:
         """Return the round whose empty completion attempt requires delegation."""
         with self._lock:
             return self._required_research_round
+
+    def note_main_model_exhausted(self) -> None:
+        """Record that the coordinator's model-call ceiling, not the agent, ended it."""
+        with self._lock:
+            self._persist_stop("MAIN_MODEL_BUDGET_EXHAUSTED")
 
     def pending_round_closure(self) -> int | None:
         """Return the finished-research round the coordinator has not closed yet."""

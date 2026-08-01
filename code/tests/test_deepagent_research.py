@@ -308,6 +308,42 @@ def test_main_filter_stops_compelling_closure_on_the_final_turn() -> None:
     assert "Return the grounded partial result" in str(final["system"])
 
 
+def test_merge_turn_demands_need_status_updates() -> None:
+    config = ResearchBudgetConfig()
+    middleware = MainToolFilterMiddleware(researched_round_budget(config), config)
+
+    merge_turn = observe_turn(middleware)
+
+    system = str(merge_turn["system"])
+    assert "set_need_status" in system
+    assert "partial" in system
+    assert "answerable" in system
+
+
+def test_main_filter_records_the_model_ceiling_that_ends_the_run() -> None:
+    config = ResearchBudgetConfig(max_main_models=4)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    assert budget.snapshot().stop_code is None
+
+    observe_turn(middleware, run_model_call_count=3)
+
+    assert budget.snapshot().stop_code == "MAIN_MODEL_BUDGET_EXHAUSTED", (
+        "a ceiling-terminated run must not report itself as agent_completed"
+    )
+
+
+def test_main_filter_leaves_stop_code_alone_below_the_model_ceiling() -> None:
+    config = ResearchBudgetConfig(max_main_models=8)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    observe_turn(middleware, run_model_call_count=2)
+
+    assert budget.snapshot().stop_code is None
+
+
 def test_task_schema_has_exactly_description_and_subagent_type() -> None:
     assert set(TaskToolSchema.model_fields) == {"description", "subagent_type"}
 

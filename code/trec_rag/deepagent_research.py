@@ -224,10 +224,13 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         if self._budget is None or self._budget_config is None:
             return filtered
         run_count = request.state.get("run_model_call_count", 0)
-        final_turn = (
-            self._budget.snapshot().stop_code is not None
-            or run_count >= self._budget_config.max_main_models - 1
-        )
+        stop_code = self._budget.snapshot().stop_code
+        model_limit_reached = run_count >= self._budget_config.max_main_models - 1
+        if model_limit_reached and stop_code is None:
+            # The ceiling is ending this run, so the result must not read as a
+            # voluntary agent_completed.
+            self._budget.note_main_model_exhausted()
+        final_turn = stop_code is not None or model_limit_reached
         if not final_turn:
             required_round = self._budget.required_research_round()
             if required_round is not None:
@@ -262,7 +265,12 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
                 "update_retrieval_state",
                 f"Round {round_index} research has finished. Merge every returned "
                 "evidence bundle now with exactly one batched "
-                "update_retrieval_state delta.",
+                "update_retrieval_state delta. That same delta must also carry a "
+                "set_need_status row for every need whose evidence changed: use "
+                '"partial" with an updated remaining_gap when grounded nuggets '
+                'exist but the need is not fully answered, and "answerable" only '
+                "with a draft_answer and grounded draft_nugget_ids. A need left "
+                "unaddressed after its researchers returned is a reporting error.",
             )
         return (
             ["complete_research_round"],

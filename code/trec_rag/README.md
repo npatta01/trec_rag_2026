@@ -238,7 +238,9 @@ to a researcher `task`. Once a round's researchers have all finished, the
 coordinator cannot skip or abandon that round: its next turn is restricted to
 one `update_retrieval_state` merge and the turn after that to
 `complete_research_round`, so a round with completed research is always recorded
-before the run can end. Closing a round out of order is refused with
+before the run can end. That merge delta must also carry `set_need_status` rows
+for every need whose evidence changed, so a need never stays `unaddressed` after
+its researchers returned. Closing a round out of order is refused with
 `ROUND_SEQUENCE_INVALID` rather than raising. A researcher that has three
 successive retrieval calls with no novel evidence must return its bundle; two
 successive rounds with no accepted coverage progress stop further research.
@@ -265,7 +267,9 @@ an honest grounded partial result: completed searches, snippets, actions, and
 coverage gaps are returned, but exhaustion never claims coverage is complete.
 When a coverage terminal reason and a budget stop coexist, `stopping_reason`
 retains the coverage reason; inspect `budget_snapshot.stop_code` for the
-independent budget outcome.
+independent budget outcome. Reaching the coordinator's `max_main_models`
+ceiling records `MAIN_MODEL_BUDGET_EXHAUSTED`, so a run cut short by that
+ceiling reports `budget_exhausted` rather than claiming `agent_completed`.
 
 The agent maintains three distinct stores, each with a different job:
 
@@ -303,6 +307,14 @@ The result reports `accepted_ids`, row-level `rejected` entries,
 `UNKNOWN_SECTION` without discarding valid rows in the same delta. A delta with
 no accepted rows and no other rejection is reported as `EMPTY_DELTA`, including
 an empty recognized list such as `{"add_needs": []}`.
+
+Any rejection also adds a `rejected_summary` count by code. When a row fails
+evidence grounding (`UNGROUNDED_QUOTE`, `INVALID_EVIDENCE`, `MISSING_EVIDENCE`,
+`UNKNOWN_SNIPPET`, `UNKNOWN_DOCUMENT`, `DUPLICATE_EVIDENCE`), the result adds
+`unadmitted_sections` and an `evidence_rejection_notice` stating that the claim
+never entered the ledger, that the cited needs remain unsupported, and that the
+only recovery is delegating a researcher again for verbatim quotes. Quotes are
+never repaired for the model.
 
 Agent-facing search and snippet behavior is deliberately narrow:
 

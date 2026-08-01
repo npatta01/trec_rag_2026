@@ -453,6 +453,26 @@ def test_traceable_budget_codes_match_the_budget_code_literal() -> None:
     assert set(get_args(BudgetCode)) == set(_BUDGET_CODES)
 
 
+def test_main_model_exhaustion_is_recorded_as_a_run_stop() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+
+    assert budget.snapshot().stop_code is None
+
+    budget.note_main_model_exhausted()
+
+    assert budget.snapshot().stop_code == "MAIN_MODEL_BUDGET_EXHAUSTED"
+
+
+def test_main_model_exhaustion_never_outranks_a_harder_stop() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig(hard_seconds=0.0, soft_seconds=0.0))
+
+    assert budget.snapshot().stop_code == "HARD_DEADLINE_REACHED"
+
+    budget.note_main_model_exhausted()
+
+    assert budget.snapshot().stop_code == "HARD_DEADLINE_REACHED"
+
+
 def test_pending_round_closure_tracks_the_unclosed_researched_round() -> None:
     budget = ResearchBudget(ResearchBudgetConfig())
     report = EvidenceCoverageState("What changed?").report()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -28,6 +28,7 @@ from trec_rag.deepagent_budget import (
 )
 from trec_rag.deepagent_evidence import (
     ActionKind,
+    DeltaRejection,
     DocumentObservation,
     EvidenceCoverageReport,
     EvidenceCoverageState,
@@ -89,7 +90,13 @@ must_stop. After soft_deadline_reached becomes true, do not launch a new survey
 task; focused or deep tasks may still close a specific gap, and already-running
 tasks may finish. Merge completed bundles and finalize even after the soft
 deadline.
-Mark a need answerable only with a draft answer and grounded nugget IDs. Report
+Every merge delta must also update need status with set_need_status. Move a need
+to "partial" with a refreshed remaining_gap as soon as it has grounded nuggets,
+and to "answerable" only with a draft_answer and grounded draft_nugget_ids.
+Leaving a need "unaddressed" after its researchers returned is a reporting
+error. If add_nuggets rows come back rejected, those claims never entered the
+ledger: leave the cited needs unsupported, never repair the quotes yourself, and
+delegate researchers for them again requiring verbatim snippet quotes. Report
 conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
 for oversized output or temporary notes. The state filesystem is ephemeral.
 Only read_file is available from it."""
@@ -122,6 +129,40 @@ def _delta_error_guidance() -> dict[str, object]:
                 ]
             }
         },
+    }
+
+
+_EVIDENCE_REJECTION_CODES = frozenset(
+    {
+        "UNGROUNDED_QUOTE",
+        "INVALID_EVIDENCE",
+        "MISSING_EVIDENCE",
+        "UNKNOWN_SNIPPET",
+        "UNKNOWN_DOCUMENT",
+        "DUPLICATE_EVIDENCE",
+    }
+)
+
+
+def _rejection_summary(rejected: Sequence[DeltaRejection]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for rejection in rejected:
+        counts[rejection.code] = counts.get(rejection.code, 0) + 1
+    return counts
+
+
+def _evidence_rejection_guidance(sections: Iterable[str]) -> dict[str, object]:
+    """State plainly that rejected rows never entered the ledger."""
+    return {
+        "unadmitted_sections": sorted(set(sections)),
+        "evidence_rejection_notice": (
+            "These rows were NOT admitted. The needs they cited gained no "
+            "grounded evidence from this round, so treat those needs as still "
+            "lacking support. Never rewrite, trim, or repair a rejected quote. "
+            "Delegate a researcher for those needs again and require every quote "
+            "to be copied verbatim from extract_relevant_snippets output under "
+            "the snippet_id that returned it."
+        ),
     }
 
 
@@ -1202,11 +1243,21 @@ class DeepAgentRetriever:
             """
             update = coverage_state.apply_delta(delta)
             payload = update.as_dict()
+            summary = _rejection_summary(update.rejected)
+            if summary:
+                payload["rejected_summary"] = summary
             if any(
                 rejection.code in {"UNKNOWN_SECTION", "EMPTY_DELTA"}
                 for rejection in update.rejected
             ):
                 payload.update(_delta_error_guidance())
+            ungrounded = [
+                rejection.section
+                for rejection in update.rejected
+                if rejection.code in _EVIDENCE_REJECTION_CODES
+            ]
+            if ungrounded:
+                payload.update(_evidence_rejection_guidance(ungrounded))
             return json.dumps(payload, sort_keys=True)
 
         def complete_research_round(round_index: int) -> str:
