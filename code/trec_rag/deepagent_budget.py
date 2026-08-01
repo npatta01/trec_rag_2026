@@ -30,6 +30,9 @@ BudgetCode = Literal[
 
 _SEARCH_TOOL = "search_climbmix"
 _SNIPPET_TOOL = "extract_relevant_snippets"
+# A pooled passage search both searches and yields citable snippets, so it
+# satisfies both first-action requirements while spending neither budget.
+_PASSAGE_TOOL = "search_passages"
 _RUN_STOP_PRIORITY: dict[BudgetCode, int] = {
     "TASK_BUDGET_EXHAUSTED": 20,
     "RETRIEVAL_BUDGET_EXHAUSTED": 30,
@@ -54,6 +57,9 @@ class ResearchBudgetConfig:
     max_tools_per_researcher: int = 20
     max_searches_per_researcher: int = 8
     max_snippets_per_researcher: int = 16
+    # Its own unit: one pooled scoring pass costs materially more than one
+    # snippet page, so it must not draw down the per-snippet allowance.
+    max_passage_searches_per_researcher: int = 8
     max_models_per_researcher: int = 30
     # The coordinator spends roughly three turns per round (dispatch, merge,
     # close) plus decomposition and recovery, so this must clear one round
@@ -75,6 +81,7 @@ class ResearchBudgetConfig:
             "max_tools_per_researcher",
             "max_searches_per_researcher",
             "max_snippets_per_researcher",
+            "max_passage_searches_per_researcher",
             "max_models_per_researcher",
             "max_main_models",
             "no_yield_calls",
@@ -160,6 +167,7 @@ class ResearchBudget:
         self._task_tool_counts: dict[str, int] = {}
         self._task_search_counts: dict[str, int] = {}
         self._task_snippet_counts: dict[str, int] = {}
+        self._task_passage_counts: dict[str, int] = {}
         self._seen_yield_ids: dict[str, set[str]] = {}
         self._no_yield_streaks: dict[str, int] = {}
         self._task_stop_codes: dict[str, BudgetCode] = {}
@@ -192,6 +200,7 @@ class ResearchBudget:
             self._task_tool_counts.setdefault(context.research_task_id, 0)
             self._task_search_counts.setdefault(context.research_task_id, 0)
             self._task_snippet_counts.setdefault(context.research_task_id, 0)
+            self._task_passage_counts.setdefault(context.research_task_id, 0)
             self._seen_yield_ids.setdefault(context.research_task_id, set())
             self._no_yield_streaks.setdefault(context.research_task_id, 0)
             return self._admission()
@@ -228,6 +237,12 @@ class ResearchBudget:
                 >= self._config.max_snippets_per_researcher
             ):
                 return self._refusal("TASK_TOOL_BUDGET_EXHAUSTED")
+            if (
+                tool_name == _PASSAGE_TOOL
+                and self._task_passage_counts.get(task_id, 0)
+                >= self._config.max_passage_searches_per_researcher
+            ):
+                return self._refusal("TASK_TOOL_BUDGET_EXHAUSTED")
 
             self._reserved_retrieval_calls += 1
             self._task_tool_counts[task_id] = self._task_tool_counts.get(task_id, 0) + 1
@@ -238,6 +253,10 @@ class ResearchBudget:
             if tool_name == _SNIPPET_TOOL:
                 self._task_snippet_counts[task_id] = (
                     self._task_snippet_counts.get(task_id, 0) + 1
+                )
+            if tool_name == _PASSAGE_TOOL:
+                self._task_passage_counts[task_id] = (
+                    self._task_passage_counts.get(task_id, 0) + 1
                 )
             if self._reserved_retrieval_calls >= self._config.max_retrieval_calls:
                 return self._terminal_admission("RETRIEVAL_BUDGET_EXHAUSTED")
@@ -290,14 +309,25 @@ class ResearchBudget:
         with self._lock:
             if self._active_tasks.get(context.research_task_id) != context:
                 return False
-            return self._task_search_counts.get(context.research_task_id, 0) > 0
+            return (
+                self._task_search_counts.get(context.research_task_id, 0) > 0
+                or self._task_passage_counts.get(context.research_task_id, 0) > 0
+            )
 
     def task_has_snippet_attempt(self, context: ResearchTaskContext) -> bool:
-        """Return whether this active researcher has attempted snippet extraction."""
+        """Return whether this active researcher has attempted snippet extraction.
+
+        A pooled passage search already returned citable passages, so requiring
+        a separate per-document extraction after it would force a step that
+        cannot add anything the researcher does not already hold.
+        """
         with self._lock:
             if self._active_tasks.get(context.research_task_id) != context:
                 return False
-            return self._task_snippet_counts.get(context.research_task_id, 0) > 0
+            return (
+                self._task_snippet_counts.get(context.research_task_id, 0) > 0
+                or self._task_passage_counts.get(context.research_task_id, 0) > 0
+            )
 
     def authorize_round_completion(self, round_index: int) -> BudgetDecision:
         """Require one finished researcher before a coordinator can close a round."""

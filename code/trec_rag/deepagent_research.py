@@ -33,8 +33,8 @@ from trec_rag.deepagent_budget import (
 
 RESEARCHER_SYSTEM_PROMPT = """You are a bounded retrieval researcher.
 Research only the stated gap. Generate and refine your own queries, then inspect
-returned snippets for exact supporting quotes. Use only search_climbmix,
-extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
+returned snippets for exact supporting quotes. Use only search_passages,
+search_climbmix, extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
 write state, or use filesystem mutation tools. Return a compact EvidenceBundle.
 Producing candidate nuggets is the job. Emit one for every claim the returned
 snippets actually support, including partial ones that only cover part of your
@@ -43,17 +43,23 @@ as a substitute for reporting what they did. Returning an empty
 candidate_nuggets list means the snippets supported nothing at all, which is
 rare once a search has returned relevant passages.
 Support each claim by citing snippet handles, never by writing out quotes.
-extract_relevant_snippets gives each snippet a "cite" value such as S3 and
-numbers its sentences. Cite "S3" for a whole snippet, "S3.2" for its sentence 2,
+search_passages and extract_relevant_snippets give each passage a "cite"
+value such as S3 and number its sentences. Cite "S3" for a whole snippet, "S3.2" for its sentence 2,
 or "S3.2-4" for sentences 2 through 4. Cite the smallest range that carries the
 claim. Handles stay valid for the rest of this run, so a handle from an earlier
 page is still citable. The system fills in the document, page, and quote text.
-Your first action must be search_climbmix. From its returned documents, your
-next action must call extract_relevant_snippets on the most relevant document.
+Your first action must be search_passages. It returns the best passages from
+across many documents, already selected for you: the passages you receive were
+chosen by relevance and spread across sources before you saw them, so you do
+not pick which document to read. Cite from them directly.
 Do not inspect state, read spill files, or return EvidenceBundle until you have
-attempted both steps, unless a budget response says must_stop=true. Afterward,
-refine queries and inspect more documents or snippet pages as the evidence gap
-requires; do not claim evidence that you have not inspected.
+searched, unless a budget response says must_stop=true. Afterward, refine
+queries and search again as the evidence gap requires. Use
+extract_relevant_snippets only to go deeper into a document whose passages you
+have already seen and found worth more; do not claim evidence you have not
+inspected.
+A claim supported by two independent documents is worth more than one supported
+by two passages of the same document, so prefer citing across sources.
 If any tool response says must_stop=true, call no more tools and immediately
 return the structured EvidenceBundle with grounded work completed so far.
 """
@@ -364,6 +370,7 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
 
     _ALLOWED_TOOLS = frozenset(
         {
+            "search_passages",
             "search_climbmix",
             "extract_relevant_snippets",
             "view_retrieval_state",
@@ -409,7 +416,7 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
             )
         if not self._budget.task_has_search_attempt(context):
             instruction = (
-                "Your first action for this task must be search_climbmix. "
+                "Your first action for this task must be search_passages. "
                 "Do not view state, read files, or return EvidenceBundle yet."
             )
             existing = request.system_message
@@ -420,11 +427,11 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
                 tools=[
                     tool
                     for tool in filtered.tools
-                    if _tool_name(tool) == "search_climbmix"
+                    if _tool_name(tool) == "search_passages"
                 ],
                 response_format=None,
                 system_message=SystemMessage(content=content),
-                tool_choice="search_climbmix",
+                tool_choice="search_passages",
                 model_settings={
                     **(filtered.model_settings or {}),
                     "parallel_tool_calls": False,

@@ -34,6 +34,7 @@ from trec_rag.deepagent_research import (
 
 ALL_TOOLS = (
     "task",
+    "search_passages",
     "search_climbmix",
     "extract_relevant_snippets",
     "view_retrieval_state",
@@ -182,6 +183,7 @@ def test_role_filters_expose_only_approved_tools() -> None:
         "read_file",
     }
     assert visible_tools(ResearcherToolFilterMiddleware(), ALL_TOOLS) == {
+        "search_passages",
         "search_climbmix",
         "extract_relevant_snippets",
         "view_retrieval_state",
@@ -803,7 +805,7 @@ def test_researcher_filter_forces_bundle_after_task_local_no_yield_stop() -> Non
     assert "must_stop" in str(observed["system"])
 
 
-def test_researcher_filter_mechanically_forces_search_then_snippets() -> None:
+def test_researcher_filter_forces_a_passage_search_first_and_nothing_after() -> None:
     budget = ResearchBudget(ResearchBudgetConfig())
     context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
     envelope = ResearchTaskEnvelope.model_validate_json(
@@ -830,25 +832,27 @@ def test_researcher_filter_mechanically_forces_search_then_snippets() -> None:
     with bind_research_task(envelope):
         middleware.wrap_model_call(request, handler)
 
-    assert observed["tools"] == ["search_climbmix"]
+    assert observed["tools"] == ["search_passages"]
     assert observed["settings"]["parallel_tool_calls"] is False
     assert observed["response_format"] is None
-    assert observed["tool_choice"] == "search_climbmix"
+    assert observed["tool_choice"] == "search_passages"
     assert "first action" in str(observed["system"])
 
-    assert budget.reserve_retrieval(context, "search_climbmix").ok
+    # A pooled passage search already returned citable passages, so no
+    # per-document extraction is forced after it. Forcing one would compel a
+    # step that cannot add anything the researcher does not already hold.
+    assert budget.reserve_retrieval(context, "search_passages").ok
     with bind_research_task(envelope):
         middleware.wrap_model_call(request, handler)
-    assert observed["tools"] == ["extract_relevant_snippets"]
-    assert observed["settings"]["parallel_tool_calls"] is False
-    assert observed["response_format"] is None
-    assert observed["tool_choice"] == "extract_relevant_snippets"
-    assert "most relevant document" in str(observed["system"])
+    assert observed["tool_choice"] is None
+    assert "search_passages" in observed["tools"]
+    assert "extract_relevant_snippets" in observed["tools"]
 
     assert budget.reserve_retrieval(context, "extract_relevant_snippets").ok
     with bind_research_task(envelope):
         middleware.wrap_model_call(request, handler)
     assert set(observed["tools"]) == {
+        "search_passages",
         "search_climbmix",
         "extract_relevant_snippets",
         "view_retrieval_state",
@@ -883,7 +887,7 @@ def test_researcher_filter_stop_is_task_local_under_concurrent_contexts() -> Non
     )
 
     assert stopped == set()
-    assert active == {"search_climbmix"}
+    assert active == {"search_passages"}
 
 
 def test_async_task_middleware_traces_compact_outcome_and_cleans_up() -> None:
