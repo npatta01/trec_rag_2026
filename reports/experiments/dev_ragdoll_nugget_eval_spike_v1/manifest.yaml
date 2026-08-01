@@ -1,0 +1,73 @@
+experiment:
+  id: dev_ragdoll_nugget_eval_spike_v1
+  run_date: 2026-08-01
+  split: development
+  status: integration_validated_not_a_measurement
+  description: >-
+    First working answer-quality evaluation in this repository. Two development
+    topics generated with the merged fixed-retrieval generator and scored with the
+    organizer RAGDoll harness in assignment-only mode against released gold nuggets.
+    Establishes that the wiring works; the scores are not a system measurement.
+
+code:
+  branch: claude/ragdoll-eval-spike
+  ragdoll_submodule: 1f0671908ab6dc581a61648463e3566ba413b480
+  pi_version: 0.83.0
+
+config:
+  retriever: archived_pyserini_bm25_responses
+  index: climbmix-400b
+  query_source: original_narrative
+  hits: 1000_archived_truncated_to_100
+  ranking: none_raw_bm25_order
+
+runtime:
+  topic_ids: ["58", "213"]
+  generator_model: openai/gpt-5.6-sol
+  generator_reasoning_effort: medium
+  judge_model: openai-codex/gpt-5.5
+  judge_thinking: minimal
+  assigner_mode: support_grade_3
+  nugget_stage: assignment_only_fixed_gold_nuggets
+  organizer_nuggets_at_generation_time: false
+
+data:
+  topics: trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv
+  topic_count: 2
+  gold_nuggets: trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl
+  gold_nugget_count: 89
+  vital_nugget_count: 62
+  qrels_at_runtime: false
+
+metrics:
+  ndcg_at_10: null
+  recall_at_100: null
+
+tracked_record_files:
+  metrics: metrics.json
+  notes: notes.md
+
+source_receipts:
+  gold_nuggets_sha256: 5621d483d2964f8cf45339c05717b1aa2b69161e56072e8145043f249b89c1ef
+  trec_run_sha256: 4ccda924aea97bf409f2fbd187962cf3e0b41db5e6f97ddbbf3f556d6bcacff3
+  documents_sha256: 4a8463fc905d3a2006669caef44a1e2cd188b99c12359bd1c0deceda6005b9b3
+  submission_sha256: abcb9d04f1366b26e495e67e4ecb2f7630b0c75ea2e589692eeffd455494ea07
+  ragdoll_answers_sha256: 573272ef14ea3854582e1a4794f1b0a7a0c0598544220216cf901ffa0b6a3742
+  ragdoll_nuggets_sha256: 2cc9cd3973bad9e04ab93b8b8c385c3c9da0d8a54d2d9468fd69e2d45c4e2734
+
+local_artifacts:
+  root: outputs/dev-ragdoll-spike
+  output_dir: outputs/dev-ragdoll-spike
+  cache_dir: cache/retrieval/pyserini_remote
+  committed_raw_documents: false
+  committed_model_responses: false
+  committed_generated_answers: false
+  note: >-
+    Generated answers, retrieved document text, and judge raw events remain ignored.
+    The tracked record holds only aggregate metrics, methodology, and receipts.
+
+notes: >-
+  Retrieval ordering is raw BM25 read from archived responses, because the
+  development archives predate the retriever provenance sidecar and cannot be
+  replayed through trec_rag.pipeline. Scores are therefore not comparable to any
+  ranked or reranked configuration. See notes.md.

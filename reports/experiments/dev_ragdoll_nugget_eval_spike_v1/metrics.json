@@ -1,0 +1,68 @@
+{
+  "comparability": {
+    "is_measurement": false,
+    "reasons": [
+      "two topics only; per-topic variance is large",
+      "raw BM25 ordering, no reranking",
+      "automated assignment runs above NIST manual assignment",
+      "strict_vital is the most fragile metric under full automation"
+    ]
+  },
+  "cost": {
+    "input_tokens": 11499,
+    "judge_calls": 9,
+    "output_tokens": 2568,
+    "source": "provider_reported",
+    "total_usd": 0.1345
+  },
+  "harness": {
+    "assigner_mode": "support_grade_3",
+    "command": "ragdoll nuggetizer eval --nuggets-file ... --answers-file ...",
+    "commit": "1f0671908ab6dc581a61648463e3566ba413b480",
+    "judge_model": "openai-codex/gpt-5.5",
+    "judge_thinking": "minimal",
+    "mode": "assignment_only_fixed_gold_nuggets",
+    "pi_version": "0.83.0",
+    "tool": "castorini/RAGDoll"
+  },
+  "label_distribution": {
+    "failed": 0,
+    "not_support": 10,
+    "other": 0,
+    "partial_support": 23,
+    "support": 56
+  },
+  "per_topic": [
+    {
+      "all_score": 0.666667,
+      "failed_count": 0,
+      "nugget_count": 39,
+      "qid": "58",
+      "response_length": 652,
+      "strict_all_score": 0.538462,
+      "strict_vital_score": 0.571429,
+      "vital_count": 35,
+      "vital_score": 0.685714
+    },
+    {
+      "all_score": 0.83,
+      "failed_count": 0,
+      "nugget_count": 50,
+      "qid": "213",
+      "response_length": 696,
+      "strict_all_score": 0.7,
+      "strict_vital_score": 0.62963,
+      "vital_count": 27,
+      "vital_score": 0.777778
+    }
+  ],
+  "run": {
+    "all_score": 0.748333,
+    "n_topics": 2,
+    "run_id": "dev_ragdoll_spike_rag",
+    "strict_all_score": 0.619231,
+    "strict_vital_score": 0.600529,
+    "vital_score": 0.731746
+  },
+  "schema": "ragdoll_nugget_assignment_v1"
+}
