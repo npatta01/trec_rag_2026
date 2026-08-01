@@ -20,6 +20,7 @@ import zipfile
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_BUNDLE_SCHEMA_VERSION = "evidence_bundle_v1"
 
 
 def _digest(text: str) -> str:
@@ -444,6 +445,7 @@ class EvidenceBundle:
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
+            "schema_version": _BUNDLE_SCHEMA_VERSION,
             "topic_id": self.topic_id,
             "natural_document_count": self.natural_document_count,
             "lanes": [
@@ -529,6 +531,8 @@ class EvidenceBundle:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> EvidenceBundle:
+        if payload.get("schema_version") != _BUNDLE_SCHEMA_VERSION:
+            raise ValueError("unsupported evidence bundle schema version")
         bundle = cls(
             topic_id=payload["topic_id"],
             natural_document_count=payload["natural_document_count"],

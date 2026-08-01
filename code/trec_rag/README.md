@@ -234,7 +234,10 @@ Outputs:
 - a validated `EvidenceBundle` with frozen lane, document, retrieval-event,
   selection, evidence, nugget, and trace-reference records
 - deterministic JSON-compatible dictionaries through `to_dict()` /
-  `from_dict()`
+  `from_dict()`, wrapped in a top-level `schema_version: evidence_bundle_v1`
+  marker so incompatible bundle envelopes fail closed while the internal lane,
+  document, event, selection, evidence, nugget, and trace-reference payload
+  shapes stay unchanged
 - deterministic downstream projections through `to_trec_run(selection_id=...)`,
   `to_document_records(selection_id=...)`, and
   `to_fixed_rag_context(selection_id=...)`
@@ -251,11 +254,19 @@ Validation:
   input union must be empty
 - every evidence span must resolve exactly inside its parent document text
 - every nugget support reference must resolve to a known evidence record
-provenance, fallback, and byte-stable resume behavior, but it does not establish
-that generated decompositions improve retrieval or that canonical claims are
-entailed. Promotion requires a frozen, held-out topic evaluation measuring
-retrieval coverage, evidence quality, claim grounding, redundancy, and failure
-rate.
+
+Downstream consumption:
+- fixed retrieval and fixed-bundle RAG consume deterministic projections from
+  the same validated bundle boundary rather than re-reading stage-local
+  artifacts
+- agentic downstream work may consume the same bundle projections as read-only
+  context, but any newly retrieved documents or agent-produced evidence must be
+  recorded as a new bundle revision instead of being hidden only in trace logs
+
+Compatibility note:
+- the bundle is the cross-stage contract; existing retrieval, decomposition,
+  evidence, and nugget stage schemas remain stage-local and unchanged in this
+  implementation
 
 ## Competition fixed-retrieval RAG inputs
 

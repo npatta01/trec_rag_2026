@@ -237,6 +237,7 @@ def test_serialization_round_trip_is_deterministic_and_json_compatible() -> None
     round_tripped = EvidenceBundle.from_dict(payload)
 
     assert json.loads(json.dumps(payload)) == payload
+    assert payload["schema_version"] == "evidence_bundle_v1"
     assert round_tripped == enriched
     assert round_tripped.to_dict() == payload
 
@@ -275,6 +276,15 @@ def test_round_trip_canonicalizes_unsorted_retrieval_events() -> None:
     ]
     assert round_tripped == bundle
     assert round_tripped.to_dict() == payload
+
+
+def test_deserialization_rejects_incompatible_bundle_schema_version() -> None:
+    payload = _bundle().to_dict()
+    incompatible = dict(payload)
+    incompatible["schema_version"] = "evidence_bundle_v2"
+
+    with pytest.raises(ValueError, match="unsupported evidence bundle schema version"):
+        EvidenceBundle.from_dict(incompatible)
 
 
 def test_round_trip_preserves_explicit_selection_document_order() -> None:
@@ -425,6 +435,80 @@ def _projection_bundle() -> EvidenceBundle:
     enriched = replace(bundle, evidence=evidence, nuggets=nuggets, selections=selections)
     enriched.validate()
     return enriched
+
+
+def test_lane_kinds_compile_to_the_same_bundle_schema() -> None:
+    rows = [
+        {
+            "lane_id": "narrative",
+            "lane_kind": "narrative",
+            "query_text": "Explain the documented outcome.",
+            "docid": "doc-shared",
+            "text": "Alpha Beta",
+            "rank": 1,
+            "score": 12.5,
+            "retriever": "bm25",
+        },
+        {
+            "lane_id": "sub.alpha",
+            "lane_kind": "subnarrative",
+            "query_text": "Explain the documented subnarrative.",
+            "parent_lane_id": "narrative",
+            "docid": "doc-shared",
+            "text": "Alpha Beta",
+            "rank": 1,
+            "score": 11.5,
+            "retriever": "bm25",
+        },
+        {
+            "lane_id": "agentic.a",
+            "lane_kind": "agentic",
+            "query_text": "Find independent corroboration.",
+            "parent_lane_id": "sub.alpha",
+            "producer": "synthetic-agent-step-v1",
+            "docid": "doc-agentic",
+            "text": "Gamma Delta",
+            "rank": 1,
+            "score": 10.5,
+            "retriever": "bm25",
+        },
+    ]
+
+    bundle = EvidenceBundle.from_retrieval_rows(topic_id="224", rows=rows)
+    payload = bundle.to_dict()
+
+    assert payload["schema_version"] == "evidence_bundle_v1"
+    assert set(payload.keys()) == {
+        "schema_version",
+        "topic_id",
+        "natural_document_count",
+        "lanes",
+        "documents",
+        "retrieval_events",
+        "selections",
+        "evidence",
+        "nuggets",
+        "trace_refs",
+    }
+    assert [lane["lane_kind"] for lane in payload["lanes"]] == [
+        "agentic",
+        "narrative",
+        "subnarrative",
+    ]
+    assert payload["documents"] == [
+        {
+            "docid": "doc-agentic",
+            "text": "Gamma Delta",
+            "text_sha256": _digest("Gamma Delta"),
+            "lane_ids": ["agentic.a"],
+        },
+        {
+            "docid": "doc-shared",
+            "text": "Alpha Beta",
+            "text_sha256": _digest("Alpha Beta"),
+            "lane_ids": ["narrative", "sub.alpha"],
+        },
+    ]
 
 
 def _projection_bundle_with_mixed_lane_support() -> EvidenceBundle:
