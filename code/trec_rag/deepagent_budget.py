@@ -52,7 +52,10 @@ class ResearchBudgetConfig:
     max_searches_per_researcher: int = 8
     max_snippets_per_researcher: int = 16
     max_models_per_researcher: int = 30
-    max_main_models: int = 25
+    # The coordinator spends roughly three turns per round (dispatch, merge,
+    # close) plus decomposition and recovery, so this must clear max_rounds
+    # with margin or a productive run is cut off mid-round.
+    max_main_models: int = 40
     soft_seconds: float = 600.0
     hard_seconds: float = 1800.0
     no_yield_calls: int = 3

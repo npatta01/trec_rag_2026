@@ -101,11 +101,16 @@ def visible_tools(
     return set(seen)
 
 
-def task_request(*, description: str, subagent_type: str = "researcher") -> ToolCallRequest:
+def task_request(
+    *, description: str, subagent_type: str | None = "researcher"
+) -> ToolCallRequest:
+    args: dict[str, object] = {"description": description}
+    if subagent_type is not None:
+        args["subagent_type"] = subagent_type
     return ToolCallRequest(
         tool_call={
             "name": "task",
-            "args": {"description": description, "subagent_type": subagent_type},
+            "args": args,
             "id": "task-call",
         },
         tool=None,
@@ -389,14 +394,40 @@ def test_task_middleware_records_compact_task_budget_outcome() -> None:
     assert records[-1]["snapshot"]["completed_researchers"] == 1
 
 
-def test_task_middleware_requires_the_researcher_subagent() -> None:
+@pytest.mark.parametrize("subagent_type", ["general-purpose", None])
+def test_task_middleware_denies_a_non_researcher_without_killing_the_run(
+    subagent_type: str | None,
+) -> None:
     middleware = ResearchTaskBudgetMiddleware(ResearchBudget(ResearchBudgetConfig()))
+    dispatched: list[str] = []
 
-    with pytest.raises(PermissionError, match="researcher"):
-        middleware.wrap_tool_call(
-            task_request(description=task_description(), subagent_type="general-purpose"),
-            lambda _request: ToolMessage(content="unexpected", tool_call_id="task-call"),
-        )
+    message = middleware.wrap_tool_call(
+        task_request(description=task_description(), subagent_type=subagent_type),
+        lambda _request: dispatched.append("ran")
+        or ToolMessage(content="unexpected", tool_call_id="task-call"),
+    )
+
+    payload = json.loads(message.content)
+    assert dispatched == [], "the denied subagent must never execute"
+    assert payload["code"] == "RESEARCHER_TYPE_DENIED"
+    assert payload["ok"] is False
+    assert payload["must_stop"] is False, "the coordinator can still retry"
+    assert payload["required_subagent_type"] == "researcher"
+    assert message.status == "error"
+
+
+def test_denied_subagent_leaves_the_researcher_budget_untouched() -> None:
+    budget = ResearchBudget(ResearchBudgetConfig())
+    middleware = ResearchTaskBudgetMiddleware(budget)
+
+    middleware.wrap_tool_call(
+        task_request(description=task_description(), subagent_type="general-purpose"),
+        lambda _request: ToolMessage(content="unexpected", tool_call_id="task-call"),
+    )
+
+    snapshot = budget.snapshot()
+    assert snapshot.remaining_researchers == ResearchBudgetConfig().max_researcher_invocations
+    assert snapshot.stop_code is None
 
 
 @pytest.mark.parametrize("is_async", [False, True])

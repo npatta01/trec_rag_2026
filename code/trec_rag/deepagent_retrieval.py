@@ -103,6 +103,22 @@ researchers for them again. Report conflicts and unresolved gaps. Caches remain 
 for oversized output or temporary notes. The state filesystem is ephemeral.
 Only read_file is available from it."""
 
+def _coordinator_prompt(config: ResearchBudgetConfig) -> str:
+    """State the dispatch limits, which the coordinator cannot otherwise know.
+
+    Built from the live config rather than written into the prompt text, so the
+    numbers an agent is told can never drift from the ones enforced.
+    """
+    return (
+        f"{RETRIEVAL_SYSTEM_PROMPT}\n"
+        f"At most {config.max_concurrent} researchers can run at once, and at "
+        f"most {config.max_researcher_invocations} may run in the whole "
+        f"invocation. Never put more than {config.max_concurrent} task calls in "
+        "one batch: the extras are refused outright, and recovering from that "
+        "refusal costs turns you need for later rounds."
+    )
+
+
 _VALID_DELTA_SECTIONS = (
     "add_needs",
     "add_facets",
@@ -607,7 +623,7 @@ def _create_agent(
                 toolset.update_retrieval_state,
                 toolset.complete_research_round,
             ],
-            system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+            system_prompt=_coordinator_prompt(toolset.budget_config),
             middleware=[
                 ModelCallLimitMiddleware(
                     run_limit=toolset.budget_config.max_main_models,

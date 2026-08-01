@@ -599,6 +599,33 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
             status="error",
         )
 
+    def _denied_subagent(self, request: ToolCallRequest) -> ToolMessage:
+        """Refuse a non-researcher dispatch recoverably rather than fatally."""
+        tool_call_id = request.tool_call.get("id")
+        if not isinstance(tool_call_id, str):
+            raise ValueError("task call requires an id")
+        return ToolMessage(
+            content=json.dumps(
+                {
+                    "budget_snapshot": self._budget.snapshot().as_dict(),
+                    "code": "RESEARCHER_TYPE_DENIED",
+                    "must_stop": False,
+                    "ok": False,
+                    "required_subagent_type": "researcher",
+                    "retry_guidance": (
+                        'Pass subagent_type exactly as "researcher". No other '
+                        "subagent exists, and omitting the field is the same as "
+                        "requesting one that does not. This dispatch did not run; "
+                        "reissue it with the correct subagent_type."
+                    ),
+                },
+                sort_keys=True,
+            ),
+            name="task",
+            tool_call_id=tool_call_id,
+            status="error",
+        )
+
     def _invalid_task(self, request: ToolCallRequest) -> ToolMessage:
         tool_call_id = request.tool_call.get("id")
         if not isinstance(tool_call_id, str):
@@ -666,7 +693,10 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                 self._record_dispatch_outcome(
                     dispatch_span, code="RESEARCHER_TYPE_DENIED", outcome="rejected"
                 )
-                raise
+                # The dispatch is still denied, but denying it must not destroy
+                # the run: a mistyped or omitted subagent_type would otherwise
+                # discard every grounded nugget collected so far.
+                return self._denied_subagent(request)
             except ValueError:
                 self._record_dispatch_outcome(
                     dispatch_span, code="INVALID_RESEARCH_TASK", outcome="rejected"
@@ -724,7 +754,10 @@ class ResearchTaskBudgetMiddleware(AgentMiddleware):
                 self._record_dispatch_outcome(
                     dispatch_span, code="RESEARCHER_TYPE_DENIED", outcome="rejected"
                 )
-                raise
+                # The dispatch is still denied, but denying it must not destroy
+                # the run: a mistyped or omitted subagent_type would otherwise
+                # discard every grounded nugget collected so far.
+                return self._denied_subagent(request)
             except ValueError:
                 self._record_dispatch_outcome(
                     dispatch_span, code="INVALID_RESEARCH_TASK", outcome="rejected"

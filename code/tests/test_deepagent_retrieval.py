@@ -560,6 +560,27 @@ def test_invalid_motivation_is_rejected_before_retrieval() -> None:
     assert [query.query_text for query in fake_retriever.queries] == ["narrative"]
 
 
+def test_coordinator_prompt_states_the_enforced_dispatch_limits() -> None:
+    prompt = deepagent_retrieval._coordinator_prompt(
+        ResearchBudgetConfig(max_concurrent=2, max_researcher_invocations=7)
+    )
+
+    assert "At most 2 researchers can run at once" in prompt
+    assert "most 7 may run in the whole invocation" in prompt
+    assert "more than 2 task calls in one batch" in prompt.replace("\n", " ")
+
+
+def test_coordinator_prompt_tracks_a_changed_concurrency_limit() -> None:
+    relaxed = deepagent_retrieval._coordinator_prompt(
+        ResearchBudgetConfig(max_concurrent=5)
+    )
+
+    assert "At most 5 researchers" in relaxed, (
+        "the stated limit must come from the config that enforces it"
+    )
+    assert "At most 3 researchers" not in relaxed
+
+
 def test_model_facing_snippets_show_handles_and_numbered_sentences() -> None:
     handles = (
         SnippetHandle(
