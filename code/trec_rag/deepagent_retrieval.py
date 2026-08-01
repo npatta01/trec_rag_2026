@@ -221,16 +221,12 @@ def _model_facing_passages(
     """
     origin = {row.chunk_id: row.document_id for row in selected}
     rows: list[dict[str, object]] = []
-    for handle, row in zip(_model_facing_snippets(handles), handles):
-        rows.append({**row_document(origin, row), **handle})
+    for rendered, handle in zip(_model_facing_snippets(handles), handles):
+        document_id = origin.get(handle.snippet_id)
+        rows.append(
+            {**({"document_id": document_id} if document_id else {}), **rendered}
+        )
     return rows
-
-
-def row_document(
-    origin: Mapping[str, str], handle: SnippetHandle
-) -> dict[str, object]:
-    document_id = origin.get(handle.chunk_id)
-    return {"document_id": document_id} if document_id else {}
 
 
 def _rejection_summary(rejected: Sequence[DeltaRejection]) -> dict[str, int]:
@@ -1308,7 +1304,7 @@ class DeepAgentRetriever:
                         pages_estimated=1,
                     )
                     observed.extend(coverage_state.record_snippet_page(page))
-                budget.record_yield(context, (handle.chunk_id for handle in observed))
+                budget.record_yield(context, (handle.snippet_id for handle in observed))
                 snapshot = budget.snapshot()
                 payload: dict[str, object] = {
                     "ok": True,

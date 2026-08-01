@@ -4,6 +4,7 @@ from collections.abc import Mapping
 import asyncio
 import hashlib
 import json
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -3269,3 +3270,173 @@ def test_direct_construction_creates_default_extractor_only_when_snippet_tool_is
 
     assert len(created_roots) == 1
     assert snippet_payloads[0]["document_id"] == "original-doc-1"
+
+
+class _PassageChunker:
+    """One chunk per sentence, so a document yields several rankable passages."""
+
+    def split_text(self, text, *, document_id):
+        from trec_rag.chunking import TextChunk
+
+        parts = [part for part in text.split(". ") if part.strip()]
+        chunks = []
+        cursor = 0
+        for index, part in enumerate(parts):
+            chunks.append(
+                TextChunk(
+                    document_id=document_id,
+                    chunk_id=f"{document_id}::c{index}",
+                    text=part.strip() + ".",
+                    start_char=cursor,
+                    end_char=cursor + len(part) + 1,
+                )
+            )
+            cursor += len(part) + 2
+        return chunks
+
+
+class _PassageRanker:
+    """Rank so that one document holds every top score, which is the collapse case."""
+
+    identity = {"backend": "fake"}
+
+    def __init__(self, failing: bool = False) -> None:
+        self.failing = failing
+        self.calls = 0
+
+    def rank(self, focus_query, chunks):
+        self.calls += 1
+        if self.failing:
+            raise RuntimeError("ranker exploded with a secret path /home/user/key")
+        from trec_rag.deepagent_snippets import ScoredTextChunk
+
+        scored = []
+        for chunk in chunks:
+            # "doc-1" wins on every chunk, so an undiversified top-K would
+            # return nothing else.
+            base = 100.0 if chunk.document_id.endswith("-doc-1") else 1.0
+            scored.append(ScoredTextChunk(chunk=chunk, relevance_score=base))
+        return tuple(scored)
+
+
+class _PassageExtractor:
+    def __init__(self, ranker) -> None:
+        self.ranker = ranker
+        self.chunker = _PassageChunker()
+
+
+def _passage_toolset(ranker, *, candidate_count=5):
+    captured: list[deepagent_retrieval.AgentToolset] = []
+
+    def agent_factory(_model, toolset):
+        captured.append(toolset)
+
+        def invoke(_payload):
+            return {"structured_response": None}
+
+        return SimpleNamespace(invoke=invoke)
+
+    sdk = deepagent_retrieval.DeepAgentRetriever(
+        retriever=FakeRetriever(candidate_count=candidate_count),
+        model="openrouter:test/model",
+        agent_factory=agent_factory,
+        tracing=FakeTracing(),
+        snippet_extractor=_PassageExtractor(ranker),
+        passage_config=PassageSelectionConfig(
+            pool_hits=10,
+            rerank_depth=5,
+            top_k=6,
+            per_document_cap=2,
+            min_distinct_documents=3,
+        ),
+    )
+    try:
+        sdk.retrieve("narrative")
+    except Exception:
+        pass
+    return captured[0]
+
+
+def _authorized_passage_search(toolset, query):
+    _seed_test_need(toolset, narrative_span="narrative")
+    _, envelope = _test_research_context(toolset)
+    with bind_research_task(envelope):
+        return toolset.search_passages(query, ["test-need"], "test need remains open")
+
+
+def test_passage_search_spans_documents_that_a_top_k_would_have_collapsed() -> None:
+    ranker = _PassageRanker()
+    toolset = _passage_toolset(ranker)
+
+    payload = json.loads(_authorized_passage_search(toolset, "a focused query"))
+
+    assert payload["ok"] is True
+    documents = {row["document_id"] for row in payload["passages"]}
+    assert len(documents) >= 3, "selection collapsed onto too few documents"
+    assert payload["distinct_documents"] == len(documents)
+    # The ranker gave one document every top score, so breadth here is the
+    # code's doing, not the scores'.
+    assert len([r for r in payload["passages"] if r["document_id"].endswith("-doc-1")]) <= 2
+
+
+def test_passage_search_mints_citable_handles_through_the_existing_ledger() -> None:
+    toolset = _passage_toolset(_PassageRanker())
+
+    payload = json.loads(_authorized_passage_search(toolset, "a focused query"))
+
+    cites = [row["cite"] for row in payload["passages"]]
+    assert cites, "no citable passages returned"
+    assert all(cite.startswith("S") for cite in cites)
+    assert len(cites) == len(set(cites))
+    for row in payload["passages"]:
+        assert row["sentences"], "a passage carried no citable sentences"
+        assert row["sentences"][0]["n"] == 1
+
+
+def test_passage_search_reports_what_it_did_not_return() -> None:
+    toolset = _passage_toolset(_PassageRanker())
+
+    payload = json.loads(_authorized_passage_search(toolset, "a focused query"))
+
+    assert payload["documents_retrieved"] == 5
+    assert payload["documents_scored"] == 5
+    assert payload["chunks_scored"] >= payload["returned_passages"]
+    assert payload["chunks_not_returned"] == (
+        payload["chunks_scored"] - payload["returned_passages"]
+    )
+
+
+def test_a_scoring_failure_is_classified_and_never_reads_as_finding_nothing() -> None:
+    """The recurring defect class: refusing correctly but costing the wrong thing."""
+    ranker = _PassageRanker(failing=True)
+    toolset = _passage_toolset(ranker)
+
+    raw = _authorized_passage_search(toolset, "a focused query")
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["code"] == "PASSAGE_SCORING_FAILED"
+    assert "passages" not in payload
+    # Raw exception text must not reach agent context.
+    assert "exploded" not in raw
+    assert "/home/user/key" not in raw
+
+
+def test_passage_search_is_charged_its_own_budget_unit() -> None:
+    toolset = _passage_toolset(_PassageRanker())
+    config = toolset.budget_config
+
+    _seed_test_need(toolset, narrative_span="narrative")
+    _, envelope = _test_research_context(toolset)
+    with bind_research_task(envelope):
+        for index in range(config.max_passage_searches_per_researcher):
+            payload = json.loads(
+                toolset.search_passages(f"query {index}", ["test-need"], "open")
+            )
+            assert payload["ok"] is True, payload
+        refused = json.loads(
+            toolset.search_passages("one too many", ["test-need"], "open")
+        )
+
+    assert refused["ok"] is False
+    assert refused["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
