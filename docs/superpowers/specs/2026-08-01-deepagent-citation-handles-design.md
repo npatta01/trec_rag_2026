@@ -89,10 +89,34 @@ class BundleEvidence(BaseModel):
 ```
 
 `document_id`, `snippet_id`, `page_index`, and `quote` are removed from the
-model's output and **derived** by the SDK. `EvidenceReference` in the report
-keeps all four, so the coverage report, the nuggetizer probe, and canonical
-evidence aliases are unaffected. They simply become SDK-authored rather than
-model-authored.
+model's output and **derived** by the SDK. The coverage report still exposes all
+four, so the nuggetizer probe and canonical evidence aliases are unaffected.
+They simply become SDK-authored rather than model-authored.
+
+### One copy of the text
+
+The ledger keeps storing each observed snippet's full text on
+`_SnippetObservation`. That is deliberate: it is the record of what an agent was
+actually shown, it is what makes a handle resolvable, and it is what provenance
+means. Handles do not remove it and were never meant to.
+
+What they do remove is the *second* copy. Today `EvidenceReference.quote` holds
+a materialised fragment of a snippet the ledger already stores in full, so the
+same text lives in two places and can in principle disagree.
+
+Under this design a nugget stores the resolved **span** — snippet handle plus
+sentence range — and `report()` derives the quote string when it builds
+`_nugget_report`. The immutable report is unchanged from a consumer's point of
+view; the string is computed rather than stored.
+
+The motive is not memory. A run observing 44 snippets holds well under 100 KB of
+text. The motive is that two copies can drift and one cannot: a derived quote is
+incapable of disagreeing with the snippet it cites.
+
+Storing only document offsets and slicing from the private document registry
+would remove even the observation's copy, but it would couple the ledger to the
+retrieval registry and make the report non-self-contained. Rejected: the
+ledger's copy is the authoritative record and should stay independent.
 
 ### State delta
 
@@ -194,4 +218,6 @@ Touched: `deepagent_research.py` (schema, researcher prompt),
   and `page_index`
 - a snippet whose text contains no sentence terminator still yields one
   citable sentence
+- a nugget stores only a span, and its reported quote is derived, so no stored
+  quote string can disagree with the snippet it cites
 - cached snippet pages written before this change still load
