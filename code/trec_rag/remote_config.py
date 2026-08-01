@@ -26,19 +26,27 @@ def remote_index_url(env: Mapping[str, str] | None = None) -> str:
     raise ValueError("Set INDEX_URL to the hosted Pyserini search endpoint.")
 
 
+DEFAULT_MIN_INTERVAL_SECONDS = 6.0
+
+
 @dataclass(frozen=True)
 class RemotePyseriniConfig:
     index_url: str
     api_token: str | None
     hits: int
     queries: tuple[str, ...]
-    min_interval_seconds: float = 3.0
+    # The hosted index throttled a run that was already paced at three
+    # seconds on a single serialized connection, so its own limit is
+    # stricter than ours was. Six leaves headroom on a shared endpoint.
+    min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS
     burst: int = 1
     limiter_state_path: Path = Path("cache/retrieval/pyserini_remote/rate-limit.sqlite")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RemotePyseriniConfig":
-        interval_text = env_get(env, "PYSERINI_MIN_INTERVAL_SECONDS") or "3"
+        interval_text = env_get(env, "PYSERINI_MIN_INTERVAL_SECONDS") or str(
+            DEFAULT_MIN_INTERVAL_SECONDS
+        )
         burst_text = env_get(env, "PYSERINI_RATE_BURST") or "1"
         try:
             interval = float(interval_text)

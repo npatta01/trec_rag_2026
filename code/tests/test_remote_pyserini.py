@@ -302,3 +302,18 @@ def test_config_rejects_bad_hits():
                 "EXTERNAL_PYSERINI_HITS": "many",
             }
         )
+
+
+def test_rate_policy_defaults_are_gentle_and_overridable():
+    """The shared endpoint throttled us at three seconds; six leaves headroom."""
+    from trec_rag.remote_config import DEFAULT_MIN_INTERVAL_SECONDS, RemotePyseriniConfig
+
+    default = RemotePyseriniConfig.from_env({"INDEX_URL": "https://index.test/search"})
+    assert default.min_interval_seconds == DEFAULT_MIN_INTERVAL_SECONDS
+    assert DEFAULT_MIN_INTERVAL_SECONDS >= 6.0
+    assert default.burst == 1
+
+    tuned = RemotePyseriniConfig.from_env(
+        {"INDEX_URL": "https://index.test/search", "PYSERINI_MIN_INTERVAL_SECONDS": "9"}
+    )
+    assert tuned.min_interval_seconds == 9.0

@@ -97,7 +97,7 @@ by responsibility:
 ### Hosted API rate and continuation policy
 
 Hosted requests use `requests` plus `requests-ratelimiter`. The default policy is
-one request start per origin every three seconds with burst `1`. The per-host
+one request start per origin every six seconds with burst `1`. The hosted index throttled a run already paced at three seconds on a single serialized connection, so its own limit is stricter than ours was. The per-host
 limiter is stored in `cache/retrieval/pyserini_remote/rate-limit.sqlite`, so
 cooperating processes and restarts share the budget. Override the interval or
 state location with `PYSERINI_MIN_INTERVAL_SECONDS` and
