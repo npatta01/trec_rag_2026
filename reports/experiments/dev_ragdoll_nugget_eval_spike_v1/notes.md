@@ -69,3 +69,48 @@ Do not compare these to published TREC numbers or to each other across configura
 Scale to all 22 development topics over a verified retrieval run, then add citation
 support (`ragdoll support`) and arena battles (`ragdoll arena compare-all`, the primary
 2026 metric).
+
+## Citation support: answer-object granularity caps every citation at Partial
+
+Running `ragdoll support judge` over the same two answers produced **31 out of 31
+`Partial Support`** judgments — no Full Support, no No Support. Weighted precision and
+recall are therefore 0.5 across the board and `hard_precision` is **0.0**.
+
+That uniformity is the signature of a structural problem, not a scoring result, so it was
+checked rather than reported.
+
+The judge output is genuine (`raw_output` is the literal string `Partial Support`, not a
+parse fallback). The cause is visible in the statements: the generator emits fused,
+multi-claim answer objects behind a heading prefix, roughly 65 words and 3-4 sentences
+each:
+
+> How it works and is used: Commercial nuclear electricity currently relies mainly on
+> fission. Neutrons split uranium nuclei in a controlled chain reaction...
+
+No single cited document fully supports a compound like that, so each one caps at Partial.
+
+### Controlled probe
+
+Holding the cited document, the claim, and the judge model fixed, and changing only the
+answer-object granularity:
+
+| statement | label |
+|---|---|
+| `How it works and is used: Commercial nuclear electricity currently relies mainly on fission. Neutrons split...` | `PS` |
+| `Commercial nuclear electricity currently relies mainly on fission.` | `FS` |
+
+The structure alone moves the judgment. This matches the task reference, which asks
+systems to "break prose into sentence-level answer objects" and permits headings only as
+their own objects.
+
+### Implication
+
+The generator currently forfeits the entire Full-versus-Partial difference on citation
+support for reasons unrelated to retrieval or evidence quality. Emitting one atomic claim
+per answer object is a prompt-level change. It should be measured, not assumed: more
+objects means more citations to get right, and the 1,024-word cap and the strict
+profile's 1-3 citations per object both still apply.
+
+Caveat: reference text was resolved offline from the local documents file and truncated
+to the same 1,000-word view the generator saw, rather than resolved from the index. That
+is stricter than organizer behaviour and can only understate support.

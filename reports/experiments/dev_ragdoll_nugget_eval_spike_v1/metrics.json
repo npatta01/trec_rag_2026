@@ -1,4 +1,54 @@
 {
+  "citation_support": {
+    "finding": {
+      "controlled_probe": {
+        "atomic_statement_label": "FS",
+        "changed": "answer object granularity only",
+        "compound_statement_label": "PS",
+        "held_fixed": [
+          "cited document",
+          "claim content",
+          "judge model"
+        ]
+      },
+      "implication": "hard_precision is 0.0 purely from answer-object structure, not evidence quality.",
+      "summary": "Every citation capped at Partial Support because answer objects fuse 3-4 sentences behind a heading prefix."
+    },
+    "harness_commands": [
+      "ragdoll support judge",
+      "assemble",
+      "metrics"
+    ],
+    "judgments": 31,
+    "label_distribution": {
+      "FS": 0,
+      "NS": 0,
+      "PS": 31
+    },
+    "per_topic": [
+      {
+        "hard_precision": 0.0,
+        "hard_recall": 0.0,
+        "sentences": 9,
+        "topic_id": "58",
+        "weighted_precision_all_judged_citations": 0.5,
+        "weighted_precision_first_citation": 0.5,
+        "weighted_recall_all_judged_citations": 0.5,
+        "weighted_recall_first_citation": 0.5
+      },
+      {
+        "hard_precision": 0.0,
+        "hard_recall": 0.0,
+        "sentences": 8,
+        "topic_id": "213",
+        "weighted_precision_all_judged_citations": 0.5,
+        "weighted_precision_first_citation": 0.5,
+        "weighted_recall_all_judged_citations": 0.5,
+        "weighted_recall_first_citation": 0.5
+      }
+    ],
+    "reference_resolution": "offline_from_local_documents_truncated_to_generator_view"
+  },
   "comparability": {
     "is_measurement": false,
     "reasons": [

@@ -127,6 +127,43 @@ def test_missing_gold_nuggets_for_a_requested_topic_is_an_error(tmp_path: Path) 
         )
 
 
+def _documents_file(path: Path, docids: list[str]) -> Path:
+    return _write_jsonl(
+        path,
+        [
+            {
+                "query": {"qid": "58"},
+                "candidates": [
+                    {"docid": docid, "doc": f"text supporting {docid}"} for docid in docids
+                ],
+            }
+        ],
+    )
+
+
+def test_support_rows_carry_segments_for_every_cited_docid(tmp_path: Path) -> None:
+    submission = _write_jsonl(tmp_path / "rag.jsonl", [_submission_record()])
+    documents = _documents_file(tmp_path / "documents.jsonl", ["climbmix-a", "climbmix-b"])
+
+    rows = ragdoll_io.resolved_support_rows(submission, documents)
+
+    assert len(rows) == 1
+    row = rows[0]
+    # ragdoll support skips any citation whose docid is absent from segments.
+    assert set(row["segments"]) == {"climbmix-a", "climbmix-b"}
+    assert row["topic_id"] == "58"
+    assert row["run_id"] == "dev-spike"
+    assert row["answer"] == _submission_record()["answer"]
+
+
+def test_support_rows_reject_a_reference_without_document_text(tmp_path: Path) -> None:
+    submission = _write_jsonl(tmp_path / "rag.jsonl", [_submission_record()])
+    documents = _documents_file(tmp_path / "documents.jsonl", ["climbmix-a"])
+
+    with pytest.raises(ValueError, match="climbmix-b"):
+        ragdoll_io.resolved_support_rows(submission, documents)
+
+
 def _archive(topic_id: str, count: int) -> dict[str, Any]:
     return {
         "topic_id": topic_id,
