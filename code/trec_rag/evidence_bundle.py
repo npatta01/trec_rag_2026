@@ -218,13 +218,12 @@ class EvidenceBundle:
                 raise ValueError(f"duplicate selection_id: {selection.selection_id}")
             source_lane_ids = _sorted_unique(selection.source_lane_ids)
             input_document_ids = _sorted_unique(selection.input_document_ids)
-            document_ids = _sorted_unique(selection.document_ids)
             if source_lane_ids != selection.source_lane_ids:
                 raise ValueError(f"selection source_lane_ids must be sorted and unique for {selection.selection_id}")
             if input_document_ids != selection.input_document_ids:
                 raise ValueError(f"selection input_document_ids must be sorted and unique for {selection.selection_id}")
-            if document_ids != selection.document_ids:
-                raise ValueError(f"selection document_ids must be sorted and unique for {selection.selection_id}")
+            if len(set(selection.document_ids)) != len(selection.document_ids):
+                raise ValueError(f"selection document_ids must be unique for {selection.selection_id}")
             for lane_id in selection.source_lane_ids:
                 if lane_id not in lane_map:
                     raise ValueError(f"unknown source lane {lane_id} in selection {selection.selection_id}")
@@ -330,10 +329,13 @@ class EvidenceBundle:
         )
 
     def to_fixed_rag_context(self, *, selection_id: str) -> tuple[dict[str, object], ...]:
+        selection = self._selection(selection_id)
         selected = self._selected_documents(selection_id)
+        selected_source_lanes = set(selection.source_lane_ids)
         evidence_by_doc: dict[str, list[EvidenceSpan]] = defaultdict(list)
         for span in self.evidence:
-            evidence_by_doc[span.docid].append(span)
+            if selected_source_lanes.intersection(span.lane_ids):
+                evidence_by_doc[span.docid].append(span)
         for spans in evidence_by_doc.values():
             spans.sort(key=lambda row: (row.start_char, row.end_char, row.evidence_id))
 
@@ -347,18 +349,27 @@ class EvidenceBundle:
         total = len(selected)
         for rank, document in enumerate(selected, start=1):
             spans = evidence_by_doc.get(document.docid, [])
+            selected_evidence_ids = {span.evidence_id for span in spans}
             seen_nuggets: set[str] = set()
-            ordered_nuggets: list[BundleNugget] = []
+            ordered_nuggets: list[tuple[BundleNugget, tuple[str, ...]]] = []
             for span in spans:
                 for nugget_id in evidence_to_nuggets.get(span.evidence_id, ()):
                     if nugget_id in seen_nuggets:
                         continue
+                    nugget = nugget_by_id[nugget_id]
+                    projected_evidence_ids = tuple(
+                        evidence_id
+                        for evidence_id in nugget.evidence_ids
+                        if evidence_id in selected_evidence_ids
+                    )
+                    if not projected_evidence_ids:
+                        continue
                     seen_nuggets.add(nugget_id)
-                    ordered_nuggets.append(nugget_by_id[nugget_id])
+                    ordered_nuggets.append((nugget, projected_evidence_ids))
             ordered_nuggets.sort(
                 key=lambda row: (
-                    min(row.evidence_ids) if row.evidence_ids else "",
-                    row.nugget_id,
+                    row[1][0] if row[1] else "",
+                    row[0].nugget_id,
                 )
             )
             context.append(
@@ -392,9 +403,9 @@ class EvidenceBundle:
                             "text_sha256": nugget.text_sha256,
                             "nugget_kind": nugget.nugget_kind,
                             "subnarrative_id": nugget.subnarrative_id,
-                            "evidence_ids": list(nugget.evidence_ids),
+                            "evidence_ids": list(projected_evidence_ids),
                         }
-                        for nugget in ordered_nuggets
+                        for nugget, projected_evidence_ids in ordered_nuggets
                     ],
                 }
             )
@@ -618,32 +629,8 @@ class EvidenceBundle:
 
     def _selected_documents(self, selection_id: str) -> tuple[BundleDocument, ...]:
         selection = self._selection(selection_id)
-        events = [
-            event
-            for event in self.retrieval_events
-            if event.lane_id in selection.source_lane_ids
-            and event.docid in selection.document_ids
-        ]
-        event_order: dict[str, tuple[int, float, str, str]] = {}
-        for event in events:
-            key = (event.rank, -event.score, event.lane_id, event.event_id)
-            previous = event_order.get(event.docid)
-            if previous is None or key < previous:
-                event_order[event.docid] = key
         documents_by_id = {document.docid: document for document in self.documents}
-        return tuple(
-            documents_by_id[docid]
-            for docid in sorted(
-                selection.document_ids,
-                key=lambda docid: (
-                    event_order[docid][0],
-                    event_order[docid][1],
-                    event_order[docid][2],
-                    docid,
-                    event_order[docid][3],
-                ),
-            )
-        )
+        return tuple(documents_by_id[docid] for docid in selection.document_ids)
 
     @classmethod
     def from_retrieval_rows(

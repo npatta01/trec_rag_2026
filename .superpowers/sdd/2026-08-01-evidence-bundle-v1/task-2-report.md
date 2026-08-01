@@ -25,12 +25,25 @@ What changed:
   - `fixed_rag_context.jsonl`
 - Reused deterministic JSONL/ZIP writing so the organizer sidecar stays byte
   stable across repeated writes.
+- Review fix: fixed-bundle RAG context now filters evidence to spans whose
+  `lane_ids` intersect the selection's `source_lane_ids`, includes nuggets only
+  when selected support remains, and projects nugget `evidence_ids` to the
+  retained support subset.
+- Review fix: `BundleSelection.document_ids` now preserves explicit ordered
+  selection provenance. Validation keeps `input_document_ids` as sorted natural
+  union IDs, requires output `document_ids` to be unique, and downstream
+  projections now follow that preserved order directly.
 
 Test-first evidence:
-- Added the projection tests first.
-- Confirmed the red phase with:
+- Added the original projection tests first.
+- Confirmed the initial red phase with:
   `pytest code/tests/test_evidence_bundle.py -q -k 'to_trec_run or to_document_records or to_fixed_rag_context or write_fixed_rag_inputs'`
   which failed with missing-method `AttributeError`s before implementation.
+- Added review-fix regressions first and confirmed the red phase with:
+  `.venv/bin/python -m pytest code/tests/test_evidence_bundle.py -q -k 'selection_document_order or duplicate_selection_output or to_trec_run_uses_explicit_selection or to_document_records_emits_organizer_core or to_fixed_rag_context_orders_documents or filters_support_to_selected_source_lanes or write_fixed_rag_inputs'`
+  which failed against the pre-fix implementation because selection outputs
+  were reconstructed from retrieval events and fixed context still projected
+  unselected support.
 
 Verification:
 - `pytest code/tests/test_evidence_bundle.py -q -k 'to_trec_run or to_document_records or to_fixed_rag_context or write_fixed_rag_inputs'`
@@ -40,12 +53,14 @@ Verification:
   project dependencies instead of the host interpreter
 - `.venv/bin/python -m pytest code/tests/test_evidence_bundle.py code/tests/test_competition_rag.py code/tests/test_retrieval_export.py -q`
   → `186 passed`
+- `.venv/bin/python -m pytest code/tests/test_evidence_bundle.py -q -k 'selection_document_order or duplicate_selection_output or to_trec_run_uses_explicit_selection or to_document_records_emits_organizer_core or to_fixed_rag_context_orders_documents or filters_support_to_selected_source_lanes or write_fixed_rag_inputs'`
+  → `7 passed, 10 deselected`
+- `.venv/bin/python -m pytest code/tests/test_evidence_bundle.py code/tests/test_competition_rag.py code/tests/test_retrieval_export.py -q`
+  → `189 passed`
 
 Concerns:
-- Selection ordering is derived deterministically from the best retained
-  retrieval event among the selection's source lanes because `BundleSelection`
-  currently stores document membership but not an explicit per-selection rank
-  ledger. That matches the new tests and keeps projections stable, but if a
-  later task needs richer selection provenance (for example, rejection reasons
-  or an explicit chosen-from-lane record), the bundle schema will need to carry
-  it directly rather than reconstructing it here.
+- Selection output ordering is now explicit and preserved, but richer
+  per-selection provenance such as rejection reasons or chosen-from-lane
+  metadata is still outside `BundleSelection`. If a later task needs that
+  attribution, the schema will need additional fields rather than another
+  reconstruction step.
