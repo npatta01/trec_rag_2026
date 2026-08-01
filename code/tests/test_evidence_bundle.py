@@ -89,6 +89,61 @@ def test_validation_checks_natural_union_counts() -> None:
         broken.validate()
 
 
+def test_validation_rejects_document_lane_membership_without_retrieval_event() -> None:
+    bundle = _bundle()
+    shared = next(document for document in bundle.documents if document.docid == "doc-shared")
+    broken_document = replace(shared, lane_ids=("agentic.a", "extra.lane", "narrative"))
+    broken = replace(
+        bundle,
+        lanes=(
+            *bundle.lanes,
+            replace(bundle.lanes[0], lane_id="extra.lane", lane_kind="agentic"),
+        ),
+        documents=(broken_document, bundle.documents[1]),
+    )
+
+    with pytest.raises(ValueError, match="document lane membership mismatch"):
+        broken.validate()
+
+
+def test_validation_rejects_document_without_any_retrieval_event() -> None:
+    bundle = _bundle()
+    orphan = replace(
+        bundle.documents[0],
+        docid="doc-orphan",
+        text="Orphan text",
+        text_sha256=_digest("Orphan text"),
+        lane_ids=("narrative",),
+    )
+    broken = replace(
+        bundle,
+        documents=(bundle.documents[0], bundle.documents[1], orphan),
+        natural_document_count=3,
+    )
+
+    with pytest.raises(ValueError, match="document lane membership mismatch"):
+        broken.validate()
+
+
+def test_validation_rejects_selection_input_without_retrieval_event() -> None:
+    bundle = _bundle()
+    selection = bundle.selections[0]
+    broken = replace(
+        bundle,
+        selections=(
+            replace(
+                selection,
+                source_lane_ids=("narrative",),
+                input_document_ids=("doc-shared", "doc-unique"),
+                input_count=2,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="selection natural union mismatch"):
+        broken.validate()
+
+
 def test_validation_requires_exact_evidence_spans_to_resolve_in_document_text() -> None:
     bundle = _bundle()
     shared = next(document for document in bundle.documents if document.docid == "doc-shared")
@@ -180,4 +235,40 @@ def test_serialization_round_trip_is_deterministic_and_json_compatible() -> None
 
     assert json.loads(json.dumps(payload)) == payload
     assert round_tripped == enriched
+    assert round_tripped.to_dict() == payload
+
+
+def test_round_trip_canonicalizes_unsorted_retrieval_events() -> None:
+    rows = [
+        {
+            "lane_id": "narrative",
+            "lane_kind": "narrative",
+            "query_text": "Explain the documented outcome.",
+            "docid": "doc-b",
+            "text": "Second",
+            "rank": 2,
+            "score": 10.0,
+            "retriever": "bm25",
+        },
+        {
+            "lane_id": "narrative",
+            "lane_kind": "narrative",
+            "query_text": "Explain the documented outcome.",
+            "docid": "doc-a",
+            "text": "First",
+            "rank": 1,
+            "score": 11.0,
+            "retriever": "bm25",
+        },
+    ]
+
+    bundle = EvidenceBundle.from_retrieval_rows(topic_id="224", rows=rows)
+    payload = bundle.to_dict()
+    round_tripped = EvidenceBundle.from_dict(payload)
+
+    assert [(event.rank, event.docid) for event in bundle.retrieval_events] == [
+        (1, "doc-a"),
+        (2, "doc-b"),
+    ]
+    assert round_tripped == bundle
     assert round_tripped.to_dict() == payload

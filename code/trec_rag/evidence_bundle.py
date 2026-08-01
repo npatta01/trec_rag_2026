@@ -44,6 +44,10 @@ def _sorted_unique(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted(set(values)))
 
 
+def _event_sort_key(event: RetrievalEvent) -> tuple[int, str, str, str]:
+    return (event.rank, event.lane_id, event.docid, event.event_id)
+
+
 @dataclass(frozen=True)
 class BundleLane:
     lane_id: str
@@ -196,8 +200,8 @@ class EvidenceBundle:
             event_membership[event.docid].add(event.lane_id)
 
         for docid, document in document_map.items():
-            seen = event_membership.get(docid)
-            if seen and tuple(sorted(seen)) != document.lane_ids:
+            seen = tuple(sorted(event_membership.get(docid, set())))
+            if seen != document.lane_ids:
                 raise ValueError(f"document lane membership mismatch for {docid}")
 
         selection_map: dict[str, BundleSelection] = {}
@@ -232,7 +236,7 @@ class EvidenceBundle:
                 for event in self.retrieval_events
                 if event.lane_id in selection.source_lane_ids
             }
-            if expected_input and expected_input != set(selection.input_document_ids):
+            if expected_input != set(selection.input_document_ids):
                 raise ValueError(f"selection natural union mismatch for {selection.selection_id}")
             selection_map[selection.selection_id] = selection
 
@@ -411,7 +415,15 @@ class EvidenceBundle:
                     retriever=row["retriever"],
                     trace_ref_id=row.get("trace_ref_id"),
                 )
-                for row in payload["retrieval_events"]
+                for row in sorted(
+                    payload["retrieval_events"],
+                    key=lambda row: (
+                        row["rank"],
+                        row["lane_id"],
+                        row["docid"],
+                        row["event_id"],
+                    ),
+                )
             ),
             selections=tuple(
                 BundleSelection(
@@ -534,7 +546,7 @@ class EvidenceBundle:
                 )
                 for docid in document_ids
             ),
-            retrieval_events=tuple(events),
+            retrieval_events=tuple(sorted(events, key=_event_sort_key)),
             selections=(
                 BundleSelection(
                     selection_id="natural_union",

@@ -218,6 +218,32 @@ post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
+
+## Evidence bundle boundary
+
+`trec_rag.evidence_bundle` defines the cross-stage canonical bundle records for
+Task 1 of the Evidence Bundle v1 plan.
+
+Inputs:
+- neutral retrieval rows with lane metadata, document text, rank, score,
+  retriever identity, and optional parent/trace identifiers
+- optional in-memory bundle relations for derived selections, evidence spans,
+  nuggets, and hashed trace references
+
+Outputs:
+- a validated `EvidenceBundle` with frozen lane, document, retrieval-event,
+  selection, evidence, nugget, and trace-reference records
+- deterministic JSON-compatible dictionaries through `to_dict()` /
+  `from_dict()`
+
+Validation:
+- every identifier and SHA-256 hash is checked
+- every document/lane membership must have a corresponding retrieval event
+- every selection input must match the exact natural union implied by its
+  source lanes; if a selection names lanes with zero retrieval events, its
+  input union must be empty
+- every evidence span must resolve exactly inside its parent document text
+- every nugget support reference must resolve to a known evidence record
 provenance, fallback, and byte-stable resume behavior, but it does not establish
 that generated decompositions improve retrieval or that canonical claims are
 entailed. Promotion requires a frozen, held-out topic evaluation measuring
