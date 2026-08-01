@@ -1,4 +1,36 @@
 {
+  "arm_c_atomic_full_budget": {
+    "nugget": {
+      "all_score": 0.654053,
+      "strict_all_score": 0.59576,
+      "strict_vital_score": 0.620539,
+      "vital_score": 0.679943
+    },
+    "prompt_note": "Generated under the original wording ('use most of that budget'). The profile has since been retargeted to ~900 words with a hard 1,024 ceiling; these numbers predate that change.",
+    "prompt_profile": "atomic_claims_full_budget",
+    "references_per_topic": {
+      "144": 18,
+      "200": 23,
+      "58": 91,
+      "72": 14
+    },
+    "support": {
+      "hard_precision": 0.438,
+      "labels": {
+        "FS": 85,
+        "NS": 89,
+        "PS": 122
+      },
+      "weighted_precision_all_judged_citations": 0.542,
+      "weighted_precision_first_citation": 0.633
+    },
+    "words_per_answer": {
+      "144": 912,
+      "200": 937,
+      "58": 841,
+      "72": 850
+    }
+  },
   "caveats": [
     "Four topics; consistent direction but not a significance test.",
     "Generation is high variance: the same default config produced 9 and then 28 answer objects for topic 58 in different runs.",
@@ -37,6 +69,20 @@
     "topics_favouring_b": 4
   },
   "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
+  "generation_reliability": {
+    "first_attempt_failures": {
+      "arm_a_of_22": 7,
+      "arm_b_of_8": 2,
+      "arm_c_of_4": 1
+    },
+    "implication": "About one topic in four fails first time. Over 119 topics that is ~30 resumes at $0.71 each.",
+    "modes": {
+      "exceeds_1024_words": 2,
+      "malformed_completion": 3,
+      "uncited_references": 4
+    },
+    "note": "Uncited-reference failures are self-imposed; the guidelines state uncited references do not hurt the score."
+  },
   "judge_model": "openrouter/deepseek/deepseek-v4-flash",
   "length": {
     "note": "Neither arm approaches the cap. Nugget scoring is pure recall with no length penalty.",
@@ -83,6 +129,39 @@
   },
   "schema": "ragdoll_paired_prompt_profile_v1",
   "supersedes": "The two-topic comparison in dev_ragdoll_nugget_eval_spike_v1, which reported atomic as neutral-to-better on coverage.",
+  "three_arm_summary": {
+    "hard_precision": {
+      "a": 0.071,
+      "b": 0.383,
+      "c": 0.438
+    },
+    "no_support_rate": {
+      "a": 0.298,
+      "b": 0.114,
+      "c": 0.301
+    },
+    "reading": "No arm dominates. B has by far the cleanest citations (11% No Support against 30% for both A and C) and the best weighted precision. C recovers most of B's coverage loss and posts the best strict_all and hard_precision, but its citation error rate returns to A's level: pushing length appears to make the model assert more than it can ground.",
+    "strict_all": {
+      "a": 0.585,
+      "b": 0.537,
+      "c": 0.596
+    },
+    "strict_vital": {
+      "a": 0.635,
+      "b": 0.57,
+      "c": 0.621
+    },
+    "weighted_precision_all_judged": {
+      "a": 0.415,
+      "b": 0.622,
+      "c": 0.542
+    },
+    "weighted_precision_first_citation": {
+      "a": 0.475,
+      "b": 0.671,
+      "c": 0.633
+    }
+  },
   "topics": [
     "58",
     "72",

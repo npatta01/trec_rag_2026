@@ -693,6 +693,26 @@ def test_prompt_profiles_differ_and_default_is_unchanged() -> None:
         assert "Reference document docid: climbmix-a" in prompt
 
 
+def test_full_budget_profile_keeps_atomic_wording_and_adds_budget_guidance() -> None:
+    documents = {"climbmix-a": "Evidence A."}
+
+    atomic = competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "atomic_claims"
+    )
+    full = competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "atomic_claims_full_budget"
+    )
+
+    for prompt in (atomic, full):
+        flat = " ".join(prompt.split())
+        assert "one self-contained sentence" in flat
+        assert "strongest to weakest support" in flat
+    assert "Aim for roughly 900" in " ".join(full.split())
+    assert "Aim for roughly 900" not in " ".join(atomic.split())
+    # The budget guidance must not license padding.
+    assert "Do not pad" in full
+
+
 def test_unknown_prompt_profile_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported prompt profile"):
         competition_rag.render_prompt("Narrative?", [], {}, "nonexistent")

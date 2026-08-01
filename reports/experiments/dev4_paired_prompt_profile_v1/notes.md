@@ -57,3 +57,56 @@ is the experiment to run before deciding what the submission uses.
 - Generation for the remaining 18 topics was stopped on cost grounds at $20.63. Only topics
   that completed under both arms are analysed.
 - Automated assignment scores above NIST manual assignment; treat all figures as relative.
+
+
+## Arm C: atomic claims pushed toward the word cap
+
+| arm | strict_vital | strict_all | wp first-cite | wp all-judged | hard precision | No Support rate |
+|---|---|---|---|---|---|---|
+| A default | **0.635** | 0.585 | 0.475 | 0.415 | 0.071 | 30% |
+| B atomic | 0.570 | 0.537 | **0.671** | **0.622** | 0.383 | **11%** |
+| C atomic + budget | 0.621 | **0.596** | 0.633 | 0.542 | **0.438** | 30% |
+
+**No arm dominates.** Arm C confirmed the length hypothesis — lifting arm B from ~600 to ~890
+words recovered most of the lost coverage (strict_vital 0.570 to 0.621) and produced the best
+strict_all and hard precision of the three.
+
+But it also **tripled the citation error rate back to arm A's level**: 89 No Support out of 296
+judgments, against 18 out of 158 for arm B. Weighted precision, which is what the organizers
+report, is accordingly *worse* in C than in B on both variants. The likely mechanism is that
+instructing the model to fill the budget makes it assert more than the retrieved evidence
+supports.
+
+So the three arms are really three positions on one trade-off: A says most and grounds worst,
+B grounds best and says least, C says nearly as much as A while grounding better than A but
+noticeably worse than B.
+
+**Arm C's numbers predate a prompt change.** They were produced under the original wording
+("use most of that budget"). The profile now targets roughly 900 words with a hard 1,024
+ceiling, after two arm-A topics exceeded the cap outright. Whether the tighter target keeps
+C's coverage without its No Support blowup is untested.
+
+## Generation reliability: about one topic in four fails first time
+
+| run | attempted | failed |
+|---|---|---|
+| arm A | 22 | 7 |
+| arm B | 8 | 2 |
+| arm C | 4 | 1 |
+
+Three modes: `uncited references` (4), `exceeds 1,024 words` (2), malformed completion (3).
+
+The uncited-reference failures are **self-imposed**. The task reference states plainly that
+uncited references do not hurt the score and that validators must not reject on them; this
+generator enforces all-cited only to match the organizer baseline script. The constraint is
+also mathematically tight, needing `references <= 3 x objects`: topic 58 succeeded with 91
+references and 33 objects, a ceiling of 99 and slack of 8.
+
+Reference counts are themselves out of line on that topic. Organizer baselines carry a median
+of 10 and 16 references per topic and never exceed 25; topic 58 produced 83 under arm A and 91
+under arm C, close to copying the whole 100-document pool, which the task reference explicitly
+advises against.
+
+Deterministically dropping uncited references and renumbering citations would make that
+failure mode impossible without changing any claim or its supporting document. At 119 topics a
+25% first-attempt failure rate means roughly 30 resumes at about $0.71 each.

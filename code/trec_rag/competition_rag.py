@@ -75,7 +75,36 @@ Reference documents:
 Question: {question}
 """
 
-PROMPT_PROFILES = {"default": USER_PROMPT, "atomic_claims": ATOMIC_USER_PROMPT}
+FULL_BUDGET_USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every reference document before writing. Aim for roughly 900 whitespace-separated words
+and never exceed 1,024, counting every answer object together. A longer answer is only better
+when the extra words carry new evidence, so keep adding distinct, answer-relevant points that
+the reference documents support, covering the question's different aspects, tradeoffs,
+constraints and uncertainty. Do not pad, repeat a point already made, or restate the
+question.
+
+Write each answer object as one self-contained sentence stating a single claim. Do not join
+several claims into one answer object and do not prefix an object with a section heading or
+label, because a cited document must be able to support the whole object on its own.
+
+Each answer object must have one to three unique zero-based citation indexes into references.
+When an answer object cites more than one reference, order its citation indexes from strongest
+to weakest support for that object. Include each cited raw ClimbMix docid once in references,
+and cite every reference. Return one JSON object with exactly references and answer; no
+Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
+PROMPT_PROFILES = {
+    "default": USER_PROMPT,
+    "atomic_claims": ATOMIC_USER_PROMPT,
+    "atomic_claims_full_budget": FULL_BUDGET_USER_PROMPT,
+}
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
