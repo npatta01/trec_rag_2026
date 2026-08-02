@@ -7,10 +7,12 @@ from contextlib import contextmanager
 
 import pytest
 from deepagents.middleware.subagents import TaskToolSchema
+from langchain.agents import create_agent
 from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool
 from pydantic import ValidationError
 from trec_rag.deepagent_budget import (
     BudgetSnapshot,
@@ -40,6 +42,7 @@ ALL_TOOLS = (
     "extract_relevant_snippets",
     "view_retrieval_state",
     "update_retrieval_state",
+    "complete_retrieval",
     "complete_research_round",
     "read_file",
     "write_file",
@@ -50,6 +53,13 @@ ALL_TOOLS = (
     "execute",
     "write_todos",
 )
+
+
+class ToolAwareFakeMessagesListChatModel(FakeMessagesListChatModel):
+    """Scripted fake model with the bind_tools hook create_agent requires."""
+
+    def bind_tools(self, tools: Sequence[object], **kwargs: object):
+        return self
 
 
 def budget_payload() -> dict[str, object]:
@@ -180,6 +190,7 @@ def test_role_filters_expose_only_approved_tools() -> None:
         "task",
         "view_retrieval_state",
         "update_retrieval_state",
+        "complete_retrieval",
         "complete_research_round",
         "read_file",
     }
@@ -291,6 +302,7 @@ def test_main_filter_releases_the_coordinator_once_the_round_is_closed() -> None
         "task",
         "view_retrieval_state",
         "update_retrieval_state",
+        "complete_retrieval",
         "complete_research_round",
         "read_file",
     }
@@ -1182,3 +1194,132 @@ def test_the_bounce_does_not_consume_the_synthesis_reserve() -> None:
         run_count=config.max_main_models - 1 - config.synthesis_reserve_turns,
     )
     assert late[0]["choice"] == "update_retrieval_state"
+
+
+def test_real_langgraph_loop_terminates_after_explicit_completion() -> None:
+    calls: list[str] = []
+
+    @tool
+    def complete_retrieval() -> str:
+        """Complete retrieval after the ledger validator succeeds."""
+        calls.append("complete")
+        return json.dumps({"ok": True, "state": "terminal"})
+
+    model = ToolAwareFakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "complete_retrieval",
+                        "args": {},
+                        "id": "complete-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="retrieval complete"),
+        ]
+    )
+    agent = create_agent(model=model, tools=[complete_retrieval])
+
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": "finish retrieval"}]}
+    )
+
+    assert calls == ["complete"]
+    assert isinstance(result["messages"][2], ToolMessage)
+    assert json.loads(result["messages"][2].content) == {
+        "ok": True,
+        "state": "terminal",
+    }
+    assert result["messages"][-1].content == "retrieval complete"
+
+
+def test_real_langgraph_loop_keeps_an_incomplete_completion_in_the_loop() -> None:
+    calls: list[str] = []
+
+    @tool
+    def complete_retrieval() -> str:
+        """Attempt completion against an incomplete ledger."""
+        calls.append("complete")
+        return json.dumps(
+            {
+                "ok": False,
+                "code": "INCOMPLETE_CLOSEOUT",
+                "need_ids": ["N1"],
+            }
+        )
+
+    model = ToolAwareFakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "complete_retrieval",
+                        "args": {},
+                        "id": "complete-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="I need to write the missing draft selection."),
+        ]
+    )
+    agent = create_agent(model=model, tools=[complete_retrieval])
+
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": "finish retrieval"}]}
+    )
+
+    assert calls == ["complete"]
+    assert json.loads(result["messages"][2].content) == {
+        "ok": False,
+        "code": "INCOMPLETE_CLOSEOUT",
+        "need_ids": ["N1"],
+    }
+    assert result["messages"][-1].content.startswith("I need to write")
+
+
+def test_real_langgraph_silent_exit_is_redirected_by_the_closeout_guard() -> None:
+    calls: list[str] = []
+
+    @tool
+    def update_retrieval_state() -> str:
+        """Record the forced closeout write-up."""
+        calls.append("update")
+        return "{\"ok\":true}"
+
+    model = ToolAwareFakeMessagesListChatModel(
+        responses=[
+            AIMessage(content="I am done"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "update_retrieval_state",
+                        "args": {},
+                        "id": "update-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="closeout written"),
+        ]
+    )
+    agent = create_agent(
+        model=model,
+        tools=[update_retrieval_state],
+        middleware=[
+            MainToolFilterMiddleware(closeout_pending=lambda: True),
+        ],
+    )
+
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": "finish retrieval"}]}
+    )
+
+    assert calls == ["update"]
+    assert any(isinstance(message, ToolMessage) for message in result["messages"])
+    assert result["messages"][-1].content == "closeout written"

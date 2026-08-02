@@ -1746,6 +1746,9 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     def update_tool(_delta: dict[str, object]) -> str:
         return "{}"
 
+    def complete_tool() -> str:
+        return "{}"
+
     def passages_tool(_query: str, _ids: list[str], _rationale: str) -> str:
         return "{}"
 
@@ -1769,6 +1772,7 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
         extract_relevant_snippets=snippet_tool,
         view_retrieval_state=view_tool,
         update_retrieval_state=update_tool,
+        complete_retrieval=complete_tool,
         complete_research_round=complete_round_tool,
         choose_next_action=action_tool,
         budget=budget,
@@ -1800,6 +1804,7 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
         view_tool,
         update_tool,
         complete_round_tool,
+        complete_tool,
     ]
     assert kwargs["system_prompt"] == ANY
     assert len(kwargs["subagents"]) == 1
@@ -1941,6 +1946,7 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
         "task",
         "view_retrieval_state",
         "update_retrieval_state",
+        "complete_retrieval",
         "complete_research_round",
         "read_file",
     }
@@ -2486,22 +2492,198 @@ def test_recorded_terminal_stop_controls_result_stopping_reason() -> None:
     ) -> FakeAgent:
         return FakeAgent(
             lambda _payload: (
-                toolset.choose_next_action(
-                    "stop",
-                    "completion",
-                    None,
-                    [],
-                    "no open needs remain",
-                ),
+                toolset.complete_retrieval(),
                 {"messages": [{"role": "assistant", "content": "Complete."}]},
             )[1]
         )
 
-    result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+    result = _sdk(
+        FakeRetriever(), agent_factory, snippet_extractor=RecordingSnippetExtractor()
+    ).retrieve("narrative")
 
     assert result.stopping_reason == "completion"
     assert result.coverage_report.terminal_reason == "completion"
     assert result.coverage_report.actions[-1].state == "terminal"
+
+
+def test_complete_retrieval_rejects_live_evidence_without_a_draft_selection() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+            toolset.update_retrieval_state(
+                {
+                    "add_nuggets": [
+                        {
+                            "nugget_id": "g1",
+                            "text": "Grounded test evidence.",
+                            "need_ids": ["test-need"],
+                            "facet_ids": [],
+                            "evidence": [{"cite": "S1"}],
+                        }
+                    ]
+                }
+            )
+            observed["completion"] = json.loads(toolset.complete_retrieval())
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(
+        FakeRetriever(), agent_factory, snippet_extractor=RecordingSnippetExtractor()
+    ).retrieve("narrative")
+
+    assert observed["completion"]["ok"] is False
+    assert observed["completion"]["code"] == "INCOMPLETE_CLOSEOUT"
+    assert observed["completion"]["need_ids"] == ["test-need"]
+    assert result.coverage_report.terminal_reason is None
+    assert result.stopping_reason == "closeout_refused"
+
+
+def test_retriever_wires_a_live_closeout_predicate_into_the_agent_toolset() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        observed["predicate"] = toolset.closeout_pending
+
+        def invoke(_payload: dict[str, object]) -> object:
+            _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+            toolset.update_retrieval_state(
+                {
+                    "add_nuggets": [
+                        {
+                            "nugget_id": "g1",
+                            "text": "Grounded test evidence.",
+                            "need_ids": ["test-need"],
+                            "facet_ids": [],
+                            "evidence": [{"cite": "S1"}],
+                        }
+                    ]
+                }
+            )
+            assert toolset.closeout_pending is not None
+            observed["pending_with_live_evidence"] = toolset.closeout_pending()
+            toolset.update_retrieval_state(
+                {
+                    "set_need_status": [
+                        {
+                            "need_id": "test-need",
+                            "status": "partial",
+                            "remaining_gap": "More detail would help.",
+                            "draft_nugget_ids": ["g1"],
+                        }
+                    ]
+                }
+            )
+            observed["pending_after_selection"] = toolset.closeout_pending()
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    _sdk(
+        FakeRetriever(),
+        agent_factory,
+        snippet_extractor=RecordingSnippetExtractor(),
+    ).retrieve("narrative")
+
+    assert callable(observed["predicate"])
+    assert observed["pending_with_live_evidence"] is True
+    assert observed["pending_after_selection"] is False
+
+
+def test_complete_retrieval_records_the_only_successful_completion_transition() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+            toolset.update_retrieval_state(
+                {
+                    "add_nuggets": [
+                        {
+                            "nugget_id": "g1",
+                            "text": "Grounded test evidence.",
+                            "need_ids": ["test-need"],
+                            "facet_ids": [],
+                            "evidence": [{"cite": "S1"}],
+                        }
+                    ],
+                    "set_need_status": [
+                        {
+                            "need_id": "test-need",
+                            "status": "answerable",
+                            "remaining_gap": "",
+                            "draft_answer": "Grounded test answer.",
+                            "draft_nugget_ids": ["g1"],
+                        }
+                    ],
+                }
+            )
+            observed["completion"] = json.loads(toolset.complete_retrieval())
+            return {"messages": [{"role": "assistant", "content": "Complete."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(
+        FakeRetriever(), agent_factory, snippet_extractor=RecordingSnippetExtractor()
+    ).retrieve("narrative")
+
+    assert observed["completion"]["ok"] is True
+    assert observed["completion"]["state"] == "terminal"
+    assert result.coverage_report.terminal_reason == "completion"
+    assert result.stopping_reason == "completion"
+
+
+def test_choose_next_action_cannot_bypass_explicit_completion_tool() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            observed["result"] = json.loads(
+                toolset.choose_next_action(
+                    "stop", "completion", None, [], "try to bypass completion tool"
+                )
+            )
+            return {"messages": [{"role": "assistant", "content": "Stopped."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert observed["result"] == {
+        "code": "COMPLETE_RETRIEVAL_REQUIRED",
+        "ok": False,
+    }
+    assert result.coverage_report.terminal_reason is None
+
+
+def test_rejected_completion_is_not_reported_as_agent_completed() -> None:
+    observed: dict[str, object] = {}
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> FakeAgent:
+        def invoke(_payload: dict[str, object]) -> object:
+            _seed_test_need(toolset)
+            observed["completion"] = json.loads(toolset.complete_retrieval())
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert observed["completion"]["ok"] is False
+    assert observed["completion"]["code"] == "COMPLETION_OPEN_NEEDS"
+    assert result.stopping_reason == "closeout_refused"
 
 
 def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None:
@@ -2536,9 +2718,7 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
                     ],
                 }
             )
-            toolset.choose_next_action(
-                "stop", "completion", None, [], "coverage is complete"
-            )
+            toolset.complete_retrieval()
             return {"messages": [{"role": "assistant", "content": "Complete."}]}
 
         return FakeAgent(invoke)
@@ -3445,4 +3625,3 @@ def test_passage_search_is_charged_its_own_budget_unit() -> None:
 
     assert refused["ok"] is False
     assert refused["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
-

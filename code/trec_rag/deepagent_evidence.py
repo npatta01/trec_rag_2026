@@ -684,6 +684,21 @@ class EvidenceCoverageState:
                 terminal_reason=self._terminal_reason,
             )
 
+    def pending_closeout_need_ids(self) -> tuple[str, ...]:
+        """Return needs with live evidence but no selected draft nuggets."""
+        with self._lock:
+            live_nugget_ids = frozenset(
+                item.nugget_id
+                for item in self._nuggets.values()
+                if item.superseded_by is None
+            )
+            return tuple(
+                need.need_id
+                for need in self._needs.values()
+                if not need.draft_nugget_ids
+                and any(nugget_id in live_nugget_ids for nugget_id in need.nugget_ids)
+            )
+
     def record_search(
         self,
         *,

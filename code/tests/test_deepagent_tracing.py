@@ -283,7 +283,8 @@ def test_researcher_dispatch_and_execution_are_visually_distinct(
 
 
 @pytest.mark.parametrize(
-    "stopping_reason", ["coverage_complete", "evidence_saturated"]
+    "stopping_reason",
+    ["coverage_complete", "evidence_saturated", "closeout_refused"],
 )
 def test_agent_trace_exports_only_bounded_coverage_summary(
     span_exporter: InMemorySpanExporter,

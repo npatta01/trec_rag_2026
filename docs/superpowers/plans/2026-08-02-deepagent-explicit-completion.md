@@ -130,3 +130,10 @@ Expected: all existing tests pass and only the repository's known skips remain; 
 Run: `git diff --check && git status --short --branch && git diff --stat HEAD~2..HEAD`
 
 Expected: no whitespace errors, only scoped source/tests/docs commits, and no secrets or generated artifacts.
+
+## Execution status
+
+- [x] Shared completion invariant and explicit coordinator tool implemented.
+- [x] Silent-exit guard, stopping-reason precedence, and trace whitelist wired.
+- [x] Real LangGraph tests added for successful completion, rejection, and silent-exit redirection.
+- [x] Verification: `PYTHONPATH=code .venv/bin/python -m pytest code/tests/ -q` → 1241 passed, 19 skipped.

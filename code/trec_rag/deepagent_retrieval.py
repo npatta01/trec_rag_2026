@@ -119,6 +119,9 @@ draft_nugget_ids, so choose those few deliberately. If add_nuggets rows come bac
 never entered the ledger: leave the cited needs unsupported and delegate
 researchers for them again. Report conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
 for oversized output or temporary notes. The state filesystem is ephemeral.
+When research is over, write every grounded need's best draft_nugget_ids and
+then call complete_retrieval. Do not use any other completion action: the
+completion tool validates the ledger before recording the terminal transition.
 Only read_file is available from it."""
 
 def _coordinator_prompt(config: ResearchBudgetConfig) -> str:
@@ -552,6 +555,8 @@ class AgentToolset:
     budget: ResearchBudget
     budget_config: ResearchBudgetConfig
     tracing: _Tracing | None = None
+    complete_retrieval: Callable[[], str] | None = None
+    closeout_pending: Callable[[], bool] | None = None
 
 
 AgentFactory = Callable[[str, AgentToolset], _Agent]
@@ -669,15 +674,19 @@ def _create_agent(
         budget_config=toolset.budget_config,
     )
 
+    coordinator_tools = [
+        toolset.view_retrieval_state,
+        toolset.update_retrieval_state,
+        toolset.complete_research_round,
+    ]
+    if toolset.complete_retrieval is not None:
+        coordinator_tools.append(toolset.complete_retrieval)
+
     return cast(
         _Agent,
         create_deep_agent(
             model=provider_model,
-            tools=[
-                toolset.view_retrieval_state,
-                toolset.update_retrieval_state,
-                toolset.complete_research_round,
-            ],
+            tools=coordinator_tools,
             system_prompt=_coordinator_prompt(toolset.budget_config),
             middleware=[
                 ModelCallLimitMiddleware(
@@ -690,7 +699,11 @@ def _create_agent(
                     exit_behavior="continue",
                 ),
                 ResearchTaskBudgetMiddleware(toolset.budget, tracing=toolset.tracing),
-                MainToolFilterMiddleware(toolset.budget, toolset.budget_config),
+                MainToolFilterMiddleware(
+                    toolset.budget,
+                    toolset.budget_config,
+                    closeout_pending=toolset.closeout_pending,
+                ),
             ],
             subagents=[researcher],
             backend=StateBackend(),
@@ -1612,6 +1625,30 @@ class DeepAgentRetriever:
                 sort_keys=True,
             )
 
+        def complete_retrieval() -> str:
+            """Validate draft coverage, then record the terminal completion."""
+            pending_need_ids = coverage_state.pending_closeout_need_ids()
+            if pending_need_ids:
+                budget.note_closeout_refused()
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "code": "INCOMPLETE_CLOSEOUT",
+                        "need_ids": list(pending_need_ids),
+                    },
+                    sort_keys=True,
+                )
+            result = coverage_state.choose_action(
+                action="stop",
+                target="completion",
+                focus_query=None,
+                motivating_ids=[],
+                rationale="explicit retrieval completion",
+            )
+            if not result.get("ok", False):
+                budget.note_closeout_refused()
+            return json.dumps(result, sort_keys=True)
+
         def choose_next_action(
             action: str,
             target: str,
@@ -1627,6 +1664,11 @@ class DeepAgentRetriever:
             if validated_action != "stop" or invalid_focus:
                 return json.dumps(
                     {"ok": False, "code": "INVALID_ACTION"}, sort_keys=True
+                )
+            if target == "completion":
+                return json.dumps(
+                    {"ok": False, "code": "COMPLETE_RETRIEVAL_REQUIRED"},
+                    sort_keys=True,
                 )
             return json.dumps(
                 coverage_state.choose_action(
@@ -1653,11 +1695,15 @@ class DeepAgentRetriever:
                         extract_relevant_snippets=extract_relevant_snippets,
                         view_retrieval_state=view_retrieval_state,
                         update_retrieval_state=update_retrieval_state,
+                        complete_retrieval=complete_retrieval,
                         complete_research_round=complete_research_round,
                         choose_next_action=choose_next_action,
                         budget=budget,
                         budget_config=self._budget_config,
                         tracing=self._tracing,
+                        closeout_pending=lambda: bool(
+                            coverage_state.pending_closeout_need_ids()
+                        ),
                     ),
                 )
                 initial_results = json.dumps(
@@ -1686,6 +1732,11 @@ class DeepAgentRetriever:
                     searches, limit=self._fused_result_limit
                 )
                 coverage_report = coverage_state.report()
+                if (
+                    coverage_report.terminal_reason is None
+                    and coverage_state.pending_closeout_need_ids()
+                ):
+                    budget.note_closeout_refused()
                 budget_snapshot = budget.snapshot()
                 stopping_reason = (
                     # An unreachable index outranks the coverage story, which
@@ -1697,6 +1748,11 @@ class DeepAgentRetriever:
                     or (
                         "budget_exhausted"
                         if budget_snapshot.stop_code is not None
+                        else None
+                    )
+                    or (
+                        "closeout_refused"
+                        if budget.closeout_refused()
                         else None
                     )
                     or "agent_completed"

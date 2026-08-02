@@ -235,6 +235,64 @@ def test_frontier_counts_grounded_nuggets_per_need() -> None:
     assert [item["grounded_nugget_count"] for item in covered] == [1]
 
 
+def test_pending_closeout_needs_only_include_live_evidence_without_drafts() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta())
+
+    assert state.pending_closeout_need_ids() == ("n1",)
+
+    state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "More detail would help.",
+                    "draft_nugget_ids": ["g1"],
+                }
+            ]
+        }
+    )
+
+    assert state.pending_closeout_need_ids() == ()
+
+
+def test_pending_closeout_ignores_superseded_only_evidence() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "n2",
+                    "narrative_span": "what challenges do they face",
+                    "question": "What challenges do migrants face?",
+                }
+            ]
+        }
+    )
+    state.apply_delta(_grounded_nugget_delta("g1"))
+    state.apply_delta(
+        {
+            "add_nuggets": [
+                {
+                    "nugget_id": "g2",
+                    "text": "Challenges follow displacement.",
+                    "need_ids": ["n2"],
+                    "facet_ids": [],
+                    "evidence": [{"cite": "S1"}],
+                }
+            ]
+        }
+    )
+    state.apply_delta(
+        {"supersede_nuggets": [{"nugget_id": "g1", "superseded_by": "g2"}]}
+    )
+
+    assert state.pending_closeout_need_ids() == ("n2",)
+
+
 def test_frontier_count_ignores_a_status_the_agent_got_wrong() -> None:
     state = _state_with_snippet()
     _add_need_and_facet(state)

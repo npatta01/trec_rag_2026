@@ -75,7 +75,9 @@ _CLOSEOUT_DIRECTIVE = (
     "listing the few best of them: use \"answerable\" with a draft_answer "
     "where the evidence answers the need, and \"partial\" with an honest "
     "remaining_gap where it does not. The selection is what matters and is "
-    "capped, so choose deliberately. Claim nothing the nuggets do not support."
+    "capped, so choose deliberately. Claim nothing the nuggets do not support. "
+    "After recording the write-up, call complete_retrieval as the only terminal "
+    "action."
 )
 
 
@@ -266,6 +268,7 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             "task",
             "view_retrieval_state",
             "update_retrieval_state",
+            "complete_retrieval",
             "complete_research_round",
             "read_file",
         }

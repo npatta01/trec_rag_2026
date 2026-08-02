@@ -391,6 +391,7 @@ class _AgentSpan(_SafeSpan):
             "agent_completed",
             "search_budget_exhausted",
             "budget_exhausted",
+            "closeout_refused",
             "retrieval_unavailable",
             "completion",
             "saturation",
