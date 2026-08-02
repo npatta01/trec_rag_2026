@@ -267,6 +267,15 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         run_count = request.state.get("run_model_call_count", 0)
         stop_code = self._budget.snapshot().stop_code
         model_limit_reached = run_count >= self._budget_config.max_main_models - 1
+        # Research stops early enough to leave the reserve for writing up, so
+        # synthesis is reached by running out of research turns and not only by
+        # a stop code arriving first.
+        research_turns_spent = run_count >= max(
+            0,
+            self._budget_config.max_main_models
+            - 1
+            - self._budget_config.synthesis_reserve_turns,
+        )
         if model_limit_reached and stop_code is None:
             # The ceiling is ending this run, so the result must not read as a
             # voluntary agent_completed.
@@ -289,7 +298,7 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             pending_round = self._budget.pending_round_closure()
             if pending_round is not None:
                 return self._directed(filtered, *self._closure_directive(pending_round))
-            if stop_code is None:
+            if stop_code is None and not research_turns_spent:
                 return filtered
             if not self._synthesis_granted:
                 self._synthesis_granted = True

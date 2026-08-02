@@ -946,32 +946,58 @@ def _state_with_degenerate_sentence():
     return state
 
 
-def test_a_citation_that_resolves_to_a_list_marker_is_refused() -> None:
-    """The live failure: a valid handle is not the same as supporting text."""
+def test_the_splitter_rejoins_fragments_it_split_off_a_real_sentence() -> None:
+    """The live failure at source: "Plyler v." was its own citable span."""
+    state = _state_with_degenerate_sentence()
+    observation = next(iter(state._snippets.values()))
+    spans = [
+        observation.text[start:end] for start, end in observation.sentence_spans
+    ]
+
+    assert spans == [
+        "Plyler v. Doe concerned schooling.",
+        "2. States may not charge tuition.",
+    ]
+
+
+def test_every_span_the_splitter_emits_is_citable() -> None:
     state = _state_with_degenerate_sentence()
     _add_need_and_facet(state)
 
-    # S1.1 is "Plyler v." and S1.3 is "2." — both minted by the splitter.
-    marker = state.apply_delta(_nugget_with("S1.3", nugget_id="m1"))
-    case_name = state.apply_delta(_nugget_with("S1.1", nugget_id="m2"))
-
-    assert marker.accepted_ids == ()
-    assert [r.code for r in marker.rejected] == ["DEGENERATE_CITATION"]
-    assert case_name.accepted_ids == ()
-    assert [r.code for r in case_name.rejected] == ["DEGENERATE_CITATION"]
+    for index in range(1, 3):
+        result = state.apply_delta(
+            _nugget_with(f"S1.{index}", nugget_id=f"n{index}")
+        )
+        assert result.accepted_ids == (f"n{index}",), result.rejected
 
 
-def test_a_substantive_sentence_in_the_same_snippet_is_still_citable() -> None:
-    """The refusal must cost only the empty span, not the whole snippet."""
-    state = _state_with_degenerate_sentence()
+def test_a_wholly_degenerate_snippet_is_still_refused_as_a_backstop() -> None:
+    """Merging cannot save a snippet that is nothing but a marker."""
+    state = EvidenceCoverageState(
+        "Why do people migrate and what challenges do they face?"
+    )
+    state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="immigration law",
+            snippets=(RelevantSnippet("doc-a:0001", 0, 2, "2.", 0.9),),
+            next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.9,
+            pages_estimated=1,
+        )
+    )
     _add_need_and_facet(state)
 
-    result = state.apply_delta(_nugget_with("S1.4"))
+    result = state.apply_delta(_nugget_with("S1"))
 
-    assert result.accepted_ids == ("x1",)
+    assert result.accepted_ids == ()
+    assert [r.code for r in result.rejected] == ["DEGENERATE_CITATION"]
 
 
-def test_whole_snippet_citation_survives_a_degenerate_sentence_inside_it() -> None:
+def test_whole_snippet_citation_still_works() -> None:
     state = _state_with_degenerate_sentence()
     _add_need_and_facet(state)
 

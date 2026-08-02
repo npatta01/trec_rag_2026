@@ -66,7 +66,43 @@ def _sentence_spans(text: str) -> tuple[tuple[int, int], ...]:
         start = match.end()
     if start < len(text):
         spans.extend(_capped_spans(text, start, len(text)))
-    return tuple(spans) or ((0, len(text)),)
+    return tuple(_merged_fragments(text, spans)) or ((0, len(text)),)
+
+
+def _merged_fragments(
+    text: str, spans: Sequence[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Rejoin fragments the sentence regex split off a real sentence.
+
+    A period is not always a sentence end. The regex breaks on the "v." of a
+    case name and on numbered list markers, so a live run produced citable
+    spans reading "Plyler v.", "2." and "B." - and a researcher attached a
+    Supreme Court holding to the first of them.
+
+    Merging forward reconstructs the sentence ("Plyler v." + "Doe concerned
+    schooling.") rather than discarding the fragment, so no text becomes
+    uncitable. Only the split is repaired; nothing here touches a citation or
+    an identifier, which are never repaired.
+    """
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and _content_word_count(text[merged[-1][0] : merged[-1][1]]) < (
+            _MIN_CITATION_CONTENT_WORDS
+        ):
+            previous_start, _ = merged.pop()
+            merged.append((previous_start, end))
+            continue
+        merged.append((start, end))
+    # A trailing fragment has nothing after it to merge into, so it folds back.
+    while (
+        len(merged) > 1
+        and _content_word_count(text[merged[-1][0] : merged[-1][1]])
+        < _MIN_CITATION_CONTENT_WORDS
+    ):
+        start, end = merged.pop()
+        previous_start, _ = merged.pop()
+        merged.append((previous_start, end))
+    return merged
 _DELTA_SECTIONS = (
     "add_needs",
     "add_facets",

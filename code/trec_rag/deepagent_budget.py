@@ -65,6 +65,13 @@ class ResearchBudgetConfig:
     # close) plus decomposition and recovery, so this must clear one round
     # per researcher with margin or a productive run is cut off mid-round.
     max_main_models: int = 40
+    # Turns held back so synthesis always gets one. Without a reserve,
+    # whether answers get written is a race: a run that hits a stop code
+    # first is granted a synthesis turn, and a run that exhausts its
+    # coordinator turns first is told to return immediately and writes
+    # none. That is why answerable came out 5-of-7 in one run and 0-of-5
+    # in the next, with the second holding more evidence than the first.
+    synthesis_reserve_turns: int = 2
     # Pacing hosted search every six seconds puts a full run near eleven
     # minutes before any thinking, so the old ten-minute soft deadline fired
     # on healthy runs. These bound a runaway, not a normal one.
@@ -84,6 +91,7 @@ class ResearchBudgetConfig:
             "max_passage_searches_per_researcher",
             "max_models_per_researcher",
             "max_main_models",
+            "synthesis_reserve_turns",
             "no_yield_calls",
             "no_progress_rounds",
         )

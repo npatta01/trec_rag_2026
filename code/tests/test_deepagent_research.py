@@ -955,3 +955,70 @@ def test_researcher_spec_keeps_the_main_model_and_excludes_todos() -> None:
     )
     assert all(type(item).__name__ != "TodoListMiddleware" for item in spec["middleware"])
     assert "task" not in visible_tools(spec["middleware"][-1], ALL_TOOLS)
+
+
+def test_synthesis_is_reached_by_spending_research_turns_not_only_by_a_stop_code() -> None:
+    """Whether answers get written must not be a race between two limits.
+
+    A run that hit a stop code first was granted a synthesis turn and wrote
+    draft answers; a run that exhausted its coordinator turns first was told to
+    return immediately and wrote none, while holding more evidence. The reserve
+    makes synthesis reachable either way.
+    """
+    config = ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=2)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    def visible(run_count: int):
+        request = ModelRequest(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+            messages=[],
+            tools=[{"name": name} for name in ALL_TOOLS],
+            model_settings={"parallel_tool_calls": True},
+            state={"run_model_call_count": run_count},
+        )
+        seen = {}
+
+        def handler(filtered):
+            seen["tools"] = [t["name"] for t in filtered.tools]
+            seen["choice"] = filtered.tool_choice
+            seen["system"] = str(filtered.system_message)
+            return ModelResponse(result=[AIMessage(content="unused")])
+
+        middleware.wrap_model_call(request, handler)
+        return seen
+
+    # Early on, with no stop code, the coordinator is left alone.
+    assert visible(0)["choice"] is None
+
+    # Once research turns are spent, synthesis is compelled even though no
+    # stop code has been raised and the model ceiling has not been hit.
+    late = visible(config.max_main_models - 1 - config.synthesis_reserve_turns)
+    assert late["choice"] == "update_retrieval_state"
+    assert "draft_answer" in late["system"]
+
+
+def test_the_synthesis_reserve_is_configurable_and_counted_from_the_ceiling() -> None:
+    config = ResearchBudgetConfig(max_main_models=20, synthesis_reserve_turns=5)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config)
+
+    def choice_at(run_count: int):
+        request = ModelRequest(
+            model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+            messages=[],
+            tools=[{"name": name} for name in ALL_TOOLS],
+            model_settings={"parallel_tool_calls": True},
+            state={"run_model_call_count": run_count},
+        )
+        seen = {}
+
+        def handler(filtered):
+            seen["choice"] = filtered.tool_choice
+            return ModelResponse(result=[AIMessage(content="unused")])
+
+        middleware.wrap_model_call(request, handler)
+        return seen["choice"]
+
+    assert choice_at(13) is None
+    assert choice_at(14) == "update_retrieval_state"
