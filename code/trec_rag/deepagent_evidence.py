@@ -105,6 +105,11 @@ class NuggetDelta(TypedDict):
     facet_ids: list[str]
     evidence: list[EvidenceDelta]
     contradicts: NotRequired[list[str]]
+    # "vital" marks a claim a good answer must contain, in the sense the
+    # AutoNuggetizer rubric uses. It defaults to "okay": with 107 claims and a
+    # 1,024-word answer cap something has to rank them, and claiming vital by
+    # default would rank nothing.
+    importance: NotRequired[Literal["vital", "okay"]]
 
 
 class AddEvidenceDelta(TypedDict):
@@ -245,6 +250,8 @@ class NuggetReport:
     contradicts: tuple[str, ...]
     support: Literal["single_document", "multi_document"]
     superseded_by: str | None
+    importance: Literal["vital", "okay"] = "okay"
+    support_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -335,6 +342,8 @@ class _Nugget:
     evidence: list[_EvidenceSpan]
     contradicts: list[str]
     superseded_by: str | None = None
+    importance: Literal["vital", "okay"] = "okay"
+    support_ratio: float = 0.0
 
 
 @dataclass
@@ -395,6 +404,47 @@ def _string_ids(value: object) -> tuple[str, ...] | None:
         return None
     items = tuple(item for item in value if _nonblank(item) is not None)
     return items if len(items) == len(value) and len(set(items)) == len(items) else None
+
+
+# A cited span with fewer than this many content words cannot carry a claim.
+# Refusing a citation costs the researcher its claim, so this is set to the
+# least aggressive value that still catches the documented harm: the live run
+# attached a full Supreme Court holding to "Plyler v." (one content word) and
+# other claims to "2.", "B." and "Yes." (zero to one). Two-word spans such as
+# "Outside support." are left citable deliberately; the support ratio still
+# records when a claim leans on one.
+_MIN_CITATION_CONTENT_WORDS = 2
+
+_STOPWORDS = frozenset(
+    "the a an and or of to in for on with that this these those is are was were"
+    " be been by as at from it its their they them we our you your not no can"
+    " may might will would should could have has had do does did than then so"
+    " such other some more most many much into over under between about which"
+    " who what when where how".split()
+)
+
+_WORD = re.compile(r"[A-Za-z][A-Za-z\-']+")
+
+
+def _content_word_count(text: str) -> int:
+    return sum(1 for word in _WORD.findall(text) if word.lower() not in _STOPWORDS)
+
+
+def claim_support_ratio(claim: str, cited_text: str) -> float:
+    """Fraction of the claim's content words that appear in the text it cites.
+
+    A screen, not an entailment proof. It cannot confirm a claim is supported,
+    but a claim whose words are almost entirely absent from what it cites is
+    drawing on something other than the retrieved evidence, which is the
+    failure worth catching: a Supreme Court holding cited to a span reading
+    only "Plyler v.".
+    """
+    words = [word.lower() for word in _WORD.findall(claim)]
+    content = [word for word in words if word not in _STOPWORDS]
+    if not content:
+        return 0.0
+    haystack = cited_text.lower()
+    return sum(1 for word in content if word in haystack) / len(content)
 
 
 def _normalised_whitespace(value: str) -> str:
@@ -518,6 +568,8 @@ class EvidenceCoverageState:
             tuple(item.contradicts),
             support,
             item.superseded_by,
+            item.importance,
+            item.support_ratio,
         )
 
     def _document_report(self, item: _DocumentFocus) -> DocumentFocusReport:
@@ -698,8 +750,22 @@ class EvidenceCoverageState:
                 last = int(match.group(3)) if match.group(3) is not None else first
             if first < 1 or last < first or last > sentence_count:
                 return "INVALID_CITATION"
+            # A citation that resolves is not the same as a citation that
+            # supports. The sentence splitter breaks on list markers and on
+            # abbreviations such as the "v." in a case name, producing spans
+            # like "2.", "B." or "Plyler v." that are perfectly citable and
+            # carry nothing. Measured live: 12 of 548 cited spans were under
+            # five words, and one nugget attached a full Supreme Court holding
+            # to the two-word span "Plyler v.".
+            if _content_word_count(self._span_text(snippet_id, first, last)) < _MIN_CITATION_CONTENT_WORDS:
+                return "DEGENERATE_CITATION"
             spans.append(_EvidenceSpan(snippet_id, first, last))
         return tuple(spans)
+
+    def _span_text(self, snippet_id: str, first: int, last: int) -> str:
+        observation = self._snippets[snippet_id]
+        selected = observation.sentence_spans[first - 1 : last]
+        return " ".join(observation.text[start:end] for start, end in selected)
 
     def _evidence_reference(self, span: _EvidenceSpan) -> EvidenceReference:
         """Derive the reported quote from stored sentences, never from an agent."""
@@ -825,10 +891,34 @@ class EvidenceCoverageState:
             return "UNKNOWN_FACET"
         if any(other_id not in self._nuggets for other_id in contradicts):
             return "UNKNOWN_NUGGET"
+        importance = row.get("importance", "okay")
+        if importance not in {"vital", "okay"}:
+            return "INVALID_IMPORTANCE"
         evidence = self._resolve_citations(row.get("evidence"))
         if isinstance(evidence, str):
             return evidence
-        self._nuggets[nugget_id] = _Nugget(nugget_id, text, list(need_ids), list(facet_ids), list(evidence), list(contradicts))
+        # Recorded, never used to reject. A low ratio means the claim's words
+        # are largely absent from what it cites, which is worth surfacing to
+        # whatever builds the answer; it is not proof of a bad claim, and
+        # discarding grounded evidence on a lexical screen would cost more
+        # than it saves.
+        support_ratio = claim_support_ratio(
+            text,
+            " ".join(
+                self._span_text(span.snippet_id, span.first_sentence, span.last_sentence)
+                for span in evidence
+            ),
+        )
+        self._nuggets[nugget_id] = _Nugget(
+            nugget_id,
+            text,
+            list(need_ids),
+            list(facet_ids),
+            list(evidence),
+            list(contradicts),
+            importance=importance,
+            support_ratio=support_ratio,
+        )
         for need_id in need_ids:
             self._needs[need_id].nugget_ids.append(nugget_id)
         for other_id in contradicts:

@@ -899,3 +899,145 @@ def test_paginate_action_requires_a_recorded_page_for_exact_document_focus() -> 
         )
         is None
     )
+
+
+def _nugget_with(cite: str, text: str = "A claim.", **extra):
+    row = {
+        "nugget_id": extra.pop("nugget_id", "x1"),
+        "text": text,
+        "need_ids": ["n1"],
+        "facet_ids": ["f1"],
+        "evidence": [{"cite": cite}],
+        "contradicts": [],
+    }
+    row.update(extra)
+    return {"add_nuggets": [row]}
+
+
+def _state_with_degenerate_sentence():
+    """A snippet whose splitter output includes a list marker and a case name.
+
+    Both are what the live run actually produced: the sentence splitter breaks
+    on "v." and on numbered list markers, minting citable spans that carry no
+    information.
+    """
+    state = EvidenceCoverageState("Why do people migrate and what challenges do they face?")
+    state.record_snippet_page(
+        SnippetPage(
+            document_id="doc-a",
+            focus_query="immigration law",
+            snippets=(
+                RelevantSnippet(
+                    "doc-a:0001",
+                    0,
+                    120,
+                    "Plyler v. Doe concerned schooling. 2. States may not charge tuition.",
+                    0.9,
+                ),
+            ),
+            next_cursor=None,
+            page_index=0,
+            residual_count=0,
+            residual_top_score=None,
+            returned_min_score=0.9,
+            pages_estimated=1,
+        )
+    )
+    return state
+
+
+def test_a_citation_that_resolves_to_a_list_marker_is_refused() -> None:
+    """The live failure: a valid handle is not the same as supporting text."""
+    state = _state_with_degenerate_sentence()
+    _add_need_and_facet(state)
+
+    # S1.1 is "Plyler v." and S1.3 is "2." — both minted by the splitter.
+    marker = state.apply_delta(_nugget_with("S1.3", nugget_id="m1"))
+    case_name = state.apply_delta(_nugget_with("S1.1", nugget_id="m2"))
+
+    assert marker.accepted_ids == ()
+    assert [r.code for r in marker.rejected] == ["DEGENERATE_CITATION"]
+    assert case_name.accepted_ids == ()
+    assert [r.code for r in case_name.rejected] == ["DEGENERATE_CITATION"]
+
+
+def test_a_substantive_sentence_in_the_same_snippet_is_still_citable() -> None:
+    """The refusal must cost only the empty span, not the whole snippet."""
+    state = _state_with_degenerate_sentence()
+    _add_need_and_facet(state)
+
+    result = state.apply_delta(_nugget_with("S1.4"))
+
+    assert result.accepted_ids == ("x1",)
+
+
+def test_whole_snippet_citation_survives_a_degenerate_sentence_inside_it() -> None:
+    state = _state_with_degenerate_sentence()
+    _add_need_and_facet(state)
+
+    assert state.apply_delta(_nugget_with("S1")).accepted_ids == ("x1",)
+
+
+def test_importance_defaults_to_okay_rather_than_claiming_vital() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    state.apply_delta(_nugget_with("S1"))
+
+    assert state.report().nuggets[0].importance == "okay"
+
+
+def test_importance_can_be_declared_vital() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    state.apply_delta(_nugget_with("S1", importance="vital"))
+
+    assert state.report().nuggets[0].importance == "vital"
+
+
+def test_an_unknown_importance_label_is_refused_not_coerced() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    result = state.apply_delta(_nugget_with("S1", importance="critical"))
+
+    assert result.accepted_ids == ()
+    assert [r.code for r in result.rejected] == ["INVALID_IMPORTANCE"]
+
+
+def test_support_ratio_separates_a_grounded_claim_from_a_recited_one() -> None:
+    """The measured failure mode: a claim whose words are not in what it cites."""
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    state.apply_delta(
+        _nugget_with("S1.2", text="Persecution forces flight.", nugget_id="grounded")
+    )
+    state.apply_delta(
+        _nugget_with(
+            "S1.2",
+            text=(
+                "The Supreme Court held that the Equal Protection Clause bars "
+                "states from denying enrollment to undocumented children."
+            ),
+            nugget_id="recited",
+        )
+    )
+
+    ratios = {n.nugget_id: n.support_ratio for n in state.report().nuggets}
+    assert ratios["grounded"] > ratios["recited"]
+    assert ratios["recited"] < 0.5
+
+
+def test_support_ratio_never_rejects_a_claim() -> None:
+    """A lexical screen must not discard grounded evidence."""
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    result = state.apply_delta(
+        _nugget_with("S1.2", text="Entirely unrelated vocabulary about spacecraft.")
+    )
+
+    assert result.accepted_ids == ("x1",)
+    assert state.report().nuggets[0].support_ratio < 0.5
