@@ -1510,24 +1510,42 @@ def _generation_identity(config: RagGenerationConfig) -> dict[str, Any]:
     would still validate whenever their references happen to survive.
     """
     return {
+        # Bump when the recorded fields change, so an identity written by an older revision
+        # fails closed instead of comparing unequal for a reason the operator cannot see.
+        "identity_version": 2,
         "run_sha256": _file_digest(config.run_path),
         "documents_sha256": _file_digest(config.documents_path),
+        "archive_member": config.archive_member,
         "model": config.model,
         "provider": config.provider,
+        "api_base": config.api_base,
         "reasoning_effort": config.reasoning_effort,
         "prompt_profile": config.prompt_profile,
         "structured_output": config.structured_output,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
         "top_k": config.top_k,
         "max_document_words": config.max_document_words,
     }
 
 
 def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) -> None:
-    """Refuse to resume into rows generated under different settings."""
+    """Refuse to resume into rows generated under different settings.
+
+    Fails closed. Rows that predate identity tracking, or that were recorded by an older
+    identity version, cannot be shown to match the current settings, so they are rejected rather
+    than adopted: adopting them would publish one file mixing two systems.
+    """
     identity_path = work_dir / "generation_identity.json"
     identity = _generation_identity(config)
     if identity_path.exists():
         recorded = json.loads(identity_path.read_text(encoding="utf-8"))
+        if recorded.get("identity_version") != identity["identity_version"]:
+            raise ValueError(
+                "existing generation rows were recorded by an older revision and cannot be "
+                "verified against the current settings; use experiment.mode: overwrite or a "
+                "new experiment.id"
+            )
         if recorded != identity:
             changed = sorted(
                 key for key in set(recorded) | set(identity)
@@ -1538,6 +1556,12 @@ def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) ->
                 f"({', '.join(changed)}); use experiment.mode: overwrite or a new experiment.id"
             )
         return
+    if _work_has_artifacts(work_dir):
+        raise ValueError(
+            "existing generation rows predate settings tracking and cannot be verified "
+            "against the current settings; use experiment.mode: overwrite or a new "
+            "experiment.id"
+        )
     _write_json(identity_path, identity)
 
 

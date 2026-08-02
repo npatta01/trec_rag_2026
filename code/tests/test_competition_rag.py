@@ -1528,6 +1528,83 @@ def test_resume_refuses_rows_generated_under_different_settings(tmp_path: Path) 
         asyncio.run(run_generation(changed, FakeGenerator({"rag2026-1": generated})))
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"max_tokens": 7000}, id="max-tokens"),
+        pytest.param({"temperature": 0.2}, id="temperature"),
+        pytest.param({"api_base": "https://elsewhere.test"}, id="api-base"),
+        pytest.param({"model": "other/model"}, id="model"),
+    ],
+)
+def test_resume_refuses_any_request_affecting_change(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
+    """Every setting that reaches the request must invalidate a resume."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    with pytest.raises(ValueError, match="different settings"):
+        asyncio.run(
+            run_generation(
+                replace(config, resume=True, **change), FakeGenerator({"rag2026-1": generated})
+            )
+        )
+
+
+def test_generation_identity_covers_every_request_and_input_selector(tmp_path: Path) -> None:
+    """archive_member fails earlier during input loading, so assert it directly."""
+    config = _pipeline_config(tmp_path)
+    base = competition_rag._generation_identity(config)
+
+    for field, value in [
+        ("archive_member", "other.jsonl"),
+        ("temperature", 0.2),
+        ("max_tokens", 7000),
+        ("api_base", "https://elsewhere.test"),
+        ("structured_output", "json_object"),
+        ("prompt_profile", "focused_citations_tail"),
+        ("top_k", 50),
+        ("max_document_words", 500),
+    ]:
+        changed = competition_rag._generation_identity(replace(config, **{field: value}))
+        assert changed != base, f"{field} does not invalidate the identity"
+
+
+def test_resume_refuses_rows_that_predate_settings_tracking(tmp_path: Path) -> None:
+    """A workdir from before identity tracking cannot be shown to match; adopt nothing."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+    (config.work_dir / "generation_identity.json").unlink()
+
+    with pytest.raises(ValueError, match="predate settings tracking"):
+        asyncio.run(run_generation(replace(config, resume=True), FakeGenerator({})))
+
+
+def test_resume_refuses_an_older_identity_version(tmp_path: Path) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+    path = config.work_dir / "generation_identity.json"
+    recorded = json.loads(path.read_text())
+    recorded["identity_version"] = 1
+    path.write_text(json.dumps(recorded), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="older revision"):
+        asyncio.run(run_generation(replace(config, resume=True), FakeGenerator({})))
+
+
 def test_resume_accepts_rows_generated_under_the_same_settings(tmp_path: Path) -> None:
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
     generated = {

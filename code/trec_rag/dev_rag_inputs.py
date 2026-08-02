@@ -86,13 +86,13 @@ def select_passages(
     """
     if budget_words <= 0:
         raise ValueError("budget_words must be a positive integer")
-    words = text.split()
-    if len(words) <= budget_words:
+    words_all = text.split()
+    if len(words_all) <= budget_words:
         return text
 
     wanted = set(_content_terms(query))
     if not wanted:
-        return " ".join(words[:budget_words])
+        return " ".join(words_all[:budget_words])
 
     if chunker is None:
         chunker = SemanticTextChunker(
@@ -102,46 +102,58 @@ def select_passages(
         )
     chunks = chunker.split_text(text, document_id="passage")
     if not chunks:
-        return " ".join(words[:budget_words])
+        return " ".join(words_all[:budget_words])
 
-    scored: list[tuple[float, int]] = []
+    # An over-budget chunk is windowed down rather than skipped. Skipping it would silently
+    # prefer a weaker chunk that happens to fit, and would also bypass the fallback below.
+    candidates: list[tuple[float, int, str]] = []
     for index, chunk in enumerate(chunks):
+        words = chunk.text.split()
         terms = _content_terms(chunk.text)
         present = wanted.intersection(terms)
         if not present:
             continue
         matches = sum(1 for term in terms if term in wanted)
-        scored.append((len(present) + 0.05 * matches, index))
-    if not scored:
-        return " ".join(words[:budget_words])
+        if len(words) > budget_words:
+            words = _window_around_match(words, wanted, budget_words)
+        candidates.append((len(present) + 0.05 * matches, index, " ".join(words)))
+    if not candidates:
+        return " ".join(words_all[:budget_words])
 
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    chosen: list[int] = []
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    chosen: list[tuple[int, str]] = []
     used = 0
-    for _, index in scored:
+    for _, index, text_ in candidates:
         # The " ... " joiner contributes one whitespace-separated token per gap.
-        cost = len(chunks[index].text.split()) + (1 if chosen else 0)
+        cost = len(text_.split()) + (1 if chosen else 0)
         if used + cost > budget_words:
             continue
-        chosen.append(index)
+        chosen.append((index, text_))
         used += cost
         if used >= budget_words:
             break
 
     if not chosen:
-        # Every chunk exceeds the budget on its own. Take a budget-sized window centred on the
-        # best chunk's first query-term match; a blind prefix can contain no query terms at all
-        # when the match falls late in the chunk.
-        best = chunks[scored[0][1]].text.split()
-        first = next(
-            (i for i, word in enumerate(best) if _content_terms(word) and _content_terms(word)[0] in wanted),
-            0,
-        )
-        start = max(0, min(first - budget_words // 2, len(best) - budget_words))
-        return " ".join(best[start : start + budget_words])
+        return candidates[0][2]
 
     chosen.sort()
-    return " ... ".join(chunks[index].text for index in chosen)
+    return " ... ".join(text_ for _, text_ in chosen)
+
+
+def _window_around_match(words: list[str], wanted: set[str], budget_words: int) -> list[str]:
+    """Return a budget-sized window centred on the first query-term match.
+
+    A blind prefix can contain no query term at all when the match falls late, and a token may
+    carry several content terms once punctuation or hyphenation is split, so every term of a
+    token is considered rather than only the first.
+    """
+    first = 0
+    for position, word in enumerate(words):
+        if wanted.intersection(_content_terms(word)):
+            first = position
+            break
+    start = max(0, min(first - budget_words // 2, len(words) - budget_words))
+    return words[start : start + budget_words]
 
 
 def archive_path(cache_dir: Path, topic_id: str) -> Path:
