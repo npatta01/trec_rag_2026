@@ -556,8 +556,17 @@ def load_documents(
     archive_member: str | None,
     wanted_docids: set[str],
     max_words: int,
+    *,
+    topic_ids: set[str] | None = None,
 ) -> dict[str, str]:
-    """Read organizer query-bundled documents while allowing extension fields."""
+    """Read organizer query-bundled documents while allowing extension fields.
+
+    ``topic_ids`` restricts harvesting to rows for the selected topics. The archive is keyed by
+    topic, so without it a document could be taken from a different topic's row whenever the two
+    share a docid, grounding an answer in evidence retrieved for another narrative. Callers on
+    the submission path must pass it; a missing topic then surfaces as an unresolved docid
+    rather than as silently borrowed text.
+    """
     if not wanted_docids:
         raise ValueError("at least one wanted docid is required")
     if isinstance(max_words, bool) or not isinstance(max_words, int) or max_words <= 0:
@@ -577,6 +586,8 @@ def load_documents(
             candidates = record.get("candidates")
             if not isinstance(query, dict) or not _nonempty_text(query.get("qid")):
                 raise ValueError(f"{path}:{line_number}: organizer query core is invalid")
+            if topic_ids is not None and str(query["qid"]) not in topic_ids:
+                continue
             if not isinstance(candidates, list):
                 raise ValueError(f"{path}:{line_number}: organizer candidates core is invalid")
             for candidate in candidates:
@@ -1533,9 +1544,10 @@ def _generation_identity(config: RagGenerationConfig) -> dict[str, Any]:
     would still validate whenever their references happen to survive.
     """
     return {
-        # Bump when the recorded fields change, so an identity written by an older revision
-        # fails closed instead of comparing unequal for a reason the operator cannot see.
-        "identity_version": 2,
+        # Bump when the recorded fields change OR when the acceptance policy changes, so rows
+        # written under looser rules are not adopted. Version 3 requires finish_reason "stop";
+        # version 2 rows may have been accepted with "error", "content_filter", or none at all.
+        "identity_version": 3,
         "run_sha256": _file_digest(config.run_path),
         "documents_sha256": _file_digest(config.documents_path),
         "archive_member": config.archive_member,
@@ -1610,6 +1622,7 @@ async def _run_generation_locked(
         config.archive_member,
         wanted_docids,
         config.max_document_words,
+        topic_ids={topic_id for topic_id, _ in topics},
     )
     # After the fallible input loading, so a failed overwrite leaves no work directory behind.
     work_dir.mkdir(parents=True, exist_ok=True)

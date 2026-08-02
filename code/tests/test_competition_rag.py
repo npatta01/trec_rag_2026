@@ -1627,6 +1627,49 @@ def test_generation_identity_covers_every_request_and_input_selector(tmp_path: P
         assert changed != base, f"{field} does not invalidate the identity"
 
 
+def test_documents_are_bound_to_the_selected_topics(tmp_path: Path) -> None:
+    """The archive is keyed by topic; a shared docid must not borrow another topic's text."""
+    archive = tmp_path / "documents.jsonl"
+    archive.write_text(
+        json.dumps(
+            {
+                "query": {"qid": "rag2026-9"},
+                "candidates": [{"docid": "shared", "doc": "evidence retrieved for topic nine"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    # Without binding the wrong topic's evidence is silently accepted.
+    assert load_documents(archive, None, {"shared"}, 100) == {
+        "shared": "evidence retrieved for topic nine"
+    }
+    # With binding the mismatch surfaces instead.
+    with pytest.raises(ValueError, match="missing 1 ranked documents"):
+        load_documents(archive, None, {"shared"}, 100, topic_ids={"rag2026-1"})
+
+
+def test_identity_version_rejects_rows_written_under_the_older_finish_policy(
+    tmp_path: Path,
+) -> None:
+    """Version 2 rows may have been accepted with a non-stop finish reason."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+    path = config.work_dir / "generation_identity.json"
+    recorded = json.loads(path.read_text())
+    assert recorded["identity_version"] == 3
+    recorded["identity_version"] = 2
+    path.write_text(json.dumps(recorded), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="older revision"):
+        asyncio.run(run_generation(replace(config, resume=True), FakeGenerator({})))
+
+
 def test_resume_refuses_rows_that_predate_settings_tracking(tmp_path: Path) -> None:
     """A workdir from before identity tracking cannot be shown to match; adopt nothing."""
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
