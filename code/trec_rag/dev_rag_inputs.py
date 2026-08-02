@@ -81,9 +81,14 @@ def select_passages(
     """
     if budget_words <= 0:
         raise ValueError("budget_words must be a positive integer")
+    if window_words <= 0 or stride_words <= 0:
+        raise ValueError("window_words and stride_words must be positive integers")
     words = text.split()
     if len(words) <= budget_words:
         return text
+    # A budget smaller than one window would reject every candidate and silently fall back to
+    # the document opening, which is the behaviour this function exists to replace.
+    window_words = min(window_words, budget_words)
 
     wanted = set(_content_terms(query))
     if not wanted:
@@ -105,12 +110,14 @@ def select_passages(
         return " ".join(words[:budget_words])
 
     scored.sort(key=lambda item: (-item[0], item[1]))
+    # The " ... " joiner contributes a whitespace-separated token between kept windows, so it
+    # counts against the budget; otherwise two 120-word windows exceed a 240-word budget.
     chosen: list[int] = []
     used = 0
     for _, start in scored:
         if any(abs(start - other) < window_words for other in chosen):
             continue
-        take = min(window_words, len(words) - start)
+        take = min(window_words, len(words) - start) + (1 if chosen else 0)
         if used + take > budget_words:
             continue
         chosen.append(start)

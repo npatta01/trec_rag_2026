@@ -211,6 +211,13 @@ def resolved_support_rows(
                         raise ValueError(f"{submission_path}: citation {citation} out of range")
                     cited.add(str(references[citation]))
                 elif isinstance(citation, str):
+                    # A docid citation naming something outside references would be dropped from
+                    # segments, and ragdoll support silently skips a citation it cannot resolve.
+                    # The skipped judgment leaves the metric denominator, understating failure.
+                    if citation not in references:
+                        raise ValueError(
+                            f"{submission_path}: citation {citation!r} is not in references"
+                        )
                     cited.add(citation)
                 else:
                     raise ValueError(f"{submission_path}: unsupported citation {citation!r}")

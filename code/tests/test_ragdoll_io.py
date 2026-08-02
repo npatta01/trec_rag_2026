@@ -164,6 +164,45 @@ def test_support_rows_reject_a_reference_without_document_text(tmp_path: Path) -
         ragdoll_io.resolved_support_rows(submission, documents)
 
 
+def test_support_rows_reject_a_citation_outside_references(tmp_path: Path) -> None:
+    """A foreign docid citation would be silently dropped from RAGDoll's denominator."""
+    record = _submission_record()
+    record["answer"][0]["citations"] = ["climbmix-elsewhere"]
+    submission = _write_jsonl(tmp_path / "rag.jsonl", [record])
+    documents = _documents_file(tmp_path / "documents.jsonl", ["climbmix-a", "climbmix-b"])
+
+    with pytest.raises(ValueError, match="not in references"):
+        ragdoll_io.resolved_support_rows(submission, documents)
+
+
+def test_select_passages_counts_the_joiner_against_the_budget() -> None:
+    document = (
+        ("alpha beta gamma " * 60)
+        + ("nuclear fission uranium reactor " * 30)
+        + ("delta epsilon " * 80)
+    )
+    for budget in (50, 240, 300):
+        out = dev_rag_inputs.select_passages(
+            document, "nuclear fission uranium", budget_words=budget
+        )
+        assert len(out.split()) <= budget, budget
+
+
+def test_select_passages_honours_a_budget_smaller_than_one_window() -> None:
+    document = ("filler words here " * 100) + ("nuclear fission uranium " * 20)
+    out = dev_rag_inputs.select_passages(document, "nuclear fission", budget_words=40)
+    # Previously every window was rejected and the document opening was returned instead.
+    assert "fission" in out
+    assert len(out.split()) <= 40
+
+
+def test_select_passages_validates_window_parameters() -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        dev_rag_inputs.select_passages("a b c", "a", budget_words=10, window_words=0)
+    with pytest.raises(ValueError, match="must be positive"):
+        dev_rag_inputs.select_passages("a b c", "a", budget_words=10, stride_words=0)
+
+
 def _archive(topic_id: str, count: int) -> dict[str, Any]:
     return {
         "topic_id": topic_id,

@@ -1389,6 +1389,21 @@ def test_generation_now_prunes_an_uncited_reference_instead_of_failing(tmp_path:
     assert rows[0]["answer"][0]["text"] == "Only the second source is cited."
 
 
+def test_generation_normalizes_duplicate_citations_end_to_end(tmp_path: Path) -> None:
+    """Cover the full generate-to-publish path, not just the normalizer in isolation."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a", "climbmix-b"],
+        "answer": [{"text": "One document, cited twice.", "citations": [1, 1]}],
+    }
+
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    rows = [json.loads(line) for line in config.output_path.read_text().splitlines()]
+    assert rows[0]["references"] == ["climbmix-b"]
+    assert rows[0]["answer"][0]["citations"] == [0]
+
+
 def test_persisted_raw_responses_and_errors_redact_configured_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
