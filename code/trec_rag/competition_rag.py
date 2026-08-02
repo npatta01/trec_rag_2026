@@ -31,6 +31,9 @@ from trec_rag.topics import load_narrative_topics
 _SCHEMA_VERSION = "competition_rag_config_v1"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+# strict_schema pins provider selection to schema-capable endpoints; json_object is the
+# portable fallback; none sends no response_format at all.
+STRUCTURED_OUTPUT_MODES = frozenset({"strict_schema", "json_object", "none"})
 _MAX_REDACTION_NORMALIZATION_ROUNDS = 32
 
 SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
@@ -128,12 +131,86 @@ Reference documents:
 Question: {question}
 """
 
+JSON_EXAMPLE_USER_PROMPT = FOCUSED_CITATION_USER_PROMPT.replace(
+    """Give each answer object one to three unique zero-based citation indexes into references. Return
+one JSON object with exactly references and answer; no Markdown.""",
+    """Give each answer object one to three unique zero-based citation indexes into references.
+Return one json object with exactly references and answer; no Markdown. Use exactly this json
+shape, in which every answer object states a single claim and cites the one document supporting
+it:
+
+{{"references": ["shard_00459_61697", "shard_01012_88420"],
+ "answer": [{{"text": "Commercial reactors generate heat by fissioning uranium.", "citations": [0]}},
+            {{"text": "Spent fuel needs long-term isolation from the environment.", "citations": [1]}}]}}""",
+)
+assert JSON_EXAMPLE_USER_PROMPT != FOCUSED_CITATION_USER_PROMPT, "json example substitution failed"
+
+
+TAIL_CONTRACT_USER_PROMPT = FOCUSED_CITATION_USER_PROMPT + """
+Restating the output contract, which the reference documents above have separated from this
+point by a long span of text:
+
+- one json object with exactly references and answer, no Markdown
+- each answer object is one self-contained sentence stating a single claim
+- cite the document that best supports each object, one to three unique zero-based indexes,
+  strongest first, and never add a citation that does not support the object on its own
+- list a document in references only if some answer object cites it
+- roughly 900 whitespace-separated words in total, never more than 1,024
+"""
+
+CONTRACT_SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
+provided reference documents and the user's task instructions. Do not invent evidence,
+document identifiers, references, or source-specific claims.
+
+Always produce one json object with exactly two keys, references and answer, and no Markdown.
+
+- Each answer object is one self-contained sentence stating a single claim. Never join several
+  claims into one object and never prefix an object with a section heading or label, because a
+  cited document must support the whole object on its own.
+- Cite the document that best supports each object. Give one to three unique zero-based indexes
+  into references, strongest support first. Never add a citation that does not support the
+  object on its own.
+- List a document in references only if some answer object cites it.
+- Write roughly 900 whitespace-separated words in total and never exceed 1,024."""
+
+CONTRACT_IN_SYSTEM_USER_PROMPT = """Answer the question using only the reference documents below,
+following the output contract in your instructions.
+
+Read every reference document before writing. Keep adding distinct, answer-relevant points that
+the documents support, covering the question's different aspects, tradeoffs, constraints and
+uncertainty. Do not pad, repeat a point already made, or restate the question.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
 PROMPT_PROFILES = {
     "default": USER_PROMPT,
     "atomic_claims": ATOMIC_USER_PROMPT,
     "atomic_claims_full_budget": FULL_BUDGET_USER_PROMPT,
     "focused_citations": FOCUSED_CITATION_USER_PROMPT,
+    # DeepSeek documents that JSON output needs the literal word "json" plus a worked
+    # example of the desired shape, not just a response_format setting.
+    "focused_citations_json_example": JSON_EXAMPLE_USER_PROMPT,
+    # The contract sits ~120k tokens before the generation point once documents are
+    # inserted; this profile restates it compactly after the question.
+    "focused_citations_tail": TAIL_CONTRACT_USER_PROMPT,
+    # Moves the contract into the system message, the channel models weight persistently,
+    # instead of burying it 120k tokens above the generation point.
+    "contract_in_system": CONTRACT_IN_SYSTEM_USER_PROMPT,
 }
+
+# Profiles that carry their contract in the system message need a matching system prompt.
+SYSTEM_PROMPT_PROFILES = {"contract_in_system": CONTRACT_SYSTEM_PROMPT}
+
+
+def system_prompt_for(prompt_profile: str) -> str:
+    """Return the system message a prompt profile expects."""
+    if prompt_profile not in PROMPT_PROFILES:
+        raise ValueError(f"unsupported prompt profile: {prompt_profile}")
+    return SYSTEM_PROMPT_PROFILES.get(prompt_profile, SYSTEM_PROMPT)
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -189,6 +266,7 @@ class RagGenerationConfig:
     model: str
     reasoning_effort: str
     prompt_profile: str
+    structured_output: str
     temperature: float | None
     max_tokens: int
     timeout_seconds: float
@@ -249,6 +327,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "model",
             "reasoning_effort",
             "prompt_profile",
+            "structured_output",
             "temperature",
             "max_tokens",
             "timeout_seconds",
@@ -277,6 +356,11 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     prompt_profile = _optional_text(generation, "prompt_profile", "generation") or "default"
     if prompt_profile not in PROMPT_PROFILES:
         raise ValueError("generation.prompt_profile is unsupported")
+    structured_output = (
+        _optional_text(generation, "structured_output", "generation") or "strict_schema"
+    )
+    if structured_output not in STRUCTURED_OUTPUT_MODES:
+        raise ValueError("generation.structured_output is unsupported")
 
     return RagGenerationConfig(
         schema_version=_SCHEMA_VERSION,
@@ -301,6 +385,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         model=_text(generation, "model", "generation"),
         reasoning_effort=reasoning_effort,
         prompt_profile=prompt_profile,
+        structured_output=structured_output,
         temperature=_optional_finite_float(generation, "temperature", "generation"),
         max_tokens=_positive_int(generation, "max_tokens", "generation"),
         timeout_seconds=_positive_float(generation, "timeout_seconds", "generation"),
@@ -719,9 +804,12 @@ class OpenRouterJsonGenerator:
         max_tokens: int,
         timeout_seconds: float,
         transport_max_attempts: int,
+        structured_output: str = "strict_schema",
     ) -> None:
         if not api_key:
             raise ValueError("OpenRouter API key is missing or empty")
+        if structured_output not in STRUCTURED_OUTPUT_MODES:
+            raise ValueError(f"unsupported structured_output mode: {structured_output}")
         self.api_base = api_base.rstrip("/")
         self._api_key = api_key
         self.model = model
@@ -730,6 +818,7 @@ class OpenRouterJsonGenerator:
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
         self.transport_max_attempts = transport_max_attempts
+        self.structured_output = structured_output
 
     def complete_json(
         self,
@@ -748,16 +837,23 @@ class OpenRouterJsonGenerator:
             ],
             "max_tokens": self.max_tokens,
             "reasoning": {"effort": self.reasoning_effort, "exclude": True},
-            "provider": {"require_parameters": True},
-            "response_format": {
+        }
+        if self.structured_output == "strict_schema":
+            # require_parameters excludes any provider that cannot honour the schema. For some
+            # models that excludes the vendor's own API and routes to a third party whose
+            # grammar-constrained decoding may only treat the schema as a hint.
+            request_body["provider"] = {"require_parameters": True}
+            request_body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "trec_rag_2026_answer",
                     "strict": True,
                     "schema": response_schema,
                 },
-            },
-        }
+            }
+        elif self.structured_output == "json_object":
+            # The widely supported fallback. Shape is validated locally either way.
+            request_body["response_format"] = {"type": "json_object"}
         if self.temperature is not None:
             request_body["temperature"] = self.temperature
         headers = {
@@ -1268,7 +1364,7 @@ async def _generate_topic(
             generated, raw_response = await asyncio.to_thread(
                 generator.complete_json,
                 topic_id=topic_id,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt_for(config.prompt_profile),
                 user_prompt=render_prompt(
                     narrative, ranked_docids, documents, config.prompt_profile
                 ),
@@ -1471,6 +1567,7 @@ def main() -> None:
             api_key=os.environ.get(config.api_key_env, ""),
             model=config.model,
             reasoning_effort=config.reasoning_effort,
+            structured_output=config.structured_output,
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             timeout_seconds=config.timeout_seconds,

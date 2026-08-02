@@ -866,6 +866,35 @@ def test_word_cap_trim_is_a_no_op_when_already_within_budget() -> None:
     assert competition_rag.trim_to_word_limit(record) is record
 
 
+def test_tail_contract_profile_restates_the_contract_after_the_question() -> None:
+    """With 100 documents inserted the contract sits ~120k tokens from the generation point."""
+    prompt = competition_rag.render_prompt(
+        "What about nuclear?", ["d1"], {"d1": "evidence"}, "focused_citations_tail"
+    )
+
+    assert prompt.index("Question: What about nuclear?") < prompt.index("Restating the output")
+    # The leading contract is preserved, not moved.
+    assert prompt.index("one self-contained sentence") < prompt.index("Reference document")
+    flat = " ".join(prompt.split())
+    assert flat.count("never more than 1,024") == 1
+
+
+def test_contract_in_system_profile_moves_the_contract_to_the_system_channel() -> None:
+    system = competition_rag.system_prompt_for("contract_in_system")
+    user = competition_rag.render_prompt("Q?", ["d1"], {"d1": "t"}, "contract_in_system")
+
+    assert "one to three unique zero-based" in system
+    assert "one to three unique zero-based" not in user
+    # Other profiles keep the original short system message.
+    assert competition_rag.system_prompt_for("focused_citations") == competition_rag.SYSTEM_PROMPT
+    assert competition_rag.system_prompt_for("default") == competition_rag.SYSTEM_PROMPT
+
+
+def test_system_prompt_for_rejects_an_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="unsupported prompt profile"):
+        competition_rag.system_prompt_for("nonexistent")
+
+
 def test_unknown_prompt_profile_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported prompt profile"):
         competition_rag.render_prompt("Narrative?", [], {}, "nonexistent")
