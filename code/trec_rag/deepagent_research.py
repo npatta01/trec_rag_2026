@@ -68,6 +68,17 @@ return the structured EvidenceBundle with grounded work completed so far.
 """
 
 
+_CLOSEOUT_DIRECTIVE = (
+    "Research is over; no further researchers can run. Write up what was "
+    "actually found, in one update_retrieval_state delta. Give every need "
+    "with grounded nuggets a set_need_status row carrying draft_nugget_ids "
+    "listing the few best of them: use \"answerable\" with a draft_answer "
+    "where the evidence answers the need, and \"partial\" with an honest "
+    "remaining_gap where it does not. The selection is what matters and is "
+    "capped, so choose deliberately. Claim nothing the nuggets do not support."
+)
+
+
 class ResearchTaskEnvelope(BaseModel):
     """The validated compact task description passed to one researcher."""
 
@@ -166,6 +177,15 @@ def current_research_task() -> ResearchTaskEnvelope | None:
     return _research_task.get()
 
 
+def _has_tool_calls(response: object) -> bool:
+    """Whether a model response asked for any tool."""
+    inner = getattr(response, "model_response", response)
+    messages = getattr(inner, "result", None)
+    if messages is None:
+        messages = [inner]
+    return any(getattr(message, "tool_calls", None) for message in messages)
+
+
 def _tool_name(tool: object) -> str | None:
     if isinstance(tool, Mapping):
         name = tool.get("name")
@@ -256,12 +276,86 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         self,
         budget: ResearchBudget | None = None,
         budget_config: ResearchBudgetConfig | None = None,
+        *,
+        closeout_pending: Callable[[], bool] | None = None,
     ) -> None:
         self._budget = budget
+        # None disables the bounce, so a bare middleware behaves as before.
+        self._closeout_pending = closeout_pending
         self._budget_config = budget_config
         self._closure_lock = Lock()
         self._merge_turns_granted: set[int] = set()
         self._synthesis_granted = False
+        # Separate from _synthesis_granted on purpose: bouncing a voluntary
+        # exit must not consume the end-of-budget synthesis reserve, which
+        # can still refresh drafts with evidence gathered afterwards.
+        self._exit_bounced = False
+
+    def wrap_model_call(self, request: ModelRequest, handler):
+        """Send one voluntary exit back for a closeout before letting it end.
+
+        A coordinator that replies with no tool call ends the run, and nothing
+        guarded that path: two live runs finished with every need holding
+        grounded nuggets and an empty draft selection, which zeroes the
+        submission ranker's highest-weighted feature. Retrying the handler is
+        the documented contract for this middleware hook, and this middleware
+        is innermost, so the discarded reply is invisible to everything else.
+
+        Exactly once per run. A gate that can fire repeatedly livelocks, and
+        the loop continues afterwards, so the model may research further and a
+        later exit passes untouched.
+        """
+        filtered = self._filter_tools(request)
+        response = handler(filtered)
+        bounced = self._closeout_bounce(filtered, response)
+        if bounced is None:
+            return response
+        response = handler(bounced)
+        if self._budget is not None and not _has_tool_calls(response):
+            self._budget.note_closeout_refused()
+        return response
+
+    async def awrap_model_call(self, request: ModelRequest, handler):
+        filtered = self._filter_tools(request)
+        response = await handler(filtered)
+        bounced = self._closeout_bounce(filtered, response)
+        if bounced is None:
+            return response
+        response = await handler(bounced)
+        if self._budget is not None and not _has_tool_calls(response):
+            self._budget.note_closeout_refused()
+        return response
+
+    def _closeout_bounce(
+        self, filtered: ModelRequest, response: object
+    ) -> ModelRequest | None:
+        """Decide whether this reply is an unaccounted exit worth bouncing."""
+        if self._exit_bounced or self._closeout_pending is None:
+            return None
+        # Only the free phase. Every directed branch sets tool_choice and the
+        # terminal branch empties the tool list; a silent reply on either is
+        # not a voluntary exit.
+        if filtered.tool_choice is not None or not filtered.tools:
+            return None
+        if _has_tool_calls(response):
+            return None
+        try:
+            if not self._closeout_pending():
+                return None
+        except Exception:
+            return None
+        self._exit_bounced = True
+        if self._budget is not None:
+            self._budget.note_exit_bounced()
+        return self._directed(
+            filtered,
+            ["update_retrieval_state"],
+            "update_retrieval_state",
+            _CLOSEOUT_DIRECTIVE
+            + " You replied without calling a tool while needs that hold "
+            "grounded evidence still have no recorded selection. Record that "
+            "closeout now; the run continues afterwards.",
+        )
 
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
         filtered = super()._filter_tools(request)
@@ -309,15 +403,7 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
                     filtered,
                     ["update_retrieval_state"],
                     "update_retrieval_state",
-                    "Research is over; no further researchers can run. Write up "
-                    "what was actually found, in one update_retrieval_state "
-                    "delta. Give every need with grounded nuggets a "
-                    "set_need_status row carrying a draft_answer composed from "
-                    "those nuggets and draft_nugget_ids listing them: use "
-                    '"answerable" where the evidence answers the need and '
-                    '"partial" with an honest remaining_gap where it does not. '
-                    "Claim nothing the nuggets do not support. This is the last "
-                    "state you can record.",
+                    _CLOSEOUT_DIRECTIVE,
                 )
         return self._directed(
             filtered,

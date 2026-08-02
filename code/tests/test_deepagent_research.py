@@ -1055,3 +1055,130 @@ def test_the_coordinator_is_told_importance_comes_from_its_selection() -> None:
 
     assert "draft_nugget_ids" in RETRIEVAL_SYSTEM_PROMPT
     assert "not something you" in RETRIEVAL_SYSTEM_PROMPT
+
+
+def _bounce_middleware(pending, *, config=None):
+    config = config or ResearchBudgetConfig()
+    budget = ResearchBudget(config)
+    return budget, MainToolFilterMiddleware(budget, config, closeout_pending=pending)
+
+
+def _silent_turn(middleware, run_count=2):
+    """One coordinator turn whose model never calls a tool."""
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": run_count},
+    )
+    seen = []
+
+    def handler(filtered):
+        seen.append(
+            {
+                "tools": [t["name"] for t in filtered.tools],
+                "choice": filtered.tool_choice,
+                "system": str(filtered.system_message),
+            }
+        )
+        return ModelResponse(result=[AIMessage(content="no tool call")])
+
+    middleware.wrap_model_call(request, handler)
+    return seen
+
+
+def test_a_voluntary_exit_is_bounced_once_into_a_forced_closeout() -> None:
+    """Two live runs ended with grounded needs and an empty draft selection."""
+    budget, middleware = _bounce_middleware(lambda: True)
+
+    seen = _silent_turn(middleware)
+
+    assert len(seen) == 2, "the silent exit was not sent back"
+    assert seen[0]["choice"] is None
+    assert seen[1]["tools"] == ["update_retrieval_state"]
+    assert seen[1]["choice"] == "update_retrieval_state"
+    assert "draft_nugget_ids" in seen[1]["system"]
+    assert budget.exit_bounced() is True
+    assert budget.closeout_refused() is True
+
+
+def test_the_bounce_fires_at_most_once_so_it_cannot_livelock() -> None:
+    budget, middleware = _bounce_middleware(lambda: True)
+
+    assert len(_silent_turn(middleware)) == 2
+    assert len(_silent_turn(middleware)) == 1
+
+
+def test_no_bounce_when_every_grounded_need_already_has_a_selection() -> None:
+    budget, middleware = _bounce_middleware(lambda: False)
+
+    assert len(_silent_turn(middleware)) == 1
+    assert budget.exit_bounced() is False
+    assert budget.closeout_refused() is False
+
+
+def test_a_reply_that_calls_a_tool_is_never_bounced() -> None:
+    budget, middleware = _bounce_middleware(lambda: True)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[{"name": name} for name in ALL_TOOLS],
+        model_settings={"parallel_tool_calls": True},
+        state={"run_model_call_count": 2},
+    )
+    calls = []
+
+    def handler(filtered):
+        calls.append(filtered)
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "task", "args": {}, "id": "t1", "type": "tool_call"}
+                    ],
+                )
+            ]
+        )
+
+    middleware.wrap_model_call(request, handler)
+
+    assert len(calls) == 1
+    assert budget.exit_bounced() is False
+
+
+def test_a_directed_turn_is_never_bounced() -> None:
+    """A silent reply under a forced tool choice is not a voluntary exit."""
+    config = ResearchBudgetConfig()
+    budget = ResearchBudget(config)
+    assert budget.authorize_round_completion(1).code == "ROUND_RESEARCH_REQUIRED"
+    middleware = MainToolFilterMiddleware(budget, config, closeout_pending=lambda: True)
+
+    seen = _silent_turn(middleware)
+
+    assert len(seen) == 1
+    assert seen[0]["choice"] == "task"
+    assert budget.exit_bounced() is False
+
+
+def test_the_bounce_is_disabled_without_a_predicate() -> None:
+    config = ResearchBudgetConfig()
+    middleware = MainToolFilterMiddleware(ResearchBudget(config), config)
+
+    assert len(_silent_turn(middleware)) == 1
+
+
+def test_the_bounce_does_not_consume_the_synthesis_reserve() -> None:
+    """Separate flags: end-of-budget synthesis must still get its turn."""
+    config = ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=2)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config, closeout_pending=lambda: True)
+
+    assert len(_silent_turn(middleware, run_count=0)) == 2
+
+    late = _silent_turn(
+        middleware,
+        run_count=config.max_main_models - 1 - config.synthesis_reserve_turns,
+    )
+    assert late[0]["choice"] == "update_retrieval_state"

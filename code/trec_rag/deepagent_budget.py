@@ -201,6 +201,8 @@ class ResearchBudget:
         self._round_decisions: dict[int, BudgetDecision] = {}
         self._no_progress_streak = 0
         self._retrieval_unavailable = False
+        self._exit_bounced = False
+        self._closeout_refused = False
         self._stop_code: BudgetCode | None = None
 
     def reserve_task(self, context: ResearchTaskContext) -> BudgetDecision:
@@ -394,6 +396,28 @@ class ResearchBudget:
         """Whether any search failed to reach the index during this invocation."""
         with self._lock:
             return self._retrieval_unavailable
+
+    def note_exit_bounced(self) -> None:
+        """Record that a voluntary exit was sent back once for a closeout."""
+        with self._lock:
+            self._exit_bounced = True
+
+    def exit_bounced(self) -> bool:
+        with self._lock:
+            return self._exit_bounced
+
+    def note_closeout_refused(self) -> None:
+        """Record that the compelled closeout turn also produced no tool call.
+
+        A flag rather than a stop code: it must not cancel or outrank anything,
+        only tell downstream that the ledger was never written up.
+        """
+        with self._lock:
+            self._closeout_refused = True
+
+    def closeout_refused(self) -> bool:
+        with self._lock:
+            return self._closeout_refused
 
     def note_main_model_exhausted(self) -> None:
         """Record that the coordinator's model-call ceiling, not the agent, ended it."""
