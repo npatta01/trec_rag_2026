@@ -137,6 +137,46 @@
     "topics_favouring_b": 4
   },
   "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
+  "extractive_passage_selection": {
+    "change": "dev_rag_inputs --passage-words replaces the generator's head truncation with query-relevant window selection (120-word windows, scored by distinct narrative-term coverage, greedy non-overlapping, re-emitted in document order).",
+    "conclusion": "Extraction buys a 2.4x cost reduction and substantially better citation support for 0.057 strict_vital of coverage. It is a genuine trade rather than the free win predicted; a larger passage budget is the untested middle ground.",
+    "corpus_effect": {
+      "after": 261,
+      "reduction": "3.7x",
+      "words_per_document_before": 975
+    },
+    "cost": {
+      "after": 0.2949,
+      "full_119_topic_run_usd": {
+        "after": 35,
+        "before": 85
+      },
+      "reduction": "2.4x",
+      "usd_per_topic_before": 0.7115
+    },
+    "measurement_error_corrected": "The extractive arm was first judged against the head-truncated document text rather than the passages its generator actually read, producing an artificial 32.7% No Support rate and an incorrect conclusion that extraction hurt support. Re-judging against matched evidence reversed it.",
+    "nugget": {
+      "strict_all_after": 0.510635,
+      "strict_all_before": 0.568619,
+      "strict_vital_after": 0.531249,
+      "strict_vital_before": 0.588128
+    },
+    "outstanding_caveat": "Each arm is now judged against its own evidence view, which is internally consistent but not what organizers do: they resolve citations from the index, i.e. full documents. Judging both arms against full document text is the realistic measurement and is untested.",
+    "support_judged_on_each_arm_own_evidence": {
+      "extractive": {
+        "hard_precision": 0.692,
+        "no_support_rate": 0.048,
+        "wp_all": 0.817,
+        "wp_first": 0.823
+      },
+      "head_truncated": {
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "wp_all": 0.692,
+        "wp_first": 0.692
+      }
+    }
+  },
   "four_arm_summary": {
     "caveat": "Four topics. Generation variance alone has produced 9 versus 28 objects for the same config, so coverage differences of this size are not resolved.",
     "coverage_strict_vital": {
@@ -197,6 +237,85 @@
     "uncited_reference_failures": 0,
     "word_cap_failures": 3
   },
+  "generator_model_sweep": {
+    "conclusion": "No cheaper model substitutes for Sol. Single-citation compliance tracks citation support almost monotonically (100% -> 9.6% No Support, 54% -> 34.3%, 26% -> 22.9%), and Sol is the only model that complied fully. Two models fabricated document ids outside the retrieval pool, which is a correctness failure rather than a formatting one.",
+    "design": "Arm D prompt and the same four topics for every model; only the generator changed. Judge held at deepseek-v4-flash throughout.",
+    "reliability_note": "Substitution here is a reliability problem as much as a quality one. The contract stacks strict JSON-schema structured output, reasoning effort and a multi-part formatting instruction; only Sol handled all three across providers. Two models needed max_tokens raised from 6,000 to 32,000 merely to finish, and truncated failures are still billed.",
+    "repair_ceiling": {
+      "description": "Dropping every judge-labelled No Support citation, an oracle upper bound.",
+      "finding": "A cheap model with flawless repair only reaches Sol's unrepaired score, and coverage is repair-proof because repair never edits answer text.",
+      "wp_all": {
+        "deepseek_flash": {
+          "now": 0.503,
+          "oracle": 0.695
+        },
+        "luna": {
+          "now": 0.442,
+          "oracle": 0.658
+        },
+        "sol": {
+          "now": 0.692,
+          "oracle": 0.768
+        }
+      }
+    },
+    "results": {
+      "deepseek/deepseek-v4-flash": {
+        "completed": "4/4",
+        "hard_precision": 0.328,
+        "no_support_rate": 0.229,
+        "single_citation_rate": 0.26,
+        "strict_all": 0.504,
+        "strict_vital": 0.542,
+        "usd_per_topic": 0.018,
+        "wp_all": 0.503,
+        "wp_first": 0.554
+      },
+      "deepseek/deepseek-v4-pro": {
+        "completed": "3/4",
+        "note": "Erratic citation compliance; 10 of 34 objects on one topic carried three citations.",
+        "usd_per_topic": 0.056
+      },
+      "google/gemini-3-flash-preview": {
+        "completed": "1/4",
+        "note": "Two topics failed by emitting docids outside the retrieval pool; poor citation compliance on the one that completed.",
+        "usd_per_topic": 0.071
+      },
+      "moonshotai/kimi-k2-thinking": {
+        "completed": "3/4",
+        "note": "Short answers, erratic citations, and one topic failed by emitting a docid outside the retrieval pool.",
+        "usd_per_topic": 0.081
+      },
+      "openai/gpt-5.6-luna": {
+        "completed": "4/4",
+        "hard_precision": 0.227,
+        "no_support_rate": 0.343,
+        "single_citation_rate": 0.54,
+        "strict_all": 0.507,
+        "strict_vital": 0.511,
+        "usd_per_topic": 0.071,
+        "wp_all": 0.442,
+        "wp_first": 0.456
+      },
+      "openai/gpt-5.6-sol": {
+        "completed": "4/4",
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "single_citation_rate": 1.0,
+        "strict_all": 0.569,
+        "strict_vital": 0.588,
+        "usd_per_topic": 0.712,
+        "wp_all": 0.692,
+        "wp_first": 0.692
+      },
+      "z-ai/glm-4.7": {
+        "completed": "0/4",
+        "note": "Returns finish_reason stop with completion tokens but null content via DeepInfra; a provider response-shape problem, not max_tokens.",
+        "usd_per_topic": 0.055
+      }
+    },
+    "spend_provider_reported_usd": 35.42
+  },
   "judge_model": "openrouter/deepseek/deepseek-v4-flash",
   "length": {
     "note": "Neither arm approaches the cap. Nugget scoring is pure recall with no length penalty.",
@@ -240,6 +359,19 @@
     },
     "topics_favouring_a": 4,
     "topics_favouring_b": 0
+  },
+  "prompt_document_budget": {
+    "cost_share_of_prompt": 0.85,
+    "document_length_words": {
+      "max": 126338,
+      "mean": 5665,
+      "median": 3426,
+      "p90": 11410
+    },
+    "finding": "91% of documents are truncated and the model sees only 17% of the pool, always the opening words, which on web pages is frequently navigation chrome. Relevance-selected passages should cut cost roughly threefold while improving what the model reads; the window scorer in facet_retrieval.MixedbreadCoverageScorer already exists for this.",
+    "pool": "100 documents per topic, truncated to the first 1,000 words each",
+    "share_longer_than_cut": 0.91,
+    "share_of_pool_text_shown": 0.17
   },
   "schema": "ragdoll_paired_prompt_profile_v1",
   "supersedes": "The two-topic comparison in dev_ragdoll_nugget_eval_spike_v1, which reported atomic as neutral-to-better on coverage.",

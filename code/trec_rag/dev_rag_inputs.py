@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -44,6 +45,85 @@ class ArchivedTopic:
     topic_id: str
     query_text: str
     candidates: tuple[ArchivedCandidate, ...]
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+_STOPWORDS = frozenset(
+    """a an the and or but if then than that this these those of in on at to for from by with
+    about into over after before between out against during without within along across is are
+    was were be been being do does did have has had can could should would may might will just
+    i me my we our you your it its as so such not no nor only own same too very s t don now""".split()
+)
+
+
+def _content_terms(text: str) -> list[str]:
+    return [word for word in _WORD.findall(text.lower()) if word not in _STOPWORDS]
+
+
+def select_passages(
+    text: str,
+    query: str,
+    *,
+    budget_words: int,
+    window_words: int = 120,
+    stride_words: int = 60,
+) -> str:
+    """Return the most query-relevant windows of ``text``, in document order.
+
+    The generator prompt previously took each document's first ``max_document_words``. With a
+    median document of about 3,400 words that shows roughly a sixth of the pool, always the
+    opening, which on scraped web pages is often navigation furniture rather than evidence.
+
+    Windows are scored by how many distinct query terms they contain, which rewards a passage
+    covering several facets of the narrative over one repeating a single term. Selection is
+    greedy and non-overlapping, and the kept windows are re-emitted in their original order so
+    the text still reads forwards.
+    """
+    if budget_words <= 0:
+        raise ValueError("budget_words must be a positive integer")
+    words = text.split()
+    if len(words) <= budget_words:
+        return text
+
+    wanted = set(_content_terms(query))
+    if not wanted:
+        return " ".join(words[:budget_words])
+
+    scored: list[tuple[float, int]] = []
+    for start in range(0, len(words), stride_words):
+        window = words[start : start + window_words]
+        if len(window) < min(window_words, 20):
+            break
+        terms = _content_terms(" ".join(window))
+        present = wanted.intersection(terms)
+        if not present:
+            continue
+        matches = sum(1 for term in terms if term in wanted)
+        scored.append((len(present) + 0.05 * matches, start))
+
+    if not scored:
+        return " ".join(words[:budget_words])
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    chosen: list[int] = []
+    used = 0
+    for _, start in scored:
+        if any(abs(start - other) < window_words for other in chosen):
+            continue
+        take = min(window_words, len(words) - start)
+        if used + take > budget_words:
+            continue
+        chosen.append(start)
+        used += take
+        if used >= budget_words:
+            break
+
+    if not chosen:
+        return " ".join(words[:budget_words])
+
+    chosen.sort()
+    parts = [" ".join(words[start : start + window_words]) for start in chosen]
+    return " ... ".join(parts)
 
 
 def archive_path(cache_dir: Path, topic_id: str) -> Path:
@@ -133,13 +213,28 @@ def trec_run_lines(topics: Sequence[ArchivedTopic], *, run_id: str) -> Iterator[
             yield f"{topic.topic_id} Q0 {candidate.docid} {rank} {score:.6f} {run_id}"
 
 
-def document_rows(topics: Sequence[ArchivedTopic]) -> Iterator[dict[str, object]]:
-    """Yield ``competition_rag.load_documents`` rows, one per topic."""
+def document_rows(
+    topics: Sequence[ArchivedTopic], *, passage_words: int | None = None
+) -> Iterator[dict[str, object]]:
+    """Yield ``competition_rag.load_documents`` rows, one per topic.
+
+    With ``passage_words`` set, each document is reduced to its most query-relevant windows
+    instead of being left for the generator to head-truncate.
+    """
     for topic in topics:
         yield {
             "query": {"qid": topic.topic_id, "text": topic.query_text},
             "candidates": [
-                {"docid": candidate.docid, "doc": candidate.text}
+                {
+                    "docid": candidate.docid,
+                    "doc": (
+                        candidate.text
+                        if passage_words is None
+                        else select_passages(
+                            candidate.text, topic.query_text, budget_words=passage_words
+                        )
+                    ),
+                }
                 for candidate in topic.candidates
             ],
         }
@@ -153,6 +248,7 @@ def build(
     documents_path: Path,
     run_id: str,
     depth: int = DEFAULT_DEPTH,
+    passage_words: int | None = None,
 ) -> list[ArchivedTopic]:
     """Write the TREC run and document JSONL for ``topic_ids`` and return what was read."""
     if not topic_ids:
@@ -174,7 +270,7 @@ def build(
     documents_path.write_text(
         "".join(
             f"{json.dumps(row, ensure_ascii=False, sort_keys=True)}\n"
-            for row in document_rows(topics)
+            for row in document_rows(topics, passage_words=passage_words)
         ),
         encoding="utf-8",
     )
@@ -189,6 +285,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--documents-path", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
+    parser.add_argument(
+        "--passage-words",
+        type=int,
+        help="Reduce each document to its most query-relevant windows of this many words.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -199,6 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             documents_path=args.documents_path,
             run_id=args.run_id,
             depth=args.depth,
+            passage_words=args.passage_words,
         )
     except (OSError, ValueError) as error:
         raise SystemExit(f"error: {type(error).__name__}: {error}") from error

@@ -235,6 +235,68 @@ def test_duplicate_docids_are_collapsed_and_ranks_stay_dense(tmp_path: Path) -> 
     assert ranks == [1, 2, 3]
 
 
+def test_select_passages_prefers_relevant_windows_over_the_document_opening() -> None:
+    boilerplate = "Menu Home About Contact Subscribe Newsletter " * 40
+    evidence = "Nuclear fission splits uranium nuclei and releases heat for steam. " * 6
+    filler = "unrelated commentary about gardening " * 80
+    document = boilerplate + evidence + filler
+
+    selected = dev_rag_inputs.select_passages(
+        document, "nuclear fission uranium", budget_words=150
+    )
+
+    assert len(selected.split()) <= 150
+    assert "fission" in selected and "uranium" in selected
+    # Head truncation would have returned only the navigation block.
+    assert "fission" not in " ".join(document.split()[:150])
+
+
+def test_select_passages_returns_short_documents_untouched() -> None:
+    document = "A short document about nuclear power."
+    assert (
+        dev_rag_inputs.select_passages(document, "nuclear", budget_words=100) == document
+    )
+
+
+def test_select_passages_falls_back_when_no_query_term_matches() -> None:
+    document = " ".join(f"word{i}" for i in range(400))
+    out = dev_rag_inputs.select_passages(document, "nuclear fission", budget_words=50)
+    # No window matches, so the opening is used rather than returning nothing.
+    assert out.split() == document.split()[:50]
+
+
+def test_document_rows_apply_the_passage_budget(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    long_text = "Nuclear fission releases heat. " + ("padding words here " * 500)
+    archive = {
+        "topic_id": "58",
+        "response": {
+            "query": {"text": "nuclear fission"},
+            "candidates": [
+                {"docid": "shard_1", "rank": 1, "score": 9.0, "doc": long_text}
+            ],
+        },
+    }
+    (cache_dir / "58__original__climbmix_bm25__abc.json").write_text(
+        json.dumps(archive), encoding="utf-8"
+    )
+    documents_path = tmp_path / "documents.jsonl"
+
+    dev_rag_inputs.build(
+        topic_ids=["58"],
+        cache_dir=cache_dir,
+        run_path=tmp_path / "run.tsv",
+        documents_path=documents_path,
+        run_id="dev-spike",
+        depth=1,
+        passage_words=60,
+    )
+
+    row = json.loads(documents_path.read_text().splitlines()[0])
+    assert len(row["candidates"][0]["doc"].split()) <= 60
+
+
 def test_missing_archive_names_the_topic(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
