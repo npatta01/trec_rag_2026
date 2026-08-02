@@ -984,7 +984,17 @@ class DeepAgentRetriever:
             return AgentSearch(
                 query=query,
                 kind=kind,
-                candidates=candidates,
+                # Only the scored slice is retained. A depth-1000 response
+                # carries roughly 37MB of document text, and every search is
+                # kept for the whole invocation to fuse at the end, so holding
+                # full depth across 20 researchers would accumulate gigabytes
+                # of text nothing can reach: scoring never looks past
+                # rerank_depth and fusion returns far fewer.
+                candidates=tuple(
+                    sorted(candidates, key=lambda item: item.rank)[
+                        : self._passage_config.rerank_depth
+                    ]
+                ),
                 cache_status=cache_status,
             )
 

@@ -2867,6 +2867,11 @@ def test_large_fused_override_keeps_root_trace_ids_at_safe_limit() -> None:
         model="test-model",
         hits_per_search=requested_limit,
         fused_result_limit=requested_limit,
+        # Retained candidates are now bounded by rerank_depth, so this test
+        # raises it to keep exercising what it is about: trace-id capping.
+        passage_config=PassageSelectionConfig(
+            pool_hits=requested_limit, rerank_depth=requested_limit
+        ),
     ).retrieve("narrative")
 
     assert len(result.candidates) == requested_limit

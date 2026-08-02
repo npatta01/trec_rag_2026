@@ -1037,6 +1037,10 @@ class EvidenceCoverageState:
             nugget_id in self._nuggets
             and need_id in self._nuggets[nugget_id].need_ids
             and bool(self._nuggets[nugget_id].evidence)
+            # A superseded claim was replaced, and the submission ranker
+            # already refuses to let it vouch for its documents. Drafting one
+            # would cite a claim whose documents the run never submits.
+            and self._nuggets[nugget_id].superseded_by is None
             for nugget_id in draft_nugget_ids
         )
         # Grounding is checked for every status that supplies a draft, not just

@@ -106,6 +106,13 @@ class ResearchBudgetConfig:
             "no_yield_calls",
             "no_progress_rounds",
         )
+        # A reserve at or above the ceiling leaves no research turns at all,
+        # and the middleware would compel synthesis on the very first
+        # coordinator turn before anything had been researched.
+        if self.synthesis_reserve_turns >= self.max_main_models:
+            raise ValueError(
+                "synthesis_reserve_turns must leave at least one research turn"
+            )
         for field_name in positive_int_fields:
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
