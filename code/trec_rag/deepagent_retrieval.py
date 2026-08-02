@@ -1231,7 +1231,12 @@ class DeepAgentRetriever:
                         ),
                         sort_keys=True,
                     )
-                searches.append(search)
+                # Recorded only once scoring succeeds. Appending before it
+                # meant a transient ranker failure left the query in
+                # `searches`, so the researcher's retry of the same query came
+                # back DUPLICATE_QUERY - permanently locking out the natural
+                # phrasing for that need, on the researcher's forced first
+                # action, and telling the model the wrong story about why.
                 try:
                     with self._snippet_extractor_lock:
                         if self._snippet_extractor is None:
@@ -1268,6 +1273,7 @@ class DeepAgentRetriever:
                         ),
                         sort_keys=True,
                     )
+                searches.append(search)
                 selected = select_diverse_passages(
                     scoring.passages, self._passage_config
                 )

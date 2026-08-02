@@ -1109,3 +1109,88 @@ def test_the_draft_selection_is_capped_so_selection_actually_selects() -> None:
     assert draft(ids[:MAX_DRAFT_NUGGETS_PER_NEED]).accepted_ids == ("n1",)
     # A need with fewer good nuggets must not have to pad to the cap.
     assert draft(ids[:2]).accepted_ids == ("n1",)
+
+
+def test_a_partial_status_cannot_draft_a_nugget_that_does_not_exist_yet() -> None:
+    """Reproduces a reviewed defect: phantom ids minting vital labels.
+
+    Grounding used to be enforced only for terminal statuses, so a "partial"
+    row could pre-list ids that arrived later and be labelled vital on arrival,
+    inflating the submission ranker's top-weighted feature with no real
+    selection behind it.
+    """
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    phantom = state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "more needed",
+                    "draft_nugget_ids": ["G1", "G2"],
+                }
+            ]
+        }
+    )
+
+    assert phantom.accepted_ids == ()
+    assert [r.code for r in phantom.rejected] == ["MISSING_GROUNDED_DRAFT"]
+
+    state.apply_delta(_nugget_with("S1", nugget_id="G1"))
+    assert state.report().nuggets[0].importance == "okay"
+
+
+def test_a_partial_status_cannot_draft_another_needs_nugget() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "n2",
+                    "narrative_span": "people migrate",
+                    "question": "Where do people migrate to?",
+                }
+            ]
+        }
+    )
+    state.apply_delta(_nugget_with("S1", nugget_id="owned_by_n1"))
+
+    result = state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n2",
+                    "status": "partial",
+                    "remaining_gap": "more needed",
+                    "draft_nugget_ids": ["owned_by_n1"],
+                }
+            ]
+        }
+    )
+
+    assert [r.code for r in result.rejected] == ["MISSING_GROUNDED_DRAFT"]
+
+
+def test_a_partial_status_with_a_real_grounded_nugget_is_still_accepted() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+    state.apply_delta(_nugget_with("S1", nugget_id="real"))
+
+    result = state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "more needed",
+                    "draft_nugget_ids": ["real"],
+                }
+            ]
+        }
+    )
+
+    assert result.accepted_ids == ("n1",)
+    assert state.report().nuggets[0].importance == "vital"

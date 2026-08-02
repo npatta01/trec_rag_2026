@@ -1039,6 +1039,14 @@ class EvidenceCoverageState:
             and bool(self._nuggets[nugget_id].evidence)
             for nugget_id in draft_nugget_ids
         )
+        # Grounding is checked for every status that supplies a draft, not just
+        # the terminal ones. Selection is the importance signal, so an
+        # unchecked "partial" row could list nugget ids that do not exist yet
+        # and mint vital labels for them the moment they arrive - inflating the
+        # submission ranker's highest-weighted feature without any real
+        # selection having happened.
+        if draft_nugget_ids and not grounded:
+            return "MISSING_GROUNDED_DRAFT"
         if status == "answerable" and (_nonblank(draft_answer) is None or not draft_nugget_ids or not grounded):
             return "MISSING_GROUNDED_DRAFT"
         if status == "conflicted":
