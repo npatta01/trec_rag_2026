@@ -784,6 +784,36 @@ def test_focused_profile_drops_the_cite_every_reference_rule() -> None:
     assert "single document that best supports" in focused
 
 
+def test_normalizer_reports_an_invalid_citation_rather_than_dropping_it() -> None:
+    """A fabricated citation index must fail loudly, not be silently pruned.
+
+    Two of the generators tested for this track emitted document ids outside the retrieval
+    pool, so this is a live failure mode rather than a hypothetical one.
+    """
+    record = {
+        "metadata": {"narrative_id": "58"},
+        "references": ["doc-a", "doc-b"],
+        "answer": [
+            {"text": "Grounded claim.", "citations": [0]},
+            {"text": "Fabricated pointer.", "citations": [9]},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="answer\\[1\\] has an invalid citation"):
+        competition_rag.normalize_generated_record(record)
+
+
+def test_normalizer_rejects_a_partially_invalid_citation_list() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a", "doc-b"],
+        "answer": [{"text": "Claim.", "citations": [0, 9]}],
+    }
+
+    with pytest.raises(ValueError, match="invalid citation"):
+        competition_rag.normalize_generated_record(record)
+
+
 def test_word_cap_trim_drops_trailing_objects_and_frees_their_references() -> None:
     record = {
         "metadata": {"narrative_id": "58"},

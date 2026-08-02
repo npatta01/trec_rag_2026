@@ -1007,10 +1007,16 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
     references = record["references"]
     answer = record["answer"]
 
+    # Only prune uncited references. An out-of-range or non-integer citation is a model error
+    # that validate_submission_record is responsible for reporting, so it must not be silently
+    # dropped here: doing so would hide fabricated citation indexes behind a later, misleading
+    # "must have 1-3 citations" failure.
     order: list[int] = []
-    for item in answer:
+    for index, item in enumerate(answer):
         for citation in item["citations"]:
-            if type(citation) is int and 0 <= citation < len(references) and citation not in order:
+            if type(citation) is not int or not 0 <= citation < len(references):
+                raise ValueError(f"answer[{index}] has an invalid citation: {citation!r}")
+            if citation not in order:
                 order.append(citation)
     if not order:
         raise ValueError("generated answer cites no valid reference")
@@ -1022,7 +1028,7 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
         "answer": [
             {
                 "text": item["text"],
-                "citations": [remap[c] for c in item["citations"] if c in remap],
+                "citations": [remap[c] for c in item["citations"]],
             }
             for item in answer
         ],
