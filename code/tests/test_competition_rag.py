@@ -1514,6 +1514,58 @@ def test_truncated_completion_is_rejected_rather_than_shortened(
         )
 
 
+@pytest.mark.parametrize(
+    "finish_reason",
+    [
+        pytest.param("error", id="provider-error-with-partial-content"),
+        pytest.param("content_filter", id="content-filter"),
+        pytest.param("tool_calls", id="tool-calls"),
+        pytest.param(None, id="absent"),
+        pytest.param("unrecognised", id="unknown"),
+    ],
+)
+def test_only_a_stop_finish_reason_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, finish_reason: str | None
+) -> None:
+    """OpenRouter returns HTTP 200 with finish_reason 'error' and partial content."""
+    generator = competition_rag.OpenRouterJsonGenerator(
+        api_base="https://openrouter.test",
+        api_key="test-key",
+        model="m",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=100,
+        timeout_seconds=5.0,
+        transport_max_attempts=1,
+    )
+    choice: dict[str, Any] = {
+        "message": {
+            "content": json.dumps(
+                {
+                    "references": ["climbmix-a"],
+                    "answer": [{"text": "Looks complete.", "citations": [0]}],
+                }
+            )
+        }
+    }
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    monkeypatch.setattr(
+        competition_rag.requests,
+        "post",
+        lambda *a, **k: FakeHttpResponse(200, {"choices": [choice]}),
+    )
+    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+
+    with pytest.raises(competition_rag.SemanticCompletionError, match="rather than 'stop'"):
+        generator.complete_json(
+            topic_id="rag2026-1",
+            system_prompt="s",
+            user_prompt="u",
+            response_schema=competition_rag.output_schema(),
+        )
+
+
 def test_resume_refuses_rows_generated_under_different_settings(tmp_path: Path) -> None:
     """Resume reuses saved rows; shape revalidation cannot detect a changed model or prompt."""
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
@@ -1664,11 +1716,12 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
             "id": f"provider-reflected-{api_key}",
             "choices": [
                 {
+                    "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(
                             _topic_output(["climbmix-c"], "C supports it.")
                         )
-                    }
+                    },
                 }
             ],
         },
@@ -1728,11 +1781,12 @@ def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
             "id": f"provider-reflected-{reflected_key}",
             "choices": [
                 {
+                    "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(
                             _topic_output(["climbmix-c"], "C supports it.")
                         )
-                    }
+                    },
                 }
             ],
         },
@@ -1793,9 +1847,10 @@ def _provider_success() -> FakeHttpResponse:
             "id": "response-1",
             "choices": [
                 {
+                    "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(_topic_output(["climbmix-a"], "Supported."))
-                    }
+                    },
                 }
             ],
         },
@@ -1834,7 +1889,7 @@ def test_malformed_semantic_completion_is_not_retried(monkeypatch: pytest.Monkey
         nonlocal calls
         del url, kwargs
         calls += 1
-        return FakeHttpResponse(200, {"choices": [{"message": {"content": "not JSON"}}]})
+        return FakeHttpResponse(200, {"choices": [{"finish_reason": "stop", "message": {"content": "not JSON"}}]})
 
     monkeypatch.setattr(competition_rag.requests, "post", fake_post)
     with pytest.raises(ValueError, match="no repair call") as error:

@@ -906,15 +906,25 @@ class OpenRouterJsonGenerator:
             # grammar-constrained decoding can close the JSON validly while the answer is cut
             # short, producing a record that passes every downstream check and scores badly.
             choices = envelope.get("choices")
-            if (
-                isinstance(choices, list)
-                and choices
-                and isinstance(choices[0], dict)
-                and choices[0].get("finish_reason") == "length"
-            ):
+            finish_reason = (
+                choices[0].get("finish_reason")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+                else None
+            )
+            if finish_reason == "length":
                 raise SemanticCompletionError(
                     "OpenRouter truncated the completion at max_tokens; raise "
                     "generation.max_tokens rather than accepting a shortened answer",
+                    safe_response,
+                )
+            if finish_reason != "stop":
+                # An allowlist, not a denylist. OpenRouter returns HTTP 200 with
+                # finish_reason "error" and partial content, and "content_filter" or an absent
+                # reason are equally unsafe to publish. Rejecting a topic is recoverable by
+                # resuming; publishing a partial answer is not.
+                raise SemanticCompletionError(
+                    f"OpenRouter finish_reason was {finish_reason!r} rather than 'stop'; "
+                    "no repair call was made",
                     safe_response,
                 )
             try:
