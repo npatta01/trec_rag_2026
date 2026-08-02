@@ -76,6 +76,18 @@ Register `closeout_refused` in the trace stopping-reason whitelist. The existing
 trace recording boundary swallows exceptions, so this registration is required
 for the new result to appear in Phoenix.
 
+## Review-fix constraints
+
+- The invariant check and successful terminal transition must execute under one
+  `EvidenceCoverageState` lock; a concurrent state delta must not be able to
+  slip between validation and completion.
+- A selected draft is valid only while at least one selected nugget remains
+  live. Superseding every selected nugget reopens the closeout requirement.
+- Every rejected completion result must include deterministic offending
+  `need_ids`, including failures from the existing open-need transition.
+- The real-loop tests must invoke the production `DeepAgentRetriever` toolset
+  through `langchain.agents.create_agent`, not a standalone replacement tool.
+
 ## Error handling
 
 Completion rejection is a normal tool result, not an exception. The result is

@@ -137,3 +137,52 @@ Expected: no whitespace errors, only scoped source/tests/docs commits, and no se
 - [x] Silent-exit guard, stopping-reason precedence, and trace whitelist wired.
 - [x] Real LangGraph tests added for successful completion, rejection, and silent-exit redirection.
 - [x] Verification: `PYTHONPATH=code .venv/bin/python -m pytest code/tests/ -q` → 1241 passed, 19 skipped.
+
+## Review-fix execution plan
+
+### Task 4: Make completion validation atomic and complete its error contract
+
+**Files:**
+- Modify: `code/trec_rag/deepagent_evidence.py` near `pending_closeout_need_ids()` and `choose_action()`.
+- Modify: `code/trec_rag/deepagent_retrieval.py` near the retrieval-local `complete_retrieval()` tool.
+- Test: `code/tests/test_deepagent_evidence.py` and `code/tests/test_deepagent_retrieval.py`.
+
+- [ ] Add failing tests for superseded selected drafts, atomic completion, and
+  `need_ids` on open-need rejection.
+- [ ] Run those tests and confirm they fail for the current two-step check.
+- [ ] Add one locked state transition that validates live drafts and existing
+  completion rules before setting the terminal reason; return sorted offending
+  need IDs for both invariant and open-need failures.
+- [ ] Run the focused state/retrieval suite.
+
+### Task 5: Exercise the production toolset through a real LangGraph loop
+
+**Files:**
+- Modify: `code/tests/test_deepagent_retrieval.py`.
+
+- [ ] Add failing production-wired `create_agent` tests for valid completion and
+  rejected live-evidence completion.
+- [ ] Run the tests and confirm the current fake standalone-tool tests do not
+  prove the production path.
+- [ ] Wire the test through the actual `AgentToolset` closures and
+  `MainToolFilterMiddleware`; keep the production implementation unchanged if
+  the new tests pass after Task 4.
+- [ ] Run the focused real-loop suite.
+
+### Task 6: Correct standards and provenance findings
+
+**Files:**
+- Modify: `code/trec_rag/README.md`, `code/trec_rag/continuation.py`, and
+  `code/trec_rag/retrievers.py` for environment-safe commands and the
+  passage-first researcher contract.
+- Modify: `code/trec_rag/deepagent_retrieval.py` to remove mutation tools from
+  the retrieval-only allowlist.
+- Modify: `code/trec_rag/README.md` with probe input/output/validation notes.
+- Modify: `reports/2026-08-01-chunk-size-and-reranker-window.md` with source,
+  configuration, and artifact provenance already available in the report
+  records.
+
+- [ ] Add or update focused assertions where the allowlist/contract is tested.
+- [ ] Run the focused documentation/allowlist tests and a source scan for bare
+  Python commands and mutation-tool exposure.
+- [ ] Run `git diff --check` and the full repository suite.
