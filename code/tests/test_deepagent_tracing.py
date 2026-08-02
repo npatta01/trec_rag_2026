@@ -928,3 +928,89 @@ def test_injected_provider_never_registers_with_phoenix(provider: TracerProvider
         )
 
     register.assert_not_called()
+
+
+def test_middleware_spans_are_dropped_at_export_not_at_creation() -> None:
+    """A live trace was mostly middleware hooks; the real work was buried."""
+    from trec_rag.deepagent_tracing import _DropMiddlewareSpans
+
+    exported = []
+
+    class Sink:
+        def on_start(self, span, parent_context=None):
+            exported.append(("start", span.name))
+
+        def on_end(self, span):
+            exported.append(("end", span.name))
+
+        def force_flush(self, timeout_millis=30_000):
+            return True
+
+        def shutdown(self):
+            return None
+
+    class Span:
+        def __init__(self, name):
+            self.name = name
+
+    processor = _DropMiddlewareSpans(Sink())
+    for name in (
+        "ToolCallLimitMiddleware[search_climbmix]",
+        "ModelCallLimitMiddleware.after_model",
+        "search_passages",
+        "ChatOpenRouter",
+        "researcher",
+    ):
+        processor.on_start(Span(name))
+        processor.on_end(Span(name))
+
+    # Every span still starts: nothing is suppressed in the application path.
+    assert [name for kind, name in exported if kind == "start"] == [
+        "ToolCallLimitMiddleware[search_climbmix]",
+        "ModelCallLimitMiddleware.after_model",
+        "search_passages",
+        "ChatOpenRouter",
+        "researcher",
+    ]
+    # Only the framework wrappers are withheld from the exporter.
+    assert [name for kind, name in exported if kind == "end"] == [
+        "search_passages",
+        "ChatOpenRouter",
+        "researcher",
+    ]
+    assert processor.force_flush() is True
+
+
+def test_middleware_spans_can_be_kept_with_an_environment_flag() -> None:
+    from trec_rag.deepagent_tracing import (
+        TRACE_MIDDLEWARE_ENV_VAR,
+        _hide_middleware_spans,
+    )
+
+    class Multi:
+        def __init__(self):
+            self._span_processors = ("original",)
+
+    class Provider:
+        def __init__(self):
+            self._active_span_processor = Multi()
+
+    kept = Provider()
+    _hide_middleware_spans(kept, {TRACE_MIDDLEWARE_ENV_VAR: "1"})
+    assert kept._active_span_processor._span_processors == ("original",)
+
+    hidden = Provider()
+    _hide_middleware_spans(hidden, {})
+    assert all(
+        isinstance(p, type(_hide_middleware_spans.__globals__["_DropMiddlewareSpans"]("x")))
+        for p in hidden._active_span_processor._span_processors
+    )
+
+
+def test_an_unexpected_provider_shape_never_breaks_tracing() -> None:
+    from trec_rag.deepagent_tracing import _hide_middleware_spans
+
+    class Odd:
+        pass
+
+    _hide_middleware_spans(Odd(), {})

@@ -730,6 +730,73 @@ def _credential_fingerprint(api_key: str | None) -> str | None:
     return sha256(api_key.encode()).hexdigest() if api_key is not None else None
 
 
+
+# Framework wrappers that carry no retrieval meaning. A live trace was mostly
+# these: every middleware hook opens a span, so the researcher's actual work
+# (search_passages, the LLM call) is buried among dozens of them. They are
+# leaves, so dropping them at export orphans nothing.
+_MIDDLEWARE_SPAN_MARKERS = ("Middleware.", "Middleware[")
+
+TRACE_MIDDLEWARE_ENV_VAR = "DEEPAGENT_TRACE_MIDDLEWARE"
+
+
+def _middleware_span(name: object) -> bool:
+    return isinstance(name, str) and any(
+        marker in name for marker in _MIDDLEWARE_SPAN_MARKERS
+    )
+
+
+class _DropMiddlewareSpans:
+    """Keep framework middleware spans out of the export, nothing else.
+
+    Filtering happens on the way to the exporter, never in the application
+    path: spans are still created and the run behaves identically whether or
+    not this is installed. Set DEEPAGENT_TRACE_MIDDLEWARE=1 to keep them.
+    """
+
+    def __init__(self, wrapped: object) -> None:
+        self._wrapped = wrapped
+
+    def on_start(self, span: object, parent_context: object = None) -> None:
+        starter = getattr(self._wrapped, "on_start", None)
+        if starter is not None:
+            starter(span, parent_context)
+
+    def on_end(self, span: object) -> None:
+        if _middleware_span(getattr(span, "name", None)):
+            return
+        ender = getattr(self._wrapped, "on_end", None)
+        if ender is not None:
+            ender(span)
+
+    def shutdown(self) -> None:
+        shutdown = getattr(self._wrapped, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        flush = getattr(self._wrapped, "force_flush", None)
+        return True if flush is None else bool(flush(timeout_millis))
+
+
+def _hide_middleware_spans(provider: object, environ: Mapping[str, str]) -> None:
+    """Wrap the provider's span processors so middleware spans are not exported."""
+    if environ.get(TRACE_MIDDLEWARE_ENV_VAR, "").strip().lower() in {"1", "true", "yes"}:
+        return
+    multi = getattr(provider, "_active_span_processor", None)
+    processors = getattr(multi, "_span_processors", None)
+    if not processors:
+        return
+    try:
+        multi._span_processors = tuple(
+            _DropMiddlewareSpans(processor) for processor in processors
+        )
+    except Exception:
+        # Tracing must never break retrieval; an unexpected provider shape just
+        # means the trace stays noisy.
+        return
+
+
 def _instrument_langchain(provider: _TracerProvider, trace_content: bool) -> None:
     """Install the one process-global LangChain instrumentor for a resolved provider."""
     LangChainInstrumentor().instrument(
@@ -803,6 +870,7 @@ def create_retrieval_tracing(
                     api_key=api_key,
                     verbose=False,
                 )
+                _hide_middleware_spans(provider, resolved_environ)
                 _LIVE_PROVIDER_CACHE[live_key] = provider
 
         if _ACTIVE_INSTRUMENTATION is None:
