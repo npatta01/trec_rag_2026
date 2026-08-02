@@ -130,6 +130,16 @@ def load_narrative_topics(path: Path) -> list[Topic]:
     return topics
 
 
+def load_topic_narrative(topic_id: str, path: Path) -> str:
+    """Return one narrative from an explicit topic source."""
+    matches = [topic for topic in load_narrative_topics(Path(path)) if topic.id == topic_id]
+    if not matches:
+        raise ValueError(f"topic ID {topic_id!r} was not found in {path}")
+    if len(matches) != 1:
+        raise ValueError(f"topic ID {topic_id!r} was not unique in {path}")
+    return matches[0].narrative
+
+
 def _strict_narrative_record(line: str, line_number: int) -> dict[str, object]:
     def no_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}

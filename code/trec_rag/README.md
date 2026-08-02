@@ -442,11 +442,25 @@ by responsibility:
 ### Hosted API rate and continuation policy
 
 Hosted requests use `requests` plus `requests-ratelimiter`. The default policy is
-one request start per origin every three seconds with burst `1`. The per-host
+one request start per origin every six seconds with burst `1`. The hosted index throttled a run already paced at three seconds on a single serialized connection, so its own limit is stricter than ours was. The per-host
 limiter is stored in `cache/retrieval/pyserini_remote/rate-limit.sqlite`, so
 cooperating processes and restarts share the budget. Override the interval or
 state location with `PYSERINI_MIN_INTERVAL_SECONDS` and
 `PYSERINI_LIMITER_STATE_PATH`; burst values other than `1` are rejected.
+
+Only an explicit throttle latches the shared budget. Any other transport
+failure is appended to the ledger as a `failed` event and raised to its caller,
+because gating every later query behind a ticket bound to one query wedges the
+retriever until somebody replays a query they may not know.
+
+A pending ticket blocks all other queries by design, so recovering never
+requires remembering what was in flight:
+
+```bash
+.venv/bin/python -m trec_rag.continuation            # what is pending, and when it may retry
+.venv/bin/python -m trec_rag.continuation --resume   # reissue it; makes one hosted call
+.venv/bin/python -m trec_rag.continuation --discard  # drop it without a hosted call
+```
 
 Each transport entry is one immutable attempt: redirects and automatic retries
 are disabled and the timeout is 30 seconds. Before transport entry, an
@@ -492,6 +506,429 @@ Run validation:
 ```bash
 .venv/bin/python -m pytest code/tests/test_remote_pyserini.py -q
 ```
+
+## Ledger-driven submission selection
+
+`trec_rag.deepagent_submission` decides which documents a retrieval run
+submits. The task asks for "all and only" the documents that are relevant and
+useful as evidence, ranked by usefulness, with k chosen per narrative.
+
+**Inputs.** An `EvidenceCoverageReport`. **Outputs.** `rank_for_submission`
+returns `DocumentUsefulness` rows, most useful first; `submission_rows` renders
+TREC run rows; `selection_summary` says what the set leans on.
+
+**Why the ledger and not the reranker score.** A score says a document looks
+on-topic; the ledger says it actually supplied evidence an agent cited.
+Measured on topic 224, restricted to documents the qrels cover: 38% of ledger
+documents were graded "answers the question" against a 13% base rate, and
+**none** was graded irrelevant. Documents behind a vital nugget reached 43%.
+
+Ranking weights drafted evidence above vital, vital above need breadth, and
+need breadth above raw nugget count: reaching an answer is proof of usefulness,
+vital is a prediction of it, and one document can supply many near-identical
+claims. Superseded nuggets stop vouching for their documents. Ties break by
+document id, so the same ledger always produces the same run file.
+
+**What is deliberately not done.** No cutoff is tuned against development
+qrels. On the measured run 90% of the agent's documents were outside the
+judgement pool, so a set-based score there measures pooling coverage, not
+selection quality. `max_documents` exists as an operator valve, not a default;
+unset, the run is exactly the documents that supplied evidence.
+
+**Unvalidated.** The *selection* has a measured lift. The *ordering within* it
+does not: the top 25 of a real 215-document ledger contained only 2 judged
+documents, which cannot show whether the ranking concentrates relevance.
+
+## Passage-first retrieval selection
+
+`trec_rag.deepagent_passages` decides which passages a researcher sees. It
+exists because the agent used to choose a *document*: a measured run drew 63
+grounded nuggets from 5 documents, with per-need nugget counts exactly equal to
+per-document counts. Retrieving deeper alone would have made that worse, not
+better, since one document out of 1000 is a smaller share of the pool than one
+out of 10.
+
+**Inputs.** `PooledDocument(document_id, rank, text)` rows from a retrieval
+response, a focus query, a chunker, and a cross-encoder ranker.
+`PassageSelectionConfig` carries `pool_hits` (how deep to retrieve),
+`rerank_depth` (how deep to score), `top_k`, `per_document_cap`, and
+`min_distinct_documents`.
+
+**Outputs.** `score_document_pool` returns a `PoolScoringResult` with every
+scored passage plus the counts of what was scored and what was skipped.
+`select_diverse_passages` returns the passage set the agent sees.
+`selection_summary` reports what was dropped as well as what was kept, so a
+capped selection is never mistaken for an exhaustive one.
+
+**How diversity is enforced.** In code, never by asking the model. Selection
+runs in two deterministic phases: a breadth phase admits each document's single
+best passage, best documents first, until `min_distinct_documents` is reached;
+then a depth phase fills remaining slots in global score order subject to
+`per_document_cap`. A plain global top-K collapses onto one document, which
+`test_global_top_k_alone_would_have_collapsed_onto_one_document` asserts
+directly.
+
+**Validation.** `code/tests/test_deepagent_passages.py` covers the collapse
+case, breadth-before-depth ordering, graceful degradation when too few
+documents exist, determinism under input reordering, deterministic tie-breaks,
+the cap and top-K bounds, and rejection of unusable configurations. Selection
+is pure, so none of it needs a GPU or a live index.
+
+**Cost, measured on this ROCm host against a real depth-1000 pool.** About 12.6
+chunks per document and ~10ms per chunk:
+
+| rerank depth | chunks | scoring time |
+| ---: | ---: | ---: |
+| 50 | 594 | 6.1s |
+| 100 | 1,290 | 13.8s |
+| 250 | 3,518 | 44.1s |
+| 500 | 6,900 | 69.7s |
+| 1000 | 12,617 | 113.2s |
+
+The per-chunk score cache makes repeated chunks free across queries, so a run
+whose queries overlap pays much less than depth times searches. Note that these
+documents are roughly 3x longer than the 300-document sample used in the
+original design note (median 22,776 characters against 7,336), so per-document
+chunk counts there were low by about the same factor.
+
+## Experimental Deep Agent retrieval SDK
+
+`trec_rag.deepagent_retrieval` is a small, narrative-only experimental SDK. It
+is not wired into `run_pipeline`, `official_run`, organizer exports, sealed
+artifacts, or the ranking semantics of the official pipeline.
+
+Pass the narrative you already have directly; the first search uses that exact
+string without rewriting it:
+
+```python
+from trec_rag.deepagent_retrieval import DeepAgentRetriever
+
+result = DeepAgentRetriever.from_env().retrieve(provided_narrative)
+for candidate in result.candidates:
+    print(candidate.rank, candidate.docid, candidate.score)
+```
+
+Topic-file lookup remains deliberately separate and always requires an
+explicit path. It is a convenience for experiments, not a second SDK input:
+
+```python
+from pathlib import Path
+
+from trec_rag.topics import load_topic_narrative
+
+provided_narrative = load_topic_narrative(
+    "224",
+    Path("trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv"),
+)
+```
+
+Inputs and configuration:
+
+- Required: `OPENROUTER_API_KEY`, `INDEX_URL`, and `PYSERINI_API_TOKEN`.
+  `PHOENIX_COLLECTOR_ENDPOINT` is also required when exporting Phoenix traces;
+  omit it to disable tracing.
+- Optional: `PHOENIX_API_KEY` is required by Phoenix Cloud endpoints, and
+  `PHOENIX_PROJECT_NAME` overrides the default
+  `trec-rag-deepagent-retrieval` project. `DEEPAGENT_MODEL` overrides the
+  default `openrouter:deepseek/deepseek-v4-flash` model.
+- The model specification must be `openrouter:<model-id>`. The SDK constructs
+  the OpenRouter client with `max_retries=0`; it does not silently retry model,
+  Pyserini, or Phoenix calls.
+
+The SDK first retrieves the untouched narrative deterministically, then the
+main coordinator delegates bounded research tasks. Each ClimbMix search returns
+at most ten candidates; results are document-ID deduplicated with deterministic
+reciprocal-rank fusion (RRF, `k=60`) and return at most twenty candidates. Raw
+BM25 scores from different queries are never compared.
+
+| Role | Available capabilities | Deliberately unavailable |
+| --- | --- | --- |
+| Main coordinator | `task`, compact retrieval-state read/update, round completion, `complete_retrieval`, `read_file` for automatic spill | Direct search/snippet tools, recursive general-purpose subagents, filesystem mutation, `write_todos` |
+| Researcher | ClimbMix search, bounded snippet extraction, compact state read, `read_file` for automatic spill | `task`, semantic state updates, filesystem mutation, `write_todos` |
+
+There is one restricted `researcher` subagent type and no default
+general-purpose subagent. `write_todos` is intentionally not installed: the
+need/facet/nugget state and immutable result are the retrieval workflow's
+auditable state, not a general task tracker.
+
+### Fixed researcher budget
+
+The following invocation-local limits are fixed defaults. Pass a
+`ResearchBudgetConfig` to the constructor or `from_env` only for a deliberate
+POC experiment; they are not environment variables.
+
+| Limit | Default |
+| --- | ---: |
+| Researcher invocations / concurrent researchers | 10 / 3 |
+| Combined researcher search + snippet attempts | 100 |
+| Tool calls / searches / snippets per researcher | 20 / 8 / 16 |
+| Model calls, researcher / main coordinator | 30 / 40 |
+| Soft warning / hard admission deadline | 30 min / 60 min |
+| Consecutive no-yield calls per researcher | 3 |
+| Consecutive no-progress rounds | 2 |
+
+The original narrative is never rewritten for its deterministic first search.
+Each researcher receives compact task JSON containing its task ID, round,
+depth, motivating need IDs, and gap; it can formulate and refine its own
+queries. The JSON envelope must begin `task.description`; optional detailed
+research instructions can follow after a newline. Its first model action is
+mechanically restricted to
+`search_passages`; after that attempt, snippet and compact-state tools become
+available. The coordinator merges completed evidence bundles with one semantic
+state update per batch, then closes the round. An empty round is refused without
+consuming the round, and the next coordinator action is mechanically restricted
+to a researcher `task`. Once a round's researchers have all finished, the
+coordinator cannot skip or abandon that round: its next turn is restricted to
+one `update_retrieval_state` merge and the turn after that to
+`complete_research_round`, so a round with completed research is always recorded
+before the run can end. That merge delta must also carry `set_need_status` rows
+for every need whose evidence changed, so a need never stays `unaddressed` after
+its researchers returned. Closing a round out of order is refused with
+`ROUND_SEQUENCE_INVALID` rather than raising. A researcher that has three
+successive retrieval calls with no novel evidence must return its bundle; two
+successive rounds with no accepted coverage progress stop further research.
+Rounds have no cap of their own: a round cannot close without a finished
+researcher, so researcher invocations already bound them and a separate limit
+could only strand researchers the run was allowed to spend. When research ends,
+the coordinator gets one final directed turn to record a synthesis: a draft
+answer and grounded nugget IDs for every need the evidence supports. It must
+then call `complete_retrieval`; this is the only coordinator tool that can make
+the coverage state terminal. The transition checks every need with live,
+non-superseded evidence and requires at least one selected live
+`draft_nugget_id`. A rejected completion returns deterministic `need_ids` for
+the open needs, and a draft selection whose nugget was later superseded no
+longer counts.
+
+`AgentRetrievalResult` contains the input `narrative`, completed `searches`
+(`AgentSearch` records), fused `candidates` (`RankedCandidate` records with
+per-search provenance), the agent's `rationale`, `stopping_reason`, immutable
+`coverage_report`, immutable `budget_snapshot`, and immutable
+`trace_flush_succeeded`. Inspect the coverage and budget through the Python SDK
+when deciding whether the evidence is ready for a downstream draft:
+
+```python
+coverage = result.coverage_report
+print(coverage.state_hash, coverage.unresolved_need_ids)
+print(result.budget_snapshot.as_dict())
+for need in coverage.needs:
+    print(need.need_id, need.status, need.draft_answer)
+```
+
+`trace_flush_succeeded` is `True` when configured tracing flushes successfully
+or tracing is disabled and no export is required; it is `False` when export
+fails. Export failure does not retry or change retrieval. Budget exhaustion is
+an honest grounded partial result: completed searches, snippets, actions, and
+coverage gaps are returned, but exhaustion never claims coverage is complete.
+When a coverage terminal reason and a budget stop coexist, `stopping_reason`
+retains the coverage reason; inspect `budget_snapshot.stop_code` for the
+independent budget outcome. Reaching the coordinator's `max_main_models`
+ceiling records `MAIN_MODEL_BUDGET_EXHAUSTED`, so a run cut short by that
+ceiling reports `budget_exhausted` rather than claiming `agent_completed`. A search that cannot reach the index
+reports `RETRIEVAL_UNAVAILABLE` to the agent and makes `stopping_reason`
+`retrieval_unavailable`, so an outage is never read as a narrative with no
+evidence. That is recorded, not enforced: one unreachable search does not
+cancel the remaining retrieval, and a sustained outage still ends the run
+through the no-yield and no-progress guards.
+
+The agent maintains three distinct stores, each with a different job:
+
+- The invocation-local **need map** records narrative-derived needs, facets,
+  remaining gaps, statuses, and any draft answer.
+- The mechanical **retrieval ledger** records searches, inspected pages,
+  document/focus pagination state, residual signals, and consumed actions.
+- The grounded **nugget store** holds only concise claims linked to
+  resolved citations into returned snippets. It stores the cited span, not a
+  copy of the passage, so a reported quote cannot disagree with its snippet.
+
+Use `view_retrieval_state` to inspect a compact frontier or a bounded state
+view and `update_retrieval_state` to add needs, facets, nuggets, evidence, and
+coverage judgments. Researcher search and snippet calls atomically record their
+own actual arguments; they do not require `choose_next_action` authorization.
+The legacy `choose_next_action` callback is retained for compatibility with
+older injected toolsets, but it cannot record a terminal stop;
+`complete_retrieval` is the only valid terminal transition. The SDK owns this
+state for one retrieval invocation; it is not a persistent cache or a
+replacement for the final result's immutable `coverage_report`.
+
+`update_retrieval_state(delta)` is the universal append/update entry point for
+the three stores. Its model-facing delta accepts these eight optional lists:
+
+| Delta section | Row input |
+| --- | --- |
+| `add_needs` | `need_id`, exact `narrative_span`, `question` |
+| `add_facets` | `facet_id`, `need_ids`, `dimension`, `value`, `origin`, optional `origin_snippet_id` |
+| `add_nuggets` | `nugget_id`, `text`, `need_ids`, `facet_ids`, `evidence` as a list of `{"cite": "S3.2"}`, optional `contradicts` |
+| `add_evidence` | `nugget_id`, `cite` |
+| `set_facet_status` | `facet_id`, `status`, optional `status_reason` and `supporting_nugget_ids` |
+| `set_need_status` | `need_id`, `status`, `remaining_gap`, optional `draft_answer` and `draft_nugget_ids` |
+| `supersede_nuggets` | `nugget_id`, `superseded_by` |
+| `abandon_documents` | `document_id`, `reason` |
+
+The result reports `accepted_ids`, row-level `rejected` entries,
+`state_version`, and `state_hash`. An unknown section is reported as
+`UNKNOWN_SECTION` without discarding valid rows in the same delta. A delta with
+no accepted rows and no other rejection is reported as `EMPTY_DELTA`, including
+an empty recognized list such as `{"add_needs": []}`.
+
+Any rejection also adds a `rejected_summary` count by code. When a citation
+fails to resolve (`UNKNOWN_CITATION`, `INVALID_CITATION`, `DUPLICATE_EVIDENCE`),
+the result adds `unadmitted_sections` and an `evidence_rejection_notice` stating
+that the claim never entered the ledger, that the cited needs remain
+unsupported, and that the only recovery is delegating a researcher again.
+
+Agent-facing search and snippet behavior is deliberately narrow:
+
+- Search results visible to the agent contain only document ID, rank, score,
+  and text length metadata. No title field is emitted because the endpoint does
+  not return titles.
+- For any document returned during the current invocation, the agent can ask
+  for up to ten relevance-ranked snippets at a time and follow `next_cursor`
+  for another page. A page may contain multiple snippets from the same
+  document. One bounded snippet may equal a complete short document that fits
+  in one chunk; long documents remain relevance-chunked and paginated and are
+  never blindly injected whole. Each page reports `page_index`,
+  `residual_count`, `residual_top_score`, `returned_min_score`, and
+  `pages_estimated`; these scores describe continuity only within that page's
+  ranking, never calibrated relevance or comparability across documents or
+  focus queries.
+- Agents cite evidence by handle and never transcribe it. Each returned
+  snippet carries a handle such as `S3` and numbered sentences; evidence is
+  `S3` for a whole snippet, `S3.2` for one sentence, or `S3.2-4` for a
+  contiguous range. The SDK resolves the handle against stored sentence spans
+  and derives the reported `document_id`, `snippet_id`, `page_index`, and
+  `quote`, so an ungrounded quote is not a reachable outcome. Handles are
+  assigned once per invocation and stay valid across pages and rounds. A need
+  becomes `answerable` only with a nonblank
+  draft answer and grounded nugget IDs; otherwise it remains unaddressed,
+  partial, or conflicted. A nugget's `single_document` or `multi_document`
+  support label describes the observed support count only; it does not
+  establish source independence.
+- The search transport and snippet extractor own their respective caches. The
+  model receives no cache keys, paths, bypass switches, or other cache controls.
+- Deep Agents may spill oversized tool results or temporary notes into
+  invocation-local state scratch. Need-map and ledger state, caches, and
+  scratch are separate: state is discarded after the retrieval invocation,
+  cache-first search/snippet tools retain their own validated reusable results,
+  and scratch is only a temporary overflow for the current invocation.
+
+The reusable `trec_rag.deepagent_snippets` layer accepts a document ID, complete
+document text, focus query, and optional cursor. It returns a typed
+`SnippetExtractionResult` containing the model-visible `SnippetPage` plus
+internal cache status, ranker backend, and page offset used by tracing. Its
+default factory uses the repository cache roots; experiments can instead inject
+an explicit extractor or ranker without changing the agent-facing tool schema.
+The default Mixedbread adapter loads with `local_files_only=True`, so the pinned
+`mixedbread-ai/mxbai-rerank-base-v2` revision
+`3ea9d4dffa7d12a4f366be8e275c349de9fc9865` must already be present in the
+local Hugging Face cache before the first uncached snippet-ranking call.
+
+The reusable layer validates its boundary before returning or caching a page:
+
+- document IDs and focus queries must be nonblank, document text must be a
+  string, and cursors must be strings or `None`;
+- opaque cursors are schema-checked and bound to the document, focus query,
+  document-text hash, ranker/chunker identity, extraction configuration, and
+  next page offset;
+- page size and chunk maximum must be positive integers, overlap must be
+  non-negative and smaller than the chunk maximum, and the duplicate-overlap
+  ratio must be a finite value from zero through one;
+- chunk IDs/ranges/text must match the source document, ranker outputs must
+  cover every known chunk exactly once, and every relevance score must be
+  finite;
+- cached identities, response and private source-manifest digests and bindings,
+  page fields, snippet records, offsets, and continuation cursors are validated
+  before reuse.
+
+Malformed or identity-mismatched cache data raises the constant,
+non-disclosing `invalid snippet cache entry` integrity error. At the agent tool
+boundary, unknown documents, blank queries, invalid cursors, and extraction
+failures likewise return fixed errors without internal cache, model, or path
+details.
+
+The retrieval presentation bounds are explicit keyword-only constructor and
+`from_env` options. They accept positive integers only (booleans are rejected)
+and are not environment variables:
+
+```python
+retriever = DeepAgentRetriever.from_env(
+    hits_per_search=10,
+    max_followup_searches=8,
+    fused_result_limit=20,
+)
+result = retriever.retrieve(provided_narrative)
+```
+
+`hits_per_search` controls the remote request depth and model candidate view;
+trace evidence is additionally subject to an absolute safety ceiling.
+`max_followup_searches` controls the per-researcher search cap when no explicit
+`ResearchBudgetConfig` is supplied, and `fused_result_limit` controls the
+deterministic final RRF depth. Defaults are 10, 8, and 20 respectively. Run
+live retrieval or local snippet/reranker work on this ROCm host with
+`.venv/bin/python-rocm`, rather than `uv run` or an unconfigured interpreter.
+
+Phoenix tracing is optional. Search spans contain document lengths rather than
+document text. Snippet-page spans contain bounded IDs, offsets, relevance
+scores, backend/cache metadata, and snippet text only when `trace_content=True`;
+with `trace_content=False`, narrative, query, snippet text, and automatically
+instrumented LangChain inputs/outputs use a redacted marker. With the default
+`trace_content=True`, Phoenix shows automatic agent, model, and tool
+inputs/outputs for interactive debugging, including snippet-tool arguments and
+results. Purpose-specific manual spans still exclude credentials,
+authorization headers, raw provider responses, continuation-ticket values,
+cursors, scratch paths, and local cache paths. Keep provider credentials in
+ignored local environment files rather than source or notebooks. Tracing
+configuration is process-global and idempotent:
+identical normalized live setup reuses its provider/exporter, while a
+conflicting endpoint, project, credential, injected provider, or content mode
+raises a constant non-disclosing configuration error instead of silently
+reconfiguring instrumentation.
+
+Validate the isolated SDK and its existing transport boundaries with:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_topics.py \
+  code/tests/test_deepagent_snippets.py \
+  code/tests/test_deepagent_tracing.py \
+  code/tests/test_deepagent_retrieval.py \
+  code/tests/test_pipeline.py \
+  code/tests/test_remote_pyserini.py -q
+```
+
+## Offline post-batch nuggetizer probe
+
+`post_batch_nuggetizer_probe.py` is an offline proof-of-concept for the
+centralized canonicalization design. It is not wired into
+`DeepAgentRetriever`, `run_pipeline`, or any submission artifact.
+
+Inputs:
+
+- one Phoenix trace for topic `224`, loaded through the configured Phoenix
+  client;
+- the trace's researcher bundles and accepted ledger, selected with
+  `--input-source researcher` or `--input-source ledger`;
+- the untouched narrative, snippet observations, and exact citation handles
+  reconstructed in memory from the trace.
+
+Outputs:
+
+- a sanitized A/B comparison of provisional claims and canonical nuggets;
+- grounding failures, alias mappings, and summary counts printed to stdout;
+- no trace content, raw snippets, provider response, or cache files written to
+  disk.
+
+Validation and safety bounds:
+
+- the trace reconstruction rejects missing or conflicting identities and
+  citation observations before a hosted call;
+- exact snippet grounding is checked before and after canonicalization;
+- at most one hosted canonicalization call is made, with no retries;
+- the existing canonical-nugget and nuggetizer-adapter tests remain the
+  reusable validation boundary.
+
+The implementation is [post_batch_nuggetizer_probe.py](post_batch_nuggetizer_probe.py).
+Run it only as a deliberate local experiment after loading the Phoenix and
+OpenRouter environment from ignored files; it is not a pipeline entry point.
 
 ## Config-Driven RAG Pipeline
 

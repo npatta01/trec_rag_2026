@@ -1,19 +1,24 @@
 [project]
 name = "trec-rag-workspace"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<4.0"
 dependencies = [
+    "arize-phoenix-otel==0.16.1",
+    "deepagents==0.7.0",
     "filelock==3.20.3",
+    "langchain-openrouter==0.2.7",
     "PyYAML",
     "requests==2.32.5",
     "requests-ratelimiter==0.7.0",
     "semantic-text-splitter",
     "nuggetizer==0.0.5",
+    "openinference-instrumentation-langchain==0.1.67",
     "openinference-semantic-conventions==0.1.30",
 ]
 
 [dependency-groups]
 dev = [
+    "arize-phoenix-client==2.13.0",
     "pytest",
 ]
 observability = [

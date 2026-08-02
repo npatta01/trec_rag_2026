@@ -50,6 +50,10 @@ def _safe_part(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "part"
 
 
+MAX_SHORT_THROTTLE_RETRIES = 2
+SHORT_RETRY_AFTER_SECONDS = 5.0
+
+
 def cache_path(
     topic_id: str,
     variant_name: str,
@@ -124,6 +128,11 @@ class PyseriniRemoteRetriever:
         )
         self.cache_stats = RetrieverCacheStats()
         self.cache_hit_artifacts: list[dict[str, object]] = []
+
+    def _sleep(self, seconds: float) -> None:
+        """Wait out a short throttle. Overridable so tests need not really wait."""
+        if seconds > 0:
+            time.sleep(seconds)
 
     def cache_summary(self) -> dict[str, object]:
         requests = self.cache_stats.hits + self.cache_stats.misses + self.cache_stats.bypasses
@@ -204,7 +213,12 @@ class PyseriniRemoteRetriever:
                 ticket = json.loads(ticket_file.read_bytes())
                 if self.continuation_ticket != ticket.get("ticket"):
                     raise RuntimeError(
-                        f"explicit continuation required; use ticket {ticket.get('ticket')}"
+                        "explicit continuation required: a throttled request is "
+                        "pending and blocks every other query. Inspect it with "
+                        "'.venv/bin/python -m trec_rag.continuation', then --resume to "
+                        "retry it or --discard to drop it. "
+                        f"(ticket {ticket.get('ticket')}, "
+                        f"query {ticket.get('query')!r})"
                     )
                 if any(ticket.get(key) != value for key, value in identity.items()):
                     raise RuntimeError("continuation ticket request identity mismatch")
@@ -235,53 +249,90 @@ class PyseriniRemoteRetriever:
             attempt_dir = self.cache_dir / "attempts"
             attempt_dir.mkdir(exist_ok=True)
             attempt_file = attempt_dir / f"{attempt_id}.response"
-            try:
-                raw_result = self.client.search_raw(
-                    query.query_text,
-                    raw_sink=attempt_file.write_bytes,
-                )
-            except RemotePyseriniThrottled as exc:
-                ticket = uuid.uuid4().hex
-                retry_after = exc.retry_after_seconds or 0.0
-                with ledger_lock:
-                    ticket_file.write_text(
-                        json.dumps(
-                            {
-                                "ticket": ticket,
-                                "not_before_unix": time.time() + retry_after,
-                                "retry_after_seconds": exc.retry_after_seconds,
-                                "failed_attempt_id": attempt_id,
-                                **identity,
-                            },
-                            sort_keys=True,
-                            indent=2,
-                        ),
-                        encoding="utf-8",
+            throttle_retries = 0
+            while raw_result is None:
+                try:
+                    raw_result = self.client.search_raw(
+                        query.query_text,
+                        raw_sink=attempt_file.write_bytes,
                     )
-                    consumed_ticket_file.unlink(missing_ok=True)
-                exc.continuation_ticket = ticket
-                raise
-            except Exception as exc:
-                ticket = uuid.uuid4().hex
-                with ledger_lock:
-                    ticket_file.write_text(
-                        json.dumps(
-                            {
-                                "ticket": ticket,
-                                "not_before_unix": time.time(),
-                                "retry_after_seconds": None,
-                                "failed_attempt_id": attempt_id,
-                                "failure_type": type(exc).__name__,
-                                **identity,
-                            },
-                            sort_keys=True,
-                            indent=2,
-                        ),
-                        encoding="utf-8",
-                    )
-                    consumed_ticket_file.unlink(missing_ok=True)
-                setattr(exc, "continuation_ticket", ticket)
-                raise
+                except RemotePyseriniThrottled as exc:
+                    retry_after = exc.retry_after_seconds or 0.0
+                    if (
+                        throttle_retries < MAX_SHORT_THROTTLE_RETRIES
+                        and retry_after <= SHORT_RETRY_AFTER_SECONDS
+                    ):
+                        # A short back-off is worth waiting out in place. Minting
+                        # a ticket blocks every later query in the run, which is
+                        # a ruinous price to pay for a one-second delay.
+                        throttle_retries += 1
+                        self._sleep(retry_after)
+                        # Every transport entry stays one immutable, separately
+                        # reserved attempt, so a retry is a new attempt rather
+                        # than a silent second use of the first one.
+                        retried_from = attempt_id
+                        attempt_id = uuid.uuid4().hex
+                        attempt_file = attempt_dir / f"{attempt_id}.response"
+                        with ledger_lock:
+                            with ledger_file.open("a", encoding="utf-8") as ledger:
+                                ledger.write(
+                                    json.dumps(
+                                        {
+                                            "event": "reserved",
+                                            "attempt_id": attempt_id,
+                                            "reserved_unix": time.time(),
+                                            "retry_of_attempt_id": retried_from,
+                                            "retry_index": throttle_retries,
+                                            "throttled_retry_after_seconds": retry_after,
+                                            **identity,
+                                        },
+                                        sort_keys=True,
+                                    )
+                                    + "\n"
+                                )
+                        continue
+                    ticket = uuid.uuid4().hex
+                    with ledger_lock:
+                        ticket_file.write_text(
+                            json.dumps(
+                                {
+                                    "ticket": ticket,
+                                    "not_before_unix": time.time() + retry_after,
+                                    "retry_after_seconds": exc.retry_after_seconds,
+                                    "failed_attempt_id": attempt_id,
+                                    **identity,
+                                },
+                                sort_keys=True,
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                        consumed_ticket_file.unlink(missing_ok=True)
+                    exc.continuation_ticket = ticket
+                    raise
+                except Exception as exc:
+                    # Only an explicit throttle latches the shared budget. A
+                    # transport failure fails its own request and is recorded, but
+                    # must not gate every later request behind a ticket bound to
+                    # this one query: the caller may never issue that query again,
+                    # which wedges the retriever until someone replays it by hand.
+                    with ledger_lock:
+                        with ledger_file.open("a", encoding="utf-8") as ledger:
+                            ledger.write(
+                                json.dumps(
+                                    {
+                                        "event": "failed",
+                                        "attempt_id": attempt_id,
+                                        "failed_unix": time.time(),
+                                        "failure_type": type(exc).__name__,
+                                        **identity,
+                                    },
+                                    sort_keys=True,
+                                )
+                                + "\n"
+                            )
+                        consumed_ticket_file.unlink(missing_ok=True)
+                    raise
             if self.config.cache:
                 cache_file.write_bytes(attempt_file.read_bytes())
         response = raw_result.payload if raw_result is not None else self.client.search(query.query_text)
