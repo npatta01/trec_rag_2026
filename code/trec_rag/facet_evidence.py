@@ -157,6 +157,17 @@ class SourceSpan:
     text_sha256: str
 
 
+@dataclass
+class _SourceValidationCache:
+    """Reusable source geometry for validating many candidates from one document."""
+
+    byte_offsets: tuple[int, ...]
+    paragraphs: tuple[SourceSpan, ...]
+    sentences_by_paragraph: dict[tuple[int, int], tuple[SourceSpan, ...]] = field(
+        default_factory=dict
+    )
+
+
 @dataclass(frozen=True)
 class SentenceEvidence(SourceSpan):
     cross_encoder_score: float
@@ -323,6 +334,14 @@ def _source_spans(source: str, byte_offsets: tuple[int, ...]) -> tuple[SourceSpa
     return tuple(result)
 
 
+def _source_validation_cache(source: str) -> _SourceValidationCache:
+    byte_offsets = _byte_offsets(source)
+    return _SourceValidationCache(
+        byte_offsets=byte_offsets,
+        paragraphs=_source_spans(source, byte_offsets),
+    )
+
+
 def _make_span(source: str, byte_offsets: tuple[int, ...], start: int, end: int) -> SourceSpan:
     text = source[start:end]
     if start < 0 or end <= start or end > len(source) or not text.strip():
@@ -467,6 +486,7 @@ def validate_extractive_candidate_source(
     *,
     source: str,
     subnarrative_text: str,
+    _source_cache: _SourceValidationCache | None = None,
 ) -> None:
     """Revalidate one decoded candidate against its exact source and plan text."""
     if not isinstance(candidate, ExtractiveCandidate):
@@ -514,7 +534,8 @@ def validate_extractive_candidate_source(
         or not candidate.evidence_sentences
     ):
         raise ValueError("candidate schema or plan identity is inconsistent")
-    byte_offsets = _byte_offsets(source)
+    source_cache = _source_cache or _source_validation_cache(source)
+    byte_offsets = source_cache.byte_offsets
     if len({row.passage_id for row in candidate.passages}) != len(candidate.passages):
         raise ValueError("candidate passage IDs must be unique")
     for row, projected in zip(candidate.passages, translated, strict=True):
@@ -560,7 +581,7 @@ def validate_extractive_candidate_source(
     ):
         if context is not None:
             validate_span(context, label)
-    paragraphs = _source_spans(source, byte_offsets)
+    paragraphs = source_cache.paragraphs
     try:
         paragraph_index = paragraphs.index(candidate.matched_paragraph)
     except ValueError as exc:
@@ -573,9 +594,16 @@ def validate_extractive_candidate_source(
     )
     if candidate.context_before != expected_before or candidate.context_after != expected_after:
         raise ValueError("candidate paragraph context is inconsistent")
-    source_sentences = _sentences_in_paragraph(
-        source, candidate.matched_paragraph, byte_offsets
+    paragraph_key = (
+        candidate.matched_paragraph.start_char,
+        candidate.matched_paragraph.end_char,
     )
+    source_sentences = source_cache.sentences_by_paragraph.get(paragraph_key)
+    if source_sentences is None:
+        source_sentences = _sentences_in_paragraph(
+            source, candidate.matched_paragraph, byte_offsets
+        )
+        source_cache.sentences_by_paragraph[paragraph_key] = source_sentences
     if any(
         not any(
             sentence.text == source_sentence.text

@@ -366,6 +366,7 @@ class _RootRetrievalArtifacts:
     document_text: Mapping[tuple[str, str], str]
     document_stage: Mapping[tuple[str, str], str]
     topic_depths: Mapping[str, tuple[int, int]]
+    source_seals: Mapping[str, Mapping[str, str]]
 
 
 @dataclass(frozen=True)
@@ -716,9 +717,15 @@ def _load_root_retrieval_artifacts(
         raise ValueError("retained root artifact topic is absent from export")
     paths = {
         "run": _safe_file(output_dir / "r_output_trec_rag_2026.tsv", output_dir),
-        "provenance": _safe_file(output_dir / "retrieval_provenance.jsonl", output_dir),
         "archive": _safe_file(output_dir / "retrieval_with_text.jsonl.zip", output_dir),
     }
+    provenance_path = output_dir / "retrieval_provenance.jsonl"
+    has_provenance = (
+        isinstance(export.get("artifacts"), Mapping)
+        and "retrieval_provenance.jsonl" in export["artifacts"]
+    )
+    if has_provenance:
+        paths["provenance"] = _safe_file(provenance_path, output_dir)
     artifact_receipts = {
         key: _export_artifact_receipt(export, path)
         for key, path in paths.items()
@@ -744,36 +751,37 @@ def _load_root_retrieval_artifacts(
         for topic_id, docids in run_docids.items()
         for docid in docids
     }
-    observed_order: dict[str, list[str]] = {topic.id: [] for topic in topics}
-    seen_provenance: set[tuple[str, str]] = set()
-    with _open_receipted_file(
-        paths["provenance"], artifact_receipts["provenance"]
-    ) as (provenance_source, provenance_digest):
-        receipts[_portable_label(output_dir, paths["provenance"])] = provenance_digest
-        for row in _iter_strict_jsonl(
-            provenance_source,
-            "retrieval provenance",
-            path=paths["provenance"],
-        ):
-            topic_id, docid = row.get("topic_id"), row.get("docid")
-            pair = (topic_id, docid)
-            if (
-                topic_id not in topic_ids
-                or not _is_docid(docid)
-                or pair in seen_provenance
-                or not _positive_int(row.get("rank"))
-                or not _finite_number(row.get("score"))
+    if has_provenance:
+        observed_order: dict[str, list[str]] = {topic.id: [] for topic in topics}
+        seen_provenance: set[tuple[str, str]] = set()
+        with _open_receipted_file(
+            paths["provenance"], artifact_receipts["provenance"]
+        ) as (provenance_source, provenance_digest):
+            receipts[_portable_label(output_dir, paths["provenance"])] = provenance_digest
+            for row in _iter_strict_jsonl(
+                provenance_source,
+                "retrieval provenance",
+                path=paths["provenance"],
             ):
-                raise ValueError("retrieval provenance identity or rank is invalid")
-            seen_provenance.add(pair)
-            observed_order[topic_id].append(docid)
-            if topic_id in retained_ids:
-                provenance[pair] = MappingProxyType(dict(row))
-    if seen_provenance != expected_pairs or any(
-        tuple(observed_order[topic_id]) != run_docids[topic_id]
-        for topic_id in observed_order
-    ):
-        raise ValueError("retrieval provenance coverage differs from organizer run")
+                topic_id, docid = row.get("topic_id"), row.get("docid")
+                pair = (topic_id, docid)
+                if (
+                    topic_id not in topic_ids
+                    or not _is_docid(docid)
+                    or pair in seen_provenance
+                    or not _positive_int(row.get("rank"))
+                    or not _finite_number(row.get("score"))
+                ):
+                    raise ValueError("retrieval provenance identity or rank is invalid")
+                seen_provenance.add(pair)
+                observed_order[topic_id].append(docid)
+                if topic_id in retained_ids:
+                    provenance[pair] = MappingProxyType(dict(row))
+        if seen_provenance != expected_pairs or any(
+            tuple(observed_order[topic_id]) != run_docids[topic_id]
+            for topic_id in observed_order
+        ):
+            raise ValueError("retrieval provenance coverage differs from organizer run")
 
     with _open_receipted_file(
         paths["archive"], artifact_receipts["archive"]
@@ -793,23 +801,38 @@ def _load_root_retrieval_artifacts(
     depths: dict[str, tuple[int, int]] = {}
     for topic_id in (topic.id for topic in topics):
         row = depths_value.get(topic_id)
-        if (
-            not isinstance(row, Mapping)
-            or set(row) != {"official", "candidate_pool"}
-            or type(row.get("official")) is not int
-            or row["official"] <= 0
-            or type(row.get("candidate_pool")) is not int
-            or row["candidate_pool"] < row["official"]
-            or row["official"] != len(run_docids[topic_id])
-        ):
+        if not isinstance(row, Mapping) or type(row.get("official")) is not int:
             raise ValueError("retrieval export topic depth is invalid")
-        depths[topic_id] = (row["candidate_pool"], row["official"])
+        if row["official"] <= 0 or row["official"] != len(run_docids[topic_id]):
+            raise ValueError("retrieval export topic depth is invalid")
+        if set(row) == {"official", "candidate_pool"}:
+            selected_depth = row.get("candidate_pool")
+        elif set(row) == {"official", "natural_union"}:
+            selected_depth = row.get("natural_union")
+        else:
+            raise ValueError("retrieval export topic depth is invalid")
+        if type(selected_depth) is not int or selected_depth < row["official"]:
+            raise ValueError("retrieval export topic depth is invalid")
+        depths[topic_id] = (selected_depth, row["official"])
+    raw_source_seals = export.get("source_seals")
+    source_seals: dict[str, Mapping[str, str]] = {}
+    if isinstance(raw_source_seals, Mapping):
+        for topic_id in topic_ids:
+            value = raw_source_seals.get(topic_id)
+            if isinstance(value, Mapping):
+                relevant = {
+                    key: value.get(key)
+                    for key in ("scoring_manifest_sha256", "canonical_manifest_sha256")
+                }
+                if all(_is_sha256(item) for item in relevant.values()):
+                    source_seals[topic_id] = MappingProxyType(relevant)
     return _RootRetrievalArtifacts(
         MappingProxyType(run_docids),
         MappingProxyType(provenance),
         MappingProxyType(archive_pairs),
         MappingProxyType(archive_stages),
         MappingProxyType(depths),
+        MappingProxyType(source_seals),
     )
 
 
@@ -937,18 +960,34 @@ def _load_streaming_archive_pairs(
                             raise ValueError("full-text archive candidate is invalid")
                         docid, text = candidate.get("docid"), candidate.get("doc")
                         stage = candidate.get("stage")
+                        if stage is None:
+                            stage = "bundle_projection"
+                        text_sha256 = candidate.get("text_sha256")
                         pair = (topic_id, docid)
                         if (
                             not _is_docid(docid)
                             or not _is_text(text)
                             or pair in seen_pairs
                             or candidate.get("rank") != rank
-                            or stage not in {"canonical_supported", "original_only_fallback"}
+                            or stage not in {
+                                "bundle_projection",
+                                "canonical_supported",
+                                "original_only_fallback",
+                            }
                         ):
                             raise ValueError("full-text archive candidate identity is invalid")
-                        normalized_digest = _text_sha256(
-                            " ".join(text.split()), "full-text archive document"
-                        )
+                        if text_sha256 is None:
+                            normalized_digest = _text_sha256(
+                                " ".join(text.split()), "full-text archive document"
+                            )
+                        else:
+                            normalized_digest = text_sha256
+                            if normalized_digest != _text_sha256(
+                                text, "full-text archive document"
+                            ):
+                                raise ValueError(
+                                    "full-text archive document hash is invalid"
+                                )
                         previous_digest = normalized_hash_by_docid.setdefault(
                             docid, normalized_digest
                         )
@@ -1447,7 +1486,7 @@ def _decode_retrieval_output(
 ) -> RetrievalOutputReport:
     selected_by_id = {row.docid: row for row in selected}
     selected_depth, final_depth = artifacts.topic_depths[topic.id]
-    if selected_depth != len(selected):
+    if selected_depth < len(selected):
         raise ValueError("retrieval export selected-pool depth differs from selected documents")
     canonical_by_docid: dict[str, set[str]] = {}
     for nugget in canonical:
@@ -1466,12 +1505,29 @@ def _decode_retrieval_output(
     if final_depth != len(run_docids):
         raise ValueError("retrieval export final depth differs from organizer run")
     documents: list[RetrievalDocumentReport] = []
+    has_legacy_provenance = bool(artifacts.provenance)
     for rank, docid in enumerate(run_docids, start=1):
         pair = (topic.id, docid)
-        provenance = artifacts.provenance[pair]
         document = selected_by_id.get(docid)
         text = artifacts.document_text[pair]
         archive_stage = artifacts.document_stage[pair]
+        if has_legacy_provenance:
+            provenance = artifacts.provenance[pair]
+        else:
+            if document is None:
+                raise ValueError("bundle projection document is absent from selected documents")
+            nugget_ids = sorted(canonical_by_docid.get(docid, set()))
+            provenance = {
+                "rank": rank,
+                "score": len(run_docids) - rank + 1,
+                "selection_rank": document.selection_rank,
+                "selected_from_lane": document.selected_from_lane,
+                "selected_from_lane_rank": document.selected_from_lane_rank,
+                "memberships": list(document.memberships),
+                "subnarrative_scores": [],
+                "nuggets": [{"canonical_nugget_id": nugget_id} for nugget_id in nugget_ids],
+                "source_seals": artifacts.source_seals.get(topic.id, {}),
+            }
         memberships = provenance.get("memberships")
         subnarrative_scores = provenance.get("subnarrative_scores")
         nuggets = provenance.get("nuggets")
@@ -1507,11 +1563,14 @@ def _decode_retrieval_output(
             else "canonical_supported"
         )
         if (
-            archive_stage != expected_stage
+            archive_stage not in {expected_stage, "bundle_projection"}
             or (
-                provenance.get("stage") != expected_stage
-                if original_only_fallback
-                else provenance.get("stage") is not None
+                has_legacy_provenance
+                and (
+                    provenance.get("stage") != expected_stage
+                    if original_only_fallback
+                    else provenance.get("stage") is not None
+                )
             )
             or (
                 original_only_fallback
@@ -1553,7 +1612,10 @@ def _decode_retrieval_output(
 def _validate_export_manifest(
     value: Mapping[str, Any], config: FacetPilotConfig, topics: Sequence[Topic]
 ) -> tuple[str, ...]:
-    if value.get("schema_version") != "retrieval_export_manifest_v2":
+    if value.get("schema_version") not in {
+        "retrieval_export_manifest_v2",
+        "retrieval_export_manifest_v3",
+    }:
         raise ValueError("retrieval export manifest schema is invalid")
     if value.get("run_id") != config.run_id:
         raise ValueError("retrieval export manifest run identity differs from config")
@@ -1843,6 +1905,12 @@ def _canonical_manifest_seal(
     topic: Topic,
 ) -> str:
     sealed_manifest_digests: set[str] = set()
+    source_seal = retrieval_artifacts.source_seals.get(topic.id)
+    if source_seal is not None:
+        digest = source_seal.get("canonical_manifest_sha256")
+        if not _is_sha256(digest):
+            raise ValueError("retrieval export canonical manifest seal is invalid")
+        sealed_manifest_digests.add(digest)
     for (topic_id, _docid), row in retrieval_artifacts.provenance.items():
         if topic_id != topic.id:
             continue
@@ -1871,6 +1939,12 @@ def _load_lane_score_provenance(
 ) -> Mapping[tuple[str, str], LaneScoreProvenanceReport]:
     manifest_path = _safe_file(topic_root / "scoring" / "complete.json", output_dir)
     sealed_manifest_digests: set[str] = set()
+    source_seal = retrieval_artifacts.source_seals.get(topic.id)
+    if source_seal is not None:
+        digest = source_seal.get("scoring_manifest_sha256")
+        if not _is_sha256(digest):
+            raise ValueError("retrieval export scoring manifest seal is invalid")
+        sealed_manifest_digests.add(digest)
     for (topic_id, _docid), row in retrieval_artifacts.provenance.items():
         if topic_id != topic.id:
             continue
