@@ -28,12 +28,12 @@ if TYPE_CHECKING:
     from trec_rag.deepagent_evidence import EvidenceCoverageReport
 
 
-# A drafted nugget reached an answer, so its documents are proven useful rather
-# than merely promising; a vital one was judged essential by the researcher
-# that read it. Breadth across needs is worth less than either, and raw nugget
-# count least, because one document can supply many near-identical claims.
+# Selection is the importance signal: a nugget is vital exactly when the
+# coordinator drafted it, so vital_count and drafted_count are the same number
+# and must not be weighted twice. Breadth across needs is worth less, and raw
+# nugget count least, because one document can supply many near-identical
+# claims.
 _DRAFTED_WEIGHT = 3.0
-_VITAL_WEIGHT = 2.0
 _NEED_WEIGHT = 1.0
 _NUGGET_WEIGHT = 0.5
 
@@ -53,7 +53,6 @@ class DocumentUsefulness:
     def score(self) -> float:
         return (
             _DRAFTED_WEIGHT * self.drafted_count
-            + _VITAL_WEIGHT * self.vital_count
             + _NEED_WEIGHT * len(self.need_ids)
             + _NUGGET_WEIGHT * self.nugget_count
             + self.mean_support_ratio

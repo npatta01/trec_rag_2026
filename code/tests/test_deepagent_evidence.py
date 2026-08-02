@@ -1004,34 +1004,6 @@ def test_whole_snippet_citation_still_works() -> None:
     assert state.apply_delta(_nugget_with("S1")).accepted_ids == ("x1",)
 
 
-def test_importance_defaults_to_okay_rather_than_claiming_vital() -> None:
-    state = _state_with_sentences()
-    _add_need_and_facet(state)
-
-    state.apply_delta(_nugget_with("S1"))
-
-    assert state.report().nuggets[0].importance == "okay"
-
-
-def test_importance_can_be_declared_vital() -> None:
-    state = _state_with_sentences()
-    _add_need_and_facet(state)
-
-    state.apply_delta(_nugget_with("S1", importance="vital"))
-
-    assert state.report().nuggets[0].importance == "vital"
-
-
-def test_an_unknown_importance_label_is_refused_not_coerced() -> None:
-    state = _state_with_sentences()
-    _add_need_and_facet(state)
-
-    result = state.apply_delta(_nugget_with("S1", importance="critical"))
-
-    assert result.accepted_ids == ()
-    assert [r.code for r in result.rejected] == ["INVALID_IMPORTANCE"]
-
-
 def test_support_ratio_separates_a_grounded_claim_from_a_recited_one() -> None:
     """The measured failure mode: a claim whose words are not in what it cites."""
     state = _state_with_sentences()
@@ -1067,3 +1039,73 @@ def test_support_ratio_never_rejects_a_claim() -> None:
 
     assert result.accepted_ids == ("x1",)
     assert state.report().nuggets[0].support_ratio < 0.5
+
+
+def test_importance_is_derived_from_selection_not_asserted() -> None:
+    """An asserted label collapsed to 94% vital on a live run; a selection cannot."""
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+    state.apply_delta(_nugget_with("S1", nugget_id="chosen"))
+    state.apply_delta(_nugget_with("S1.2", nugget_id="passed_over"))
+
+    assert all(n.importance == "okay" for n in state.report().nuggets)
+
+    state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "more needed",
+                    "draft_nugget_ids": ["chosen"],
+                }
+            ]
+        }
+    )
+
+    importance = {n.nugget_id: n.importance for n in state.report().nuggets}
+    assert importance == {"chosen": "vital", "passed_over": "okay"}
+
+
+def test_a_nugget_delta_cannot_claim_its_own_importance() -> None:
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+
+    state.apply_delta(_nugget_with("S1", importance="vital"))
+
+    assert state.report().nuggets[0].importance == "okay"
+
+
+def test_the_draft_selection_is_capped_so_selection_actually_selects() -> None:
+    """Unbounded, a live run drafted all 145 nuggets and the signal went flat."""
+    from trec_rag.deepagent_evidence import MAX_DRAFT_NUGGETS_PER_NEED
+
+    state = _state_with_sentences()
+    _add_need_and_facet(state)
+    ids = []
+    for index in range(MAX_DRAFT_NUGGETS_PER_NEED + 1):
+        nugget_id = f"g{index}"
+        ids.append(nugget_id)
+        state.apply_delta(_nugget_with("S1", nugget_id=nugget_id))
+
+    def draft(selected):
+        return state.apply_delta(
+            {
+                "set_need_status": [
+                    {
+                        "need_id": "n1",
+                        "status": "partial",
+                        "remaining_gap": "more needed",
+                        "draft_nugget_ids": selected,
+                    }
+                ]
+            }
+        )
+
+    too_many = draft(ids)
+    assert too_many.accepted_ids == ()
+    assert [r.code for r in too_many.rejected] == ["TOO_MANY_DRAFT_NUGGETS"]
+
+    assert draft(ids[:MAX_DRAFT_NUGGETS_PER_NEED]).accepted_ids == ("n1",)
+    # A need with fewer good nuggets must not have to pad to the cap.
+    assert draft(ids[:2]).accepted_ids == ("n1",)

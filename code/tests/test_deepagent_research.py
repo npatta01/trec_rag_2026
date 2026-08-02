@@ -1028,64 +1028,9 @@ def test_the_synthesis_reserve_is_configurable_and_counted_from_the_ceiling() ->
     assert choice_at(14) == "update_retrieval_state"
 
 
-def test_a_researcher_can_declare_a_nugget_vital() -> None:
-    """Importance is judged by the agent that read the passages."""
-    bundle = EvidenceBundle.model_validate(
-        {
-            "research_task_id": "R1-N1",
-            "round_index": 1,
-            "depth": "survey",
-            "motivating_need_ids": ["N1"],
-            "candidate_nuggets": [
-                {
-                    "claim": "Claim.",
-                    "need_ids": ["N1"],
-                    "facet_ids": [],
-                    "evidence": [{"cite": "S3.2"}],
-                    "contradicts_claims": [],
-                    "importance": "vital",
-                }
-            ],
-            "conflicts": [],
-            "unresolved_gaps": [],
-            "suggested_followups": [],
-            "stopping_reason": "goal_satisfied",
-            "budget_snapshot": budget_payload(),
-        }
-    )
-
-    assert bundle.candidate_nuggets[0].importance == "vital"
-
-
-def test_importance_defaults_to_okay_when_a_researcher_omits_it() -> None:
-    bundle = EvidenceBundle.model_validate(
-        {
-            "research_task_id": "R1-N1",
-            "round_index": 1,
-            "depth": "survey",
-            "motivating_need_ids": ["N1"],
-            "candidate_nuggets": [
-                {
-                    "claim": "Claim.",
-                    "need_ids": ["N1"],
-                    "facet_ids": [],
-                    "evidence": [{"cite": "S3.2"}],
-                    "contradicts_claims": [],
-                }
-            ],
-            "conflicts": [],
-            "unresolved_gaps": [],
-            "suggested_followups": [],
-            "stopping_reason": "goal_satisfied",
-            "budget_snapshot": budget_payload(),
-        }
-    )
-
-    assert bundle.candidate_nuggets[0].importance == "okay"
-
-
-def test_an_invented_importance_label_is_refused() -> None:
-    with pytest.raises(ValidationError):
+def test_a_researcher_cannot_assert_importance() -> None:
+    """Researcher-asserted importance reached 94% vital; it is no longer accepted."""
+    with pytest.raises(ValidationError, match="extra_forbidden"):
         CandidateNugget.model_validate(
             {
                 "claim": "Claim.",
@@ -1093,21 +1038,20 @@ def test_an_invented_importance_label_is_refused() -> None:
                 "facet_ids": [],
                 "evidence": [{"cite": "S3.2"}],
                 "contradicts_claims": [],
-                "importance": "critical",
+                "importance": "vital",
             }
         )
 
 
-def test_the_researcher_prompt_defines_vital_rather_than_naming_it() -> None:
-    """An unexplained label is filled in by guesswork; this one is scored."""
+def test_the_researcher_is_asked_for_an_ordering_it_cannot_inflate() -> None:
     from trec_rag.deepagent_research import RESEARCHER_SYSTEM_PROMPT
 
-    assert "vital" in RESEARCHER_SYSTEM_PROMPT
-    assert "must contain" in RESEARCHER_SYSTEM_PROMPT
-    assert "not essential" in RESEARCHER_SYSTEM_PROMPT
+    assert "order of importance" in RESEARCHER_SYSTEM_PROMPT
+    assert "most important" in RESEARCHER_SYSTEM_PROMPT
 
 
-def test_the_coordinator_is_told_to_carry_importance_through() -> None:
+def test_the_coordinator_is_told_importance_comes_from_its_selection() -> None:
     from trec_rag.deepagent_retrieval import RETRIEVAL_SYSTEM_PROMPT
 
-    assert "importance" in RETRIEVAL_SYSTEM_PROMPT
+    assert "draft_nugget_ids" in RETRIEVAL_SYSTEM_PROMPT
+    assert "not something you" in RETRIEVAL_SYSTEM_PROMPT

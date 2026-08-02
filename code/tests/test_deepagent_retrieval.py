@@ -3440,3 +3440,4 @@ def test_passage_search_is_charged_its_own_budget_unit() -> None:
 
     assert refused["ok"] is False
     assert refused["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
+

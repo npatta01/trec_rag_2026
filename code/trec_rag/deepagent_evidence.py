@@ -26,6 +26,10 @@ ActionKind = Literal["search", "extract", "paginate", "refocus", "stop"]
 MAX_FRONTIER_CHARACTERS = 2_000
 SATURATION_ZERO_YIELD_PAGES = 3
 MAX_SENTENCE_CHARACTERS = 600
+# A cap, not a target: a need with three good nuggets must not pad to five.
+# Sized against observed volume of roughly 21 nuggets per need, which gives
+# about 4:1 selection pressure and 20-35 drafted nuggets per topic.
+MAX_DRAFT_NUGGETS_PER_NEED = 5
 _SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?:\s+|$)")
 _CITATION = re.compile(r"^S(\d+)(?:\.(\d+)(?:-(\d+))?)?$")
 
@@ -141,11 +145,6 @@ class NuggetDelta(TypedDict):
     facet_ids: list[str]
     evidence: list[EvidenceDelta]
     contradicts: NotRequired[list[str]]
-    # "vital" marks a claim a good answer must contain, in the sense the
-    # AutoNuggetizer rubric uses. It defaults to "okay": with 107 claims and a
-    # 1,024-word answer cap something has to rank them, and claiming vital by
-    # default would rank nothing.
-    importance: NotRequired[Literal["vital", "okay"]]
 
 
 class AddEvidenceDelta(TypedDict):
@@ -378,7 +377,6 @@ class _Nugget:
     evidence: list[_EvidenceSpan]
     contradicts: list[str]
     superseded_by: str | None = None
-    importance: Literal["vital", "okay"] = "okay"
     support_ratio: float = 0.0
 
 
@@ -604,8 +602,25 @@ class EvidenceCoverageState:
             tuple(item.contradicts),
             support,
             item.superseded_by,
-            item.importance,
+            # Derived, never written. A nugget is vital exactly when the
+            # coordinator selected it into a need's bounded draft set, so
+            # the label cannot be inflated by claiming it.
+            "vital" if item.nugget_id in self._drafted_nugget_ids() else "okay",
             item.support_ratio,
+        )
+
+    def _drafted_nugget_ids(self) -> frozenset[str]:
+        """Nuggets the coordinator selected into some need's bounded draft set.
+
+        This is the importance signal. It is a selection rather than a label,
+        so it cannot be inflated: the draft set is capped per need, and an
+        earlier design where an agent asserted its own importance collapsed to
+        94% vital on a live run.
+        """
+        return frozenset(
+            nugget_id
+            for need in self._needs.values()
+            for nugget_id in need.draft_nugget_ids
         )
 
     def _document_report(self, item: _DocumentFocus) -> DocumentFocusReport:
@@ -927,9 +942,6 @@ class EvidenceCoverageState:
             return "UNKNOWN_FACET"
         if any(other_id not in self._nuggets for other_id in contradicts):
             return "UNKNOWN_NUGGET"
-        importance = row.get("importance", "okay")
-        if importance not in {"vital", "okay"}:
-            return "INVALID_IMPORTANCE"
         evidence = self._resolve_citations(row.get("evidence"))
         if isinstance(evidence, str):
             return evidence
@@ -952,7 +964,6 @@ class EvidenceCoverageState:
             list(facet_ids),
             list(evidence),
             list(contradicts),
-            importance=importance,
             support_ratio=support_ratio,
         )
         for need_id in need_ids:
@@ -1013,6 +1024,15 @@ class EvidenceCoverageState:
             return "UNKNOWN_NEED"
         if status not in {"unaddressed", "partial", "answerable", "conflicted"} or not isinstance(remaining_gap, str) or draft_nugget_ids is None:
             return "INVALID_NEED_STATUS"
+        # Selection has to select. Unbounded, a live run drafted all 145 of its
+        # nuggets, which made drafted_count equal nugget_count for every
+        # document and collapsed the submission ranker's highest-weighted
+        # feature into its lowest. The cap is deliberately a fixed number and
+        # not derived from the evidence: a derived threshold would launder the
+        # ranking judgement away again, and tuning one against development
+        # qrels is unsound when most retrieved documents are unjudged.
+        if len(draft_nugget_ids) > MAX_DRAFT_NUGGETS_PER_NEED:
+            return "TOO_MANY_DRAFT_NUGGETS"
         grounded = all(
             nugget_id in self._nuggets
             and need_id in self._nuggets[nugget_id].need_ids

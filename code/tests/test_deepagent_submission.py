@@ -56,7 +56,7 @@ def _state(documents=("doc-a", "doc-b", "doc-c")):
     return state
 
 
-def _add(state, nugget_id, cite, need_ids=("n1",), importance="okay"):
+def _add(state, nugget_id, cite, need_ids=("n1",)):
     return state.apply_delta(
         {
             "add_nuggets": [
@@ -67,7 +67,6 @@ def _add(state, nugget_id, cite, need_ids=("n1",), importance="okay"):
                     "facet_ids": [],
                     "evidence": [{"cite": cite}],
                     "contradicts": [],
-                    "importance": importance,
                 }
             ]
         }
@@ -84,11 +83,11 @@ def test_only_documents_that_supplied_evidence_are_submitted() -> None:
     assert [row.document_id for row in ranked] == ["doc-a"]
 
 
-def test_a_drafted_document_outranks_a_merely_vital_one() -> None:
-    """Reaching an answer is proof of usefulness; vital is a prediction of it."""
+def test_a_drafted_document_outranks_an_undrafted_one() -> None:
+    """Being selected into a need's bounded draft set is the importance signal."""
     state = _state()
-    _add(state, "drafted", "S1", importance="okay")
-    _add(state, "vital", "S2", importance="vital")
+    _add(state, "drafted", "S1")
+    _add(state, "vital", "S2")
     state.apply_delta(
         {
             "set_need_status": [
@@ -106,16 +105,6 @@ def test_a_drafted_document_outranks_a_merely_vital_one() -> None:
     ranked = rank_for_submission(state.report())
 
     assert [row.document_id for row in ranked][0] == "doc-a"
-
-
-def test_a_vital_document_outranks_an_okay_one() -> None:
-    state = _state()
-    _add(state, "okay1", "S1", importance="okay")
-    _add(state, "vital1", "S2", importance="vital")
-
-    ranked = rank_for_submission(state.report())
-
-    assert [row.document_id for row in ranked] == ["doc-b", "doc-a"]
 
 
 def test_a_superseded_claim_stops_vouching_for_its_document() -> None:
@@ -162,8 +151,8 @@ def test_max_documents_is_a_valve_not_a_default() -> None:
 
 def test_run_rows_are_ranked_from_one_with_non_increasing_scores() -> None:
     state = _state()
-    _add(state, "vital1", "S1", importance="vital")
-    _add(state, "okay1", "S2", importance="okay")
+    _add(state, "vital1", "S1")
+    _add(state, "okay1", "S2")
 
     rows = submission_rows(state.report(), topic_id="rag2026-1", run_id="deepagent")
 
@@ -186,12 +175,26 @@ def test_usefulness_records_need_breadth_and_support() -> None:
 
 
 def test_summary_reports_what_the_submission_leans_on() -> None:
+    """Vital is now the drafted selection, so the summary counts that."""
     state = _state()
-    _add(state, "v", "S1", importance="vital")
-    _add(state, "o", "S2", importance="okay")
+    _add(state, "v", "S1")
+    _add(state, "o", "S2")
+    state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "more needed",
+                    "draft_nugget_ids": ["v"],
+                }
+            ]
+        }
+    )
 
     summary = selection_summary(rank_for_submission(state.report()))
 
     assert summary["submitted_documents"] == 2
     assert summary["documents_behind_a_vital_nugget"] == 1
+    assert summary["documents_behind_a_drafted_nugget"] == 1
     assert summary["single_nugget_documents"] == 2
