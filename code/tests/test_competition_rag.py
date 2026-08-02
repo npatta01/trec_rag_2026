@@ -784,6 +784,44 @@ def test_focused_profile_drops_the_cite_every_reference_rule() -> None:
     assert "single document that best supports" in focused
 
 
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        pytest.param(
+            {"references": ["a"], "answer": ["oops"]},
+            "not an object",
+            id="answer-item-is-a-string",
+        ),
+        pytest.param(
+            {"references": ["a"], "answer": [{"citations": [0]}]},
+            "text",
+            id="missing-text",
+        ),
+        pytest.param(
+            {"references": ["a"], "answer": [{"text": "x", "citations": 0}]},
+            "citations list",
+            id="citations-not-a-list",
+        ),
+        pytest.param(
+            {"references": "a", "answer": [{"text": "x", "citations": [0]}]},
+            "references must be a nonempty list",
+            id="references-not-a-list",
+        ),
+    ],
+)
+def test_post_processors_reject_malformed_shapes_cleanly(
+    record: dict[str, Any], expected: str
+) -> None:
+    """These run before validation, so a malformed model response must not raise TypeError.
+
+    Relaxing structured output to json_object produced exactly these shapes from a live model.
+    """
+    with pytest.raises(ValueError, match=expected):
+        competition_rag.normalize_generated_record(
+            competition_rag.trim_to_word_limit(record)
+        )
+
+
 def test_normalizer_collapses_a_duplicate_citation() -> None:
     record = {
         "metadata": {},

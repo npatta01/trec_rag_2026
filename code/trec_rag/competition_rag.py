@@ -1100,8 +1100,21 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
     construction. Answer text is never touched, and each citation keeps pointing at exactly the
     document it pointed at before, so no claim changes its evidence.
     """
-    references = record["references"]
-    answer = record["answer"]
+    references = record.get("references")
+    answer = record.get("answer")
+    # Runs before validate_submission_record, so it cannot assume a well-formed record. A model
+    # that returns a malformed shape must produce a clear error here rather than a TypeError.
+    if not isinstance(references, list) or not references:
+        raise ValueError("generated references must be a nonempty list")
+    if not isinstance(answer, list) or not answer:
+        raise ValueError("generated answer must be a nonempty list")
+    for index, item in enumerate(answer):
+        if not isinstance(item, dict):
+            raise ValueError(f"answer[{index}] is not an object")
+        if not isinstance(item.get("text"), str):
+            raise ValueError(f"answer[{index}] has no text string")
+        if not isinstance(item.get("citations"), list):
+            raise ValueError(f"answer[{index}] has no citations list")
 
     # Only prune uncited references. An out-of-range or non-integer citation is a model error
     # that validate_submission_record is responsible for reporting, so it must not be silently
@@ -1151,7 +1164,12 @@ def trim_to_word_limit(record: dict[str, Any], *, max_words: int = 1024) -> dict
     Runs before ``normalize_generated_record`` so that references orphaned by the trim are then
     rebuilt away.
     """
-    answer = record["answer"]
+    answer = record.get("answer")
+    if not isinstance(answer, list) or not answer:
+        raise ValueError("generated answer must be a nonempty list")
+    for index, item in enumerate(answer):
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            raise ValueError(f"answer[{index}] is not an object with text")
     kept: list[dict[str, Any]] = []
     words = 0
     for item in answer:
