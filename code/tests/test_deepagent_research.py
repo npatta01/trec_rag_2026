@@ -522,7 +522,10 @@ def test_task_middleware_returns_recoverable_error_for_prose_description(
     assert payload["code"] == "INVALID_RESEARCH_TASK"
     assert payload["must_stop"] is False
     assert payload["description_format"]["research_task_id"] == "R1-N1"
-    assert budget.snapshot().remaining_researchers == 10
+    # A rejected task must not consume an invocation.
+    assert budget.snapshot().remaining_researchers == (
+        ResearchBudgetConfig().max_researcher_invocations
+    )
     assert budget.snapshot().active_researchers == 0
 
 

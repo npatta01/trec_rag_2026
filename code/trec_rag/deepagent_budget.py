@@ -49,7 +49,13 @@ class ResearchBudgetConfig:
     # Researcher invocations are the only limit on how much research happens.
     # A round cannot close without a finished researcher, so rounds are already
     # bounded by researchers and need no separate cap of their own.
-    max_researcher_invocations: int = 10
+    # Researchers are the binding constraint, measured. The runs that reached
+    # full need coverage both ended on TASK_BUDGET_EXHAUSTED with retrieval and
+    # wall clock to spare: 10 of 10 researchers spent, 7 retrieval calls left,
+    # and the hard deadline never approached. Raising retrieval depth or the
+    # deadlines instead does nothing, which one run demonstrated by scoring
+    # worse with a longer deadline.
+    max_researcher_invocations: int = 20
     # Concurrency is per topic, not across topics. Hosted-search throttling has
     # come from running whole topics back to back, which this does not govern.
     max_concurrent: int = 3
@@ -64,7 +70,12 @@ class ResearchBudgetConfig:
     # The coordinator spends roughly three turns per round (dispatch, merge,
     # close) plus decomposition and recovery, so this must clear one round
     # per researcher with margin or a productive run is cut off mid-round.
-    max_main_models: int = 40
+    # Scaled with the researcher count to hold the ratio the 10-researcher runs
+    # were measured at. A tracked invariant requires at least three turns per
+    # researcher, since a round costs dispatch, merge and close; the remainder
+    # is decomposition, recovery and the synthesis reserve. Setting this below
+    # the researchers it must serve strands them mid-round.
+    max_main_models: int = 80
     # Turns held back so synthesis always gets one. Without a reserve,
     # whether answers get written is a race: a run that hits a stop code
     # first is granted a synthesis turn, and a run that exhausts its

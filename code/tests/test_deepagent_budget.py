@@ -62,7 +62,8 @@ def test_simultaneous_task_reservations_never_exceed_concurrency() -> None:
 
 
 def test_duplicate_active_task_is_refused_without_consuming_an_invocation() -> None:
-    budget = ResearchBudget(ResearchBudgetConfig(max_concurrent=2))
+    config = ResearchBudgetConfig(max_concurrent=2)
+    budget = ResearchBudget(config)
     context = ResearchTaskContext("T1", 1, "survey", ("N1",))
     assert budget.reserve_task(context).ok
 
@@ -70,7 +71,10 @@ def test_duplicate_active_task_is_refused_without_consuming_an_invocation() -> N
     budget.finish_task(context)
 
     assert duplicate.ok is False
-    assert duplicate.snapshot.remaining_researchers == 9
+    # The refusal consumed nothing: only the first reservation counts.
+    assert duplicate.snapshot.remaining_researchers == (
+        config.max_researcher_invocations - 1
+    )
     assert budget.snapshot().completed_researchers == 1
 
 
