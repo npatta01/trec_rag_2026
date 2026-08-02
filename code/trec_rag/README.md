@@ -445,6 +445,38 @@ Run validation:
 .venv/bin/python -m pytest code/tests/test_remote_pyserini.py -q
 ```
 
+## Ledger-driven submission selection
+
+`trec_rag.deepagent_submission` decides which documents a retrieval run
+submits. The task asks for "all and only" the documents that are relevant and
+useful as evidence, ranked by usefulness, with k chosen per narrative.
+
+**Inputs.** An `EvidenceCoverageReport`. **Outputs.** `rank_for_submission`
+returns `DocumentUsefulness` rows, most useful first; `submission_rows` renders
+TREC run rows; `selection_summary` says what the set leans on.
+
+**Why the ledger and not the reranker score.** A score says a document looks
+on-topic; the ledger says it actually supplied evidence an agent cited.
+Measured on topic 224, restricted to documents the qrels cover: 38% of ledger
+documents were graded "answers the question" against a 13% base rate, and
+**none** was graded irrelevant. Documents behind a vital nugget reached 43%.
+
+Ranking weights drafted evidence above vital, vital above need breadth, and
+need breadth above raw nugget count: reaching an answer is proof of usefulness,
+vital is a prediction of it, and one document can supply many near-identical
+claims. Superseded nuggets stop vouching for their documents. Ties break by
+document id, so the same ledger always produces the same run file.
+
+**What is deliberately not done.** No cutoff is tuned against development
+qrels. On the measured run 90% of the agent's documents were outside the
+judgement pool, so a set-based score there measures pooling coverage, not
+selection quality. `max_documents` exists as an operator valve, not a default;
+unset, the run is exactly the documents that supplied evidence.
+
+**Unvalidated.** The *selection* has a measured lift. The *ordering within* it
+does not: the top 25 of a real 215-document ledger contained only 2 judged
+documents, which cannot show whether the ranking concentrates relevance.
+
 ## Passage-first retrieval selection
 
 `trec_rag.deepagent_passages` decides which passages a researcher sees. It
