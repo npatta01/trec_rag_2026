@@ -184,7 +184,7 @@ def load_facet_pilot_config(path: Path) -> FacetPilotConfig:
     nuggets_raw = _strict_mapping(raw.get("nuggets"), "nuggets")
     _reject_unknown(nuggets_raw, {"evidence_budget_per_subnarrative", "maximum_claims_per_subnarrative", "maximum_supporting_documents_per_claim"}, "nuggets")
     nuggets = NuggetSettings(
-        evidence_budget_per_subnarrative=_bounded_positive_int(nuggets_raw, "evidence_budget_per_subnarrative", "nuggets", maximum=40),
+        evidence_budget_per_subnarrative=_bounded_positive_int(nuggets_raw, "evidence_budget_per_subnarrative", "nuggets", maximum=120),
         maximum_claims_per_subnarrative=_bounded_positive_int(nuggets_raw, "maximum_claims_per_subnarrative", "nuggets", maximum=20),
         maximum_supporting_documents_per_claim=_bounded_positive_int(nuggets_raw, "maximum_supporting_documents_per_claim", "nuggets", maximum=3),
     )
