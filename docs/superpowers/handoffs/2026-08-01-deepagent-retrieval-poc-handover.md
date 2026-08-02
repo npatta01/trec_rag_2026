@@ -127,6 +127,24 @@ The latest run grounded 63 nuggets in 5 documents, with per-need counts (9, 5,
 23, 14, 12) exactly equal to per-document counts: one document per need. That
 1:1 pattern is what the passage-first design exists to fix.
 
+### After passage-first (2026-08-01/02, topic 224, still n=1 each)
+
+| Run | Nuggets | Docs | Multi-doc | Needs empty | Answerable | Stopped by |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| A, soft deadline fired | 107 | 261 | 92/107 | 0 of 7 | 5 of 7 | `agent_completed` |
+| B, longer deadline | 75 | 172 | 57/75 | 0 of 5 | 0 of 5 | main-model ceiling |
+| C, synthesis reserved | **145** | **215** | 95/145 | **0 of 7** | **7 of 7** | task budget |
+
+The 1:1 collapse is gone in all three: per-need document counts run 17 to 65
+against per-need nugget counts of 11 to 30. Run B is the evidence that a longer
+deadline *hurts*; see next-work item 3.
+
+Run C also confirms the citation fixes live: **0 of 518 cited spans were
+degenerate**, against 11 of 548 before, and the share of a claim's content
+words present in what it cites rose from a median of 0.62 to **0.84**, with no
+claim below 0.4 where 15 had been. Importance is being set rather than
+defaulted: 54 vital, 91 okay.
+
 ## Verified vs unverified
 
 **Verified live:** citation handles resolve (30/30); rounds close; the honest
@@ -227,9 +245,15 @@ Items 1, 2 and 4 were done in a later session on 2026-08-01. Item 3 is open.
    untouched narrative: reformulations are worse per query and much better in
    aggregate. The spec's worry was directionally wrong, and depth 1000 is
    better supported than it argued. One topic; see the report's caveats.
-3. **Make `answerable` reliable, or drop it.** Still open. The synthesis turn
-   produced answers in one run out of two. It forces which tool the coordinator
-   calls but not what it puts in the delta.
+3. ~~**Make `answerable` reliable, or drop it.**~~ Diagnosed and fixed. It was
+   never a quality problem: synthesis was granted only once a stop code
+   existed, and skipped entirely once the coordinator's turn ceiling was
+   reached, so whether any answer got written was a race between two limits.
+   Three runs show it: one hit its soft deadline and wrote 5 answerable of 7;
+   one given a longer deadline ran out of coordinator turns instead and wrote
+   0 of 5 while its own gap notes said the evidence was "substantial"; and one
+   with turns reserved for writing up wrote **7 of 7 while still stopping on a
+   budget wall**, which is the path that previously guaranteed zero.
 4. ~~**Decide the integration target.**~~ Done: master is merged in, 0 behind.
 
 ### Corrections to the passage-first spec
