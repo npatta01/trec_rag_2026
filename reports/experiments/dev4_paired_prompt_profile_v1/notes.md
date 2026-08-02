@@ -161,3 +161,48 @@ normalization removed that mode entirely. The word cap then became the dominant 
 occurrences), which is why the deterministic trim was added. The pattern holds in both cases —
 a constraint enforced in the prompt costs failed generations, and the same constraint enforced
 in a post-processor costs nothing.
+
+
+## Document selection: extraction dominates truncation
+
+The generator showed each document's first 1,000 words. With a median document of 3,426 words,
+91% are cut and the model sees 17% of the pool, always the opening, which on scraped pages is
+frequently navigation furniture.
+
+A first comparison changed selection *and* budget together (975-word truncation against
+261-word extraction) and so could not attribute the resulting 0.057 coverage loss. Repeating it
+at matched budget separates them:
+
+| documents | $/topic | strict_vital | strict_all | wp first | hard prec | No Support |
+|---|---|---|---|---|---|---|
+| head-truncated 957w | 0.712 | 0.588 | **0.569** | 0.692 | 0.481 | 9.6% |
+| extractive 931w | 0.788 | **0.613** | 0.564 | **0.717** | **0.506** | **7.4%** |
+| extractive 261w | **0.295** | 0.531 | 0.511 | **0.823** | **0.692** | **4.8%** |
+
+**At matched budget extraction wins four of five metrics**, each by about 0.025, with
+all-coverage level. No single delta clears the four-topic noise bar, but four independent
+metrics moving together is stronger evidence than any one of them. The earlier coverage loss
+belonged to the budget cut, not the selection method, so truncation has no remaining argument.
+
+**Passage budget is a dial trading coverage against precision.** Dropping 931 to 261 words costs
+0.082 strict_vital and buys 0.106 weighted precision. Less but better-selected text makes the
+model assert less and ground what it does assert more firmly. Extraction dominates truncation at
+both points, so the dial setting is a separate decision from the selection method.
+
+Where to sit depends on how organizers weight nugget coverage against citation support, which is
+not observable from the released material.
+
+**Extraction at full budget is not a cost saving** — $0.7882 against $0.7115. Fewer document
+words are offset by longer answers, and output tokens dominate the bill. Only shrinking the
+budget reduces cost.
+
+**Measurement note.** Citations are judged against the evidence each generator actually read.
+That is internally consistent but not what organizers do: they resolve references from the
+index, that is full documents. Judging every arm against full document text is the realistic
+measurement and remains untested. An earlier version of the 261-word comparison judged it
+against head-truncated text its generator never saw, inflating No Support to 32.7% and inverting
+the conclusion; that error is corrected above.
+
+The selector is lexical, scoring windows by distinct narrative-term coverage. Gold nuggets often
+cover facets the narrative never names, so a cross-encoder should select better; the window
+scorer in `facet_retrieval.MixedbreadCoverageScorer` already exists for that upgrade.

@@ -138,6 +138,24 @@
   },
   "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
   "extractive_passage_selection": {
+    "budget_frontier": {
+      "description": "Passage budget trades coverage against citation precision; extraction dominates truncation at every point tested.",
+      "points": [
+        {
+          "strict_vital": 0.613,
+          "usd_per_topic": 0.7882,
+          "words_per_doc": 931,
+          "wp_first": 0.717
+        },
+        {
+          "strict_vital": 0.531,
+          "usd_per_topic": 0.2949,
+          "words_per_doc": 261,
+          "wp_first": 0.823
+        }
+      ],
+      "reading": "Less but better-selected text makes the model assert less and ground it better. Where to sit depends on how organizers weight coverage against support, which is not observable."
+    },
     "change": "dev_rag_inputs --passage-words replaces the generator's head truncation with query-relevant window selection (120-word windows, scored by distinct narrative-term coverage, greedy non-overlapping, re-emitted in document order).",
     "conclusion": "Extraction buys a 2.4x cost reduction and substantially better citation support for 0.057 strict_vital of coverage. It is a genuine trade rather than the free win predicted; a larger passage budget is the untested middle ground.",
     "corpus_effect": {
@@ -153,6 +171,33 @@
       },
       "reduction": "2.4x",
       "usd_per_topic_before": 0.7115
+    },
+    "matched_budget_test": {
+      "budgets": {
+        "extractive_words_per_doc": 931,
+        "head_truncated_words_per_doc": 957
+      },
+      "cost_correction": "Extraction at full budget costs slightly more, not less: $0.7882 against $0.7115. Fewer document words are offset by longer answers, and output tokens dominate. Only reducing the budget saves money.",
+      "extractive_931w": {
+        "hard_precision": 0.506,
+        "no_support_rate": 0.074,
+        "strict_all": 0.564,
+        "strict_vital": 0.613,
+        "usd_per_topic": 0.7882,
+        "wp_all": 0.717,
+        "wp_first": 0.717
+      },
+      "finding": "At matched budget extraction beats truncation on four of five metrics: coverage +0.025, weighted precision +0.025, hard precision +0.025, No Support 9.6% to 7.4%, all-coverage level. No single delta clears the four-topic noise bar, but the direction is consistent across independent metrics. The 0.057 coverage loss in the first comparison came from the budget cut, not the selection method.",
+      "head_truncated": {
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "strict_all": 0.569,
+        "strict_vital": 0.588,
+        "usd_per_topic": 0.7115,
+        "wp_all": 0.692,
+        "wp_first": 0.692
+      },
+      "purpose": "Isolate selection method from budget. The first comparison changed both at once and could not attribute the coverage loss."
     },
     "measurement_error_corrected": "The extractive arm was first judged against the head-truncated document text rather than the passages its generator actually read, producing an artificial 32.7% No Support rate and an incorrect conclusion that extraction hurt support. Re-judging against matched evidence reversed it.",
     "nugget": {
