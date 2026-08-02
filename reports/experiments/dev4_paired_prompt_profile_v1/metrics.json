@@ -136,6 +136,18 @@
     "topics_favouring_a": 0,
     "topics_favouring_b": 4
   },
+  "deepseek_configuration_sweep": {
+    "eliminated": {
+      "effort_max": "No better than high; 3/4 topics, one lost to a fabricated citation index.",
+      "model_version": "deepseek-v4-flash was a superseded 2026-04-24 preview; 0731 is newer and cheaper.",
+      "provider_routing": "structured_output json_object failed 3/4 topics with malformed shapes, so the strict schema is load-bearing and the third-party-routing hypothesis is disproved.",
+      "reasoning_effort": "OpenRouter's medium is not a native DeepSeek level and spent roughly half the token budget on reasoning, causing 397-676 word answers. Native high fixed length entirely.",
+      "vendor_json_example": "DeepSeek documents that JSON output needs a worked in-prompt example. Adding one made compliance worse, 59% to 26% single-citation, with shorter answers and one failure."
+    },
+    "purpose": "Establish whether the DeepSeek coverage gap was configuration or capability.",
+    "remaining": "Instruction placement, which the tail contract addresses and which recovered most of the gap.",
+    "support_note": "DeepSeek 0731 beats Sol's focused_citations arm on citation support (hard precision 0.678 against 0.481) while trailing on coverage, so it is not uniformly worse."
+  },
   "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
   "extractive_passage_selection": {
     "budget_frontier": {
@@ -360,6 +372,52 @@
       }
     },
     "spend_provider_reported_usd": 35.42
+  },
+  "instruction_placement_and_transfer": {
+    "caveats": [
+      "Four topics, and Sol's gain is uneven: +0.114 on topic 58 and +0.082 on 200, flat on 144, -0.027 on 72.",
+      "DeepSeek's tail arm covers three topics; topic 72 failed twice with a non-JSON response and is where its baseline was weakest, so the DeepSeek tail mean is flattered."
+    ],
+    "deepseek_v4_flash_0731": {
+      "contract_in_system": {
+        "gain": -0.02,
+        "strict_vital_3_shared_topics": 0.509
+      },
+      "focused_citations": {
+        "strict_vital_3_shared_topics": 0.529
+      },
+      "focused_citations_tail": {
+        "gain": 0.05,
+        "strict_vital_3_shared_topics": 0.578
+      }
+    },
+    "findings": [
+      "Restating the contract after the question helps; moving it into the system message does not. The mechanism is proximity to the generation point, not channel privilege.",
+      "The gain transfers across models: Sol +0.042 strict_vital, DeepSeek +0.050. On the shared prompt Sol still leads DeepSeek by 0.081 on the three shared topics.",
+      "For Sol the tail contract is a strict improvement on every metric measured, so it replaces focused_citations in the competition config.",
+      "Transfer holding for this variant validates screening prompt changes on DeepSeek at 1/53 the cost, but it is one variant; a change targeting a DeepSeek-specific weakness need not transfer."
+    ],
+    "gpt_5_6_sol": {
+      "focused_citations": {
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "strict_all": 0.569,
+        "strict_vital": 0.588,
+        "wp_first": 0.692
+      },
+      "focused_citations_tail": {
+        "hard_precision": 0.586,
+        "no_support_rate": 0.09,
+        "strict_all": 0.609,
+        "strict_vital": 0.63,
+        "wp_first": 0.747
+      }
+    },
+    "hypothesis": "With 100 documents inserted the output contract sits roughly 120k tokens above the generation point, a lost-in-the-middle position. Only the question benefits from recency.",
+    "variants": {
+      "contract_in_system": "moves the contract into the system message, leaving documents plus question in the user message",
+      "focused_citations_tail": "restates a compact contract after the question"
+    }
   },
   "judge_model": "openrouter/deepseek/deepseek-v4-flash",
   "length": {
