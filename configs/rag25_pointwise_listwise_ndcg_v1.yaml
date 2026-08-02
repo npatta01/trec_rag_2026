@@ -1,0 +1,161 @@
+schema_version: retrieval_ranking_benchmark_v1
+
+experiment:
+  id: rag25_pointwise_listwise_ndcg_v1
+  random_seed: 20260801
+
+paths:
+  shared_root_env: TREC_RAG_SHARED_ROOT
+  bm25_candidates:
+    base: repo
+    path: outputs/rag25_bm25_full_query_v1/stage_retrieved.jsonl
+  mixedbread_document_scores:
+    base: shared
+    path: cache/reranker/mixedbread_full_dev_bf16/results/st_crossencoder_longctx_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ctx32768_buf512_raw_logits_modal_a100_scores.jsonl
+  mixedbread_window_scores:
+    base: shared
+    path: cache/reranker/mixedbread_full_dev_bf16/results/st_chunk_eval_hits1000_mixedbread_ai__mxbai_rerank_base_v2_ml1024_cm3500_ov350_raw_logits_modal_a100_scores.jsonl
+  organizer_listwise_run:
+    base: shared
+    path: cache/reranker/organizer_qwen3_8b_bf16/first_qwen3_8b_bf16_mixedbread_top100.jsonl
+  current_listwise_seed:
+    base: repo
+    path: outputs/rag25_pointwise_listwise_ndcg_v1/mixedbread_top100_seed_canonical.jsonl
+  output_dir:
+    base: repo
+    path: reports/experiments/rag25_pointwise_listwise_ndcg_v1
+
+evaluation:
+  relevance_threshold: 2
+  metrics:
+    - ndcg@10
+    - ndcg@20
+    - ndcg@100
+    - recall@100
+    - judged_rate@10
+    - judged_rate@100
+  statistical_metrics:
+    - ndcg@10
+    - ndcg@20
+    - ndcg@100
+  bootstrap_samples: 20000
+  randomization_samples: 50000
+  qrels:
+    - name: codex_gpt5_5_medium
+      path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels
+    - name: qwen3_5_9b
+      path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-qwen3.5-9b-v2.qrels
+    - name: ministral_3_14b
+      path: trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-ministral-3-14b-instruct-2512-v2.qrels
+
+current_pointwise:
+  model: mixedbread-ai/mxbai-rerank-base-v2
+  dtype: bfloat16
+  candidate_depths: [1000]
+  long_document_weight: 0.5
+  strongest_passage_weight: 0.5
+  coverage_bonus_weight: 0.25
+  relative_span_delta: 1.0
+  support_cap: 6
+  min_new_chars: 800
+  top_window_weights: [0.55, 0.25, 0.13, 0.07]
+  document_score_metadata:
+    artifact_schema_version: 2
+    backend: sentence-transformers-cross-encoder
+    backend_version: 5.6.0
+    inference_dtype: bfloat16
+    input_policy: trec_rag_raw_v2
+    max_length: 32256
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    model_revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+    pair_buffer_tokens: 512
+    requested_max_length: 32768
+    score_kind: doc_max_32768_buf512
+    score_representation: raw_logits
+  window_score_metadata:
+    artifact_schema_version: 2
+    backend: sentence-transformers-cross-encoder
+    backend_version: 5.6.0
+    chunk_max_characters: 3500
+    chunk_overlap_characters: 350
+    inference_dtype: bfloat16
+    input_policy: trec_rag_raw_v2
+    max_length: 1024
+    model: mixedbread-ai/mxbai-rerank-base-v2
+    model_revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+    pair_buffer_tokens: 0
+    requested_max_length: 1024
+    score_kind: window
+    score_representation: raw_logits
+
+organizer_pointwise:
+  model: Qwen/Qwen3-Reranker-8B
+  dtype: bfloat16
+  candidate_depth: 1000
+  max_length: 8192
+  batch_size: 16
+  instruction: Given a web search query, retrieve relevant passages that answer the query
+  local_vllm:
+    endpoint: http://127.0.0.1:8000/generative_scoring
+    request_timeout_seconds: 600
+    smoke_topic_id: "14"
+    smoke_ranks: [1, 125, 250, 375, 500, 625, 750, 1000]
+    server:
+      host: 0.0.0.0
+      port: 8000
+      startup_timeout_seconds: 180
+      gpu_memory_utilization: 0.82
+      max_num_seqs: 1
+      enforce_eager: true
+      offload_backend: prefetch
+      offload_group_size: 4
+      offload_num_in_group: 2
+      offload_prefetch_step: 1
+      environment:
+        VLLM_WSL2_ENABLE_PIN_MEMORY: "1"
+        VLLM_USE_V2_MODEL_RUNNER: "0"
+        VLLM_USE_FLASHINFER_SAMPLER: "0"
+
+organizer_listwise:
+  model: castorini/first_qwen3_8b
+  dtype: bfloat16
+  candidate_depth: 100
+  context_size: 4096
+  window_size: 20
+  stride: 10
+  max_passage_words: 300
+  vllm_max_num_seqs: 64
+  vllm_max_num_batched_tokens: 8192
+
+modal_execution:
+  app_name: trec-rag-pointwise-listwise-benchmark-v1
+  source_volume: trec-rag-raw-logit-hits1000-20260710
+  result_volume: trec-rag-organizer-rerank-20260801
+  huggingface_cache_volume: hf-cache
+  source_cache_dir: workspace/cache/retrieval/pyserini_remote
+  listwise_seed_filename: mixedbread_top100_seed_canonical.jsonl
+  run_id: rag25_pointwise_listwise_ndcg_corrected_v3
+  smoke_topic_id: "14"
+  smoke_candidate_count: 256
+  expected_topics: 22
+  expected_candidates_per_topic: 1000
+  expected_total_prompt_tokens: 93312315
+  pointwise_timeout_seconds: 10
+  listwise_timeout_seconds: 400
+  vllm_gpu_memory_utilization: 0.92
+  vllm_max_num_seqs: 96
+  vllm_max_num_batched_tokens: 65536
+
+modal_budget:
+  maximum_usd: 10.0
+  prior_spend_usd: 6.4
+  a100_80gb_usd_per_second: 0.000694
+  cpu_usd_per_core_second: 0.0000131
+  memory_usd_per_gib_second: 0.00000222
+  gpu_cpu_cores: 4
+  gpu_memory_gib: 32
+  smoke_timeout_seconds: 10
+  full_timeout_seconds: 410
+  staging_cpu_cores: 2
+  staging_memory_gib: 8
+  staging_timeout_seconds: 10

@@ -539,6 +539,52 @@ Validate the comparison helpers:
 .venv/bin/python -m pytest code/tests/test_pipeline_comparison.py -q
 ```
 
+## Mixedbread pointwise versus FIRST listwise benchmark
+
+`trec_rag.retrieval_ranking_benchmark` measures whether the organizer's FIRST
+listwise reranker improves the repository's complete Mixedbread pointwise
+ranking. The checked-in experiment is
+`configs/rag25_pointwise_listwise_ndcg_v1.yaml`.
+
+Inputs:
+
+- the same original-narrative ClimbMix BM25 top 1,000 for all 22 RAG25
+  development topics;
+- BF16 Mixedbread document and window score caches from the shared checkout;
+- a hash-validated FIRST BF16 ordering of Mixedbread's exact top 100; and
+- the three released Umbrela qrel sets, evaluated independently.
+
+The experiment first rebuilds the complete coverage-aware Mixedbread ranking.
+FIRST then applies tail-to-head windows of 20 with stride 10 to the unchanged
+top-100 candidate set. A paired topic bootstrap and Monte Carlo sign-flip test
+are computed for nDCG@10, nDCG@20, and nDCG@100.
+
+Set `TREC_RAG_SHARED_ROOT` to the shared checkout that owns the score caches,
+then reproduce the reports:
+
+```bash
+export TREC_RAG_SHARED_ROOT=/path/to/shared/trec_rag
+.venv/bin/python code/tools/build_mixedbread_listwise_seed.py \
+  --config configs/rag25_pointwise_listwise_ndcg_v1.yaml
+uvx modal run code/tools/modal_organizer_reranking.py::listwise_full
+.venv/bin/python -m trec_rag.retrieval_ranking_benchmark \
+  --config configs/rag25_pointwise_listwise_ndcg_v1.yaml
+```
+
+Generated publication artifacts live under
+`reports/experiments/rag25_pointwise_listwise_ndcg_v1/`: standalone Markdown
+and HTML reports, aggregate and per-topic metrics, paired statistics, TREC run
+files, runtime receipts, and a SHA-256 manifest. Large retrieval and score
+caches remain under ignored `outputs/` and `cache/` paths.
+
+Validate the adapters, cost guard, statistics, and config contract with:
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_organizer_reranking.py \
+  code/tests/test_retrieval_ranking_benchmark.py -q
+```
+
 ## Restoring Shared Cache Artifacts
 
 GitHub Release cache archives are packaged with a top-level `cache/` directory.
