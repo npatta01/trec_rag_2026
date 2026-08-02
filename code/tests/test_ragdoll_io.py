@@ -196,11 +196,47 @@ def test_select_passages_honours_a_budget_smaller_than_one_window() -> None:
     assert len(out.split()) <= 40
 
 
-def test_select_passages_validates_window_parameters() -> None:
-    with pytest.raises(ValueError, match="must be positive"):
-        dev_rag_inputs.select_passages("a b c", "a", budget_words=10, window_words=0)
-    with pytest.raises(ValueError, match="must be positive"):
-        dev_rag_inputs.select_passages("a b c", "a", budget_words=10, stride_words=0)
+def test_select_passages_uses_the_repo_semantic_chunker() -> None:
+    """Chunking is delegated, not hand-rolled; an injected chunker must be honoured."""
+
+    class RecordingChunker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def split_text(self, text: str, *, document_id: str):
+            self.calls += 1
+            from trec_rag.chunking import TextChunk
+
+            parts = text.split(" | ")
+            offset = 0
+            chunks = []
+            for index, part in enumerate(parts):
+                chunks.append(
+                    TextChunk(
+                        document_id=document_id,
+                        chunk_id=f"{document_id}:{index}",
+                        text=part,
+                        start_char=offset,
+                        end_char=offset + len(part),
+                    )
+                )
+                offset += len(part) + 3
+            return chunks
+
+    chunker = RecordingChunker()
+    document = " | ".join(["filler " * 30, "nuclear fission uranium reactor core", "more filler " * 20])
+    out = dev_rag_inputs.select_passages(
+        document, "nuclear fission uranium", budget_words=40, chunker=chunker
+    )
+
+    assert chunker.calls == 1
+    assert "fission" in out
+    assert len(out.split()) <= 40
+
+
+def test_select_passages_rejects_a_non_positive_budget() -> None:
+    with pytest.raises(ValueError, match="budget_words must be a positive integer"):
+        dev_rag_inputs.select_passages("a b c", "a", budget_words=0)
 
 
 def _archive(topic_id: str, count: int) -> dict[str, Any]:

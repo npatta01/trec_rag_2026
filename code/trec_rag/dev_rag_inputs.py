@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
 
+from trec_rag.chunking import ChunkingConfig, SemanticTextChunker, TextChunker
+
 ARCHIVE_VARIANT = "original"
 ARCHIVE_RETRIEVER = "climbmix_bm25"
 DEFAULT_DEPTH = 100
@@ -65,72 +67,75 @@ def select_passages(
     query: str,
     *,
     budget_words: int,
-    window_words: int = 120,
-    stride_words: int = 60,
+    chunker: TextChunker | None = None,
+    chunk_characters: int = 800,
+    overlap_characters: int = 100,
 ) -> str:
-    """Return the most query-relevant windows of ``text``, in document order.
+    """Return the most query-relevant chunks of ``text``, in document order.
 
     The generator prompt previously took each document's first ``max_document_words``. With a
     median document of about 3,400 words that shows roughly a sixth of the pool, always the
     opening, which on scraped web pages is often navigation furniture rather than evidence.
 
-    Windows are scored by how many distinct query terms they contain, which rewards a passage
-    covering several facets of the narrative over one repeating a single term. Selection is
-    greedy and non-overlapping, and the kept windows are re-emitted in their original order so
-    the text still reads forwards.
+    Chunking is delegated to :class:`trec_rag.chunking.SemanticTextChunker`, the same
+    semantic-text-splitter backend the reranking and evidence-selection paths already use, so
+    passages break on semantic boundaries rather than arbitrary word offsets. Chunks are scored
+    by how many distinct query terms they contain, which rewards a passage covering several
+    facets of the narrative over one repeating a single term, then selected greedily and
+    re-emitted in document order so the text still reads forwards.
     """
     if budget_words <= 0:
         raise ValueError("budget_words must be a positive integer")
-    if window_words <= 0 or stride_words <= 0:
-        raise ValueError("window_words and stride_words must be positive integers")
     words = text.split()
     if len(words) <= budget_words:
         return text
-    # A budget smaller than one window would reject every candidate and silently fall back to
-    # the document opening, which is the behaviour this function exists to replace.
-    window_words = min(window_words, budget_words)
 
     wanted = set(_content_terms(query))
     if not wanted:
         return " ".join(words[:budget_words])
 
+    if chunker is None:
+        chunker = SemanticTextChunker(
+            ChunkingConfig(
+                max_characters=chunk_characters, overlap_characters=overlap_characters
+            )
+        )
+    chunks = chunker.split_text(text, document_id="passage")
+    if not chunks:
+        return " ".join(words[:budget_words])
+
     scored: list[tuple[float, int]] = []
-    for start in range(0, len(words), stride_words):
-        window = words[start : start + window_words]
-        if len(window) < min(window_words, 20):
-            break
-        terms = _content_terms(" ".join(window))
+    for index, chunk in enumerate(chunks):
+        terms = _content_terms(chunk.text)
         present = wanted.intersection(terms)
         if not present:
             continue
         matches = sum(1 for term in terms if term in wanted)
-        scored.append((len(present) + 0.05 * matches, start))
-
+        scored.append((len(present) + 0.05 * matches, index))
     if not scored:
         return " ".join(words[:budget_words])
 
     scored.sort(key=lambda item: (-item[0], item[1]))
-    # The " ... " joiner contributes a whitespace-separated token between kept windows, so it
-    # counts against the budget; otherwise two 120-word windows exceed a 240-word budget.
     chosen: list[int] = []
     used = 0
-    for _, start in scored:
-        if any(abs(start - other) < window_words for other in chosen):
+    for _, index in scored:
+        # The " ... " joiner contributes one whitespace-separated token per gap.
+        cost = len(chunks[index].text.split()) + (1 if chosen else 0)
+        if used + cost > budget_words:
             continue
-        take = min(window_words, len(words) - start) + (1 if chosen else 0)
-        if used + take > budget_words:
-            continue
-        chosen.append(start)
-        used += take
+        chosen.append(index)
+        used += cost
         if used >= budget_words:
             break
 
     if not chosen:
-        return " ".join(words[:budget_words])
+        # Every chunk exceeds the budget on its own; fall back to a budget-sized prefix of the
+        # best-scoring chunk rather than the document opening.
+        best = chunks[scored[0][1]].text.split()
+        return " ".join(best[:budget_words])
 
     chosen.sort()
-    parts = [" ".join(words[start : start + window_words]) for start in chosen]
-    return " ... ".join(parts)
+    return " ... ".join(chunks[index].text for index in chosen)
 
 
 def archive_path(cache_dir: Path, topic_id: str) -> Path:
