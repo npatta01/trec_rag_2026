@@ -278,3 +278,69 @@ it costs 6.1s, not the sub-6s that would hide inside the pacing window.
   throttle, not concurrency.
 - Do not treat `single_document` vs `multi_document` as a source-independence
   claim. It records observed support only.
+
+
+## Session of 2026-08-02: where this stands
+
+All of it is on `claude/deepagent-retrieval-handover-df766f`, open as PR #35,
+1229 tests passing, 0 behind master.
+
+**Safe to merge.** The DeepAgent SDK is not wired into `run_pipeline`,
+`official_run`, or any submission artifact, so nothing here can affect a
+competition run.
+
+### Done and confirmed by a live run
+
+- **Passage-first retrieval.** The one-document-per-need collapse is gone:
+  63 nuggets from 5 documents became 145 from 215 on topic 224, and it held on
+  a second topic. Breadth is enforced in code, not asked for in a prompt.
+- **Citation integrity.** A claim could be "grounded" by citing a span reading
+  only `"Plyler v."`. The sentence splitter is fixed at source; degenerate
+  cited spans went from 11 of 548 to 0 of 518, and claim support ratio from a
+  median of 0.62 to 0.84.
+- **The reranker was capped at 512 tokens by our own constant**, not the
+  model's limit of 32,768. Raised to 1024.
+- **`answerable` was a race**, not a quality problem, and the synthesis reserve
+  fixed the limit-driven half of it: 7 of 7 on a run that stopped at a budget
+  wall, the path that used to guarantee zero.
+
+### Done but never exercised live
+
+- The draft cap of 5 per need, and importance derived from that selection.
+- The ledger-driven submission ranker (`deepagent_submission.py`), which is
+  **imported only by tests** — deliberately, on advice from two reviewers.
+
+### The one open failure, and the next task
+
+The coordinator can end a run by replying with no tool call. Nothing guarded
+it, so two runs finished with grounded evidence and an empty draft selection,
+which zeroes the submission ranker's top signal. A third run on the same topic
+was fine, so it is non-deterministic.
+
+The mechanism to fix it is built and tested (`MainToolFilterMiddleware`
+bounces such an exit once into a forced closeout) but is **inert**: its
+predicate defaults to `None`. Three steps turn it on.
+
+1. In `DeepAgentRetriever.retrieve`, build a closure over `coverage_state` that
+   returns True when any need with live, non-superseded nuggets has an empty
+   `draft_nugget_ids`, and thread it through a new optional `AgentToolset`
+   field into `MainToolFilterMiddleware(..., closeout_pending=...)`.
+2. Add a `closeout_refused` rung to the stopping-reason chain in `retrieve`,
+   below `budget_exhausted` and above `agent_completed`, fed by
+   `budget.closeout_refused()`.
+3. Register `"closeout_refused"` in `_STOPPING_REASONS` in
+   `deepagent_tracing.py`. Omitting it drops the trace **silently**, because
+   `record_result` is exception-swallowed.
+
+Then a real-loop test: drive `langchain.agents.create_agent` with a scripted
+model (no tool call, then a tool call, then no tool call) to prove the handler
+retry works inside real LangGraph execution and not just against a stub.
+
+### Two cautions worth carrying
+
+- **Everything measured is n=1 per configuration, on two topics.** A chunk-size
+  result that looked decisive at n=1 evaporated across 22 topics; see
+  `reports/2026-08-01-chunk-size-and-reranker-window.md`.
+- **Prompts do not produce separation here; validators do.** A researcher told
+  explicitly "do not mark everything vital" returned 94% vital. Every fix that
+  held this session was enforced in code.
