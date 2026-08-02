@@ -293,6 +293,100 @@ def test_pending_closeout_ignores_superseded_only_evidence() -> None:
     assert state.pending_closeout_need_ids() == ("n2",)
 
 
+def test_pending_closeout_reopens_when_every_selected_draft_is_superseded() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta("g1"))
+    state.apply_delta(
+        {
+            "set_need_status": [
+                {
+                    "need_id": "n1",
+                    "status": "partial",
+                    "remaining_gap": "More detail would help.",
+                    "draft_nugget_ids": ["g1"],
+                }
+            ],
+            "add_nuggets": [
+                {
+                    "nugget_id": "g2",
+                    "text": "A replacement claim.",
+                    "need_ids": ["n1"],
+                    "facet_ids": [],
+                    "evidence": [{"cite": "S1"}],
+                }
+            ],
+        }
+    )
+    state.apply_delta(
+        {"supersede_nuggets": [{"nugget_id": "g1", "superseded_by": "g2"}]}
+    )
+
+    assert state.pending_closeout_need_ids() == ("n1",)
+
+
+def test_atomic_completion_rejects_live_evidence_without_draft_selection() -> None:
+    state = _state_with_snippet()
+    _add_need_and_facet(state)
+    state.apply_delta(_grounded_nugget_delta())
+
+    result = state.complete_retrieval()
+
+    assert result["ok"] is False
+    assert result["code"] == "INCOMPLETE_CLOSEOUT"
+    assert result["need_ids"] == ["n1"]
+    assert state.report().terminal_reason is None
+
+
+def test_atomic_completion_reports_open_need_ids() -> None:
+    state = EvidenceCoverageState("Why do people migrate?")
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "n1",
+                    "narrative_span": "Why do people migrate",
+                    "question": "Why do people migrate?",
+                }
+            ]
+        }
+    )
+
+    result = state.complete_retrieval()
+
+    assert result["ok"] is False
+    assert result["code"] == "COMPLETION_OPEN_NEEDS"
+    assert result["need_ids"] == ["n1"]
+
+
+def test_every_rejected_completion_includes_deterministic_need_ids() -> None:
+    state = EvidenceCoverageState("Why do people migrate?")
+    state.apply_delta(
+        {
+            "add_needs": [
+                {
+                    "need_id": "n1",
+                    "narrative_span": "Why do people migrate",
+                    "question": "Why do people migrate?",
+                }
+            ]
+        }
+    )
+    assert state.choose_action(
+        action="search",
+        target="migration",
+        focus_query=None,
+        motivating_ids=["n1"],
+        rationale="find evidence",
+    )["ok"] is True
+
+    result = state.complete_retrieval()
+
+    assert result["ok"] is False
+    assert result["code"] == "PENDING_ACTION_EXISTS"
+    assert result["need_ids"] == ["n1"]
+
+
 def test_frontier_count_ignores_a_status_the_agent_got_wrong() -> None:
     state = _state_with_snippet()
     _add_need_and_facet(state)

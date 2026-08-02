@@ -395,9 +395,9 @@ A pending ticket blocks all other queries by design, so recovering never
 requires remembering what was in flight:
 
 ```bash
-python -m trec_rag.continuation            # what is pending, and when it may retry
-python -m trec_rag.continuation --resume   # reissue it; makes one hosted call
-python -m trec_rag.continuation --discard  # drop it without a hosted call
+.venv/bin/python -m trec_rag.continuation            # what is pending, and when it may retry
+.venv/bin/python -m trec_rag.continuation --resume   # reissue it; makes one hosted call
+.venv/bin/python -m trec_rag.continuation --discard  # drop it without a hosted call
 ```
 
 Each transport entry is one immutable attempt: redirects and automatic retries
@@ -581,7 +581,7 @@ BM25 scores from different queries are never compared.
 
 | Role | Available capabilities | Deliberately unavailable |
 | --- | --- | --- |
-| Main coordinator | `task`, compact retrieval-state read/update, round completion, `read_file` for automatic spill | Direct search/snippet tools, recursive general-purpose subagents, filesystem mutation, `write_todos` |
+| Main coordinator | `task`, compact retrieval-state read/update, round completion, `complete_retrieval`, `read_file` for automatic spill | Direct search/snippet tools, recursive general-purpose subagents, filesystem mutation, `write_todos` |
 | Researcher | ClimbMix search, bounded snippet extraction, compact state read, `read_file` for automatic spill | `task`, semantic state updates, filesystem mutation, `write_todos` |
 
 There is one restricted `researcher` subagent type and no default
@@ -611,7 +611,7 @@ depth, motivating need IDs, and gap; it can formulate and refine its own
 queries. The JSON envelope must begin `task.description`; optional detailed
 research instructions can follow after a newline. Its first model action is
 mechanically restricted to
-`search_climbmix`; after that attempt, snippet and compact-state tools become
+`search_passages`; after that attempt, snippet and compact-state tools become
 available. The coordinator merges completed evidence bundles with one semantic
 state update per batch, then closes the round. An empty round is refused without
 consuming the round, and the next coordinator action is mechanically restricted
@@ -629,7 +629,13 @@ Rounds have no cap of their own: a round cannot close without a finished
 researcher, so researcher invocations already bound them and a separate limit
 could only strand researchers the run was allowed to spend. When research ends,
 the coordinator gets one final directed turn to record a synthesis: a draft
-answer and grounded nugget IDs for every need the evidence supports.
+answer and grounded nugget IDs for every need the evidence supports. It must
+then call `complete_retrieval`; this is the only coordinator tool that can make
+the coverage state terminal. The transition checks every need with live,
+non-superseded evidence and requires at least one selected live
+`draft_nugget_id`. A rejected completion returns deterministic `need_ids` for
+the open needs, and a draft selection whose nugget was later superseded no
+longer counts.
 
 `AgentRetrievalResult` contains the input `narrative`, completed `searches`
 (`AgentSearch` records), fused `candidates` (`RankedCandidate` records with
@@ -676,9 +682,11 @@ Use `view_retrieval_state` to inspect a compact frontier or a bounded state
 view and `update_retrieval_state` to add needs, facets, nuggets, evidence, and
 coverage judgments. Researcher search and snippet calls atomically record their
 own actual arguments; they do not require `choose_next_action` authorization.
-The remaining `choose_next_action` path records only a terminal stop. The SDK
-owns this state for one retrieval invocation; it is not a persistent cache or
-a replacement for the final result's immutable `coverage_report`.
+The legacy `choose_next_action` callback is retained for compatibility with
+older injected toolsets, but it cannot record a terminal stop;
+`complete_retrieval` is the only valid terminal transition. The SDK owns this
+state for one retrieval invocation; it is not a persistent cache or a
+replacement for the final result's immutable `coverage_report`.
 
 `update_retrieval_state(delta)` is the universal append/update entry point for
 the three stores. Its model-facing delta accepts these eight optional lists:
@@ -824,6 +832,41 @@ Validate the isolated SDK and its existing transport boundaries with:
   code/tests/test_pipeline.py \
   code/tests/test_remote_pyserini.py -q
 ```
+
+## Offline post-batch nuggetizer probe
+
+`post_batch_nuggetizer_probe.py` is an offline proof-of-concept for the
+centralized canonicalization design. It is not wired into
+`DeepAgentRetriever`, `run_pipeline`, or any submission artifact.
+
+Inputs:
+
+- one Phoenix trace for topic `224`, loaded through the configured Phoenix
+  client;
+- the trace's researcher bundles and accepted ledger, selected with
+  `--input-source researcher` or `--input-source ledger`;
+- the untouched narrative, snippet observations, and exact citation handles
+  reconstructed in memory from the trace.
+
+Outputs:
+
+- a sanitized A/B comparison of provisional claims and canonical nuggets;
+- grounding failures, alias mappings, and summary counts printed to stdout;
+- no trace content, raw snippets, provider response, or cache files written to
+  disk.
+
+Validation and safety bounds:
+
+- the trace reconstruction rejects missing or conflicting identities and
+  citation observations before a hosted call;
+- exact snippet grounding is checked before and after canonicalization;
+- at most one hosted canonicalization call is made, with no retries;
+- the existing canonical-nugget and nuggetizer-adapter tests remain the
+  reusable validation boundary.
+
+The implementation is [post_batch_nuggetizer_probe.py](post_batch_nuggetizer_probe.py).
+Run it only as a deliberate local experiment after loading the Phoenix and
+OpenRouter environment from ignored files; it is not a pipeline entry point.
 
 ## Config-Driven RAG Pipeline
 

@@ -4,6 +4,39 @@
 
 **Status:** measured, 22 judged dev topics
 
+## Provenance and reproducibility boundary
+
+This is a sanitized development diagnostic, not an official submission result.
+The measured population is the 22-topic development split from
+`trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv`.
+Evaluation uses the projected UMBRELA qrels at
+`trec-rag-data/trec-rag-2026/development-data/rag25-dev-umbrela-qrels/rag25-climbmix-umbrela-codex-gpt5.5-medium-reasoning-v1.qrels`,
+with relevance threshold 2 and integer grades for nDCG. The tracked
+experiment manifest records the topic SHA-256
+`dec2aa2e672dede15d46b255f66bccc41f3fa1688a3523d030b2f70ee6f54abf` and qrels
+SHA-256
+`42bf933ae06eb22213312b22e3f2bc39f3dcc2d54e87ebcd8125e9528ddfcc37`.
+
+The depth-100 BM25 control is the first 100 rows of the pool produced by
+`configs/rag25_bm25_full_query_v1.yaml`; the checked-in 3,500-character
+reranker contract is represented by
+`configs/rag25_bm25_mixedbread_rerank_v1.yaml` and uses
+`mixedbread-ai/mxbai-rerank-base-v2`, raw logits, a 1,024-token window, and
+3,500-character chunks with 350-character overlap. Chunking and passage
+selection are implemented in `code/trec_rag/deepagent_passages.py`, with
+score materialization in `code/trec_rag/rerank_score_cache.py`. The design
+decision and the 22-topic warning are also recorded in
+`docs/superpowers/specs/2026-08-01-deepagent-passage-first-retrieval-design.md`.
+
+The 1,200/2,000/3,500 sweep and its matched-controls cache were local
+diagnostic artifacts; their exact cache paths, model-runtime receipt, and
+per-topic rows were not preserved in a tracked manifest. The related tracked
+record at `reports/experiments/bm25_mixedbread_config_comparison_v1/` pins the
+shared source/config identities, but reports a separate top-50 nDCG@10
+comparison and must not be read as the source of the nDCG@20 table below.
+The table is therefore reproducible as a documented result and audit trail,
+not guaranteed bit-for-bit reproducible from the repository alone.
+
 ## Summary
 
 Two questions: how large should a chunk be, and how much of it should the

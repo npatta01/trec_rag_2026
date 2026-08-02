@@ -221,6 +221,7 @@ class _RoleToolFilterMiddleware(AgentMiddleware):
 
     _ALLOWED_TOOLS: frozenset[str] = frozenset()
     _PARALLEL_TOOL_CALLS = False
+    _DENIED_MESSAGE = "role-restricted tool access denied"
 
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
         return request.override(
@@ -245,7 +246,7 @@ class _RoleToolFilterMiddleware(AgentMiddleware):
 
     def _require_allowed_tool(self, request: ToolCallRequest) -> None:
         if request.tool_call.get("name") not in self._ALLOWED_TOOLS:
-            raise PermissionError("role-restricted tool access denied")
+            raise PermissionError(self._DENIED_MESSAGE)
 
     def wrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]

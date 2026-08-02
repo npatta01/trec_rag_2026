@@ -4,9 +4,9 @@ A throttled ClimbMix request writes a ticket and refuses every later request
 until that exact request is retried. The ticket records the query, so recovering
 never requires remembering what was in flight when a run was interrupted.
 
-    python -m trec_rag.continuation              # show what is pending
-    python -m trec_rag.continuation --resume     # retry it, then unblock
-    python -m trec_rag.continuation --discard    # drop it without retrying
+    .venv/bin/python -m trec_rag.continuation              # show what is pending
+    .venv/bin/python -m trec_rag.continuation --resume     # retry it, then unblock
+    .venv/bin/python -m trec_rag.continuation --discard    # drop it without retrying
 """
 
 from __future__ import annotations

@@ -11,14 +11,12 @@ import os
 from pathlib import Path
 from threading import Lock
 from time import monotonic
-from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
+from typing import ClassVar, Literal, Protocol, TypeVar, cast
 
 from langchain.agents.middleware import (
-    AgentMiddleware,
     ModelCallLimitMiddleware,
     ToolCallLimitMiddleware,
 )
-from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from trec_rag.deepagent_budget import (
     BudgetDecision,
     BudgetSnapshot,
@@ -38,6 +36,7 @@ from trec_rag.deepagent_evidence import (
 from trec_rag.deepagent_research import (
     MainToolFilterMiddleware,
     ResearchTaskBudgetMiddleware,
+    _RoleToolFilterMiddleware,
     build_research_subagent,
     current_research_task,
 )
@@ -341,7 +340,7 @@ class _FusionRow:
     provenance: list[AgentCandidateProvenance]
 
 
-class _RetrievalOnlyMiddleware(AgentMiddleware):
+class _RetrievalOnlyMiddleware(_RoleToolFilterMiddleware):
     """Limit one SDK-created agent to retrieval and state scratch tools."""
 
     _ALLOWED_TOOLS = frozenset(
@@ -350,64 +349,13 @@ class _RetrievalOnlyMiddleware(AgentMiddleware):
             "extract_relevant_snippets",
             "view_retrieval_state",
             "update_retrieval_state",
-            "choose_next_action",
             "ls",
             "read_file",
-            "write_file",
-            "edit_file",
-            "delete",
             "glob",
             "grep",
         }
     )
     _DENIED_MESSAGE = "retrieval-only tool access denied"
-
-    @staticmethod
-    def _tool_name(tool: object) -> str | None:
-        if isinstance(tool, Mapping):
-            name = tool.get("name")
-        else:
-            name = getattr(tool, "name", None)
-        return name if isinstance(name, str) else None
-
-    def _filter_tools(self, request: ModelRequest) -> ModelRequest:
-        return request.override(
-            tools=[
-                tool
-                for tool in request.tools
-                if self._tool_name(tool) in self._ALLOWED_TOOLS
-            ],
-            model_settings={
-                **(request.model_settings or {}),
-                "parallel_tool_calls": False,
-            },
-        )
-
-    def wrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Any]
-    ) -> Any:
-        return handler(self._filter_tools(request))
-
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Any]
-    ) -> Any:
-        return await handler(self._filter_tools(request))
-
-    def _require_allowed_tool(self, request: ToolCallRequest) -> None:
-        if request.tool_call.get("name") not in self._ALLOWED_TOOLS:
-            raise PermissionError(self._DENIED_MESSAGE)
-
-    def wrap_tool_call(
-        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]
-    ) -> Any:
-        self._require_allowed_tool(request)
-        return handler(request)
-
-    async def awrap_tool_call(
-        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Any]
-    ) -> Any:
-        self._require_allowed_tool(request)
-        return await handler(request)
 
 
 class _Agent(Protocol):
@@ -1627,24 +1575,7 @@ class DeepAgentRetriever:
 
         def complete_retrieval() -> str:
             """Validate draft coverage, then record the terminal completion."""
-            pending_need_ids = coverage_state.pending_closeout_need_ids()
-            if pending_need_ids:
-                budget.note_closeout_refused()
-                return json.dumps(
-                    {
-                        "ok": False,
-                        "code": "INCOMPLETE_CLOSEOUT",
-                        "need_ids": list(pending_need_ids),
-                    },
-                    sort_keys=True,
-                )
-            result = coverage_state.choose_action(
-                action="stop",
-                target="completion",
-                focus_query=None,
-                motivating_ids=[],
-                rationale="explicit retrieval completion",
-            )
+            result = coverage_state.complete_retrieval()
             if not result.get("ok", False):
                 budget.note_closeout_refused()
             return json.dumps(result, sort_keys=True)

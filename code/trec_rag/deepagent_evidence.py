@@ -684,20 +684,25 @@ class EvidenceCoverageState:
                 terminal_reason=self._terminal_reason,
             )
 
+    def _pending_closeout_need_ids_locked(self) -> tuple[str, ...]:
+        live_nugget_ids = frozenset(
+            item.nugget_id
+            for item in self._nuggets.values()
+            if item.superseded_by is None
+        )
+        return tuple(
+            need.need_id
+            for need in self._needs.values()
+            if any(nugget_id in live_nugget_ids for nugget_id in need.nugget_ids)
+            and not any(
+                nugget_id in live_nugget_ids for nugget_id in need.draft_nugget_ids
+            )
+        )
+
     def pending_closeout_need_ids(self) -> tuple[str, ...]:
-        """Return needs with live evidence but no selected draft nuggets."""
+        """Return needs with live evidence but no selected live draft nuggets."""
         with self._lock:
-            live_nugget_ids = frozenset(
-                item.nugget_id
-                for item in self._nuggets.values()
-                if item.superseded_by is None
-            )
-            return tuple(
-                need.need_id
-                for need in self._needs.values()
-                if not need.draft_nugget_ids
-                and any(nugget_id in live_nugget_ids for nugget_id in need.nugget_ids)
-            )
+            return self._pending_closeout_need_ids_locked()
 
     def record_search(
         self,
@@ -1169,8 +1174,18 @@ class EvidenceCoverageState:
             return None if facet.status == "open" else "CLOSED_MOTIVATION"
         return "UNKNOWN_MOTIVATION"
 
-    def _action_error(self, code: str) -> Mapping[str, object]:
-        return {"ok": False, "code": code, "state_version": self._state_version, "state_hash": self._hash()}
+    def _action_error(
+        self, code: str, *, need_ids: Sequence[str] = ()
+    ) -> Mapping[str, object]:
+        result: dict[str, object] = {
+            "ok": False,
+            "code": code,
+            "state_version": self._state_version,
+            "state_hash": self._hash(),
+        }
+        if need_ids:
+            result["need_ids"] = list(need_ids)
+        return result
 
     def record_retrieval_action(
         self,
@@ -1236,6 +1251,84 @@ class EvidenceCoverageState:
             self._changed()
             return None
 
+    def _choose_action_locked(
+        self,
+        *,
+        action: ActionKind,
+        target: str,
+        focus_query: str | None,
+        motivating_ids: Sequence[str],
+        rationale: str,
+    ) -> Mapping[str, object]:
+        if self._terminal_reason is not None:
+            return self._action_error("TERMINAL_STATE")
+        if (
+            action not in {"search", "extract", "paginate", "refocus", "stop"}
+            or _nonblank(target) is None
+            or _nonblank(rationale) is None
+        ):
+            return self._action_error("INVALID_ACTION")
+        ids = _string_ids(motivating_ids)
+        if ids is None:
+            return self._action_error("INVALID_MOTIVATION")
+        if action != "stop":
+            if not ids:
+                return self._action_error("MISSING_MOTIVATION")
+            for item_id in ids:
+                error = self._open_motivation(item_id)
+                if error is not None:
+                    return self._action_error(error)
+            if any(item.state == "pending" for item in self._actions):
+                return self._action_error("PENDING_ACTION_EXISTS")
+            self._actions.append(
+                _Action(action, target, focus_query, list(ids), rationale, "pending")
+            )
+            self._changed()
+            return {
+                "ok": True,
+                "action": action,
+                "state": "pending",
+                "state_version": self._state_version,
+                "state_hash": self._hash(),
+            }
+        if any(item.state == "pending" for item in self._actions):
+            return self._action_error("PENDING_ACTION_EXISTS")
+        if target == "completion":
+            open_need_ids = tuple(
+                item.need_id
+                for item in self._needs.values()
+                if self._open_motivation(item.need_id) is None
+            )
+            if open_need_ids:
+                return self._action_error(
+                    "COMPLETION_OPEN_NEEDS", need_ids=open_need_ids
+                )
+            if ids:
+                return self._action_error("COMPLETION_HAS_MOTIVATION")
+        elif target == "saturation":
+            if not ids:
+                return self._action_error("MISSING_MOTIVATION")
+            for item_id in ids:
+                error = self._open_motivation(item_id)
+                if error is not None:
+                    return self._action_error(error)
+            if self._zero_yield_pages() < SATURATION_ZERO_YIELD_PAGES:
+                return self._action_error("INSUFFICIENT_ZERO_YIELD_PAGES")
+        else:
+            return self._action_error("INVALID_STOP_TARGET")
+        self._actions.append(
+            _Action("stop", target, focus_query, list(ids), rationale, "terminal")
+        )
+        self._terminal_reason = target
+        self._changed()
+        return {
+            "ok": True,
+            "action": "stop",
+            "state": "terminal",
+            "state_version": self._state_version,
+            "state_hash": self._hash(),
+        }
+
     def choose_action(
         self,
         *,
@@ -1247,47 +1340,37 @@ class EvidenceCoverageState:
     ) -> Mapping[str, object]:
         """Validate, append, and expose one pending action or terminal stop."""
         with self._lock:
-            if self._terminal_reason is not None:
-                return self._action_error("TERMINAL_STATE")
-            if action not in {"search", "extract", "paginate", "refocus", "stop"} or _nonblank(target) is None or _nonblank(rationale) is None:
-                return self._action_error("INVALID_ACTION")
-            ids = _string_ids(motivating_ids)
-            if ids is None:
-                return self._action_error("INVALID_MOTIVATION")
-            if action != "stop":
-                if not ids:
-                    return self._action_error("MISSING_MOTIVATION")
-                for item_id in ids:
-                    error = self._open_motivation(item_id)
-                    if error is not None:
-                        return self._action_error(error)
-                if any(item.state == "pending" for item in self._actions):
-                    return self._action_error("PENDING_ACTION_EXISTS")
-                self._actions.append(_Action(action, target, focus_query, list(ids), rationale, "pending"))
-                self._changed()
-                return {"ok": True, "action": action, "state": "pending", "state_version": self._state_version, "state_hash": self._hash()}
-            if any(item.state == "pending" for item in self._actions):
-                return self._action_error("PENDING_ACTION_EXISTS")
-            if target == "completion":
-                if any(self._open_motivation(item.need_id) is None for item in self._needs.values()):
-                    return self._action_error("COMPLETION_OPEN_NEEDS")
-                if ids:
-                    return self._action_error("COMPLETION_HAS_MOTIVATION")
-            elif target == "saturation":
-                if not ids:
-                    return self._action_error("MISSING_MOTIVATION")
-                for item_id in ids:
-                    error = self._open_motivation(item_id)
-                    if error is not None:
-                        return self._action_error(error)
-                if self._zero_yield_pages() < SATURATION_ZERO_YIELD_PAGES:
-                    return self._action_error("INSUFFICIENT_ZERO_YIELD_PAGES")
-            else:
-                return self._action_error("INVALID_STOP_TARGET")
-            self._actions.append(_Action("stop", target, focus_query, list(ids), rationale, "terminal"))
-            self._terminal_reason = target
-            self._changed()
-            return {"ok": True, "action": "stop", "state": "terminal", "state_version": self._state_version, "state_hash": self._hash()}
+            return self._choose_action_locked(
+                action=action,
+                target=target,
+                focus_query=focus_query,
+                motivating_ids=motivating_ids,
+                rationale=rationale,
+            )
+
+    def complete_retrieval(self) -> Mapping[str, object]:
+        """Atomically validate draft coverage and record completion."""
+        with self._lock:
+            pending_need_ids = self._pending_closeout_need_ids_locked()
+            if pending_need_ids:
+                return self._action_error(
+                    "INCOMPLETE_CLOSEOUT", need_ids=pending_need_ids
+                )
+            result = self._choose_action_locked(
+                action="stop",
+                target="completion",
+                focus_query=None,
+                motivating_ids=[],
+                rationale="explicit retrieval completion",
+            )
+            if not result.get("ok", False) and "need_ids" not in result:
+                open_need_ids = tuple(
+                    item.need_id
+                    for item in self._needs.values()
+                    if self._open_motivation(item.need_id) is None
+                )
+                result = {**result, "need_ids": list(open_need_ids)}
+            return result
 
     def _zero_yield_pages(self) -> int:
         count = 0

@@ -17,6 +17,7 @@ import pytest
 import trec_rag.deepagent_retrieval as deepagent_retrieval
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
+from langchain.agents import create_agent
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
@@ -425,6 +426,13 @@ class CaptureChatModel(FakeMessagesListChatModel):
     ) -> "CaptureChatModel":
         self.captured_tool_names = [str(getattr(tool, "name", "")) for tool in tools]
         self.captured_bind_settings.append(dict(kwargs))
+        return self
+
+
+class ToolAwareFakeMessagesListChatModel(FakeMessagesListChatModel):
+    """Scripted model with the bind_tools hook required by create_agent."""
+
+    def bind_tools(self, tools: Sequence[object], **kwargs: object):
         return self
 
 
@@ -2641,6 +2649,127 @@ def test_complete_retrieval_records_the_only_successful_completion_transition() 
     assert result.stopping_reason == "completion"
 
 
+def test_production_toolset_completes_through_a_real_langgraph_loop() -> None:
+    model = ToolAwareFakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "complete_retrieval",
+                        "args": {},
+                        "id": "complete-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="retrieval complete"),
+        ]
+    )
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> object:
+        assert toolset.complete_retrieval is not None
+        return create_agent(
+            model=model,
+            tools=[toolset.complete_retrieval],
+            middleware=[
+                MainToolFilterMiddleware(
+                    toolset.budget,
+                    toolset.budget_config,
+                    closeout_pending=toolset.closeout_pending,
+                )
+            ],
+        )
+
+    result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
+
+    assert result.coverage_report.terminal_reason == "completion"
+    assert result.stopping_reason == "completion"
+
+
+def test_production_toolset_rejects_live_incomplete_completion_and_continues() -> None:
+    model = ToolAwareFakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "complete_retrieval",
+                        "args": {},
+                        "id": "complete-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "update_retrieval_state",
+                        "args": {
+                            "delta": {
+                                "set_need_status": [
+                                    {
+                                        "need_id": "test-need",
+                                        "status": "partial",
+                                        "remaining_gap": "More detail would help.",
+                                        "draft_nugget_ids": ["g1"],
+                                    }
+                                ]
+                            }
+                        },
+                        "id": "update-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="I wrote the missing draft selection."),
+        ]
+    )
+
+    def agent_factory(
+        _model: str, toolset: deepagent_retrieval.AgentToolset
+    ) -> object:
+        _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+        toolset.update_retrieval_state(
+            {
+                "add_nuggets": [
+                    {
+                        "nugget_id": "g1",
+                        "text": "Grounded test evidence.",
+                        "need_ids": ["test-need"],
+                        "facet_ids": [],
+                        "evidence": [{"cite": "S1"}],
+                    }
+                ]
+            }
+        )
+        assert toolset.complete_retrieval is not None
+        return create_agent(
+            model=model,
+            tools=[toolset.update_retrieval_state, toolset.complete_retrieval],
+            middleware=[
+                MainToolFilterMiddleware(
+                    toolset.budget,
+                    toolset.budget_config,
+                    closeout_pending=toolset.closeout_pending,
+                )
+            ],
+        )
+
+    result = _sdk(
+        FakeRetriever(),
+        agent_factory,
+        snippet_extractor=RecordingSnippetExtractor(),
+    ).retrieve("narrative")
+
+    assert result.coverage_report.terminal_reason is None
+    assert result.stopping_reason == "closeout_refused"
+    assert result.coverage_report.unresolved_need_ids == ("test-need",)
+
+
 def test_choose_next_action_cannot_bypass_explicit_completion_tool() -> None:
     observed: dict[str, object] = {}
 
@@ -2683,6 +2812,7 @@ def test_rejected_completion_is_not_reported_as_agent_completed() -> None:
 
     assert observed["completion"]["ok"] is False
     assert observed["completion"]["code"] == "COMPLETION_OPEN_NEEDS"
+    assert observed["completion"]["need_ids"] == ["test-need"]
     assert result.stopping_reason == "closeout_refused"
 
 
@@ -2887,12 +3017,8 @@ def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_o
         "extract_relevant_snippets",
         "view_retrieval_state",
         "update_retrieval_state",
-        "choose_next_action",
         "ls",
         "read_file",
-        "write_file",
-        "edit_file",
-        "delete",
         "glob",
         "grep",
     ]
@@ -2918,7 +3044,7 @@ def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_o
             {"temperature": 0.25, "parallel_tool_calls": False},
         ]
 
-        for allowed_name in ("write_file", "read_file"):
+        for allowed_name in ("read_file",):
             allowed = ToolCallRequest(
                 tool_call={"name": allowed_name, "args": {}, "id": "call-allowed"},
                 tool=None,
@@ -2932,7 +3058,14 @@ def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_o
 
             assert await middleware.awrap_tool_call(allowed, allowed_handler) == "ok"
 
-        for forbidden_name in ("execute", "task", "unrelated_tool"):
+        for forbidden_name in (
+            "execute",
+            "task",
+            "unrelated_tool",
+            "write_file",
+            "edit_file",
+            "delete",
+        ):
             forbidden = ToolCallRequest(
                 tool_call={"name": forbidden_name, "args": {}, "id": "call-forbidden"},
                 tool=None,

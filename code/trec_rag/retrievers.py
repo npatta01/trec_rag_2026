@@ -215,7 +215,7 @@ class PyseriniRemoteRetriever:
                     raise RuntimeError(
                         "explicit continuation required: a throttled request is "
                         "pending and blocks every other query. Inspect it with "
-                        "'python -m trec_rag.continuation', then --resume to "
+                        "'.venv/bin/python -m trec_rag.continuation', then --resume to "
                         "retry it or --discard to drop it. "
                         f"(ticket {ticket.get('ticket')}, "
                         f"query {ticket.get('query')!r})"
