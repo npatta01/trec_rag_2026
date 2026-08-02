@@ -42,6 +42,11 @@ gap. Use unresolved_gaps for what the snippets genuinely could not answer, not
 as a substitute for reporting what they did. Returning an empty
 candidate_nuggets list means the snippets supported nothing at all, which is
 rare once a search has returned relevant passages.
+Label every candidate nugget's importance for the need it answers. Use "vital"
+when a good answer to that need must contain the concept, and "okay" when it
+adds worthwhile information that is not essential. Judge it against the need
+you were given, not against the narrative as a whole, and do not mark
+everything vital: the label only helps if it separates.
 Support each claim by citing snippet handles, never by writing out quotes.
 search_passages and extract_relevant_snippets give each passage a "cite"
 value such as S3 and number its sentences. Cite "S3" for a whole snippet, "S3.2" for its sentence 2,
@@ -120,6 +125,10 @@ class CandidateNugget(BaseModel):
     facet_ids: list[str]
     evidence: list[BundleEvidence] = Field(min_length=1)
     contradicts_claims: list[str]
+    # Judged by the researcher, which is the only agent that read the passages.
+    # It was previously assigned by the coordinator at merge time from the
+    # claim text alone, having never seen the evidence.
+    importance: Literal["vital", "okay"] = "okay"
 
 
 class EvidenceBundle(BaseModel):

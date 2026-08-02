@@ -113,7 +113,10 @@ and to "answerable" only with a draft_answer and grounded draft_nugget_ids.
 Leaving a need "unaddressed" after its researchers returned is a reporting
 error. Nugget evidence is a list of citations such as
 [{"cite":"S3.2"}]; pass through the handles a researcher returned and never
-write quote text yourself. If add_nuggets rows come back rejected, those claims
+write quote text yourself. Carry each nugget's importance through from the
+bundle that returned it, exactly as you carry its citations: the researcher
+read the passages and you did not. Only change a label when a later bundle
+shows the claim is not what a good answer to that need must contain. If add_nuggets rows come back rejected, those claims
 never entered the ledger: leave the cited needs unsupported and delegate
 researchers for them again. Report conflicts and unresolved gaps. Caches remain tool-owned; use state scratch only
 for oversized output or temporary notes. The state filesystem is ephemeral.
