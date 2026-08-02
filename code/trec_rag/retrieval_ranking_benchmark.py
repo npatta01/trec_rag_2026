@@ -425,7 +425,9 @@ def _recommendation(metrics: Mapping[str, object], pairwise: Sequence[Mapping[st
             "Use the current Mixedbread pointwise reranker for exhaustive pruning, then "
             "FIRST listwise reranking only on its final top 100. Preserve per-facet quotas "
             "before the global listwise stage because nDCG does not measure answer-evidence "
-            "diversity."
+            "diversity. If operational constraints permit only one reranker, choose "
+            "Mixedbread: FIRST cannot recover relevant documents or facets excluded from "
+            "its input pool."
         )
     return (
         "Use pointwise reranking for the production RAG candidate pool. FIRST did not show "

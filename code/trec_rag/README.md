@@ -559,6 +559,11 @@ FIRST then applies tail-to-head windows of 20 with stride 10 to the unchanged
 top-100 candidate set. A paired topic bootstrap and Monte Carlo sign-flip test
 are computed for nDCG@10, nDCG@20, and nDCG@100.
 
+For production RAG, use Mixedbread for broad pointwise pruning, preserve
+facet/sub-narrative quotas, and apply FIRST only to the final top 100. If only
+one reranker can be operated, use Mixedbread because a listwise stage cannot
+recover evidence omitted from its input pool.
+
 Set `TREC_RAG_SHARED_ROOT` to the shared checkout that owns the score caches,
 then reproduce the reports:
 

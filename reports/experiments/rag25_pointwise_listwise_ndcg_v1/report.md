@@ -2,7 +2,7 @@
 
 ## Result
 
-Use the current Mixedbread pointwise reranker for exhaustive pruning, then FIRST listwise reranking only on its final top 100. Preserve per-facet quotas before the global listwise stage because nDCG does not measure answer-evidence diversity.
+Use the current Mixedbread pointwise reranker for exhaustive pruning, then FIRST listwise reranking only on its final top 100. Preserve per-facet quotas before the global listwise stage because nDCG does not measure answer-evidence diversity. If operational constraints permit only one reranker, choose Mixedbread: FIRST cannot recover relevant documents or facets excluded from its input pool.
 
 FIRST increased nDCG at every measured cutoff under all three qrel sets. None of the paired improvements reaches p < 0.05 on only 22 topics, so this is consistent directional evidence rather than a conclusive significance result.
 
