@@ -21,7 +21,7 @@ from trec_rag.evidence_store import (
     materialize_candidate_inputs,
     select_evidence_artifacts,
 )
-from trec_rag.evidence_bundle import EvidenceBundle
+from trec_rag.evidence_bundle import BundleLane, EvidenceBundle
 from trec_rag.facet_evidence import SelectionPolicy
 from trec_rag.facet_extraction import (
     FacetPlanningResult,
@@ -571,6 +571,23 @@ def _retrieve_topic(
     evidence_bundle = EvidenceBundle.from_retrieval_rows(
         topic_id=topic.id,
         rows=bundle_rows,
+        lane_records=tuple(
+            BundleLane(
+                lane_id=lane.retrieval_query.variant_name,
+                lane_kind=(
+                    "narrative" if lane.subnarrative_id is None else "subnarrative"
+                ),
+                query_text=lane.retrieval_query.query_text,
+                query_text_sha256=lane.bm25_query_sha256,
+                parent_lane_id=(
+                    None if lane.subnarrative_id is None else "original"
+                ),
+                producer=str(
+                    identity.get("name") or identity.get("type") or "retriever"
+                ),
+            )
+            for lane in lanes
+        ),
     )
     _write_json(root / artifacts[0], decomposition_record)
     _write_json(root / artifacts[1], audit)

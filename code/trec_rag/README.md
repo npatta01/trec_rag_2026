@@ -186,15 +186,17 @@ cache locations, model/index identities, depths, selection policy, evidence
 budget, claim limit, and supporting-document limit. Output paths and run tags
 are conventions, not configuration knobs.
 
-A completed run publishes these six conventional files beneath the experiment
+A completed run publishes these three conventional files beneath the experiment
 directory:
 
 - `r_output_trec_rag_2026.tsv`: the variable-depth official evidence run;
-- `retrieval_candidate_pool.trec`: a broader diagnostic pool;
 - `retrieval_with_text.jsonl.zip`: the mandatory full-text archive;
-- `retrieval_provenance.jsonl`: source and selection provenance;
-- `resolved_config.yaml`: normalized non-secret settings and topic-source hash;
 - `retrieval_export_manifest.json`: the manifest-last export seal.
+
+The official run and full-text archive are deterministic projections of each
+topic's validated Evidence Bundle. Candidate-pool, provenance, and resolved
+configuration sidecars are not exported; their sealed stage inputs remain
+available inside the private per-topic checkpoints when needed for validation.
 
 Per-topic stages are also sealed by hashes through
 `<topic-id>/canonical/complete.json`. Resume revalidates checkpoint schemas,
@@ -277,10 +279,12 @@ Downstream consumption:
   context, but any newly retrieved documents or agent-produced evidence must be
   recorded as a new bundle revision instead of being hidden only in trace logs
 
-Compatibility note:
+Migration note:
 - the bundle is the cross-stage contract; decomposition, evidence, and nugget
   records remain stage-local, while retrieval checkpoints now include the
-  sealed bundle artifact as an additional handoff
+  sealed bundle artifact as the retrieval handoff. The exporter no longer
+  publishes the superseded candidate-pool, provenance, or resolved-config
+  sidecars.
 
 ## Competition fixed-retrieval RAG inputs
 

@@ -10,6 +10,7 @@ import pytest
 
 from trec_rag import evidence_bundle as evidence_bundle_module
 from trec_rag.evidence_bundle import (
+    BundleLane,
     BundleSelection,
     BundleSelectionMember,
     BundleNugget,
@@ -80,6 +81,32 @@ def test_from_retrieval_rows_preserves_multi_lane_document_membership() -> None:
         ("narrative", "doc-shared", 1),
         ("agentic.a", "doc-shared", 2),
     ]
+
+
+def test_from_retrieval_rows_preserves_seeded_empty_lanes() -> None:
+    query = "A generated subnarrative with no hits."
+    empty_lane = BundleLane(
+        lane_id="sub.empty",
+        lane_kind="subnarrative",
+        query_text=query,
+        query_text_sha256=_digest(query),
+        parent_lane_id="narrative",
+        producer="retriever-v1",
+    )
+
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=_retrieval_rows(),
+        lane_records=(empty_lane,),
+    )
+
+    assert "sub.empty" in {lane.lane_id for lane in bundle.lanes}
+    assert bundle.selections[0].source_lane_ids == (
+        "agentic.a",
+        "narrative",
+        "sub.empty",
+    )
+    assert bundle.selections[0].document_ids == ("doc-shared", "doc-unique")
 
 
 def test_validation_checks_natural_union_counts() -> None:
@@ -510,7 +537,13 @@ def _projection_bundle() -> EvidenceBundle:
         lanes=(*bundle.lanes, subnarrative_lane),
         evidence=evidence,
         nuggets=nuggets,
-        selections=selections,
+        selections=(
+            replace(
+                selections[0],
+                source_lane_ids=("agentic.a", "narrative", "sub.alpha"),
+            ),
+            *selections[1:],
+        ),
     )
     enriched.validate()
     return enriched
@@ -654,6 +687,22 @@ def test_to_trec_run_uses_explicit_selection_and_rank_order_without_top_100() ->
         ("224", "doc-a", 1, 2, "agentic_only"),
         ("224", "doc-c", 2, 1, "agentic_only"),
     )
+
+
+def test_with_ranked_selection_records_rejections_and_explicit_order() -> None:
+    bundle = _bundle().with_ranked_selection(
+        selection_id="official",
+        document_ids=("doc-unique",),
+        policy="canonical_supported",
+    )
+
+    selection = next(row for row in bundle.selections if row.selection_id == "official")
+    assert selection.document_ids == ("doc-unique",)
+    assert [(member.docid, member.included, member.output_rank, member.rejection_reason)
+            for member in selection.members] == [
+        ("doc-shared", False, None, "not_selected"),
+        ("doc-unique", True, 1, None),
+    ]
 
 
 def test_natural_union_preserves_more_than_100_unranked_documents() -> None:
@@ -933,6 +982,34 @@ def test_write_fixed_rag_inputs_writes_deterministic_run_and_document_sidecars(
     with zipfile.ZipFile(outputs["documents_zip"]) as archive:
         assert archive.namelist() == ["retrieval_with_text.jsonl"]
         assert archive.read("retrieval_with_text.jsonl") == outputs["documents_jsonl"].read_bytes()
+
+
+def test_fixed_rag_query_projection_rejects_lossy_tsv_text(tmp_path: Path) -> None:
+    query = "Preserve this line.\nAnd this one."
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=[
+            {
+                "lane_id": "narrative",
+                "lane_kind": "narrative",
+                "query_text": query,
+                "docid": "doc-only",
+                "text": "Only document.",
+                "rank": 1,
+                "score": 1.0,
+                "retriever": "bm25",
+            }
+        ],
+    ).with_ranked_selection(
+        selection_id="official",
+        document_ids=("doc-only",),
+        policy="official",
+    )
+
+    with pytest.raises(ValueError, match="cannot represent tabs or line breaks"):
+        evidence_bundle_module.write_fixed_rag_package(
+            [bundle], tmp_path, selection_id="official"
+        )
 
 
 def test_validation_rejects_evidence_without_lane_support() -> None:

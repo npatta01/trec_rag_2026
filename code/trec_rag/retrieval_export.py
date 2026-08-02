@@ -15,8 +15,6 @@ import tempfile
 from typing import Any, Mapping, Sequence
 import zipfile
 
-import yaml
-
 from trec_rag.facet_pilot_config import FacetPilotConfig
 from trec_rag.evidence_bundle import EvidenceBundle
 from trec_rag.facet_retrieval import (
@@ -32,7 +30,23 @@ from trec_rag.topics import Topic, load_narrative_topics
 
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-_EXPORT_SCHEMA = "retrieval_export_manifest_v2"
+_EXPORT_SCHEMA = "retrieval_export_manifest_v3"
+_LEGACY_EXPORT_ARTIFACTS = frozenset(
+    {
+        "r_output_trec_rag_2026.tsv",
+        "retrieval_candidate_pool.trec",
+        "retrieval_with_text.jsonl.zip",
+        "retrieval_provenance.jsonl",
+        "resolved_config.yaml",
+    }
+)
+_LEGACY_DIAGNOSTIC_ARTIFACTS = frozenset(
+    {
+        "retrieval_candidate_pool.trec",
+        "retrieval_provenance.jsonl",
+        "resolved_config.yaml",
+    }
+)
 _RETRIEVAL_ARTIFACTS = frozenset(
     {
         "decomposition.json",
@@ -208,10 +222,7 @@ _PASSAGE_FIELDS = frozenset(
 @dataclass(frozen=True)
 class RetrievalExportReceipt:
     official_run: Path
-    candidate_pool_run: Path
     with_text_archive: Path
-    provenance: Path
-    resolved_config: Path
     manifest: Path
 
 
@@ -228,6 +239,7 @@ class _SelectedDocument:
 @dataclass(frozen=True)
 class _TopicProjection:
     topic: Topic
+    bundle: EvidenceBundle
     selected: tuple[_SelectedDocument, ...]
     supported_docids: frozenset[str]
     original_only_fallback: bool
@@ -250,98 +262,32 @@ def export_retrieval_run(
         raise ValueError("code commit must be a full lowercase SHA-1")
     selected_topics = tuple(topics)
     _validate_topics(selected_topics)
+    _remove_legacy_export_outputs(config.output_dir)
     _validate_existing_export(
         config.output_dir,
         run_id=config.run_id,
-        required_topic_ids=None,
+        required_topic_ids=tuple(topic.id for topic in selected_topics),
+        allow_topic_expansion=True,
     )
 
     projections = tuple(_load_topic_projection(config, topic) for topic in selected_topics)
     official_rows: list[tuple[str, str, int, int, str]] = []
-    candidate_rows: list[tuple[str, str, int, int, str]] = []
-    for projection in projections:
-        final = _final_documents(projection)
-        if not final:
-            raise ValueError(f"selected topic {projection.topic.id!r} has no supported document")
-        official_rows.extend(
-            (
-                projection.topic.id,
-                row.docid,
-                rank,
-                len(final) - rank + 1,
-                config.run_id,
-            )
-            for rank, row in enumerate(final, start=1)
-        )
-        candidate_rows.extend(
-            (
-                projection.topic.id,
-                row.docid,
-                rank,
-                len(projection.selected) - rank + 1,
-                f"{config.run_id}-candidate-pool",
-            )
-            for rank, row in enumerate(projection.selected, start=1)
-        )
-
-    official_bytes = _trec_bytes(official_rows)
-    candidate_bytes = _trec_bytes(candidate_rows)
-    _validate_trec_bytes(official_bytes, official_rows)
-    _validate_trec_bytes(candidate_bytes, candidate_rows)
-
     with_text_rows: list[dict[str, object]] = []
-    provenance_rows: list[dict[str, object]] = []
     topic_depths: dict[str, dict[str, int]] = {}
     source_seals: dict[str, dict[str, str]] = {}
     for projection in projections:
-        final = _final_documents(projection)
-        stage = (
-            "original_only_fallback"
-            if projection.original_only_fallback
-            else "canonical_supported"
+        bundle = projection.bundle
+        official = bundle.to_trec_run(
+            selection_id="official",
+            run_tag=config.run_id,
         )
-        with_text_rows.append(
-            {
-                "query": {
-                    "qid": projection.topic.id,
-                    "text": projection.topic.narrative,
-                },
-                "candidates": [
-                    {
-                        "docid": document.docid,
-                        "rank": rank,
-                        "score": len(final) - rank + 1,
-                        "doc": document.text,
-                        "index": config.retrieval.index,
-                        "stage": stage,
-                    }
-                    for rank, document in enumerate(final, start=1)
-                ],
-            }
-        )
-        for rank, document in enumerate(final, start=1):
-            provenance_row = {
-                "topic_id": projection.topic.id,
-                "docid": document.docid,
-                "rank": rank,
-                "score": len(final) - rank + 1,
-                "selection_rank": document.rank,
-                "selected_from_lane": document.selected_from_lane,
-                "selected_from_lane_rank": document.selected_from_lane_rank,
-                "memberships": list(projection.memberships[document.docid]),
-                "subnarrative_scores": list(projection.scores[document.docid]),
-                "nuggets": list(projection.nuggets[document.docid]),
-                "source_seals": {
-                    "scoring_manifest_sha256": projection.scoring_manifest_sha256,
-                    "canonical_manifest_sha256": projection.canonical_manifest_sha256,
-                },
-            }
-            if projection.original_only_fallback:
-                provenance_row["stage"] = stage
-            provenance_rows.append(provenance_row)
+        if not official:
+            raise ValueError(f"selected topic {projection.topic.id!r} has no supported document")
+        official_rows.extend(official)
+        with_text_rows.extend(bundle.to_document_records(selection_id="official"))
         topic_depths[projection.topic.id] = {
-            "official": len(final),
-            "candidate_pool": len(projection.selected),
+            "natural_union": bundle.natural_document_count,
+            "official": len(official),
         }
         source_seals[projection.topic.id] = {
             "scoring_manifest_sha256": projection.scoring_manifest_sha256,
@@ -349,28 +295,18 @@ def export_retrieval_run(
             "source_code_commit": projection.source_code_commit,
         }
 
+    official_bytes = _trec_bytes(official_rows)
+    _validate_trec_bytes(official_bytes, official_rows)
     with_text_jsonl = _jsonl_bytes(with_text_rows)
-    provenance_bytes = _jsonl_bytes(provenance_rows)
     archive_bytes = _deterministic_zip(with_text_jsonl)
-    resolved_bytes = yaml.safe_dump(
-        config.resolved_payload(selected_topics),
-        allow_unicode=True,
-        sort_keys=True,
-    ).encode("utf-8")
 
     output_dir = config.output_dir
     official_run = output_dir / "r_output_trec_rag_2026.tsv"
-    candidate_pool_run = output_dir / "retrieval_candidate_pool.trec"
     with_text_archive = output_dir / "retrieval_with_text.jsonl.zip"
-    provenance = output_dir / "retrieval_provenance.jsonl"
-    resolved_config = output_dir / "resolved_config.yaml"
     manifest = output_dir / "retrieval_export_manifest.json"
     artifacts = {
         official_run.name: official_bytes,
-        candidate_pool_run.name: candidate_bytes,
         with_text_archive.name: archive_bytes,
-        provenance.name: provenance_bytes,
-        resolved_config.name: resolved_bytes,
     }
     manifest_body = _canonical_json_bytes(
         {
@@ -384,9 +320,7 @@ def export_retrieval_run(
             "score_semantics": "ordinal_selection_order",
             "topic_depths": topic_depths,
             "source_seals": source_seals,
-            "resolved_config_sha256": sha256(resolved_bytes).hexdigest(),
             "official_row_count": len(official_rows),
-            "candidate_pool_row_count": len(candidate_rows),
             "artifacts": {
                 name: {"bytes": len(body), "sha256": sha256(body).hexdigest()}
                 for name, body in artifacts.items()
@@ -398,19 +332,13 @@ def export_retrieval_run(
         manifest.unlink()
     for path, body in (
         (official_run, official_bytes),
-        (candidate_pool_run, candidate_bytes),
         (with_text_archive, archive_bytes),
-        (provenance, provenance_bytes),
-        (resolved_config, resolved_bytes),
     ):
         _atomic_write(path, body)
     _atomic_write(manifest, manifest_body)
     return RetrievalExportReceipt(
         official_run=official_run,
-        candidate_pool_run=candidate_pool_run,
         with_text_archive=with_text_archive,
-        provenance=provenance,
-        resolved_config=resolved_config,
         manifest=manifest,
     )
 
@@ -440,10 +368,7 @@ def read_retrieval_export_receipt(
     )
     return RetrievalExportReceipt(
         official_run=config.output_dir / "r_output_trec_rag_2026.tsv",
-        candidate_pool_run=config.output_dir / "retrieval_candidate_pool.trec",
         with_text_archive=config.output_dir / "retrieval_with_text.jsonl.zip",
-        provenance=config.output_dir / "retrieval_provenance.jsonl",
-        resolved_config=config.output_dir / "resolved_config.yaml",
         manifest=manifest,
     )
 
@@ -487,6 +412,7 @@ def _validate_existing_export(
     *,
     run_id: str,
     required_topic_ids: tuple[str, ...] | None,
+    allow_topic_expansion: bool = False,
 ) -> None:
     manifest_path = output_dir / "retrieval_export_manifest.json"
     if not manifest_path.exists():
@@ -503,9 +429,7 @@ def _validate_existing_export(
         "score_semantics",
         "topic_depths",
         "source_seals",
-        "resolved_config_sha256",
         "official_row_count",
-        "candidate_pool_row_count",
         "artifacts",
     }
     recorded_topic_ids = manifest.get("selected_topic_ids")
@@ -531,7 +455,11 @@ def _validate_existing_export(
         or set(source_seals) != set(recorded_topic_ids)
         or (
             required_topic_ids is not None
-            and recorded_topic_ids != list(required_topic_ids)
+            and (
+                not set(recorded_topic_ids) <= set(required_topic_ids)
+                if allow_topic_expansion
+                else recorded_topic_ids != list(required_topic_ids)
+            )
         )
         or manifest.get("score_semantics") != "ordinal_selection_order"
     ):
@@ -550,14 +478,10 @@ def _validate_existing_export(
     artifacts = manifest.get("artifacts")
     expected_names = {
         "r_output_trec_rag_2026.tsv",
-        "retrieval_candidate_pool.trec",
         "retrieval_with_text.jsonl.zip",
-        "retrieval_provenance.jsonl",
-        "resolved_config.yaml",
     }
     if not isinstance(artifacts, dict) or set(artifacts) != expected_names:
         raise ValueError("existing export artifact receipts changed")
-    resolved_config_body: bytes | None = None
     for name in sorted(expected_names):
         receipt = artifacts[name]
         if (
@@ -575,26 +499,25 @@ def _validate_existing_export(
             or sha256(body).hexdigest() != receipt["sha256"]
         ):
             raise ValueError("existing export artifact hash changed")
-        if name == "resolved_config.yaml":
-            resolved_config_body = body
-    if resolved_config_body is None:
-        raise ValueError("existing export resolved config is missing")
+
+
+def _remove_legacy_export_outputs(output_dir: Path) -> None:
+    """Delete superseded diagnostic export files from the explicitly replaced path."""
+    manifest_path = output_dir / "retrieval_export_manifest.json"
+    for name in _LEGACY_DIAGNOSTIC_ARTIFACTS:
+        (output_dir / name).unlink(missing_ok=True)
+    if not manifest_path.exists():
+        return
     try:
-        resolved_config = yaml.safe_load(resolved_config_body.decode("utf-8"))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise ValueError("existing export resolved config changed") from exc
-    resolved_topics = (
-        resolved_config.get("topics")
-        if isinstance(resolved_config, dict)
-        else None
-    )
-    if (
-        manifest.get("resolved_config_sha256")
-        != sha256(resolved_config_body).hexdigest()
-        or not isinstance(resolved_topics, dict)
-        or resolved_topics.get("selected_topic_ids") != recorded_topic_ids
-    ):
-        raise ValueError("existing export manifest identity changed")
+        manifest = _manifest(manifest_path.read_bytes(), "existing export manifest")
+    except (OSError, ValueError):
+        return
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != _LEGACY_EXPORT_ARTIFACTS:
+        return
+    for name in _LEGACY_EXPORT_ARTIFACTS:
+        (output_dir / name).unlink(missing_ok=True)
+    manifest_path.unlink(missing_ok=True)
 
 
 def _load_topic_projection(
@@ -614,6 +537,7 @@ def _load_topic_projection(
         original_only_fallback,
         decomposition,
         retrieval_audit,
+        retrieval_bundle,
     ) = _validate_retrieval_source_chain(
         topic_root,
         scoring_manifest,
@@ -692,6 +616,11 @@ def _load_topic_projection(
         ),
         allow_empty=original_only_fallback,
     )
+    candidate_bundle = retrieval_bundle.with_ranked_selection(
+        selection_id="candidate_pool",
+        document_ids=tuple(row.docid for row in selected),
+        policy="scoring_selection",
+    )
     nugget_manifest = _validate_canonical_nugget_manifest(
         topic_root,
         canonical_manifest,
@@ -747,8 +676,23 @@ def _load_topic_projection(
         )
         for document in selected
     }
+    final_document_ids = tuple(
+        row.docid
+        for row in selected
+        if original_only_fallback or row.docid in supported_docids
+    )
+    bundle = candidate_bundle.with_ranked_selection(
+        selection_id="official",
+        document_ids=final_document_ids,
+        policy=(
+            "original_only_fallback"
+            if original_only_fallback
+            else "canonical_supported"
+        ),
+    )
     return _TopicProjection(
         topic,
+        bundle,
         selected,
         frozenset(supported_docids),
         original_only_fallback,
@@ -842,7 +786,7 @@ def _validate_retrieval_source_chain(
     config: FacetPilotConfig,
     topic: Topic,
     source_commit: str,
-) -> tuple[bool, Any, tuple[Any, ...]]:
+) -> tuple[bool, Any, tuple[Any, ...], EvidenceBundle]:
     retrieval_path = topic_root / "retrieval" / "complete.json"
     retrieval_bytes = retrieval_path.read_bytes()
     if scoring_manifest.get("retrieval_manifest_sha256") != sha256(
@@ -872,7 +816,7 @@ def _validate_retrieval_source_chain(
     if _validate_receipts(topic_root, retrieval) != _RETRIEVAL_ARTIFACTS:
         raise ValueError("retrieval checkpoint artifact set changed")
     try:
-        EvidenceBundle.from_dict(
+        retrieval_bundle = EvidenceBundle.from_dict(
             _strict_json(
                 (topic_root / "retrieval/evidence-bundle.json").read_bytes(),
                 "retrieval evidence bundle",
@@ -913,7 +857,64 @@ def _validate_retrieval_source_chain(
         (topic_root / "retrieval" / "audit.json").read_bytes(),
         requested_depth=config.retrieval.candidate_depth_per_query,
     )
-    return decomposition.result.used_fallback, decomposition, audit
+    _validate_bundle_against_retrieval_audit(
+        retrieval_bundle,
+        topic,
+        audit,
+    )
+    return decomposition.result.used_fallback, decomposition, audit, retrieval_bundle
+
+
+def _validate_bundle_against_retrieval_audit(
+    bundle: EvidenceBundle,
+    topic: Topic,
+    audit: tuple[Any, ...],
+) -> None:
+    if bundle.topic_id != topic.id:
+        raise ValueError("retrieval evidence bundle topic identity changed")
+    narrative_lanes = tuple(
+        lane for lane in bundle.lanes if lane.lane_kind == "narrative"
+    )
+    if len(narrative_lanes) != 1 or narrative_lanes[0].query_text != topic.narrative:
+        raise ValueError("retrieval evidence bundle narrative identity changed")
+    expected_events = {
+        (lane.lane.retrieval_query.variant_name, candidate.docid): (
+            candidate.bm25_rank,
+            candidate.bm25_score,
+            candidate.text_sha256,
+        )
+        for lane in audit
+        for candidate in lane.candidates
+    }
+    documents = {document.docid: document for document in bundle.documents}
+    actual_events = {
+        (event.lane_id, event.docid): event
+        for event in bundle.retrieval_events
+    }
+    if (
+        len(actual_events) != len(bundle.retrieval_events)
+        or len(expected_events)
+        != sum(len(lane.candidates) for lane in audit)
+        or set(actual_events) != set(expected_events)
+    ):
+        raise ValueError("retrieval evidence bundle events differ from retrieval audit")
+    for key, (rank, score, text_sha256) in expected_events.items():
+        event = actual_events[key]
+        if (
+            event.rank != rank
+            or event.score != score
+            or documents[event.docid].text_sha256 != text_sha256
+        ):
+            raise ValueError("retrieval evidence bundle event differs from retrieval audit")
+    expected_queries = {
+        lane.lane.retrieval_query.variant_name: lane.lane.retrieval_query.query_text
+        for lane in audit
+    }
+    if {lane.lane_id for lane in bundle.lanes} != set(expected_queries):
+        raise ValueError("retrieval evidence bundle lanes differ from retrieval audit")
+    for lane in bundle.lanes:
+        if lane.query_text != expected_queries[lane.lane_id]:
+            raise ValueError("retrieval evidence bundle query differs from retrieval audit")
 
 
 def _validate_canonical_manifest(

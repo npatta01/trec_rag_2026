@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import io
 import json
@@ -307,6 +307,11 @@ class EvidenceBundle:
             raise ValueError(
                 "bundle requires exactly one natural_union selection"
             )
+        natural_union = natural_union_selections[0]
+        if set(natural_union.source_lane_ids) != set(lane_map):
+            raise ValueError("natural_union selection must cover every lane")
+        if set(natural_union.document_ids) != set(document_map):
+            raise ValueError("natural_union selection must cover every document")
 
         evidence_map: dict[str, EvidenceSpan] = {}
         for span in self.evidence:
@@ -370,11 +375,17 @@ class EvidenceBundle:
                     raise ValueError(f"unknown evidence for nugget {nugget.nugget_id}: {evidence_id}")
             nugget_map[nugget.nugget_id] = nugget
 
-    def to_trec_run(self, *, selection_id: str) -> tuple[tuple[str, str, int, int, str], ...]:
+    def to_trec_run(
+        self,
+        *,
+        selection_id: str,
+        run_tag: str | None = None,
+    ) -> tuple[tuple[str, str, int, int, str], ...]:
         selected = self._selected_documents(selection_id)
         total = len(selected)
+        tag = selection_id if run_tag is None else run_tag
         return tuple(
-            (self.topic_id, document.docid, rank, total - rank + 1, selection_id)
+            (self.topic_id, document.docid, rank, total - rank + 1, tag)
             for rank, document in enumerate(selected, start=1)
         )
 
@@ -503,6 +514,63 @@ class EvidenceBundle:
             (self,), output_dir, selection_id=selection_id
         )
         return {key: value for key, value in outputs.items() if key != "queries"}
+
+    def with_ranked_selection(
+        self,
+        *,
+        selection_id: str,
+        document_ids: Sequence[str],
+        policy: str,
+        rejection_reason: str = "not_selected",
+        source_lane_ids: Sequence[str] | None = None,
+    ) -> EvidenceBundle:
+        """Add a named, explicitly ranked projection over the natural union."""
+        self.validate()
+        if any(selection.selection_id == selection_id for selection in self.selections):
+            raise ValueError(f"duplicate selection_id: {selection_id}")
+        ordered_ids = tuple(document_ids)
+        if len(set(ordered_ids)) != len(ordered_ids):
+            raise ValueError("ranked selection document IDs must be unique")
+        lane_id_values = (
+            tuple(sorted(lane.lane_id for lane in self.lanes))
+            if source_lane_ids is None
+            else tuple(sorted(source_lane_ids))
+        )
+        if len(set(lane_id_values)) != len(lane_id_values):
+            raise ValueError("ranked selection source lanes must be unique")
+        document_ids_in_scope = {
+            event.docid
+            for event in self.retrieval_events
+            if event.lane_id in lane_id_values
+        }
+        if not set(ordered_ids) <= document_ids_in_scope:
+            raise ValueError("ranked selection contains a document outside its source lanes")
+        rank_by_docid = {docid: rank for rank, docid in enumerate(ordered_ids, start=1)}
+        members = tuple(
+            BundleSelectionMember(
+                docid=docid,
+                included=docid in rank_by_docid,
+                output_rank=rank_by_docid.get(docid),
+                rejection_reason=None
+                if docid in rank_by_docid
+                else rejection_reason,
+            )
+            for docid in sorted(document_ids_in_scope)
+        )
+        result = replace(
+            self,
+            selections=(
+                *self.selections,
+                BundleSelection(
+                    selection_id=selection_id,
+                    source_lane_ids=lane_id_values,
+                    members=members,
+                    policy=policy,
+                ),
+            ),
+        )
+        result.validate()
+        return result
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -817,11 +885,19 @@ class EvidenceBundle:
         topic_id: str,
         rows: Iterable[Mapping[str, object]],
         trace_refs: Iterable[TraceReference] = (),
+        lane_records: Iterable[BundleLane] = (),
     ) -> EvidenceBundle:
         lane_rows: dict[str, BundleLane] = {}
         document_texts: dict[str, tuple[str, str]] = {}
         document_lanes: dict[str, set[str]] = defaultdict(set)
         events: list[RetrievalEvent] = []
+
+        for lane in lane_records:
+            if not isinstance(lane, BundleLane):
+                raise TypeError("lane_records must contain BundleLane values")
+            if lane.lane_id in lane_rows and lane_rows[lane.lane_id] != lane:
+                raise ValueError(f"inconsistent lane metadata for {lane.lane_id}")
+            lane_rows[lane.lane_id] = lane
 
         for index, row in enumerate(rows, start=1):
             lane_id = _expect_str(row, "lane_id")
@@ -1046,7 +1122,11 @@ def write_fixed_rag_package(
     for bundle in ordered_bundles:
         bundle.validate()
         query = bundle._topic_query()
-        query_rows.append((bundle.topic_id, " ".join(query.query_text.split())))
+        if any(character in query.query_text for character in "\t\r\n"):
+            raise ValueError(
+                "fixed-RAG query TSV cannot represent tabs or line breaks without loss"
+            )
+        query_rows.append((bundle.topic_id, query.query_text))
         trec_rows.extend(bundle.to_trec_run(selection_id=selection_id))
         document_records.extend(bundle.to_document_records(selection_id=selection_id))
         context_records.extend(bundle.to_fixed_rag_context(selection_id=selection_id))

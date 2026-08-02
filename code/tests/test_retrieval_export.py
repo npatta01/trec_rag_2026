@@ -68,10 +68,7 @@ def _root_artifact_bodies(receipt: RetrievalExportReceipt) -> dict[str, bytes]:
         path.name: path.read_bytes()
         for path in (
             receipt.official_run,
-            receipt.candidate_pool_run,
             receipt.with_text_archive,
-            receipt.provenance,
-            receipt.resolved_config,
         )
     }
 
@@ -911,7 +908,7 @@ def test_export_rejects_resigned_canonical_evidence_absent_from_sealed_selection
         export_retrieval_run(config, (topic,), code_commit="b" * 40)
 
 
-def test_export_writes_exact_variable_depth_official_and_candidate_runs(
+def test_export_writes_exact_variable_depth_official_run_without_legacy_sidecars(
     tmp_path: Path,
 ) -> None:
     config, topics = _config_and_topics(tmp_path)
@@ -922,6 +919,12 @@ def test_export_writes_exact_variable_depth_official_and_candidate_runs(
         supported=("doc-a", "doc-c"),
         source_commit="a" * 40,
     )
+    for name in (
+        "retrieval_candidate_pool.trec",
+        "retrieval_provenance.jsonl",
+        "resolved_config.yaml",
+    ):
+        (config.output_dir / name).write_text("legacy\n", encoding="utf-8")
 
     receipt = export_retrieval_run(config, topics, code_commit="a" * 40)
 
@@ -929,11 +932,9 @@ def test_export_writes_exact_variable_depth_official_and_candidate_runs(
         b"rag2026-0 Q0 doc-a 1 2 demo\n"
         b"rag2026-0 Q0 doc-c 2 1 demo\n"
     )
-    assert receipt.candidate_pool_run.read_bytes() == (
-        b"rag2026-0 Q0 doc-b 1 3 demo-candidate-pool\n"
-        b"rag2026-0 Q0 doc-a 2 2 demo-candidate-pool\n"
-        b"rag2026-0 Q0 doc-c 3 1 demo-candidate-pool\n"
-    )
+    assert not (config.output_dir / "retrieval_candidate_pool.trec").exists()
+    assert not (config.output_dir / "retrieval_provenance.jsonl").exists()
+    assert not (config.output_dir / "resolved_config.yaml").exists()
 
 
 def test_export_streams_the_sealed_candidate_ledger(
@@ -965,7 +966,7 @@ def test_export_streams_the_sealed_candidate_ledger(
     assert receipt.official_run.read_text() == "rag2026-0 Q0 doc-a 1 1 demo\n"
 
 
-def test_export_writes_deterministic_full_text_provenance_and_manifest(
+def test_export_writes_deterministic_bundle_projections_and_manifest(
     tmp_path: Path,
 ) -> None:
     config, topics = _config_and_topics(tmp_path)
@@ -985,31 +986,29 @@ def test_export_writes_deterministic_full_text_provenance_and_manifest(
     with zipfile.ZipFile(second.with_text_archive) as archive:
         assert archive.namelist() == ["retrieval_with_text.jsonl"]
         row = json.loads(archive.read("retrieval_with_text.jsonl"))
-    assert row["query"] == {"qid": "rag2026-0", "text": topics[0].narrative}
+    assert row["query"] == {
+        "qid": "rag2026-0",
+        "selection_id": "official",
+        "text": topics[0].narrative,
+        "text_sha256": sha256(topics[0].narrative.encode("utf-8")).hexdigest(),
+    }
     assert row["candidates"][0]["doc"] == "Full text for doc-a."
-    assert row["candidates"][0]["stage"] == "canonical_supported"
-    provenance = _read_jsonl(second.provenance)
-    assert "stage" not in provenance[0]
-    assert provenance[0]["selected_from_lane"] == "original"
-    assert provenance[0]["selected_from_lane_rank"] == 1
-    assert provenance[0]["memberships"] == [
-        {
-            "lane_name": "original",
-            "aggregate_rank": 1,
-            "aggregate_score": 4.0,
-            "bm25_rank": 1,
-            "bm25_score": 99.0,
-        }
-    ]
-    assert "bm25_score" not in provenance[0]["subnarrative_scores"][0]
-    assert "bm25_rank" not in provenance[0]["subnarrative_scores"][0]
-    assert provenance[0]["nuggets"][0]["canonical_nugget_id"]
+    assert row["candidates"][0]["text_sha256"] == sha256(
+        b"Full text for doc-a."
+    ).hexdigest()
     manifest = json.loads(second.manifest.read_bytes())
-    assert manifest["schema_version"] == "retrieval_export_manifest_v2"
+    assert manifest["schema_version"] == "retrieval_export_manifest_v3"
     assert manifest["export_code_commit"] == "b" * 40
     assert manifest["source_code_commits"] == ["b" * 40]
     assert manifest["score_semantics"] == "ordinal_selection_order"
     assert manifest["artifacts"]["r_output_trec_rag_2026.tsv"]["sha256"]
+    assert set(manifest["artifacts"]) == {
+        "r_output_trec_rag_2026.tsv",
+        "retrieval_with_text.jsonl.zip",
+    }
+    assert not (config.output_dir / "retrieval_candidate_pool.trec").exists()
+    assert not (config.output_dir / "retrieval_provenance.jsonl").exists()
+    assert not (config.output_dir / "resolved_config.yaml").exists()
 
 
 def test_export_rejects_tampered_checkpoint_without_manifest(tmp_path: Path) -> None:
@@ -1261,7 +1260,7 @@ def test_export_rejects_fallback_score_from_nonoriginal_query(
     selection_path.write_bytes(_canonical_json(selection))
     _resign_scoring_artifact(topic_root, "scoring/selection.json")
 
-    with pytest.raises(ValueError, match="original narrative query"):
+    with pytest.raises(ValueError, match="retrieval evidence bundle"):
         export_retrieval_run(config, topics, code_commit="c" * 40)
 
 
