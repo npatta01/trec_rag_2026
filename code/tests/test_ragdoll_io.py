@@ -164,6 +164,19 @@ def test_support_rows_reject_a_reference_without_document_text(tmp_path: Path) -
         ragdoll_io.resolved_support_rows(submission, documents)
 
 
+def test_support_rows_allow_an_uncited_reference(tmp_path: Path) -> None:
+    """The task reference states uncited references are valid and do not hurt the score."""
+    record = _submission_record()
+    record["answer"] = [{"text": "Only the first source is cited.", "citations": [0]}]
+    submission = _write_jsonl(tmp_path / "rag.jsonl", [record])
+    documents = _documents_file(tmp_path / "documents.jsonl", ["climbmix-a"])
+
+    rows = ragdoll_io.resolved_support_rows(submission, documents)
+
+    assert rows[0]["references"] == ["climbmix-a", "climbmix-b"]
+    assert set(rows[0]["segments"]) == {"climbmix-a"}
+
+
 def test_support_rows_reject_a_citation_outside_references(tmp_path: Path) -> None:
     """A foreign docid citation would be silently dropped from RAGDoll's denominator."""
     record = _submission_record()

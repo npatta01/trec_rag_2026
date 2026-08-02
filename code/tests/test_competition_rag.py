@@ -1471,6 +1471,33 @@ def test_generation_normalizes_duplicate_citations_end_to_end(tmp_path: Path) ->
     assert rows[0]["answer"][0]["citations"] == [0]
 
 
+def test_resume_refuses_rows_generated_under_different_settings(tmp_path: Path) -> None:
+    """Resume reuses saved rows; shape revalidation cannot detect a changed model or prompt."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    changed = replace(config, resume=True, prompt_profile="focused_citations_tail")
+    with pytest.raises(ValueError, match="different settings"):
+        asyncio.run(run_generation(changed, FakeGenerator({"rag2026-1": generated})))
+
+
+def test_resume_accepts_rows_generated_under_the_same_settings(tmp_path: Path) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    resumed = FakeGenerator({})
+    asyncio.run(run_generation(replace(config, resume=True), resumed))
+    assert resumed.calls == [], "resume should reuse the saved row without regenerating"
+
+
 def test_persisted_raw_responses_and_errors_redact_configured_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

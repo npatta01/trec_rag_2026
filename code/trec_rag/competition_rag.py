@@ -1472,6 +1472,43 @@ def _clear_generation_artifacts(config: RagGenerationConfig) -> None:
         _fsync_directory(config.output_path.parent)
 
 
+def _generation_identity(config: RagGenerationConfig) -> dict[str, Any]:
+    """Return the settings that make already-generated rows comparable.
+
+    Resuming reuses rows produced by an earlier invocation. Those rows are revalidated for
+    shape, but shape cannot detect that they came from a different model or prompt, so a resume
+    after any of these changed would publish one file containing answers from two systems.
+    """
+    return {
+        "model": config.model,
+        "provider": config.provider,
+        "reasoning_effort": config.reasoning_effort,
+        "prompt_profile": config.prompt_profile,
+        "structured_output": config.structured_output,
+        "top_k": config.top_k,
+        "max_document_words": config.max_document_words,
+    }
+
+
+def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) -> None:
+    """Refuse to resume into rows generated under different settings."""
+    identity_path = work_dir / "generation_identity.json"
+    identity = _generation_identity(config)
+    if identity_path.exists():
+        recorded = json.loads(identity_path.read_text(encoding="utf-8"))
+        if recorded != identity:
+            changed = sorted(
+                key for key in set(recorded) | set(identity)
+                if recorded.get(key) != identity.get(key)
+            )
+            raise ValueError(
+                "existing generation rows were produced under different settings "
+                f"({', '.join(changed)}); use experiment.mode: overwrite or a new experiment.id"
+            )
+        return
+    _write_json(identity_path, identity)
+
+
 async def _run_generation_locked(
     config: RagGenerationConfig, generator: JsonGenerator
 ) -> None:
@@ -1495,6 +1532,10 @@ async def _run_generation_locked(
         wanted_docids,
         config.max_document_words,
     )
+    # After the fallible input loading, so a failed overwrite leaves no work directory behind.
+    work_dir.mkdir(parents=True, exist_ok=True)
+    _enforce_generation_identity(config, work_dir)
+
     rows_dir = work_dir / "rows"
     pending: list[tuple[str, str]] = []
     for topic_id, narrative in topics:

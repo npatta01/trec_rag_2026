@@ -232,7 +232,9 @@ def resolved_support_rows(
         if not isinstance(metadata, dict):
             raise ValueError(f"{submission_path}: record is missing a metadata object")
         references = [str(docid) for docid in record["references"]]  # type: ignore[index]
-        missing = [docid for docid in references if docid not in documents]
+        # Only cited documents need text. Uncited references are valid per the task reference
+        # and simply carry no support judgment.
+        missing = [docid for docid in references if docid in cited and docid not in documents]
         if missing:
             raise ValueError(
                 f"{metadata.get('narrative_id')}: no document text for {', '.join(missing)}"
@@ -243,7 +245,9 @@ def resolved_support_rows(
                 "run_id": str(metadata.get("run_id")),
                 "metadata": metadata,
                 "references": references,
-                "segments": {docid: documents[docid] for docid in references},
+                "segments": {
+                    docid: documents[docid] for docid in references if docid in documents
+                },
                 "answer": record["answer"],
             }
         )

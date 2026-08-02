@@ -129,10 +129,16 @@ def select_passages(
             break
 
     if not chosen:
-        # Every chunk exceeds the budget on its own; fall back to a budget-sized prefix of the
-        # best-scoring chunk rather than the document opening.
+        # Every chunk exceeds the budget on its own. Take a budget-sized window centred on the
+        # best chunk's first query-term match; a blind prefix can contain no query terms at all
+        # when the match falls late in the chunk.
         best = chunks[scored[0][1]].text.split()
-        return " ".join(best[:budget_words])
+        first = next(
+            (i for i, word in enumerate(best) if _content_terms(word) and _content_terms(word)[0] in wanted),
+            0,
+        )
+        start = max(0, min(first - budget_words // 2, len(best) - budget_words))
+        return " ".join(best[start : start + budget_words])
 
     chosen.sort()
     return " ... ".join(chunks[index].text for index in chosen)
