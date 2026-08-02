@@ -22,6 +22,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _UNSAFE_TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _BUNDLE_SCHEMA_VERSION = "evidence_bundle_v1"
+_LANE_KINDS = frozenset({"narrative", "subnarrative", "agentic"})
 
 
 def _digest(text: str) -> str:
@@ -172,6 +173,8 @@ class EvidenceBundle:
         for lane in self.lanes:
             _require_identifier(lane.lane_id, field_name="lane_id")
             _require_identifier(lane.lane_kind, field_name="lane_kind")
+            if lane.lane_kind not in _LANE_KINDS:
+                raise ValueError(f"unsupported lane_kind: {lane.lane_kind}")
             _require_text(lane.query_text, field_name="query_text")
             _require_sha256(lane.query_text_sha256, field_name="query_text_sha256")
             if _digest(lane.query_text) != lane.query_text_sha256:
@@ -293,6 +296,17 @@ class EvidenceBundle:
             if expected_input != set(selection.input_document_ids):
                 raise ValueError(f"selection natural union mismatch for {selection.selection_id}")
             selection_map[selection.selection_id] = selection
+
+        natural_union_selections = tuple(
+            selection
+            for selection in self.selections
+            if selection.selection_id == "natural_union"
+            and selection.policy == "natural_union"
+        )
+        if len(natural_union_selections) != 1:
+            raise ValueError(
+                "bundle requires exactly one natural_union selection"
+            )
 
         evidence_map: dict[str, EvidenceSpan] = {}
         for span in self.evidence:
@@ -802,6 +816,7 @@ class EvidenceBundle:
         *,
         topic_id: str,
         rows: Iterable[Mapping[str, object]],
+        trace_refs: Iterable[TraceReference] = (),
     ) -> EvidenceBundle:
         lane_rows: dict[str, BundleLane] = {}
         document_texts: dict[str, tuple[str, str]] = {}
@@ -881,6 +896,7 @@ class EvidenceBundle:
                     ),
                 ),
             ),
+            trace_refs=tuple(trace_refs),
             natural_document_count=len(document_ids),
         )
         bundle.validate()

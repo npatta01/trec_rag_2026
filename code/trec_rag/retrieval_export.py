@@ -18,6 +18,7 @@ import zipfile
 import yaml
 
 from trec_rag.facet_pilot_config import FacetPilotConfig
+from trec_rag.evidence_bundle import EvidenceBundle
 from trec_rag.facet_retrieval import (
     LONG_DOCUMENT_WEIGHT,
     RELATIVE_SPAN_DELTA,
@@ -32,7 +33,13 @@ from trec_rag.topics import Topic, load_narrative_topics
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _EXPORT_SCHEMA = "retrieval_export_manifest_v2"
-_RETRIEVAL_ARTIFACTS = frozenset({"decomposition.json", "retrieval/audit.json"})
+_RETRIEVAL_ARTIFACTS = frozenset(
+    {
+        "decomposition.json",
+        "retrieval/audit.json",
+        "retrieval/evidence-bundle.json",
+    }
+)
 _RETRIEVAL_MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -864,6 +871,15 @@ def _validate_retrieval_source_chain(
         raise ValueError("retrieval checkpoint identity is incompatible with export")
     if _validate_receipts(topic_root, retrieval) != _RETRIEVAL_ARTIFACTS:
         raise ValueError("retrieval checkpoint artifact set changed")
+    try:
+        EvidenceBundle.from_dict(
+            _strict_json(
+                (topic_root / "retrieval/evidence-bundle.json").read_bytes(),
+                "retrieval evidence bundle",
+            )
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("retrieval evidence bundle is invalid") from exc
 
     from trec_rag.competition_retrieval import (
         decode_retrieval_audit,

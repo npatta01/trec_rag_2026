@@ -94,6 +94,40 @@ def test_validation_checks_natural_union_counts() -> None:
         broken.validate()
 
 
+def test_validation_rejects_unknown_lane_kind() -> None:
+    bundle = _bundle()
+    broken_lane = replace(bundle.lanes[0], lane_kind="unsupported")
+
+    with pytest.raises(ValueError, match="unsupported lane_kind"):
+        replace(bundle, lanes=(broken_lane, *bundle.lanes[1:])).validate()
+
+
+def test_validation_requires_natural_union_selection() -> None:
+    bundle = _bundle()
+
+    with pytest.raises(ValueError, match="exactly one natural_union"):
+        replace(bundle, selections=()).validate()
+
+
+def test_from_retrieval_rows_preserves_trace_references() -> None:
+    trace = TraceReference(
+        trace_ref_id="trace.1",
+        trace_kind="agent_trace",
+        trace_sha256=_digest("trace body"),
+    )
+    rows = _retrieval_rows()
+    rows[0]["trace_ref_id"] = trace.trace_ref_id
+
+    bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id="224",
+        rows=rows,
+        trace_refs=(trace,),
+    )
+
+    assert bundle.trace_refs == (trace,)
+    assert bundle.retrieval_events[0].trace_ref_id == trace.trace_ref_id
+
+
 def test_validation_rejects_document_lane_membership_without_retrieval_event() -> None:
     bundle = _bundle()
     shared = next(document for document in bundle.documents if document.docid == "doc-shared")
@@ -288,9 +322,11 @@ def test_deserialization_rejects_incompatible_bundle_schema_version() -> None:
 
 
 def test_round_trip_preserves_explicit_selection_document_order() -> None:
+    bundle = _bundle()
     bundle = replace(
-        _bundle(),
+        bundle,
         selections=(
+            bundle.selections[0],
             BundleSelection(
                 selection_id="ordered",
                 source_lane_ids=("agentic.a", "narrative"),
@@ -310,8 +346,14 @@ def test_round_trip_preserves_explicit_selection_document_order() -> None:
     payload = bundle.to_dict()
     round_tripped = EvidenceBundle.from_dict(payload)
 
-    assert payload["selections"][0]["document_ids"] == ["doc-unique", "doc-shared"]
-    assert round_tripped.selections[0].document_ids == ("doc-unique", "doc-shared")
+    ordered_payload = next(
+        selection for selection in payload["selections"] if selection["selection_id"] == "ordered"
+    )
+    ordered_round_trip = next(
+        selection for selection in round_tripped.selections if selection.selection_id == "ordered"
+    )
+    assert ordered_payload["document_ids"] == ["doc-unique", "doc-shared"]
+    assert ordered_round_trip.document_ids == ("doc-unique", "doc-shared")
 
 
 def test_validation_rejects_duplicate_selection_member_document_ids() -> None:
@@ -958,6 +1000,7 @@ def test_validation_requires_nugget_subnarrative_to_resolve_to_subnarrative_lane
 def test_selection_members_record_inclusion_rank_and_rejection_reason() -> None:
     payload = _bundle().to_dict()
     selection = payload["selections"][0]
+    natural_union = _bundle().to_dict()["selections"][0]
     selection.update(
         {
             "selection_id": "top_one",
@@ -980,20 +1023,27 @@ def test_selection_members_record_inclusion_rank_and_rejection_reason() -> None:
             ],
         }
     )
+    payload["selections"].append(natural_union)
 
     round_tripped = EvidenceBundle.from_dict(payload)
 
+    top_one = next(
+        selection for selection in round_tripped.selections if selection.selection_id == "top_one"
+    )
     assert [
         (member.docid, member.included, member.output_rank, member.rejection_reason)
-        for member in round_tripped.selections[0].members
+        for member in top_one.members
     ] == [
         ("doc-shared", False, None, "context_budget"),
         ("doc-unique", True, 1, None),
     ]
-    assert round_tripped.selections[0].document_ids == ("doc-unique",)
-    assert round_tripped.selections[0].input_count == 2
-    assert round_tripped.selections[0].output_count == 1
-    assert round_tripped.to_dict()["selections"][0]["members"] == selection["members"]
+    assert top_one.document_ids == ("doc-unique",)
+    assert top_one.input_count == 2
+    assert top_one.output_count == 1
+    top_one_payload = next(
+        item for item in round_tripped.to_dict()["selections"] if item["selection_id"] == "top_one"
+    )
+    assert top_one_payload["members"] == selection["members"]
 
 
 def test_natural_union_is_an_unranked_relation_and_cannot_emit_trec_run() -> None:
@@ -1121,9 +1171,9 @@ def test_write_fixed_rag_package_writes_one_deterministic_query_aware_multi_topi
             else lane
             for lane in first.lanes
         ),
-        selections=(first_selection,),
+        selections=(first.selections[0], first_selection),
     )
-    first = replace(first, selections=(first_selection,))
+    first = replace(first, selections=(first.selections[0], first_selection))
 
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"

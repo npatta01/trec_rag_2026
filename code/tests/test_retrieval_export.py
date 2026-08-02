@@ -10,6 +10,7 @@ import zipfile
 import pytest
 
 from trec_rag.canonical_nuggets import run_canonical_stage
+from trec_rag.evidence_bundle import EvidenceBundle
 from trec_rag.facet_pilot_config import (
     ExperimentSettings,
     FacetPilotConfig,
@@ -1752,3 +1753,43 @@ def test_export_validates_canonical_result_completeness(
         export_retrieval_run(config, topics, code_commit="b" * 40)
 
     assert not (config.output_dir / "retrieval_export_manifest.json").exists()
+
+
+def test_retrieval_stage_emits_validated_bundles_for_two_topics(
+    tmp_path: Path,
+) -> None:
+    config, topics = _config_and_topics(tmp_path)
+    second = Topic("rag2026-1", "", "Explain the second demonstrated topic.")
+
+    for topic in (*topics, second):
+        _write_sealed_topic(
+            config.output_dir,
+            topic,
+            selected=("doc-a",),
+            supported=("doc-a",),
+            source_commit="a" * 40,
+        )
+
+    bundles = [
+        EvidenceBundle.from_dict(
+            json.loads(
+                (
+                    config.output_dir
+                    / topic.id
+                    / "retrieval"
+                    / "evidence-bundle.json"
+                ).read_bytes()
+            )
+        )
+        for topic in (*topics, second)
+    ]
+
+    assert [bundle.topic_id for bundle in bundles] == [
+        "rag2026-0",
+        "rag2026-1",
+    ]
+    assert all(bundle.natural_document_count == 1 for bundle in bundles)
+    assert all(
+        bundle.selections[0].selection_id == "natural_union"
+        for bundle in bundles
+    )

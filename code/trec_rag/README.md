@@ -238,6 +238,9 @@ Inputs:
 Outputs:
 - a validated `EvidenceBundle` with frozen lane, document, retrieval-event,
   selection, selection-member, evidence, nugget, and trace-reference records
+- the competition retrieval checkpoint now seals the retrieval-stage bundle at
+  `retrieval/evidence-bundle.json`; it contains the full retained natural
+  document union before any downstream context projection
 - deterministic JSON-compatible dictionaries through `to_dict()` /
   `from_dict()`, wrapped in a top-level `schema_version: evidence_bundle_v1`
   marker; v1 decoding requires the complete relation/key shape and rejects
@@ -275,9 +278,9 @@ Downstream consumption:
   recorded as a new bundle revision instead of being hidden only in trace logs
 
 Compatibility note:
-- the bundle is the cross-stage contract; existing retrieval, decomposition,
-  evidence, and nugget stage schemas remain stage-local and unchanged in this
-  implementation
+- the bundle is the cross-stage contract; decomposition, evidence, and nugget
+  records remain stage-local, while retrieval checkpoints now include the
+  sealed bundle artifact as an additional handoff
 
 ## Competition fixed-retrieval RAG inputs
 
