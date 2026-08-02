@@ -900,6 +900,23 @@ class OpenRouterJsonGenerator:
                     "OpenRouter response must be a JSON object; no repair call was made",
                     safe_response,
                 )
+            # Checked outside the parse guard below, which catches ValueError and would
+            # otherwise rewrite this as a generic malformed-completion error.
+            # Reasoning tokens share the max_tokens budget, so truncation is a real risk, and
+            # grammar-constrained decoding can close the JSON validly while the answer is cut
+            # short, producing a record that passes every downstream check and scores badly.
+            choices = envelope.get("choices")
+            if (
+                isinstance(choices, list)
+                and choices
+                and isinstance(choices[0], dict)
+                and choices[0].get("finish_reason") == "length"
+            ):
+                raise SemanticCompletionError(
+                    "OpenRouter truncated the completion at max_tokens; raise "
+                    "generation.max_tokens rather than accepting a shortened answer",
+                    safe_response,
+                )
             try:
                 message = envelope["choices"][0]["message"]
                 generated = parse_generated_json(_message_text(message.get("content")))
@@ -1472,14 +1489,29 @@ def _clear_generation_artifacts(config: RagGenerationConfig) -> None:
         _fsync_directory(config.output_path.parent)
 
 
+def _file_digest(path: Path) -> str:
+    """Return a streaming sha256 so large document archives do not load into memory."""
+    digest = sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _generation_identity(config: RagGenerationConfig) -> dict[str, Any]:
     """Return the settings that make already-generated rows comparable.
 
     Resuming reuses rows produced by an earlier invocation. Those rows are revalidated for
     shape, but shape cannot detect that they came from a different model or prompt, so a resume
     after any of these changed would publish one file containing answers from two systems.
+
+    The retrieval inputs are digested too. Regenerating them in place between create and resume
+    would otherwise leave earlier rows grounded in evidence that no longer exists, and they
+    would still validate whenever their references happen to survive.
     """
     return {
+        "run_sha256": _file_digest(config.run_path),
+        "documents_sha256": _file_digest(config.documents_path),
         "model": config.model,
         "provider": config.provider,
         "reasoning_effort": config.reasoning_effort,

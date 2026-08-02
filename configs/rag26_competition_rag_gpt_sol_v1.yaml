@@ -32,7 +32,10 @@ generation:
   # contract sits roughly 120k tokens above the generation point.
   prompt_profile: focused_citations_tail
   temperature: null
-  max_tokens: 6000
+  # Reasoning tokens share this budget. Observed answers run 938-1003 words (~2,300 output
+  # tokens), so 6000 fits on average but leaves no room for a heavy-reasoning topic. Tokens are
+  # billed as generated, so headroom is free unless used.
+  max_tokens: 12000
   timeout_seconds: 900
   transport_max_attempts: 3
   concurrency: 4

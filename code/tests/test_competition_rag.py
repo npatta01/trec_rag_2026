@@ -1471,6 +1471,49 @@ def test_generation_normalizes_duplicate_citations_end_to_end(tmp_path: Path) ->
     assert rows[0]["answer"][0]["citations"] == [0]
 
 
+def test_truncated_completion_is_rejected_rather_than_shortened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Grammar-constrained decoding can close the JSON validly while the answer is cut short."""
+    generator = competition_rag.OpenRouterJsonGenerator(
+        api_base="https://openrouter.test",
+        api_key="test-key",
+        model="m",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=10,
+        timeout_seconds=5.0,
+        transport_max_attempts=1,
+    )
+    body = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "references": ["climbmix-a"],
+                            "answer": [{"text": "Cut short.", "citations": [0]}],
+                        }
+                    )
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        competition_rag.requests, "post", lambda *a, **k: FakeHttpResponse(200, body)
+    )
+    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+
+    with pytest.raises(competition_rag.SemanticCompletionError, match="truncated"):
+        generator.complete_json(
+            topic_id="rag2026-1",
+            system_prompt="s",
+            user_prompt="u",
+            response_schema=competition_rag.output_schema(),
+        )
+
+
 def test_resume_refuses_rows_generated_under_different_settings(tmp_path: Path) -> None:
     """Resume reuses saved rows; shape revalidation cannot detect a changed model or prompt."""
     config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
