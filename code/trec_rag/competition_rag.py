@@ -186,19 +186,32 @@ Reference documents:
 Question: {question}
 """
 
+# Every profile records what it measured, not only what it was meant to do, so a later reader
+# does not re-select one that was already tried and rejected. Figures are strict_vital on four
+# development topics against the released gold nuggets; see
+# reports/experiments/dev4_paired_prompt_profile_v1/.
 PROMPT_PROFILES = {
+    # Superseded. Fuses several claims per answer object behind a heading, which caps citation
+    # support at Partial: hard precision 0.071 against 0.586 for the current default.
     "default": USER_PROMPT,
+    # Superseded. One claim per object, but suppresses length, so coverage falls to 0.570.
     "atomic_claims": ATOMIC_USER_PROMPT,
+    # Superseded by focused_citations_tail. Coverage 0.621, citation error rate 30%.
     "atomic_claims_full_budget": FULL_BUDGET_USER_PROMPT,
+    # Superseded by focused_citations_tail, which is this profile plus a restated contract.
     "focused_citations": FOCUSED_CITATION_USER_PROMPT,
-    # DeepSeek documents that JSON output needs the literal word "json" plus a worked
-    # example of the desired shape, not just a response_format setting.
+    # REJECTED. DeepSeek documents that JSON output needs the literal word "json" and a worked
+    # example, but adding one measured worse: single-citation compliance fell 59% to 26%,
+    # answers shortened, and one topic failed outright. Kept only to record the negative result.
     "focused_citations_json_example": JSON_EXAMPLE_USER_PROMPT,
-    # The contract sits ~120k tokens before the generation point once documents are
-    # inserted; this profile restates it compactly after the question.
+    # CURRENT DEFAULT for both competition configs. Restates the contract after the question,
+    # because with 100 documents inserted the leading contract sits roughly 120k tokens above
+    # the generation point. Best measured on every metric: Sol strict_vital 0.630, weighted
+    # citation precision 0.747, hard precision 0.586.
     "focused_citations_tail": TAIL_CONTRACT_USER_PROMPT,
-    # Moves the contract into the system message, the channel models weight persistently,
-    # instead of burying it 120k tokens above the generation point.
+    # REJECTED. Moving the contract into the system message measured worse than restating it
+    # after the question, 0.509 against 0.578, so proximity to the generation point matters
+    # more than channel. Kept only to record the negative result.
     "contract_in_system": CONTRACT_IN_SYSTEM_USER_PROMPT,
 }
 
