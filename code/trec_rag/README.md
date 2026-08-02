@@ -186,15 +186,17 @@ cache locations, model/index identities, depths, selection policy, evidence
 budget, claim limit, and supporting-document limit. Output paths and run tags
 are conventions, not configuration knobs.
 
-A completed run publishes these six conventional files beneath the experiment
+A completed run publishes these three conventional files beneath the experiment
 directory:
 
 - `r_output_trec_rag_2026.tsv`: the variable-depth official evidence run;
-- `retrieval_candidate_pool.trec`: a broader diagnostic pool;
 - `retrieval_with_text.jsonl.zip`: the mandatory full-text archive;
-- `retrieval_provenance.jsonl`: source and selection provenance;
-- `resolved_config.yaml`: normalized non-secret settings and topic-source hash;
 - `retrieval_export_manifest.json`: the manifest-last export seal.
+
+The official run and full-text archive are deterministic projections of each
+topic's validated Evidence Bundle. Candidate-pool, provenance, and resolved
+configuration sidecars are not exported; their sealed stage inputs remain
+available inside the private per-topic checkpoints when needed for validation.
 
 Per-topic stages are also sealed by hashes through
 `<topic-id>/canonical/complete.json`. Resume revalidates checkpoint schemas,
@@ -223,6 +225,66 @@ that generated decompositions improve retrieval or that canonical claims are
 entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
+
+## Evidence bundle boundary
+
+`trec_rag.evidence_bundle` defines the versioned cross-stage contract for the
+Evidence Bundle v1 plan.
+
+Inputs:
+- neutral retrieval rows with lane metadata, document text, rank, score,
+  retriever identity, and optional parent/trace identifiers
+- optional in-memory bundle relations for derived selections, evidence spans,
+  nuggets, and hashed trace references
+
+Outputs:
+- a validated `EvidenceBundle` with frozen lane, document, retrieval-event,
+  selection, selection-member, evidence, nugget, and trace-reference records
+- the competition retrieval checkpoint now seals the retrieval-stage bundle at
+  `retrieval/evidence-bundle.json`; it contains the full retained natural
+  document union before any downstream context projection
+- deterministic JSON-compatible dictionaries through `to_dict()` /
+  `from_dict()`, wrapped in a top-level `schema_version: evidence_bundle_v1`
+  marker; v1 decoding requires the complete relation/key shape and rejects
+  Boolean values in numeric scalar fields
+- deterministic downstream projections through `to_trec_run(selection_id=...)`,
+  `to_document_records(selection_id=...)`, and
+  `to_fixed_rag_context(selection_id=...)`
+- `write_fixed_rag_package(bundles, output_dir, selection_id=...)`, which sorts
+  validated per-topic bundles by topic ID and writes one deterministic package:
+  `trec_rag_2026_queries.tsv`, an organizer-compatible six-column
+  `r_output_trec_rag_2026.tsv`, `retrieval_with_text.jsonl`, deterministic
+  `retrieval_with_text.jsonl.zip`, and `fixed_rag_context.jsonl`
+
+Validation:
+- every identifier and text hash is checked, including each lane query hash;
+  document and query text may contain ordinary tabs and line breaks
+- every document/lane membership must have a corresponding retrieval event
+- every selection member audits one input document with inclusion state,
+  optional output rank, and a rejection reason for excluded documents; the
+  member relation must match the exact union implied by its source lanes
+- the `natural_union` selection includes every unique document without output
+  ranks and is rejected by rank-bearing projections; named ranked selections
+  provide contiguous explicit ranks without an implicit top-100 limit
+- every evidence span has non-empty lane support and resolves exactly inside its
+  parent document text
+- every nugget has non-empty known evidence support, and an optional
+  `subnarrative_id` must resolve to a lane whose kind is `subnarrative`
+
+Downstream consumption:
+- fixed retrieval and fixed-bundle RAG consume deterministic projections from
+  the same validated bundle boundary; document and fixed-context records carry
+  the topic query text and its hash alongside the selected evidence
+- agentic downstream work may consume the same bundle projections as read-only
+  context, but any newly retrieved documents or agent-produced evidence must be
+  recorded as a new bundle revision instead of being hidden only in trace logs
+
+Migration note:
+- the bundle is the cross-stage contract; decomposition, evidence, and nugget
+  records remain stage-local, while retrieval checkpoints now include the
+  sealed bundle artifact as the retrieval handoff. The exporter no longer
+  publishes the superseded candidate-pool, provenance, or resolved-config
+  sidecars.
 
 ## Competition fixed-retrieval RAG inputs
 

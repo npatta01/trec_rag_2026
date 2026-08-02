@@ -11,10 +11,7 @@ import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
 import trec_rag.nuggetizer_adapter as nuggetizer_adapter
 import trec_rag.competition_retrieval as competition_retrieval
-from trec_rag.competition_debug_report import (
-    load_debug_report_data,
-    render_debug_report,
-)
+from trec_rag.competition_debug_report import load_debug_report_data, render_debug_report
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
@@ -283,19 +280,13 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         output = config.output_dir
         return RetrievalExportReceipt(
             official_run=output / "r_output_trec_rag_2026.tsv",
-            candidate_pool_run=output / "retrieval_candidate_pool.trec",
             with_text_archive=output / "retrieval_with_text.jsonl.zip",
-            provenance=output / "retrieval_provenance.jsonl",
-            resolved_config=output / "resolved_config.yaml",
             manifest=output / "retrieval_export_manifest.json",
         )
 
     validated_export = RetrievalExportReceipt(
         official_run=tmp_path / "validated" / "r_output_trec_rag_2026.tsv",
-        candidate_pool_run=tmp_path / "validated" / "retrieval_candidate_pool.trec",
         with_text_archive=tmp_path / "validated" / "retrieval_with_text.jsonl.zip",
-        provenance=tmp_path / "validated" / "retrieval_provenance.jsonl",
-        resolved_config=tmp_path / "validated" / "resolved_config.yaml",
         manifest=tmp_path / "validated" / "retrieval_export_manifest.json",
     )
 
@@ -327,10 +318,7 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
     assert receipt.selected_topic_ids == ("topic-2", "topic-1")
     assert receipt.resumed_topic_ids == ()
     assert receipt.retrieval_export.official_run.name == "r_output_trec_rag_2026.tsv"
-    assert receipt.retrieval_export.candidate_pool_run.name == "retrieval_candidate_pool.trec"
     assert receipt.retrieval_export.with_text_archive.name == "retrieval_with_text.jsonl.zip"
-    assert receipt.retrieval_export.provenance.name == "retrieval_provenance.jsonl"
-    assert receipt.retrieval_export.resolved_config.name == "resolved_config.yaml"
     assert receipt.retrieval_export.manifest.name == "retrieval_export_manifest.json"
     assert receipt.retrieval_export is validated_export
     assert export_events == ["written", "validated"]
@@ -756,20 +744,21 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
         path.is_file()
         for path in (
             exported.official_run,
-            exported.candidate_pool_run,
             exported.with_text_archive,
-            exported.provenance,
-            exported.resolved_config,
             exported.manifest,
+        )
+    )
+    assert all(
+        not (exported.official_run.parent / name).exists()
+        for name in (
+            "retrieval_candidate_pool.trec",
+            "retrieval_provenance.jsonl",
+            "resolved_config.yaml",
         )
     )
     assert exported.official_run.read_bytes() == (
         b"housing-1 Q0 original-d1 1 2 public-e2e\n"
         b"housing-1 Q0 original-d2 2 1 public-e2e\n"
-    )
-    assert exported.candidate_pool_run.read_bytes() == (
-        b"housing-1 Q0 original-d1 1 2 public-e2e-candidate-pool\n"
-        b"housing-1 Q0 original-d2 2 1 public-e2e-candidate-pool\n"
     )
     with zipfile.ZipFile(exported.with_text_archive) as archive:
         assert archive.namelist() == ["retrieval_with_text.jsonl"]
@@ -778,25 +767,10 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
         "original-d1",
         "original-d2",
     ]
-    assert {row["stage"] for row in with_text["candidates"]} == {
-        "original_only_fallback"
-    }
-    provenance = [
-        json.loads(line) for line in exported.provenance.read_bytes().splitlines()
-    ]
-    assert [row["docid"] for row in provenance] == ["original-d1", "original-d2"]
-    assert {row["stage"] for row in provenance} == {"original_only_fallback"}
-    assert all(row["subnarrative_scores"] == [] for row in provenance)
-    assert all(row["nuggets"] == [] for row in provenance)
-    assert all(
-        [lane["lane_name"] for lane in row["memberships"]] == ["original"]
-        for row in provenance
-    )
     manifest = json.loads(exported.manifest.read_bytes())
     assert manifest["official_row_count"] == 2
-    assert manifest["candidate_pool_row_count"] == 2
     assert manifest["topic_depths"] == {
-        "housing-1": {"official": 2, "candidate_pool": 2}
+        "housing-1": {"official": 2, "natural_union": 3}
     }
     assert retriever.calls == ["original", "original"]
     assert candidate_scorer.calls == []
@@ -823,32 +797,4 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
     rendered = render_debug_report(report_data)
     assert "Original-only fallback" in rendered
     assert "No generated subnarratives" in rendered
-    assert "No downstream passage rankings" in rendered
-    assert "No canonical result rows" in rendered
     assert "Final retrieval uses the sealed original-only selected pool" in rendered
-
-    provenance[0]["memberships"].append(
-        {
-            "lane_name": "facet:forged:text",
-            "aggregate_rank": 1,
-            "aggregate_score": 1.0,
-            "bm25_rank": 1,
-            "bm25_score": 1.0,
-        }
-    )
-    forged_body = b"".join(
-        (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-        for row in provenance
-    )
-    exported.provenance.write_bytes(forged_body)
-    manifest["artifacts"][exported.provenance.name] = {
-        "bytes": len(forged_body),
-        "sha256": hashlib.sha256(forged_body).hexdigest(),
-    }
-    exported.manifest.write_text(
-        json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="membership differs from sealed selection"):
-        load_debug_report_data(config)

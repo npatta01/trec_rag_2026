@@ -21,6 +21,7 @@ from trec_rag.evidence_store import (
     materialize_candidate_inputs,
     select_evidence_artifacts,
 )
+from trec_rag.evidence_bundle import BundleLane, EvidenceBundle
 from trec_rag.facet_evidence import SelectionPolicy
 from trec_rag.facet_extraction import (
     FacetPlanningResult,
@@ -481,7 +482,7 @@ def _retrieve_topic(
     retriever: Any | None = None,
     retrieval_depth: int,
 ) -> TopicPhaseOutcome:
-    """Fill the shared retrieval cache and save a text-free retrieval audit."""
+    """Fill retrieval checkpoints, including the full natural evidence bundle."""
     if (
         isinstance(retrieval_depth, bool)
         or not isinstance(retrieval_depth, int)
@@ -497,7 +498,11 @@ def _retrieve_topic(
     root = Path(output_dir) / topic.id
     manifest = root / "retrieval" / "complete.json"
     expected = _expected("retrieve", topic, decomposition, code_commit, identity)
-    artifacts = ("decomposition.json", "retrieval/audit.json")
+    artifacts = (
+        "decomposition.json",
+        "retrieval/audit.json",
+        "retrieval/evidence-bundle.json",
+    )
     if _resume(manifest, root, expected, artifacts):
         return TopicPhaseOutcome(topic.id, "retrieve", manifest, True)
 
@@ -508,6 +513,7 @@ def _retrieve_topic(
     )
     hashes: dict[str, str] = {}
     audit_lanes = []
+    bundle_rows: list[dict[str, object]] = []
     for lane in lanes:
         query = lane.retrieval_query
         rows = _candidates(topic, query, retriever.retrieve(query))
@@ -523,6 +529,26 @@ def _retrieve_topic(
                     "bm25_rank": row.rank,
                     "bm25_score": row.score,
                     "text_sha256": text_hash,
+                }
+            )
+            bundle_rows.append(
+                {
+                    "lane_id": query.variant_name,
+                    "lane_kind": (
+                        "narrative" if lane.subnarrative_id is None else "subnarrative"
+                    ),
+                    "query_text": query.query_text,
+                    "parent_lane_id": (
+                        None if lane.subnarrative_id is None else "original"
+                    ),
+                    "producer": str(identity.get("name") or identity.get("type") or "retriever"),
+                    "docid": row.docid,
+                    "text": row.text,
+                    "rank": row.rank,
+                    "score": row.score,
+                    "retriever": str(identity.get("name") or identity.get("type") or "retriever"),
+                    "text_sha256": text_hash,
+                    "event_id": f"retrieval:{query.variant_name}:{row.rank}",
                 }
             )
         audit_lanes.append(_audit_lane(lane, len(rows), candidates))
@@ -542,8 +568,30 @@ def _retrieve_topic(
         audit_lanes,
         retrieval_depth=retrieval_depth,
     )
+    evidence_bundle = EvidenceBundle.from_retrieval_rows(
+        topic_id=topic.id,
+        rows=bundle_rows,
+        lane_records=tuple(
+            BundleLane(
+                lane_id=lane.retrieval_query.variant_name,
+                lane_kind=(
+                    "narrative" if lane.subnarrative_id is None else "subnarrative"
+                ),
+                query_text=lane.retrieval_query.query_text,
+                query_text_sha256=lane.bm25_query_sha256,
+                parent_lane_id=(
+                    None if lane.subnarrative_id is None else "original"
+                ),
+                producer=str(
+                    identity.get("name") or identity.get("type") or "retriever"
+                ),
+            )
+            for lane in lanes
+        ),
+    )
     _write_json(root / artifacts[0], decomposition_record)
     _write_json(root / artifacts[1], audit)
+    _write_json(root / artifacts[2], evidence_bundle.to_dict())
     _complete(manifest, root, expected, artifacts)
     return TopicPhaseOutcome(topic.id, "retrieve", manifest, False)
 
@@ -585,7 +633,11 @@ def _score_topic(
             code_commit,
             retriever_identity,
         ),
-        ("decomposition.json", "retrieval/audit.json"),
+        (
+            "decomposition.json",
+            "retrieval/audit.json",
+            "retrieval/evidence-bundle.json",
+        ),
         required=True,
     )
     scorer = scorer or MixedbreadCoverageScorer(
