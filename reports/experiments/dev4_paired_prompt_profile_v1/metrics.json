@@ -418,6 +418,17 @@
     "share_longer_than_cut": 0.91,
     "share_of_pool_text_shown": 0.17
   },
+  "review_corrections": {
+    "extraction_is_dev_only": "select_passages lives in dev_rag_inputs.py, which reads dev BM25 archives. competition_retrieval does not use it, so extractive selection is not on the competition path and is not proposed for this cycle.",
+    "normalizer_hardening": "Three defects found and fixed after review: invalid citations were silently pruned rather than reported, disabling an existing range check; duplicate citations survived remapping and failed validation later; and a docid listed at two positions produced two citations of one document. Invalid citations now raise, duplicates collapse, and references canonicalize by docid.",
+    "not_shipping": [
+      "Extractive passage selection: dev-only code path, deltas around 0.025 on four topics, and the 261-word precision figure partly reflects the model being able to echo only what it was shown.",
+      "The 261-word budget: a coverage/precision dial set without knowing organizer weighting.",
+      "Any generator conclusion beyond 'Sol only': one to four topics per model is anecdote."
+    ],
+    "one_citation_conclusion_qualified": "Partly metric mechanics. RAGDoll's hard_precision and weighted_precision_first_citation judge only citations[0], and weighted_precision_all_judged averages per object, so removing trailing citations improves the averaged metrics arithmetically rather than behaviourally. The 72.5/27.9/11.1 Full Support table also carries a confound: multi-citation objects are disproportionately the fused multi-claim objects no single document can support. What survives is that arm D beat every other arm on wp_first and hard_precision, which trailing citations cannot dilute, so its first citations genuinely improved. Credit belongs to 'cite the single best supporting document', not to capping the count. A second citation that independently supports the claim is free under every metric except the all-judged average, so 'exactly one' should stay prompt guidance and never become a validator rule.",
+    "reachability_gap": "The measured winner was not reachable by the competition pipeline. No checked-in config set prompt_profile, so a production run would have used the default prompt (arm A, hard precision 0.071) with the new post-processors, a combination never measured. Fixed by setting prompt_profile: focused_citations in configs/rag26_competition_rag_gpt_sol_v1.yaml."
+  },
   "schema": "ragdoll_paired_prompt_profile_v1",
   "supersedes": "The two-topic comparison in dev_ragdoll_nugget_eval_spike_v1, which reported atomic as neutral-to-better on coverage.",
   "three_arm_summary": {

@@ -1011,13 +1011,25 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
     # that validate_submission_record is responsible for reporting, so it must not be silently
     # dropped here: doing so would hide fabricated citation indexes behind a later, misleading
     # "must have 1-3 citations" failure.
+    # A model may list the same docid at two positions. Collapse those to the first position so
+    # two citations that name one document do not survive as a duplicate pair.
+    canonical: dict[str, int] = {}
+    for position, docid in enumerate(references):
+        canonical.setdefault(str(docid), position)
+
     order: list[int] = []
+    resolved: list[list[int]] = []
     for index, item in enumerate(answer):
+        cites: list[int] = []
         for citation in item["citations"]:
             if type(citation) is not int or not 0 <= citation < len(references):
                 raise ValueError(f"answer[{index}] has an invalid citation: {citation!r}")
-            if citation not in order:
-                order.append(citation)
+            position = canonical[str(references[citation])]
+            if position not in cites:
+                cites.append(position)
+            if position not in order:
+                order.append(position)
+        resolved.append(cites)
     if not order:
         raise ValueError("generated answer cites no valid reference")
 
@@ -1026,11 +1038,8 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
         **record,
         "references": [references[old] for old in order],
         "answer": [
-            {
-                "text": item["text"],
-                "citations": [remap[c] for c in item["citations"]],
-            }
-            for item in answer
+            {"text": item["text"], "citations": [remap[c] for c in cites]}
+            for item, cites in zip(answer, resolved)
         ],
     }
 

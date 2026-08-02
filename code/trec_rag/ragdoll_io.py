@@ -180,8 +180,13 @@ def resolved_support_rows(
     citation whose docid is absent from ``segments`` is silently skipped by the judge, so every
     cited docid is required up front instead.
 
-    Document text is truncated to the same ``max_words`` the generator saw. That is stricter
-    than resolving full passages from the index, so it can only understate support.
+    ``documents_path`` must be the same document file the generator read. Judging citations
+    against text the model never saw produces spurious No Support: an earlier run of this
+    comparison passed head-truncated text against an extractive generation and inflated the No
+    Support rate from 4.8% to 32.7%, inverting the conclusion.
+
+    Note also that organizers resolve references from the index, that is full documents, so
+    scoring against any truncated view understates support for every arm.
     """
     from trec_rag.competition_rag import load_documents
 
@@ -201,7 +206,7 @@ def resolved_support_rows(
             if not isinstance(item, dict):
                 raise ValueError(f"{submission_path}: answer object is not an object")
             for citation in item.get("citations") or []:
-                if isinstance(citation, bool) or isinstance(citation, int):
+                if type(citation) is int:
                     if not 0 <= citation < len(references):
                         raise ValueError(f"{submission_path}: citation {citation} out of range")
                     cited.add(str(references[citation]))

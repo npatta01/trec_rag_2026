@@ -784,6 +784,30 @@ def test_focused_profile_drops_the_cite_every_reference_rule() -> None:
     assert "single document that best supports" in focused
 
 
+def test_normalizer_collapses_a_duplicate_citation() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a", "doc-b"],
+        "answer": [{"text": "Claim.", "citations": [1, 1]}],
+    }
+    out = competition_rag.normalize_generated_record(record)
+    # Would otherwise survive as [0, 0] and fail the unique-citation rule.
+    assert out["answer"][0]["citations"] == [0]
+    assert out["references"] == ["doc-b"]
+
+
+def test_normalizer_canonicalizes_a_docid_listed_twice() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a", "doc-b", "doc-a"],
+        "answer": [{"text": "Claim.", "citations": [0, 2]}],
+    }
+    out = competition_rag.normalize_generated_record(record)
+    # Both positions name the same document, so one citation of one reference remains.
+    assert out["references"] == ["doc-a"]
+    assert out["answer"][0]["citations"] == [0]
+
+
 def test_normalizer_reports_an_invalid_citation_rather_than_dropping_it() -> None:
     """A fabricated citation index must fail loudly, not be silently pruned.
 
@@ -1328,7 +1352,6 @@ def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> N
     ("references", "citations"),
     [
         pytest.param(["climbmix-a"], [], id="empty-citations"),
-        pytest.param(["climbmix-a"], [0, 0], id="duplicate-citations"),
         pytest.param(["climbmix-a"], ["climbmix-a"], id="direct-docid-citation"),
     ],
 )
