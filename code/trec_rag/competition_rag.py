@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Iterator, Protocol, Sequence, TextIO
+from typing import Any, Collection, Iterator, Mapping, Protocol, Sequence, TextIO
 from urllib.parse import unquote
 
 import requests
@@ -551,6 +551,110 @@ def _document_lines(path: Path, archive_member: str | None) -> Iterator[TextIO]:
         raise ValueError(f"{document_path}: invalid ZIP document archive") from exc
 
 
+def _iter_document_candidates(
+    path: Path,
+    archive_member: str | None,
+    *,
+    topic_ids: set[str] | None,
+) -> Iterator[tuple[int, str, str, str]]:
+    with _document_lines(path, archive_member) as lines:
+        for line_number, raw_line in enumerate(lines, 1):
+            if not raw_line.strip():
+                raise ValueError(f"{path}:{line_number}: blank JSONL rows are invalid")
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{line_number}: expected a JSON object")
+            query = record.get("query")
+            candidates = record.get("candidates")
+            if not isinstance(query, dict) or not _nonempty_text(query.get("qid")):
+                raise ValueError(f"{path}:{line_number}: organizer query core is invalid")
+            topic_id = str(query["qid"])
+            if topic_ids is not None and topic_id not in topic_ids:
+                continue
+            if not isinstance(candidates, list):
+                raise ValueError(f"{path}:{line_number}: organizer candidates core is invalid")
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    raise ValueError(f"{path}:{line_number}: candidate must be an object")
+                docid = candidate.get("docid")
+                text = candidate.get("doc")
+                if not _nonempty_text(docid) or not _nonempty_text(text):
+                    raise ValueError(f"{path}:{line_number}: candidate docid and doc are required")
+                yield line_number, topic_id, docid.strip(), " ".join(text.split())
+
+
+def _validate_max_document_words(max_words: int) -> None:
+    if isinstance(max_words, bool) or not isinstance(max_words, int) or max_words <= 0:
+        raise ValueError("max_words must be a positive integer")
+
+
+def load_topic_documents(
+    path: Path,
+    archive_member: str | None,
+    topic_docids: Mapping[str, Collection[str]],
+    max_words: int,
+) -> dict[str, dict[str, str]]:
+    """Read document text while preserving the topic that ranked each document.
+
+    A document ID is only valid for the topic row that supplied it. The same ID may
+    therefore have different text under different topics without one answer borrowing
+    another topic's evidence.
+    """
+    if not topic_docids:
+        raise ValueError("at least one topic document set is required")
+    _validate_max_document_words(max_words)
+    wanted_by_topic: dict[str, set[str]] = {}
+    for topic_id, docids in topic_docids.items():
+        if not isinstance(topic_id, str) or not topic_id.strip():
+            raise ValueError("topic IDs must be non-empty text")
+        if isinstance(docids, (str, bytes)) or not isinstance(docids, Collection):
+            raise ValueError(f"{topic_id}: document IDs must be a collection")
+        normalized = {
+            docid.strip()
+            for docid in docids
+            if isinstance(docid, str) and docid.strip()
+        }
+        if not normalized:
+            raise ValueError(f"{topic_id}: at least one wanted docid is required")
+        wanted_by_topic[topic_id] = normalized
+
+    documents_by_topic = {topic_id: {} for topic_id in wanted_by_topic}
+    for line_number, topic_id, docid, text in _iter_document_candidates(
+        path,
+        archive_member,
+        topic_ids=set(wanted_by_topic),
+    ):
+        wanted = wanted_by_topic[topic_id]
+        if docid not in wanted:
+            continue
+        documents = documents_by_topic[topic_id]
+        existing = documents.get(docid)
+        if existing is not None and existing != text:
+            raise ValueError(
+                f"{path}:{line_number}: conflicting duplicate document {docid} "
+                f"for topic {topic_id}"
+            )
+        documents[docid] = text
+
+    for topic_id, wanted in wanted_by_topic.items():
+        missing = sorted(wanted - documents_by_topic[topic_id].keys())
+        if missing:
+            raise ValueError(
+                f"{path}: {topic_id} missing {len(missing)} ranked documents "
+                f"({', '.join(missing[:5])})"
+            )
+    return {
+        topic_id: {
+            docid: " ".join(text.split()[:max_words])
+            for docid, text in documents.items()
+        }
+        for topic_id, documents in documents_by_topic.items()
+    }
+
+
 def load_documents(
     path: Path,
     archive_member: str | None,
@@ -569,44 +673,21 @@ def load_documents(
     """
     if not wanted_docids:
         raise ValueError("at least one wanted docid is required")
-    if isinstance(max_words, bool) or not isinstance(max_words, int) or max_words <= 0:
-        raise ValueError("max_words must be a positive integer")
+    _validate_max_document_words(max_words)
     documents: dict[str, str] = {}
-    with _document_lines(path, archive_member) as lines:
-        for line_number, raw_line in enumerate(lines, 1):
-            if not raw_line.strip():
-                raise ValueError(f"{path}:{line_number}: blank JSONL rows are invalid")
-            try:
-                record = json.loads(raw_line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{line_number}: expected a JSON object")
-            query = record.get("query")
-            candidates = record.get("candidates")
-            if not isinstance(query, dict) or not _nonempty_text(query.get("qid")):
-                raise ValueError(f"{path}:{line_number}: organizer query core is invalid")
-            if topic_ids is not None and str(query["qid"]) not in topic_ids:
-                continue
-            if not isinstance(candidates, list):
-                raise ValueError(f"{path}:{line_number}: organizer candidates core is invalid")
-            for candidate in candidates:
-                if not isinstance(candidate, dict):
-                    raise ValueError(f"{path}:{line_number}: candidate must be an object")
-                docid = candidate.get("docid")
-                text = candidate.get("doc")
-                if not _nonempty_text(docid) or not _nonempty_text(text):
-                    raise ValueError(f"{path}:{line_number}: candidate docid and doc are required")
-                normalized_docid = docid.strip()
-                normalized_text = " ".join(text.split())
-                if normalized_docid not in wanted_docids:
-                    continue
-                existing = documents.get(normalized_docid)
-                if existing is not None and existing != normalized_text:
-                    raise ValueError(
-                        f"{path}:{line_number}: conflicting duplicate document {normalized_docid}"
-                    )
-                documents[normalized_docid] = normalized_text
+    for line_number, _topic_id, docid, text in _iter_document_candidates(
+        path,
+        archive_member,
+        topic_ids=topic_ids,
+    ):
+        if docid not in wanted_docids:
+            continue
+        existing = documents.get(docid)
+        if existing is not None and existing != text:
+            raise ValueError(
+                f"{path}:{line_number}: conflicting duplicate document {docid}"
+            )
+        documents[docid] = text
     missing = sorted(wanted_docids - documents.keys())
     if missing:
         raise ValueError(f"{path}: missing {len(missing)} ranked documents ({', '.join(missing[:5])})")
@@ -1616,13 +1697,15 @@ async def _run_generation_locked(
 
     topics = select_queries(load_queries(config.queries_path), config.topic_ids)
     ranked = load_trec_run(config.run_path, {topic_id for topic_id, _ in topics}, config.top_k)
-    wanted_docids = {docid for docids in ranked.values() for docid in docids}
-    documents = load_documents(
+    topic_docids = {
+        topic_id: set(ranked[topic_id])
+        for topic_id, _narrative in topics
+    }
+    documents_by_topic = load_topic_documents(
         config.documents_path,
         config.archive_member,
-        wanted_docids,
+        topic_docids,
         config.max_document_words,
-        topic_ids={topic_id for topic_id, _ in topics},
     )
     # After the fallible input loading, so a failed overwrite leaves no work directory behind.
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1652,7 +1735,7 @@ async def _run_generation_locked(
                 topic_id=topic_id,
                 narrative=narrative,
                 ranked_docids=ranked[topic_id],
-                documents=documents,
+                documents=documents_by_topic[topic_id],
                 generator=generator,
                 config=config,
                 semaphore=semaphore,

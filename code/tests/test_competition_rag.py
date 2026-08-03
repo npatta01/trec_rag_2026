@@ -979,6 +979,47 @@ def test_runs_generation_in_official_query_order_and_atomically_consolidates(
     assert "Reference document docid: climbmix-b" in topic_one_prompt
 
 
+def test_generation_uses_topic_owned_text_for_shared_docid(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path)
+    config.run_path.write_text(
+        "rag2026-1 Q0 shared 1 9.0 bm25\n"
+        "rag2026-2 Q0 shared 1 8.0 bm25\n",
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(config.documents_path, "w") as archive:
+        archive.writestr(
+            "retrieval_with_text.jsonl",
+            json.dumps(
+                {
+                    "query": {"qid": "rag2026-1"},
+                    "candidates": [{"docid": "shared", "doc": "Topic one evidence."}],
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "query": {"qid": "rag2026-2"},
+                    "candidates": [{"docid": "shared", "doc": "Topic two evidence."}],
+                }
+            )
+            + "\n",
+        )
+    generator = FakeGenerator(
+        {
+            "rag2026-1": _topic_output(["shared"], "Topic one answer."),
+            "rag2026-2": _topic_output(["shared"], "Topic two answer."),
+        }
+    )
+
+    asyncio.run(run_generation(config, generator))
+
+    prompts = {call["topic_id"]: call["user_prompt"] for call in generator.calls}
+    assert "Topic one evidence." in prompts["rag2026-1"]
+    assert "Topic two evidence." not in prompts["rag2026-1"]
+    assert "Topic two evidence." in prompts["rag2026-2"]
+    assert "Topic one evidence." not in prompts["rag2026-2"]
+
+
 def test_generation_consumes_the_retrieval_export_file_contract(
     tmp_path: Path,
 ) -> None:
@@ -1648,6 +1689,73 @@ def test_documents_are_bound_to_the_selected_topics(tmp_path: Path) -> None:
     # With binding the mismatch surfaces instead.
     with pytest.raises(ValueError, match="missing 1 ranked documents"):
         load_documents(archive, None, {"shared"}, 100, topic_ids={"rag2026-1"})
+
+
+def test_topic_document_loader_keeps_shared_docids_bound_to_each_topic(
+    tmp_path: Path,
+) -> None:
+    """Generation must keep same-named documents separate by owning topic."""
+    archive = tmp_path / "documents.jsonl"
+    archive.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "query": {"qid": "topic-a"},
+                        "candidates": [
+                            {"docid": "shared", "doc": "text owned by topic A"}
+                        ],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "query": {"qid": "topic-b"},
+                        "candidates": [
+                            {"docid": "shared", "doc": "text owned by topic B"}
+                        ],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    documents = competition_rag.load_topic_documents(
+        archive,
+        archive_member=None,
+        topic_docids={"topic-a": {"shared"}, "topic-b": {"shared"}},
+        max_words=100,
+    )
+
+    assert documents == {
+        "topic-a": {"shared": "text owned by topic A"},
+        "topic-b": {"shared": "text owned by topic B"},
+    }
+
+
+def test_topic_document_loader_rejects_docid_found_only_under_another_topic(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "documents.jsonl"
+    archive.write_text(
+        json.dumps(
+            {
+                "query": {"qid": "topic-b"},
+                "candidates": [{"docid": "shared", "doc": "topic B text"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"topic-a.*missing 1 ranked documents"):
+        competition_rag.load_topic_documents(
+            archive,
+            archive_member=None,
+            topic_docids={"topic-a": {"shared"}},
+            max_words=100,
+        )
 
 
 def test_identity_version_rejects_rows_written_under_the_older_finish_policy(
