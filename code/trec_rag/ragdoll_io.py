@@ -262,7 +262,8 @@ def resolved_support_rows(
         references = [str(docid) for docid in record["references"]]  # type: ignore[index]
         # Only cited documents need text. Uncited references are valid per the task reference
         # and simply carry no support judgment.
-        missing = [docid for docid in references if docid in cited and docid not in documents]
+        topic_cited = topic_docids.get(topic_id, set())
+        missing = [docid for docid in references if docid in topic_cited and docid not in documents]
         if missing:
             raise ValueError(
                 f"{metadata.get('narrative_id')}: no document text for {', '.join(missing)}"

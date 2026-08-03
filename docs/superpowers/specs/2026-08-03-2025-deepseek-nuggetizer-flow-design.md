@@ -41,8 +41,9 @@ topic_id -> docid -> normalized document text
 The generation path will pass the topic-to-ranked-docid mapping into the
 loader and render each prompt from that topic’s map only. A missing document
 for its owning topic remains a hard error. Existing single-topic callers and
-RAGDoll support resolution retain a compatible flat-loading boundary where
-there is no topic-to-ranked mapping.
+RAGDoll support resolution will use the same topic-aware map, keyed by each
+submission record’s narrative ID. Its output remains compatible with RAGDoll’s
+existing per-record ``segments`` shape.
 
 The regression test will use two topics with the same document ID but
 different text and assert that each generated prompt receives its own text.
