@@ -31,6 +31,9 @@ from trec_rag.topics import load_narrative_topics
 _SCHEMA_VERSION = "competition_rag_config_v1"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+# strict_schema pins provider selection to schema-capable endpoints; json_object is the
+# portable fallback; none sends no response_format at all.
+STRUCTURED_OUTPUT_MODES = frozenset({"strict_schema", "json_object", "none"})
 _MAX_REDACTION_NORMALIZATION_ROUNDS = 32
 
 SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
@@ -52,6 +55,175 @@ Reference documents:
 
 Question: {question}
 """
+
+ATOMIC_USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every reference document before writing. Cover answer-relevant evidence,
+tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
+1,024 whitespace-separated words.
+
+Write each answer object as one self-contained sentence stating a single claim. Do not join
+several claims into one answer object and do not prefix an object with a section heading or
+label, because a cited document must be able to support the whole object on its own.
+
+Each answer object must have one to three unique zero-based citation indexes into references.
+When an answer object cites more than one reference, order its citation indexes from strongest
+to weakest support for that object. Include each cited raw ClimbMix docid once in references,
+and cite every reference. Return one JSON object with exactly references and answer; no
+Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
+FULL_BUDGET_USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every reference document before writing. Aim for roughly 900 whitespace-separated words
+and never exceed 1,024, counting every answer object together. A longer answer is only better
+when the extra words carry new evidence, so keep adding distinct, answer-relevant points that
+the reference documents support, covering the question's different aspects, tradeoffs,
+constraints and uncertainty. Do not pad, repeat a point already made, or restate the
+question.
+
+Write each answer object as one self-contained sentence stating a single claim. Do not join
+several claims into one answer object and do not prefix an object with a section heading or
+label, because a cited document must be able to support the whole object on its own.
+
+Each answer object must have one to three unique zero-based citation indexes into references.
+When an answer object cites more than one reference, order its citation indexes from strongest
+to weakest support for that object. Include each cited raw ClimbMix docid once in references,
+and cite every reference. Return one JSON object with exactly references and answer; no
+Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
+FOCUSED_CITATION_USER_PROMPT = """Answer the question using only the reference documents below.
+
+Read every reference document before writing. Aim for roughly 900 whitespace-separated words
+and never exceed 1,024, counting every answer object together. A longer answer is only better
+when the extra words carry new evidence, so keep adding distinct, answer-relevant points that
+the reference documents support, covering the question's different aspects, tradeoffs,
+constraints and uncertainty. Do not pad, repeat a point already made, or restate the
+question.
+
+Write each answer object as one self-contained sentence stating a single claim. Do not join
+several claims into one answer object and do not prefix an object with a section heading or
+label, because a cited document must be able to support the whole object on its own.
+
+Cite the single document that best supports each answer object. Add a second or third citation
+only when that document by itself also fully supports the same object, and order citations from
+strongest to weakest support. Never add a citation to spread coverage across documents: an
+extra citation that does not support the object on its own is worse than no extra citation.
+List a document in references only if some answer object cites it.
+
+Give each answer object one to three unique zero-based citation indexes into references. Return
+one JSON object with exactly references and answer; no Markdown.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
+JSON_EXAMPLE_USER_PROMPT = FOCUSED_CITATION_USER_PROMPT.replace(
+    """Give each answer object one to three unique zero-based citation indexes into references. Return
+one JSON object with exactly references and answer; no Markdown.""",
+    """Give each answer object one to three unique zero-based citation indexes into references.
+Return one json object with exactly references and answer; no Markdown. Use exactly this json
+shape, in which every answer object states a single claim and cites the one document supporting
+it:
+
+{{"references": ["shard_00459_61697", "shard_01012_88420"],
+ "answer": [{{"text": "Commercial reactors generate heat by fissioning uranium.", "citations": [0]}},
+            {{"text": "Spent fuel needs long-term isolation from the environment.", "citations": [1]}}]}}""",
+)
+assert JSON_EXAMPLE_USER_PROMPT != FOCUSED_CITATION_USER_PROMPT, "json example substitution failed"
+
+
+TAIL_CONTRACT_USER_PROMPT = FOCUSED_CITATION_USER_PROMPT + """
+Restating the output contract, which the reference documents above have separated from this
+point by a long span of text:
+
+- one json object with exactly references and answer, no Markdown
+- each answer object is one self-contained sentence stating a single claim
+- cite the document that best supports each object, one to three unique zero-based indexes,
+  strongest first, and never add a citation that does not support the object on its own
+- list a document in references only if some answer object cites it
+- roughly 900 whitespace-separated words in total, never more than 1,024
+"""
+
+CONTRACT_SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
+provided reference documents and the user's task instructions. Do not invent evidence,
+document identifiers, references, or source-specific claims.
+
+Always produce one json object with exactly two keys, references and answer, and no Markdown.
+
+- Each answer object is one self-contained sentence stating a single claim. Never join several
+  claims into one object and never prefix an object with a section heading or label, because a
+  cited document must support the whole object on its own.
+- Cite the document that best supports each object. Give one to three unique zero-based indexes
+  into references, strongest support first. Never add a citation that does not support the
+  object on its own.
+- List a document in references only if some answer object cites it.
+- Write roughly 900 whitespace-separated words in total and never exceed 1,024."""
+
+CONTRACT_IN_SYSTEM_USER_PROMPT = """Answer the question using only the reference documents below,
+following the output contract in your instructions.
+
+Read every reference document before writing. Keep adding distinct, answer-relevant points that
+the documents support, covering the question's different aspects, tradeoffs, constraints and
+uncertainty. Do not pad, repeat a point already made, or restate the question.
+
+Reference documents:
+{documents}
+
+Question: {question}
+"""
+
+# Every profile records what it measured, not only what it was meant to do, so a later reader
+# does not re-select one that was already tried and rejected. Figures are strict_vital on four
+# development topics against the released gold nuggets; see
+# reports/experiments/dev4_paired_prompt_profile_v1/.
+PROMPT_PROFILES = {
+    # Superseded. Fuses several claims per answer object behind a heading, which caps citation
+    # support at Partial: hard precision 0.071 against 0.586 for the current default.
+    "default": USER_PROMPT,
+    # Superseded. One claim per object, but suppresses length, so coverage falls to 0.570.
+    "atomic_claims": ATOMIC_USER_PROMPT,
+    # Superseded by focused_citations_tail. Coverage 0.621, citation error rate 30%.
+    "atomic_claims_full_budget": FULL_BUDGET_USER_PROMPT,
+    # Superseded by focused_citations_tail, which is this profile plus a restated contract.
+    "focused_citations": FOCUSED_CITATION_USER_PROMPT,
+    # REJECTED. DeepSeek documents that JSON output needs the literal word "json" and a worked
+    # example, but adding one measured worse: single-citation compliance fell 59% to 26%,
+    # answers shortened, and one topic failed outright. Kept only to record the negative result.
+    "focused_citations_json_example": JSON_EXAMPLE_USER_PROMPT,
+    # CURRENT DEFAULT for both competition configs. Restates the contract after the question,
+    # because with 100 documents inserted the leading contract sits roughly 120k tokens above
+    # the generation point. Best measured on every metric: Sol strict_vital 0.630, weighted
+    # citation precision 0.747, hard precision 0.586.
+    "focused_citations_tail": TAIL_CONTRACT_USER_PROMPT,
+    # REJECTED. Moving the contract into the system message measured worse than restating it
+    # after the question, 0.509 against 0.578, so proximity to the generation point matters
+    # more than channel. Kept only to record the negative result.
+    "contract_in_system": CONTRACT_IN_SYSTEM_USER_PROMPT,
+}
+
+# Profiles that carry their contract in the system message need a matching system prompt.
+SYSTEM_PROMPT_PROFILES = {"contract_in_system": CONTRACT_SYSTEM_PROMPT}
+
+
+def system_prompt_for(prompt_profile: str) -> str:
+    """Return the system message a prompt profile expects."""
+    if prompt_profile not in PROMPT_PROFILES:
+        raise ValueError(f"unsupported prompt profile: {prompt_profile}")
+    return SYSTEM_PROMPT_PROFILES.get(prompt_profile, SYSTEM_PROMPT)
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -106,6 +278,8 @@ class RagGenerationConfig:
     api_key_env: str
     model: str
     reasoning_effort: str
+    prompt_profile: str
+    structured_output: str
     temperature: float | None
     max_tokens: int
     timeout_seconds: float
@@ -165,6 +339,21 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "api_key_env",
             "model",
             "reasoning_effort",
+            "prompt_profile",
+            "structured_output",
+            "temperature",
+            "max_tokens",
+            "timeout_seconds",
+            "transport_max_attempts",
+            "concurrency",
+        },
+        # prompt_profile is optional so existing configs keep the default prompt.
+        required={
+            "type",
+            "api_base",
+            "api_key_env",
+            "model",
+            "reasoning_effort",
             "temperature",
             "max_tokens",
             "timeout_seconds",
@@ -177,6 +366,14 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     reasoning_effort = _text(generation, "reasoning_effort", "generation").lower()
     if reasoning_effort not in _REASONING_EFFORTS:
         raise ValueError("generation.reasoning_effort is unsupported")
+    prompt_profile = _optional_text(generation, "prompt_profile", "generation") or "default"
+    if prompt_profile not in PROMPT_PROFILES:
+        raise ValueError("generation.prompt_profile is unsupported")
+    structured_output = (
+        _optional_text(generation, "structured_output", "generation") or "strict_schema"
+    )
+    if structured_output not in STRUCTURED_OUTPUT_MODES:
+        raise ValueError("generation.structured_output is unsupported")
 
     return RagGenerationConfig(
         schema_version=_SCHEMA_VERSION,
@@ -200,6 +397,8 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         api_key_env=_text(generation, "api_key_env", "generation"),
         model=_text(generation, "model", "generation"),
         reasoning_effort=reasoning_effort,
+        prompt_profile=prompt_profile,
+        structured_output=structured_output,
         temperature=_optional_finite_float(generation, "temperature", "generation"),
         max_tokens=_positive_int(generation, "max_tokens", "generation"),
         timeout_seconds=_positive_float(generation, "timeout_seconds", "generation"),
@@ -357,8 +556,17 @@ def load_documents(
     archive_member: str | None,
     wanted_docids: set[str],
     max_words: int,
+    *,
+    topic_ids: set[str] | None = None,
 ) -> dict[str, str]:
-    """Read organizer query-bundled documents while allowing extension fields."""
+    """Read organizer query-bundled documents while allowing extension fields.
+
+    ``topic_ids`` restricts harvesting to rows for the selected topics. The archive is keyed by
+    topic, so without it a document could be taken from a different topic's row whenever the two
+    share a docid, grounding an answer in evidence retrieved for another narrative. Callers on
+    the submission path must pass it; a missing topic then surfaces as an unresolved docid
+    rather than as silently borrowed text.
+    """
     if not wanted_docids:
         raise ValueError("at least one wanted docid is required")
     if isinstance(max_words, bool) or not isinstance(max_words, int) or max_words <= 0:
@@ -378,6 +586,8 @@ def load_documents(
             candidates = record.get("candidates")
             if not isinstance(query, dict) or not _nonempty_text(query.get("qid")):
                 raise ValueError(f"{path}:{line_number}: organizer query core is invalid")
+            if topic_ids is not None and str(query["qid"]) not in topic_ids:
+                continue
             if not isinstance(candidates, list):
                 raise ValueError(f"{path}:{line_number}: organizer candidates core is invalid")
             for candidate in candidates:
@@ -618,9 +828,12 @@ class OpenRouterJsonGenerator:
         max_tokens: int,
         timeout_seconds: float,
         transport_max_attempts: int,
+        structured_output: str = "strict_schema",
     ) -> None:
         if not api_key:
             raise ValueError("OpenRouter API key is missing or empty")
+        if structured_output not in STRUCTURED_OUTPUT_MODES:
+            raise ValueError(f"unsupported structured_output mode: {structured_output}")
         self.api_base = api_base.rstrip("/")
         self._api_key = api_key
         self.model = model
@@ -629,6 +842,7 @@ class OpenRouterJsonGenerator:
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
         self.transport_max_attempts = transport_max_attempts
+        self.structured_output = structured_output
 
     def complete_json(
         self,
@@ -647,16 +861,23 @@ class OpenRouterJsonGenerator:
             ],
             "max_tokens": self.max_tokens,
             "reasoning": {"effort": self.reasoning_effort, "exclude": True},
-            "provider": {"require_parameters": True},
-            "response_format": {
+        }
+        if self.structured_output == "strict_schema":
+            # require_parameters excludes any provider that cannot honour the schema. For some
+            # models that excludes the vendor's own API and routes to a third party whose
+            # grammar-constrained decoding may only treat the schema as a hint.
+            request_body["provider"] = {"require_parameters": True}
+            request_body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "trec_rag_2026_answer",
                     "strict": True,
                     "schema": response_schema,
                 },
-            },
-        }
+            }
+        elif self.structured_output == "json_object":
+            # The widely supported fallback. Shape is validated locally either way.
+            request_body["response_format"] = {"type": "json_object"}
         if self.temperature is not None:
             request_body["temperature"] = self.temperature
         headers = {
@@ -701,6 +922,33 @@ class OpenRouterJsonGenerator:
             if not isinstance(envelope, dict):
                 raise SemanticCompletionError(
                     "OpenRouter response must be a JSON object; no repair call was made",
+                    safe_response,
+                )
+            # Checked outside the parse guard below, which catches ValueError and would
+            # otherwise rewrite this as a generic malformed-completion error.
+            # Reasoning tokens share the max_tokens budget, so truncation is a real risk, and
+            # grammar-constrained decoding can close the JSON validly while the answer is cut
+            # short, producing a record that passes every downstream check and scores badly.
+            choices = envelope.get("choices")
+            finish_reason = (
+                choices[0].get("finish_reason")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+                else None
+            )
+            if finish_reason == "length":
+                raise SemanticCompletionError(
+                    "OpenRouter truncated the completion at max_tokens; raise "
+                    "generation.max_tokens rather than accepting a shortened answer",
+                    safe_response,
+                )
+            if finish_reason != "stop":
+                # An allowlist, not a denylist. OpenRouter returns HTTP 200 with
+                # finish_reason "error" and partial content, and "content_filter" or an absent
+                # reason are equally unsafe to publish. Rejecting a topic is recoverable by
+                # resuming; publishing a partial answer is not.
+                raise SemanticCompletionError(
+                    f"OpenRouter finish_reason was {finish_reason!r} rather than 'stop'; "
+                    "no repair call was made",
                     safe_response,
                 )
             try:
@@ -765,13 +1013,19 @@ def _message_text(content: object) -> str:
 
 
 def render_prompt(
-    narrative: str, ranked_docids: list[str], documents: dict[str, str]
+    narrative: str,
+    ranked_docids: list[str],
+    documents: dict[str, str],
+    prompt_profile: str = "default",
 ) -> str:
+    template = PROMPT_PROFILES.get(prompt_profile)
+    if template is None:
+        raise ValueError(f"unsupported prompt profile: {prompt_profile}")
     context = "\n\n".join(
         f"Reference document docid: {docid}\n{documents[docid]}"
         for docid in ranked_docids
     )
-    return USER_PROMPT.format(documents=context, question=narrative)
+    return template.format(documents=context, question=narrative)
 
 
 def parse_generated_json(text: str) -> dict[str, Any]:
@@ -883,6 +1137,103 @@ def validate_submission_record(
             raise ValueError(f"{topic_id}: answer[{index}] has an invalid citation")
     if words > 1024:
         raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
+
+
+def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild ``references`` from the citations actually used, then re-index them.
+
+    The organizer baseline validator requires every reference to be cited. Asking the model to
+    satisfy that is the single largest source of first-attempt generation failures, and it also
+    drives citation padding: to cover a long reference list the model must attach two or three
+    citations to nearly every object, and the trailing ones frequently do not support the claim.
+
+    Deriving the reference list from the citations instead makes the constraint true by
+    construction. Answer text is never touched, and each citation keeps pointing at exactly the
+    document it pointed at before, so no claim changes its evidence.
+    """
+    references = record.get("references")
+    answer = record.get("answer")
+    # Runs before validate_submission_record, so it cannot assume a well-formed record. A model
+    # that returns a malformed shape must produce a clear error here rather than a TypeError.
+    if not isinstance(references, list) or not references:
+        raise ValueError("generated references must be a nonempty list")
+    if not isinstance(answer, list) or not answer:
+        raise ValueError("generated answer must be a nonempty list")
+    for index, item in enumerate(answer):
+        if not isinstance(item, dict):
+            raise ValueError(f"answer[{index}] is not an object")
+        if not isinstance(item.get("text"), str):
+            raise ValueError(f"answer[{index}] has no text string")
+        if not isinstance(item.get("citations"), list):
+            raise ValueError(f"answer[{index}] has no citations list")
+
+    # Only prune uncited references. An out-of-range or non-integer citation is a model error
+    # that validate_submission_record is responsible for reporting, so it must not be silently
+    # dropped here: doing so would hide fabricated citation indexes behind a later, misleading
+    # "must have 1-3 citations" failure.
+    # A model may list the same docid at two positions. Collapse those to the first position so
+    # two citations that name one document do not survive as a duplicate pair.
+    canonical: dict[str, int] = {}
+    for position, docid in enumerate(references):
+        canonical.setdefault(str(docid), position)
+
+    order: list[int] = []
+    resolved: list[list[int]] = []
+    for index, item in enumerate(answer):
+        cites: list[int] = []
+        for citation in item["citations"]:
+            if type(citation) is not int or not 0 <= citation < len(references):
+                raise ValueError(f"answer[{index}] has an invalid citation: {citation!r}")
+            position = canonical[str(references[citation])]
+            if position not in cites:
+                cites.append(position)
+            if position not in order:
+                order.append(position)
+        resolved.append(cites)
+    if not order:
+        raise ValueError("generated answer cites no valid reference")
+
+    remap = {old: new for new, old in enumerate(order)}
+    return {
+        **record,
+        "references": [references[old] for old in order],
+        "answer": [
+            {"text": item["text"], "citations": [remap[c] for c in cites]}
+            for item, cites in zip(answer, resolved)
+        ],
+    }
+
+
+def trim_to_word_limit(record: dict[str, Any], *, max_words: int = 1024) -> dict[str, Any]:
+    """Drop trailing answer objects until the record fits the organizer word cap.
+
+    Models track a running word budget poorly: answers land at 950 to 1000 words and tip over
+    often enough that the cap is a leading cause of generation failure. Trimming the tail is
+    strictly better than discarding the whole topic, and later objects are the least load-bearing
+    because the answer is written most-important-first.
+
+    Runs before ``normalize_generated_record`` so that references orphaned by the trim are then
+    rebuilt away.
+    """
+    answer = record.get("answer")
+    if not isinstance(answer, list) or not answer:
+        raise ValueError("generated answer must be a nonempty list")
+    for index, item in enumerate(answer):
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            raise ValueError(f"answer[{index}] is not an object with text")
+    kept: list[dict[str, Any]] = []
+    words = 0
+    for item in answer:
+        length = len(item["text"].split())
+        if words + length > max_words:
+            break
+        kept.append(item)
+        words += length
+    if not kept:
+        raise ValueError("first answer object alone exceeds the word limit")
+    if len(kept) == len(answer):
+        return record
+    return {**record, "answer": kept}
 
 
 def _validate_generated_submission_record(
@@ -1082,21 +1433,27 @@ async def _generate_topic(
             generated, raw_response = await asyncio.to_thread(
                 generator.complete_json,
                 topic_id=topic_id,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=render_prompt(narrative, ranked_docids, documents),
+                system_prompt=system_prompt_for(config.prompt_profile),
+                user_prompt=render_prompt(
+                    narrative, ranked_docids, documents, config.prompt_profile
+                ),
                 response_schema=output_schema(),
             )
         _write_json(
             work_dir / "raw" / f"{topic_name}.json",
             _redact(raw_response, secrets),
         )
-        record = build_submission_record(
-            generated,
-            topic_id=topic_id,
-            narrative=narrative,
-            team_id=config.team_id,
-            run_id=config.run_id,
-            run_desc=config.run_desc,
+        record = normalize_generated_record(
+            trim_to_word_limit(
+                build_submission_record(
+                generated,
+                topic_id=topic_id,
+                narrative=narrative,
+                team_id=config.team_id,
+                run_id=config.run_id,
+                    run_desc=config.run_desc,
+                )
+            )
         )
         _validate_generated_submission_record(
             record,
@@ -1166,6 +1523,83 @@ def _clear_generation_artifacts(config: RagGenerationConfig) -> None:
         _fsync_directory(config.output_path.parent)
 
 
+def _file_digest(path: Path) -> str:
+    """Return a streaming sha256 so large document archives do not load into memory."""
+    digest = sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _generation_identity(config: RagGenerationConfig) -> dict[str, Any]:
+    """Return the settings that make already-generated rows comparable.
+
+    Resuming reuses rows produced by an earlier invocation. Those rows are revalidated for
+    shape, but shape cannot detect that they came from a different model or prompt, so a resume
+    after any of these changed would publish one file containing answers from two systems.
+
+    The retrieval inputs are digested too. Regenerating them in place between create and resume
+    would otherwise leave earlier rows grounded in evidence that no longer exists, and they
+    would still validate whenever their references happen to survive.
+    """
+    return {
+        # Bump when the recorded fields change OR when the acceptance policy changes, so rows
+        # written under looser rules are not adopted. Version 3 requires finish_reason "stop";
+        # version 2 rows may have been accepted with "error", "content_filter", or none at all.
+        "identity_version": 3,
+        "run_sha256": _file_digest(config.run_path),
+        "documents_sha256": _file_digest(config.documents_path),
+        "archive_member": config.archive_member,
+        "model": config.model,
+        "provider": config.provider,
+        "api_base": config.api_base,
+        "reasoning_effort": config.reasoning_effort,
+        "prompt_profile": config.prompt_profile,
+        "structured_output": config.structured_output,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "top_k": config.top_k,
+        "max_document_words": config.max_document_words,
+    }
+
+
+def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) -> None:
+    """Refuse to resume into rows generated under different settings.
+
+    Fails closed. Rows that predate identity tracking, or that were recorded by an older
+    identity version, cannot be shown to match the current settings, so they are rejected rather
+    than adopted: adopting them would publish one file mixing two systems.
+    """
+    identity_path = work_dir / "generation_identity.json"
+    identity = _generation_identity(config)
+    if identity_path.exists():
+        recorded = json.loads(identity_path.read_text(encoding="utf-8"))
+        if recorded.get("identity_version") != identity["identity_version"]:
+            raise ValueError(
+                "existing generation rows were recorded by an older revision and cannot be "
+                "verified against the current settings; use experiment.mode: overwrite or a "
+                "new experiment.id"
+            )
+        if recorded != identity:
+            changed = sorted(
+                key for key in set(recorded) | set(identity)
+                if recorded.get(key) != identity.get(key)
+            )
+            raise ValueError(
+                "existing generation rows were produced under different settings "
+                f"({', '.join(changed)}); use experiment.mode: overwrite or a new experiment.id"
+            )
+        return
+    if _work_has_artifacts(work_dir):
+        raise ValueError(
+            "existing generation rows predate settings tracking and cannot be verified "
+            "against the current settings; use experiment.mode: overwrite or a new "
+            "experiment.id"
+        )
+    _write_json(identity_path, identity)
+
+
 async def _run_generation_locked(
     config: RagGenerationConfig, generator: JsonGenerator
 ) -> None:
@@ -1188,7 +1622,12 @@ async def _run_generation_locked(
         config.archive_member,
         wanted_docids,
         config.max_document_words,
+        topic_ids={topic_id for topic_id, _ in topics},
     )
+    # After the fallible input loading, so a failed overwrite leaves no work directory behind.
+    work_dir.mkdir(parents=True, exist_ok=True)
+    _enforce_generation_identity(config, work_dir)
+
     rows_dir = work_dir / "rows"
     pending: list[tuple[str, str]] = []
     for topic_id, narrative in topics:
@@ -1279,6 +1718,7 @@ def main() -> None:
             api_key=os.environ.get(config.api_key_env, ""),
             model=config.model,
             reasoning_effort=config.reasoning_effort,
+            structured_output=config.structured_output,
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             timeout_seconds=config.timeout_seconds,

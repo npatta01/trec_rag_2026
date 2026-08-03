@@ -672,6 +672,272 @@ def test_prompt_labels_documents_by_docid_without_numeric_pseudo_citations() -> 
     assert "[2] docid:" not in prompt
 
 
+def test_prompt_profiles_differ_and_default_is_unchanged() -> None:
+    documents = {"climbmix-a": "Evidence A."}
+
+    default = competition_rag.render_prompt("Narrative?", ["climbmix-a"], documents)
+    atomic = competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "atomic_claims"
+    )
+
+    assert default == competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "default"
+    )
+    assert "one self-contained sentence" in atomic
+    assert "one self-contained sentence" not in default
+    # Both profiles keep the organizer-facing constraints (templates are line-wrapped).
+    for prompt in (default, atomic):
+        flat = " ".join(prompt.split())
+        assert "one to three unique zero-based citation indexes" in flat
+        assert "strongest to weakest support" in flat
+        assert "Reference document docid: climbmix-a" in prompt
+
+
+def test_full_budget_profile_keeps_atomic_wording_and_adds_budget_guidance() -> None:
+    documents = {"climbmix-a": "Evidence A."}
+
+    atomic = competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "atomic_claims"
+    )
+    full = competition_rag.render_prompt(
+        "Narrative?", ["climbmix-a"], documents, "atomic_claims_full_budget"
+    )
+
+    for prompt in (atomic, full):
+        flat = " ".join(prompt.split())
+        assert "one self-contained sentence" in flat
+        assert "strongest to weakest support" in flat
+    assert "Aim for roughly 900" in " ".join(full.split())
+    assert "Aim for roughly 900" not in " ".join(atomic.split())
+    # The budget guidance must not license padding.
+    assert "Do not pad" in full
+
+
+def test_normalizer_rebuilds_references_from_citations_without_touching_text() -> None:
+    record = {
+        "metadata": {"narrative_id": "58"},
+        # b and d are never cited; a and c are, out of order.
+        "references": ["doc-a", "doc-b", "doc-c", "doc-d"],
+        "answer": [
+            {"text": "Second reference first.", "citations": [2]},
+            {"text": "Then the first one.", "citations": [0, 2]},
+        ],
+    }
+
+    out = competition_rag.normalize_generated_record(record)
+
+    # References are exactly the cited docids, ordered by first use.
+    assert out["references"] == ["doc-c", "doc-a"]
+    # Every reference is now cited, which is what the strict profile demands.
+    used = {c for item in out["answer"] for c in item["citations"]}
+    assert used == set(range(len(out["references"])))
+    # Citations still point at the same documents they did before.
+    assert [out["references"][c] for c in out["answer"][0]["citations"]] == ["doc-c"]
+    assert [out["references"][c] for c in out["answer"][1]["citations"]] == ["doc-a", "doc-c"]
+    # Answer text is untouched.
+    assert [i["text"] for i in out["answer"]] == [i["text"] for i in record["answer"]]
+
+
+def test_normalized_record_satisfies_the_strict_profile(tmp_path: Path) -> None:
+    generated = {
+        "references": ["climbmix-a", "climbmix-b", "climbmix-c"],
+        "answer": [{"text": "A grounded claim.", "citations": [1]}],
+    }
+    record = competition_rag.normalize_generated_record(
+        competition_rag.build_submission_record(
+            generated,
+            topic_id="58",
+            narrative="Official question",
+            team_id="local-baseline",
+            run_id="dev-spike",
+            run_desc="development spike",
+        )
+    )
+
+    # Would have raised "uncited references" without normalization.
+    competition_rag._validate_generated_submission_record(
+        record,
+        topic_id="58",
+        narrative="Official question",
+        allowed_docids=["climbmix-a", "climbmix-b", "climbmix-c"],
+        team_id="local-baseline",
+        run_id="dev-spike",
+        run_desc="development spike",
+    )
+    assert record["references"] == ["climbmix-b"]
+
+
+def test_focused_profile_drops_the_cite_every_reference_rule() -> None:
+    focused = " ".join(
+        competition_rag.render_prompt(
+            "Narrative?", ["climbmix-a"], {"climbmix-a": "Evidence."}, "focused_citations"
+        ).split()
+    )
+    default = " ".join(
+        competition_rag.render_prompt(
+            "Narrative?", ["climbmix-a"], {"climbmix-a": "Evidence."}, "default"
+        ).split()
+    )
+
+    assert "cite every reference" in default
+    assert "cite every reference" not in focused
+    assert "single document that best supports" in focused
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        pytest.param(
+            {"references": ["a"], "answer": ["oops"]},
+            "not an object",
+            id="answer-item-is-a-string",
+        ),
+        pytest.param(
+            {"references": ["a"], "answer": [{"citations": [0]}]},
+            "text",
+            id="missing-text",
+        ),
+        pytest.param(
+            {"references": ["a"], "answer": [{"text": "x", "citations": 0}]},
+            "citations list",
+            id="citations-not-a-list",
+        ),
+        pytest.param(
+            {"references": "a", "answer": [{"text": "x", "citations": [0]}]},
+            "references must be a nonempty list",
+            id="references-not-a-list",
+        ),
+    ],
+)
+def test_post_processors_reject_malformed_shapes_cleanly(
+    record: dict[str, Any], expected: str
+) -> None:
+    """These run before validation, so a malformed model response must not raise TypeError.
+
+    Relaxing structured output to json_object produced exactly these shapes from a live model.
+    """
+    with pytest.raises(ValueError, match=expected):
+        competition_rag.normalize_generated_record(
+            competition_rag.trim_to_word_limit(record)
+        )
+
+
+def test_normalizer_collapses_a_duplicate_citation() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a", "doc-b"],
+        "answer": [{"text": "Claim.", "citations": [1, 1]}],
+    }
+    out = competition_rag.normalize_generated_record(record)
+    # Would otherwise survive as [0, 0] and fail the unique-citation rule.
+    assert out["answer"][0]["citations"] == [0]
+    assert out["references"] == ["doc-b"]
+
+
+def test_normalizer_canonicalizes_a_docid_listed_twice() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a", "doc-b", "doc-a"],
+        "answer": [{"text": "Claim.", "citations": [0, 2]}],
+    }
+    out = competition_rag.normalize_generated_record(record)
+    # Both positions name the same document, so one citation of one reference remains.
+    assert out["references"] == ["doc-a"]
+    assert out["answer"][0]["citations"] == [0]
+
+
+def test_normalizer_reports_an_invalid_citation_rather_than_dropping_it() -> None:
+    """A fabricated citation index must fail loudly, not be silently pruned.
+
+    Two of the generators tested for this track emitted document ids outside the retrieval
+    pool, so this is a live failure mode rather than a hypothetical one.
+    """
+    record = {
+        "metadata": {"narrative_id": "58"},
+        "references": ["doc-a", "doc-b"],
+        "answer": [
+            {"text": "Grounded claim.", "citations": [0]},
+            {"text": "Fabricated pointer.", "citations": [9]},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="answer\\[1\\] has an invalid citation"):
+        competition_rag.normalize_generated_record(record)
+
+
+def test_normalizer_rejects_a_partially_invalid_citation_list() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a", "doc-b"],
+        "answer": [{"text": "Claim.", "citations": [0, 9]}],
+    }
+
+    with pytest.raises(ValueError, match="invalid citation"):
+        competition_rag.normalize_generated_record(record)
+
+
+def test_word_cap_trim_drops_trailing_objects_and_frees_their_references() -> None:
+    record = {
+        "metadata": {"narrative_id": "58"},
+        "references": ["doc-a", "doc-b"],
+        "answer": [
+            {"text": "word " * 900, "citations": [0]},
+            {"text": "word " * 200, "citations": [1]},
+        ],
+    }
+
+    trimmed = competition_rag.trim_to_word_limit(record)
+    assert len(trimmed["answer"]) == 1
+    assert sum(len(i["text"].split()) for i in trimmed["answer"]) <= 1024
+
+    # The reference only the dropped object cited is normalized away.
+    out = competition_rag.normalize_generated_record(trimmed)
+    assert out["references"] == ["doc-a"]
+
+
+def test_word_cap_trim_is_a_no_op_when_already_within_budget() -> None:
+    record = {
+        "metadata": {},
+        "references": ["doc-a"],
+        "answer": [{"text": "Short claim.", "citations": [0]}],
+    }
+    assert competition_rag.trim_to_word_limit(record) is record
+
+
+def test_tail_contract_profile_restates_the_contract_after_the_question() -> None:
+    """With 100 documents inserted the contract sits ~120k tokens from the generation point."""
+    prompt = competition_rag.render_prompt(
+        "What about nuclear?", ["d1"], {"d1": "evidence"}, "focused_citations_tail"
+    )
+
+    assert prompt.index("Question: What about nuclear?") < prompt.index("Restating the output")
+    # The leading contract is preserved, not moved.
+    assert prompt.index("one self-contained sentence") < prompt.index("Reference document")
+    flat = " ".join(prompt.split())
+    assert flat.count("never more than 1,024") == 1
+
+
+def test_contract_in_system_profile_moves_the_contract_to_the_system_channel() -> None:
+    system = competition_rag.system_prompt_for("contract_in_system")
+    user = competition_rag.render_prompt("Q?", ["d1"], {"d1": "t"}, "contract_in_system")
+
+    assert "one to three unique zero-based" in system
+    assert "one to three unique zero-based" not in user
+    # Other profiles keep the original short system message.
+    assert competition_rag.system_prompt_for("focused_citations") == competition_rag.SYSTEM_PROMPT
+    assert competition_rag.system_prompt_for("default") == competition_rag.SYSTEM_PROMPT
+
+
+def test_system_prompt_for_rejects_an_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="unsupported prompt profile"):
+        competition_rag.system_prompt_for("nonexistent")
+
+
+def test_unknown_prompt_profile_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported prompt profile"):
+        competition_rag.render_prompt("Narrative?", [], {}, "nonexistent")
+
+
 def test_configuration_mode_guidance_uses_config_values_not_cli_flags(tmp_path: Path) -> None:
     existing = _pipeline_config(tmp_path)
     existing.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1153,9 +1419,7 @@ def test_invalid_model_output_keeps_final_submission_absent(tmp_path: Path) -> N
     ("references", "citations"),
     [
         pytest.param(["climbmix-a"], [], id="empty-citations"),
-        pytest.param(["climbmix-a"], [0, 0], id="duplicate-citations"),
         pytest.param(["climbmix-a"], ["climbmix-a"], id="direct-docid-citation"),
-        pytest.param(["climbmix-a", "climbmix-b"], [0], id="uncited-reference"),
     ],
 )
 def test_generation_rejects_organizer_valid_rows_outside_strict_profile(
@@ -1173,6 +1437,280 @@ def test_generation_rejects_organizer_valid_rows_outside_strict_profile(
         asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
 
     assert not config.output_path.exists()
+
+
+def test_generation_now_prunes_an_uncited_reference_instead_of_failing(tmp_path: Path) -> None:
+    """Uncited references used to fail the strict profile; they are normalized away."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a", "climbmix-b"],
+        "answer": [{"text": "Only the second source is cited.", "citations": [1]}],
+    }
+
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    rows = [json.loads(line) for line in config.output_path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["references"] == ["climbmix-b"]
+    assert rows[0]["answer"][0]["citations"] == [0]
+    assert rows[0]["answer"][0]["text"] == "Only the second source is cited."
+
+
+def test_generation_normalizes_duplicate_citations_end_to_end(tmp_path: Path) -> None:
+    """Cover the full generate-to-publish path, not just the normalizer in isolation."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a", "climbmix-b"],
+        "answer": [{"text": "One document, cited twice.", "citations": [1, 1]}],
+    }
+
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    rows = [json.loads(line) for line in config.output_path.read_text().splitlines()]
+    assert rows[0]["references"] == ["climbmix-b"]
+    assert rows[0]["answer"][0]["citations"] == [0]
+
+
+def test_truncated_completion_is_rejected_rather_than_shortened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Grammar-constrained decoding can close the JSON validly while the answer is cut short."""
+    generator = competition_rag.OpenRouterJsonGenerator(
+        api_base="https://openrouter.test",
+        api_key="test-key",
+        model="m",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=10,
+        timeout_seconds=5.0,
+        transport_max_attempts=1,
+    )
+    body = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "references": ["climbmix-a"],
+                            "answer": [{"text": "Cut short.", "citations": [0]}],
+                        }
+                    )
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        competition_rag.requests, "post", lambda *a, **k: FakeHttpResponse(200, body)
+    )
+    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+
+    with pytest.raises(competition_rag.SemanticCompletionError, match="truncated"):
+        generator.complete_json(
+            topic_id="rag2026-1",
+            system_prompt="s",
+            user_prompt="u",
+            response_schema=competition_rag.output_schema(),
+        )
+
+
+@pytest.mark.parametrize(
+    "finish_reason",
+    [
+        pytest.param("error", id="provider-error-with-partial-content"),
+        pytest.param("content_filter", id="content-filter"),
+        pytest.param("tool_calls", id="tool-calls"),
+        pytest.param(None, id="absent"),
+        pytest.param("unrecognised", id="unknown"),
+    ],
+)
+def test_only_a_stop_finish_reason_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, finish_reason: str | None
+) -> None:
+    """OpenRouter returns HTTP 200 with finish_reason 'error' and partial content."""
+    generator = competition_rag.OpenRouterJsonGenerator(
+        api_base="https://openrouter.test",
+        api_key="test-key",
+        model="m",
+        reasoning_effort="medium",
+        temperature=None,
+        max_tokens=100,
+        timeout_seconds=5.0,
+        transport_max_attempts=1,
+    )
+    choice: dict[str, Any] = {
+        "message": {
+            "content": json.dumps(
+                {
+                    "references": ["climbmix-a"],
+                    "answer": [{"text": "Looks complete.", "citations": [0]}],
+                }
+            )
+        }
+    }
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    monkeypatch.setattr(
+        competition_rag.requests,
+        "post",
+        lambda *a, **k: FakeHttpResponse(200, {"choices": [choice]}),
+    )
+    monkeypatch.setattr(competition_rag.time, "sleep", lambda _: None)
+
+    with pytest.raises(competition_rag.SemanticCompletionError, match="rather than 'stop'"):
+        generator.complete_json(
+            topic_id="rag2026-1",
+            system_prompt="s",
+            user_prompt="u",
+            response_schema=competition_rag.output_schema(),
+        )
+
+
+def test_resume_refuses_rows_generated_under_different_settings(tmp_path: Path) -> None:
+    """Resume reuses saved rows; shape revalidation cannot detect a changed model or prompt."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    changed = replace(config, resume=True, prompt_profile="focused_citations_tail")
+    with pytest.raises(ValueError, match="different settings"):
+        asyncio.run(run_generation(changed, FakeGenerator({"rag2026-1": generated})))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"max_tokens": 7000}, id="max-tokens"),
+        pytest.param({"temperature": 0.2}, id="temperature"),
+        pytest.param({"api_base": "https://elsewhere.test"}, id="api-base"),
+        pytest.param({"model": "other/model"}, id="model"),
+    ],
+)
+def test_resume_refuses_any_request_affecting_change(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
+    """Every setting that reaches the request must invalidate a resume."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    with pytest.raises(ValueError, match="different settings"):
+        asyncio.run(
+            run_generation(
+                replace(config, resume=True, **change), FakeGenerator({"rag2026-1": generated})
+            )
+        )
+
+
+def test_generation_identity_covers_every_request_and_input_selector(tmp_path: Path) -> None:
+    """archive_member fails earlier during input loading, so assert it directly."""
+    config = _pipeline_config(tmp_path)
+    base = competition_rag._generation_identity(config)
+
+    for field, value in [
+        ("archive_member", "other.jsonl"),
+        ("temperature", 0.2),
+        ("max_tokens", 7000),
+        ("api_base", "https://elsewhere.test"),
+        ("structured_output", "json_object"),
+        ("prompt_profile", "focused_citations_tail"),
+        ("top_k", 50),
+        ("max_document_words", 500),
+    ]:
+        changed = competition_rag._generation_identity(replace(config, **{field: value}))
+        assert changed != base, f"{field} does not invalidate the identity"
+
+
+def test_documents_are_bound_to_the_selected_topics(tmp_path: Path) -> None:
+    """The archive is keyed by topic; a shared docid must not borrow another topic's text."""
+    archive = tmp_path / "documents.jsonl"
+    archive.write_text(
+        json.dumps(
+            {
+                "query": {"qid": "rag2026-9"},
+                "candidates": [{"docid": "shared", "doc": "evidence retrieved for topic nine"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    # Without binding the wrong topic's evidence is silently accepted.
+    assert load_documents(archive, None, {"shared"}, 100) == {
+        "shared": "evidence retrieved for topic nine"
+    }
+    # With binding the mismatch surfaces instead.
+    with pytest.raises(ValueError, match="missing 1 ranked documents"):
+        load_documents(archive, None, {"shared"}, 100, topic_ids={"rag2026-1"})
+
+
+def test_identity_version_rejects_rows_written_under_the_older_finish_policy(
+    tmp_path: Path,
+) -> None:
+    """Version 2 rows may have been accepted with a non-stop finish reason."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+    path = config.work_dir / "generation_identity.json"
+    recorded = json.loads(path.read_text())
+    assert recorded["identity_version"] == 3
+    recorded["identity_version"] = 2
+    path.write_text(json.dumps(recorded), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="older revision"):
+        asyncio.run(run_generation(replace(config, resume=True), FakeGenerator({})))
+
+
+def test_resume_refuses_rows_that_predate_settings_tracking(tmp_path: Path) -> None:
+    """A workdir from before identity tracking cannot be shown to match; adopt nothing."""
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+    (config.work_dir / "generation_identity.json").unlink()
+
+    with pytest.raises(ValueError, match="predate settings tracking"):
+        asyncio.run(run_generation(replace(config, resume=True), FakeGenerator({})))
+
+
+def test_resume_refuses_an_older_identity_version(tmp_path: Path) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+    path = config.work_dir / "generation_identity.json"
+    recorded = json.loads(path.read_text())
+    recorded["identity_version"] = 1
+    path.write_text(json.dumps(recorded), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="older revision"):
+        asyncio.run(run_generation(replace(config, resume=True), FakeGenerator({})))
+
+
+def test_resume_accepts_rows_generated_under_the_same_settings(tmp_path: Path) -> None:
+    config = replace(_pipeline_config(tmp_path), topic_ids=("rag2026-1",))
+    generated = {
+        "references": ["climbmix-a"],
+        "answer": [{"text": "A grounded claim.", "citations": [0]}],
+    }
+    asyncio.run(run_generation(config, FakeGenerator({"rag2026-1": generated})))
+
+    resumed = FakeGenerator({})
+    asyncio.run(run_generation(replace(config, resume=True), resumed))
+    assert resumed.calls == [], "resume should reuse the saved row without regenerating"
 
 
 def test_persisted_raw_responses_and_errors_redact_configured_api_key(
@@ -1221,11 +1759,12 @@ def test_openrouter_redacts_its_key_from_persisted_success_envelope(
             "id": f"provider-reflected-{api_key}",
             "choices": [
                 {
+                    "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(
                             _topic_output(["climbmix-c"], "C supports it.")
                         )
-                    }
+                    },
                 }
             ],
         },
@@ -1285,11 +1824,12 @@ def test_percent_encoded_api_key_in_parsed_envelope_never_persists(
             "id": f"provider-reflected-{reflected_key}",
             "choices": [
                 {
+                    "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(
                             _topic_output(["climbmix-c"], "C supports it.")
                         )
-                    }
+                    },
                 }
             ],
         },
@@ -1350,9 +1890,10 @@ def _provider_success() -> FakeHttpResponse:
             "id": "response-1",
             "choices": [
                 {
+                    "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(_topic_output(["climbmix-a"], "Supported."))
-                    }
+                    },
                 }
             ],
         },
@@ -1391,7 +1932,7 @@ def test_malformed_semantic_completion_is_not_retried(monkeypatch: pytest.Monkey
         nonlocal calls
         del url, kwargs
         calls += 1
-        return FakeHttpResponse(200, {"choices": [{"message": {"content": "not JSON"}}]})
+        return FakeHttpResponse(200, {"choices": [{"finish_reason": "stop", "message": {"content": "not JSON"}}]})
 
     monkeypatch.setattr(competition_rag.requests, "post", fake_post)
     with pytest.raises(ValueError, match="no repair call") as error:

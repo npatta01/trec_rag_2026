@@ -1253,3 +1253,53 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.rerank_cache_promotion promote \
 
 The Modal and local paths differ, but the artifact rows, cache keys, validation
 rules, and pipeline consumer interface are the same.
+
+## Answer-quality evaluation
+
+`ragdoll_io.py` and `dev_rag_inputs.py` support scoring generated answers with the organizer
+harness, tracked as the `ragdoll` submodule. Neither is on the competition path.
+
+### `ragdoll_io.py`
+
+Derives RAGDoll inputs from a published submission JSONL, writing sidecar files rather than
+editing the submission. RAGDoll resolves a topic id only from a top-level `qid`, while the
+organizer contract requires exactly the `metadata`/`references`/`answer` root keys, so an
+unadapted submission joins to nothing and reports empty metrics instead of failing.
+
+```bash
+.venv/bin/python -m trec_rag.ragdoll_io \
+  --submission outputs/<id>/rag_output_trec_rag_2026.jsonl \
+  --gold-nuggets trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl \
+  --answers-out <dir>/answers.jsonl --nuggets-out <dir>/nuggets.jsonl \
+  --documents <the document file the generator read> --support-out <dir>/support_input.jsonl
+```
+
+Outputs: an answers file and reshaped gold nuggets for `ragdoll nuggetizer eval`, and
+optionally resolved rows for `ragdoll support judge`. Validation: the answers/nuggets join must
+be non-empty, every cited docid must resolve to text, and a citation naming a document outside
+`references` is rejected because RAGDoll would silently drop it from the metric denominator.
+
+`--documents` must be the file the generator actually read. Judging citations against text the
+model never saw produces spurious No Support; doing so once inflated a measured rate from 4.8%
+to 32.7% and inverted a conclusion.
+
+### `dev_rag_inputs.py`
+
+Builds a TREC run and document JSONL for development topics from the archived Pyserini
+responses under `cache/retrieval/pyserini_remote`. Those archives predate the retriever
+provenance sidecar, so they cannot be replayed through `trec_rag.pipeline`; this module reads
+them as an archive and never writes a sidecar, because synthesizing provenance would defeat
+that check. The emitted ordering is therefore raw BM25, not reranked.
+
+```bash
+.venv/bin/python -m trec_rag.dev_rag_inputs \
+  --topic 58 --topic 213 --cache-dir cache/retrieval/pyserini_remote \
+  --run-path <dir>/run.tsv --documents-path <dir>/documents.jsonl \
+  --run-id <id> --depth 100 [--passage-words 1000]
+```
+
+Outputs: a six-column TREC run and one document row per topic, both shaped for
+`trec_rag.competition_rag`. With `--passage-words`, each document is reduced to its most
+query-relevant chunks via `trec_rag.chunking.SemanticTextChunker` instead of being left for the
+generator to head-truncate. Validation: ranks are dense and scores non-increasing so
+`load_trec_run` accepts the output, and duplicate docids are collapsed to their best rank.

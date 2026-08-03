@@ -1,0 +1,531 @@
+{
+  "arm_c_atomic_full_budget": {
+    "nugget": {
+      "all_score": 0.654053,
+      "strict_all_score": 0.59576,
+      "strict_vital_score": 0.620539,
+      "vital_score": 0.679943
+    },
+    "prompt_note": "Generated under the original wording ('use most of that budget'). The profile has since been retargeted to ~900 words with a hard 1,024 ceiling; these numbers predate that change.",
+    "prompt_profile": "atomic_claims_full_budget",
+    "references_per_topic": {
+      "144": 18,
+      "200": 23,
+      "58": 91,
+      "72": 14
+    },
+    "support": {
+      "hard_precision": 0.438,
+      "labels": {
+        "FS": 85,
+        "NS": 89,
+        "PS": 122
+      },
+      "weighted_precision_all_judged_citations": 0.542,
+      "weighted_precision_first_citation": 0.633
+    },
+    "words_per_answer": {
+      "144": 912,
+      "200": 937,
+      "58": 841,
+      "72": 850
+    }
+  },
+  "arm_d_focused_citations": {
+    "change": "Removed the 'cite every reference' instruction; told the model to cite the single best supporting document and add more only if each independently supports the object.",
+    "nugget": {
+      "all_score": 0.651032,
+      "strict_all_score": 0.568619,
+      "strict_vital_score": 0.588128,
+      "vital_score": 0.678082
+    },
+    "oracle_repaired_support": {
+      "weighted_precision_all_judged_citations": 0.768,
+      "weighted_precision_first_citation": 0.768
+    },
+    "pipeline_change": "Added trim_to_word_limit and normalize_generated_record, so the word cap and the all-cited rule are enforced deterministically instead of by prompt.",
+    "prompt_profile": "focused_citations",
+    "structure": {
+      "citations_per_object": "exactly 1 on all 161 objects",
+      "objects": {
+        "144": 34,
+        "200": 39,
+        "58": 42,
+        "72": 46
+      },
+      "references": {
+        "144": 13,
+        "200": 23,
+        "58": 15,
+        "72": 12
+      },
+      "words": {
+        "144": 954,
+        "200": 966,
+        "58": 981,
+        "72": 978
+      }
+    },
+    "support": {
+      "hard_precision": 0.481,
+      "labels": {
+        "FS": 74,
+        "NS": 15,
+        "PS": 68
+      },
+      "no_support_rate": 0.096,
+      "weighted_precision_all_judged_citations": 0.692,
+      "weighted_precision_first_citation": 0.692
+    }
+  },
+  "caveats": [
+    "Four topics; consistent direction but not a significance test.",
+    "Generation is high variance: the same default config produced 9 and then 28 answer objects for topic 58 in different runs.",
+    "Judge changed from gpt-5.5 to DeepSeek V4 Flash, so absolute values are not comparable across records; the A/B contrast within this record is consistent.",
+    "Automated assignment scores above NIST manual assignment."
+  ],
+  "citation_count_effect": {
+    "arm_c": {
+      "1_citation": {
+        "fs_rate": 0.725,
+        "n": 51,
+        "ns_rate": 0.137
+      },
+      "2_citations": {
+        "fs_rate": 0.279,
+        "n": 122,
+        "ns_rate": 0.213
+      },
+      "3_citations": {
+        "fs_rate": 0.111,
+        "n": 126,
+        "ns_rate": 0.444
+      }
+    },
+    "description": "Full Support rate collapses as citations per object rise; measured on arm C.",
+    "mechanism": "The all-cited rule forced long reference lists to be covered by padding two or three citations onto nearly every object; trailing citations frequently do not support the claim."
+  },
+  "citation_support": {
+    "arm_a_default": {
+      "hard_precision": 0.071,
+      "labels": {
+        "FS": 4,
+        "NS": 51,
+        "PS": 116,
+        "unparsed": 4
+      },
+      "weighted_precision_all_judged_citations": 0.415,
+      "weighted_precision_first_citation": 0.475
+    },
+    "arm_b_atomic": {
+      "hard_precision": 0.383,
+      "labels": {
+        "FS": 48,
+        "NS": 18,
+        "PS": 92,
+        "unparsed": 2
+      },
+      "weighted_precision_all_judged_citations": 0.622,
+      "weighted_precision_first_citation": 0.671
+    },
+    "delta_b_minus_a": {
+      "hard_precision": 0.312,
+      "weighted_precision_all_judged_citations": 0.207,
+      "weighted_precision_first_citation": 0.196
+    },
+    "topics_favouring_a": 0,
+    "topics_favouring_b": 4
+  },
+  "deepseek_configuration_sweep": {
+    "eliminated": {
+      "effort_max": "No better than high; 3/4 topics, one lost to a fabricated citation index.",
+      "model_version": "deepseek-v4-flash was a superseded 2026-04-24 preview; 0731 is newer and cheaper.",
+      "provider_routing": "structured_output json_object failed 3/4 topics with malformed shapes, so the strict schema is load-bearing and the third-party-routing hypothesis is disproved.",
+      "reasoning_effort": "OpenRouter's medium is not a native DeepSeek level and spent roughly half the token budget on reasoning, causing 397-676 word answers. Native high fixed length entirely.",
+      "vendor_json_example": "DeepSeek documents that JSON output needs a worked in-prompt example. Adding one made compliance worse, 59% to 26% single-citation, with shorter answers and one failure."
+    },
+    "purpose": "Establish whether the DeepSeek coverage gap was configuration or capability.",
+    "remaining": "Instruction placement, which the tail contract addresses and which recovered most of the gap.",
+    "support_note": "DeepSeek 0731 beats Sol's focused_citations arm on citation support (hard precision 0.678 against 0.481) while trailing on coverage, so it is not uniformly worse."
+  },
+  "design": "Four development topics generated under both prompt profiles. Retrieval, generator model and judge held fixed. Judge is DeepSeek V4 Flash for every cell.",
+  "extractive_passage_selection": {
+    "budget_frontier": {
+      "description": "Passage budget trades coverage against citation precision; extraction dominates truncation at every point tested.",
+      "points": [
+        {
+          "strict_vital": 0.613,
+          "usd_per_topic": 0.7882,
+          "words_per_doc": 931,
+          "wp_first": 0.717
+        },
+        {
+          "strict_vital": 0.531,
+          "usd_per_topic": 0.2949,
+          "words_per_doc": 261,
+          "wp_first": 0.823
+        }
+      ],
+      "reading": "Less but better-selected text makes the model assert less and ground it better. Where to sit depends on how organizers weight coverage against support, which is not observable."
+    },
+    "change": "dev_rag_inputs --passage-words replaces the generator's head truncation with query-relevant window selection (120-word windows, scored by distinct narrative-term coverage, greedy non-overlapping, re-emitted in document order).",
+    "conclusion": "Extraction buys a 2.4x cost reduction and substantially better citation support for 0.057 strict_vital of coverage. It is a genuine trade rather than the free win predicted; a larger passage budget is the untested middle ground.",
+    "corpus_effect": {
+      "after": 261,
+      "reduction": "3.7x",
+      "words_per_document_before": 975
+    },
+    "cost": {
+      "after": 0.2949,
+      "full_119_topic_run_usd": {
+        "after": 35,
+        "before": 85
+      },
+      "reduction": "2.4x",
+      "usd_per_topic_before": 0.7115
+    },
+    "matched_budget_test": {
+      "budgets": {
+        "extractive_words_per_doc": 931,
+        "head_truncated_words_per_doc": 957
+      },
+      "cost_correction": "Extraction at full budget costs slightly more, not less: $0.7882 against $0.7115. Fewer document words are offset by longer answers, and output tokens dominate. Only reducing the budget saves money.",
+      "extractive_931w": {
+        "hard_precision": 0.506,
+        "no_support_rate": 0.074,
+        "strict_all": 0.564,
+        "strict_vital": 0.613,
+        "usd_per_topic": 0.7882,
+        "wp_all": 0.717,
+        "wp_first": 0.717
+      },
+      "finding": "At matched budget extraction beats truncation on four of five metrics: coverage +0.025, weighted precision +0.025, hard precision +0.025, No Support 9.6% to 7.4%, all-coverage level. No single delta clears the four-topic noise bar, but the direction is consistent across independent metrics. The 0.057 coverage loss in the first comparison came from the budget cut, not the selection method.",
+      "head_truncated": {
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "strict_all": 0.569,
+        "strict_vital": 0.588,
+        "usd_per_topic": 0.7115,
+        "wp_all": 0.692,
+        "wp_first": 0.692
+      },
+      "purpose": "Isolate selection method from budget. The first comparison changed both at once and could not attribute the coverage loss."
+    },
+    "measurement_error_corrected": "The extractive arm was first judged against the head-truncated document text rather than the passages its generator actually read, producing an artificial 32.7% No Support rate and an incorrect conclusion that extraction hurt support. Re-judging against matched evidence reversed it.",
+    "nugget": {
+      "strict_all_after": 0.510635,
+      "strict_all_before": 0.568619,
+      "strict_vital_after": 0.531249,
+      "strict_vital_before": 0.588128
+    },
+    "outstanding_caveat": "Each arm is now judged against its own evidence view, which is internally consistent but not what organizers do: they resolve citations from the index, i.e. full documents. Judging both arms against full document text is the realistic measurement and is untested.",
+    "support_judged_on_each_arm_own_evidence": {
+      "extractive": {
+        "hard_precision": 0.692,
+        "no_support_rate": 0.048,
+        "wp_all": 0.817,
+        "wp_first": 0.823
+      },
+      "head_truncated": {
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "wp_all": 0.692,
+        "wp_first": 0.692
+      }
+    }
+  },
+  "four_arm_summary": {
+    "caveat": "Four topics. Generation variance alone has produced 9 versus 28 objects for the same config, so coverage differences of this size are not resolved.",
+    "coverage_strict_vital": {
+      "a": 0.635,
+      "b": 0.57,
+      "c": 0.621,
+      "d": 0.588
+    },
+    "hard_precision": {
+      "a": 0.071,
+      "b": 0.383,
+      "c": 0.438,
+      "d": 0.481
+    },
+    "no_support_rate": {
+      "a": 0.298,
+      "b": 0.114,
+      "c": 0.301,
+      "d": 0.096
+    },
+    "oracle_wp_first": {
+      "a": 0.537,
+      "b": 0.696,
+      "c": 0.745,
+      "d": 0.768
+    },
+    "recommendation": "Arm D. It wins every citation-support metric both as generated and at the oracle repair ceiling, and because every object carries exactly one citation its wp_all equals wp_first by construction, so it cannot be diluted on the all-judged variant. It gives up 0.047 strict_vital against arm A for +0.217 weighted precision and +0.410 hard precision.",
+    "wp_all": {
+      "a": 0.415,
+      "b": 0.622,
+      "c": 0.542,
+      "d": 0.692
+    },
+    "wp_first": {
+      "a": 0.475,
+      "b": 0.671,
+      "c": 0.633,
+      "d": 0.692
+    }
+  },
+  "generation_reliability": {
+    "first_attempt_failures": {
+      "arm_a_of_22": 7,
+      "arm_b_of_8": 2,
+      "arm_c_of_4": 1
+    },
+    "implication": "About one topic in four fails first time. Over 119 topics that is ~30 resumes at $0.71 each.",
+    "modes": {
+      "exceeds_1024_words": 2,
+      "malformed_completion": 3,
+      "uncited_references": 4
+    },
+    "note": "Uncited-reference failures are self-imposed; the guidelines state uncited references do not hurt the score."
+  },
+  "generation_reliability_arm_d": {
+    "malformed_completion_failures": 1,
+    "note": "Normalization eliminated the uncited-reference mode entirely. The word cap became the dominant failure, which is why a deterministic trim was added.",
+    "uncited_reference_failures": 0,
+    "word_cap_failures": 3
+  },
+  "generator_model_sweep": {
+    "conclusion": "No cheaper model substitutes for Sol. Single-citation compliance tracks citation support almost monotonically (100% -> 9.6% No Support, 54% -> 34.3%, 26% -> 22.9%), and Sol is the only model that complied fully. Two models fabricated document ids outside the retrieval pool, which is a correctness failure rather than a formatting one.",
+    "design": "Arm D prompt and the same four topics for every model; only the generator changed. Judge held at deepseek-v4-flash throughout.",
+    "reliability_note": "Substitution here is a reliability problem as much as a quality one. The contract stacks strict JSON-schema structured output, reasoning effort and a multi-part formatting instruction; only Sol handled all three across providers. Two models needed max_tokens raised from 6,000 to 32,000 merely to finish, and truncated failures are still billed.",
+    "repair_ceiling": {
+      "description": "Dropping every judge-labelled No Support citation, an oracle upper bound.",
+      "finding": "A cheap model with flawless repair only reaches Sol's unrepaired score, and coverage is repair-proof because repair never edits answer text.",
+      "wp_all": {
+        "deepseek_flash": {
+          "now": 0.503,
+          "oracle": 0.695
+        },
+        "luna": {
+          "now": 0.442,
+          "oracle": 0.658
+        },
+        "sol": {
+          "now": 0.692,
+          "oracle": 0.768
+        }
+      }
+    },
+    "results": {
+      "deepseek/deepseek-v4-flash": {
+        "completed": "4/4",
+        "hard_precision": 0.328,
+        "no_support_rate": 0.229,
+        "single_citation_rate": 0.26,
+        "strict_all": 0.504,
+        "strict_vital": 0.542,
+        "usd_per_topic": 0.018,
+        "wp_all": 0.503,
+        "wp_first": 0.554
+      },
+      "deepseek/deepseek-v4-pro": {
+        "completed": "3/4",
+        "note": "Erratic citation compliance; 10 of 34 objects on one topic carried three citations.",
+        "usd_per_topic": 0.056
+      },
+      "google/gemini-3-flash-preview": {
+        "completed": "1/4",
+        "note": "Two topics failed by emitting docids outside the retrieval pool; poor citation compliance on the one that completed.",
+        "usd_per_topic": 0.071
+      },
+      "moonshotai/kimi-k2-thinking": {
+        "completed": "3/4",
+        "note": "Short answers, erratic citations, and one topic failed by emitting a docid outside the retrieval pool.",
+        "usd_per_topic": 0.081
+      },
+      "openai/gpt-5.6-luna": {
+        "completed": "4/4",
+        "hard_precision": 0.227,
+        "no_support_rate": 0.343,
+        "single_citation_rate": 0.54,
+        "strict_all": 0.507,
+        "strict_vital": 0.511,
+        "usd_per_topic": 0.071,
+        "wp_all": 0.442,
+        "wp_first": 0.456
+      },
+      "openai/gpt-5.6-sol": {
+        "completed": "4/4",
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "single_citation_rate": 1.0,
+        "strict_all": 0.569,
+        "strict_vital": 0.588,
+        "usd_per_topic": 0.712,
+        "wp_all": 0.692,
+        "wp_first": 0.692
+      },
+      "z-ai/glm-4.7": {
+        "completed": "0/4",
+        "note": "Returns finish_reason stop with completion tokens but null content via DeepInfra; a provider response-shape problem, not max_tokens.",
+        "usd_per_topic": 0.055
+      }
+    },
+    "spend_provider_reported_usd": 35.42
+  },
+  "instruction_placement_and_transfer": {
+    "caveats": [
+      "Four topics, and Sol's gain is uneven: +0.114 on topic 58 and +0.082 on 200, flat on 144, -0.027 on 72.",
+      "DeepSeek's tail arm covers three topics; topic 72 failed twice with a non-JSON response and is where its baseline was weakest, so the DeepSeek tail mean is flattered."
+    ],
+    "deepseek_v4_flash_0731": {
+      "contract_in_system": {
+        "gain": -0.02,
+        "strict_vital_3_shared_topics": 0.509
+      },
+      "focused_citations": {
+        "strict_vital_3_shared_topics": 0.529
+      },
+      "focused_citations_tail": {
+        "gain": 0.05,
+        "strict_vital_3_shared_topics": 0.578
+      }
+    },
+    "findings": [
+      "Restating the contract after the question helps; moving it into the system message does not. The mechanism is proximity to the generation point, not channel privilege.",
+      "The gain transfers across models: Sol +0.042 strict_vital, DeepSeek +0.050. On the shared prompt Sol still leads DeepSeek by 0.081 on the three shared topics.",
+      "For Sol the tail contract is a strict improvement on every metric measured, so it replaces focused_citations in the competition config.",
+      "Transfer holding for this variant validates screening prompt changes on DeepSeek at 1/53 the cost, but it is one variant; a change targeting a DeepSeek-specific weakness need not transfer."
+    ],
+    "gpt_5_6_sol": {
+      "focused_citations": {
+        "hard_precision": 0.481,
+        "no_support_rate": 0.096,
+        "strict_all": 0.569,
+        "strict_vital": 0.588,
+        "wp_first": 0.692
+      },
+      "focused_citations_tail": {
+        "hard_precision": 0.586,
+        "no_support_rate": 0.09,
+        "strict_all": 0.609,
+        "strict_vital": 0.63,
+        "wp_first": 0.747
+      }
+    },
+    "hypothesis": "With 100 documents inserted the output contract sits roughly 120k tokens above the generation point, a lost-in-the-middle position. Only the question benefits from recency.",
+    "variants": {
+      "contract_in_system": "moves the contract into the system message, leaving documents plus question in the user message",
+      "focused_citations_tail": "restates a compact contract after the question"
+    }
+  },
+  "judge_model": "openrouter/deepseek/deepseek-v4-flash",
+  "length": {
+    "note": "Neither arm approaches the cap. Nugget scoring is pure recall with no length penalty.",
+    "pearson_r_words_vs_strict_vital": 0.704,
+    "word_cap": 1024,
+    "words": {
+      "144": {
+        "a": 747,
+        "b": 756
+      },
+      "200": {
+        "a": 935,
+        "b": 772
+      },
+      "58": {
+        "a": 770,
+        "b": 514
+      },
+      "72": {
+        "a": 653,
+        "b": 344
+      }
+    }
+  },
+  "nugget_coverage": {
+    "arm_a_default": {
+      "all_score": 0.653528,
+      "strict_all_score": 0.585388,
+      "strict_vital_score": 0.634783,
+      "vital_score": 0.699082
+    },
+    "arm_b_atomic": {
+      "all_score": 0.620867,
+      "strict_all_score": 0.537461,
+      "strict_vital_score": 0.569799,
+      "vital_score": 0.653012
+    },
+    "delta_b_minus_a": {
+      "strict_all_score": -0.047927,
+      "strict_vital_score": -0.064984
+    },
+    "topics_favouring_a": 4,
+    "topics_favouring_b": 0
+  },
+  "prompt_document_budget": {
+    "cost_share_of_prompt": 0.85,
+    "document_length_words": {
+      "max": 126338,
+      "mean": 5665,
+      "median": 3426,
+      "p90": 11410
+    },
+    "finding": "91% of documents are truncated and the model sees only 17% of the pool, always the opening words, which on web pages is frequently navigation chrome. Relevance-selected passages should cut cost roughly threefold while improving what the model reads; the window scorer in facet_retrieval.MixedbreadCoverageScorer already exists for this.",
+    "pool": "100 documents per topic, truncated to the first 1,000 words each",
+    "share_longer_than_cut": 0.91,
+    "share_of_pool_text_shown": 0.17
+  },
+  "review_corrections": {
+    "extraction_is_dev_only": "select_passages lives in dev_rag_inputs.py, which reads dev BM25 archives. competition_retrieval does not use it, so extractive selection is not on the competition path and is not proposed for this cycle.",
+    "normalizer_hardening": "Three defects found and fixed after review: invalid citations were silently pruned rather than reported, disabling an existing range check; duplicate citations survived remapping and failed validation later; and a docid listed at two positions produced two citations of one document. Invalid citations now raise, duplicates collapse, and references canonicalize by docid.",
+    "not_shipping": [
+      "Extractive passage selection: dev-only code path, deltas around 0.025 on four topics, and the 261-word precision figure partly reflects the model being able to echo only what it was shown.",
+      "The 261-word budget: a coverage/precision dial set without knowing organizer weighting.",
+      "Any generator conclusion beyond 'Sol only': one to four topics per model is anecdote."
+    ],
+    "one_citation_conclusion_qualified": "Partly metric mechanics. RAGDoll's hard_precision and weighted_precision_first_citation judge only citations[0], and weighted_precision_all_judged averages per object, so removing trailing citations improves the averaged metrics arithmetically rather than behaviourally. The 72.5/27.9/11.1 Full Support table also carries a confound: multi-citation objects are disproportionately the fused multi-claim objects no single document can support. What survives is that arm D beat every other arm on wp_first and hard_precision, which trailing citations cannot dilute, so its first citations genuinely improved. Credit belongs to 'cite the single best supporting document', not to capping the count. A second citation that independently supports the claim is free under every metric except the all-judged average, so 'exactly one' should stay prompt guidance and never become a validator rule.",
+    "reachability_gap": "The measured winner was not reachable by the competition pipeline. No checked-in config set prompt_profile, so a production run would have used the default prompt (arm A, hard precision 0.071) with the new post-processors, a combination never measured. Fixed by setting prompt_profile: focused_citations in configs/rag26_competition_rag_gpt_sol_v1.yaml."
+  },
+  "schema": "ragdoll_paired_prompt_profile_v1",
+  "supersedes": "The two-topic comparison in dev_ragdoll_nugget_eval_spike_v1, which reported atomic as neutral-to-better on coverage.",
+  "three_arm_summary": {
+    "hard_precision": {
+      "a": 0.071,
+      "b": 0.383,
+      "c": 0.438
+    },
+    "no_support_rate": {
+      "a": 0.298,
+      "b": 0.114,
+      "c": 0.301
+    },
+    "reading": "No arm dominates. B has by far the cleanest citations (11% No Support against 30% for both A and C) and the best weighted precision. C recovers most of B's coverage loss and posts the best strict_all and hard_precision, but its citation error rate returns to A's level: pushing length appears to make the model assert more than it can ground.",
+    "strict_all": {
+      "a": 0.585,
+      "b": 0.537,
+      "c": 0.596
+    },
+    "strict_vital": {
+      "a": 0.635,
+      "b": 0.57,
+      "c": 0.621
+    },
+    "weighted_precision_all_judged": {
+      "a": 0.415,
+      "b": 0.622,
+      "c": 0.542
+    },
+    "weighted_precision_first_citation": {
+      "a": 0.475,
+      "b": 0.671,
+      "c": 0.633
+    }
+  },
+  "topics": [
+    "58",
+    "72",
+    "144",
+    "200"
+  ]
+}
