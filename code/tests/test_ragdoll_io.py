@@ -156,6 +156,101 @@ def test_support_rows_carry_segments_for_every_cited_docid(tmp_path: Path) -> No
     assert row["answer"] == _submission_record()["answer"]
 
 
+def test_support_rows_keep_shared_docids_bound_to_each_topic(tmp_path: Path) -> None:
+    def record(qid: str) -> dict[str, Any]:
+        return {
+            "metadata": {"narrative_id": qid, "run_id": "dev-spike"},
+            "references": ["shared"],
+            "answer": [{"text": f"answer for {qid}", "citations": [0]}],
+        }
+
+    submission = _write_jsonl(
+        tmp_path / "rag.jsonl", [record("topic-a"), record("topic-b")]
+    )
+    documents = _write_jsonl(
+        tmp_path / "documents.jsonl",
+        [
+            {
+                "query": {"qid": "topic-a"},
+                "candidates": [{"docid": "shared", "doc": "topic A evidence"}],
+            },
+            {
+                "query": {"qid": "topic-b"},
+                "candidates": [{"docid": "shared", "doc": "topic B evidence"}],
+            },
+        ],
+    )
+
+    rows = ragdoll_io.resolved_support_rows(submission, documents)
+
+    assert rows[0]["topic_id"] == "topic-a"
+    assert rows[0]["segments"] == {"shared": "topic A evidence"}
+    assert rows[1]["topic_id"] == "topic-b"
+    assert rows[1]["segments"] == {"shared": "topic B evidence"}
+
+
+def test_support_rows_do_not_borrow_a_docid_from_another_topic(tmp_path: Path) -> None:
+    submission = _write_jsonl(
+        tmp_path / "rag.jsonl",
+        [
+            {
+                "metadata": {"narrative_id": "topic-a", "run_id": "dev-spike"},
+                "references": ["shared"],
+                "answer": [{"text": "answer", "citations": [0]}],
+            }
+        ],
+    )
+    documents = _write_jsonl(
+        tmp_path / "documents.jsonl",
+        [
+            {
+                "query": {"qid": "topic-b"},
+                "candidates": [{"docid": "shared", "doc": "topic B evidence"}],
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match=r"topic-a.*missing 1 ranked documents"):
+        ragdoll_io.resolved_support_rows(submission, documents)
+
+
+def test_support_rows_allow_a_shared_uncited_reference_for_another_topic(
+    tmp_path: Path,
+) -> None:
+    submission = _write_jsonl(
+        tmp_path / "rag.jsonl",
+        [
+            {
+                "metadata": {"narrative_id": "topic-a", "run_id": "dev-spike"},
+                "references": ["shared"],
+                "answer": [{"text": "cited answer", "citations": [0]}],
+            },
+            {
+                "metadata": {"narrative_id": "topic-b", "run_id": "dev-spike"},
+                "references": ["shared"],
+                "answer": [{"text": "uncited answer", "citations": []}],
+            },
+        ],
+    )
+    documents = _write_jsonl(
+        tmp_path / "documents.jsonl",
+        [
+            {
+                "query": {"qid": "topic-a"},
+                "candidates": [{"docid": "shared", "doc": "topic A evidence"}],
+            },
+            {
+                "query": {"qid": "topic-b"},
+                "candidates": [{"docid": "shared", "doc": "topic B evidence"}],
+            },
+        ],
+    )
+
+    rows = ragdoll_io.resolved_support_rows(submission, documents)
+
+    assert rows[1]["segments"] == {}
+
+
 def test_support_rows_reject_a_reference_without_document_text(tmp_path: Path) -> None:
     submission = _write_jsonl(tmp_path / "rag.jsonl", [_submission_record()])
     documents = _documents_file(tmp_path / "documents.jsonl", ["climbmix-a"])

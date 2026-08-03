@@ -187,21 +187,34 @@ def resolved_support_rows(
 
     Note also that organizers resolve references from the index, that is full documents, so
     scoring against any truncated view understates support for every arm.
+
+    Document lookup is scoped by ``metadata.narrative_id``. The same docid may therefore
+    carry different text for different topics without one support row borrowing another
+    topic's evidence.
     """
-    from trec_rag.competition_rag import load_documents
+    from trec_rag.competition_rag import load_topic_documents
 
     records = list(_read_jsonl(submission_path))
     if not records:
         raise ValueError(f"{submission_path}: no submission records")
 
     cited: set[str] = set()
+    topic_docids: dict[str, set[str]] = {}
     for record in records:
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError(f"{submission_path}: record is missing a metadata object")
+        topic_id = metadata.get("narrative_id")
+        if not isinstance(topic_id, str) or not topic_id.strip():
+            raise ValueError(f"{submission_path}: record is missing a narrative_id")
+        topic_id = topic_id.strip()
         references = record.get("references")
         if not isinstance(references, list) or not references:
             raise ValueError(f"{submission_path}: record has no references")
         answer = record.get("answer")
         if not isinstance(answer, list) or not answer:
             raise ValueError(f"{submission_path}: record has no answer objects")
+        record_cited: set[str] = set()
         for item in answer:
             if not isinstance(item, dict):
                 raise ValueError(f"{submission_path}: answer object is not an object")
@@ -209,7 +222,9 @@ def resolved_support_rows(
                 if type(citation) is int:
                     if not 0 <= citation < len(references):
                         raise ValueError(f"{submission_path}: citation {citation} out of range")
-                    cited.add(str(references[citation]))
+                    docid = str(references[citation])
+                    cited.add(docid)
+                    record_cited.add(docid)
                 elif isinstance(citation, str):
                     # A docid citation naming something outside references would be dropped from
                     # segments, and ragdoll support silently skips a citation it cannot resolve.
@@ -219,29 +234,43 @@ def resolved_support_rows(
                             f"{submission_path}: citation {citation!r} is not in references"
                         )
                     cited.add(citation)
+                    record_cited.add(citation)
                 else:
                     raise ValueError(f"{submission_path}: unsupported citation {citation!r}")
+        if record_cited:
+            topic_docids.setdefault(topic_id, set()).update(record_cited)
 
     if not cited:
         raise ValueError(f"{submission_path}: no citations to resolve")
-    documents = load_documents(documents_path, archive_member, cited, max_words)
+    documents_by_topic = load_topic_documents(
+        documents_path,
+        archive_member,
+        topic_docids,
+        max_words,
+    )
 
     rows: list[dict[str, object]] = []
     for record in records:
         metadata = record.get("metadata")
         if not isinstance(metadata, dict):
             raise ValueError(f"{submission_path}: record is missing a metadata object")
+        topic_id = metadata.get("narrative_id")
+        if not isinstance(topic_id, str) or not topic_id.strip():
+            raise ValueError(f"{submission_path}: record is missing a narrative_id")
+        topic_id = topic_id.strip()
+        documents = documents_by_topic.get(topic_id, {})
         references = [str(docid) for docid in record["references"]]  # type: ignore[index]
         # Only cited documents need text. Uncited references are valid per the task reference
         # and simply carry no support judgment.
-        missing = [docid for docid in references if docid in cited and docid not in documents]
+        topic_cited = topic_docids.get(topic_id, set())
+        missing = [docid for docid in references if docid in topic_cited and docid not in documents]
         if missing:
             raise ValueError(
                 f"{metadata.get('narrative_id')}: no document text for {', '.join(missing)}"
             )
         rows.append(
             {
-                "topic_id": str(metadata.get("narrative_id")),
+                "topic_id": topic_id,
                 "run_id": str(metadata.get("run_id")),
                 "metadata": metadata,
                 "references": references,
