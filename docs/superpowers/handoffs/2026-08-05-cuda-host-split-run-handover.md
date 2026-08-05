@@ -7,17 +7,22 @@ rented GPU box**, download the artifact, and finish the run locally.
 
 ## State
 
-- Branch `claude/cloud-topics-artifact-download-hy5osu`, 2 commits ahead of `origin/master`,
-  pushed, working tree clean. PR #39 OPEN, `mergeable_state: clean`. No CI — the repo has no
-  test workflows, only the dynamic Copilot reviewer agent.
-  - `7e0ab69` CUDA dependency group, `setup_cuda_env.sh`, device pin, docs
-  - `87111fa` both offline models prefetched, new experiment namespace (review fixes)
-- Review from the owner: two P1 and one P2. **Two fixed in `87111fa`; one P1 is still open and
-  is a merge blocker** — see below.
-- Tests: **1862 passed**, plus 15 failures and 5 collection errors that are all
+- Branch `claude/cloud-topics-artifact-download-hy5osu`, pushed, working tree clean. PR #39 OPEN,
+  `mergeable_state: clean`. No CI — the repo has no test workflows, only the dynamic Copilot
+  reviewer agent. For the exact commit list, read `git log origin/master..` rather than trusting
+  a count written here; in order, the work was:
+  - CUDA dependency group, `setup_cuda_env.sh`, device pin, docs
+  - both offline models prefetched, new experiment namespace (review round 1)
+  - `verify_torch_groups.sh` and the hermetic bootstrap contract tests (review round 2)
+  - this handover, plus any later follow-ups
+- Owner review, two rounds. Everything is addressed **except the `uv.lock` P1, which is still a
+  merge blocker** — see below.
+- Tests: **1870 passed**, plus 15 failures and 5 collection errors that are all
   `No module named 'numpy'` / missing `transformers` metadata in the cloud container. Identical
-  before and after the diff. They should actually run on the ROCm host — worth confirming green,
-  since they were never executed with the ML stack present.
+  before and after the diff. The owner confirmed `test_evidence_local_contract.py` passes 4/4 on a
+  host with the ML stack, so those are environmental. Worth running the whole suite once on a venv
+  that has both the ML stack and `deepagents`/`langchain`/OpenTelemetry — no single environment has
+  covered all of it yet.
   ```bash
   .venv/bin/python -m pytest -q
   ```
@@ -34,12 +39,16 @@ On this host, where radeon is reachable:
 
 ```bash
 uv lock
-uv sync --group cuda --locked      # must succeed with no repo.radeon.com fetch
-grep -A2 'name = "torch"' uv.lock  # expect a pypi.org entry alongside the rocm one
-uv sync --group rocm               # confirm the ROCm env still resolves as before
+./code/tools/verify_torch_groups.sh   # the acceptance check; must print OK for both groups
+uv sync --group cuda --locked         # must succeed with no repo.radeon.com fetch
+uv sync --group rocm                  # confirm the ROCm env still resolves as before
 ```
 
-Then commit the lock and the blocker clears.
+`verify_torch_groups.sh` is read-only (`uv export --frozen` resolves from the committed lock and
+never installs, downloads, or touches a cache), so it is safe to run beside an active task. Today
+it prints `OK rocm: torch @ https://repo.radeon.com/...` and `FAIL cuda: uv.lock does not carry
+this group`, exit 1. After regeneration the cuda line should read `OK cuda: torch==2.9.1` and the
+script should exit 0. Then commit the lock and the blocker clears.
 
 Mechanism note, because the review and the original PR description disagreed: `--locked`
 **re-resolves** in order to decide whether the lock is current, and that re-resolution pulls the
@@ -61,8 +70,16 @@ pins `torch==2.9.1` (PyPI CUDA build), `sentence-transformers==5.6.0`, `transfor
 reranker score-cache entries stay interchangeable across hosts.
 
 **2. `code/tools/setup_cuda_env.sh`.** Syncs that group, prefetches **both** models the
-production path loads with `local_files_only=True`, verifies each resolves from cache alone, and
-probes CUDA. `setup_env.sh` now dispatches ROCm → NVIDIA → plain.
+production path loads with `local_files_only=True` — `mxbai-rerank-base-v2` for passage scoring
+and `all-MiniLM-L6-v2` for evidence selection — verifies each resolves from cache alone, and
+probes CUDA. `setup_env.sh` now dispatches ROCm → NVIDIA → plain. Caching only the reranker is the
+trap: selection runs after scoring, so a missing MiniLM fails late with the expensive stage paid.
+
+`code/tests/test_env_setup_contract.py` guards this hermetically — no network, no cache writes, no
+torch needed. It executes the script's prefetch block against a stubbed `huggingface_hub`, and
+separately drives the two production loaders with stub loaders to assert the set they request
+equals the set the script prefetches. Drift in either direction fails. Mutation-checked: deleting
+the MiniLM line from the script fails four of the eight tests.
 
 **3. `passage.device: cuda`, replacing `auto`.** The resolved device string is part of the sealed
 passage-search identity, so `auto` is not portable across hosts (see findings).

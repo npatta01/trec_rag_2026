@@ -7,6 +7,7 @@ never writes to a model cache, and never needs torch installed.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 import re
 import sys
@@ -14,8 +15,16 @@ import types
 
 import pytest
 
-from trec_rag.evidence_local import MINILM_MODEL, MINILM_REVISION
-from trec_rag.mixedbread_passage_scorer import MIXEDBREAD_MODEL, MIXEDBREAD_REVISION
+from trec_rag.evidence_local import (
+    MINILM_MODEL,
+    MINILM_REVISION,
+    LocalMiniLMSimilarity,
+)
+from trec_rag.mixedbread_passage_scorer import (
+    MIXEDBREAD_MODEL,
+    MIXEDBREAD_REVISION,
+    MixedbreadPassageScorer,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -115,6 +124,71 @@ def test_prefetch_block_fails_when_a_snapshot_is_missing_from_cache(
     ]
     with pytest.raises(OSError, match=MINILM_MODEL):
         exec(compile(prefetch[0], str(SETUP_CUDA), "exec"), {"__name__": "__main__"})
+
+
+def _selection_path_request() -> tuple[str, str, bool]:
+    """Record the snapshot the evidence-selection path asks for."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def loader(model: str, **kwargs: object) -> object:
+        calls.append((model, kwargs))
+        return object()
+
+    LocalMiniLMSimilarity(device="cpu", loader=loader)._load()
+    model, kwargs = calls[0]
+    return model, str(kwargs["revision"]), bool(kwargs["local_files_only"])
+
+
+def _passage_scoring_request(tmp_path: Path) -> tuple[str, str, bool]:
+    """Record the snapshot the passage-scoring path asks for."""
+    calls: list[dict[str, object]] = []
+
+    def loader(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    scorer = MixedbreadPassageScorer(
+        tmp_path / "score-cache",
+        device="cpu",
+        model_loader=loader,
+    )
+    # The loader records its arguments before dtype validation rejects the stub.
+    with suppress(Exception):
+        scorer._get_model()
+    kwargs = calls[0]
+    return (
+        str(kwargs["model_name"]),
+        str(kwargs["revision"]),
+        bool(kwargs["local_files_only"]),
+    )
+
+
+def test_selection_path_loads_minilm_offline_from_a_prefetched_snapshot() -> None:
+    """The MiniLM that selection loads must be one the bootstrap already cached."""
+    model, revision, local_files_only = _selection_path_request()
+
+    assert (model, revision) in REQUIRED_OFFLINE_SNAPSHOTS
+    assert local_files_only is True
+
+
+def test_bootstrap_prefetches_exactly_what_the_production_loaders_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close the drift gap in both directions, not just against a static list."""
+    selection_model, selection_revision, _ = _selection_path_request()
+    scoring_model, scoring_revision, _ = _passage_scoring_request(tmp_path)
+    requested = {
+        (selection_model, selection_revision),
+        (scoring_model, scoring_revision),
+    }
+
+    calls = _run_prefetch_block(monkeypatch)
+    prefetched = {
+        (call["model"], call["revision"]) for call in calls if not call["local_files_only"]
+    }
+
+    assert requested == prefetched
 
 
 def test_setup_env_dispatches_to_both_hardware_scripts() -> None:

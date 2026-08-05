@@ -275,8 +275,19 @@ closed:
   rather than a file tarball.
 - **No commit change inside a topic.** All phases of one topic must share a
   commit; different topics may carry different commits.
-- **Pre-cached reranker weights.** The scorer loads at a pinned revision with
-  `local_files_only=True`; `code/tools/setup_cuda_env.sh` fetches them.
+- **Both pinned model snapshots pre-cached.** The retrieval path loads two, each
+  at a pinned revision with `local_files_only=True`, and each must resolve from
+  the cache alone before a run starts:
+
+  | Snapshot | Revision | Loaded by |
+  | --- | --- | --- |
+  | `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
+  | `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
+
+  `code/tools/setup_cuda_env.sh` fetches both and re-resolves each with
+  `local_files_only=True`. Caching only the reranker is the trap: selection runs
+  *after* passage scoring, so the missing MiniLM surfaces as a late failure with
+  the expensive stage already paid for.
 
 Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
 CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
