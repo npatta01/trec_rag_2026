@@ -63,7 +63,9 @@ official narratives by default. Like the fixed runner, the CLI accepts repeated
 - the pinned Mixedbread model, revision, chunking, and scoring settings;
 - the OpenRouter coordinator/researcher model;
 - topic-level execution concurrency;
-- the production research-count budgets; and
+- the production research-count budgets;
+- two total final-synthesis attempts;
+- two total zero-nugget topic attempts; and
 - `create` or `resume` lifecycle mode.
 
 The production research limits are the configuration actually planned and
@@ -86,8 +88,8 @@ exact stopping reason and unresolved need IDs, gives the coordinator its
 reserved final synthesis opportunity when possible, and continues to topic
 projection. Unresolved needs do not block the Retrieval artifacts or generation
 handoff. The handoff contains the grounded draft-selected evidence that exists;
-if no draft selection survives, it uses the deterministic original-query
-fallback defined below.
+missing or invalid draft selection follows the grounded-nugget retry and
+recovery policy defined below.
 
 ## Shared Cache Contract
 
@@ -163,13 +165,27 @@ without violating handoff ownership rules. A missing, superseded, or
 ungrounded draft nugget—or one not associated with the need that selected
 it—is an integrity error rather than a silent omission.
 
-If no surviving draft selection exists, the projector emits the existing
-official-narrative fallback group using up to the configured `hits_per_search`
-highest-ranked original-query passages, at most one passage per document, and
-emits no invented claim hints. Those fallback documents are added to the
-variable-depth Retrieval run if live nuggets did not already select them. A
-topic whose original search produced no authenticated passage fails instead of
-publishing an empty or fabricated handoff.
+Raw original-query passages are never promoted into the generation handoff.
+When the coordinator's final synthesis omits a required draft selection or
+names a missing, superseded, ungrounded, or need-unassociated nugget, the
+invalid synthesis is rejected and the coordinator receives one fresh synthesis
+attempt against the same grounded state, with no new retrieval. Thus final
+synthesis has at most two semantic attempts.
+
+If both synthesis attempts fail while live grounded nuggets exist, a
+deterministic recovery selector keeps, for each need, up to the existing
+`MAX_DRAFT_NUGGETS_PER_NEED` live grounded nugget IDs in that need's recorded
+order. Projection then uses those nuggets and their authenticated cited
+passages, and the topic receipt records `deterministic_grounded_recovery` as the
+synthesis outcome. This recovery cannot introduce a nugget, passage, or
+document absent from the validated coverage state.
+
+If a completed topic attempt has no live grounded nuggets at all, nothing is
+projected. The runner automatically makes one fresh topic attempt from the
+official narrative, using a new temporary ledger and the same shared caches.
+If the second topic attempt also produces no live grounded nugget, the topic
+fails without a handoff; publishing raw search passages or fabricated evidence
+is forbidden.
 
 Every handoff citation document must be a subset of both the topic's Retrieval
 rows and its full-text archive. The projection validates that closure before it
@@ -203,11 +219,13 @@ separate and cannot overwrite one another.
 - Cache corruption, conflicting cache import bytes, foreign documents,
   ungrounded citations, dangling facets, source-offset mismatches, and
   cross-artifact document-closure failures are fatal integrity errors.
-- A provider or retrieval failure leaves the topic unsealed and prevents root
-  publication. `resume` restarts that topic from the beginning with warm caches.
+- A provider or retrieval failure during evidence collection leaves the topic
+  unsealed and prevents root publication. `resume` restarts that topic from the
+  beginning with warm caches. A final-synthesis provider failure follows the
+  synthesis retry and grounded-nugget recovery policy instead.
 - Research-count exhaustion and unresolved needs are not provider/retrieval
-  failures; they publish partial grounded evidence or the original-query
-  fallback as specified above.
+  failures; they publish the available grounded nuggets or use deterministic
+  grounded-nugget recovery after the synthesis retry.
 - The runner never fabricates evidence, weakens TopicRecords integrity, drops
   a citation to force validation, reads organizer qrels/gold/RAGDoll outputs,
   or silently falls back to fixed retrieval.
@@ -223,12 +241,15 @@ Implementation proceeds test-first. Automated verification must cover:
 - absence of time-based admission and stopping under an advanced fake clock;
 - unchanged count, concurrency, no-yield, and no-progress limits;
 - successful handoff publication after researcher-budget exhaustion with both
-  partial draft evidence and zero-draft fallback cases;
+  partial draft evidence and deterministic grounded-nugget recovery;
+- rejection and one fresh retry of an invalid final synthesis;
+- one fresh warm-cache topic retry after a zero-nugget attempt, followed by a
+  hard failure if the second attempt also has no grounded nugget;
 - linked-worktree shared cache resolution and conflict-safe cache import;
 - exact cache hits for repeated retrieval and reranker identities;
 - fresh agent state on incomplete-topic restart;
 - reuse only of authenticated completed-topic receipts;
-- deterministic agentic `GenerationTopic` projection, fallback behavior, and
+- deterministic agentic `GenerationTopic` projection, recovery behavior, and
   rejection of ungrounded or unranked evidence;
 - handoff-document subset closure across the TREC run and full-text ZIP;
 - manifest-last publication and refusal to overwrite conflicting output;
@@ -250,6 +271,7 @@ explicit authorization.
 - No changes to the fixed retrieval algorithm or its existing config bytes.
 - No caching of coordinator or researcher LLM responses.
 - No mid-topic agent-state checkpointing.
+- No original-query passage fallback in the generation handoff.
 - No prompt/schema change that prevents researchers from proposing facets.
 - No RAG generation-model, prompt, retry, or citation-policy change.
 - No all-topic live run, public publishing, or submission upload.
