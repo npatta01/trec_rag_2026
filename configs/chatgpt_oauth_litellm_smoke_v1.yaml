@@ -1,0 +1,19 @@
+schema_version: chatgpt_oauth_smoke_v1
+
+experiment:
+  id: issue27_chatgpt_oauth_litellm_smoke_v1
+
+auth:
+  token_store: ~/.codex/auth.json
+
+model:
+  name: chatgpt/gpt-5.4
+  originator: trec-rag-issue-27-smoke
+  timeout_seconds: 60
+
+probe:
+  prompt: "Reply with exactly: ChatGPT OAuth smoke test passed."
+  expected_response: ChatGPT OAuth smoke test passed.
+
+output:
+  report_path: outputs/issue27_chatgpt_oauth_litellm_smoke_v1/result.json

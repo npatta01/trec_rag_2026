@@ -1291,6 +1291,32 @@ PYTHONPATH=code .venv/bin/python -m trec_rag.rerank_cache_promotion promote \
 The Modal and local paths differ, but the artifact rows, cache keys, validation
 rules, and pipeline consumer interface are the same.
 
+## ChatGPT OAuth LiteLLM smoke test
+
+`chatgpt_oauth_smoke.py` is the issue #27 compatibility probe for a ChatGPT
+subscription call through LiteLLM. It deliberately refuses `OPENAI_API_KEY`,
+`OPENROUTER_API_KEY`, and `LITELLM_API_KEY`, and it imports LiteLLM from an
+empty temporary working directory so LiteLLM cannot discover the repository
+`.env` file.
+
+The default config reads the OAuth session created by Codex at
+`~/.codex/auth.json`. Codex stores tokens under a nested `tokens` object while
+LiteLLM 1.95.0 expects flat fields. The runner copies only OAuth fields into a
+temporary, restricted auth file, allows LiteLLM to refresh that copy if needed,
+and removes it after the call. It never edits the source Codex auth file.
+
+Install the optional dependency group and run the config-driven probe:
+
+```bash
+uv sync --group chatgpt-oauth-poc --inexact
+PYTHONPATH=code .venv/bin/python -m trec_rag.chatgpt_oauth_smoke \
+  configs/chatgpt_oauth_litellm_smoke_v1.yaml
+```
+
+On Windows PowerShell, use `.venv\Scripts\python.exe` in the second command.
+The expected response is `ChatGPT OAuth smoke test passed.` and the sanitized
+report is written beneath `outputs/issue27_chatgpt_oauth_litellm_smoke_v1/`.
+
 ## Answer-quality evaluation
 
 `ragdoll_io.py` and `dev_rag_inputs.py` support scoring generated answers with the organizer

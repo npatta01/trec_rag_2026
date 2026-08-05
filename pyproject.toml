@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+chatgpt-oauth-poc = [
+    "litellm==1.95.0",
+]
 dev = [
     "arize-phoenix-client==2.13.0",
     "pytest",
