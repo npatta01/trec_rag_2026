@@ -83,11 +83,12 @@ class ResearchBudgetConfig:
     # none. That is why answerable came out 5-of-7 in one run and 0-of-5
     # in the next, with the second holding more evidence than the first.
     synthesis_reserve_turns: int = 2
-    # Pacing hosted search every six seconds puts a full run near eleven
-    # minutes before any thinking, so the old ten-minute soft deadline fired
-    # on healthy runs. These bound a runaway, not a normal one.
-    soft_seconds: float = 1800.0
-    hard_seconds: float = 3600.0
+    # Absent by default: a competition run is bounded by researchers, retrieval
+    # and coordinator turns, and a wall-clock cut only ends a productive run
+    # early with no work saved. Callers that need a bounded run — tests and
+    # timed experiments — still pass finite values, which behave as before.
+    soft_seconds: float | None = None
+    hard_seconds: float | None = None
     no_yield_calls: int = 3
     no_progress_rounds: int = 2
 
@@ -119,6 +120,8 @@ class ResearchBudgetConfig:
                 raise ValueError(f"{field_name} must be a positive integer")
         for field_name in ("soft_seconds", "hard_seconds"):
             value = getattr(self, field_name)
+            if value is None:
+                continue
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
@@ -126,7 +129,11 @@ class ResearchBudgetConfig:
                 or value < 0
             ):
                 raise ValueError(f"{field_name} must be a non-negative number")
-        if self.hard_seconds < self.soft_seconds:
+        if (
+            self.soft_seconds is not None
+            and self.hard_seconds is not None
+            and self.hard_seconds < self.soft_seconds
+        ):
             raise ValueError("hard_seconds must be greater than or equal to soft_seconds")
 
 
@@ -213,10 +220,7 @@ class ResearchBudget:
                 return self._refusal(stopping, must_stop=True)
             if context.research_task_id in self._active_tasks:
                 return self._refusal("CONCURRENCY_BUDGET_EXHAUSTED")
-            if (
-                context.depth == "survey"
-                and self._elapsed_seconds() >= self._config.soft_seconds
-            ):
+            if context.depth == "survey" and self._soft_deadline_reached():
                 return self._refusal("SOFT_DEADLINE_REACHED")
             if self._reserved_researchers >= self._config.max_researcher_invocations:
                 return self._refusal("TASK_BUDGET_EXHAUSTED", must_stop=True)
@@ -487,9 +491,18 @@ class ResearchBudget:
         )
 
     def _global_stop_code(self) -> BudgetCode | None:
-        if self._elapsed_seconds() >= self._config.hard_seconds:
+        if self._hard_deadline_reached():
             self._persist_stop("HARD_DEADLINE_REACHED")
         return self._stop_code
+
+    def _soft_deadline_reached(self) -> bool:
+        """An absent deadline is never reached, however long the run has run."""
+        soft_seconds = self._config.soft_seconds
+        return soft_seconds is not None and self._elapsed_seconds() >= soft_seconds
+
+    def _hard_deadline_reached(self) -> bool:
+        hard_seconds = self._config.hard_seconds
+        return hard_seconds is not None and self._elapsed_seconds() >= hard_seconds
 
     def _persist_stop(self, code: BudgetCode) -> None:
         """Persist the highest-priority true run-stop decision."""
@@ -500,7 +513,7 @@ class ResearchBudget:
 
     def _admission(self) -> BudgetDecision:
         code: BudgetCode = "OK"
-        if self._elapsed_seconds() >= self._config.soft_seconds:
+        if self._soft_deadline_reached():
             code = "SOFT_DEADLINE_REACHED"
         return BudgetDecision(ok=True, code=code, snapshot=self._snapshot())
 
@@ -533,7 +546,7 @@ class ResearchBudget:
 
     def _snapshot(self) -> BudgetSnapshot:
         elapsed_seconds = self._elapsed_seconds()
-        hard_deadline_reached = elapsed_seconds >= self._config.hard_seconds
+        hard_deadline_reached = self._hard_deadline_reached()
         if hard_deadline_reached:
             self._persist_stop("HARD_DEADLINE_REACHED")
         return BudgetSnapshot(
@@ -547,7 +560,7 @@ class ResearchBudget:
             active_researchers=len(self._active_tasks),
             completed_researchers=self._completed_researchers,
             completed_rounds=len(self._completed_round_indexes),
-            soft_deadline_reached=elapsed_seconds >= self._config.soft_seconds,
+            soft_deadline_reached=self._soft_deadline_reached(),
             hard_deadline_reached=hard_deadline_reached,
             stop_code=self._stop_code,
         )
