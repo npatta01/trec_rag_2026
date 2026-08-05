@@ -1,0 +1,79 @@
+:root {
+  color-scheme: light dark;
+  --guide-retrieval: light-dark(#0f766e, #67d4c7);
+  --guide-generation: light-dark(#4f5fc7, #a7b1ff);
+  --guide-advisory: light-dark(#8b5e0a, #efbd67);
+  --guide-line: light-dark(#52615a, #afbbb4);
+  --guide-soft: light-dark(#eef3ef, #17201c);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  overflow-wrap: anywhere;
+}
+
+main.content {
+  max-width: 78rem;
+}
+
+main.content > section > p,
+main.content > p {
+  max-width: 72ch;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+a:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--guide-generation);
+  outline-offset: 3px;
+}
+
+details {
+  margin-block: 1rem 1.5rem;
+  border-inline-start: 3px solid var(--guide-line);
+  padding-inline-start: 1rem;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+@media (max-width: 44rem) {
+  main.content {
+    padding-inline: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  details > * {
+    display: block !important;
+  }
+
+  .quarto-lightbox,
+  .quarto-color-scheme-toggle {
+    display: none !important;
+  }
+}

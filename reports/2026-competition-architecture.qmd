@@ -1,0 +1,21 @@
+---
+title: "From one narrative to a TREC RAG 2026 submission"
+subtitle: "The supported competition architecture, told as a guided story"
+lang: en
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 2
+    smooth-scroll: true
+    theme:
+      light: 2026-competition-architecture/theme-light.scss
+      dark: 2026-competition-architecture/theme-dark.scss
+    css: 2026-competition-architecture/report.css
+lightbox: true
+---
+
+# The supported path
+
+This guide follows the supported 2026 competition path from one narrative to
+retrieval, a sealed evidence handoff, generation, and organizer output.
