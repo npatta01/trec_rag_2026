@@ -286,6 +286,17 @@ recorded backend version stays honest. The two groups are declared conflicting
 because one lock cannot hold both torch builds; regenerate `uv.lock` on the ROCm
 host, where `repo.radeon.com` is reachable.
 
+`code/tools/verify_torch_groups.sh` proves each group selects its intended torch
+build. It is read-only — `uv export --frozen` resolves from the committed lock
+and never installs, downloads, or touches a model or retrieval cache — so it is
+safe to run beside an active pipeline task.
+
+```bash
+./code/tools/verify_torch_groups.sh
+OK   rocm: torch @ https://repo.radeon.com/rocm/.../torch-2.9.1+rocm7.2.1...whl
+OK   cuda: torch==2.9.1
+```
+
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
 provenance, fallback, and byte-stable resume behavior, but it does not establish
 that generated decompositions improve retrieval or that canonical claims are
