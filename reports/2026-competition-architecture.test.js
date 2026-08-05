@@ -101,4 +101,84 @@ assert(
   "Asset README should explain fictional content and conceptual geometry",
 );
 
+const requiredConcepts = [
+  "Illustrative narrative — not a TREC test topic",
+  "DeepSeek V4 Flash",
+  "deepseek/deepseek-v4-flash-20260423",
+  "0–8 focused subnarratives",
+  "Pyserini",
+  "ClimbMix",
+  "≤1,000 documents / focused query",
+  "3500 characters",
+  "350-character overlap",
+  "Mixedbread",
+  "mixedbread-ai/mxbai-rerank-base-v2",
+  "≤100 passages / focused query",
+  "Nuggetizer",
+  "Selected passages are factual authority",
+  "Canonical claim hints are advisory",
+  "generation_handoff_manifest.json",
+  "openai/gpt-5.6-sol",
+  "12,000-token ceiling",
+  "≤3 transport attempts",
+  "≤2 semantic attempts",
+  "1,024-word ceiling",
+  "organizer RAG JSONL",
+];
+
+for (const concept of requiredConcepts) {
+  assert(qmd.includes(concept), `Missing architecture concept in QMD: ${concept}`);
+}
+
+let previousFigureIndex = -1;
+for (const figure of figures) {
+  const currentFigureIndex = qmd.indexOf(figure);
+  assert(currentFigureIndex > previousFigureIndex, `Figure should appear in story order: ${figure}`);
+  previousFigureIndex = currentFigureIndex;
+  assert(html.includes(figure), `Rendered report should link directly to ${figure}`);
+}
+
+assert(
+  (qmd.match(/\*\*Text equivalent:\*\*/g) || []).length === 9,
+  "QMD should contain nine visible text equivalents",
+);
+assert(
+  (html.match(/<strong>Text equivalent:<\/strong>/g) || []).length === 9,
+  "Rendered report should contain nine visible text equivalents",
+);
+assert(
+  (qmd.match(/<details>/g) || []).length >= 9 &&
+    (qmd.match(/<summary>Implementation notes and sources<\/summary>/g) || []).length >= 9,
+  "Each figure should have a native implementation disclosure",
+);
+for (const signal of [
+  "Solid arrows",
+  "Dashed arrows",
+  "documents",
+  "chunks",
+  "passages",
+  "selected evidence",
+  "advisory hints",
+  "TREC run",
+  "full-text ZIP",
+  "qrels",
+  "gold nuggets",
+  "RAGDoll scores",
+]) {
+  assert(qmd.includes(signal), `Missing architecture distinction: ${signal}`);
+}
+
+for (const forbidden of [
+  "Authorization:",
+  "Bearer ",
+  "rag2026-",
+  "TODO",
+  "placeholder",
+]) {
+  assert(!qmd.includes(forbidden), `QMD should not expose ${forbidden}`);
+}
+for (const forbidden of ["Authorization:", "Bearer ", "rag2026-"]) {
+  assert(!html.includes(forbidden), `Rendered report should not expose ${forbidden}`);
+}
+
 console.log("2026 competition architecture smoke test passed");

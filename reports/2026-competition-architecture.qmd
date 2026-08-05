@@ -15,7 +15,473 @@ format:
 lightbox: true
 ---
 
-# The supported path
+::: {.scope-note}
+**Scope.** This is only the supported TREC RAG 2026 competition path. It does
+not describe legacy baselines, development experiments, evaluation systems, or
+every reusable package in the repository.
+:::
 
-This guide follows the supported 2026 competition path from one narrative to
-retrieval, a sealed evidence handoff, generation, and organizer output.
+The system performs two jobs in order. **Retrieval** finds and seals evidence.
+Only after Retrieval finishes does **Generation** use that sealed evidence to
+write an answer. That separation is the central architecture decision.
+
+::: {.running-example}
+### Illustrative narrative — not a TREC test topic
+
+Imagine a friend asks: *How should a city protect outdoor workers and runners
+during an extreme-heat week, including hydration, schedule changes, warning
+signs, and interactions with poor air quality?*
+
+We will follow this fictional information need through every figure. It is not
+copied from the test set, and the examples below are not corpus text or a model
+answer.
+:::
+
+## A small glossary {.unnumbered}
+
+Narrative
+: The complete official information need. It is broader than a short search
+  query and remains the contract for the final answer.
+
+Query lane
+: One focused search. The untouched narrative is always one lane; bounded
+  planning may add narrower subnarrative lanes.
+
+Document
+: One ClimbMix source returned by Pyserini.
+
+Chunk
+: An overlapping piece cut from a document so a reranker can score manageable
+  text windows.
+
+Passage
+: A scored chunk in a query-specific ranking.
+
+Selected evidence
+: An exact source span that passed local admission, deduplication, and diversity
+  selection. It can ground the answer.
+
+Canonical hint
+: A Nuggetizer-produced claim-shaped summary linked to selected evidence. It
+  helps organize coverage but is not independent factual authority.
+
+Handoff
+: The canonical, hash-authenticated file that freezes the only context
+  Generation is allowed to read.
+
+Citation
+: A source document ID attached to an answer claim, later converted into the
+  organizer's integer reference indexes.
+
+::: {.visual-legend}
+### How to read every image {.unnumbered}
+
+- **Solid arrows** carry data, passages, selected evidence, or validated output.
+- **Dashed arrows** carry advisory, bounded-control, failure, or retry flow.
+- Folded-corner shapes are artifacts; cylinders are stores; diamonds are gates.
+- Teal names Retrieval. Indigo names Generation. Labels and shapes repeat the
+  meaning so the diagrams still work without color.
+:::
+
+# The whole system {#whole-system}
+
+::: {.takeaway}
+**Takeaway:** Retrieval and Generation are separate sealed stages. Only one
+authenticated evidence handoff crosses between them.
+:::
+
+![The supported path begins with an official narrative, passes through Retrieval and one authenticated handoff, then reaches GPT-5.6 Sol Generation, local validation, and organizer RAG JSONL. Retrieval separately emits its run and full-text ZIP.](2026-competition-architecture/01-whole-system.svg){#fig-whole-system}
+
+[Open the reusable whole-system SVG](2026-competition-architecture/01-whole-system.svg){.figure-source}
+
+Retrieval can publish organizer evidence artifacts, but it does not pass those
+artifacts into Generation. Generation receives a smaller, purpose-built
+context: the selected passages and their authenticated provenance. This makes
+the boundary inspectable and prevents later code from quietly expanding the
+model's information access.
+
+**Text equivalent:** The official narrative enters Retrieval. Retrieval emits
+the official evidence run and full-text ZIP on one branch and an authenticated
+selected-evidence handoff on the main branch. Only that handoff crosses the
+Retrieval/Generation boundary. GPT-5.6 Sol produces structured answer objects,
+which must pass local validation before becoming organizer RAG JSONL.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- The supported commands and boundary are documented in
+  [`AGENTS.md`](../AGENTS.md) and the
+  [competition README](../code/trec_rag/README.md).
+- Retrieval is implemented by
+  [`competition_retrieval.py`](../code/trec_rag/competition_retrieval.py).
+  Generation is implemented by
+  [`competition_rag.py`](../code/trec_rag/competition_rag.py).
+- This guide explains mechanics and contracts. It does not claim that answer
+  quality, retrieval benefit, or entailment quality has been established.
+
+</details>
+
+# Retrieval: widen, score, then narrow {#retrieval}
+
+::: {.takeaway}
+**Takeaway:** Agentic retrieval here means bounded planning at the edge—not an
+open-ended model that repeatedly searches until it decides to stop.
+:::
+
+![Retrieval preserves the original narrative lane, may add planned lanes, sends every lane through the same Pyserini and Mixedbread boundary, selects exact evidence locally, and adds optional Nuggetizer hints.](2026-competition-architecture/02-retrieval-system.svg){#fig-retrieval-system}
+
+[Open the reusable Retrieval SVG](2026-competition-architecture/02-retrieval-system.svg){.figure-source}
+
+For our heat-safety example, the original narrative searches as written. A
+planner may also add narrower lanes for hydration, work scheduling, warning
+signs, and heat-plus-air-quality guidance. Those lanes do not get special search
+tools: every lane crosses the same fixed retrieval boundary and is narrowed by
+the same local evidence process.
+
+The prominent limits are per lane: [≤1,000 documents / focused query]{.limit}
+enter from Pyserini, and [≤100 passages / focused query]{.limit} remain after
+chunk scoring. With the original lane plus planned lanes, a topic can make
+several bounded searches; 1,000 and 100 are not global topic totals.
+
+**Text equivalent:** The official narrative splits into an always-present
+original lane and zero to eight extra focused lanes. Each lane searches the
+ClimbMix index through Pyserini, chunks returned documents, uses Mixedbread to
+rank passages, and retains a query-specific top list. Local selection creates
+factual passages. Nuggetizer optionally creates advisory hints. Both are sealed
+into the handoff, while Retrieval also creates its organizer-facing exports.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- The checked-in
+  [Retrieval config](../configs/rag26_competition_retrieval_v2.yaml) fixes
+  `documents_per_query: 1000`, `passages_per_query: 100`, the
+  `climbmix-400b` index, and the Mixedbread model.
+- [`competition_retrieval.py`](../code/trec_rag/competition_retrieval.py)
+  orchestrates the stages. The fixed and agentic adapters call the same shared
+  passage-search boundary described in
+  [`code/trec_rag/README.md`](../code/trec_rag/README.md).
+- “Agentic” is intentionally narrow: the hosted model decomposes the
+  information need, while query execution, limits, ranking, evidence admission,
+  checkpointing, and export remain deterministic or locally controlled.
+
+</details>
+
+# Planning is bounded {#planning}
+
+::: {.takeaway}
+**Takeaway:** DeepSeek may widen the search, but it cannot replace the narrative
+or start an unbounded plan–search–replan loop.
+:::
+
+![One strict DeepSeek V4 Flash call receives the full narrative. The original lane remains, zero to eight extra focused subnarratives may be used, and planning failure falls back to the original-only lane.](2026-competition-architecture/03-bounded-deepseek-planning.svg){#fig-bounded-planning}
+
+[Open the reusable bounded-planning SVG](2026-competition-architecture/03-bounded-deepseek-planning.svg){.figure-source}
+
+DeepSeek V4 Flash performs **bounded agentic planning**. It sees the complete
+narrative once and returns a strict structured decomposition. In a valid
+planner response it supplies one to eight subnarratives; across the whole system
+there may therefore be **0–8 focused subnarratives**, because a failed plan
+contributes zero extra lanes. The untouched narrative is never removed.
+
+For the running example, “warning signs that require stopping exercise” can
+become a focused lane. It is still only a search instruction. The system—not
+the planner—owns when retrieval happens, how much it retrieves, and when it
+stops.
+
+**Text equivalent:** One complete narrative goes to one strict DeepSeek planning
+request. The original narrative becomes an unconditional Retrieval lane. A
+valid plan may contribute up to eight additional subnarrative lanes. The lanes
+then cross one fixed search boundary each. If planning fails validation or
+transport, the system retains the original-only lane and does not begin an
+iterative agent loop.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- The figure uses the friendly name **DeepSeek V4 Flash**. The pinned route is
+  `deepseek/deepseek-v4-flash-20260423` in
+  [`facet_extraction.py`](../code/trec_rag/facet_extraction.py).
+- That module fixes `MAX_SUBNARRATIVES = 8`, strict JSON schema, temperature
+  zero, seed zero, and disabled reasoning for this planning request.
+- Planning failure behavior and the original-only fallback are enforced by
+  [`competition_retrieval.py`](../code/trec_rag/competition_retrieval.py), not
+  left to the model.
+
+</details>
+
+# One query changes units {#candidate-accounting}
+
+::: {.takeaway}
+**Takeaway:** “A thousand in, a hundred out” is shorthand. The system changes
+from documents to chunks/passages between those two ceilings.
+:::
+
+![A conceptual funnel for one focused query starts with at most one thousand ClimbMix documents, changes units into overlapping chunks, ranks them with Mixedbread, and retains at most one hundred passages.](2026-competition-architecture/04-per-query-candidate-accounting.svg){#fig-candidate-accounting}
+
+[Open the reusable candidate-accounting SVG](2026-competition-architecture/04-per-query-candidate-accounting.svg){.figure-source}
+
+Pyserini asks the remote ClimbMix index for at most 1,000 **documents** for one
+query. Each non-empty document is cut into overlapping **chunks**. Mixedbread
+scores those chunks against that query, so the scored units are now called
+**passages**. One global ranking keeps at most 100 passages for the lane.
+
+The funnel is methodology, not measured volume: its widths are not proportional,
+and a ceiling is not a target. A query may return fewer documents, a document
+may produce a different number of chunks, and fewer than 100 eligible passages
+may survive.
+
+**Text equivalent:** For one focused query, Pyserini returns no more than 1,000
+ClimbMix documents. Non-empty documents are divided into chunks no longer than
+3500 characters with a 350-character overlap. Mixedbread scores every chunk as
+a passage, and one query-wide ranking retains no more than 100 passages. The
+same process repeats independently for the original narrative and each planned
+lane.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- Exact configuration: `documents_per_query: 1000`,
+  `chunk_max_characters: 3500`, `chunk_overlap_characters: 350`, and
+  `passages_per_query: 100` in the
+  [Retrieval config](../configs/rag26_competition_retrieval_v2.yaml).
+- **Pyserini** is the retrieval API boundary; **ClimbMix** is the searched
+  collection/index. The ranking model is **Mixedbread**, exact identifier
+  `mixedbread-ai/mxbai-rerank-base-v2`.
+- A passage ranking is query-specific. It should not be described as 100 whole
+  documents or as one top-100 list shared by all topic lanes.
+
+</details>
+
+# Evidence first; hints second {#evidence}
+
+::: {.takeaway}
+**Takeaway:** Selected passages are factual authority. Canonical claim hints are advisory.
+:::
+
+![Local exact-span selection creates factual selected passages. A dashed advisory branch sends those passages once through Nuggetizer to create bounded claim hints, while failure leaves the exact extractive evidence intact.](2026-competition-architecture/05-evidence-and-nuggetizer.svg){#fig-evidence-nuggetizer}
+
+[Open the reusable evidence-and-Nuggetizer SVG](2026-competition-architecture/05-evidence-and-nuggetizer.svg){.figure-source}
+
+The top passages are still candidates. Local code finds exact spans, ranks them
+within the relevant subnarrative, removes duplicates, clusters for diversity,
+and selects within a budget. These source-linked spans are what Generation may
+use as facts.
+
+The **Nuggetizer** package sees the selected passages and proposes a smaller set
+of claim-shaped hints. A hint can tell Sol, “cover the relationship between heat
+warning signs and stopping activity,” while its linked passages remain the
+actual evidence. If canonicalization fails, deterministic exact extractive
+evidence remains; the system does not promote an unsupported model claim.
+
+**Text equivalent:** Query-ranked passages enter a local exact-span,
+deduplication, diversity, and budget-selection stage. It selects at most 40
+evidence items per subnarrative. A solid path carries those exact passages as
+factual authority. A dashed path makes at most one hosted Nuggetizer call and
+may create at most 20 advisory claim hints per subnarrative, with at most three
+supporting documents per claim. Canonicalization failure leaves the exact
+passages intact. The handoff contains both roles without equating them.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- The [Retrieval config](../configs/rag26_competition_retrieval_v2.yaml) fixes
+  an evidence budget of 40, a claim limit of 20, and a supporting-document limit
+  of 3 per subnarrative.
+- [`canonical_nuggets.py`](../code/trec_rag/canonical_nuggets.py) wraps the
+  Nuggetizer adapter as a one-shot bounded canonicalization stage. Package
+  scoring is local; hosted scoring and assignment are bypassed.
+- [`generation_handoff.py`](../code/trec_rag/generation_handoff.py) preserves
+  selected evidence and claim hints as different typed records with linked
+  provenance.
+
+</details>
+
+# The handoff is the trust boundary {#handoff}
+
+::: {.takeaway}
+**Takeaway:** Generation authenticates one purpose-built file. It is not allowed
+to browse Retrieval's other outputs or evaluation material.
+:::
+
+![The generation handoff document contains narrative, evidence groups and passages, advisory hints, allowed citation IDs, source receipts, and hashes. Generation authenticates it, while five named artifacts are visibly barred.](2026-competition-architecture/06-generation-handoff-contract.svg){#fig-handoff-contract}
+
+[Open the reusable handoff-contract SVG](2026-competition-architecture/06-generation-handoff-contract.svg){.figure-source}
+
+`generation_handoff_manifest.json` is both a context package and an integrity
+contract. It binds the exact narrative, selected evidence, advisory hints,
+citation domain, and source receipts with canonical serialization and hashes.
+Generation rejects malformed, contradictory, non-canonical, or unauthenticated
+bytes instead of trying to “make them work.”
+
+This boundary is also about absence. Generation never opens the **TREC run**,
+**full-text ZIP**, **qrels**, **gold nuggets**, or **RAGDoll scores**. The first
+two are Retrieval deliverables; the last three are evaluation or gold material.
+None is an answer-generation input.
+
+**Text equivalent:** Retrieval publishes one canonical handoff containing the
+official narrative, selected evidence groups and exact passages, advisory claim
+hints, allowed citation document IDs, source receipts, and hashes. A horizontal
+trust boundary separates the stages. Generation authenticates and opens only
+that manifest. The retrieval run, full-text ZIP, qrels, gold nuggets, and
+RAGDoll scores are shown in a barred group with no edge into Generation.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- [`generation_handoff.py`](../code/trec_rag/generation_handoff.py) defines
+  `generation_handoff_manifest_v1`, canonical JSON serialization, payload and
+  context hashes, strict reconstruction, and authenticated loading.
+- The handoff derives the allowed citation document IDs from selected evidence
+  document identity and rank; it does not grant the model an arbitrary corpus
+  lookup.
+- [`competition_rag.py`](../code/trec_rag/competition_rag.py) accepts the
+  handoff manifest as its only configured input path.
+
+</details>
+
+# Generation with GPT-5.6 Sol {#generation}
+
+::: {.takeaway}
+**Takeaway:** Sol receives a deterministic projection of the handoff, not a
+retrieval tool and not the raw retrieval export.
+:::
+
+![The authenticated handoff becomes a deterministic prompt for GPT-5.6 Sol using medium reasoning, strict structured output, and a twelve-thousand-token ceiling. Sol returns answer objects with raw allowed document IDs.](2026-competition-architecture/07-sol-generation.svg){#fig-sol-generation}
+
+[Open the reusable Sol-generation SVG](2026-competition-architecture/07-sol-generation.svg){.figure-source}
+
+The Generation runner renders the narrative, selected passages, advisory hints,
+and allowed document IDs into a fixed prompt. GPT-5.6 Sol is asked for strict
+JSON answer objects, not free-form prose. Each object contains claim text and
+raw ClimbMix document-ID citations drawn from the handoff's allowed domain.
+
+For our fictional narrative, Sol could organize an answer across hydration,
+schedule changes, warning signs, and air quality—but every asserted answer
+object still needs selected-passage support and allowed citations. The diagram
+shows configuration, not a claim about the quality of a hypothetical answer.
+
+**Text equivalent:** The authenticated handoff enters a deterministic prompt
+projection. That prompt supplies factual selected passages, advisory coverage
+hints, and allowed document IDs to GPT-5.6 Sol. The model uses medium reasoning,
+strict structured output, and a 12,000-token ceiling. It returns answer objects
+with claim text and one to three raw ClimbMix document IDs for local validation;
+they are not organizer integer indexes yet.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- Friendly figure label: **GPT-5.6 Sol**. Exact configured route:
+  `openai/gpt-5.6-sol` in the
+  [Generation config](../configs/rag26_competition_rag_gpt_sol_v2.yaml).
+- The same config fixes `reasoning_effort: medium`,
+  `structured_output: strict_schema`, `max_tokens: 12000`, and generation
+  concurrency 4.
+- [`competition_rag.py`](../code/trec_rag/competition_rag.py) renders the prompt,
+  defines the strict response schema, and writes raw provider responses only to
+  private work state—not to this report.
+
+</details>
+
+# Validation has two retry clocks {#validation}
+
+::: {.takeaway}
+**Takeaway:** Transport retries deliver one request; semantic retries give a
+topic one more chance to produce locally valid meaning. They are not six generic
+model retries.
+:::
+
+![A semantic-attempt boundary contains the hosted request and local validation. The request has at most three transport attempts, while the topic has at most two semantic attempts. Accepted document IDs are converted deterministically to organizer indexes.](2026-competition-architecture/08-validation-and-retries.svg){#fig-validation-retries}
+
+[Open the reusable validation-and-retries SVG](2026-competition-architecture/08-validation-and-retries.svg){.figure-source}
+
+The transport clock handles delivery failures such as a retryable network or
+provider error. One semantic attempt can therefore contain [≤3 transport attempts]{.limit}.
+After a response arrives, local code validates its meaning
+and organizer contract. A retryable semantic failure can trigger one revised
+prompt, for [≤2 semantic attempts]{.limit} total.
+
+The gate checks strict structure, the **1,024-word ceiling**, citation count and
+uniqueness, membership in the handoff's citation domain, and knowable
+claim-hint-to-document compatibility. After acceptance, deterministic code
+prunes uncited references and remaps raw document IDs to organizer integer
+indexes without rewriting answer text.
+
+**Text equivalent:** A topic-level box allows at most two semantic attempts. In
+each attempt, the hosted generation request has at most three transport
+attempts. The returned answer passes a local diamond-shaped gate checking strict
+schema, no more than 1,024 words, one to three unique allowed citations per
+answer object, and exact-hint compatibility. A retryable semantic failure loops
+once to a revised prompt. Accepted raw document IDs then pass through
+deterministic reference pruning and citation-index conversion to form an
+organizer-valid row.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- `transport_max_attempts: 3` comes from the
+  [Generation config](../configs/rag26_competition_rag_gpt_sol_v2.yaml).
+  `MAX_SEMANTIC_ATTEMPTS = 2` is fixed in
+  [`competition_rag.py`](../code/trec_rag/competition_rag.py).
+- The semantic retry instruction is added only after a retryable local semantic
+  failure. Non-retryable failures stop early rather than spending the full
+  budget.
+- Citation normalization derives the final reference list from citations that
+  survived validation. Invalid or fabricated citations are rejected, not
+  silently dropped.
+
+</details>
+
+# Two organizer-facing outputs {#outputs}
+
+::: {.takeaway}
+**Takeaway:** Retrieval and Generation publish different deliverables. The
+handoff connects the commands; the Retrieval run and ZIP do not.
+:::
+
+![Competition Retrieval publishes an evidence run, full-text ZIP, export receipt, and the selected-evidence handoff. Only the handoff enters GPT-5.6 Sol Generation, which publishes organizer RAG JSONL.](2026-competition-architecture/09-organizer-output-split.svg){#fig-output-split}
+
+[Open the reusable organizer-output SVG](2026-competition-architecture/09-organizer-output-split.svg){.figure-source}
+
+The first command publishes the organizer's evidence ranking and required
+full-text archive, sealed by a manifest-last receipt. It also publishes the
+private Generation handoff. The second command authenticates that handoff and
+publishes `rag_output_trec_rag_2026.jsonl`, the organizer RAG JSONL.
+
+This is why “Retrieval then Generation” is more precise than drawing one large
+undifferentiated RAG box. The stages have different inputs, different failure
+modes, different outputs, and a deliberately narrow contract between them.
+
+**Text equivalent:** Competition Retrieval publishes three sibling organizer
+artifacts—the official TREC evidence run, full-text ZIP, and export receipt—and
+also publishes the authenticated Generation handoff. A stop notice says the run
+and ZIP are never Generation inputs. Only the handoff crosses the boundary into
+GPT-5.6 Sol Generation. Generation publishes the organizer RAG JSONL containing
+validated answers and deterministic citation indexes.
+
+<details>
+<summary>Implementation notes and sources</summary>
+
+- Retrieval output names are `r_output_trec_rag_2026.tsv`,
+  `retrieval_with_text.jsonl.zip`, and `retrieval_export_manifest.json`, as
+  documented in [`code/trec_rag/README.md`](../code/trec_rag/README.md).
+- Generation's configured output is `rag_output_trec_rag_2026.jsonl` in
+  [`competition_rag.py`](../code/trec_rag/competition_rag.py).
+- The handoff is private pipeline state. This report contains only the contract
+  and fictional examples, never a live handoff, output row, or corpus passage.
+
+</details>
+
+# Sources and scope {#sources}
+
+This guide was mechanically grounded at merge commit `7e9d3b9` in the checked-in
+configs and modules linked above. The canonical authored source is
+[`reports/2026-competition-architecture.qmd`](2026-competition-architecture.qmd);
+the page you are reading is its generated, self-contained HTML rendering. The
+nine reusable figures and their provenance map live in
+[`reports/2026-competition-architecture/`](2026-competition-architecture/README.md).
+
+What is verified here: stage order, limits, identities, data contracts, failure
+paths, validation, and artifact ownership. What remains unknown: how well the
+configured system will retrieve evidence or answer the official topics until
+it is run and evaluated under the competition protocol.
