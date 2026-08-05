@@ -43,9 +43,13 @@ Narrative
 : The complete official information need. It is broader than a short search
   query and remains the contract for the final answer.
 
+Subnarrative
+: A focused semantic slice proposed by the planner. It groups later evidence;
+  it is not itself an executable search.
+
 Query lane
-: One focused search. The untouched narrative is always one lane; bounded
-  planning may add narrower subnarrative lanes.
+: One executable search. The untouched narrative is always one lane. A
+  successful plan contributes **1–3 BM25 query lanes per subnarrative**.
 
 Document
 : One ClimbMix source returned by Pyserini.
@@ -128,27 +132,30 @@ which must pass local validation before becoming organizer RAG JSONL.
 open-ended model that repeatedly searches until it decides to stop.
 :::
 
-![Retrieval preserves the original narrative lane, may add planned lanes, sends every lane through the same Pyserini and Mixedbread boundary, selects exact evidence locally, and adds optional Nuggetizer hints.](2026-competition-architecture/02-retrieval-system.svg){#fig-retrieval-system}
+![Retrieval preserves the original narrative query lane. Planning may add zero to eight subnarratives, each containing one to three BM25 query lanes. All one to twenty-five possible lanes use the same Pyserini and Mixedbread boundary before local evidence selection and optional Nuggetizer hints.](2026-competition-architecture/02-retrieval-system.svg){#fig-retrieval-system}
 
 [Open the reusable Retrieval SVG](2026-competition-architecture/02-retrieval-system.svg){.figure-source}
 
 For our heat-safety example, the original narrative searches as written. A
-planner may also add narrower lanes for hydration, work scheduling, warning
-signs, and heat-plus-air-quality guidance. Those lanes do not get special search
-tools: every lane crosses the same fixed retrieval boundary and is narrowed by
-the same local evidence process.
+planner may also add narrower subnarratives for hydration, work scheduling,
+warning signs, and heat-plus-air-quality guidance. Each successful
+subnarrative contains one to three BM25 query strings. Those strings become
+executable lanes; every lane crosses the same fixed retrieval boundary.
 
 The prominent limits are per lane: [≤1,000 documents / focused query]{.limit}
 enter from Pyserini, and [≤100 passages / focused query]{.limit} remain after
-chunk scoring. With the original lane plus planned lanes, a topic can make
-several bounded searches; 1,000 and 100 are not global topic totals.
+chunk scoring. The original lane plus up to eight subnarratives with three
+queries each means **at most 25 searches per topic**. The 1,000 and 100 values
+are independent per-query ceilings, not global topic totals.
 
-**Text equivalent:** The official narrative splits into an always-present
-original lane and zero to eight extra focused lanes. Each lane searches the
-ClimbMix index through Pyserini, chunks returned documents, uses Mixedbread to
-rank passages, and retains a query-specific top list. Local selection creates
-factual passages. Nuggetizer optionally creates advisory hints. Both are sealed
-into the handoff, while Retrieval also creates its organizer-facing exports.
+**Text equivalent:** The official narrative creates one always-present query
+lane. A valid plan has one to eight subnarratives, each with one to three BM25
+queries; a failed plan adds none. The result is one to 25 executable query
+lanes. Each searches ClimbMix through Pyserini, chunks returned documents, uses
+Mixedbread to rank passages, and retains a query-specific top list. Local
+selection creates factual passages. Nuggetizer optionally creates advisory
+hints. Both are sealed into the handoff, while Retrieval also creates its
+organizer-facing exports.
 
 <details>
 <summary>Implementation notes and sources</summary>
@@ -174,7 +181,7 @@ into the handoff, while Retrieval also creates its organizer-facing exports.
 or start an unbounded plan–search–replan loop.
 :::
 
-![One strict DeepSeek V4 Flash call receives the full narrative. The original lane remains, zero to eight extra focused subnarratives may be used, and planning failure falls back to the original-only lane.](2026-competition-architecture/03-bounded-deepseek-planning.svg){#fig-bounded-planning}
+![One strict DeepSeek V4 Flash call receives the full narrative. The original query lane remains. Zero to eight subnarratives may add one to three BM25 queries each, for at most twenty-four planned lanes and twenty-five total. Planning failure falls back to the original-only lane.](2026-competition-architecture/03-bounded-deepseek-planning.svg){#fig-bounded-planning}
 
 [Open the reusable bounded-planning SVG](2026-competition-architecture/03-bounded-deepseek-planning.svg){.figure-source}
 
@@ -182,19 +189,22 @@ DeepSeek V4 Flash performs **bounded agentic planning**. It sees the complete
 narrative once and returns a strict structured decomposition. In a valid
 planner response it supplies one to eight subnarratives; across the whole system
 there may therefore be **0–8 focused subnarratives**, because a failed plan
-contributes zero extra lanes. The untouched narrative is never removed.
+contributes none. Every successful subnarrative contains one to three BM25
+queries, producing up to 24 planned query lanes. The untouched narrative is
+never removed and supplies the twenty-fifth possible lane.
 
 For the running example, “warning signs that require stopping exercise” can
-become a focused lane. It is still only a search instruction. The system—not
-the planner—owns when retrieval happens, how much it retrieves, and when it
-stops.
+become a subnarrative with short BM25 queries such as “heat illness stop
+exercise warning signs.” The system—not the planner—owns when retrieval
+happens, how much each query retrieves, and when it stops.
 
 **Text equivalent:** One complete narrative goes to one strict DeepSeek planning
 request. The original narrative becomes an unconditional Retrieval lane. A
-valid plan may contribute up to eight additional subnarrative lanes. The lanes
-then cross one fixed search boundary each. If planning fails validation or
-transport, the system retains the original-only lane and does not begin an
-iterative agent loop.
+valid plan contributes one to eight subnarratives, each holding one to three
+BM25 queries. Those become up to 24 planned lanes, so the original-plus-planned
+range is one to 25 searches. Every query crosses the fixed search boundary
+once. If planning fails validation or transport, the system retains the
+original-only lane and does not begin an iterative agent loop.
 
 <details>
 <summary>Implementation notes and sources</summary>
@@ -202,8 +212,9 @@ iterative agent loop.
 - The figure uses the friendly name **DeepSeek V4 Flash**. The pinned route is
   `deepseek/deepseek-v4-flash-20260423` in
   [`facet_extraction.py`](../code/trec_rag/facet_extraction.py).
-- That module fixes `MAX_SUBNARRATIVES = 8`, strict JSON schema, temperature
-  zero, seed zero, and disabled reasoning for this planning request.
+- That module fixes `MAX_SUBNARRATIVES = 8`, `MAX_BM25_QUERIES = 3`, strict JSON
+  schema, temperature zero, seed zero, and disabled reasoning for this planning
+  request.
 - Planning failure behavior and the original-only fallback are enforced by
   [`competition_retrieval.py`](../code/trec_rag/competition_retrieval.py), not
   left to the model.

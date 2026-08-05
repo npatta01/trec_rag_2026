@@ -300,7 +300,11 @@ Start with one narrative document artifact. It creates:
 
 - the guaranteed untouched-original query lane;
 - a one-shot, schema-validated DeepSeek plan with at most eight focused
-  subnarratives.
+  subnarratives, each containing one to three BM25 queries.
+
+The valid execution range is one original query lane plus zero to 24 planned
+query lanes: at most 25 searches per topic. Do not equate a subnarrative with a
+single query lane.
 
 Show planning failure as a dashed control-flow branch that retains only the
 untouched original lane and produces no downstream evidence or canonical call.

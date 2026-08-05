@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="planning-title planning-desc">
   <title id="planning-title">DeepSeek planning is bounded and one-shot</title>
-  <desc id="planning-desc">One strict DeepSeek V4 Flash request may create zero to eight focused subnarratives. The untouched original narrative remains a retrieval lane. A planning failure falls back to that original-only lane, and there is no open-ended search or tool loop.</desc>
+  <desc id="planning-desc">One strict DeepSeek V4 Flash request may create zero to eight focused subnarratives. Each successful subnarrative contains one to three BM25 queries, yielding up to twenty-four planned query lanes. The untouched original narrative supplies one more lane, for at most twenty-five searches. A planning failure falls back to the original-only lane, and there is no open-ended search or tool loop.</desc>
   <style>
     :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7;--danger:#b4493e;--danger-soft:#f9dedb}
     @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616;--danger:#ff9b90;--danger-soft:#482621}}
@@ -24,17 +24,18 @@
   <path class="flow" d="M270 500V590" vector-effect="non-scaling-stroke"/>
   <path class="flow control" d="M530 500V590" vector-effect="non-scaling-stroke"/>
   <rect class="retrieval" x="55" y="600" width="325" height="150" rx="8"/>
-  <text class="label" x="217" y="650" text-anchor="middle">Original lane</text>
+  <text class="label" x="217" y="650" text-anchor="middle">Original query lane</text>
   <text class="body" x="217" y="698" text-anchor="middle">always present</text>
   <rect class="advisory-box" x="420" y="600" width="325" height="150" rx="8"/>
-  <text class="label" x="582" y="650" text-anchor="middle">0–8 subnarratives</text>
-  <text class="body" x="582" y="698" text-anchor="middle">focused extra lanes</text>
+  <text class="label" x="582" y="640" text-anchor="middle">0–8 subnarratives</text>
+  <text class="body" x="582" y="684" text-anchor="middle">1–3 BM25 queries each</text>
+  <text class="body" x="582" y="724" text-anchor="middle">0–24 planned lanes</text>
 
   <path class="join" d="M217 750V850H400M582 750V850H400" vector-effect="non-scaling-stroke"/>
   <path class="flow" d="M400 850V870" vector-effect="non-scaling-stroke"/>
   <rect class="retrieval" x="120" y="870" width="560" height="120" rx="8"/>
-  <text class="label" x="400" y="918" text-anchor="middle">Bounded retrieval lanes</text>
-  <text class="body" x="400" y="958" text-anchor="middle">same search boundary • once per lane</text>
+  <text class="label" x="400" y="918" text-anchor="middle">1–25 query lanes total</text>
+  <text class="body" x="400" y="958" text-anchor="middle">same fixed boundary • once per lane</text>
 
   <path class="flow failure" d="M105 405H45V1040H120" vector-effect="non-scaling-stroke"/>
   <rect class="blocked" x="120" y="1015" width="560" height="135" rx="8"/>

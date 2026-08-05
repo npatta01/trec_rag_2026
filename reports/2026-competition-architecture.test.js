@@ -120,6 +120,8 @@ const requiredConcepts = [
   "DeepSeek V4 Flash",
   "deepseek/deepseek-v4-flash-20260423",
   "0–8 focused subnarratives",
+  "1–3 BM25 query lanes per subnarrative",
+  "at most 25 searches per topic",
   "Pyserini",
   "ClimbMix",
   "≤1,000 documents / focused query",
@@ -143,6 +145,15 @@ const requiredConcepts = [
 for (const concept of requiredConcepts) {
   assert(qmd.includes(concept), `Missing architecture concept in QMD: ${concept}`);
 }
+
+assert(
+  fs.readFileSync(path.join(assetRoot, "02-retrieval-system.svg"), "utf8").includes("1–25 query lanes"),
+  "Retrieval overview should show the true executable query-lane range",
+);
+assert(
+  fs.readFileSync(path.join(assetRoot, "03-bounded-deepseek-planning.svg"), "utf8").includes("1–3 BM25 queries each"),
+  "Planning figure should distinguish subnarratives from their BM25 queries",
+);
 
 let previousFigureIndex = -1;
 for (const figure of figures) {
@@ -210,6 +221,8 @@ for (const signal of [
   "## Architecture Orientation",
   "Retrieval → handoff → Generation",
   "per-query ceilings with a documents-to-passages unit change",
+  "1–3 BM25 query lanes",
+  "at most 25 searches per topic",
   "Selected passages are factual authority",
   "authenticated handoff",
   "TREC run, full-text ZIP, qrels, gold nuggets, or RAGDoll scores",

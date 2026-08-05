@@ -70,6 +70,7 @@ Keep these boundaries intact:
 
 - The untouched narrative always remains a Retrieval lane.
 - DeepSeek planning is bounded and one-shot, not an open-ended search loop.
+- Each valid subnarrative contains 1–3 BM25 query lanes, for at most 25 searches per topic including the original lane.
 - The 1,000-document and 100-passage values are per-query ceilings with a documents-to-passages unit change.
 - Selected passages are factual authority; canonical claim hints are advisory.
 - Generation consumes only the authenticated handoff.

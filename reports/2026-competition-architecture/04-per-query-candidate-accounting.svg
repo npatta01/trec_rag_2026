@@ -14,7 +14,7 @@
 
   <rect class="query" x="170" y="135" width="460" height="100" rx="8"/>
   <text class="label" x="400" y="178" text-anchor="middle">One focused query</text>
-  <text class="body" x="400" y="216" text-anchor="middle">original narrative or one subnarrative</text>
+  <text class="body" x="400" y="216" text-anchor="middle">original narrative or planned BM25 query</text>
   <path class="flow" d="M400 235V295" vector-effect="non-scaling-stroke"/>
 
   <path class="tier-a" d="M70 305H730L675 490H125Z"/>
