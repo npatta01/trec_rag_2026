@@ -6,6 +6,10 @@ implementation patterns.
 ## Current Contents
 
 - `reports/index.html` - common entrypoint for the interactive reports.
+- `reports/2026-competition-architecture.html` - image-led walkthrough of the
+  supported 2026 Narrative → Retrieval → Handoff → Generation path.
+- `reports/2026-competition-architecture.qmd` - canonical Quarto source for the
+  generated architecture walkthrough.
 - `reports/trec-rag-briefing-report.html` - interactive 2026 briefing report
   covering ClimbMix, sample documents, answer nuggets, and solution strategy.
 - `reports/trec-rag-2025-writeups/` - standalone interactive report for the

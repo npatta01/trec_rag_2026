@@ -181,4 +181,27 @@ for (const forbidden of ["Authorization:", "Bearer ", "rag2026-"]) {
   assert(!html.includes(forbidden), `Rendered report should not expose ${forbidden}`);
 }
 
+const agents = fs.readFileSync(path.join(reportsRoot, "..", "AGENTS.md"), "utf8");
+const rootReadme = fs.readFileSync(path.join(reportsRoot, "..", "README.md"), "utf8");
+
+for (const target of [
+  "reports/2026-competition-architecture.html",
+  "reports/2026-competition-architecture.qmd",
+]) {
+  assert(agents.includes(target), `AGENTS.md should link ${target}`);
+  assert(rootReadme.includes(target), `README.md should link ${target}`);
+}
+
+for (const signal of [
+  "## Architecture Orientation",
+  "Retrieval → handoff → Generation",
+  "per-query ceilings with a documents-to-passages unit change",
+  "Selected passages are factual authority",
+  "authenticated handoff",
+  "TREC run, full-text ZIP, qrels, gold nuggets, or RAGDoll scores",
+  "Transport and semantic retry limits are separate",
+]) {
+  assert(agents.includes(signal), `AGENTS.md should retain architecture signal: ${signal}`);
+}
+
 console.log("2026 competition architecture smoke test passed");
