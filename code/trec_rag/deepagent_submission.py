@@ -182,6 +182,7 @@ class _SearchLike(Protocol):
     """One completed search, as the agentic runner records it."""
 
     candidates: Sequence[_CandidateLike]
+    passages: Sequence[_CandidateLike]
 
 
 _OrderSource = Literal["fused", "search", "unplaced"]
@@ -264,7 +265,9 @@ def rank_agentic_documents(
 
     earliest: dict[str, tuple[int, int]] = {}
     for ordinal, search in enumerate(searches):
-        for candidate in search.candidates:
+        retained_passages = getattr(search, "passages", ())
+        positioned_rows = retained_passages or search.candidates
+        for candidate in positioned_rows:
             document_id = candidate.docid
             if document_id not in grounded or document_id in placed:
                 continue

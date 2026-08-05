@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from trec_rag.deepagent_evidence import EvidenceCoverageState
@@ -308,6 +310,30 @@ def test_agentic_document_order_falls_back_to_earliest_search_position() -> None
 
     assert [row.document_id for row in ranked] == ["doc-c", "doc-b", "doc-a"]
     assert {row.order_source for row in ranked} == {"search"}
+
+
+def test_agentic_document_order_uses_passage_rank_when_search_retains_passages() -> None:
+    """Production searches retain reranked passages; that is the fallback signal."""
+    state = _state(documents=("doc-a", "doc-b"))
+    _add(state, "a", "S1")
+    _add(state, "b", "S2")
+    search = SimpleNamespace(
+        # Remote document order disagrees with the local passage reranker.
+        candidates=(
+            SimpleNamespace(docid="doc-a", rank=1),
+            SimpleNamespace(docid="doc-b", rank=2),
+        ),
+        passages=(
+            SimpleNamespace(docid="doc-b", rank=1),
+            SimpleNamespace(docid="doc-a", rank=8),
+        ),
+    )
+
+    ranked = rank_agentic_documents(
+        state.report(), fused_candidates=(), searches=(search,)
+    )
+
+    assert [row.document_id for row in ranked] == ["doc-b", "doc-a"]
 
 
 def test_agentic_document_order_breaks_search_ties_by_document_id() -> None:
