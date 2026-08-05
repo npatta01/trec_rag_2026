@@ -1207,6 +1207,73 @@ def test_the_bounce_does_not_consume_the_synthesis_reserve() -> None:
     assert late[0]["choice"] == "update_retrieval_state"
 
 
+def _synthesis_middleware(pending, *, config=None):
+    """Middleware whose next turns land in the end-of-budget synthesis window."""
+    config = config or ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=2)
+    budget = ResearchBudget(config)
+    middleware = MainToolFilterMiddleware(budget, config, closeout_pending=pending)
+    first_synthesis_turn = config.max_main_models - 1 - config.synthesis_reserve_turns
+    return config, middleware, first_synthesis_turn
+
+
+def test_an_invalid_closeout_gets_one_second_directed_synthesis_retry() -> None:
+    """One live run wrote an unusable closeout and the run ended with no selection."""
+    config, middleware, first_turn = _synthesis_middleware(lambda: True)
+
+    first = observe_turn(middleware, run_model_call_count=first_turn)
+    second = observe_turn(middleware, run_model_call_count=first_turn + 1)
+
+    assert first["tools"] == ["update_retrieval_state"]
+    assert second["tools"] == ["update_retrieval_state"], (
+        "a closeout that left grounded needs unselected must get a second turn"
+    )
+    assert second["tool_choice"] == "update_retrieval_state"
+    assert second["settings"]["parallel_tool_calls"] is False
+    assert "still have no recorded selection" in str(second["system"]), (
+        "the retry must tell the coordinator its first write-up did not land"
+    )
+
+
+def test_a_valid_closeout_gets_no_redundant_synthesis_retry() -> None:
+    pending = {"value": True}
+    config, middleware, first_turn = _synthesis_middleware(lambda: pending["value"])
+
+    first = observe_turn(middleware, run_model_call_count=first_turn)
+    pending["value"] = False
+    second = observe_turn(middleware, run_model_call_count=first_turn + 1)
+
+    assert first["tools"] == ["update_retrieval_state"]
+    assert second["tools"] == [], "a recorded closeout must not be asked for again"
+    assert "Return the grounded partial result" in str(second["system"])
+
+
+def test_a_still_invalid_closeout_cannot_get_a_third_synthesis_attempt() -> None:
+    config, middleware, first_turn = _synthesis_middleware(lambda: True)
+
+    observe_turn(middleware, run_model_call_count=first_turn)
+    observe_turn(middleware, run_model_call_count=first_turn + 1)
+    # Still below the model ceiling, so only the attempt bound can stop this.
+    third = observe_turn(middleware, run_model_call_count=first_turn + 1)
+
+    assert third["tools"] == [], "two synthesis attempts is the whole reserve"
+    assert third["tool_choice"] is None
+
+
+def test_the_closeout_synthesis_attempt_bound_follows_the_configured_reserve() -> None:
+    config, middleware, first_turn = _synthesis_middleware(
+        lambda: True,
+        config=ResearchBudgetConfig(max_main_models=10, synthesis_reserve_turns=3),
+    )
+
+    granted = [
+        observe_turn(middleware, run_model_call_count=first_turn + offset)["tools"]
+        for offset in (0, 1, 2, 2)
+    ]
+
+    assert granted[:3] == [["update_retrieval_state"]] * 3
+    assert granted[3] == []
+
+
 def test_real_langgraph_loop_terminates_after_explicit_completion() -> None:
     calls: list[str] = []
 

@@ -286,8 +286,11 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
         self._budget_config = budget_config
         self._closure_lock = Lock()
         self._merge_turns_granted: set[int] = set()
-        self._synthesis_granted = False
-        # Separate from _synthesis_granted on purpose: bouncing a voluntary
+        # A count, not a flag: one live run answered the closeout with a delta
+        # that recorded no usable selection, and the single grant was already
+        # spent, so the run ended empty. The reserve pays for a second try.
+        self._synthesis_attempts = 0
+        # Separate from the synthesis attempts on purpose: bouncing a voluntary
         # exit must not consume the end-of-budget synthesis reserve, which
         # can still refresh drafts with evidence gathered afterwards.
         self._exit_bounced = False
@@ -398,13 +401,13 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
                 return self._directed(filtered, *self._closure_directive(pending_round))
             if stop_code is None and not research_turns_spent:
                 return filtered
-            if not self._synthesis_granted:
-                self._synthesis_granted = True
+            synthesis = self._synthesis_directive()
+            if synthesis is not None:
                 return self._directed(
                     filtered,
                     ["update_retrieval_state"],
                     "update_retrieval_state",
-                    _CLOSEOUT_DIRECTIVE,
+                    synthesis,
                 )
         return self._directed(
             filtered,
@@ -412,6 +415,38 @@ class MainToolFilterMiddleware(_RoleToolFilterMiddleware):
             None,
             "Return the grounded partial result immediately. Do not call more tools.",
         )
+
+    def _synthesis_directive(self) -> str | None:
+        """Claim one synthesis attempt, or None once the reserve is spent.
+
+        The first attempt is unconditional. Later attempts are spent only while
+        needs holding grounded evidence still have no recorded selection, so a
+        closeout that landed is never asked for twice. The reserve turns are
+        what pays for these attempts, so the configured reserve is the bound.
+        """
+        if self._synthesis_attempts >= self._budget_config.synthesis_reserve_turns:
+            return None
+        if self._synthesis_attempts and not self._closeout_still_pending():
+            return None
+        self._synthesis_attempts += 1
+        if self._synthesis_attempts == 1:
+            return _CLOSEOUT_DIRECTIVE
+        return (
+            _CLOSEOUT_DIRECTIVE
+            + " Your last update_retrieval_state delta was not accepted as a "
+            "closeout: needs that hold grounded evidence still have no "
+            "recorded selection. Record it now with valid nugget ids; almost "
+            "no turns remain."
+        )
+
+    def _closeout_still_pending(self) -> bool:
+        """Whether grounded needs remain unselected; unknown counts as settled."""
+        if self._closeout_pending is None:
+            return False
+        try:
+            return bool(self._closeout_pending())
+        except Exception:
+            return False
 
     def _closure_directive(self, round_index: int) -> tuple[list[str], str, str]:
         """Grant one merge turn per open round, then compel its explicit close."""
