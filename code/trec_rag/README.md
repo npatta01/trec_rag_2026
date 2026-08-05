@@ -234,6 +234,58 @@ planning, retrieval, evidence, and canonicalization; they belong only in
 post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
+### Splitting one run across hosts
+
+Topic selection plus per-topic sealing make it practical to run part of a run on
+a rented GPU box and finish it locally. Partition the topics with
+`--topic-subset`, never overlap the two sets, and copy the remote work back
+before the final local run. Sealed topics revalidate and are skipped, the
+remaining topics run locally, and the export is regenerated over every selected
+topic, so the organizer TSV, full-text ZIP, and handoff never need manual
+merging.
+
+The downloadable artifact is **two directories**, not one:
+
+| Path | Required | Why |
+| --- | --- | --- |
+| `outputs/<experiment.id>/<topic-id>/` | yes | sealed per-topic checkpoints, ledger, and receipts |
+| `cache/documents/v1/` | yes | content-addressed document text the export reads for every row |
+| `cache/retrieval/pyserini_remote/` | no | avoids re-querying the hosted index if a topic is rerun |
+| `cache/canonical/<prompt-version>/` | no | avoids re-paying for hosted canonical calls on a rerun |
+| `cache/reranker/` | **no — do not copy** | the score database path is derived from the scoring context, so both hosts write the same filename with different contents and a copy clobbers local scores |
+
+Skipping `cache/documents/v1/` is the quiet failure: the checkpoints validate
+and the export then fails on missing document text. Both required directories
+are content-addressed or topic-scoped, so they merge by copy.
+
+Both hosts must agree on the things the checkpoints seal, or resume fails
+closed:
+
+- **The same config bytes.** The YAML SHA-256 is sealed into every dispatch and
+  projection receipt, so `experiment.id` and every other field must be
+  byte-identical on both hosts.
+- **`passage.device` pinned, not `auto`.** The resolved device string is part of
+  the sealed passage-search identity, and the exporting host recomputes it.
+  `auto` resolving to `cpu` remotely and `cuda` locally rejects the download.
+  The checked-in config pins `cuda`, which both ROCm and NVIDIA report.
+- **The same `INDEX_URL`.** It is part of the retriever identity and is required
+  even for a resume-and-export pass that issues no queries.
+- **A clean tracked worktree containing real git metadata.** The runner rejects
+  a dirty tree and reads `HEAD` for the recorded commit, so ship a checkout
+  rather than a file tarball.
+- **No commit change inside a topic.** All phases of one topic must share a
+  commit; different topics may carry different commits.
+- **Pre-cached reranker weights.** The scorer loads at a pinned revision with
+  `local_files_only=True`; `code/tools/setup_cuda_env.sh` fetches them.
+
+Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
+CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
+same `sentence-transformers`, `transformers`, and `numpy` versions the `rocm`
+group resolves to, so reranker score-cache entries stay interchangeable and the
+recorded backend version stays honest. The two groups are declared conflicting
+because one lock cannot hold both torch builds; regenerate `uv.lock` on the ROCm
+host, where `repo.radeon.com` is reachable.
+
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
 provenance, fallback, and byte-stable resume behavior, but it does not establish
 that generated decompositions improve retrieval or that canonical claims are

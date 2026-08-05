@@ -32,9 +32,27 @@ rocm = [
     "transformers>=4.55.5 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "triton @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
+# NVIDIA counterpart of the ROCm group, for renting a CUDA box and running a
+# subset of the competition topics there. The pins match the versions the ROCm
+# group resolves to and the Modal image contract in
+# code/tools/modal_rerank_score_cache.py, so both hosts report the same
+# `sentence-transformers` backend version and write interchangeable reranker
+# score-cache entries. Only the torch build differs.
+cuda = [
+    "numpy==2.5.1 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sentence-transformers==5.6.0 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch==2.9.1 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "transformers==5.13.0 ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv]
+# One torch distribution cannot be both the ROCm wheel and the PyPI CUDA wheel
+# in a single resolution, so the two hardware groups are mutually exclusive.
+conflicts = [[{ group = "rocm" }, { group = "cuda" }]]
 
 [tool.uv.dependency-groups]
 rocm = { requires-python = ">=3.12,<3.13" }
+cuda = { requires-python = ">=3.12,<3.13" }
 
 [build-system]
 requires = ["setuptools>=69"]
