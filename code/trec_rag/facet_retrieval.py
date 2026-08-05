@@ -7,20 +7,23 @@ material and qrels are not inputs.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
+import fcntl
 import json
 import math
+import os
 from pathlib import Path
+import tempfile
+import threading
 from typing import Any, Protocol
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
-from trec_rag.facet_extraction import (
-    GeneratedQueryPlan,
-    Subnarrative,
-    render_facet_queries,
-)
+from trec_rag.facet_extraction import Subnarrative
+from trec_rag.facet_evidence import SCORING_NORMALIZATION_VERSION, ScoringView
+from trec_rag.facet_retrieval_lanes import FacetRetrievalLane, build_retrieval_lanes
 from trec_rag.pipeline_config import RetrieverConfig
 from trec_rag.pipeline_models import QueryVariant, RankedCandidate, RetrievedCandidate
 from trec_rag.ranking import _weighted, coverage_aware_long_doc_rank
@@ -31,7 +34,6 @@ from trec_rag.rerank_score_cache import (
     DEFAULT_SCORE_REPRESENTATION,
     GlobalScoreCache,
     ScoreCacheContext,
-    _append_jsonl,
     _choose_device,
     _load_cross_encoder,
     _read_document_scores,
@@ -42,6 +44,11 @@ from trec_rag.rerank_score_cache import (
 )
 from trec_rag.retrievers import PyseriniRemoteRetriever
 from trec_rag.topics import Topic
+from trec_rag.topic_passage_search import (
+    FocusedQuery,
+    PassageSearchResult,
+    SourceDocument,
+)
 
 
 RETRIEVAL_DEPTH = 1_000
@@ -52,7 +59,7 @@ MIXEDBREAD_REVISION = DEFAULT_MODEL_REVISION
 BACKEND_VERSION = DEFAULT_BACKEND_VERSION
 SCORE_REPRESENTATION = DEFAULT_SCORE_REPRESENTATION
 INFERENCE_DTYPE = DEFAULT_INFERENCE_DTYPE
-INPUT_POLICY = "trec_rag_raw_v2"
+INPUT_POLICY = SCORING_NORMALIZATION_VERSION
 DOCUMENT_MAX_LENGTH = 32_768
 DOCUMENT_PAIR_BUFFER_TOKENS = 512
 WINDOW_MAX_LENGTH = 1_024
@@ -67,6 +74,22 @@ SPAN_SUPPORT_CAP = 6
 MIN_NEW_SPAN_CHARACTERS = 800
 _BACKEND = "sentence-transformers-cross-encoder"
 _DOCUMENT_SCORE_KIND = "doc_max_32768_buf512"
+_LEDGER_DOCUMENT_FIELDS = (
+    "topic_id",
+    "docid",
+    "query_sha256",
+    "text_sha256",
+    "score_cache_key",
+)
+_LEDGER_WINDOW_FIELDS = (
+    "topic_id",
+    "docid",
+    "chunk_index",
+    "query_sha256",
+    "document_text_sha256",
+    "text_sha256",
+    "score_cache_key",
+)
 
 
 __all__ = [
@@ -119,32 +142,208 @@ class LaneScorer(Protocol):
     ) -> tuple["LaneDocumentScore", ...]: ...
 
 
-@dataclass(frozen=True)
-class FacetRetrievalLane:
-    """One BM25 retrieval identity paired with one semantic scoring identity."""
+class PassageSearchAdapter(Protocol):
+    def search(self, query: FocusedQuery) -> PassageSearchResult: ...
 
-    retrieval_query: QueryVariant
-    scoring_query: QueryVariant
-    subnarrative_id: str | None
-    bm25_query_sha256: str = field(init=False)
-    semantic_query_sha256: str = field(init=False)
+    def read_text(self, content_sha256: str) -> str: ...
 
-    def __post_init__(self) -> None:
-        if (
-            self.retrieval_query.topic_id != self.scoring_query.topic_id
-            or self.retrieval_query.variant_name != self.scoring_query.variant_name
-        ):
-            raise ValueError("retrieval and scoring query lane identities must match")
-        object.__setattr__(
-            self,
-            "bm25_query_sha256",
-            sha256(self.retrieval_query.query_text.encode("utf-8")).hexdigest(),
+
+@contextmanager
+def _ledger_lock(path: Path):
+    """Serialize publication for one topic ledger without holding its data file open."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _ledger_json(row: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("score ledger row is not JSON serializable") from exc
+
+
+def _ledger_score_identity(row: Mapping[str, Any], *, kind: str) -> str:
+    if kind == "document":
+        fields = _LEDGER_DOCUMENT_FIELDS
+    elif kind == "window":
+        fields = _LEDGER_WINDOW_FIELDS
+    else:
+        raise ValueError("score ledger kind must be document or window")
+    if all(field in row for field in fields):
+        return _ledger_json({field: row[field] for field in fields})
+    return _ledger_json({field: value for field, value in row.items() if field != "score"})
+
+
+def _ledger_row_identity(row: Mapping[str, Any]) -> str:
+    return _ledger_json({field: value for field, value in row.items() if field != "score"})
+
+
+def _reject_incomplete_ledger_publication(path: Path) -> None:
+    if not path.parent.is_dir():
+        return
+    temporary_paths = sorted(
+        candidate
+        for pattern in (
+            f".{path.name}.tmp",
+            f".{path.name}.*.tmp",
+            f"{path.name}.tmp",
+            f"{path.name}.*.tmp",
         )
-        object.__setattr__(
-            self,
-            "semantic_query_sha256",
-            sha256(self.scoring_query.query_text.encode("utf-8")).hexdigest(),
+        for candidate in path.parent.glob(pattern)
+    )
+    if temporary_paths:
+        raise ValueError(
+            f"{path}: incomplete temporary score ledger publication "
+            f"({temporary_paths[0].name})"
         )
+
+
+def _validate_ledger_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    path: Path,
+    kind: str,
+) -> None:
+    scores_by_identity: dict[str, object] = {}
+    for row in rows:
+        identity = _ledger_score_identity(row, kind=kind)
+        score = row.get("score")
+        if identity in scores_by_identity and scores_by_identity[identity] != score:
+            raise ValueError(f"{path}: contradictory score ledger publication")
+        scores_by_identity[identity] = score
+
+
+def _read_ledger_scores_unlocked(
+    path: Path,
+    *,
+    context: ScoreCacheContext,
+    kind: str,
+) -> dict[Any, list[dict[str, Any]]]:
+    if kind not in {"document", "window"}:
+        raise ValueError("score ledger kind must be document or window")
+    _reject_incomplete_ledger_publication(path)
+    if not path.exists():
+        return {}
+    try:
+        if kind == "document":
+            scores = _read_document_scores(path, context=context)
+        elif kind == "window":
+            scores = _read_window_scores(path, context=context)
+        else:
+            raise ValueError("score ledger kind must be document or window")
+    except OSError as exc:
+        raise ValueError(f"{path}: score ledger is not a readable regular file") from exc
+    rows = [row for grouped in scores.values() for row in grouped]
+    _validate_ledger_rows(rows, path=path, kind=kind)
+    return scores
+
+
+def _read_ledger_scores(
+    path: Path,
+    *,
+    context: ScoreCacheContext,
+    kind: str,
+) -> dict[Any, list[dict[str, Any]]]:
+    with _ledger_lock(path):
+        return _read_ledger_scores_unlocked(path, context=context, kind=kind)
+
+
+def _ledger_rows(
+    grouped: Mapping[Any, Sequence[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    return [row for rows in grouped.values() for row in rows]
+
+
+def _merge_ledger_rows(
+    existing: Sequence[Mapping[str, Any]],
+    incoming: Sequence[Mapping[str, Any]],
+    *,
+    path: Path,
+    kind: str,
+) -> list[dict[str, Any]]:
+    combined: dict[str, dict[str, Any]] = {}
+    scores_by_identity: dict[str, object] = {}
+    for source in (existing, incoming):
+        for row in source:
+            score_identity = _ledger_score_identity(row, kind=kind)
+            score = row.get("score")
+            if (
+                score_identity in scores_by_identity
+                and scores_by_identity[score_identity] != score
+            ):
+                raise ValueError(f"{path}: contradictory score ledger publication")
+            scores_by_identity[score_identity] = score
+            combined[_ledger_row_identity(row)] = dict(row)
+    return sorted(combined.values(), key=_ledger_json)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    directory_fd = os.open(path, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _atomic_write_ledger(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    payload = "".join(f"{_ledger_json(row)}\n" for row in rows).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as sink:
+            sink.write(payload)
+            sink.flush()
+            os.fsync(sink.fileno())
+        os.replace(temporary_name, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _publish_ledger_rows(
+    path: Path,
+    rows: Sequence[dict[str, Any]],
+    *,
+    context: ScoreCacheContext,
+    kind: str,
+) -> int:
+    materialized = list(rows)
+    with _ledger_lock(path):
+        existing_grouped = _read_ledger_scores_unlocked(
+            path,
+            context=context,
+            kind=kind,
+        )
+        existing = _ledger_rows(existing_grouped)
+        merged = _merge_ledger_rows(
+            existing,
+            materialized,
+            path=path,
+            kind=kind,
+        )
+        if not merged:
+            return 0
+        payload = "".join(f"{_ledger_json(row)}\n" for row in merged).encode("utf-8")
+        if path.is_file() and path.read_bytes() == payload:
+            return len(materialized)
+        _atomic_write_ledger(path, merged)
+    return len(materialized)
 
 
 @dataclass(frozen=True)
@@ -198,6 +397,7 @@ class LaneRanking:
     documents: tuple[LaneDocumentScore, ...]
     retrieval_requested_depth: int = RETRIEVAL_DEPTH
     rerank_depth: int = RERANK_DEPTH
+    passage_result: PassageSearchResult | None = None
     retrieval_audit_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -325,91 +525,12 @@ class SubnarrativeDocumentScore:
     downstream_only: bool = True
 
 
-def build_retrieval_lanes(
-    topic: Topic,
-    queries: Sequence[QueryVariant],
-    subnarratives: Sequence[Subnarrative],
-) -> tuple[FacetRetrievalLane, ...]:
-    """Bind the original and one full-text lane per generated subnarrative."""
-    if not isinstance(topic, Topic):
-        raise TypeError("topic must be a Topic")
-    rows = tuple(queries)
-    for query in rows:
-        if not isinstance(query, QueryVariant) or query.topic_id != topic.id:
-            raise ValueError("all retrieval queries must belong to the topic")
-    originals = [
-        query
-        for query in rows
-        if query.variant_name == "original" and query.source_type == "original_topic"
-    ]
-    if len(originals) != 1 or originals[0].query_text != topic.narrative:
-        raise ValueError("retrieval requires one exact official-narrative original lane")
-    allowed = {"original_topic", "generated_subnarrative_bm25"}
-    if any(query.source_type not in allowed for query in rows):
-        raise ValueError("unsupported query source type in facet retrieval plan")
-    semantic_rows = tuple(subnarratives)
-    if any(
-        not isinstance(row, Subnarrative) or row.topic_id != topic.id
-        for row in semantic_rows
-    ):
-        raise ValueError("all subnarratives must belong to the topic")
-    if len({row.subnarrative_id for row in semantic_rows}) != len(semantic_rows):
-        raise ValueError("subnarrative IDs must be unique")
-    if semantic_rows:
-        admitted = render_facet_queries(
-            topic,
-            GeneratedQueryPlan(topic.id, semantic_rows),
-        )
-        if (
-            admitted.used_fallback
-            or admitted.subnarratives != semantic_rows
-            or admitted.queries != rows
-        ):
-            raise ValueError("retrieval requires the complete ordered canonical query plan")
-    elif rows != (
-        QueryVariant(topic.id, "original", topic.narrative, "original_topic"),
-    ):
-        raise ValueError("retrieval requires the complete ordered canonical query plan")
-
-    bound = [
-        FacetRetrievalLane(
-            retrieval_query=originals[0],
-            scoring_query=QueryVariant(
-                topic.id,
-                "original",
-                topic.narrative,
-                "semantic_original",
-            ),
-            subnarrative_id=None,
-        )
-    ]
-    for subnarrative in semantic_rows:
-        lane_name = f"facet:{subnarrative.subnarrative_id}:text"
-        bound.append(
-            FacetRetrievalLane(
-                retrieval_query=QueryVariant(
-                    topic.id,
-                    lane_name,
-                    subnarrative.text,
-                    "generated_subnarrative",
-                ),
-                scoring_query=QueryVariant(
-                    topic.id,
-                    lane_name,
-                    subnarrative.text,
-                    "generated_subnarrative",
-                ),
-                subnarrative_id=subnarrative.subnarrative_id,
-            )
-        )
-    return tuple(bound)
-
-
 def build_pyserini_retriever(
     cache_dir: Path,
     *,
     index: str = "climbmix-400b",
     hits: int = RETRIEVAL_DEPTH,
+    corpus_epoch: str,
     client: Any | None = None,
     continuation_ticket: str | None = None,
 ) -> PyseriniRemoteRetriever:
@@ -423,12 +544,14 @@ def build_pyserini_retriever(
         query_variants=("original", "generated_subnarrative"),
         hits=hits,
         index=index.strip(),
+        corpus_epoch=corpus_epoch,
         cache=True,
     )
     return PyseriniRemoteRetriever(
         config,
         cache_dir=Path(cache_dir),
         client=client,
+        corpus_epoch=corpus_epoch,
         continuation_ticket=continuation_ticket,
     )
 
@@ -546,15 +669,54 @@ def round_robin_select(
 def run_facet_retrieval(
     topic: Topic,
     queries: Sequence[QueryVariant],
-    retriever: LaneRetriever,
-    scorer: LaneScorer,
+    retriever: LaneRetriever | None = None,
+    scorer: LaneScorer | None = None,
     *,
     subnarratives: Sequence[Subnarrative],
     retrieval_depth: int = RETRIEVAL_DEPTH,
     rerank_depth: int = RERANK_DEPTH,
     selection_k: int = SELECTION_DEPTH,
+    passage_search: PassageSearchAdapter | None = None,
+    legacy_scorer: LaneScorer | None = None,
 ) -> FacetRetrievalResult:
-    """Run configured-depth retrieval, top-N scoring, and coverage-first selection."""
+    """Run fixed retrieval through the shared passage path when supplied."""
+    if passage_search is not None:
+        return _run_shared_passage_retrieval(
+            topic,
+            queries,
+            passage_search,
+            subnarratives=subnarratives,
+            retrieval_depth=retrieval_depth,
+            selection_k=selection_k,
+        )
+    if retriever is None or scorer is None:
+        raise TypeError("legacy retrieval requires both retriever and scorer")
+    if legacy_scorer is not None:
+        raise ValueError("legacy_scorer is only valid with passage_search")
+    return _run_legacy_facet_retrieval(
+        topic,
+        queries,
+        retriever,
+        scorer,
+        subnarratives=subnarratives,
+        retrieval_depth=retrieval_depth,
+        rerank_depth=rerank_depth,
+        selection_k=selection_k,
+    )
+
+
+def _run_legacy_facet_retrieval(
+    topic: Topic,
+    queries: Sequence[QueryVariant],
+    retriever: LaneRetriever,
+    scorer: LaneScorer,
+    *,
+    subnarratives: Sequence[Subnarrative],
+    retrieval_depth: int,
+    rerank_depth: int,
+    selection_k: int,
+) -> FacetRetrievalResult:
+    """Historical direct unit-test seam; v2 production never enters it."""
     _validate_depth(retrieval_depth, "retrieval_depth")
     _validate_depth(rerank_depth, "rerank_depth", maximum=retrieval_depth)
     _validate_depth(selection_k, "selection_k")
@@ -622,6 +784,159 @@ def run_facet_retrieval(
         rerank_depth=rerank_depth,
         selection_k=selection_k,
     )
+
+
+def _run_shared_passage_retrieval(
+    topic: Topic,
+    queries: Sequence[QueryVariant],
+    passage_search: PassageSearchAdapter,
+    *,
+    subnarratives: Sequence[Subnarrative],
+    retrieval_depth: int,
+    selection_k: int,
+) -> FacetRetrievalResult:
+    """Project one sealed shared result for each deterministic fixed lane."""
+    _validate_depth(retrieval_depth, "retrieval_depth")
+    _validate_depth(selection_k, "selection_k")
+    lane_queries = build_retrieval_lanes(topic, queries, subnarratives)
+    lane_results: list[LaneRanking] = []
+    for lane in lane_queries:
+        focused_query = FocusedQuery(
+            query_id=lane.retrieval_query.variant_name,
+            text=lane.scoring_query.query_text,
+            primary_subnarrative_id=lane.subnarrative_id or "original",
+        )
+        passage_result = passage_search.search(focused_query)
+        _validate_shared_result(topic, lane, passage_result, retrieval_depth)
+        documents = _project_shared_documents(topic, lane, passage_search, passage_result)
+        audit = tuple(
+            RetrievalAuditCandidate(
+                docid=document.docid,
+                bm25_rank=document.source_rank,
+                bm25_score=document.source_score,
+                text_sha256=document.content_sha256,
+            )
+            for document in passage_result.documents
+        )
+        lane_results.append(
+            LaneRanking(
+                lane=lane,
+                retrieval_returned_count=passage_result.returned_documents,
+                retrieval_retained_count=passage_result.returned_documents,
+                retrieval_audit_candidates=audit,
+                documents=documents,
+                retrieval_requested_depth=passage_result.requested_documents,
+                rerank_depth=passage_result.scored_documents,
+                passage_result=passage_result,
+            )
+        )
+    lanes = tuple(lane_results)
+    selection = round_robin_select(lanes, limit=selection_k)
+    return FacetRetrievalResult(
+        topic_id=topic.id,
+        lanes=lanes,
+        selection=selection,
+        original_only_control=lanes[0].documents,
+        union_pool=_union_pool(lanes),
+        rerank_depth=retrieval_depth,
+        selection_k=selection_k,
+    )
+
+
+def _validate_shared_result(
+    topic: Topic,
+    lane: FacetRetrievalLane,
+    result: PassageSearchResult,
+    retrieval_depth: int,
+) -> None:
+    if not isinstance(result, PassageSearchResult):
+        raise TypeError("passage search must return a PassageSearchResult")
+    expected_primary = lane.subnarrative_id or "original"
+    if (
+        result.query.query_id != lane.retrieval_query.variant_name
+        or result.query.text != lane.scoring_query.query_text
+        or result.query.primary_subnarrative_id != expected_primary
+        or result.requested_documents != retrieval_depth
+    ):
+        raise ValueError("passage search result identity differs from its fixed lane")
+    if result.status == "complete" and result.stopping_reason is not None:
+        raise ValueError("complete passage search cannot carry a stopping reason")
+
+
+def _project_shared_documents(
+    topic: Topic,
+    lane: FacetRetrievalLane,
+    passage_search: PassageSearchAdapter,
+    result: PassageSearchResult,
+) -> tuple[LaneDocumentScore, ...]:
+    available = tuple(
+        document
+        for document in result.documents
+        if document.best_passage_raw_logit is not None
+    )
+    ordered = sorted(
+        available,
+        key=lambda document: (
+            -float(document.best_passage_raw_logit)
+            if document.best_passage_raw_logit is not None else float("inf"),
+            document.source_rank,
+            document.docid,
+        ),
+    )
+    rows: list[LaneDocumentScore] = []
+    for aggregate_rank, document in enumerate(ordered, start=1):
+        passages = tuple(
+            passage for passage in result.passages if passage.docid == document.docid
+        )
+        text = _document_text(passage_search, document)
+        winning = tuple(
+            PassageScore(
+                chunk_index=index,
+                start_char=passage.start_char,
+                end_char=passage.end_char,
+                raw_logit=passage.raw_logit,
+                weighted_rank=index,
+            )
+            for index, passage in enumerate(passages, start=1)
+        )
+        rows.append(
+            LaneDocumentScore(
+                topic_id=topic.id,
+                lane_name=lane.retrieval_query.variant_name,
+                bm25_query=lane.retrieval_query.query_text,
+                bm25_query_sha256=lane.bm25_query_sha256,
+                semantic_query=lane.scoring_query.query_text,
+                semantic_query_sha256=lane.semantic_query_sha256,
+                docid=document.docid,
+                text=text,
+                bm25_rank=document.source_rank,
+                bm25_score=document.source_score,
+                aggregate_rank=aggregate_rank,
+                aggregate_score=document.best_passage_raw_logit,
+                long_document_raw_logit=document.best_passage_raw_logit,
+                weighted_passage_raw_logit=document.best_passage_raw_logit,
+                within_document_span_support=0,
+                winning_passages=winning,
+            )
+        )
+    return tuple(rows)
+
+
+def _document_text(
+    passage_search: PassageSearchAdapter,
+    document: SourceDocument,
+) -> str:
+    read_text = getattr(passage_search, "read_text", None)
+    if callable(read_text):
+        text = read_text(document.content_sha256)
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or sha256(text.encode("utf-8")).hexdigest() != document.content_sha256
+        ):
+            raise ValueError("passage search document text does not match its source digest")
+        return text
+    raise TypeError("passage search adapter must expose public read_text(content_sha256)")
 
 
 def score_selected_documents(
@@ -732,8 +1047,7 @@ class MixedbreadCoverageScorer:
         _validate_depth(document_batch_size, "document_batch_size")
         _validate_depth(window_batch_size, "window_batch_size")
         self.artifact_dir = Path(artifact_dir)
-        self.document_score_path = self.artifact_dir / "document_scores.jsonl"
-        self.window_score_path = self.artifact_dir / "window_scores.jsonl"
+        self._last_topic = threading.local()
         self.document_batch_size = document_batch_size
         self.window_batch_size = window_batch_size
         self.chunker = SemanticTextChunker(
@@ -783,6 +1097,32 @@ class MixedbreadCoverageScorer:
             loader=model_loader,
         )
 
+    def _topic_ledger_paths(self, topic: Topic) -> tuple[Path, Path]:
+        topic_id = topic.id
+        if (
+            not isinstance(topic_id, str)
+            or not topic_id
+            or topic_id in {".", ".."}
+            or Path(topic_id).name != topic_id
+        ):
+            raise ValueError("topic ID is not safe for a score ledger path")
+        root = self.artifact_dir / topic_id
+        return root / "document_scores.jsonl", root / "window_scores.jsonl"
+
+    @property
+    def document_score_path(self) -> Path:
+        topic_id = getattr(self._last_topic, "id", None)
+        if topic_id is None:
+            return self.artifact_dir / "document_scores.jsonl"
+        return self.artifact_dir / topic_id / "document_scores.jsonl"
+
+    @property
+    def window_score_path(self) -> Path:
+        topic_id = getattr(self._last_topic, "id", None)
+        if topic_id is None:
+            return self.artifact_dir / "window_scores.jsonl"
+        return self.artifact_dir / topic_id / "window_scores.jsonl"
+
     @property
     def identity(self) -> dict[str, object]:
         return {
@@ -791,6 +1131,7 @@ class MixedbreadCoverageScorer:
             "backend_version": BACKEND_VERSION,
             "score_representation": SCORE_REPRESENTATION,
             "inference_dtype": INFERENCE_DTYPE,
+            "input_policy": INPUT_POLICY,
             "document_max_length": DOCUMENT_MAX_LENGTH,
             "document_pair_buffer_tokens": DOCUMENT_PAIR_BUFFER_TOKENS,
             "window_max_length": WINDOW_MAX_LENGTH,
@@ -807,38 +1148,62 @@ class MixedbreadCoverageScorer:
         if not candidates:
             return ()
         candidates = _canonical_candidates(topic, lane.scoring_query, candidates)
-        existing_documents = _read_document_scores(
-            self.document_score_path,
+        self._last_topic.id = topic.id
+        document_score_path, window_score_path = self._topic_ledger_paths(topic)
+        views_by_docid: dict[str, ScoringView] = {}
+        scoring_candidates: list[RetrievedCandidate] = []
+        for candidate in candidates:
+            view = ScoringView(candidate.text)
+            if not view.scoring_text:
+                raise ValueError(
+                    f"empty scoring view for topic={topic.id} docid={candidate.docid}"
+                )
+            views_by_docid[candidate.docid] = view
+            scoring_candidates.append(replace(candidate, text=view.scoring_text))
+        existing_documents = _read_ledger_scores(
+            document_score_path,
             context=self.document_cache.context,
+            kind="document",
+        )
+        existing_windows = _read_ledger_scores(
+            window_score_path,
+            context=self.window_cache.context,
+            kind="window",
         )
         document_rows = _score_document_rows(
             model=self._document_model,
             topic=topic,
-            candidates=candidates,
+            candidates=scoring_candidates,
             existing_scores=existing_documents,
             batch_size=self.document_batch_size,
             score_cache=self.document_cache,
             score_kind=_DOCUMENT_SCORE_KIND,
         )
-        _append_jsonl(self.document_score_path, document_rows)
-        existing_windows = _read_window_scores(
-            self.window_score_path,
-            context=self.window_cache.context,
+        _publish_ledger_rows(
+            document_score_path,
+            document_rows,
+            context=self.document_cache.context,
+            kind="document",
         )
         window_rows = _score_window_rows(
             model=self._window_model,
             topic=topic,
-            candidates=candidates,
+            candidates=scoring_candidates,
             existing_scores=existing_windows,
             batch_size=self.window_batch_size,
             chunker=self.chunker,
             score_cache=self.window_cache,
         )
-        _append_jsonl(self.window_score_path, window_rows)
+        _publish_ledger_rows(
+            window_score_path,
+            window_rows,
+            context=self.window_cache.context,
+            kind="window",
+        )
         ranked = coverage_aware_long_doc_rank(
-            candidates,
-            document_score_path=self.document_score_path,
-            window_score_path=self.window_score_path,
+            scoring_candidates,
+            document_score_path=document_score_path,
+            window_score_path=window_score_path,
             expected_document_score_metadata=self.document_cache.context.artifact_metadata,
             expected_window_score_metadata=self.window_cache.context.artifact_metadata,
             long_document_weight=LONG_DOCUMENT_WEIGHT,
@@ -849,12 +1214,19 @@ class MixedbreadCoverageScorer:
             min_new_chars=MIN_NEW_SPAN_CHARACTERS,
             top_window_weights=TOP_WINDOW_WEIGHTS,
         )
-        all_windows = _read_window_scores(
-            self.window_score_path,
+        all_windows = _read_ledger_scores(
+            window_score_path,
             context=self.window_cache.context,
+            kind="window",
         )
         return tuple(
-            self._to_lane_score(lane, candidates, row, all_windows)
+            self._to_lane_score(
+                lane,
+                candidates,
+                views_by_docid,
+                row,
+                all_windows,
+            )
             for row in ranked
         )
 
@@ -862,6 +1234,7 @@ class MixedbreadCoverageScorer:
     def _to_lane_score(
         lane: FacetRetrievalLane,
         candidates: Sequence[RetrievedCandidate],
+        views_by_docid: Mapping[str, ScoringView],
         ranked: RankedCandidate,
         all_windows: dict[tuple[str, str, int], list[dict[str, Any]]],
     ) -> LaneDocumentScore:
@@ -869,13 +1242,16 @@ class MixedbreadCoverageScorer:
             (row for row in candidates if row.docid == ranked.docid),
             key=lambda row: (row.rank, -row.score),
         )
+        view = views_by_docid.get(source.docid)
+        if view is None or view.source != source.text or ranked.text != view.scoring_text:
+            raise ValueError("ranked scoring view differs from exact source binding")
         aggregate = next(
             row
             for row in reversed(ranked.provenance)
             if row.get("ranker") == "coverage_aware_long_doc_aggregate"
         )
         query_hash = lane.semantic_query_sha256
-        document_hash = sha256(source.text.encode("utf-8")).hexdigest()
+        document_hash = view.scoring_text_sha256
         windows = [
             row
             for (topic_id, docid, _chunk_index), rows in all_windows.items()
@@ -885,16 +1261,21 @@ class MixedbreadCoverageScorer:
             and row.get("document_text_sha256") == document_hash
         ]
         windows.sort(key=lambda row: (-float(row["score"]), int(row["chunk_index"])))
-        winning = tuple(
-            PassageScore(
-                chunk_index=int(row["chunk_index"]),
-                start_char=int(row["start_char"]),
-                end_char=int(row["end_char"]),
-                raw_logit=float(row["score"]),
-                weighted_rank=index,
+        winning_rows: list[PassageScore] = []
+        for index, row in enumerate(
+            windows[: len(TOP_WINDOW_WEIGHTS)], start=1
+        ):
+            projection = view.project(int(row["start_char"]), int(row["end_char"]))
+            winning_rows.append(
+                PassageScore(
+                    chunk_index=int(row["chunk_index"]),
+                    start_char=projection.source_start_char,
+                    end_char=projection.source_end_char,
+                    raw_logit=float(row["score"]),
+                    weighted_rank=index,
+                )
             )
-            for index, row in enumerate(windows[: len(TOP_WINDOW_WEIGHTS)], start=1)
-        )
+        winning = tuple(winning_rows)
         return LaneDocumentScore(
             topic_id=ranked.topic_id,
             lane_name=lane.retrieval_query.variant_name,
@@ -903,7 +1284,7 @@ class MixedbreadCoverageScorer:
             semantic_query=lane.scoring_query.query_text,
             semantic_query_sha256=lane.semantic_query_sha256,
             docid=ranked.docid,
-            text=ranked.text,
+            text=source.text,
             bm25_rank=source.rank,
             bm25_score=source.score,
             aggregate_rank=ranked.rank,

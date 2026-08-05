@@ -1,24 +1,28 @@
-schema_version: facet_pilot_config_v1
+schema_version: facet_pilot_config_v2
 
 experiment:
-  id: facet-deepseek-b40-v1
+  id: facet-deepseek-b40-v2
 
 topics:
   path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+
+execution:
+  topic_workers: 2
 
 retrieval:
   index: climbmix-400b
   cache_dir: cache/retrieval/pyserini_remote
   query_sources: [original, subnarrative]
-  candidate_depth_per_query: 1000
+  documents_per_query: 1000
+  corpus_epoch: climbmix-400b-operator-archive-facet-2025-v2-sha256-2ccad901eb908ac14747bafd2069f7c8aa96ecaaa8cc30457ff47c73ce3bf81f
 
-reranking:
+passage:
   model: mixedbread-ai/mxbai-rerank-base-v2
   score_cache_dir: cache/reranker
   device: auto
-  rerank_depth_per_query: 100
-  candidate_pool_depth: 100
-  selection_policy: round_robin_subnarrative_coverage
+  passages_per_query: 100
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
 
 nuggets:
   evidence_budget_per_subnarrative: 40

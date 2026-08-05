@@ -98,6 +98,8 @@ class BackendReply:
     response_body: bytes
     status: int
     metadata: Mapping[str, object]
+    response_bodies: tuple[bytes, ...] = ()
+    metadata_entries: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -26,6 +26,7 @@ from trec_rag.deepagent_research import (
     CandidateNugget,
     EvidenceBundle,
     MainToolFilterMiddleware,
+    RESEARCHER_SYSTEM_PROMPT,
     ResearchTaskBudgetMiddleware,
     ResearchTaskEnvelope,
     ResearcherToolFilterMiddleware,
@@ -196,11 +197,15 @@ def test_role_filters_expose_only_approved_tools() -> None:
     }
     assert visible_tools(ResearcherToolFilterMiddleware(), ALL_TOOLS) == {
         "search_passages",
-        "search_climbmix",
-        "extract_relevant_snippets",
         "view_retrieval_state",
         "read_file",
     }
+
+
+def test_researcher_prompt_names_only_passage_search_as_evidence_retrieval() -> None:
+    assert "search_passages" in RESEARCHER_SYSTEM_PROMPT
+    assert "search_climbmix" not in RESEARCHER_SYSTEM_PROMPT
+    assert "extract_relevant_snippets" not in RESEARCHER_SYSTEM_PROMPT
 
 
 def test_main_filter_forces_research_after_empty_round_attempt() -> None:
@@ -821,7 +826,7 @@ def test_researcher_filter_forces_bundle_after_task_local_no_yield_stop() -> Non
     assert "must_stop" in str(observed["system"])
 
 
-def test_researcher_filter_forces_a_passage_search_first_and_nothing_after() -> None:
+def test_researcher_filter_forces_a_passage_search_first_and_nothing_legacy_after() -> None:
     budget = ResearchBudget(ResearchBudgetConfig())
     context = ResearchTaskContext("R1-N1", 1, "focused", ("N1",))
     envelope = ResearchTaskEnvelope.model_validate_json(
@@ -861,19 +866,13 @@ def test_researcher_filter_forces_a_passage_search_first_and_nothing_after() -> 
     with bind_research_task(envelope):
         middleware.wrap_model_call(request, handler)
     assert observed["tool_choice"] is None
-    assert "search_passages" in observed["tools"]
-    assert "extract_relevant_snippets" in observed["tools"]
-
-    assert budget.reserve_retrieval(context, "extract_relevant_snippets").ok
-    with bind_research_task(envelope):
-        middleware.wrap_model_call(request, handler)
     assert set(observed["tools"]) == {
         "search_passages",
-        "search_climbmix",
-        "extract_relevant_snippets",
         "view_retrieval_state",
         "read_file",
     }
+    assert "search_climbmix" not in str(observed["system"])
+    assert "extract_relevant_snippets" not in str(observed["system"])
 
 
 def test_researcher_filter_stop_is_task_local_under_concurrent_contexts() -> None:
@@ -883,7 +882,7 @@ def test_researcher_filter_stop_is_task_local_under_concurrent_contexts() -> Non
     active_context = ResearchTaskContext("R1-N2", 1, "focused", ("N1",))
     assert budget.reserve_task(stopped_context).ok
     assert budget.reserve_task(active_context).ok
-    assert budget.reserve_retrieval(stopped_context, "search_climbmix").ok
+    assert budget.reserve_retrieval(stopped_context, "search_passages").ok
     budget.record_yield(stopped_context, ())
     middleware = ResearcherToolFilterMiddleware(budget)
 
@@ -971,6 +970,18 @@ def test_researcher_spec_keeps_the_main_model_and_excludes_todos() -> None:
     )
     assert all(type(item).__name__ != "TodoListMiddleware" for item in spec["middleware"])
     assert "task" not in visible_tools(spec["middleware"][-1], ALL_TOOLS)
+    assert not any(
+        getattr(item, "tool_name", None)
+        in {"search_climbmix", "extract_relevant_snippets"}
+        for item in spec["middleware"]
+    )
+    passage_limits = [
+        item
+        for item in spec["middleware"]
+        if getattr(item, "tool_name", None) == "search_passages"
+    ]
+    assert len(passage_limits) == 1
+    assert passage_limits[0].run_limit == ResearchBudgetConfig().max_passage_searches_per_researcher
 
 
 def test_synthesis_is_reached_by_spending_research_turns_not_only_by_a_stop_code() -> None:

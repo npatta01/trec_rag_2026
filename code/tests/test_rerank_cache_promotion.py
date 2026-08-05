@@ -1,6 +1,10 @@
 import json
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -159,6 +163,8 @@ def _build_bundle(tmp_path: Path) -> _FixtureBundle:
 
     document_cache.add_many(document_inputs)
     window_cache.add_many(window_inputs)
+    document_cache.close()
+    window_cache.close()
     document_artifact = tmp_path / "staged" / "results" / "document.jsonl"
     window_artifact = tmp_path / "staged" / "results" / "window.jsonl"
     _write_jsonl(document_artifact, document_rows)
@@ -187,12 +193,31 @@ def _read_rows(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _mutate_score_cache(path: Path, statement: str, parameters=()) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(statement, parameters)
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    for sidecar in (Path(f"{path}-wal"), Path(f"{path}-shm")):
+        sidecar.unlink(missing_ok=True)
+
+
+def _seed_destination_cache(path_root: Path, context: ScoreCacheContext) -> GlobalScoreCache:
+    cache = GlobalScoreCache(path_root, context)
+    cache.add_many([("old query", "old text", 0.25)])
+    cache.close()
+    return cache
+
+
 def _live_destination(
     tmp_path: Path,
     bundle: _FixtureBundle,
+    *,
+    document_context: ScoreCacheContext | None = None,
+    window_context: ScoreCacheContext | None = None,
 ) -> tuple[CacheBundlePaths, Path, Path]:
-    document_context = bundle.expectations.document_context
-    window_context = bundle.expectations.window_context
+    document_context = document_context or bundle.expectations.document_context
+    window_context = window_context or bundle.expectations.window_context
     assert document_context is not None
     assert window_context is not None
     destination_root = tmp_path / "live" / "score_cache"
@@ -401,6 +426,18 @@ def test_rejects_artifact_cache_key_that_does_not_match_content_hash(tmp_path):
         validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
 
 
+def test_rejects_score_cache_context_metadata_conflict(tmp_path):
+    bundle = _build_bundle(tmp_path)
+    _mutate_score_cache(
+        bundle.document_cache_path,
+        "UPDATE cache_meta SET value = ? WHERE key = 'context_sha256'",
+        ("0" * 64,),
+    )
+
+    with pytest.raises(CacheBundleValidationError, match="metadata|context"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
 def test_rejects_model_context_that_differs_from_selected_config(tmp_path):
     bundle = _build_bundle(tmp_path)
     expected_document_context = replace(
@@ -492,26 +529,23 @@ def test_rejects_incomplete_window_coverage(tmp_path):
         validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
 
 
-def test_rejects_conflicting_duplicate_global_cache_key(tmp_path):
+def test_rejects_conflicting_score_in_global_cache(tmp_path):
     bundle = _build_bundle(tmp_path)
-    row = _read_rows(bundle.document_cache_path)[0]
-    row["score"] = float(row["score"]) + 1.0
-    with bundle.document_cache_path.open("a", encoding="utf-8") as sink:
-        sink.write(json.dumps(row) + "\n")
+    _mutate_score_cache(
+        bundle.document_cache_path,
+        "UPDATE scores SET score = score + 1.0 WHERE rowid = 1",
+    )
 
-    with pytest.raises(CacheBundleValidationError, match="conflicting duplicate"):
+    with pytest.raises(CacheBundleValidationError, match="global cache conflicts"):
         validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
 
 
-def test_accepts_identical_duplicate_global_cache_row(tmp_path):
+def test_validates_sqlite_score_row_and_count(tmp_path):
     bundle = _build_bundle(tmp_path)
-    line = bundle.document_cache_path.read_text(encoding="utf-8").splitlines()[0]
-    with bundle.document_cache_path.open("a", encoding="utf-8") as sink:
-        sink.write(line + "\n")
 
     result = validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
 
-    assert result.document_score_cache.row_count == 5
+    assert result.document_score_cache.row_count == 4
     assert result.document_score_cache.unique_key_count == 4
 
 
@@ -527,13 +561,89 @@ def test_rejects_nonfinite_raw_logit(tmp_path):
         validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
 
 
+def test_rejects_boolean_artifact_score(tmp_path):
+    bundle = _build_bundle(tmp_path)
+    rows = _read_rows(bundle.paths.window_artifact)
+    rows[0]["score"] = True
+    _write_jsonl(bundle.paths.window_artifact, rows)
+
+    with pytest.raises(CacheBundleValidationError, match="JSON number"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
+@pytest.mark.parametrize("sidecar", ["-wal", "-shm"])
+def test_rejects_unsealed_score_cache_sidecars(tmp_path, sidecar):
+    bundle = _build_bundle(tmp_path)
+    sidecar_path = Path(f"{bundle.document_cache_path}{sidecar}")
+    sidecar_path.write_bytes(b"stale")
+
+    with pytest.raises(CacheBundleValidationError, match="sidecar|WAL"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
+@pytest.mark.parametrize(
+    "ddl",
+    [
+        "CREATE TRIGGER extra_trigger AFTER INSERT ON scores BEGIN SELECT 1; END",
+        "CREATE VIEW extra_view AS SELECT 1",
+        "CREATE TABLE extra_table (value TEXT)",
+        "CREATE INDEX extra_index ON scores(score)",
+    ],
+)
+def test_rejects_unsupported_sqlite_objects(tmp_path, ddl):
+    bundle = _build_bundle(tmp_path)
+    _mutate_score_cache(bundle.document_cache_path, ddl)
+
+    with pytest.raises(CacheBundleValidationError, match="schema|object"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
+def test_rejects_malformed_sqlite_metadata(tmp_path):
+    bundle = _build_bundle(tmp_path)
+    _mutate_score_cache(
+        bundle.document_cache_path,
+        "UPDATE cache_meta SET value = ? WHERE key = 'context_json'",
+        ("not-json",),
+    )
+
+    with pytest.raises(CacheBundleValidationError, match="metadata|context"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
+def test_rejects_missing_score_coverage(tmp_path):
+    bundle = _build_bundle(tmp_path)
+    _mutate_score_cache(
+        bundle.document_cache_path,
+        "DELETE FROM scores WHERE rowid = 1",
+    )
+
+    with pytest.raises(CacheBundleValidationError, match="missing"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
+def test_rejects_nonfinite_score_stored_in_sqlite(tmp_path):
+    bundle = _build_bundle(tmp_path)
+    with sqlite3.connect(bundle.document_cache_path) as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            "UPDATE scores SET score = ? WHERE rowid = 1", (float("inf"),)
+        )
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    Path(f"{bundle.document_cache_path}-wal").unlink(missing_ok=True)
+    Path(f"{bundle.document_cache_path}-shm").unlink(missing_ok=True)
+
+    with pytest.raises(CacheBundleValidationError, match="finite"):
+        validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
+
+
 def test_promotion_rejects_global_cache_keys_not_used_by_artifacts(tmp_path):
     bundle = _build_bundle(tmp_path)
     document_context = bundle.expectations.document_context
     assert document_context is not None
-    GlobalScoreCache(bundle.paths.score_cache_root, document_context).add_many(
-        [("unreferenced query", "unreferenced document", 1.25)]
-    )
+    extra_cache = GlobalScoreCache(bundle.paths.score_cache_root, document_context)
+    extra_cache.add_many([("unreferenced query", "unreferenced document", 1.25)])
+    extra_cache.close()
     validation = validate_cache_bundle(bundle.paths, expectations=bundle.expectations)
     assert validation.cache_extra_keys == {"document": 1, "window": 0}
     destination, _, _ = _live_destination(tmp_path, bundle)
@@ -564,12 +674,12 @@ def test_promotes_validated_files_and_archives_previous_files(tmp_path):
     old_files = {
         destination.document_artifact: b"old document artifact\n",
         destination.window_artifact: b"old window artifact\n",
-        destination_document_cache: b"old document cache\n",
-        destination_window_cache: b"old window cache\n",
     }
     for path, content in old_files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+    _seed_destination_cache(tmp_path / "live" / "score_cache", bundle.expectations.document_context)
+    _seed_destination_cache(tmp_path / "live" / "score_cache", bundle.expectations.window_context)
 
     result = promote_cache_bundle(
         bundle.paths,
@@ -586,25 +696,23 @@ def test_promotes_validated_files_and_archives_previous_files(tmp_path):
         destination.window_artifact.read_bytes()
         == bundle.paths.window_artifact.read_bytes()
     )
-    assert (
-        destination_document_cache.read_bytes()
-        == bundle.document_cache_path.read_bytes()
+    document_destination = GlobalScoreCache(
+        tmp_path / "live" / "score_cache", bundle.expectations.document_context
     )
-    assert (
-        destination_window_cache.read_bytes() == bundle.window_cache_path.read_bytes()
+    window_destination = GlobalScoreCache(
+        tmp_path / "live" / "score_cache", bundle.expectations.window_context
     )
+    assert document_destination.lookup_many([("old query", "old text")])[0] == 0.25
+    assert window_destination.lookup_many([("query for topic 1", "window 0 for doc-1-1")])[0] == 110.0
+    document_destination.close()
+    window_destination.close()
     promotion_manifest = json.loads(
         (result.archive_dir / "promotion_manifest.json").read_text(encoding="utf-8")
     )
     assert promotion_manifest["reviewed_modal_runtime_status"]["payload"] == (
         reviewed_runtime_payload
     )
-    assert set(result.backups) == {
-        "document_artifact",
-        "window_artifact",
-        "document_score_cache",
-        "window_score_cache",
-    }
+    assert set(result.backups) == {"document_artifact", "window_artifact"}
     for label, backup_path in result.backups.items():
         assert backup_path.read_bytes() == old_files[result.destinations[label]]
 
@@ -617,12 +725,12 @@ def test_keyboard_interrupt_mid_swap_rolls_back_entire_bundle(tmp_path, monkeypa
     old_files = {
         destination.document_artifact: b"old document artifact\n",
         destination.window_artifact: b"old window artifact\n",
-        destination_document_cache: b"old document cache\n",
-        destination_window_cache: b"old window cache\n",
     }
     for path, content in old_files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+    _seed_destination_cache(tmp_path / "live" / "score_cache", bundle.expectations.document_context)
+    _seed_destination_cache(tmp_path / "live" / "score_cache", bundle.expectations.window_context)
 
     real_replace = promotion_module._atomic_replace
     incoming_replacements = 0
@@ -650,6 +758,16 @@ def test_keyboard_interrupt_mid_swap_rolls_back_entire_bundle(tmp_path, monkeypa
     assert incoming_replacements == 2
     for path, expected in old_files.items():
         assert path.read_bytes() == expected
+    destination_cache = GlobalScoreCache(
+        tmp_path / "live" / "score_cache", bundle.expectations.document_context
+    )
+    assert destination_cache.lookup_many(
+        [("query for topic 1", "document text for doc-1-1")]
+    )[0] is None
+    assert destination_cache.connection.execute(
+        "SELECT count(*) FROM imports"
+    ).fetchone()[0] == 0
+    destination_cache.close()
     transaction_files = [
         path
         for path in (tmp_path / "live").rglob("*")
@@ -657,6 +775,197 @@ def test_keyboard_interrupt_mid_swap_rolls_back_entire_bundle(tmp_path, monkeypa
         and (path.name.endswith(".incoming") or path.name.endswith(".rollback"))
     ]
     assert transaction_files == []
+
+
+def test_late_source_change_rolls_back_authenticated_import(tmp_path, monkeypatch):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    real_sha256_file = promotion_module._sha256_file
+    document_hash_calls = 0
+
+    def changed_after_import(path: Path) -> str:
+        nonlocal document_hash_calls
+        if Path(path) == bundle.document_cache_path:
+            document_hash_calls += 1
+            if document_hash_calls >= 3:
+                return "f" * 64
+        return real_sha256_file(path)
+
+    monkeypatch.setattr(
+        promotion_module,
+        "_sha256_file",
+        changed_after_import,
+    )
+
+    with pytest.raises(
+        CacheBundleValidationError,
+        match="sealed score cache changed",
+    ):
+        promote_cache_bundle(
+            bundle.paths,
+            destination,
+            archive_root=tmp_path / "archives",
+            expectations=bundle.expectations,
+        )
+
+    destination_cache = GlobalScoreCache(
+        destination.score_cache_root,
+        bundle.expectations.document_context,
+    )
+    assert destination_cache.lookup_many(
+        [("query for topic 1", "document text for doc-1-1")]
+    )[0] is None
+    assert destination_cache.connection.execute(
+        "SELECT count(*) FROM imports"
+    ).fetchone()[0] == 0
+    destination_cache.close()
+    assert not (tmp_path / "archives").exists()
+
+
+def test_source_wal_created_during_import_is_rejected_and_rolled_back(
+    tmp_path,
+    monkeypatch,
+):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    real_import_scores = GlobalScoreCache.import_scores
+    writers: list[sqlite3.Connection] = []
+    injected = False
+
+    def import_then_open_source_wal(cache, source, **kwargs):
+        nonlocal injected
+        receipt = real_import_scores(cache, source, **kwargs)
+        if not injected:
+            injected = True
+            writer = sqlite3.connect(bundle.document_cache_path)
+            writer.execute("UPDATE scores SET score = score + 1000 WHERE rowid = 1")
+            writer.commit()
+            writers.append(writer)
+            assert Path(f"{bundle.document_cache_path}-wal").exists()
+        return receipt
+
+    monkeypatch.setattr(
+        GlobalScoreCache,
+        "import_scores",
+        import_then_open_source_wal,
+    )
+
+    try:
+        with pytest.raises(
+            CacheBundleValidationError,
+            match="sidecar|sealed",
+        ):
+            promote_cache_bundle(
+                bundle.paths,
+                destination,
+                archive_root=tmp_path / "archives",
+                expectations=bundle.expectations,
+            )
+    finally:
+        for writer in writers:
+            writer.close()
+
+    destination_cache = GlobalScoreCache(
+        destination.score_cache_root,
+        bundle.expectations.document_context,
+    )
+    assert destination_cache.lookup_many(
+        [("query for topic 1", "document text for doc-1-1")]
+    )[0] is None
+    assert destination_cache.connection.execute(
+        "SELECT count(*) FROM imports"
+    ).fetchone()[0] == 0
+    destination_cache.close()
+
+
+def test_failure_before_manifest_replace_rolls_back(tmp_path, monkeypatch):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    old_document = b"old document artifact\n"
+    old_window = b"old window artifact\n"
+    destination.document_artifact.parent.mkdir(parents=True, exist_ok=True)
+    destination.document_artifact.write_bytes(old_document)
+    destination.window_artifact.write_bytes(old_window)
+
+    def fail_before_manifest_replace(path: Path, payload, **_kwargs) -> None:
+        raise OSError("injected failure before manifest replacement")
+
+    monkeypatch.setattr(
+        promotion_module,
+        "_write_json_durable",
+        fail_before_manifest_replace,
+    )
+
+    with pytest.raises(OSError, match="before manifest replacement"):
+        promote_cache_bundle(
+            bundle.paths,
+            destination,
+            archive_root=tmp_path / "archives",
+            expectations=bundle.expectations,
+        )
+
+    assert destination.document_artifact.read_bytes() == old_document
+    assert destination.window_artifact.read_bytes() == old_window
+    assert list((tmp_path / "archives").glob("*/promotion_manifest.json")) == []
+    destination_cache = GlobalScoreCache(
+        destination.score_cache_root,
+        bundle.expectations.document_context,
+    )
+    assert destination_cache.lookup_many(
+        [("query for topic 1", "document text for doc-1-1")]
+    )[0] is None
+    destination_cache.close()
+
+
+def test_failure_after_manifest_replace_preserves_committed_promotion(
+    tmp_path,
+    monkeypatch,
+):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    old_document = b"old document artifact\n"
+    old_window = b"old window artifact\n"
+    destination.document_artifact.parent.mkdir(parents=True, exist_ok=True)
+    destination.document_artifact.write_bytes(old_document)
+    destination.window_artifact.write_bytes(old_window)
+    real_write_json_durable = promotion_module._write_json_durable
+
+    def fail_after_manifest_replace(path: Path, payload, **kwargs) -> None:
+        real_write_json_durable(path, payload, **kwargs)
+        raise OSError("injected failure after manifest replacement")
+
+    monkeypatch.setattr(
+        promotion_module,
+        "_write_json_durable",
+        fail_after_manifest_replace,
+    )
+
+    with pytest.raises(OSError, match="after manifest replacement"):
+        promote_cache_bundle(
+            bundle.paths,
+            destination,
+            archive_root=tmp_path / "archives",
+            expectations=bundle.expectations,
+        )
+
+    assert destination.document_artifact.read_bytes() == (
+        bundle.paths.document_artifact.read_bytes()
+    )
+    assert destination.window_artifact.read_bytes() == (
+        bundle.paths.window_artifact.read_bytes()
+    )
+    assert len(list((tmp_path / "archives").glob("*/promotion_manifest.json"))) == 1
+    destination_cache = GlobalScoreCache(
+        destination.score_cache_root,
+        bundle.expectations.document_context,
+    )
+    assert destination_cache.lookup_many(
+        [("query for topic 1", "document text for doc-1-1")]
+    )[0] == 11.0
+    assert destination_cache.connection.execute(
+        "SELECT count(*) FROM imports"
+    ).fetchone()[0] == 1
+    destination_cache.close()
 
 
 def test_failed_validation_leaves_live_files_untouched(tmp_path):
@@ -683,6 +992,242 @@ def test_failed_validation_leaves_live_files_untouched(tmp_path):
 
     assert destination_document.read_text(encoding="utf-8") == "keep me\n"
     assert not archive_root.exists()
+
+
+@pytest.mark.parametrize("legacy_policy", ["trec_rag_raw_v2", "extractive_sentence_pair_v1"])
+def test_promotes_false_policy_bundle_through_authenticated_logical_rebinding(
+    tmp_path, legacy_policy
+):
+    bundle = _build_bundle(tmp_path)
+    target_document_context = replace(
+        bundle.expectations.document_context,
+        input_policy="trec_rag_whitespace_v1",
+    )
+    target_window_context = replace(
+        bundle.expectations.window_context,
+        input_policy="trec_rag_whitespace_v1",
+    )
+    legacy_document_context = replace(
+        bundle.expectations.document_context, input_policy=legacy_policy
+    )
+    legacy_window_context = replace(
+        bundle.expectations.window_context, input_policy=legacy_policy
+    )
+    expectations = replace(
+        bundle.expectations,
+        document_context=target_document_context,
+        window_context=target_window_context,
+    )
+    staged = replace(
+        bundle.paths,
+        document_score_cache=bundle.document_cache_path,
+        window_score_cache=bundle.window_cache_path,
+    )
+    destination, _, _ = _live_destination(
+        tmp_path,
+        bundle,
+        document_context=target_document_context,
+        window_context=target_window_context,
+    )
+
+    # The artifact and source cache retain the declared historical policy;
+    # promotion must authenticate the source and re-key into the target cache.
+    for artifact_path, context in (
+        (
+            bundle.paths.document_artifact,
+            legacy_document_context,
+        ),
+        (
+            bundle.paths.window_artifact,
+            legacy_window_context,
+        ),
+    ):
+        rows = _read_rows(artifact_path)
+        for row in rows:
+            query_hash = row["query_sha256"]
+            text_hash = row["text_sha256"]
+            if "document_text_sha256" in row:
+                text_hash = row["text_sha256"]
+            row.update(context.artifact_metadata)
+            row["score_cache_key"] = promotion_module._cache_key_from_hashes(
+                context, query_sha256=query_hash, text_sha256=text_hash
+            )
+        _write_jsonl(artifact_path, rows)
+    _mutate_score_cache(
+        bundle.document_cache_path,
+        "UPDATE cache_meta SET value = ? WHERE key = 'context_json'",
+        (legacy_document_context.context_json,),
+    )
+    _mutate_score_cache(
+        bundle.document_cache_path,
+        "UPDATE cache_meta SET value = ? WHERE key = 'context_sha256'",
+        (legacy_document_context.context_sha256,),
+    )
+    _mutate_score_cache(
+        bundle.window_cache_path,
+        "UPDATE cache_meta SET value = ? WHERE key = 'context_json'",
+        (legacy_window_context.context_json,),
+    )
+    _mutate_score_cache(
+        bundle.window_cache_path,
+        "UPDATE cache_meta SET value = ? WHERE key = 'context_sha256'",
+        (legacy_window_context.context_sha256,),
+    )
+    # Rewrite source keys to the legacy context-bound formula.
+    for path, legacy_context in (
+        (bundle.document_cache_path, legacy_document_context),
+        (bundle.window_cache_path, legacy_window_context),
+    ):
+        with sqlite3.connect(path) as connection:
+            rows = connection.execute(
+                "SELECT key_sha256, query_sha256, text_sha256 FROM scores"
+            ).fetchall()
+            for old_key, query_hash, text_hash in rows:
+                legacy_key = promotion_module._cache_key_from_hashes(
+                    legacy_context,
+                    query_sha256=bytes(query_hash).hex(),
+                    text_sha256=bytes(text_hash).hex(),
+                )
+                connection.execute(
+                    "UPDATE scores SET key_sha256 = ? WHERE key_sha256 = ?",
+                    (bytes.fromhex(legacy_key), old_key),
+                )
+                connection.commit()
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            for sidecar in (Path(f"{path}-wal"), Path(f"{path}-shm")):
+                sidecar.unlink(missing_ok=True)
+
+    result = promote_cache_bundle(
+        staged,
+        destination,
+        archive_root=tmp_path / "archives",
+        expectations=expectations,
+    )
+    manifest = json.loads(
+        (result.archive_dir / "promotion_manifest.json").read_text(encoding="utf-8")
+    )
+    receipt = manifest["score_cache_receipts"]["document"]
+    assert receipt["legacy_context_sha256"] == legacy_document_context.context_sha256
+    assert receipt["target_context_sha256"] == target_document_context.context_sha256
+    assert receipt["declared_input_policy"] == legacy_policy
+    assert receipt["effective_input_policy"] == "trec_rag_whitespace_v1"
+    assert receipt["source_sha256"] == result.validation.document_score_cache.sha256
+    assert receipt["source_logical_digest"] == (
+        result.validation.document_score_cache.logical_digest
+    )
+    assert len(receipt["target_logical_digest"]) == 64
+    target_cache = GlobalScoreCache(destination.score_cache_root, target_document_context)
+    assert target_cache.lookup_many([("query for topic 1", "document text for doc-1-1")])[0] == 11.0
+    import_row = target_cache.connection.execute(
+        "SELECT source_sha256, source_row_count, logical_digest, authorization_sha256 "
+        "FROM imports"
+    ).fetchone()
+    assert import_row == (
+        bytes.fromhex(receipt["source_sha256"]),
+        receipt["source_row_count"],
+        bytes.fromhex(receipt["target_logical_digest"]),
+        bytes.fromhex(receipt["authorization_sha256"]),
+    )
+    target_cache.close()
+
+
+def test_promotion_is_idempotent_and_safe_for_concurrent_identical_attempts(tmp_path):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    archive_root = tmp_path / "archives"
+
+    def promote_once():
+        return promote_cache_bundle(
+            bundle.paths,
+            destination,
+            archive_root=archive_root,
+            expectations=bundle.expectations,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: promote_once(), range(2)))
+    results.append(promote_once())
+
+    target = GlobalScoreCache(
+        destination.score_cache_root, bundle.expectations.document_context
+    )
+    assert target.lookup_many([("query for topic 2", "document text for doc-2-2")])[0] == 22.0
+    target.close()
+    assert len(list(archive_root.glob("*/promotion_manifest.json"))) == 3
+
+
+def test_promotions_with_shared_destinations_serialize_across_archive_roots(
+    tmp_path,
+    monkeypatch,
+):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    first_inside = threading.Event()
+    second_started = threading.Event()
+    active_lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def fake_promote(*_args, **_kwargs):
+        nonlocal active, maximum_active
+        with active_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            is_first = not first_inside.is_set()
+            if is_first:
+                first_inside.set()
+        if is_first:
+            assert second_started.wait(timeout=1)
+            time.sleep(0.05)
+        with active_lock:
+            active -= 1
+        return object()
+
+    monkeypatch.setattr(
+        promotion_module,
+        "_promote_cache_bundle_unlocked",
+        fake_promote,
+    )
+
+    def promote_once(index: int):
+        if index == 1:
+            second_started.set()
+        return promote_cache_bundle(
+            bundle.paths,
+            destination,
+            archive_root=tmp_path / f"archives-{index}",
+            expectations=bundle.expectations,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(promote_once, 0)
+        assert first_inside.wait(timeout=1)
+        second = executor.submit(promote_once, 1)
+        first.result()
+        second.result()
+
+    assert maximum_active == 1
+
+
+def test_promotion_rejects_conflicting_existing_destination_score_without_archiving(
+    tmp_path,
+):
+    bundle = _build_bundle(tmp_path)
+    destination, _, _ = _live_destination(tmp_path, bundle)
+    target = GlobalScoreCache(
+        destination.score_cache_root, bundle.expectations.document_context
+    )
+    target.add_many([("query for topic 1", "document text for doc-1-1", 999.0)])
+    target.close()
+
+    with pytest.raises(CacheBundleValidationError, match="destination|conflict"):
+        promote_cache_bundle(
+            bundle.paths,
+            destination,
+            archive_root=tmp_path / "archives",
+            expectations=bundle.expectations,
+        )
+    assert not (tmp_path / "archives").exists()
 
 
 def test_promotion_requires_contexts_derived_from_selected_config(tmp_path):

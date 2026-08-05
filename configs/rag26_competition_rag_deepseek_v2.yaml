@@ -1,0 +1,31 @@
+# Retained from the v1 development runs: OpenRouter's "medium" was not a native
+# DeepSeek reasoning level and often spent enough budget on reasoning to truncate
+# the answer. strict_schema also prevented malformed response shapes in 3/4
+# development topics. The old full-document coverage figures are not comparable
+# to this selected-evidence prompt and are intentionally not reused as v2 claims.
+schema_version: competition_rag_config_v2
+
+experiment:
+  id: rag26_competition_rag_deepseek_v2
+  output_dir: outputs/rag26_competition_rag_deepseek_v2
+  mode: create
+
+submission:
+  team_id: castorini
+  run_desc: Selected-evidence retrieval with DeepSeek V4 Flash 0731 answer generation.
+
+inputs:
+  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+
+generation:
+  type: openrouter
+  api_base: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  model: deepseek/deepseek-v4-flash-0731
+  reasoning_effort: high
+  structured_output: strict_schema
+  temperature: null
+  max_tokens: 32000
+  timeout_seconds: 900
+  transport_max_attempts: 3
+  concurrency: 4

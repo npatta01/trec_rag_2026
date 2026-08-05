@@ -16,11 +16,15 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
+
+from trec_rag.topics import load_narrative_topics
 
 GOLD_NUGGET_IMPORTANCE = frozenset({"vital", "okay"})
+SUPPORT_LABELS = frozenset({"FS", "PS", "NS"})
 
 
 @dataclass(frozen=True)
@@ -66,8 +70,14 @@ def _write_jsonl(path: Path, rows: Sequence[dict[str, object]]) -> int:
     return len(rows)
 
 
-def answer_rows(submission_path: Path) -> list[AnswerRow]:
-    """Derive RAGDoll answers rows from an organizer submission JSONL."""
+def answer_rows(
+    submission_path: Path,
+    *,
+    narratives: Mapping[str, str],
+) -> list[AnswerRow]:
+    """Derive answers while binding every question to an authoritative topic."""
+    if not isinstance(narratives, Mapping):
+        raise TypeError("narratives must be a topic-to-narrative mapping")
     rows: list[AnswerRow] = []
     seen: set[str] = set()
     for record in _read_jsonl(submission_path):
@@ -93,9 +103,14 @@ def answer_rows(submission_path: Path) -> list[AnswerRow]:
                 raise ValueError(f"{qid}: answer[{index}] has empty text")
             texts.append(text.strip())
 
-        narrative = metadata.get("narrative")
-        if not isinstance(narrative, str) or not narrative.strip():
+        metadata_narrative = metadata.get("narrative")
+        if not isinstance(metadata_narrative, str) or not metadata_narrative.strip():
             raise ValueError(f"{qid}: record is missing metadata.narrative")
+        narrative = narratives.get(qid)
+        if not isinstance(narrative, str) or not narrative.strip():
+            raise ValueError(f"{qid}: no authoritative topic narrative is available")
+        if metadata_narrative != narrative:
+            raise ValueError(f"{qid}: metadata narrative differs from authoritative topic narrative")
         run_id = metadata.get("run_id")
         if not isinstance(run_id, str) or not run_id.strip():
             raise ValueError(f"{qid}: record is missing metadata.run_id")
@@ -166,40 +181,174 @@ def gold_nugget_rows(
     return rows
 
 
-def resolved_support_rows(
+def selected_evidence_support_rows(
     submission_path: Path,
-    documents_path: Path,
-    *,
-    archive_member: str | None = None,
-    max_words: int = 1000,
+    handoff_manifest_path: Path,
+    generation_identity_path: Path,
 ) -> list[dict[str, object]]:
-    """Attach cited document text to submission records for ``ragdoll support judge``.
+    """Attach exactly the topic-owned selected passages shown to this generation run."""
+    from trec_rag.generation_handoff import (
+        HANDOFF_SCHEMA_VERSION,
+        PROMPT_CONTRACT_VERSION,
+        load_generation_handoff,
+    )
 
-    ``support/stages.py`` already falls back to ``metadata.narrative_id``, so the submission
-    shape needs no id adapter here — only the ``segments`` map it cannot resolve offline. A
-    citation whose docid is absent from ``segments`` is silently skipped by the judge, so every
-    cited docid is required up front instead.
+    records, topic_docids = _support_inputs(submission_path)
+    handoff = load_generation_handoff(handoff_manifest_path)
+    identity = _load_generation_identity(generation_identity_path)
+    if identity["handoff_schema_version"] != HANDOFF_SCHEMA_VERSION:
+        raise ValueError(
+            f"{generation_identity_path}: handoff_schema_version is not "
+            f"{HANDOFF_SCHEMA_VERSION}"
+        )
+    if identity["prompt_contract_version"] != PROMPT_CONTRACT_VERSION:
+        raise ValueError(
+            f"{generation_identity_path}: prompt_contract_version is not "
+            f"{PROMPT_CONTRACT_VERSION}"
+        )
+    if identity["handoff_manifest_sha256"] != handoff.manifest_sha256:
+        raise ValueError(
+            f"{generation_identity_path}: handoff_manifest_sha256 does not match "
+            f"{handoff_manifest_path}"
+        )
 
-    ``documents_path`` must be the same document file the generator read. Judging citations
-    against text the model never saw produces spurious No Support: an earlier run of this
-    comparison passed head-truncated text against an extractive generation and inflated the No
-    Support rate from 4.8% to 32.7%, inverting the conclusion.
+    run_ids = {
+        str(record["metadata"]["run_id"])
+        for record in records
+    }
+    if run_ids != {identity["run_id"]}:
+        raise ValueError(
+            f"{generation_identity_path}: run_id does not match submission run IDs "
+            f"{sorted(run_ids)}"
+        )
 
-    Note also that organizers resolve references from the index, that is full documents, so
-    scoring against any truncated view understates support for every arm.
+    identity_topics = identity["selected_topics"]
+    topics = {topic.topic_id: topic for topic in handoff.topics}
+    records_by_topic = {
+        str(record["metadata"]["narrative_id"]).strip(): record
+        for record in records
+    }
+    for topic_id, record in records_by_topic.items():
+        topic = topics.get(topic_id)
+        if topic is None:
+            raise ValueError(
+                f"{handoff_manifest_path}: no selected evidence for topic {topic_id}"
+            )
+        context_sha256 = identity_topics.get(topic_id)
+        if context_sha256 != topic.context_sha256:
+            raise ValueError(
+                f"{generation_identity_path}: selected topic {topic_id} is absent or its "
+                "context_sha256 does not match the handoff"
+            )
+        metadata = record["metadata"]
+        if metadata.get("narrative") != topic.narrative:
+            raise ValueError(
+                f"{topic_id}: submission narrative does not match selected-evidence handoff"
+            )
+        evidence_docids = {evidence.docid for evidence in topic.evidence}
+        foreign_references = sorted(
+            str(docid)
+            for docid in record["references"]
+            if str(docid) not in evidence_docids
+        )
+        if foreign_references:
+            raise ValueError(
+                f"{topic_id}: references outside selected-evidence handoff: "
+                f"{', '.join(foreign_references)}"
+            )
 
-    Document lookup is scoped by ``metadata.narrative_id``. The same docid may therefore
-    carry different text for different topics without one support row borrowing another
-    topic's evidence.
-    """
-    from trec_rag.competition_rag import load_topic_documents
+    documents_by_topic: dict[str, dict[str, str]] = {}
+    for topic_id, cited_docids in topic_docids.items():
+        topic = topics[topic_id]
+        passages: dict[str, list[str]] = {docid: [] for docid in cited_docids}
+        seen: dict[str, set[str]] = {docid: set() for docid in cited_docids}
+        for evidence in topic.evidence:
+            if evidence.docid not in cited_docids or evidence.text in seen[evidence.docid]:
+                continue
+            seen[evidence.docid].add(evidence.text)
+            passages[evidence.docid].append(evidence.text)
+        missing = sorted(docid for docid, rows in passages.items() if not rows)
+        if missing:
+            raise ValueError(
+                f"{topic_id}: no selected evidence for cited docids {', '.join(missing)}"
+            )
+        documents_by_topic[topic_id] = {
+            docid: "\n\n".join(rows) for docid, rows in passages.items()
+        }
+    return _assemble_support_rows(
+        submission_path,
+        records=records,
+        topic_docids=topic_docids,
+        documents_by_topic=documents_by_topic,
+    )
 
+
+def _load_generation_identity(path: Path) -> dict[str, Any]:
+    """Load the immutable generation receipt fields needed to bind an evidence view."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path}: invalid generation identity JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: generation identity is not an object")
+
+    identity_version = value.get("identity_version")
+    schema_version = value.get("handoff_schema_version")
+    prompt_contract_version = value.get("prompt_contract_version")
+    digest = value.get("handoff_manifest_sha256")
+    run_id = value.get("run_id")
+    selected = value.get("selected_topics")
+    if (
+        isinstance(identity_version, bool)
+        or not isinstance(identity_version, int)
+        or identity_version <= 0
+    ):
+        raise ValueError(f"{path}: invalid identity_version")
+    if not isinstance(schema_version, str) or not schema_version:
+        raise ValueError(f"{path}: invalid handoff_schema_version")
+    if not isinstance(prompt_contract_version, str) or not prompt_contract_version:
+        raise ValueError(f"{path}: invalid prompt_contract_version")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ValueError(f"{path}: invalid handoff_manifest_sha256")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(f"{path}: invalid run_id")
+    if not isinstance(selected, list) or not selected:
+        raise ValueError(f"{path}: selected_topics must be a nonempty list")
+
+    topics: dict[str, str] = {}
+    for index, item in enumerate(selected):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: selected_topics[{index}] is not an object")
+        topic_id = item.get("topic_id")
+        context_sha256 = item.get("context_sha256")
+        if not isinstance(topic_id, str) or not topic_id.strip():
+            raise ValueError(f"{path}: selected_topics[{index}] has invalid topic_id")
+        if topic_id in topics:
+            raise ValueError(f"{path}: duplicate selected topic {topic_id}")
+        if not isinstance(context_sha256, str) or len(context_sha256) != 64:
+            raise ValueError(
+                f"{path}: selected_topics[{index}] has invalid context_sha256"
+            )
+        topics[topic_id] = context_sha256
+    return {
+        "identity_version": identity_version,
+        "handoff_schema_version": schema_version,
+        "prompt_contract_version": prompt_contract_version,
+        "handoff_manifest_sha256": digest,
+        "run_id": run_id,
+        "selected_topics": topics,
+    }
+
+
+def _support_inputs(
+    submission_path: Path,
+) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
     records = list(_read_jsonl(submission_path))
     if not records:
         raise ValueError(f"{submission_path}: no submission records")
 
-    cited: set[str] = set()
     topic_docids: dict[str, set[str]] = {}
+    seen_topics: set[str] = set()
     for record in records:
         metadata = record.get("metadata")
         if not isinstance(metadata, dict):
@@ -208,9 +357,25 @@ def resolved_support_rows(
         if not isinstance(topic_id, str) or not topic_id.strip():
             raise ValueError(f"{submission_path}: record is missing a narrative_id")
         topic_id = topic_id.strip()
+        if topic_id in seen_topics:
+            raise ValueError(f"{submission_path}: duplicate narrative_id {topic_id}")
+        seen_topics.add(topic_id)
+        run_id = metadata.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError(f"{submission_path}: record is missing metadata.run_id")
         references = record.get("references")
-        if not isinstance(references, list) or not references:
-            raise ValueError(f"{submission_path}: record has no references")
+        if (
+            not isinstance(references, list)
+            or not references
+            or not all(
+                isinstance(docid, str) and docid.strip() and docid == docid.strip()
+                for docid in references
+            )
+            or len(references) != len(set(references))
+        ):
+            raise ValueError(
+                f"{submission_path}: references must be unique nonempty docid strings"
+            )
         answer = record.get("answer")
         if not isinstance(answer, list) or not answer:
             raise ValueError(f"{submission_path}: record has no answer objects")
@@ -223,7 +388,6 @@ def resolved_support_rows(
                     if not 0 <= citation < len(references):
                         raise ValueError(f"{submission_path}: citation {citation} out of range")
                     docid = str(references[citation])
-                    cited.add(docid)
                     record_cited.add(docid)
                 elif isinstance(citation, str):
                     # A docid citation naming something outside references would be dropped from
@@ -233,22 +397,24 @@ def resolved_support_rows(
                         raise ValueError(
                             f"{submission_path}: citation {citation!r} is not in references"
                         )
-                    cited.add(citation)
                     record_cited.add(citation)
                 else:
                     raise ValueError(f"{submission_path}: unsupported citation {citation!r}")
         if record_cited:
             topic_docids.setdefault(topic_id, set()).update(record_cited)
 
-    if not cited:
+    if not topic_docids:
         raise ValueError(f"{submission_path}: no citations to resolve")
-    documents_by_topic = load_topic_documents(
-        documents_path,
-        archive_member,
-        topic_docids,
-        max_words,
-    )
+    return records, topic_docids
 
+
+def _assemble_support_rows(
+    submission_path: Path,
+    *,
+    records: Sequence[dict[str, Any]],
+    topic_docids: Mapping[str, set[str]],
+    documents_by_topic: Mapping[str, Mapping[str, str]],
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for record in records:
         metadata = record.get("metadata")
@@ -283,6 +449,105 @@ def resolved_support_rows(
     return rows
 
 
+def validate_support_judgments(
+    support_input_path: Path,
+    judgments_path: Path,
+) -> int:
+    """Fail unless RAGDoll completed exactly every expected citation judgment."""
+    expected: dict[str, dict[str, object]] = {}
+    for row in _read_jsonl(support_input_path):
+        topic_id = row.get("topic_id")
+        run_id = row.get("run_id")
+        references = row.get("references")
+        segments = row.get("segments")
+        answer = row.get("answer")
+        if not isinstance(topic_id, str) or not topic_id:
+            raise ValueError(f"{support_input_path}: support row has no topic_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError(f"{support_input_path}: support row has no run_id")
+        if not isinstance(references, list) or not isinstance(segments, dict):
+            raise ValueError(f"{support_input_path}: invalid references or segments")
+        if not isinstance(answer, list):
+            raise ValueError(f"{support_input_path}: invalid answer")
+        for sentence_index, sentence in enumerate(answer):
+            if not isinstance(sentence, dict) or not isinstance(sentence.get("text"), str):
+                raise ValueError(
+                    f"{support_input_path}: answer[{sentence_index}] has no text"
+                )
+            citations = sentence.get("citations")
+            if not isinstance(citations, list):
+                raise ValueError(
+                    f"{support_input_path}: answer[{sentence_index}] has invalid citations"
+                )
+            for citation_index, citation in enumerate(citations):
+                if type(citation) is int and 0 <= citation < len(references):
+                    docid = str(references[citation])
+                elif isinstance(citation, str):
+                    docid = citation
+                else:
+                    raise ValueError(
+                        f"{support_input_path}: unsupported citation {citation!r}"
+                    )
+                citation_text = segments.get(docid)
+                if not isinstance(citation_text, str):
+                    raise ValueError(
+                        f"{support_input_path}: citation {docid!r} has no segment"
+                    )
+                task_id = f"{run_id}:{topic_id}:s{sentence_index}:c{citation_index}"
+                if task_id in expected:
+                    raise ValueError(f"{support_input_path}: duplicate task {task_id}")
+                expected[task_id] = {
+                    "statement": sentence["text"],
+                    "citation": citation_text,
+                    "topic_id": topic_id,
+                    "run_id": run_id,
+                    "sentence_index": sentence_index,
+                    "citation_index": citation_index,
+                    "docid": docid,
+                }
+    if not expected:
+        raise ValueError(f"{support_input_path}: no support tasks")
+
+    seen: set[str] = set()
+    for row in _read_jsonl(judgments_path):
+        task_id = row.get("task_id")
+        if not isinstance(task_id, str) or task_id not in expected:
+            raise ValueError(f"{judgments_path}: unexpected task {task_id}")
+        if task_id in seen:
+            raise ValueError(f"{judgments_path}: duplicate task {task_id}")
+        seen.add(task_id)
+        if row.get("status") != "completed":
+            raise ValueError(f"{task_id}: judgment is not completed")
+        if row.get("support_label") not in SUPPORT_LABELS:
+            raise ValueError(f"{task_id}: invalid support_label {row.get('support_label')!r}")
+
+        expected_row = expected[task_id]
+        if row.get("statement") != expected_row["statement"]:
+            raise ValueError(f"{task_id}: statement differs from support input")
+        if row.get("citation") != expected_row["citation"]:
+            raise ValueError(f"{task_id}: citation differs from support input")
+        metadata = row.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError(f"{task_id}: judgment has no metadata")
+        for field in (
+            "topic_id",
+            "run_id",
+            "sentence_index",
+            "citation_index",
+            "docid",
+        ):
+            if metadata.get(field) != expected_row[field]:
+                raise ValueError(f"{task_id}: metadata.{field} differs from support input")
+
+    missing = sorted(set(expected) - seen)
+    if missing:
+        raise ValueError(
+            f"{judgments_path}: missing {len(missing)} expected task(s): "
+            f"{', '.join(missing[:3])}"
+        )
+    return len(seen)
+
+
 def assert_join(answers: Sequence[AnswerRow], nuggets: Sequence[dict[str, object]]) -> set[str]:
     """Return the shared topic ids, raising when the join would silently be empty."""
     answer_ids = {row.qid for row in answers}
@@ -299,29 +564,50 @@ def assert_join(answers: Sequence[AnswerRow], nuggets: Sequence[dict[str, object
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Derive RAGDoll inputs from RAG artifacts.")
     parser.add_argument("--submission", type=Path, required=True)
+    parser.add_argument("--topics", type=Path, required=True)
     parser.add_argument("--gold-nuggets", type=Path, required=True)
     parser.add_argument("--answers-out", type=Path, required=True)
     parser.add_argument("--nuggets-out", type=Path, required=True)
     parser.add_argument(
-        "--documents",
+        "--handoff-manifest",
         type=Path,
-        help="Document JSONL/ZIP; enables --support-out reference resolution.",
+        help="Sealed selected-evidence handoff read by the v2 generator; enables --support-out.",
     )
-    parser.add_argument("--archive-member")
-    parser.add_argument("--max-document-words", type=int, default=1000)
+    parser.add_argument(
+        "--generation-identity",
+        type=Path,
+        help="Generation receipt that binds the answer run to the exact handoff digest.",
+    )
     parser.add_argument(
         "--support-out",
         type=Path,
-        help="Write resolved rows for `ragdoll support judge` (requires --documents).",
+        help=(
+            "Write rows for `ragdoll support judge`; requires --handoff-manifest "
+            "and --generation-identity."
+        ),
+    )
+    parser.add_argument(
+        "--support-judgments",
+        type=Path,
+        help="Fail unless this RAGDoll output completed every task in --support-out.",
     )
     args = parser.parse_args(argv)
 
-    if bool(args.support_out) != bool(args.documents):
-        parser.error("--support-out and --documents must be given together")
+    has_handoff = args.handoff_manifest is not None
+    has_identity = args.generation_identity is not None
+    if bool(args.support_out) != has_handoff or bool(args.support_out) != has_identity:
+        parser.error(
+            "--support-out, --handoff-manifest, and --generation-identity "
+            "must be provided together"
+        )
+    if args.support_judgments is not None and args.support_out is None:
+        parser.error("--support-judgments requires --support-out")
 
     try:
-        answers = answer_rows(args.submission)
-        narratives = {row.qid: row.query for row in answers}
+        narratives = {
+            topic.id: topic.narrative for topic in load_narrative_topics(args.topics)
+        }
+        answers = answer_rows(args.submission, narratives=narratives)
         nuggets = gold_nugget_rows(
             args.gold_nuggets,
             narratives=narratives,
@@ -331,14 +617,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_jsonl(args.answers_out, [row.as_dict() for row in answers])
         _write_jsonl(args.nuggets_out, nuggets)
         support_count = 0
+        judgment_count = 0
         if args.support_out is not None:
-            support_rows = resolved_support_rows(
+            support_rows = selected_evidence_support_rows(
                 args.submission,
-                args.documents,
-                archive_member=args.archive_member,
-                max_words=args.max_document_words,
+                args.handoff_manifest,
+                args.generation_identity,
             )
             support_count = _write_jsonl(args.support_out, support_rows)
+            if args.support_judgments is not None:
+                judgment_count = validate_support_judgments(
+                    args.support_out,
+                    args.support_judgments,
+                )
     except (OSError, ValueError) as error:
         raise SystemExit(f"error: {type(error).__name__}: {error}") from error
 
@@ -347,6 +638,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"joined topics={len(shared)} answers={args.answers_out} nuggets={args.nuggets_out}")
     if args.support_out is not None:
         print(f"support rows={support_count} -> {args.support_out}")
+    if args.support_judgments is not None:
+        print(f"validated support judgments={judgment_count} -> {args.support_judgments}")
     return 0
 
 

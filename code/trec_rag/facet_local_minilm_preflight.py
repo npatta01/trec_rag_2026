@@ -1058,15 +1058,20 @@ def build_preflight(
         observed_candidates.add(identity)
         query = _required_candidate_text(candidate, "query")
         candidate_rows = build_window_plan(candidate, tokenizer, query=query)
+        cached_values = score_cache.lookup_many(  # type: ignore[attr-defined]
+            (row.query, row.window_text) for row in candidate_rows
+        )
+        if len(cached_values) != len(candidate_rows):
+            raise ValueError("score cache returned an unexpected lookup count")
         cached_rows: list[WindowPlanRow] = []
-        for row in candidate_rows:
+        for row, cached in zip(candidate_rows, cached_values, strict=True):
             cache_key = score_cache.cache_key(  # type: ignore[attr-defined]
                 query_text=row.query, text=row.window_text
             )
             if cache_key != row.cache_key:
                 raise ValueError("score cache identity differs from frozen preflight context")
             cached_rows.append(
-                replace(row, cache_hit=cache_key in score_cache.scores)  # type: ignore[attr-defined]
+                replace(row, cache_hit=cached is not None)
             )
         verify_window_plan(
             cached_rows, tokenizer=tokenizer, candidate=candidate

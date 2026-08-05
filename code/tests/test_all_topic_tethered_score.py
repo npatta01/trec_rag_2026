@@ -277,13 +277,13 @@ def test_run_is_resumable_without_mutating_shared_cache(tmp_path, monkeypatch) -
             cache_root=cache_root,
             runner=_InterruptingRunner(fail_call=2),
         )
-    assert not cache.path.exists()
+    assert cache.connection.execute("SELECT COUNT(*) FROM scores").fetchone()[0] == 0
     assert (scoring / "score_ledger.jsonl").is_file()
     receipt = run_scores(
         scoring, cache_root=cache_root, runner=_InterruptingRunner()
     )
     assert receipt["status"] == "complete"
-    assert not cache.path.exists()
+    assert cache.connection.execute("SELECT COUNT(*) FROM scores").fetchone()[0] == 0
     assert module.verify_scores(scoring)["verified"] is True
 
 

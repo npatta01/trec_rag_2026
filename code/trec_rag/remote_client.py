@@ -108,8 +108,10 @@ class RemotePyseriniClient:
         self,
         config: RemotePyseriniConfig,
         session: requests.Session | None = None,
-        timeout: int = 30,
+        timeout: int = 300,
     ) -> None:
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+            raise ValueError("timeout must be a positive integer")
         self.config = config
         self.session = session or rate_limited_session(config)
         self.timeout = timeout

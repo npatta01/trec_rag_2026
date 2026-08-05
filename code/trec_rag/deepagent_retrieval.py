@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from hashlib import sha256
 import json
 import os
@@ -41,13 +42,7 @@ from trec_rag.deepagent_research import (
     current_research_task,
 )
 from trec_rag.deepagent_passages import (
-    PassageSelectionConfig,
-    PooledDocument,
-    ScoredPassage,
     group_by_document,
-    score_document_pool,
-    select_diverse_passages,
-    selection_summary,
 )
 from trec_rag.deepagent_snippets import (
     InvalidSnippetCursorError,
@@ -61,14 +56,27 @@ from trec_rag.deepagent_tracing import (
     MAX_TRACE_DOCUMENTS,
     create_retrieval_tracing,
 )
-from trec_rag.pipeline_config import RetrieverConfig
-from trec_rag.pipeline_models import QueryVariant, RankedCandidate, RetrievedCandidate
-from trec_rag.repo_env import find_repo_root, load_repo_env, repo_cache_root
-from trec_rag.retrievers import PyseriniRemoteRetriever, Retriever
+from trec_rag.pipeline_models import RankedCandidate, RetrievedCandidate
+from trec_rag.repo_env import find_repo_root, load_repo_env
+from trec_rag.topic_passage_search import (
+    FocusedQuery,
+    OrganizerRequestFailed,
+    PassageScoringFailed,
+    PassageSearchResult,
+    SourcePassage,
+    TopicPassageSearch,
+)
+from trec_rag.topic_records import (
+    FacetRecord,
+    ResearcherEvidence,
+    ResearcherHandoff,
+    TopicRecordsBuilder,
+    TopicRecordsIntegrityError,
+)
 
 
 DEFAULT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
-OPENROUTER_REQUEST_TIMEOUT_MS = 120_000
+OPENROUTER_REQUEST_TIMEOUT_MS = 300_000
 MAX_FOLLOWUP_SEARCHES = 8
 HITS_PER_SEARCH = 10
 FUSED_RESULT_LIMIT = 20
@@ -213,24 +221,67 @@ def _model_facing_snippets(
     ]
 
 
-def _model_facing_passages(
-    handles: Sequence[SnippetHandle],
-    selected: Sequence[ScoredPassage],
-) -> list[dict[str, object]]:
-    """Show each passage as a citable handle plus the document it came from.
+def agentic_passage_payload(
+    result: PassageSearchResult,
+    handles: Sequence[SnippetHandle] | None = None,
+) -> dict[str, object]:
+    """Render every shared passage row without introducing a second policy.
 
-    ``document_id`` is included so the agent can reason about breadth and can
-    deepen into a source it has already seen, but it is not a selection
-    surface: which passages appear was decided in code before this ran.
+    ``handles`` is supplied by the live tool after the evidence validator has
+    registered the rows.  The standalone form is useful to adapters and keeps
+    the source passage identity visible in offline tests.
     """
-    origin = {row.chunk_id: row.document_id for row in selected}
+    if not isinstance(result, PassageSearchResult):
+        raise TypeError("result must be a PassageSearchResult")
+    by_passage_id = {
+        handle.snippet_id: handle for handle in (handles or ())
+    }
     rows: list[dict[str, object]] = []
-    for rendered, handle in zip(_model_facing_snippets(handles), handles):
-        document_id = origin.get(handle.snippet_id)
+    for passage in result.passages:
+        handle = by_passage_id.get(passage.passage_id)
         rows.append(
-            {**({"document_id": document_id} if document_id else {}), **rendered}
+            {
+                "cite": handle.handle if handle is not None else passage.passage_id,
+                "passage_id": passage.passage_id,
+                "document_id": passage.docid,
+                "docid": passage.docid,
+                "source_rank": passage.source_rank,
+                "source_score": passage.source_score,
+                "start_char": passage.start_char,
+                "end_char": passage.end_char,
+                "start_byte": passage.start_byte,
+                "end_byte": passage.end_byte,
+                "text": passage.text,
+                "raw_logit": passage.raw_logit,
+                "relevance_score": passage.raw_logit,
+                "rank": passage.rank,
+                **(
+                    {
+                        "sentences": [
+                            {"n": index, "text": sentence}
+                            for index, sentence in enumerate(
+                                handle.sentences, start=1
+                            )
+                        ],
+                    }
+                    if handle is not None
+                    else {}
+                ),
+            }
         )
-    return rows
+    return {
+        "passages": rows,
+        "documents_retrieved": result.returned_documents,
+        "documents_scored": result.scored_documents,
+        "documents_not_scored": max(
+            0, result.returned_documents - result.scored_documents
+        ),
+        "scored_passages": result.scored_passages,
+        "returned_passages": len(result.passages),
+        "distinct_documents": len({passage.docid for passage in result.passages}),
+        "chunks_scored": result.scored_passages,
+        "chunks_not_returned": max(0, result.scored_passages - len(result.passages)),
+    }
 
 
 def _rejection_summary(rejected: Sequence[DeltaRejection]) -> dict[str, int]:
@@ -263,6 +314,7 @@ class AgentSearch:
     kind: Literal["original", "followup"]
     candidates: tuple[RetrievedCandidate, ...]
     cache_status: str
+    passages: tuple[SourcePassage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -277,6 +329,7 @@ class AgentRetrievalResult:
     coverage_report: EvidenceCoverageReport
     budget_snapshot: BudgetSnapshot
     trace_flush_succeeded: bool
+    topic_snapshot: object | None = None
 
 
 class RetrievalTransportError(RuntimeError):
@@ -289,6 +342,39 @@ class AgentRetrievalError(RuntimeError):
     def __init__(self, message: str, *, searches: Sequence[AgentSearch]) -> None:
         super().__init__(message)
         self.searches = tuple(searches)
+
+
+def _is_operational_provider_stop(exc: Exception) -> bool:
+    """Classify bounded provider/transport stops without swallowing code bugs."""
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    module = type(exc).__module__.split(".", 1)[0]
+    name = type(exc).__name__.lower()
+    if module in {
+        "httpcore",
+        "httpx",
+        "openai",
+        "openrouter",
+        "requests",
+    }:
+        return True
+    if any(
+        marker in name
+        for marker in ("connection", "provider", "ratelimit", "timeout")
+    ):
+        return True
+    if isinstance(exc, RuntimeError):
+        detail = str(exc).lower()
+        return any(
+            marker in detail
+            for marker in (
+                "provider unavailable",
+                "provider timeout",
+                "rate limit",
+                "service unavailable",
+            )
+        )
+    return False
 
 
 @dataclass(frozen=True)
@@ -614,8 +700,6 @@ def _create_agent(
         model=provider_model,
         tools=[
             toolset.search_passages,
-            toolset.search_climbmix,
-            toolset.extract_relevant_snippets,
             toolset.view_retrieval_state,
         ],
         budget=toolset.budget,
@@ -657,32 +741,6 @@ def _create_agent(
             backend=StateBackend(),
         ),
     )
-
-
-def _cache_counts(retriever: Retriever) -> Mapping[str, int] | None:
-    summary = getattr(retriever, "cache_summary", None)
-    if not callable(summary):
-        return None
-    reported = summary()
-    if not isinstance(reported, Mapping):
-        return None
-    counts = {}
-    for key in ("hits", "misses", "bypasses"):
-        value = reported.get(key)
-        if isinstance(value, int):
-            counts[key] = value
-    return counts
-
-
-def _cache_status(
-    before: Mapping[str, int] | None, after: Mapping[str, int] | None
-) -> str:
-    if before is None or after is None:
-        return "not_reported"
-    for key, label in (("hits", "hit"), ("misses", "miss"), ("bypasses", "bypass")):
-        if after.get(key, 0) > before.get(key, 0):
-            return label
-    return "not_reported"
 
 
 def _positive_int(value: object, *, name: str) -> int:
@@ -745,7 +803,7 @@ class DeepAgentRetriever:
     def __init__(
         self,
         *,
-        retriever: Retriever,
+        passage_search: TopicPassageSearch,
         model: str = DEFAULT_MODEL,
         agent_factory: AgentFactory = _create_agent,
         tracing: _Tracing | None = None,
@@ -754,9 +812,7 @@ class DeepAgentRetriever:
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
         budget_config: ResearchBudgetConfig | None = None,
-        passage_config: PassageSelectionConfig | None = None,
     ) -> None:
-        self._passage_config = passage_config or PassageSelectionConfig()
         self._hits_per_search = _positive_int(hits_per_search, name="hits_per_search")
         self._max_followup_searches = _positive_int(
             max_followup_searches, name="max_followup_searches"
@@ -767,7 +823,13 @@ class DeepAgentRetriever:
         self._budget_config = budget_config or ResearchBudgetConfig(
             max_searches_per_researcher=self._max_followup_searches
         )
-        self._retriever = retriever
+        if not callable(getattr(passage_search, "search", None)):
+            raise TypeError("passage_search must provide search(FocusedQuery)")
+        if not isinstance(getattr(passage_search, "topic_id", None), str) or not (
+            passage_search.topic_id.strip()
+        ):
+            raise ValueError("passage_search must expose a non-empty topic_id")
+        self._passage_search = passage_search
         self._model = model
         self._agent_factory = agent_factory
         self._tracing = tracing or create_retrieval_tracing()
@@ -778,6 +840,7 @@ class DeepAgentRetriever:
     def from_env(
         cls,
         *,
+        passage_search: TopicPassageSearch,
         root: Path | None = None,
         model: str | None = None,
         agent_factory: AgentFactory = _create_agent,
@@ -787,9 +850,8 @@ class DeepAgentRetriever:
         max_followup_searches: int = MAX_FOLLOWUP_SEARCHES,
         fused_result_limit: int = FUSED_RESULT_LIMIT,
         budget_config: ResearchBudgetConfig | None = None,
-        passage_config: PassageSelectionConfig | None = None,
     ) -> "DeepAgentRetriever":
-        """Build the isolated SDK using the existing remote retriever and cache."""
+        """Build agent orchestration around an already topic-scoped search."""
         validated_hits = _positive_int(hits_per_search, name="hits_per_search")
         validated_followups = _positive_int(
             max_followup_searches, name="max_followup_searches"
@@ -801,26 +863,8 @@ class DeepAgentRetriever:
         load_repo_env(resolved_root)
         if not os.environ.get("OPENROUTER_API_KEY", "").strip():
             raise ValueError("OPENROUTER_API_KEY is required for Deep Agent retrieval")
-        resolved_passage_config = passage_config or PassageSelectionConfig()
-        # One request returns the whole pool: depth costs no extra rate-limit
-        # slot and no extra call, and recall of answering documents keeps
-        # climbing to 1000. `hits_per_search` still bounds how many documents
-        # the older document-selection tool shows the model.
-        config = RetrieverConfig(
-            name="deepagent_climbmix",
-            type="pyserini_remote",
-            query_variants=("original", "followup"),
-            hits=resolved_passage_config.pool_hits,
-            index="climbmix-400b",
-            cache=True,
-        )
         return cls(
-            retriever=PyseriniRemoteRetriever(
-                config,
-                cache_dir=repo_cache_root(resolved_root)
-                / "retrieval"
-                / "pyserini_remote",
-            ),
+            passage_search=passage_search,
             model=model or os.environ.get("DEEPAGENT_MODEL") or DEFAULT_MODEL,
             agent_factory=agent_factory,
             tracing=tracing or create_retrieval_tracing(environ=os.environ),
@@ -833,32 +877,288 @@ class DeepAgentRetriever:
             max_followup_searches=validated_followups,
             fused_result_limit=validated_fused_limit,
             budget_config=budget_config,
-            passage_config=resolved_passage_config,
         )
 
-    def retrieve(self, narrative: str) -> AgentRetrievalResult:
-        """Retrieve from an untouched narrative without accepting a topic identifier."""
+    def search_passages(self, query: FocusedQuery) -> PassageSearchResult:
+        """Run the injected shared search adapter without a second policy."""
+        result = self._passage_search.search(query)
+        if not isinstance(result, PassageSearchResult):
+            raise TypeError("passage search must return a PassageSearchResult")
+        return result
+
+    def retrieve(
+        self,
+        records: TopicRecordsBuilder,
+        narrative: str,
+    ) -> AgentRetrievalResult:
+        """Run bounded research against an already topic/run-scoped ledger."""
         if not isinstance(narrative, str) or not narrative.strip():
             raise ValueError("narrative must be non-empty text")
+        required = (
+            "add_facets",
+            "add_passage_search",
+            "add_researcher_handoff",
+            "topic_snapshot",
+            "set_completion",
+        )
+        if any(not callable(getattr(records, name, None)) for name in required):
+            raise TypeError("records must be a topic-scoped TopicRecordsBuilder")
+        records_topic_id = getattr(records, "topic_id", None)
+        records_run_id = getattr(records, "run_id", None)
+        if not isinstance(records_topic_id, str) or not records_topic_id.strip():
+            raise ValueError("topic records builder must expose its topic identity")
+        if not isinstance(records_run_id, str) or not records_run_id.strip():
+            raise ValueError("topic records builder must expose its run identity")
+        if self._passage_search.topic_id != records_topic_id:
+            raise ValueError("passage_search topic_id does not match records topic_id")
+        records_builder = cast(TopicRecordsBuilder, records)
 
-        topic_component = sha256(narrative.encode()).hexdigest()[:16]
         coverage_state = EvidenceCoverageState(narrative)
         budget = ResearchBudget(self._budget_config)
         searches: list[AgentSearch] = []
         documents: dict[str, str] = {}
         followup_lock = Lock()
         document_lock = Lock()
+        shared_failure_reasons: list[str] = []
+        shared_task_passages: dict[str, set[str]] = {}
+        shared_task_rounds: dict[str, int] = {}
+        dynamic_facet_creators: dict[str, str] = {}
+        admitted_ledger_facets: set[str] = set()
+        topic_snapshot: object | None = None
+        operational_provider_stop = False
+        unexpected_tool_failures: list[tuple[str, Exception]] = []
+        unexpected_tool_failure_lock = Lock()
+
+        def guard_retrieval_tool(
+            name: str,
+            function: Callable[..., str],
+        ) -> Callable[..., str]:
+            @wraps(function)
+            def guarded(*args: object, **kwargs: object) -> str:
+                try:
+                    return function(*args, **kwargs)
+                except Exception as exc:
+                    with unexpected_tool_failure_lock:
+                        if not unexpected_tool_failures:
+                            unexpected_tool_failures.append((name, exc))
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "code": "INTERNAL_TOOL_FAILURE",
+                            "must_stop": True,
+                            "budget_snapshot": budget.snapshot().as_dict(),
+                            "error": "internal retrieval tool failed",
+                            "tool": name,
+                        },
+                        sort_keys=True,
+                    )
+
+            return guarded
+
+        def _records_run_id() -> str:
+            return records_run_id
+
+        def _ensure_ledger_facets(facet_ids: Sequence[str], query: str) -> None:
+            rows: list[FacetRecord] = []
+            coverage_report = coverage_state.report()
+            coverage_facets = {
+                facet.facet_id: facet for facet in coverage_report.facets
+            }
+            coverage_needs = {need.need_id: need for need in coverage_report.needs}
+            for index, facet_id in enumerate(dict.fromkeys(facet_ids)):
+                if not isinstance(facet_id, str) or not facet_id.strip():
+                    continue
+                if facet_id in admitted_ledger_facets:
+                    continue
+                coverage_facet = coverage_facets.get(facet_id)
+                coverage_need = coverage_needs.get(facet_id)
+                facet_text = (
+                    coverage_facet.value
+                    if coverage_facet is not None
+                    else coverage_need.question
+                    if coverage_need is not None
+                    else query
+                    if index == 0
+                    else f"Supporting evidence for {facet_id}"
+                )
+                facet_origin = (
+                    "research_discovered"
+                    if coverage_facet is not None and coverage_facet.origin == "snippet"
+                    else "initial"
+                )
+                rows.append(
+                    FacetRecord(
+                        facet_id,
+                        facet_text,
+                        facet_origin,
+                    )
+                )
+            if rows:
+                records_builder.add_facets(tuple(rows))
+                admitted_ledger_facets.update(
+                    facet.subnarrative_id for facet in rows
+                )
+
+        def _shared_query(
+            query: str,
+            context: ResearchTaskContext | None,
+            motivating_ids: Sequence[str],
+        ) -> FocusedQuery:
+            if context is None:
+                primary = motivating_ids[0] if motivating_ids else "original"
+                supporting = tuple(motivating_ids[1:])
+                query_id = "original"
+            else:
+                primary = motivating_ids[0] if motivating_ids else context.research_task_id
+                supporting = tuple(motivating_ids[1:])
+                query_id = "followup-" + sha256(query.encode()).hexdigest()[:16]
+            _ensure_ledger_facets((primary, *supporting), query)
+            return FocusedQuery(query_id, query, primary, supporting)
+
+        def _register_shared_passages(
+            result: PassageSearchResult,
+        ) -> tuple[SnippetHandle, ...]:
+            # Grouping is only an index for document metadata. Register the
+            # original shared sequence so S-handles and model rows retain the
+            # global (-score, source-rank, passage-id) ordering.
+            observed: list[SnippetHandle] = []
+            for passage in result.passages:
+                page = SnippetPage(
+                    document_id=passage.docid,
+                    focus_query=result.query.text,
+                    snippets=(
+                        RelevantSnippet(
+                            chunk_id=passage.passage_id,
+                            start_char=passage.start_char,
+                            end_char=passage.end_char,
+                            text=passage.text,
+                            relevance_score=passage.raw_logit,
+                        ),
+                    ),
+                    next_cursor=None,
+                    page_index=0,
+                    residual_count=0,
+                    residual_top_score=None,
+                    returned_min_score=passage.raw_logit,
+                    pages_estimated=1,
+                )
+                observed.extend(coverage_state.record_snippet_page(page))
+            return tuple(observed)
+
+        def _shared_agent_search(
+            query: str,
+            kind: Literal["original", "followup"],
+            *,
+            context: ResearchTaskContext | None = None,
+            decision: BudgetDecision | None = None,
+            motivating_ids: Sequence[str] = (),
+        ) -> tuple[AgentSearch, tuple[SnippetHandle, ...], PassageSearchResult]:
+            focused_query = _shared_query(query, context, motivating_ids)
+            try:
+                with _isolated_trace_span(
+                    lambda: self._tracing.retriever_span(query)
+                ) as span:
+                    if span is not None and context is not None and decision is not None:
+                        try:
+                            span.record_research_context(
+                                research_task_id=context.research_task_id,
+                                round_index=context.round_index,
+                                depth=context.depth,
+                                code=decision.code,
+                                must_stop=decision.must_stop,
+                                snapshot=decision.snapshot.as_dict(),
+                            )
+                        except Exception:
+                            pass
+                    started_at = monotonic()
+                    result = self.search_passages(focused_query)
+                    latency_ms = (monotonic() - started_at) * 1_000
+                    if span is not None:
+                        trace_documents = result.documents[
+                            : min(self._hits_per_search, MAX_TRACE_DOCUMENTS)
+                        ]
+                        text_lengths = {
+                            docid: len(rows[0].text)
+                            for docid, rows in group_by_document(result.passages)
+                            if rows
+                        }
+                        try:
+                            span.record_search(
+                                document_ids=tuple(
+                                    document.docid for document in trace_documents
+                                ),
+                                source_ranks=tuple(
+                                    document.source_rank for document in trace_documents
+                                ),
+                                source_scores=tuple(
+                                    document.source_score for document in trace_documents
+                                ),
+                                cache_status="not_reported",
+                                latency_ms=latency_ms,
+                                text_lengths=tuple(
+                                    text_lengths.get(document.docid, 0)
+                                    for document in trace_documents
+                                ),
+                            )
+                        except Exception:
+                            pass
+            except OrganizerRequestFailed:
+                shared_failure_reasons.append("retrieval_unavailable")
+                raise RetrievalTransportError("shared passage retrieval unavailable")
+            except PassageScoringFailed:
+                shared_failure_reasons.append("scoring_failed")
+                raise RetrievalTransportError("shared passage scoring failed")
+
+            records_builder.add_passage_search(result)
+            handles = _register_shared_passages(result)
+            if result.status == "incomplete" and result.stopping_reason is not None:
+                shared_failure_reasons.append(result.stopping_reason)
+            if context is not None:
+                shared_task_passages.setdefault(context.research_task_id, set()).update(
+                    passage.passage_id for passage in result.passages
+                )
+                shared_task_rounds[context.research_task_id] = context.round_index
+            coverage_state.record_search(
+                query=query,
+                kind=kind,
+                documents=tuple(
+                    DocumentObservation(document.docid, document.source_rank)
+                    for document in result.documents
+                ),
+            )
+            passages_by_doc = {
+                docid: rows[0].text
+                for docid, rows in group_by_document(result.passages)
+                if rows
+            }
+            candidates = tuple(
+                RetrievedCandidate(
+                    topic_id=self._passage_search.topic_id,
+                    variant_name=result.query.query_id,
+                    retriever_name="topic_passage_search",
+                    query_text=query,
+                    docid=document.docid,
+                    rank=document.source_rank,
+                    score=document.source_score,
+                    text=passages_by_doc.get(document.docid, ""),
+                )
+                for document in result.documents
+            )
+            return (
+                AgentSearch(
+                    query=query,
+                    kind=kind,
+                    candidates=candidates,
+                    cache_status="shared",
+                    passages=result.passages,
+                ),
+                handles,
+                result,
+            )
 
         def register_documents(candidates: Sequence[RetrievedCandidate]) -> None:
-            # A depth-1000 pool is roughly 37MB of text per search. Only the
-            # documents shallow enough to be scored can ever be read from, so
-            # retaining the rest would cost gigabytes across a run to hold text
-            # nothing can reach.
-            retained = sorted(candidates, key=lambda item: item.rank)[
-                : self._passage_config.rerank_depth
-            ]
             with document_lock:
-                for candidate in retained:
+                for candidate in candidates:
                     if candidate.docid not in documents:
                         documents[candidate.docid] = candidate.text
                         continue
@@ -869,95 +1169,6 @@ class DeepAgentRetriever:
                         )
                     if not existing and candidate.text:
                         documents[candidate.docid] = candidate.text
-
-        def run_search(
-            query: str,
-            kind: Literal["original", "followup"],
-            variant: str,
-            *,
-            context: ResearchTaskContext | None = None,
-            decision: BudgetDecision | None = None,
-        ) -> AgentSearch:
-            before = _cache_counts(self._retriever)
-            with _isolated_trace_span(
-                lambda: self._tracing.retriever_span(query)
-            ) as span:
-                if span is not None and context is not None and decision is not None:
-                    try:
-                        span.record_research_context(
-                            research_task_id=context.research_task_id,
-                            round_index=context.round_index,
-                            depth=context.depth,
-                            code=decision.code,
-                            must_stop=decision.must_stop,
-                            snapshot=decision.snapshot.as_dict(),
-                        )
-                    except Exception:
-                        pass
-                started_at = monotonic()
-                try:
-                    candidates = tuple(
-                        self._retriever.retrieve(
-                            QueryVariant(
-                                topic_id=topic_component,
-                                variant_name=variant,
-                                query_text=query,
-                                source_type="deepagent_retrieval",
-                            )
-                        )
-                    )
-                except Exception as exc:
-                    raise RetrievalTransportError(str(exc)) from exc
-                latency_ms = (monotonic() - started_at) * 1_000
-                cache_status = _cache_status(before, _cache_counts(self._retriever))
-                trace_candidates = candidates[
-                    : min(self._hits_per_search, MAX_TRACE_DOCUMENTS)
-                ]
-                if span is not None:
-                    try:
-                        span.record_search(
-                            document_ids=tuple(
-                                candidate.docid for candidate in trace_candidates
-                            ),
-                            source_ranks=tuple(
-                                candidate.rank for candidate in trace_candidates
-                            ),
-                            source_scores=tuple(
-                                candidate.score for candidate in trace_candidates
-                            ),
-                            cache_status=cache_status,
-                            latency_ms=latency_ms,
-                            text_lengths=tuple(
-                                len(candidate.text) for candidate in trace_candidates
-                            ),
-                        )
-                    except Exception:
-                        pass
-            register_documents(candidates)
-            coverage_state.record_search(
-                query=query,
-                kind=kind,
-                documents=tuple(
-                    DocumentObservation(candidate.docid, candidate.rank)
-                    for candidate in candidates
-                ),
-            )
-            return AgentSearch(
-                query=query,
-                kind=kind,
-                # Only the scored slice is retained. A depth-1000 response
-                # carries roughly 37MB of document text, and every search is
-                # kept for the whole invocation to fuse at the end, so holding
-                # full depth across 20 researchers would accumulate gigabytes
-                # of text nothing can reach: scoring never looks past
-                # rerank_depth and fusion returns far fewer.
-                candidates=tuple(
-                    sorted(candidates, key=lambda item: item.rank)[
-                        : self._passage_config.rerank_depth
-                    ]
-                ),
-                cache_status=cache_status,
-            )
 
         def task_context() -> ResearchTaskContext | None:
             envelope = current_research_task()
@@ -1066,18 +1277,14 @@ class DeepAgentRetriever:
                         sort_keys=True,
                     )
                 try:
-                    search = run_search(
+                    search, _handles, shared_result = _shared_agent_search(
                         query,
                         "followup",
-                        "followup-" + sha256(query.encode()).hexdigest()[:16],
                         context=context,
                         decision=decision,
+                        motivating_ids=motivating_ids,
                     )
                 except RetrievalTransportError:
-                    # The index could not be reached. Record that distinctly, so
-                    # the result cannot be read as "this narrative had no
-                    # evidence" when it means "we never got to look". Errors
-                    # raised after retrieval still propagate.
                     budget.note_retrieval_unavailable()
                     record_no_yield(context)
                     return json.dumps(
@@ -1085,19 +1292,17 @@ class DeepAgentRetriever:
                             BudgetDecision(
                                 False, decision.code, budget.snapshot(), True
                             ),
-                            error="climbmix search transport failed",
+                            error="shared passage search failed",
                             code="RETRIEVAL_UNAVAILABLE",
                         ),
                         sort_keys=True,
                     )
                 searches.append(search)
-                budget.record_yield(
-                    context, (candidate.docid for candidate in search.candidates)
-                )
+                budget.record_yield(context, (row.passage_id for row in search.passages))
                 snapshot = budget.snapshot()
                 return json.dumps(
                     {
-                        "ok": True,
+                        "ok": shared_result.status == "complete",
                         "code": decision.code,
                         "must_stop": decision.must_stop or task_must_stop(snapshot),
                         "budget_snapshot": snapshot.as_dict(),
@@ -1182,127 +1387,51 @@ class DeepAgentRetriever:
                         sort_keys=True,
                     )
                 try:
-                    search = run_search(
+                    search, observed, result = _shared_agent_search(
                         query,
                         "followup",
-                        "followup-" + sha256(query.encode()).hexdigest()[:16],
                         context=context,
                         decision=decision,
+                        motivating_ids=motivating_ids,
                     )
                 except RetrievalTransportError:
-                    budget.note_retrieval_unavailable()
                     record_no_yield(context)
+                    code = (
+                        "PASSAGE_SCORING_FAILED"
+                        if shared_failure_reasons
+                        and shared_failure_reasons[-1] == "scoring_failed"
+                        else "RETRIEVAL_UNAVAILABLE"
+                    )
                     return json.dumps(
                         budget_payload(
                             BudgetDecision(
                                 False, decision.code, budget.snapshot(), True
                             ),
-                            error="climbmix search transport failed",
-                            code="RETRIEVAL_UNAVAILABLE",
+                            error="shared passage search failed",
+                            code=code,
                         ),
                         sort_keys=True,
                     )
-                # Recorded only once scoring succeeds. Appending before it
-                # meant a transient ranker failure left the query in
-                # `searches`, so the researcher's retry of the same query came
-                # back DUPLICATE_QUERY - permanently locking out the natural
-                # phrasing for that need, on the researcher's forced first
-                # action, and telling the model the wrong story about why.
-                try:
-                    with self._snippet_extractor_lock:
-                        if self._snippet_extractor is None:
-                            self._snippet_extractor = create_default_snippet_extractor(
-                                find_repo_root()
-                            )
-                        extractor = self._snippet_extractor
-                    scoring = score_document_pool(
-                        tuple(
-                            PooledDocument(
-                                document_id=candidate.docid,
-                                rank=candidate.rank,
-                                text=candidate.text,
-                            )
-                            for candidate in search.candidates
-                        ),
-                        query,
-                        chunker=extractor.chunker,
-                        ranker=extractor.ranker,
-                        config=self._passage_config,
-                    )
-                except Exception:
-                    # Classified, never the raw exception text: a scoring
-                    # failure must not be readable as "this query found
-                    # nothing", and raw text must not reach agent context.
-                    record_no_yield(context)
-                    return json.dumps(
-                        budget_payload(
-                            BudgetDecision(
-                                False, decision.code, budget.snapshot(), decision.must_stop
-                            ),
-                            error="passage scoring failed",
-                            code="PASSAGE_SCORING_FAILED",
-                        ),
-                        sort_keys=True,
-                    )
+
                 searches.append(search)
-                selected = select_diverse_passages(
-                    scoring.passages, self._passage_config
-                )
-                scored_by_document: dict[str, int] = {}
-                for row in scoring.passages:
-                    scored_by_document[row.document_id] = (
-                        scored_by_document.get(row.document_id, 0) + 1
-                    )
-                observed: list[SnippetHandle] = []
-                # One ledger page per contributing document, so pagination,
-                # exhaustion state and the single/multi document support label
-                # keep the meaning they had when the agent picked documents.
-                for document_id, rows in group_by_document(selected):
-                    page = SnippetPage(
-                        document_id=document_id,
-                        focus_query=query,
-                        snippets=tuple(
-                            RelevantSnippet(
-                                chunk_id=row.chunk_id,
-                                start_char=row.chunk.start_char,
-                                end_char=row.chunk.end_char,
-                                text=row.chunk.text,
-                                relevance_score=row.relevance_score,
-                            )
-                            for row in rows
-                        ),
-                        next_cursor=None,
-                        page_index=0,
-                        residual_count=max(
-                            0, scored_by_document.get(document_id, 0) - len(rows)
-                        ),
-                        residual_top_score=None,
-                        returned_min_score=min(
-                            (row.relevance_score for row in rows), default=None
-                        ),
-                        pages_estimated=1,
-                    )
-                    observed.extend(coverage_state.record_snippet_page(page))
                 budget.record_yield(context, (handle.snippet_id for handle in observed))
                 snapshot = budget.snapshot()
                 payload: dict[str, object] = {
-                    "ok": True,
+                    "ok": result.status == "complete",
                     "code": decision.code,
                     "must_stop": decision.must_stop or task_must_stop(snapshot),
                     "budget_snapshot": snapshot.as_dict(),
                     "focus_query": query,
-                    "passages": _model_facing_passages(observed, selected),
                     "remaining_budget": snapshot.remaining_retrieval_calls,
                 }
-                payload.update(
-                    selection_summary(
-                        selected,
-                        scored_total=scoring.chunks_scored,
-                        documents_scored=scoring.documents_scored,
-                    )
-                )
-                payload["documents_retrieved"] = len(search.candidates)
-                payload["documents_not_scored"] = scoring.documents_skipped
+                payload.update(agentic_passage_payload(result, observed))
+                if result.status == "incomplete":
+                    payload["error"] = "shared passage search incomplete"
+                    payload["code"] = {
+                        "retrieval_unavailable": "RETRIEVAL_UNAVAILABLE",
+                        "scoring_failed": "PASSAGE_SCORING_FAILED",
+                        "no_evidence": "NO_EVIDENCE",
+                    }.get(result.stopping_reason, "PASSAGE_SEARCH_INCOMPLETE")
                 return json.dumps(payload, sort_keys=True)
 
         def extract_relevant_snippets(
@@ -1540,6 +1669,33 @@ class DeepAgentRetriever:
             Do not use "needs" or IDs such as "N1" as keys inside delta.
             """
             update = coverage_state.apply_delta(delta)
+            context = task_context()
+            if context is not None and isinstance(delta, Mapping):
+                facet_rows = delta.get("add_facets", ())
+                if isinstance(facet_rows, (list, tuple)):
+                    rejected_indexes = {
+                        rejection.index
+                        for rejection in update.rejected
+                        if rejection.section == "add_facets"
+                    }
+                    visible_passages = shared_task_passages.get(
+                        context.research_task_id, set()
+                    )
+                    for index, row in enumerate(facet_rows):
+                        if index in rejected_indexes or not isinstance(row, Mapping):
+                            continue
+                        facet_id = row.get("facet_id")
+                        origin_snippet_id = row.get("origin_snippet_id")
+                        if (
+                            row.get("origin") == "snippet"
+                            and isinstance(facet_id, str)
+                            and facet_id in update.accepted_ids
+                            and isinstance(origin_snippet_id, str)
+                            and origin_snippet_id in visible_passages
+                        ):
+                            dynamic_facet_creators[facet_id] = (
+                                context.research_task_id
+                            )
             payload = update.as_dict()
             summary = _rejection_summary(update.rejected)
             if summary:
@@ -1612,23 +1768,112 @@ class DeepAgentRetriever:
                 sort_keys=True,
             )
 
+        def commit_researcher_handoffs(
+            report: EvidenceCoverageReport,
+        ) -> frozenset[str]:
+            """Commit already validated passage citations once per researcher."""
+            nuggets = tuple(report.nuggets)
+            direct_need_ids = tuple(
+                dict.fromkeys(
+                    need_id
+                    for nugget in nuggets
+                    if not nugget.facet_ids
+                    for need_id in nugget.need_ids
+                )
+            )
+            if direct_need_ids:
+                _ensure_ledger_facets(direct_need_ids, "Direct need evidence")
+            run_id = _records_run_id()
+            admitted_passage_ids: set[str] = set()
+            for researcher_id, passage_ids in shared_task_passages.items():
+                evidence_rows: list[ResearcherEvidence] = []
+                seen: set[tuple[str, str]] = set()
+                facet_updates = [
+                    FacetRecord(
+                        facet.facet_id,
+                        facet.value,
+                        "research_discovered",
+                    )
+                    for facet in report.facets
+                    if facet.origin == "snippet"
+                    and dynamic_facet_creators.get(facet.facet_id) == researcher_id
+                ]
+                for nugget in nuggets:
+                    for evidence in nugget.evidence:
+                        if evidence.snippet_id not in passage_ids:
+                            continue
+                        subnarrative_ids = nugget.facet_ids or nugget.need_ids
+                        for subnarrative_id in subnarrative_ids:
+                            key = (subnarrative_id, evidence.snippet_id)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            evidence_rows.append(
+                                ResearcherEvidence(
+                                    subnarrative_id,
+                                    evidence.snippet_id,
+                                    "relevant",
+                                )
+                            )
+                unique_updates = tuple(
+                    {facet.subnarrative_id: facet for facet in facet_updates}.values()
+                )
+                records_builder.add_researcher_handoff(
+                    ResearcherHandoff(
+                        run_id=run_id,
+                        researcher_id=researcher_id,
+                        round_index=shared_task_rounds.get(researcher_id, 1),
+                        evidence=tuple(evidence_rows),
+                        facet_updates=tuple(unique_updates),
+                    )
+                )
+                admitted_passage_ids.update(
+                    evidence.passage_id for evidence in evidence_rows
+                )
+            return frozenset(admitted_passage_ids)
+
         try:
             with _isolated_trace_span(
                 lambda: self._tracing.agent_span(narrative)
             ) as agent_span:
-                original = run_search(narrative, "original", "original")
+                try:
+                    original, _handles, _result = _shared_agent_search(
+                        narrative,
+                        "original",
+                        motivating_ids=("original",),
+                    )
+                except RetrievalTransportError:
+                    original = AgentSearch(
+                        narrative, "original", (), "unavailable"
+                    )
                 searches.append(original)
                 agent = self._agent_factory(
                     self._model,
                     AgentToolset(
-                        search_climbmix=search_climbmix,
-                        search_passages=search_passages,
-                        extract_relevant_snippets=extract_relevant_snippets,
-                        view_retrieval_state=view_retrieval_state,
-                        update_retrieval_state=update_retrieval_state,
-                        complete_retrieval=complete_retrieval,
-                        complete_research_round=complete_research_round,
-                        choose_next_action=choose_next_action,
+                        search_climbmix=guard_retrieval_tool(
+                            "search_climbmix", search_climbmix
+                        ),
+                        search_passages=guard_retrieval_tool(
+                            "search_passages", search_passages
+                        ),
+                        extract_relevant_snippets=guard_retrieval_tool(
+                            "extract_relevant_snippets", extract_relevant_snippets
+                        ),
+                        view_retrieval_state=guard_retrieval_tool(
+                            "view_retrieval_state", view_retrieval_state
+                        ),
+                        update_retrieval_state=guard_retrieval_tool(
+                            "update_retrieval_state", update_retrieval_state
+                        ),
+                        complete_retrieval=guard_retrieval_tool(
+                            "complete_retrieval", complete_retrieval
+                        ),
+                        complete_research_round=guard_retrieval_tool(
+                            "complete_research_round", complete_research_round
+                        ),
+                        choose_next_action=guard_retrieval_tool(
+                            "choose_next_action", choose_next_action
+                        ),
                         budget=budget,
                         budget_config=self._budget_config,
                         tracing=self._tracing,
@@ -1643,51 +1888,113 @@ class DeepAgentRetriever:
                     ),
                     sort_keys=True,
                 )
-                reply = agent.invoke(
-                    {
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": (
-                                    "The untouched narrative is:\n"
-                                    f"{narrative}\n\n"
-                                    "It has already been searched. Bounded original results:\n"
-                                    f"{initial_results}"
-                                ),
-                            }
-                        ]
-                    }
-                )
+                try:
+                    reply = agent.invoke(
+                        {
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "The untouched narrative is:\n"
+                                        f"{narrative}\n\n"
+                                        "It has already been searched. Bounded original results:\n"
+                                        f"{initial_results}"
+                                    ),
+                                }
+                            ]
+                        }
+                    )
+                except Exception as exc:
+                    if isinstance(
+                        exc,
+                        (AssertionError, TypeError, ValueError, TopicRecordsIntegrityError),
+                    ) or not _is_operational_provider_stop(exc):
+                        raise
+                    operational_provider_stop = True
+                    reply = {"messages": ()}
+                with unexpected_tool_failure_lock:
+                    unexpected_tool_failure = (
+                        unexpected_tool_failures[0]
+                        if unexpected_tool_failures
+                        else None
+                    )
+                if unexpected_tool_failure is not None:
+                    raise AgentRetrievalError(
+                        "agentic retrieval tool failed",
+                        searches=searches,
+                    ) from unexpected_tool_failure[1]
                 rationale = _assistant_rationale(reply)
                 candidates = reciprocal_rank_fuse(
                     searches, limit=self._fused_result_limit
                 )
                 coverage_report = coverage_state.report()
+                admitted_handoff_passage_ids = commit_researcher_handoffs(coverage_report)
+                live_evidence_passage_ids = {
+                    evidence.snippet_id
+                    for nugget in coverage_report.nuggets
+                    if nugget.superseded_by is None
+                    for evidence in nugget.evidence
+                }
+                shared_passage_ids = {
+                    passage_id
+                    for passage_ids in shared_task_passages.values()
+                    for passage_id in passage_ids
+                }
+                evidence_validation_failed = bool(
+                    live_evidence_passage_ids.difference(shared_passage_ids)
+                    or live_evidence_passage_ids.difference(
+                        admitted_handoff_passage_ids
+                    )
+                )
                 if (
                     coverage_report.terminal_reason is None
                     and coverage_state.pending_closeout_need_ids()
                 ):
                     budget.note_closeout_refused()
                 budget_snapshot = budget.snapshot()
-                stopping_reason = (
-                    # An unreachable index outranks the coverage story, which
-                    # would otherwise report an infrastructure outage as though
-                    # the narrative simply had no evidence.
-                    "retrieval_unavailable"
-                    if budget.retrieval_unavailable()
-                    else coverage_report.terminal_reason
-                    or (
-                        "budget_exhausted"
-                        if budget_snapshot.stop_code is not None
-                        else None
-                    )
-                    or (
-                        "closeout_refused"
-                        if budget.closeout_refused()
-                        else None
-                    )
-                    or "agent_completed"
-                )
+                if evidence_validation_failed:
+                    stopping_reason = "evidence_validation_failed"
+                elif "scoring_failed" in shared_failure_reasons:
+                    stopping_reason = "scoring_failed"
+                elif budget.retrieval_unavailable() or "retrieval_unavailable" in shared_failure_reasons:
+                    stopping_reason = "retrieval_unavailable"
+                elif "no_evidence" in shared_failure_reasons and not coverage_report.nuggets:
+                    stopping_reason = "no_evidence"
+                elif coverage_report.terminal_reason is not None:
+                    stopping_reason = coverage_report.terminal_reason
+                elif budget_snapshot.hard_deadline_reached:
+                    stopping_reason = "hard_deadline"
+                elif budget_snapshot.stop_code is not None:
+                    stopping_reason = "budget_exhausted"
+                elif operational_provider_stop:
+                    stopping_reason = "retrieval_unavailable"
+                elif (
+                    budget.closeout_refused()
+                ):
+                    stopping_reason = "closeout_refused"
+                else:
+                    stopping_reason = "agent_completed"
+                incomplete_reasons = {
+                    "retrieval_unavailable",
+                    "scoring_failed",
+                    "budget_exhausted",
+                    "hard_deadline",
+                    "no_evidence",
+                    "evidence_validation_failed",
+                }
+                if stopping_reason in incomplete_reasons:
+                    completion = ("incomplete", stopping_reason)
+                elif stopping_reason == "closeout_refused" or (
+                    stopping_reason == "agent_completed"
+                    and coverage_report.terminal_reason is None
+                ):
+                    completion = ("incomplete", "no_evidence")
+                else:
+                    completion = ("complete", "coverage_sufficient")
+                records_builder.set_completion(*completion)
+                # Completion is part of the coordinator view. Take exactly one
+                # holistic snapshot, after every handoff and completion write.
+                topic_snapshot = records_builder.topic_snapshot()
                 if agent_span is not None:
                     try:
                         agent_span.record_result(
@@ -1724,11 +2031,7 @@ class DeepAgentRetriever:
                         )
                     except Exception:
                         pass
-        except Exception as exc:
-            if searches:
-                raise AgentRetrievalError(
-                    "Deep Agent retrieval failed", searches=searches
-                ) from exc
+        except Exception:
             raise
         finally:
             try:
@@ -1745,4 +2048,5 @@ class DeepAgentRetriever:
             coverage_report=coverage_report,
             budget_snapshot=budget_snapshot,
             trace_flush_succeeded=trace_flush_succeeded,
+            topic_snapshot=topic_snapshot,
         )

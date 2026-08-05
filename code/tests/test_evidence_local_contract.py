@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from types import SimpleNamespace
 
@@ -116,20 +115,11 @@ def test_mixedbread_rejects_boolean_cache_and_model_scores(tmp_path) -> None:
         score_cache_root=tmp_path / "cached",
         model_loader=lambda *_args, **_kwargs: pytest.fail("model must stay lazy"),
     )
-    cached.score_cache.path.parent.mkdir(parents=True, exist_ok=True)
-    cached.score_cache.path.write_text(
-        json.dumps({
-            "schema_version": 2,
-            "cache_key": "corrupt-boolean-score",
-            "score": True,
-        }) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="Boolean"):
-        MixedbreadSentencePairScorer(
-            score_cache_root=tmp_path / "cached",
-            model_loader=lambda *_args, **_kwargs: pytest.fail("model must stay lazy"),
-        )
+    with pytest.raises(ValueError, match="bool"):
+        cached.score_cache.add_many((("query", "text", True),))
+    assert cached.score_cache.connection.execute(
+        "SELECT count(*) FROM scores"
+    ).fetchone()[0] == 0
 
     model = _RawLogitModel(scores=(True,))
     scorer = MixedbreadSentencePairScorer(
@@ -139,7 +129,9 @@ def test_mixedbread_rejects_boolean_cache_and_model_scores(tmp_path) -> None:
     pair = SentencePair("224", "doc-a", "safety", "Safety evidence", "Sentence.")
     with pytest.raises(ValueError, match="Boolean"):
         scorer.score_pairs((pair,))
-    assert not scorer.score_cache.path.exists()
+    assert scorer.score_cache.connection.execute(
+        "SELECT count(*) FROM scores"
+    ).fetchone()[0] == 0
 
 
 def test_minilm_resolves_device_and_computes_pinned_offline_cosine(monkeypatch) -> None:

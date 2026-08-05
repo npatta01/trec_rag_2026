@@ -34,7 +34,7 @@ from trec_rag.deepagent_budget import (
 RESEARCHER_SYSTEM_PROMPT = """You are a bounded retrieval researcher.
 Research only the stated gap. Generate and refine your own queries, then inspect
 returned snippets for exact supporting quotes. Use only search_passages,
-search_climbmix, extract_relevant_snippets, view_retrieval_state, and read_file. Do not delegate,
+view_retrieval_state, and read_file. Do not delegate,
 write state, or use filesystem mutation tools. Return a compact EvidenceBundle.
 Producing candidate nuggets is the job. Emit one for every claim the returned
 snippets actually support, including partial ones that only cover part of your
@@ -46,7 +46,7 @@ Return candidate_nuggets in your own order of importance, most important
 first. Ordering is all that is asked of you: which claims are essential is
 decided later, by the coordinator, which can compare across every need.
 Support each claim by citing snippet handles, never by writing out quotes.
-search_passages and extract_relevant_snippets give each passage a "cite"
+search_passages gives each passage a "cite"
 value such as S3 and number its sentences. Cite "S3" for a whole snippet, "S3.2" for its sentence 2,
 or "S3.2-4" for sentences 2 through 4. Cite the smallest range that carries the
 claim. Handles stay valid for the rest of this run, so a handle from an earlier
@@ -57,10 +57,7 @@ chosen by relevance and spread across sources before you saw them, so you do
 not pick which document to read. Cite from them directly.
 Do not inspect state, read spill files, or return EvidenceBundle until you have
 searched, unless a budget response says must_stop=true. Afterward, refine
-queries and search again as the evidence gap requires. Use
-extract_relevant_snippets only to go deeper into a document whose passages you
-have already seen and found worth more; do not claim evidence you have not
-inspected.
+queries and search again as the evidence gap requires.
 A claim supported by two independent documents is worth more than one supported
 by two passages of the same document, so prefer citing across sources.
 If any tool response says must_stop=true, call no more tools and immediately
@@ -119,7 +116,7 @@ class BundleEvidence(BaseModel):
     cite: str = Field(
         min_length=2,
         description=(
-            'A snippet handle from extract_relevant_snippets: "S3" for the '
+            'A snippet handle from search_passages: "S3" for the '
             'whole snippet, "S3.2" for its sentence 2, or "S3.2-4" for '
             "sentences 2 through 4. Never write out the quote itself."
         ),
@@ -473,8 +470,6 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
     _ALLOWED_TOOLS = frozenset(
         {
             "search_passages",
-            "search_climbmix",
-            "extract_relevant_snippets",
             "view_retrieval_state",
             "read_file",
         }
@@ -534,30 +529,6 @@ class ResearcherToolFilterMiddleware(_RoleToolFilterMiddleware):
                 response_format=None,
                 system_message=SystemMessage(content=content),
                 tool_choice="search_passages",
-                model_settings={
-                    **(filtered.model_settings or {}),
-                    "parallel_tool_calls": False,
-                },
-            )
-        if not self._budget.task_has_snippet_attempt(context):
-            instruction = (
-                "Use the search result you just received. Select its most relevant "
-                "document_id and call extract_relevant_snippets now for the stated "
-                "research gap. Do not return EvidenceBundle yet."
-            )
-            existing = request.system_message
-            content = (
-                f"{existing.content}\n\n{instruction}" if existing else instruction
-            )
-            return filtered.override(
-                tools=[
-                    tool
-                    for tool in filtered.tools
-                    if _tool_name(tool) == "extract_relevant_snippets"
-                ],
-                response_format=None,
-                system_message=SystemMessage(content=content),
-                tool_choice="extract_relevant_snippets",
                 model_settings={
                     **(filtered.model_settings or {}),
                     "parallel_tool_calls": False,
@@ -995,13 +966,8 @@ def build_research_subagent(
                     exit_behavior="continue",
                 ),
                 ToolCallLimitMiddleware(
-                    tool_name="search_climbmix",
-                    run_limit=budget_config.max_searches_per_researcher,
-                    exit_behavior="continue",
-                ),
-                ToolCallLimitMiddleware(
-                    tool_name="extract_relevant_snippets",
-                    run_limit=budget_config.max_snippets_per_researcher,
+                    tool_name="search_passages",
+                    run_limit=budget_config.max_passage_searches_per_researcher,
                     exit_behavior="continue",
                 ),
                 ResearcherToolFilterMiddleware(budget),

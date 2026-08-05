@@ -42,6 +42,7 @@ class RetrieverConfig:
     query_variants: tuple[str, ...]
     hits: int
     index: str | None = None
+    corpus_epoch: str | None = None
     cache: bool = True
 
 
@@ -441,6 +442,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
                 query_variants=query_variant_names,
                 hits=int(row.get("hits") or 100),
                 index=str(row["index"]).strip() if row.get("index") else None,
+                corpus_epoch=_optional_text(row, "corpus_epoch"),
                 cache=_optional_bool(row, "cache", True),
             )
         )

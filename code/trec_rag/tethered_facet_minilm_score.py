@@ -1025,9 +1025,14 @@ def create_preflight(
     unique_miss_keys: set[str] = set()
     for candidate in candidates:
         planned = build_window_plan(candidate, tokenizer, query=str(candidate["query"]))
+        cached_values = cache.lookup_many(  # type: ignore[attr-defined]
+            (row.query, row.window_text) for row in planned
+        )
+        if len(cached_values) != len(planned):
+            raise ValueError("score cache returned an unexpected lookup count")
         local_coverage: list[float] = []
-        for row in planned:
-            cached = cache.get(query_text=row.query, text=row.window_text) is not None  # type: ignore[attr-defined]
+        for row, cached_value in zip(planned, cached_values, strict=True):
+            cached = cached_value is not None
             hits += int(cached)
             unique_pair_keys.add(row.cache_key)
             if not cached:
@@ -1918,10 +1923,16 @@ def run_local_scoring(
         by_key.setdefault(key, row)
         if row.get("cache_hit") is False:
             planned_miss_keys.add(key)
+    ordered_unique_rows = tuple(row for _key, row in sorted(by_key.items()))
+    cached_values = cache.lookup_many(  # type: ignore[attr-defined]
+        (str(row["query"]), str(row["window_text"])) for row in ordered_unique_rows
+    )
+    if len(cached_values) != len(ordered_unique_rows):
+        raise ValueError("score cache returned an unexpected lookup count")
     actual_misses = [
         row
-        for key, row in sorted(by_key.items())
-        if cache.get(query_text=str(row["query"]), text=str(row["window_text"])) is None  # type: ignore[attr-defined]
+        for row, cached in zip(ordered_unique_rows, cached_values, strict=True)
+        if cached is None
     ]
     actual_miss_keys = {str(row["cache_key"]) for row in actual_misses}
     if (
@@ -1946,23 +1957,47 @@ def run_local_scoring(
     scorer = runner
     if actual_misses and scorer is None:
         scorer = _LocalMiniLMRunner(model_receipt)
-    for start in range(0, len(actual_misses), BATCH_SIZE):
-        if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
-            raise RuntimeError("tethered MiniLM scoring exceeded the 600-second ceiling; no retry")
-        batch = actual_misses[start : start + BATCH_SIZE]
-        values = scorer.score(batch)  # type: ignore[union-attr]
-        if len(values) != len(batch):
-            raise ValueError("MiniLM runner returned an unexpected score count")
-        cache.add_many(  # type: ignore[attr-defined]
-            (str(row["query"]), str(row["window_text"]), _float32(score))
-            for row, score in zip(batch, values, strict=True)
+    if actual_misses:
+        row_by_pair = {
+            (str(row["query"]), str(row["window_text"])): row
+            for row in actual_misses
+        }
+
+        def compute_batch(
+            pairs: Sequence[tuple[str, str]],
+        ) -> Sequence[float]:
+            if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
+                raise RuntimeError(
+                    "tethered MiniLM scoring exceeded the 600-second ceiling; no retry"
+                )
+            batch = [row_by_pair[pair] for pair in pairs]
+            values = scorer.score(batch)  # type: ignore[union-attr]
+            if len(values) != len(batch):
+                raise ValueError("MiniLM runner returned an unexpected score count")
+            if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
+                raise RuntimeError(
+                    "tethered MiniLM scoring exceeded the 600-second ceiling; no retry"
+                )
+            return [_float32(score) for score in values]
+
+        resolved = cache.score_many(  # type: ignore[attr-defined]
+            (
+                (str(row["query"]), str(row["window_text"]))
+                for row in actual_misses
+            ),
+            compute_batch,
+            batch_size=BATCH_SIZE,
         )
-        if time.perf_counter() - started >= RUNTIME_CEILING_SECONDS:
-            raise RuntimeError("tethered MiniLM scoring exceeded the 600-second ceiling; no retry")
+        if len(resolved) != len(actual_misses):
+            raise ValueError("score cache returned an unexpected score count")
 
     score_rows: list[dict[str, object]] = []
-    for row in windows:
-        score = cache.get(query_text=str(row["query"]), text=str(row["window_text"]))  # type: ignore[attr-defined]
+    final_values = cache.lookup_many(  # type: ignore[attr-defined]
+        (str(row["query"]), str(row["window_text"])) for row in windows
+    )
+    if len(final_values) != len(windows):
+        raise ValueError("score cache returned an unexpected lookup count")
+    for row, score in zip(windows, final_values, strict=True):
         if score is None:
             raise ValueError("score cache does not cover a frozen tethered window")
         score_rows.append(

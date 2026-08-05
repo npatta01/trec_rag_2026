@@ -23,6 +23,18 @@ from trec_rag.competition_debug_report import (
     load_debug_report_data,
     render_debug_report,
 )
+from trec_rag.generation_handoff import (
+    SOURCE_CONTRACT,
+    EvidenceGroup,
+    EvidencePassage,
+    EvidenceSourceSpan,
+    GenerationHandoff,
+    GenerationTopic,
+    HandoffProducer,
+    SelectedCluster,
+    TopicSourceReceipts,
+    serialize_generation_handoff,
+)
 from trec_rag.topics import Topic
 
 
@@ -69,23 +81,26 @@ def _write_debug_run(tmp_path: Path) -> tuple[Path, Path]:
     )
     config_path = tmp_path / "retrieval.yaml"
     config_path.write_text(
-        """schema_version: facet_pilot_config_v1
+        """schema_version: facet_pilot_config_v2
 experiment:
   id: debug-fixture
 topics:
   path: topics.jsonl
+execution:
+  topic_workers: 1
 retrieval:
   index: fixture-index
   cache_dir: cache/retrieval
   query_sources: [original, subnarrative]
-  candidate_depth_per_query: 10
-reranking:
+  documents_per_query: 1000
+  corpus_epoch: fixture-corpus-epoch
+passage:
   model: mixedbread-ai/mxbai-rerank-base-v2
   score_cache_dir: cache/reranker
   device: cpu
-  rerank_depth_per_query: 5
-  candidate_pool_depth: 5
-  selection_policy: round_robin_subnarrative_coverage
+  passages_per_query: 100
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
 nuggets:
   evidence_budget_per_subnarrative: 2
   maximum_claims_per_subnarrative: 2
@@ -229,6 +244,8 @@ nuggets:
             text_sha256=_sha256("Both-lane source."),
         ),
     ]
+    lane_scores[3]["within_document_span_support"] = 0
+    lane_scores[3]["winning_passages"] = []
     lane_scores_path = topic_root / "scoring" / "lane_scores.jsonl"
     lane_scores_path.write_bytes(b"".join(_json_bytes(row) for row in lane_scores))
     scoring_manifest_path = topic_root / "scoring" / "complete.json"
@@ -254,7 +271,7 @@ nuggets:
         "topic_id": "rag2026-0",
         "narrative_sha256": _sha256(narrative),
         "decomposition_source_sha256": "a" * 64,
-        "requested_depth": 10,
+        "requested_depth": 1000,
         "lanes": [
             {
                 "lane_name": "original", "subnarrative_id": None,
@@ -271,6 +288,7 @@ nuggets:
                 "candidates": [{"docid": "doc-facet", "bm25_rank": 1, "bm25_score": 6.0, "text_sha256": _sha256("Facet selected source with <unsafe> text.")}],
             },
         ],
+        "passage_search_results": [{}, {}],
     }
     (topic_root / "retrieval").mkdir()
     (topic_root / "retrieval" / "audit.json").write_bytes(_json_bytes(audit))
@@ -335,29 +353,98 @@ def _write_symlinked_debug_run(tmp_path: Path) -> tuple[Path, Path, Path]:
     return config_path, linked_output, shared_output
 
 
+def _rag_generation_topic(
+    topic_id: str,
+    narrative: str,
+    *,
+    docid: str = "doc-original",
+) -> GenerationTopic:
+    evidence_id = f"{topic_id}-evidence-1"
+    cluster_id = f"{topic_id}-cluster-1"
+    group_id = f"{topic_id}-group-1"
+    passage = f"Selected evidence for {topic_id}."
+    return GenerationTopic(
+        topic_id=topic_id,
+        narrative=narrative,
+        groups=(
+            EvidenceGroup(
+                group_id=group_id,
+                kind="generated_subnarrative",
+                text=f"Evidence group for {topic_id}.",
+                selected_clusters=(
+                    SelectedCluster(
+                        cluster_id=cluster_id,
+                        ordinal=1,
+                        representative_evidence_id=evidence_id,
+                        evidence_ids=(evidence_id,),
+                    ),
+                ),
+            ),
+        ),
+        evidence=(
+            EvidencePassage(
+                evidence_id=evidence_id,
+                group_id=group_id,
+                cluster_id=cluster_id,
+                cluster_ordinal=1,
+                support_ordinal=1,
+                candidate_kind="extractive",
+                docid=docid,
+                document_rank=1,
+                text=passage,
+                document_sha256=_sha256(f"document:{topic_id}:{docid}"),
+                source_span=EvidenceSourceSpan(
+                    start_char=0,
+                    end_char=len(passage),
+                    start_byte=0,
+                    end_byte=len(passage.encode("utf-8")),
+                ),
+            ),
+        ),
+        claim_hints=(),
+        source_receipts=TopicSourceReceipts(
+            official_topics_sha256=_sha256("debug official topics"),
+            retrieval_topic_sha256=_sha256(f"debug retrieval:{topic_id}"),
+        ),
+    )
+
+
+def _write_debug_handoff(
+    retrieval_output: Path,
+    topics: tuple[GenerationTopic, ...],
+) -> Path:
+    path = retrieval_output / "generation_handoff_manifest.json"
+    handoff = GenerationHandoff(
+        producer=HandoffProducer(
+            source_contract=SOURCE_CONTRACT,
+            retrieval_run_id="debug-fixture",
+            producer_revision="debug-test-revision",
+        ),
+        topics=topics,
+    )
+    path.write_bytes(serialize_generation_handoff(handoff))
+    return path
+
+
 def _write_rag_run(tmp_path: Path, retrieval_output: Path) -> tuple[Path, Path, str]:
     narrative = 'Original <narrative> & "quotes"'
-    queries_path = tmp_path / "rag_queries.tsv"
-    queries_path.write_text(f"rag2026-0\t{narrative}\n", encoding="utf-8")
+    _write_debug_handoff(
+        retrieval_output,
+        (_rag_generation_topic("rag2026-0", narrative),),
+    )
     rag_config = tmp_path / "rag.yaml"
     rag_config.write_text(
-        """schema_version: competition_rag_config_v1
+        """schema_version: competition_rag_config_v2
 experiment:
   id: rag-debug-fixture
   output_dir: outputs/rag-debug-fixture
   mode: create
+  topic_ids: [rag2026-0]
 submission:
   team_id: fixture-team
   run_desc: Fixture answer generation.
 inputs:
-  queries: rag_queries.tsv
-  run: outputs/debug-fixture/r_output_trec_rag_2026.tsv
-  documents: outputs/debug-fixture/retrieval_with_text.jsonl.zip
-  archive_member: null
-  topic_ids: [rag2026-0]
-retrieval:
-  top_k: null
-  max_document_words: 1000
+  handoff_manifest: outputs/debug-fixture/generation_handoff_manifest.json
 generation:
   type: openrouter
   api_base: https://example.invalid/api/v1
@@ -538,10 +625,14 @@ def _reseal_canonical_artifacts(output: Path, topic_id: str = "rag2026-0") -> st
 def _extend_rag_run_with_forged_second_narrative(
     tmp_path: Path, rag_config: Path, rag_output: Path
 ) -> None:
-    (tmp_path / "rag_queries.tsv").write_text(
-        'rag2026-0\tOriginal <narrative> & "quotes"\n'
-        "rag2026-1\tForged second narrative\n",
-        encoding="utf-8",
+    _write_debug_handoff(
+        tmp_path / "outputs" / "debug-fixture",
+        (
+            _rag_generation_topic(
+                "rag2026-0", 'Original <narrative> & "quotes"'
+            ),
+            _rag_generation_topic("rag2026-1", "Forged second narrative"),
+        ),
     )
     rag_config.write_text(
         rag_config.read_text(encoding="utf-8").replace(
@@ -565,59 +656,119 @@ def _write_task_2_artifacts(
     scoring_manifest_sha256: str,
 ) -> None:
     source = "Intro. Exact evidence sentence. Tail."
+    facet_source = "Facet selected source with <unsafe> text."
     start = 7
     end = 31
     assert source[start:end] == "Exact evidence sentence."
-    scores = [
-        {
-            "topic_id": "rag2026-0",
-            "lane_name": "subnarrative:subnarrative-1",
-            "semantic_query_sha256": _sha256(subnarrative),
-            "docid": "doc-facet",
-            "bm25_rank": 2,
-            "bm25_score": 6.0,
-            "aggregate_rank": 2,
-            "aggregate_score": 2.5,
-            "long_document_raw_logit": 1.5,
-            "weighted_passage_raw_logit": 2.0,
-            "within_document_span_support": 1,
-            "winning_passages": [
-                {"chunk_index": 0, "start_char": 0, "end_char": 5, "raw_logit": 2.0, "weighted_rank": 1}
-            ],
-            "score_representation": "raw_logits",
-            "text_sha256": _sha256("Facet selected source with <unsafe> text."),
-            "selection_rank": 2,
-            "subnarrative_id": "subnarrative-1",
-            "bm25_queries": [query],
-            "bm25_query_sha256s": [_sha256(query)],
-            "downstream_only": True,
+    passage_search = {
+        "query": {
+            "query_id": "facet:subnarrative-1:text",
+            "text": subnarrative,
+            "primary_subnarrative_id": "subnarrative-1",
+            "supporting_subnarrative_ids": [],
         },
-        {
-            "topic_id": "rag2026-0",
-            "lane_name": "subnarrative:subnarrative-1",
-            "semantic_query_sha256": _sha256(subnarrative),
-            "docid": "doc-original",
-            "bm25_rank": 1,
-            "bm25_score": 8.0,
-            "aggregate_rank": 1,
-            "aggregate_score": 4.5,
-            "long_document_raw_logit": 3.0,
-            "weighted_passage_raw_logit": 3.5,
-            "within_document_span_support": 1,
-            "winning_passages": [
-                {"chunk_index": 0, "start_char": start, "end_char": end, "raw_logit": 3.5, "weighted_rank": 1}
-            ],
-            "score_representation": "raw_logits",
-            "text_sha256": _sha256(source),
-            "selection_rank": 1,
-            "subnarrative_id": "subnarrative-1",
-            "bm25_queries": [query],
-            "bm25_query_sha256s": [_sha256(query)],
-            "downstream_only": True,
-        },
-    ]
+        "status": "complete",
+        "stopping_reason": None,
+        "requested_documents": 1000,
+        "returned_documents": 2,
+        "scored_documents": 2,
+        "scored_passages": 2,
+        "documents": [
+            {
+                "docid": "doc-original",
+                "content_sha256": _sha256(source),
+                "source_rank": 1,
+                "source_score": 8.0,
+                "best_passage_id": "p-" + "1" * 64,
+                "best_passage_raw_logit": 3.5,
+            },
+            {
+                "docid": "doc-facet",
+                "content_sha256": _sha256(facet_source),
+                "source_rank": 2,
+                "source_score": 6.0,
+                "best_passage_id": "p-" + "2" * 64,
+                "best_passage_raw_logit": 2.0,
+            },
+        ],
+        "passages": [
+            {
+                "passage_id": "p-" + "1" * 64,
+                "docid": "doc-original",
+                "content_sha256": _sha256(source),
+                "source_rank": 1,
+                "source_score": 8.0,
+                "start_char": start,
+                "end_char": end,
+                "start_byte": start,
+                "end_byte": end,
+                "text_sha256": _sha256("Exact evidence sentence."),
+                "text": "Exact evidence sentence.",
+                "raw_logit": 3.5,
+                "rank": 1,
+                "score_cache_key": "b" * 64,
+                "scoring_text_sha256": _sha256("Exact evidence sentence."),
+                "chunker_identity": {},
+            },
+            {
+                "passage_id": "p-" + "2" * 64,
+                "docid": "doc-facet",
+                "content_sha256": _sha256(facet_source),
+                "source_rank": 2,
+                "source_score": 6.0,
+                "start_char": 0,
+                "end_char": 5,
+                "start_byte": 0,
+                "end_byte": 5,
+                "text_sha256": _sha256("Facet"),
+                "text": "Facet",
+                "raw_logit": 2.0,
+                "rank": 2,
+                "score_cache_key": "c" * 64,
+                "scoring_text_sha256": _sha256("Facet"),
+                "chunker_identity": {},
+            },
+        ],
+        "attempt_count": 1,
+        "source_exhausted": True,
+    }
+    provenance_subnarrative_score = {
+        "topic_id": "rag2026-0",
+        "lane_name": "subnarrative:subnarrative-1",
+        "semantic_query_sha256": _sha256(subnarrative),
+        "docid": "doc-original",
+        "bm25_rank": 1,
+        "bm25_score": 8.0,
+        "aggregate_rank": 1,
+        "aggregate_score": 4.5,
+        "long_document_raw_logit": 3.0,
+        "weighted_passage_raw_logit": 3.5,
+        "within_document_span_support": 1,
+        "winning_passages": [
+            {
+                "chunk_index": 0,
+                "start_char": start,
+                "end_char": end,
+                "raw_logit": 3.5,
+                "weighted_rank": 1,
+            }
+        ],
+        "score_representation": "raw_logits",
+        "text_sha256": _sha256(source),
+        "selection_rank": 1,
+        "subnarrative_id": "subnarrative-1",
+        "bm25_queries": [query],
+        "bm25_query_sha256s": [_sha256(query)],
+        "downstream_only": True,
+    }
     (topic_root / "scoring" / "selected_subnarrative_scores.jsonl").write_bytes(
-        b"".join(_json_bytes(row) for row in scores)
+        _json_bytes(
+            {
+                "schema_version": "facet_passage_lane_v2",
+                "subnarrative_id": "subnarrative-1",
+                "passage_search": passage_search,
+            }
+        )
     )
 
     evidence = {
@@ -662,7 +813,7 @@ def _write_task_2_artifacts(
     selection_manifest_path = canonical / "selection-manifest.json"
     selection_manifest_path.write_bytes(_json_bytes({"fixture": "selection manifest"}))
     canonical_result = {
-        "schema_version": "canonical_nugget_result_v1",
+        "schema_version": "canonical_nugget_result_v2",
         "topic_id": "rag2026-0",
         "subnarrative_id": "subnarrative-1",
         "selected_budget": 2,
@@ -673,6 +824,7 @@ def _write_task_2_artifacts(
                 "canonical_nugget_id": "canonical-1",
                 "nugget_kind": "model_claim",
                 "claim_text": "The exact evidence is supported.",
+                "importance": "vital",
                 "evidence": [
                     {
                         "candidate_nugget_id": "candidate-1",
@@ -696,6 +848,9 @@ def _write_task_2_artifacts(
         _json_bytes(
             {
                 "schema_version": "canonical_nugget_manifest_v2",
+                "result_schema_version": "canonical_nugget_result_v2",
+                "canonical_response_schema_version": "canonical_nuggets_v2",
+                "prompt_version": "canonical_nuggetizer_v5",
                 "selected_budget": 2,
                 "selection_count": 1,
                 "result_count": 1,
@@ -749,7 +904,7 @@ def _write_task_2_artifacts(
             "selected_from_lane": "original",
             "selected_from_lane_rank": 1,
             "memberships": [{"lane_name": "original", "aggregate_rank": 1, "aggregate_score": 9.0, "bm25_rank": 1, "bm25_score": 8.0}],
-            "subnarrative_scores": [scores[1]],
+            "subnarrative_scores": [provenance_subnarrative_score],
             "nuggets": [{"canonical_nugget_id": "canonical-1", "subnarrative_id": "subnarrative-1"}],
             "source_seals": {"scoring_manifest_sha256": scoring_manifest_sha256, "canonical_manifest_sha256": canonical_manifest_sha256},
         }
@@ -942,6 +1097,136 @@ def test_audit_hashes_reject_non_integer_candidate_rank(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="retrieval audit candidate identity"):
         load_debug_report_data(config_path)
+
+
+@pytest.mark.parametrize(
+    "passage_search_results",
+    (None, [{}], [{}, "not-an-object"]),
+)
+def test_audit_hashes_require_one_passage_search_result_per_lane(
+    tmp_path: Path, passage_search_results: object
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "retrieval" / "audit.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["passage_search_results"] = passage_search_results
+    path.write_bytes(_json_bytes(value))
+
+    with pytest.raises(ValueError, match="retrieval audit identity"):
+        load_debug_report_data(config_path)
+
+
+def test_audit_reader_accepts_full_depth_multifacet_artifact(tmp_path: Path) -> None:
+    topic = Topic("14", "", "A production-depth narrative")
+    narrative_sha256 = _sha256(topic.narrative)
+    decomposition_sha256 = "a" * 64
+    subnarratives = tuple(
+        debug_report.SubnarrativeReport(
+            subnarrative_id=f"subnarrative-{index}",
+            text=f"Facet {index}",
+            bm25_queries=(f"facet {index}",),
+            semantic_query_sha256=_sha256(f"Facet {index}"),
+            bm25_query_sha256s=(_sha256(f"facet {index}"),),
+        )
+        for index in range(1, 6)
+    )
+    lane_identities = (
+        ("original", None, narrative_sha256),
+        *tuple(
+            (
+                f"facet:{row.subnarrative_id}:text",
+                row.subnarrative_id,
+                row.semantic_query_sha256,
+            )
+            for row in subnarratives
+        ),
+    )
+    lanes = []
+    for lane_index, (lane_name, subnarrative_id, query_sha256) in enumerate(
+        lane_identities
+    ):
+        lanes.append(
+            {
+                "lane_name": lane_name,
+                "subnarrative_id": subnarrative_id,
+                "bm25_query_sha256": query_sha256,
+                "semantic_query_sha256": query_sha256,
+                "returned_count": 1000,
+                "retained_count": 1000,
+                "candidates": [
+                    {
+                        "docid": (
+                            f"doc-{lane_index}-{rank}-" + "x" * 700
+                        ),
+                        "bm25_rank": rank,
+                        "bm25_score": 1001.0 - rank,
+                        "text_sha256": _sha256(f"document {lane_index} {rank}"),
+                    }
+                    for rank in range(1, 1001)
+                ],
+            }
+        )
+    topic_root = tmp_path / topic.id
+    audit_path = topic_root / "retrieval" / "audit.json"
+    audit_path.parent.mkdir(parents=True)
+    audit_path.write_bytes(
+        _json_bytes(
+            {
+                "schema_version": "facet_pilot_v2",
+                "topic_id": topic.id,
+                "narrative_sha256": narrative_sha256,
+                "decomposition_source_sha256": decomposition_sha256,
+                "requested_depth": 1000,
+                "lanes": lanes,
+                "passage_search_results": [{} for _ in lanes],
+            }
+        )
+    )
+    assert audit_path.stat().st_size > 2 * 1024 * 1024
+
+    hashes = debug_report._load_audit_hashes(
+        topic_root,
+        tmp_path.resolve(),
+        {},
+        topic,
+        narrative_sha256,
+        decomposition_sha256,
+        subnarratives,
+        1000,
+    )
+
+    assert len(hashes) == 6000
+
+
+def test_audit_reader_rejects_artifact_above_dedicated_bound_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    topic = Topic("14", "", "A production-depth narrative")
+    topic_root = tmp_path / topic.id
+    audit_path = topic_root / "retrieval" / "audit.json"
+    audit_path.parent.mkdir(parents=True)
+    audit_path.write_bytes(
+        b"x" * (debug_report._MAX_RETRIEVAL_AUDIT_BYTES + 1)
+    )
+    original_open = Path.open
+
+    def guarded_open(candidate: Path, *args: object, **kwargs: object):
+        if candidate.resolve() == audit_path.resolve():
+            raise AssertionError("oversized audit must not be opened")
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    with pytest.raises(ValueError, match="bounded reader limit"):
+        debug_report._load_audit_hashes(
+            topic_root,
+            tmp_path.resolve(),
+            {},
+            topic,
+            _sha256(topic.narrative),
+            "a" * 64,
+            (),
+            1000,
+        )
 
 
 def test_oversized_artifact_is_rejected_before_receipt_hashing(
@@ -1241,8 +1526,15 @@ def test_noncanonical_snapshot_binds_rendered_data_to_receipt(
     )
     sealed = path.read_bytes()
     rows = [json.loads(line) for line in sealed.splitlines()]
-    original = next(row for row in rows if row["docid"] == "doc-original")
-    original["aggregate_score"] = 4.6
+    search = rows[0]["passage_search"]
+    original = next(
+        row for row in search["documents"] if row["docid"] == "doc-original"
+    )
+    original["source_score"] = 8.1
+    original_passage = next(
+        row for row in search["passages"] if row["docid"] == "doc-original"
+    )
+    original_passage["source_score"] = 8.1
     forged = b"".join(_json_bytes(row) for row in rows)
     assert len(forged) == len(sealed)
     replacement = tmp_path / "forged-selected-subnarrative-scores.jsonl"
@@ -1266,8 +1558,12 @@ def test_noncanonical_snapshot_binds_rendered_data_to_receipt(
     assert data.source_sha256s[
         "rag2026-0/scoring/selected_subnarrative_scores.jsonl"
     ] == sha256(sealed).hexdigest()
-    assert "<td>4.5</td><td>3</td><td>3.5</td>" in rendered
-    assert "<td>4.6</td><td>3</td><td>3.5</td>" not in rendered
+    ranking = next(
+        row for row in data.topics[0].passage_rankings if row.docid == "doc-original"
+    )
+    assert ranking.source_score == 8.0
+    assert "<td>8</td>" in rendered
+    assert "<td>8.1</td>" not in rendered
     assert open_count == 1
 
 
@@ -1399,6 +1695,7 @@ def test_root_export_streams_valid_full_scale_artifacts_and_retains_topic_subset
     assert provenance_path.stat().st_size > 16 * 1024 * 1024
 
     manifest = {
+        "schema_version": "retrieval_export_manifest_v2",
         "official_row_count": 119,
         "topic_depths": {
             topic.id: {"official": 1, "candidate_pool": 1} for topic in topics
@@ -1443,13 +1740,21 @@ def test_passage_rankings_retain_stored_ranks_logits_and_exact_source_spans(
 ) -> None:
     config_path, _output = _write_debug_run(tmp_path)
 
-    topic = load_debug_report_data(config_path).topics[0]
+    loaded = load_debug_report_data(config_path)
+    topic = loaded.topics[0]
 
-    assert [row.aggregate_rank for row in topic.passage_rankings] == [1, 2]
+    assert [row.passage_document_rank for row in topic.passage_rankings] == [1, 2]
     assert [row.docid for row in topic.passage_rankings] == ["doc-original", "doc-facet"]
-    assert topic.passage_rankings[0].score_representation == "raw_logits"
+    assert topic.passage_rankings[0].lane_schema_version == "facet_passage_lane_v2"
+    assert topic.passage_rankings[0].best_passage_raw_logit == 3.5
     assert topic.passage_rankings[0].winning_passages[0].raw_logit == 3.5
+    assert topic.passage_rankings[0].winning_passages[0].passage_rank == 1
     assert topic.passage_rankings[0].winning_passages[0].text == "Exact evidence sentence."
+    rendered = render_debug_report(loaded)
+    assert "facet_passage_lane_v2" in rendered
+    assert "Best passage raw logit" in rendered
+    assert "Document raw logit" not in rendered
+    assert "Span support" not in rendered
 
 
 def test_funnel_projection_counts_overall_and_per_subnarrative(tmp_path: Path) -> None:
@@ -1491,7 +1796,10 @@ def test_funnel_projection_keeps_pair_records_distinct_from_ranked_documents(
         replace(
             topic.passage_rankings[0],
             docid="doc-shared",
-            winning_passages=(first_passage, replace(first_passage, chunk_index=1)),
+            winning_passages=(
+                first_passage,
+                replace(first_passage, passage_id="p-" + "3" * 64, passage_rank=2),
+            ),
         ),
         replace(
             topic.passage_rankings[1],
@@ -1502,11 +1810,19 @@ def test_funnel_projection_keeps_pair_records_distinct_from_ranked_documents(
             topic.passage_rankings[1],
             subnarrative_id=second_subnarrative.subnarrative_id,
             docid="doc-other",
-            winning_passages=(
-                second_passage,
-                replace(second_passage, chunk_index=1),
-                replace(second_passage, chunk_index=2),
-            ),
+                winning_passages=(
+                    second_passage,
+                    replace(
+                        second_passage,
+                        passage_id="p-" + "4" * 64,
+                        passage_rank=2,
+                    ),
+                    replace(
+                        second_passage,
+                        passage_id="p-" + "5" * 64,
+                        passage_rank=3,
+                    ),
+                ),
         ),
     )
     clusters = (
@@ -1645,6 +1961,20 @@ def test_nugget_join_uses_configured_budget_selected_clusters_and_evidence_docid
     assert topic.canonical_nuggets[0].maximum_supporting_documents == 1
 
 
+def test_canonical_manifest_versions_are_authenticated(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    manifest_path = output / "rag2026-0" / "canonical" / "canonical-nugget-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["prompt_version"] = "stale-prompt"
+    manifest_path.write_bytes(_json_bytes(manifest))
+    _reseal_canonical_artifacts(output)
+
+    with pytest.raises(ValueError, match="canonical nugget manifest differs"):
+        load_debug_report_data(config_path)
+
+
 def test_empty_canonical_result_retains_state_budget_caps_and_zero_claims(
     tmp_path: Path,
 ) -> None:
@@ -1666,7 +1996,7 @@ def test_empty_canonical_result_retains_state_budget_caps_and_zero_claims(
     )
     selection_path.write_bytes(_json_bytes(selection))
     result = {
-        "schema_version": "canonical_nugget_result_v1",
+        "schema_version": "canonical_nugget_result_v2",
         "topic_id": "rag2026-0",
         "subnarrative_id": "subnarrative-1",
         "selected_budget": 2,
@@ -1699,7 +2029,7 @@ def test_empty_canonical_result_retains_state_budget_caps_and_zero_claims(
         {},
         topic,
         report_topic.subnarratives,
-        report_topic.selected_documents,
+        report_topic.passage_rankings,
         canonical_manifest_sha256=canonical_manifest_sha256,
     )
 
@@ -1816,6 +2146,25 @@ def test_canonical_nugget_preserves_distinct_same_document_evidence_aliases(
     assert nugget.maximum_supporting_documents == 1
 
 
+def test_selected_support_must_exist_in_sealed_facet_passage_lane(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "rag2026-0" / "canonical" / "subnarrative-selections.jsonl"
+    selection = json.loads(path.read_text(encoding="utf-8"))
+    changed_hash = _sha256("Unbound source document.")
+    for field in ("members", "supports"):
+        selection["clusters"][0][field][0]["docid"] = "doc-unbound"
+        selection["clusters"][0][field][0]["document_sha256"] = changed_hash
+    path.write_bytes(_json_bytes(selection))
+    _reseal_canonical_artifacts(output)
+
+    with pytest.raises(
+        ValueError, match="selected evidence document differs from sealed passage lane"
+    ):
+        load_debug_report_data(config_path)
+
+
 def test_retrieval_projection_explains_selected_depth_versus_supported_depth(
     tmp_path: Path,
 ) -> None:
@@ -1828,6 +2177,175 @@ def test_retrieval_projection_explains_selected_depth_versus_supported_depth(
     assert [row.docid for row in retrieval.documents] == ["doc-original"]
     assert retrieval.documents[0].text == "Intro. Exact evidence sentence. Tail."
     assert retrieval.documents[0].canonical_nugget_ids == ("canonical-1",)
+
+
+def test_current_retrieval_projection_keeps_selected_evidence_without_canonical_claim(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    report = loaded.topics[0]
+    evidence_text = "Evidence selected for generation but omitted from canonical claims."
+    evidence_document = "Full evidence-only source document."
+    evidence = replace(
+        report.evidence_clusters[0].evidence[0],
+        candidate_nugget_id="candidate-evidence-only",
+        text=evidence_text,
+        text_sha256=_sha256(evidence_text),
+        docid="doc-evidence-only",
+        document_sha256=_sha256(evidence_document),
+    )
+    clusters = (
+        replace(
+            report.evidence_clusters[0],
+            evidence=(*report.evidence_clusters[0].evidence, evidence),
+        ),
+    )
+    artifacts = debug_report._RootRetrievalArtifacts(
+        run_docids={"rag2026-0": ("doc-original", "doc-evidence-only")},
+        provenance={},
+        document_text={
+            ("rag2026-0", "doc-original"): report.selected_documents[0].text,
+            ("rag2026-0", "doc-evidence-only"): evidence_document,
+        },
+        document_stage={
+            ("rag2026-0", "doc-original"): "bundle_projection",
+            ("rag2026-0", "doc-evidence-only"): "bundle_projection",
+        },
+        topic_depths={"rag2026-0": (3, 2)},
+        source_seals={
+            "rag2026-0": {
+                "scoring_manifest_sha256": "a" * 64,
+                "canonical_manifest_sha256": "b" * 64,
+            }
+        },
+        export_schema_version="retrieval_export_manifest_v6",
+    )
+
+    retrieval = debug_report._decode_retrieval_output(
+        Topic("rag2026-0", "", report.narrative),
+        report.selected_documents,
+        clusters,
+        report.canonical_nuggets,
+        artifacts,
+    )
+
+    assert [row.docid for row in retrieval.documents] == [
+        "doc-original",
+        "doc-evidence-only",
+    ]
+    evidence_only = retrieval.documents[1]
+    assert evidence_only.selection_rank is None
+    assert evidence_only.selected_from_lane is None
+    assert evidence_only.selected_from_lane_rank is None
+    assert evidence_only.canonical_nugget_ids == ()
+    assert evidence_only.text == evidence_document
+
+
+def test_current_retrieval_projection_rejects_selected_evidence_document_hash_change(
+    tmp_path: Path,
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    report = loaded.topics[0]
+    evidence = replace(
+        report.evidence_clusters[0].evidence[0],
+        candidate_nugget_id="candidate-evidence-only",
+        docid="doc-evidence-only",
+        document_sha256=_sha256("Expected evidence-only source document."),
+    )
+    artifacts = debug_report._RootRetrievalArtifacts(
+        run_docids={"rag2026-0": ("doc-original", "doc-evidence-only")},
+        provenance={},
+        document_text={
+            ("rag2026-0", "doc-original"): report.selected_documents[0].text,
+            ("rag2026-0", "doc-evidence-only"): "Changed source document.",
+        },
+        document_stage={
+            ("rag2026-0", "doc-original"): "bundle_projection",
+            ("rag2026-0", "doc-evidence-only"): "bundle_projection",
+        },
+        topic_depths={"rag2026-0": (3, 2)},
+        source_seals={
+            "rag2026-0": {
+                "scoring_manifest_sha256": "a" * 64,
+                "canonical_manifest_sha256": "b" * 64,
+            }
+        },
+        export_schema_version="retrieval_export_manifest_v6",
+    )
+
+    with pytest.raises(
+        ValueError, match="selected evidence document differs from full-text archive"
+    ):
+        debug_report._decode_retrieval_output(
+            Topic("rag2026-0", "", report.narrative),
+            report.selected_documents,
+            (
+                replace(
+                    report.evidence_clusters[0],
+                    evidence=(*report.evidence_clusters[0].evidence, evidence),
+                ),
+            ),
+            report.canonical_nuggets,
+            artifacts,
+        )
+
+
+@pytest.mark.parametrize(
+    "run_docids",
+    (
+        ("doc-original",),
+        ("doc-original", "doc-evidence-only", "doc-extra"),
+    ),
+)
+def test_current_retrieval_projection_requires_exact_selected_evidence_set(
+    tmp_path: Path, run_docids: tuple[str, ...]
+) -> None:
+    config_path, _output = _write_debug_run(tmp_path)
+    loaded = load_debug_report_data(config_path)
+    report = loaded.topics[0]
+    evidence_document = "Full evidence-only source document."
+    evidence = replace(
+        report.evidence_clusters[0].evidence[0],
+        candidate_nugget_id="candidate-evidence-only",
+        docid="doc-evidence-only",
+        document_sha256=_sha256(evidence_document),
+    )
+    artifacts = debug_report._RootRetrievalArtifacts(
+        run_docids={"rag2026-0": run_docids},
+        provenance={},
+        document_text={
+            ("rag2026-0", "doc-original"): report.selected_documents[0].text,
+            ("rag2026-0", "doc-evidence-only"): evidence_document,
+        },
+        document_stage={
+            ("rag2026-0", "doc-original"): "bundle_projection",
+            ("rag2026-0", "doc-evidence-only"): "bundle_projection",
+        },
+        topic_depths={"rag2026-0": (3, len(run_docids))},
+        source_seals={
+            "rag2026-0": {
+                "scoring_manifest_sha256": "a" * 64,
+                "canonical_manifest_sha256": "b" * 64,
+            }
+        },
+        export_schema_version="retrieval_export_manifest_v6",
+    )
+
+    with pytest.raises(ValueError, match="organizer run differs from selected-evidence"):
+        debug_report._decode_retrieval_output(
+            Topic("rag2026-0", "", report.narrative),
+            report.selected_documents,
+            (
+                replace(
+                    report.evidence_clusters[0],
+                    evidence=(*report.evidence_clusters[0].evidence, evidence),
+                ),
+            ),
+            report.canonical_nuggets,
+            artifacts,
+        )
 
 
 def test_root_provenance_memberships_must_equal_sealed_selection(
@@ -1844,23 +2362,72 @@ def test_root_provenance_memberships_must_equal_sealed_selection(
         load_debug_report_data(config_path)
 
 
-def test_candidate_ledger_and_network_are_outside_the_bounded_report_path(
+def test_current_export_schema_rejects_legacy_provenance_sidecar(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "retrieval_export_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = "retrieval_export_manifest_v6"
+    path.write_bytes(_json_bytes(manifest))
+
+    with pytest.raises(ValueError, match="export schema and provenance sidecar disagree"):
+        load_debug_report_data(config_path)
+
+
+def test_legacy_export_schema_requires_provenance_sidecar(tmp_path: Path) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "retrieval_export_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["artifacts"].pop("retrieval_provenance.jsonl")
+    path.write_bytes(_json_bytes(manifest))
+
+    with pytest.raises(ValueError, match="export schema and provenance sidecar disagree"):
+        load_debug_report_data(config_path)
+
+
+def test_full_text_archive_rejects_document_outside_organizer_run(
+    tmp_path: Path,
+) -> None:
+    config_path, output = _write_debug_run(tmp_path)
+    path = output / "retrieval_with_text.jsonl.zip"
+    with zipfile.ZipFile(path) as archive:
+        row = json.loads(archive.read("retrieval_with_text.jsonl"))
+    row["candidates"].append(
+        {
+            "docid": "doc-extra",
+            "rank": 2,
+            "score": 0,
+            "doc": "Archive-only document.",
+            "index": "fixture-index",
+            "stage": "canonical_supported",
+        }
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("retrieval_with_text.jsonl", _json_bytes(row))
+    _rewrite_export_artifact_receipt(output, path.name)
+
+    with pytest.raises(ValueError, match="full-text archive document order differs"):
+        load_debug_report_data(config_path)
+
+
+def test_topic_records_and_network_are_outside_the_bounded_report_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path, output = _write_debug_run(tmp_path)
-    forbidden = output / "rag2026-0" / "canonical" / "candidates.jsonl"
-    forbidden.mkdir()
+    forbidden = output / "rag2026-0" / "records.sqlite3"
+    forbidden.write_bytes(b"sealed topic records fixture")
     original_open = Path.open
     original_read_bytes = Path.read_bytes
 
     def guarded_open(candidate: Path, *args: object, **kwargs: object):
         if candidate.resolve() == forbidden.resolve():
-            raise AssertionError("candidate ledger must not be opened")
+            raise AssertionError("topic records must not be opened")
         return original_open(candidate, *args, **kwargs)
 
     def guarded_read_bytes(candidate: Path) -> bytes:
         if candidate.resolve() == forbidden.resolve():
-            raise AssertionError("candidate ledger must not be read")
+            raise AssertionError("topic records must not be read")
         return original_read_bytes(candidate)
 
     def reject_network(*_args: object, **_kwargs: object) -> None:
@@ -1877,7 +2444,7 @@ def test_passage_ranking_rejects_offsets_outside_selected_document(tmp_path: Pat
     config_path, output = _write_debug_run(tmp_path)
     path = output / "rag2026-0" / "scoring" / "selected_subnarrative_scores.jsonl"
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    rows[1]["winning_passages"][0]["end_char"] = 10_000
+    rows[0]["passage_search"]["passages"][0]["end_char"] = 10_000
     path.write_bytes(b"".join(_json_bytes(row) for row in rows))
 
     with pytest.raises(ValueError, match="winning passage offsets are outside selected document"):
@@ -2025,7 +2592,7 @@ def test_html_renderer_is_semantic_self_contained_and_escapes_hostile_source_tex
         replace(
             topic.passage_rankings[0],
             docid=f"ranked-doc-{rank}",
-            aggregate_rank=rank,
+            passage_document_rank=rank,
             winning_passages=(
                 replace(topic.passage_rankings[0].winning_passages[0], text=f"passage {rank}"),
             ),
@@ -2263,7 +2830,11 @@ def test_html_renderer_discloses_passage_rankings_after_the_first_five(tmp_path:
     loaded = load_debug_report_data(config_path)
     topic = loaded.topics[0]
     rankings = tuple(
-        replace(topic.passage_rankings[0], docid=f"ranked-doc-{rank}", aggregate_rank=rank)
+        replace(
+            topic.passage_rankings[0],
+            docid=f"ranked-doc-{rank}",
+            passage_document_rank=rank,
+        )
         for rank in range(1, 8)
     )
 
@@ -2326,10 +2897,10 @@ def test_selected_document_presentation_reason_uses_membership_and_sealed_lane(
     )
 
 
-def test_best_stored_passage_uses_aggregate_rank_then_decomposition_order(
+def test_best_stored_passage_uses_passage_document_rank_then_decomposition_order(
     tmp_path: Path,
 ) -> None:
-    """Comparing logits or breaking aggregate-rank ties out of topic order must fail."""
+    """Comparing logits or breaking rank ties out of topic order must fail."""
     config_path, _output = _write_debug_run(tmp_path)
     topic = load_debug_report_data(config_path).topics[0]
     document = topic.selected_documents[0]
@@ -2345,16 +2916,14 @@ def test_best_stored_passage_uses_aggregate_rank_then_decomposition_order(
     first = replace(
         source,
         subnarrative_id=first_subnarrative.subnarrative_id,
-        aggregate_rank=2,
-        aggregate_score=-100.0,
-        weighted_passage_raw_logit=-100.0,
+        passage_document_rank=2,
+        best_passage_raw_logit=-100.0,
     )
     second = replace(
         source,
         subnarrative_id=second_subnarrative.subnarrative_id,
-        aggregate_rank=1,
-        aggregate_score=-200.0,
-        weighted_passage_raw_logit=-200.0,
+        passage_document_rank=1,
+        best_passage_raw_logit=-200.0,
     )
     projected_topic = replace(
         topic,
@@ -2367,7 +2936,7 @@ def test_best_stored_passage_uses_aggregate_rank_then_decomposition_order(
     assert best is not None
     assert best.subnarrative_id == "subnarrative-2"
     assert best.subnarrative_text == "Second decomposition facet"
-    assert best.aggregate_rank == 1
+    assert best.passage_document_rank == 1
     assert best.passage == source.winning_passages[0]
 
     tied_topic = replace(
@@ -2375,9 +2944,8 @@ def test_best_stored_passage_uses_aggregate_rank_then_decomposition_order(
         passage_rankings=(
             replace(
                 first,
-                aggregate_rank=1,
-                aggregate_score=-300.0,
-                weighted_passage_raw_logit=-300.0,
+                passage_document_rank=1,
+                best_passage_raw_logit=-300.0,
             ),
             second,
         ),
@@ -2427,7 +2995,7 @@ def test_selected_documents_render_as_ordered_evidence_disclosures(tmp_path: Pat
     assert "Facet-only document selected at position 2" in section
     assert "Representative stored passage" in section
     assert html.escape(topic.subnarratives[0].text, quote=True) in section
-    assert "Aggregate rank</dt><dd>1</dd>" in section
+    assert "Passage-document rank</dt><dd>1</dd>" in section
     assert '<details class="technical-provenance">' in section
     assert "Memberships and selection rationale" in section
 
@@ -2800,7 +3368,7 @@ def test_passage_disclosure_keeps_five_visible_rows_per_subnarrative(
             source,
             subnarrative_id=sub.subnarrative_id,
             docid=f"{sub.subnarrative_id}-doc-{rank}",
-            aggregate_rank=rank,
+            passage_document_rank=rank,
         )
         for sub in (first_sub, second_sub)
         for rank in range(1, 7)
@@ -2902,7 +3470,7 @@ def test_passage_tables_are_collapsed_per_subnarrative_and_keep_every_record(
             source,
             subnarrative_id=sub.subnarrative_id,
             docid=f"{sub.subnarrative_id}-diagnostic-{rank}",
-            aggregate_rank=rank,
+            passage_document_rank=rank,
         )
         for sub in (first_sub, second_sub)
         for rank in range(1, 7)
@@ -3171,43 +3739,20 @@ def test_standard_rag_config_loads_validated_answers_and_resolved_citations(
     assert "citation 0 → doc-original" in rendered
 
 
-def test_rag_validation_uses_authenticated_organizer_run_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A second run-path open must not authorize unreceipted RAG references."""
+def test_rag_validation_uses_the_handoff_citation_domain(tmp_path: Path) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
     rag_config, rag_output, _output_sha256 = _write_rag_run(
         tmp_path, retrieval_output
     )
-    run_path = retrieval_output / "r_output_trec_rag_2026.tsv"
-    sealed_run = run_path.read_bytes()
-    forged_run = sealed_run.replace(b"doc-original", b"doc-forged!!")
-    assert len(forged_run) == len(sealed_run)
-    replacement = tmp_path / "forged-r_output_trec_rag_2026.tsv"
-    replacement.write_bytes(forged_run)
-
     record = json.loads(rag_output.read_text(encoding="utf-8"))
     record["references"] = ["doc-forged!!"]
     rag_output.write_bytes(_json_bytes(record))
-    original_open = Path.open
-    open_count = 0
-
-    def racing_open(candidate: Path, *args: object, **kwargs: object) -> object:
-        nonlocal open_count
-        if candidate.resolve() == run_path.resolve():
-            open_count += 1
-            if open_count == 2:
-                replacement.replace(run_path)
-        return original_open(candidate, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", racing_open)
 
     with pytest.raises(
         ValueError,
-        match="references are duplicated or outside selected TREC rows",
+        match="references are duplicated or outside the selected-evidence citation domain",
     ):
         load_debug_report_data(config_path, rag_config_path=rag_config)
-    assert open_count == 1
 
 
 def test_rag_report_resolves_index_direct_docid_and_empty_citations(
@@ -3290,25 +3835,40 @@ def test_rag_report_provider_comes_from_the_validated_generation_config(
     assert rag.provider == "validated-fixture-provider"
 
 
-@pytest.mark.parametrize("mismatch", ("run_path", "topic_narrative"))
+@pytest.mark.parametrize(
+    "mismatch",
+    ("handoff_path", "topic_narrative", "citation_domain"),
+)
 def test_rag_compatibility_errors_before_output_is_written(
     tmp_path: Path, mismatch: str
 ) -> None:
     config_path, retrieval_output = _write_debug_run(tmp_path)
-    rag_config, _rag_output, _output_sha256 = _write_rag_run(tmp_path, retrieval_output)
-    if mismatch == "run_path":
+    rag_config, rag_output, _output_sha256 = _write_rag_run(tmp_path, retrieval_output)
+    if mismatch == "handoff_path":
         text = rag_config.read_text(encoding="utf-8").replace(
-            "outputs/debug-fixture/r_output_trec_rag_2026.tsv",
+            "outputs/debug-fixture/generation_handoff_manifest.json",
             "outputs/debug-fixture/retrieval_provenance.jsonl",
         )
         rag_config.write_text(text, encoding="utf-8")
-    else:
-        (tmp_path / "rag_queries.tsv").write_text(
-            "rag2026-0\tDifferent official narrative\n", encoding="utf-8"
+    elif mismatch == "topic_narrative":
+        _write_debug_handoff(
+            retrieval_output,
+            (
+                _rag_generation_topic(
+                    "rag2026-0", "Different official narrative"
+                ),
+            ),
         )
+    else:
+        record = json.loads(rag_output.read_text(encoding="utf-8"))
+        record["references"] = ["doc-outside-handoff"]
+        rag_output.write_bytes(_json_bytes(record))
     target = retrieval_output / "must-not-be-written.html"
 
-    with pytest.raises(ValueError, match="RAG.*(?:retrieval|topic|narrative|compatible)"):
+    with pytest.raises(
+        ValueError,
+        match="(?:RAG.*(?:retrieval|topic|narrative|compatible)|references.*outside)",
+    ):
         debug_report.build_debug_report(
             config_path,
             rag_config_path=rag_config,

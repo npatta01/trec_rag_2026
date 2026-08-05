@@ -163,6 +163,7 @@ class _SourceValidationCache:
 
     byte_offsets: tuple[int, ...]
     paragraphs: tuple[SourceSpan, ...]
+    paragraph_index: dict[tuple[int, int], int]
     sentences_by_paragraph: dict[tuple[int, int], tuple[SourceSpan, ...]] = field(
         default_factory=dict
     )
@@ -241,6 +242,146 @@ def _scoring_text_and_boundaries(source: str) -> tuple[str, tuple[int, ...]]:
     if len(boundaries) != len(text) + 1:
         raise AssertionError("scoring boundary construction is inconsistent")
     return text, tuple(boundaries)
+
+
+@dataclass(frozen=True, slots=True)
+class ScoringSpanProjection:
+    """One scoring span and its exact-source UTF-8 projection."""
+
+    scoring_start_char: int
+    scoring_end_char: int
+    source_start_char: int
+    source_end_char: int
+    source_start_byte: int
+    source_end_byte: int
+    source_text: str
+
+    def __post_init__(self) -> None:
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (
+                self.scoring_start_char,
+                self.scoring_end_char,
+                self.source_start_char,
+                self.source_end_char,
+                self.source_start_byte,
+                self.source_end_byte,
+            )
+        ):
+            raise ValueError("scoring projection offsets must be integers")
+        if (
+            self.scoring_start_char < 0
+            or self.scoring_end_char <= self.scoring_start_char
+            or self.source_start_char < 0
+            or self.source_end_char <= self.source_start_char
+            or self.source_start_byte < 0
+            or self.source_end_byte <= self.source_start_byte
+        ):
+            raise ValueError("scoring projection offsets must be non-empty ranges")
+        if not isinstance(self.source_text, str) or not self.source_text:
+            raise ValueError("scoring projection source_text must be non-empty text")
+        if self.source_end_char - self.source_start_char != len(self.source_text):
+            raise ValueError("scoring projection character offsets are inconsistent")
+        if self.source_end_byte - self.source_start_byte != len(self.source_text.encode("utf-8")):
+            raise ValueError("scoring projection byte offsets are inconsistent")
+
+
+@dataclass(frozen=True, slots=True)
+class ScoringView:
+    """Immutable exact-source view used by ``trec_rag_whitespace_v1`` scoring."""
+
+    source: str
+    source_sha256: str = field(init=False)
+    normalization_version: str = field(init=False)
+    scoring_text: str = field(init=False)
+    scoring_text_sha256: str = field(init=False)
+    scoring_boundaries: tuple[int, ...] = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, str):
+            raise TypeError("scoring view source must be text")
+        scoring_text, scoring_boundaries = _scoring_text_and_boundaries(self.source)
+        object.__setattr__(self, "source_sha256", _hash(self.source))
+        object.__setattr__(self, "normalization_version", SCORING_NORMALIZATION_VERSION)
+        object.__setattr__(self, "scoring_text", scoring_text)
+        object.__setattr__(self, "scoring_text_sha256", _hash(scoring_text))
+        object.__setattr__(self, "scoring_boundaries", scoring_boundaries)
+        _validate_scoring_view(self)
+
+    def project(
+        self,
+        scoring_start_char: object,
+        scoring_end_char: object,
+    ) -> ScoringSpanProjection:
+        """Project a non-empty scoring span into exact source coordinates."""
+        _validate_scoring_view(self)
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (scoring_start_char, scoring_end_char)
+        ):
+            raise ValueError("scoring span offsets must be integers")
+        if (
+            scoring_start_char < 0
+            or scoring_end_char <= scoring_start_char
+            or scoring_end_char > len(self.scoring_text)
+        ):
+            raise ValueError("scoring span must be a non-empty in-range span")
+
+        source_start_char = self.scoring_boundaries[scoring_start_char]
+        source_end_char = self.scoring_boundaries[scoring_end_char]
+        if (
+            source_start_char < 0
+            or source_end_char > len(self.source)
+            or source_end_char <= source_start_char
+        ):
+            raise ValueError("scoring view mapping is inconsistent")
+        source_text = self.source[source_start_char:source_end_char]
+        scoring_text = self.scoring_text[scoring_start_char:scoring_end_char]
+        if not source_text or _normalize_scoring_slice(source_text) != scoring_text:
+            raise ValueError("scoring view mapping is inconsistent")
+
+        byte_offsets = _byte_offsets(self.source)
+        source_start_byte = byte_offsets[source_start_char]
+        source_end_byte = byte_offsets[source_end_char]
+        if source_end_byte <= source_start_byte:
+            raise ValueError("scoring view byte mapping is inconsistent")
+        return ScoringSpanProjection(
+            scoring_start_char=scoring_start_char,
+            scoring_end_char=scoring_end_char,
+            source_start_char=source_start_char,
+            source_end_char=source_end_char,
+            source_start_byte=source_start_byte,
+            source_end_byte=source_end_byte,
+            source_text=source_text,
+        )
+
+
+def _validate_scoring_view(view: ScoringView) -> None:
+    if not isinstance(view.source, str):
+        raise ValueError("scoring view source is inconsistent")
+    if view.source_sha256 != _hash(view.source):
+        raise ValueError("scoring view source_sha256 is inconsistent")
+    if view.normalization_version != SCORING_NORMALIZATION_VERSION:
+        raise ValueError("scoring view normalization version is inconsistent")
+    expected_text, expected_boundaries = _scoring_text_and_boundaries(view.source)
+    if view.scoring_text != expected_text:
+        raise ValueError("scoring view scoring_text is inconsistent")
+    if view.scoring_text_sha256 != _hash(view.scoring_text):
+        raise ValueError("scoring view scoring_text_sha256 is inconsistent")
+    if (
+        not isinstance(view.scoring_boundaries, tuple)
+        or view.scoring_boundaries != expected_boundaries
+        or len(view.scoring_boundaries) != len(view.scoring_text) + 1
+    ):
+        raise ValueError("scoring view scoring boundaries are inconsistent")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > len(view.source)
+        for value in view.scoring_boundaries
+    ):
+        raise ValueError("scoring view scoring boundaries are inconsistent")
 
 
 def project_source_span(
@@ -336,9 +477,14 @@ def _source_spans(source: str, byte_offsets: tuple[int, ...]) -> tuple[SourceSpa
 
 def _source_validation_cache(source: str) -> _SourceValidationCache:
     byte_offsets = _byte_offsets(source)
+    paragraphs = _source_spans(source, byte_offsets)
     return _SourceValidationCache(
         byte_offsets=byte_offsets,
-        paragraphs=_source_spans(source, byte_offsets),
+        paragraphs=paragraphs,
+        paragraph_index={
+            (paragraph.start_char, paragraph.end_char): index
+            for index, paragraph in enumerate(paragraphs)
+        },
     )
 
 
@@ -428,11 +574,21 @@ def _dependency_cue(sentence: str) -> bool:
     return False
 
 
-def _candidate_id(request: ExtractiveCandidateRequest, subnarrative: CandidateSubnarrative, kind: str, sentences: tuple[SentenceEvidence, ...]) -> str:
+def _candidate_nugget_id_from_identity(
+    *,
+    topic_id: str,
+    document_id: str,
+    document_sha256: str,
+    subnarrative_id: str,
+    subnarrative_sha256: str,
+    candidate_kind: str,
+    sentences: Sequence[SourceSpan],
+) -> str:
+    """Derive the stable extractive-candidate identity from natural fields."""
     identity = {
-        "candidate_kind": kind,
-        "document_id": request.document_id,
-        "document_sha256": request.document_sha256,
+        "candidate_kind": candidate_kind,
+        "document_id": document_id,
+        "document_sha256": document_sha256,
         "schema_version": SCHEMA_VERSION,
         "sentences": [
             {
@@ -444,11 +600,28 @@ def _candidate_id(request: ExtractiveCandidateRequest, subnarrative: CandidateSu
             }
             for row in sentences
         ],
-        "subnarrative_id": subnarrative.subnarrative_id,
-        "subnarrative_sha256": subnarrative.text_sha256,
-        "topic_id": request.topic_id,
+        "subnarrative_id": subnarrative_id,
+        "subnarrative_sha256": subnarrative_sha256,
+        "topic_id": topic_id,
     }
     return "ecn1_" + _hash(json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _candidate_id(
+    request: ExtractiveCandidateRequest,
+    subnarrative: CandidateSubnarrative,
+    kind: str,
+    sentences: tuple[SentenceEvidence, ...],
+) -> str:
+    return _candidate_nugget_id_from_identity(
+        topic_id=request.topic_id,
+        document_id=request.document_id,
+        document_sha256=request.document_sha256,
+        subnarrative_id=subnarrative.subnarrative_id,
+        subnarrative_sha256=subnarrative.text_sha256,
+        candidate_kind=kind,
+        sentences=sentences,
+    )
 
 
 def _validate_and_translate(request: ExtractiveCandidateRequest) -> tuple[str, tuple[int, ...], tuple[_TranslatedPassage, ...]]:
@@ -582,10 +755,16 @@ def validate_extractive_candidate_source(
         if context is not None:
             validate_span(context, label)
     paragraphs = source_cache.paragraphs
-    try:
-        paragraph_index = paragraphs.index(candidate.matched_paragraph)
-    except ValueError as exc:
-        raise ValueError("candidate paragraph is not an exact source paragraph") from exc
+    paragraph_key = (
+        candidate.matched_paragraph.start_char,
+        candidate.matched_paragraph.end_char,
+    )
+    paragraph_index = source_cache.paragraph_index.get(paragraph_key)
+    if (
+        paragraph_index is None
+        or paragraphs[paragraph_index] != candidate.matched_paragraph
+    ):
+        raise ValueError("candidate paragraph is not an exact source paragraph")
     expected_before = paragraphs[paragraph_index - 1] if paragraph_index else None
     expected_after = (
         paragraphs[paragraph_index + 1]
@@ -594,10 +773,6 @@ def validate_extractive_candidate_source(
     )
     if candidate.context_before != expected_before or candidate.context_after != expected_after:
         raise ValueError("candidate paragraph context is inconsistent")
-    paragraph_key = (
-        candidate.matched_paragraph.start_char,
-        candidate.matched_paragraph.end_char,
-    )
     source_sentences = source_cache.sentences_by_paragraph.get(paragraph_key)
     if source_sentences is None:
         source_sentences = _sentences_in_paragraph(

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import multiprocessing
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,10 +32,24 @@ from trec_rag.facet_retrieval import (
     run_facet_retrieval,
     score_selected_documents,
 )
+from trec_rag.pipeline_config import RetrieverConfig
 from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
+from trec_rag.remote_client import RemoteSearchResponse
 from trec_rag.remote_config import RemotePyseriniConfig
-from trec_rag.retrievers import request_cache_key
+from trec_rag.retrieval_cache import RetrievalCacheIntegrityError
+from trec_rag.retrievers import PyseriniRemoteRetriever, cache_path, request_cache_key
 from trec_rag.topics import Topic
+from trec_rag.topic_passage_search import (
+    FocusedQuery,
+    PassageSearchResult,
+    SourceDocument,
+    SourcePassage,
+)
+
+
+@pytest.fixture(autouse=True)
+def _explicit_test_corpus_epoch(monkeypatch):
+    monkeypatch.setenv("PYSERINI_CORPUS_EPOCH", "test-epoch")
 
 
 def _topic(*, title: str = "ignored title") -> Topic:
@@ -75,6 +94,219 @@ def _subnarratives(topic: Topic) -> tuple[Subnarrative, ...]:
             ("wildfire smoke public responses clean air shelter",),
         ),
     )
+
+
+def _single_flight_worker(
+    worker_index: int,
+    cache_dir: str,
+    ready: multiprocessing.synchronize.Event,
+    go: multiprocessing.synchronize.Event,
+    entered_remote: multiprocessing.synchronize.Event,
+    release_remote: multiprocessing.synchronize.Event,
+    remote_calls: multiprocessing.sharedctypes.Synchronized,
+    results: multiprocessing.queues.Queue,
+) -> None:
+    class Client:
+        config = RemotePyseriniConfig(
+            index_url="https://pyserini.test/search",
+            api_token=None,
+            hits=10,
+            queries=(),
+        )
+
+        def search_raw(self, query_text: str, *, raw_sink=None) -> RemoteSearchResponse:
+            with remote_calls.get_lock():
+                remote_calls.value += 1
+            entered_remote.set()
+            if not release_remote.wait(10):
+                raise TimeoutError("test remote gate was not released")
+            raw = json.dumps(
+                {
+                    "api": "v1",
+                    "index": "climbmix-400b",
+                    "query": {"text": query_text},
+                    "candidates": [
+                        {
+                            "doc": "single-flight body",
+                            "docid": "doc-single-flight",
+                            "rank": 1,
+                            "score": 3.0,
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+            if raw_sink is not None:
+                raw_sink(raw)
+            return RemoteSearchResponse(
+                raw=raw,
+                payload=json.loads(raw),
+                sha256=hashlib.sha256(raw).hexdigest(),
+            )
+
+    ready.set()
+    if not go.wait(10):
+        results.put({"error": "test start gate was not released"})
+        return
+    if worker_index == 1 and not entered_remote.wait(10):
+        results.put({"error": "first worker did not enter remote call"})
+        return
+    query = QueryVariant("31", "original", "single flight query", "original_topic")
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+    )
+    try:
+        retriever = PyseriniRemoteRetriever(config, cache_dir=Path(cache_dir), client=Client())
+        candidates = retriever.retrieve(query)
+        results.put(
+            {
+                "docids": [candidate.docid for candidate in candidates],
+                "summary": retriever.cache_summary(),
+            }
+        )
+    except Exception as exc:  # pragma: no cover - surfaced by the parent assertion
+        results.put({"error": f"{type(exc).__name__}: {exc}"})
+
+
+def test_shared_pyserini_cache_single_flights_identical_concurrent_requests(tmp_path) -> None:
+    context = multiprocessing.get_context("spawn")
+    start_events = [context.Event(), context.Event()]
+    go = context.Event()
+    entered_remote = context.Event()
+    release_remote = context.Event()
+    remote_calls = context.Value("i", 0)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_single_flight_worker,
+            args=(
+                index,
+                str(tmp_path),
+                start_events[index],
+                go,
+                entered_remote,
+                release_remote,
+                remote_calls,
+                results,
+            ),
+        )
+        for index in range(2)
+    ]
+
+    for process in processes:
+        process.start()
+    try:
+        for event in start_events:
+            assert event.wait(10)
+        go.set()
+        assert entered_remote.wait(10)
+        deadline = time.monotonic() + 1.0
+        while remote_calls.value < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert remote_calls.value == 1
+    finally:
+        release_remote.set()
+        for process in processes:
+            process.join(15)
+            if process.is_alive():
+                process.terminate()
+                process.join()
+
+    assert all(process.exitcode == 0 for process in processes)
+    outcomes = sorted(
+        (results.get(timeout=5) for _ in processes),
+        key=lambda outcome: outcome.get("summary", {}).get("hits", -1),
+    )
+    assert [outcome["docids"] for outcome in outcomes] == [
+        ["doc-single-flight"],
+        ["doc-single-flight"],
+    ]
+    assert sorted(outcome["summary"]["hits"] for outcome in outcomes) == [0, 1]
+    assert sorted(outcome["summary"]["writes"] for outcome in outcomes) == [0, 1]
+    assert len(list((tmp_path / "v2" / "attempts").rglob("manifest.json"))) == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "message"),
+    (
+        ("metadata-only", "missing response artifact"),
+        ("response-only", "missing provenance sidecar"),
+        ("stale-temporary", "incomplete cache publication state"),
+        ("conflicting-pair", "cache response hash mismatch"),
+    ),
+)
+def test_shared_pyserini_cache_fails_closed_on_partial_or_conflicting_state(
+    tmp_path: Path,
+    state: str,
+    message: str,
+) -> None:
+    query = QueryVariant("31", "original", "partial cache query", "original_topic")
+    config = RetrieverConfig(
+        name="climbmix_bm25",
+        type="pyserini_remote",
+        query_variants=("original",),
+        hits=10,
+        index="climbmix-400b",
+    )
+
+    class FailingClient:
+        config = RemotePyseriniConfig(
+            index_url="https://pyserini.test/search",
+            api_token=None,
+            hits=10,
+            queries=(),
+        )
+
+        calls = 0
+
+        def search(self, _query: str) -> dict[str, object]:
+            self.calls += 1
+            raise AssertionError("partial or conflicting cache must not call remote search")
+
+    client = FailingClient()
+    retriever = PyseriniRemoteRetriever(config, cache_dir=tmp_path, client=client)
+    cache = retriever.retrieval_cache
+    identity = retriever._transport_identity(query)
+    entry = cache._entry_path(identity.request_key)
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    if state == "metadata-only":
+        entry.mkdir()
+        (entry / "transport-manifest.json").write_text("{}", encoding="utf-8")
+    elif state == "response-only":
+        entry.mkdir()
+        (entry / "raw.body.gz").write_bytes(
+            __import__("gzip").compress(
+                b'{"api":"v1","index":"climbmix-400b","candidates":[]}', mtime=0
+            )
+        )
+    elif state == "stale-temporary":
+        entry.with_name(f".{entry.name}.crashed.tmp").mkdir()
+    else:
+        entry.mkdir()
+        (entry / "raw.body.gz").write_bytes(
+            __import__("gzip").compress(
+                b'{"api":"v1","index":"climbmix-400b","candidates":[]}', mtime=0
+            )
+        )
+        (entry / "transport-manifest.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(RetrievalCacheIntegrityError, match="partial|transport|incomplete"):
+        retriever.retrieve(query)
+
+    assert client.calls == 0
+    assert retriever.cache_summary() == {
+        "enabled": True,
+        "retrieval_cache_schema": "organizer-retrieval-cache-v2",
+        "requests": 0,
+        "hit_artifacts": [],
+        "hits": 0,
+        "misses": 0,
+        "writes": 0,
+        "bypasses": 0,
+    }
 
 
 def _score(
@@ -267,6 +499,104 @@ def test_retrieval_lanes_reject_noncanonical_direct_subnarratives(
 
     with pytest.raises(ValueError, match="canonical"):
         build_retrieval_lanes(topic, queries, (subnarrative,))
+
+
+def _shared_depth_1000_result(topic: Topic) -> PassageSearchResult:
+    documents: list[SourceDocument] = []
+    passages: list[SourcePassage] = []
+    chunker_identity = {"backend": "test-chunker", "implementation": "v1"}
+    for source_rank in range(1, RETRIEVAL_DEPTH + 1):
+        docid = f"doc-{source_rank:04d}"
+        text = f"source text for {docid}"
+        text_sha256 = hashlib.sha256(text.encode()).hexdigest()
+        passage_id = f"p-{docid}-0000"
+        raw_logit = float(RETRIEVAL_DEPTH - source_rank)
+        if source_rank == RETRIEVAL_DEPTH:
+            raw_logit = float(RETRIEVAL_DEPTH + 1)
+        documents.append(
+            SourceDocument(
+                docid,
+                text_sha256,
+                source_rank,
+                float(RETRIEVAL_DEPTH - source_rank),
+                passage_id,
+                raw_logit,
+            )
+        )
+        if source_rank <= RERANK_DEPTH - 1 or source_rank == RETRIEVAL_DEPTH:
+            passages.append(
+                SourcePassage(
+                    passage_id,
+                    docid,
+                    text_sha256,
+                    source_rank,
+                    float(RETRIEVAL_DEPTH - source_rank),
+                    0,
+                    len(text),
+                    0,
+                    len(text.encode()),
+                    text_sha256,
+                    text,
+                    raw_logit,
+                    len(passages) + 1,
+                    f"cache-{docid}",
+                    text_sha256,
+                    chunker_identity,
+                )
+            )
+    return PassageSearchResult(
+        FocusedQuery("original", topic.narrative, "original"),
+        "complete",
+        None,
+        RETRIEVAL_DEPTH,
+        RETRIEVAL_DEPTH,
+        RETRIEVAL_DEPTH,
+        RETRIEVAL_DEPTH,
+        tuple(documents),
+        tuple(passages),
+        1,
+        False,
+    )
+
+
+def test_fixed_path_uses_shared_passage_search_and_never_old_document_scorer() -> None:
+    topic = _topic()
+    shared_search = _RecordingTopicPassageSearch(_shared_depth_1000_result(topic))
+
+    class PoisonLaneScorer:
+        def score_lane(self, *_args, **_kwargs):
+            raise AssertionError("the v2 fixed path must not call the old lane scorer")
+
+    result = run_facet_retrieval(
+        topic,
+        _queries(topic),
+        passage_search=shared_search,
+        subnarratives=_subnarratives(topic),
+        legacy_scorer=PoisonLaneScorer(),
+    )
+
+    assert len(shared_search.queries) == len(result.lanes)
+    assert len(result.lanes[0].passage_result.passages) == RERANK_DEPTH
+    assert "p-doc-1000-0000" in {
+        passage.passage_id for passage in result.lanes[0].passage_result.passages
+    }
+
+
+class _RecordingTopicPassageSearch:
+    def __init__(self, result: PassageSearchResult) -> None:
+        self.result = result
+        self.queries: list[FocusedQuery] = []
+        self._texts = {
+            document.content_sha256: f"source text for {document.docid}"
+            for document in result.documents
+        }
+
+    def search(self, query: FocusedQuery) -> PassageSearchResult:
+        self.queries.append(query)
+        return replace(self.result, query=query)
+
+    def read_text(self, content_sha256: str) -> str:
+        return self._texts[content_sha256]
 
 
 def test_round_robin_advances_duplicates_and_preserves_each_lane_score() -> None:
@@ -943,7 +1273,9 @@ def test_real_adapters_pin_retrieval_and_content_addressed_score_identity(tmp_pa
             (),
         )
 
-    retriever = build_pyserini_retriever(tmp_path / "retrieval", client=Client())
+    retriever = build_pyserini_retriever(
+        tmp_path / "retrieval", client=Client(), corpus_epoch="test-epoch"
+    )
     topic = _topic()
     original, health, _response = build_retrieval_lanes(
         topic,
@@ -979,6 +1311,7 @@ def test_real_adapters_pin_retrieval_and_content_addressed_score_identity(tmp_pa
         "window_max_length": WINDOW_MAX_LENGTH,
         "chunk_max_characters": 3500,
         "chunk_overlap_characters": 350,
+        "input_policy": "trec_rag_whitespace_v1",
     }
     assert scorer.document_cache.cache_key(query_text="q1", text="doc") != (
         scorer.document_cache.cache_key(query_text="q2", text="doc")
@@ -998,6 +1331,7 @@ def test_configured_retriever_binds_index_and_candidate_depth(tmp_path: Path) ->
         tmp_path,
         index="climbmix-test",
         hits=500,
+        corpus_epoch="test-epoch",
         client=Client(),
     )
 
@@ -1125,3 +1459,223 @@ def test_mixedbread_adapter_records_formula_components_and_reuses_cache(tmp_path
         model_loader=forbidden_loader,
     )
     assert warm.score_lane(topic, query, [candidate]) == rows
+
+
+def _ledger_topic(topic_id: str) -> Topic:
+    return Topic(topic_id, "", f"Question for ledger topic {topic_id}")
+
+
+def _ledger_lane(topic: Topic):
+    query = QueryVariant(topic.id, "original", topic.narrative, "original_topic")
+    return build_retrieval_lanes(topic, (query,), ())[0]
+
+
+def _ledger_candidate(topic: Topic) -> RetrievedCandidate:
+    lane = _ledger_lane(topic)
+    return RetrievedCandidate(
+        topic.id,
+        lane.scoring_query.variant_name,
+        "climbmix_bm25",
+        lane.scoring_query.query_text,
+        f"doc-{topic.id}",
+        1,
+        1.0,
+        f"Document body for ledger topic {topic.id}.",
+    )
+
+
+def _ledger_model_loader(*_args, **_kwargs):
+    return _ledger_model_loader_with_score(1.0)(*_args, **_kwargs)
+
+
+def _ledger_model_loader_with_score(score: float):
+    def loader(*_args, **_kwargs):
+        class Parameter:
+            dtype = "torch.bfloat16"
+
+        class Model:
+            def parameters(self):
+                return [Parameter()]
+
+            def predict(self, pairs, **_kwargs):
+                return [score] * len(pairs)
+
+        return Model()
+
+    return loader
+
+
+def _gated_ledger_model_loader(score: float, barrier: threading.Barrier):
+    def loader(*_args, max_length, **_kwargs):
+        class Parameter:
+            dtype = "torch.bfloat16"
+
+        class Model:
+            def parameters(self):
+                return [Parameter()]
+
+            def predict(self, pairs, **_kwargs):
+                if max_length != WINDOW_MAX_LENGTH:
+                    barrier.wait(timeout=10)
+                return [score] * len(pairs)
+
+        return Model()
+
+    return loader
+
+
+def test_topics_publish_to_disjoint_ledgers_when_scored_concurrently(tmp_path: Path) -> None:
+    root = tmp_path / "scorer-ledger"
+    topics = (_ledger_topic("topic-a"), _ledger_topic("topic-b"))
+    barrier = threading.Barrier(len(topics))
+    outcomes: list[
+        tuple[Topic, MixedbreadCoverageScorer, tuple[LaneDocumentScore, ...], Path, Path]
+    ] = []
+    errors: list[BaseException] = []
+    outcome_lock = threading.Lock()
+
+    def run(topic: Topic) -> None:
+        scorer = MixedbreadCoverageScorer(
+            artifact_dir=root,
+            score_cache_root=tmp_path / f"score-cache-{topic.id}",
+            device="cpu",
+            model_loader=_ledger_model_loader,
+        )
+        try:
+            barrier.wait(timeout=10)
+            rows = scorer.score_lane(topic, _ledger_lane(topic), [_ledger_candidate(topic)])
+            with outcome_lock:
+                outcomes.append(
+                    (topic, scorer, rows, scorer.document_score_path, scorer.window_score_path)
+                )
+        except BaseException as exc:  # pragma: no cover - surfaced by assertions
+            with outcome_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(topic,)) for topic in topics]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(20)
+
+    assert not errors
+    assert len(outcomes) == len(topics)
+    assert not (root / "document_scores.jsonl").exists()
+    assert not (root / "window_scores.jsonl").exists()
+    for topic, scorer, rows, document_score_path, window_score_path in outcomes:
+        assert len(rows) == 1
+        assert document_score_path == root / topic.id / "document_scores.jsonl"
+        assert window_score_path == root / topic.id / "window_scores.jsonl"
+        for path in (document_score_path, window_score_path):
+            payload = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            assert payload
+            assert {row["topic_id"] for row in payload} == {topic.id}
+
+
+@pytest.mark.parametrize("artifact_name", ("document_scores.jsonl", "window_scores.jsonl"))
+def test_partial_score_ledger_is_rejected(tmp_path: Path, artifact_name: str) -> None:
+    topic = _ledger_topic("partial-topic")
+    root = tmp_path / "scorer-ledger" / topic.id
+    root.mkdir(parents=True)
+    (root / artifact_name).write_text('{"topic_id":', encoding="utf-8")
+    scorer = MixedbreadCoverageScorer(
+        artifact_dir=tmp_path / "scorer-ledger",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        model_loader=lambda *_args, **_kwargs: pytest.fail("partial ledger must fail before model loading"),
+    )
+
+    with pytest.raises(ValueError, match="invalid JSONL row"):
+        scorer.score_lane(topic, _ledger_lane(topic), [_ledger_candidate(topic)])
+
+
+def test_stale_temporary_score_ledger_is_rejected(tmp_path: Path) -> None:
+    topic = _ledger_topic("stale-topic")
+    root = tmp_path / "scorer-ledger" / topic.id
+    root.mkdir(parents=True)
+    (root / ".document_scores.jsonl.crashed.tmp").write_text('{"partial":', encoding="utf-8")
+    scorer = MixedbreadCoverageScorer(
+        artifact_dir=tmp_path / "scorer-ledger",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        model_loader=lambda *_args, **_kwargs: pytest.fail("stale ledger must fail before model loading"),
+    )
+
+    with pytest.raises(ValueError, match="temporary|incomplete"):
+        scorer.score_lane(topic, _ledger_lane(topic), [_ledger_candidate(topic)])
+
+
+def test_identical_score_ledger_reruns_converge_to_identical_bytes(tmp_path: Path) -> None:
+    topic = _ledger_topic("rerun-topic")
+    lane = _ledger_lane(topic)
+    candidate = _ledger_candidate(topic)
+    first = MixedbreadCoverageScorer(
+        artifact_dir=tmp_path / "scorer-ledger",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        model_loader=_ledger_model_loader,
+    )
+    first.score_lane(topic, lane, [candidate])
+    expected_rows = first.score_lane(topic, lane, [candidate])
+    first_bytes = {
+        path.name: path.read_bytes()
+        for path in (first.document_score_path, first.window_score_path)
+    }
+
+    second = MixedbreadCoverageScorer(
+        artifact_dir=tmp_path / "scorer-ledger",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        model_loader=lambda *_args, **_kwargs: pytest.fail("identical rerun should use cache"),
+    )
+    assert second.score_lane(topic, lane, [candidate]) == expected_rows
+    assert {
+        path.name: path.read_bytes()
+        for path in (second.document_score_path, second.window_score_path)
+    } == first_bytes
+
+
+def test_contradictory_concurrent_ledger_publication_fails_closed(tmp_path: Path) -> None:
+    topic = _ledger_topic("conflict-topic")
+    root = tmp_path / "scorer-ledger"
+    barrier = threading.Barrier(2)
+    scorers = (
+        MixedbreadCoverageScorer(
+            artifact_dir=root,
+            score_cache_root=tmp_path / "score-cache-a",
+            device="cpu",
+            model_loader=_gated_ledger_model_loader(1.0, barrier),
+        ),
+        MixedbreadCoverageScorer(
+            artifact_dir=root,
+            score_cache_root=tmp_path / "score-cache-b",
+            device="cpu",
+            model_loader=_gated_ledger_model_loader(2.0, barrier),
+        ),
+    )
+    outcomes: list[tuple[MixedbreadCoverageScorer, BaseException | None]] = []
+    lock = threading.Lock()
+
+    def publish(scorer: MixedbreadCoverageScorer) -> None:
+        try:
+            scorer.score_lane(topic, _ledger_lane(topic), [_ledger_candidate(topic)])
+        except BaseException as exc:  # pragma: no cover - collected below
+            with lock:
+                outcomes.append((scorer, exc))
+        else:
+            with lock:
+                outcomes.append((scorer, None))
+
+    threads = [threading.Thread(target=publish, args=(scorer,)) for scorer in scorers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(20)
+
+    assert len(outcomes) == 2
+    assert sum(error is None for _scorer, error in outcomes) == 1
+    assert sum(isinstance(error, ValueError) for _scorer, error in outcomes) == 1
+    path = root / topic.id / "document_scores.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["score"] in {1.0, 2.0}

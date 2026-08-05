@@ -12,6 +12,7 @@ from trec_rag.canonical_nuggets import (
     OpenRouterCanonicalNuggetBackend,
     build_canonical_nugget_request,
     canonicalize_subnarrative,
+    load_validated_selection_artifacts,
     run_canonical_stage,
 )
 from trec_rag.nuggetizer_adapter import NuggetizerCanonicalNuggetBackend
@@ -29,6 +30,7 @@ from trec_rag.facet_extraction import (
     FacetResponse,
     OPENROUTER_DEEPSEEK_MODEL,
 )
+from trec_rag.topic_records import TOPIC_RECORDS_SCHEMA_VERSION
 
 
 def _canonical(value: object) -> bytes:
@@ -101,13 +103,14 @@ def _write_inputs(tmp_path: Path, *, count: int = 1) -> tuple[Path, Path]:
                 "selection_schema_version": "subnarrative_selection_v1",
                 "context_schema_version": "subnarrative_selection_context_v1",
                 "candidate_schema_version": "extractive_candidate_nugget_v1",
-                "candidate_manifest_schema_version": "extractive_candidate_manifest_v1",
-                "candidates_file": "candidates.jsonl",
-                "candidate_manifest_file": "candidate-manifest.json",
+                "records_schema_version": TOPIC_RECORDS_SCHEMA_VERSION,
+                "records_stage": "canonical-candidates-v1",
+                "records_file": "records.sqlite3",
+                "records_manifest_file": "records-manifest.json",
                 "contexts_file": "selection-contexts.jsonl",
                 "selection_file": selections_path.name,
-                "candidates_sha256": "a" * 64,
-                "candidate_manifest_sha256": "b" * 64,
+                "records_database_sha256": "a" * 64,
+                "candidate_semantic_sha256": "b" * 64,
                 "contexts_sha256": "c" * 64,
                 "selections_sha256": sha256(selections_bytes).hexdigest(),
                 "output_sha256": sha256(selections_bytes).hexdigest(),
@@ -134,6 +137,7 @@ def _write_inputs(tmp_path: Path, *, count: int = 1) -> tuple[Path, Path]:
                     "inference_dtype": "float32",
                     "score_kind": "extractive_sentence_v1",
                     "sentence_max_length": 512,
+                    "input_policy": "trec_rag_whitespace_v1",
                 },
                 "retrieval_network_calls": 0,
                 "hosted_llm_calls": 0,
@@ -194,7 +198,7 @@ def test_stage_keeps_claims_evidence_bound_and_binds_configured_limits(
     selections, selection_manifest = _write_inputs(tmp_path)
     backend = _Backend(
         b'{"claims":[{"claim":"The center opened in 2020.",'
-        b'"evidence_aliases":["e001"]}]}'
+        b'"evidence_aliases":["e001"],"importance":"vital"}]}'
     )
 
     artifacts = _stage(
@@ -220,6 +224,7 @@ def test_stage_keeps_claims_evidence_bound_and_binds_configured_limits(
     assert prompt_limits["max_supporting_documents_per_claim"] == 1
     result = json.loads(artifacts.nuggets_path.read_bytes())
     assert result["nuggets"][0]["claim_text"] == "The center opened in 2020."
+    assert result["nuggets"][0]["importance"] == "vital"
     assert result["nuggets"][0]["evidence"] == [
         {
             "candidate_nugget_id": "n1-a",
@@ -249,10 +254,10 @@ def test_stage_keeps_claims_evidence_bound_and_binds_configured_limits(
         / f"{request.request_sha256}.json"
     )
     assert json.loads(raw_cache.read_bytes())["schema_version"] == (
-        "canonical_nugget_raw_cache_v1"
+        "canonical_nugget_raw_cache_v2"
     )
     assert json.loads(validated_cache.read_bytes())["schema_version"] == (
-        "canonical_nugget_validated_cache_v2"
+        "canonical_nugget_validated_cache_v3"
     )
 
 
@@ -334,7 +339,8 @@ def test_validated_cache_is_revalidated_against_the_current_request(
     """Catches treating a hash-consistent but semantically invalid cache as trusted."""
     selections, selection_manifest = _write_inputs(tmp_path)
     safe = _Backend(
-        b'{"claims":[{"claim":"Safe cached claim.","evidence_aliases":["e001"]}]}'
+        b'{"claims":[{"claim":"Safe cached claim.","evidence_aliases":["e001"],'
+        b'"importance":"vital"}]}'
     )
     artifacts = _stage(
         tmp_path,
@@ -346,7 +352,8 @@ def test_validated_cache_is_revalidated_against_the_current_request(
     validated = next((tmp_path / "response-cache" / "validated").glob("*.json"))
     cached = json.loads(validated.read_bytes())
     cached["content"] = (
-        '{"claims":[{"claim":"Stale.","evidence_aliases":["e999"]}]}'
+        '{"claims":[{"claim":"Stale.","evidence_aliases":["e999"],'
+        '"importance":"vital"}]}'
     )
     cached["content_sha256"] = sha256(cached["content"].encode()).hexdigest()
     validated.write_bytes(_canonical(cached) + b"\n")
@@ -366,6 +373,59 @@ def test_validated_cache_is_revalidated_against_the_current_request(
     rewritten = json.loads(validated.read_bytes())
     assert "e999" not in rewritten["content"]
     assert json.loads(recovered.manifest_path.read_bytes())["hosted_llm_calls"] == 0
+
+
+def test_composite_backend_cache_retains_creator_and_scorer_provenance(
+    tmp_path: Path,
+) -> None:
+    """A Nuggetizer composite reply must not discard the scorer response on cache."""
+    selections, selection_manifest = _write_inputs(tmp_path)
+    content = (
+        b'{"claims":[{"claim":"The center opened in 2020.",'
+        b'"evidence_aliases":["e001"],"importance":"vital"}]}'
+    )
+
+    class _CompositeBackend:
+        def complete(self, _request: object) -> BackendReply:
+            creator_metadata = _metadata()
+            scorer_metadata = {**_metadata(), "provider": "scorer-provider"}
+            return BackendReply(
+                content=content,
+                response_body=b"creator-response",
+                status=200,
+                metadata=creator_metadata,
+                response_bodies=(b"creator-response", b"scorer-response"),
+                metadata_entries=(creator_metadata, scorer_metadata),
+            )
+
+    artifacts = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=_CompositeBackend,
+    )
+    raw_path = next((tmp_path / "response-cache" / "raw").glob("*.json"))
+    raw = json.loads(raw_path.read_bytes())
+    assert len(raw["response_bodies_base64"]) == 2
+    assert len(raw["response_body_sha256s"]) == 2
+    assert len(raw["metadata_entries"]) == 2
+
+    validated_path = next((tmp_path / "response-cache" / "validated").glob("*.json"))
+    artifacts.nuggets_path.unlink()
+    artifacts.manifest_path.unlink()
+    validated_path.unlink()
+    resumed = _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: (_ for _ in ()).throw(
+            AssertionError("raw provenance cache should prevent another backend call")
+        ),
+    )
+    validated = json.loads(next((tmp_path / "response-cache" / "validated").glob("*.json")).read_bytes())
+    assert len(validated["response_body_sha256s"]) == 2
+    assert len(validated["metadata_entries"]) == 2
+    assert json.loads(resumed.manifest_path.read_bytes())["hosted_llm_calls"] == 0
 
 
 def test_selection_manifest_tamper_is_rejected_before_backend_construction(
@@ -389,7 +449,34 @@ def test_selection_manifest_tamper_is_rejected_before_backend_construction(
     assert constructed == []
 
 
-@pytest.mark.parametrize("mutation", ("id", "kind", "claim"))
+def test_selection_manifest_rejects_legacy_candidate_file_shape(
+    tmp_path: Path,
+) -> None:
+    selections, selection_manifest = _write_inputs(tmp_path)
+    manifest = json.loads(selection_manifest.read_bytes())
+    for key in (
+        "records_schema_version",
+        "records_stage",
+        "records_file",
+        "records_manifest_file",
+        "records_database_sha256",
+        "candidate_semantic_sha256",
+    ):
+        manifest.pop(key)
+    manifest.update({
+        "candidate_manifest_schema_version": "extractive_candidate_manifest_v1",
+        "candidates_file": "candidates.jsonl",
+        "candidate_manifest_file": "candidate-manifest.json",
+        "candidates_sha256": "a" * 64,
+        "candidate_manifest_sha256": "b" * 64,
+    })
+    selection_manifest.write_bytes(_canonical(manifest) + b"\n")
+
+    with pytest.raises(ValueError, match="selection manifest"):
+        load_validated_selection_artifacts(selections, selection_manifest)
+
+
+@pytest.mark.parametrize("mutation", ("id", "kind", "claim", "importance"))
 def test_warm_resume_rejects_canonical_result_semantic_tamper_before_backend(
     tmp_path: Path,
     mutation: str,
@@ -399,9 +486,9 @@ def test_warm_resume_rejects_canonical_result_semantic_tamper_before_backend(
         tmp_path,
         selections,
         selection_manifest,
-        backend_factory=lambda: _Backend(
-            b'{"claims":[{"claim":"The center opened in 2020.",'
-            b'"evidence_aliases":["e001"]}]}'
+            backend_factory=lambda: _Backend(
+                b'{"claims":[{"claim":"The center opened in 2020.",'
+                b'"evidence_aliases":["e001"],"importance":"vital"}]}'
         ),
     )
     row = json.loads(artifacts.nuggets_path.read_bytes())
@@ -410,6 +497,8 @@ def test_warm_resume_rejects_canonical_result_semantic_tamper_before_backend(
         nugget["canonical_nugget_id"] = "canonical-forged"
     elif mutation == "kind":
         nugget["nugget_kind"] = "extractive_fallback"
+    elif mutation == "importance":
+        nugget["importance"] = "invalid"
     else:
         nugget["claim_text"] = "Altered but re-signed claim."
     output_bytes = _canonical(row) + b"\n"
@@ -502,6 +591,19 @@ def test_empty_request_never_calls_backend() -> None:
     assert result.backend_attempts == 0
 
 
+def test_scorer_mode_is_part_of_the_canonical_request_identity() -> None:
+    """A diagnostic all-okay run must not share hosted-scoring cache entries."""
+    hosted = build_canonical_nugget_request(_selection(), 1, scorer_mode="hosted")
+    local = build_canonical_nugget_request(
+        _selection(), 1, scorer_mode="local_all_okay"
+    )
+
+    assert hosted.scorer_mode == "hosted"
+    assert local.scorer_mode == "local_all_okay"
+    assert hosted.request_sha256 != local.request_sha256
+    assert hosted.request_body != local.request_body
+
+
 def _openrouter_envelope(content: str) -> bytes:
     return _canonical(
         {
@@ -522,7 +624,7 @@ def _openrouter_envelope(content: str) -> bytes:
     )
 
 
-def test_nuggetizer_adapter_sends_one_grounded_creator_request(
+def test_nuggetizer_adapter_sends_grounded_creator_and_scorer_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Catches loss or reordering of sealed evidence at the package boundary."""
@@ -549,6 +651,8 @@ def test_nuggetizer_adapter_sends_one_grounded_creator_request(
                 _openrouter_envelope(
                     '{"claims":[{"claim":"The center opened in 2020.",'
                     '"evidence_aliases":["e001"]}]}'
+                    if len(self.requests) == 1
+                    else '{"labels":["vital"]}'
                 ),
             )
 
@@ -569,11 +673,56 @@ def test_nuggetizer_adapter_sends_one_grounded_creator_request(
         "e001: Exact evidence 1 opened the center in 2020.",
         "e002: Exact evidence 1 recorded ten shelters.",
     ]
-    assert len(transport.requests) == 1
+    assert len(transport.requests) == 2
     assert transport.requests[0].body == request.request_body
     assert result.state == "complete"
     assert result.nuggets[0].claim_text == "The center opened in 2020."
+    assert result.nuggets[0].importance == "vital"
     assert result.nuggets[0].evidence[0].candidate_nugget_id == "n1-a"
+
+
+def test_nuggetizer_adapter_returns_real_vital_and_okay_labels() -> None:
+    """The canonical result must retain Nuggetizer's importance classification."""
+    request = build_canonical_nugget_request(_selection(), 1, max_canonical_claims=2)
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def send(self, sent: object) -> FacetResponse:
+            self.requests.append(sent)
+            if len(self.requests) == 1:
+                content = (
+                    '{"claims":['
+                    '{"claim":"The center opened in 2020.",'
+                    '"evidence_aliases":["e001"]},'
+                    '{"claim":"Ten shelters were recorded.",'
+                    '"evidence_aliases":["e002"]}'
+                    ']}'
+                )
+            else:
+                content = '{"labels":["vital","okay"]}'
+            return FacetResponse(200, _openrouter_envelope(content))
+
+    transport = _Transport()
+    result = canonicalize_subnarrative(
+        request,
+        NuggetizerCanonicalNuggetBackend(
+            environ={"OPENROUTER_API_KEY": "test-key"}, transport=transport
+        ),
+    )
+
+    assert len(transport.requests) == 2
+    scorer_payload = json.loads(transport.requests[1].body)
+    assert scorer_payload["messages"][-1]["content"]
+    assert scorer_payload["response_format"]["json_schema"]["schema"][
+        "properties"
+    ]["labels"]["items"]["enum"] == ["vital", "okay"]
+    assert [nugget.importance for nugget in result.nuggets] == ["vital", "okay"]
+    assert [nugget.claim_text for nugget in result.nuggets] == [
+        "The center opened in 2020.",
+        "Ten shelters were recorded.",
+    ]
 
 
 def test_nuggetizer_adapter_translates_the_package_result(
@@ -677,7 +826,7 @@ def test_nuggetizer_adapter_fails_closed_without_a_package_retry(
             "success",
             '{"claims":[{"claim":"The center opened in 2020.",'
             '"evidence_aliases":["e001"]}]}',
-            1,
+            2,
         ),
     ),
 )

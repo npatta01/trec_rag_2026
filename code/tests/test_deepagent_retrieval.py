@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import asyncio
 import hashlib
+import inspect
 import json
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
@@ -31,7 +32,6 @@ from openinference.instrumentation.langchain import LangChainInstrumentor
 from pydantic import Field
 
 import trec_rag.deepagent_tracing as deepagent_tracing
-from trec_rag.deepagent_passages import PassageSelectionConfig
 from trec_rag.deepagent_budget import (
     ResearchBudget,
     ResearchBudgetConfig,
@@ -44,6 +44,7 @@ from trec_rag.deepagent_research import (
     bind_research_task,
 )
 from trec_rag.deepagent_evidence import SnippetHandle
+from trec_rag.document_store import DocumentStore
 from trec_rag.deepagent_retrieval import (
     AgentRetrievalError,
     AgentSearch,
@@ -63,7 +64,15 @@ from trec_rag.deepagent_tracing import (
     REDACTED_CONTENT,
     create_retrieval_tracing,
 )
-from trec_rag.pipeline_models import RetrievedCandidate, jsonable
+from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate, jsonable
+from trec_rag.topic_passage_search import (
+    FocusedQuery,
+    OrganizerRequestFailed,
+    PassageSearchResult,
+    SourceDocument,
+    SourcePassage,
+)
+from trec_rag.topic_records import TopicRecordsBuilder
 
 
 def _candidate(
@@ -260,6 +269,22 @@ def _authorized_snippet(
         )
 
 
+def _authorized_passage(
+    toolset: deepagent_retrieval.AgentToolset,
+    query: str,
+    *,
+    motivating_ids: list[str] | None = None,
+) -> str:
+    _seed_test_need(toolset)
+    _, envelope = _test_research_context(toolset)
+    with bind_research_task(envelope):
+        return toolset.search_passages(
+            query,
+            motivating_ids or ["test-need"],
+            "test need remains open",
+        )
+
+
 class FakeTracing:
     def __init__(self) -> None:
         self.flushes = 0
@@ -450,6 +475,180 @@ def isolated_real_tracing() -> None:
     reset()
 
 
+class _RetrieverBackedPassageSearch:
+    """Test-only bridge from historical fakes to the shared passage contract."""
+
+    def __init__(self, retriever: FakeRetriever, topic_id: str) -> None:
+        self._retriever = retriever
+        self.topic_id = topic_id
+
+    def search(self, query: FocusedQuery) -> PassageSearchResult:
+        request = QueryVariant(
+            self.topic_id,
+            query.query_id,
+            query.text,
+            "topic_passage_search",
+        )
+        try:
+            candidates = tuple(self._retriever.retrieve(request))
+        except RuntimeError as exc:
+            if str(exc) in {
+                "controlled retrieval failure",
+                "explicit continuation required",
+            }:
+                raise OrganizerRequestFailed("test retriever unavailable") from exc
+            raise
+
+        by_docid: dict[str, RetrievedCandidate] = {}
+        for candidate in candidates:
+            previous = by_docid.get(candidate.docid)
+            if previous is not None and previous.text != candidate.text:
+                raise ValueError(
+                    f"conflicting text for document_id {candidate.docid}"
+                )
+            if previous is None or candidate.rank < previous.rank:
+                by_docid[candidate.docid] = candidate
+        retained = tuple(sorted(by_docid.values(), key=lambda row: (row.rank, row.docid)))
+        if not retained:
+            return PassageSearchResult(
+                query,
+                "incomplete",
+                "no_evidence",
+                1000,
+                0,
+                0,
+                0,
+                (),
+                (),
+                1,
+                True,
+            )
+
+        passage_rows = []
+        document_rows = []
+        for candidate in retained:
+            text = candidate.text or f"No text returned for {candidate.docid}."
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            passage_id = "p-" + hashlib.sha256(
+                f"{candidate.docid}\0{text}".encode("utf-8")
+            ).hexdigest()
+            passage_rows.append(
+                SourcePassage(
+                    passage_id,
+                    candidate.docid,
+                    digest,
+                    candidate.rank,
+                    candidate.score,
+                    0,
+                    len(text),
+                    0,
+                    len(text.encode("utf-8")),
+                    digest,
+                    text,
+                    candidate.score,
+                    1,
+                    "cache-" + hashlib.sha256(
+                        f"{query.text}\0{text}".encode("utf-8")
+                    ).hexdigest(),
+                    digest,
+                    {"backend": "retriever-backed-test-chunker"},
+                )
+            )
+            document_rows.append(
+                SourceDocument(
+                    candidate.docid,
+                    digest,
+                    candidate.rank,
+                    candidate.score,
+                    passage_id,
+                    candidate.score,
+                )
+            )
+        passage_rows.sort(
+            key=lambda row: (-row.raw_logit, row.source_rank, row.passage_id)
+        )
+        ranked_passages = tuple(
+            SourcePassage(
+                row.passage_id,
+                row.docid,
+                row.content_sha256,
+                row.source_rank,
+                row.source_score,
+                row.start_char,
+                row.end_char,
+                row.start_byte,
+                row.end_byte,
+                row.text_sha256,
+                row.text,
+                row.raw_logit,
+                rank,
+                row.score_cache_key,
+                row.scoring_text_sha256,
+                row.chunker_identity,
+            )
+            for rank, row in enumerate(passage_rows[:100], start=1)
+        )
+        return PassageSearchResult(
+            query,
+            "complete",
+            None,
+            1000,
+            len(document_rows),
+            len(document_rows),
+            len(passage_rows),
+            tuple(document_rows),
+            ranked_passages,
+            1,
+            len(document_rows) < 1000,
+        )
+
+
+class _HarnessTopicLedger:
+    def __init__(self, topic_id: str) -> None:
+        self.topic_id = topic_id
+        self.run_id = "test-run"
+        self._facets = {}
+        self.searches = []
+        self.handoffs = []
+        self.completion: tuple[str, str] | None = None
+
+    def add_facets(self, facets) -> None:
+        self._facets.update((facet.subnarrative_id, facet) for facet in facets)
+
+    def add_passage_search(self, result) -> None:
+        self.searches.append(result)
+
+    def add_researcher_handoff(self, handoff) -> None:
+        self.handoffs.append(handoff)
+
+    def set_completion(self, status: str, stopping_reason: str) -> None:
+        self.completion = (status, stopping_reason)
+
+    def topic_snapshot(self):
+        return SimpleNamespace(
+            status=self.completion[0] if self.completion else None,
+            stopping_reason=self.completion[1] if self.completion else None,
+        )
+
+
+class _TopicBoundSdkHarness:
+    def __init__(self, retriever: FakeRetriever, **sdk_kwargs: object) -> None:
+        self.retriever = retriever
+        self.sdk_kwargs = sdk_kwargs
+
+    def retrieve(self, narrative: str):
+        topic_id = hashlib.sha256(narrative.encode("utf-8")).hexdigest()[:16]
+        sdk = DeepAgentRetriever(
+            passage_search=_RetrieverBackedPassageSearch(self.retriever, topic_id),
+            **self.sdk_kwargs,
+        )
+        return sdk.retrieve(_HarnessTopicLedger(topic_id), narrative)
+
+
+def _topic_bound_sdk(retriever: FakeRetriever, **kwargs: object) -> _TopicBoundSdkHarness:
+    return _TopicBoundSdkHarness(retriever, **kwargs)
+
+
 def _sdk(
     retriever: FakeRetriever,
     agent_factory: Callable[
@@ -459,9 +658,9 @@ def _sdk(
     *,
     tracing: FakeTracing | None = None,
     snippet_extractor: object | None = None,
-) -> DeepAgentRetriever:
-    return DeepAgentRetriever(
-        retriever=retriever,
+) -> _TopicBoundSdkHarness:
+    return _topic_bound_sdk(
+        retriever,
         agent_factory=agent_factory,
         tracing=tracing or FakeTracing(),
         model="test-model",
@@ -907,7 +1106,7 @@ def test_retrieve_searches_untouched_narrative_before_agent_followups() -> None:
     assert result.rationale == "Coverage is sufficient."
 
 
-def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followup_snippets() -> (
+def test_agent_sees_candidate_metadata_without_shared_document_extraction() -> (
     None
 ):
     sentinel = "FULL-DOCUMENT-SENTINEL-9d64"
@@ -971,47 +1170,18 @@ def test_agent_sees_only_candidate_metadata_and_can_extract_original_and_followu
     assert set(followup_candidates[0]) == {"docid", "rank", "score", "text_length"}
     assert sentinel not in json.dumps(initial_candidates)
     assert sentinel not in json.dumps(followup_candidates)
-    assert [payload["focus_query"] for payload in snippet_payloads] == [
-        "original focus",
-        "followup focus",
+    assert [payload["code"] for payload in snippet_payloads] == [
+        "UNKNOWN_DOCUMENT",
+        "UNKNOWN_DOCUMENT",
     ]
-    assert all(
-        set(payload)
-        == {
-            "ok",
-            "code",
-            "must_stop",
-            "budget_snapshot",
-            "document_id",
-            "focus_query",
-            "snippets",
-            "next_cursor",
-            "page_index",
-            "residual_count",
-            "residual_top_score",
-            "returned_min_score",
-            "pages_estimated",
-        }
-        for payload in snippet_payloads
-    )
-    assert all(
-        sentinel
-        in " ".join(
-            row["text"] for row in payload["snippets"][0]["sentences"]
-        )
-        for payload in snippet_payloads
-    )
-    assert all(
-        payload["snippets"][0]["cite"].startswith("S")
-        for payload in snippet_payloads
-    )
+    assert extractor.calls == []
     assert all("cache_status" not in payload for payload in snippet_payloads)
     assert all("ranker_backend" not in payload for payload in snippet_payloads)
     assert all(sentinel in search.candidates[0].text for search in result.searches)
     assert all(sentinel in candidate.text for candidate in result.candidates)
 
 
-def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_failures() -> (
+def test_legacy_snippet_tool_returns_safe_errors_without_shared_document_text() -> (
     None
 ):
     extractor = RecordingSnippetExtractor()
@@ -1032,32 +1202,8 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
                     ),
                 )
             )
-            _authorized_snippet(toolset, "original-doc-1", "focus", None)
-            tool_payloads.extend(
-                json.loads(response)
-                for response in (
-                    _authorized_snippet(
-                        toolset,
-                        "original-doc-1",
-                        "focus",
-                        "invalid-cursor",
-                        action="paginate",
-                    ),
-                    _authorized_snippet(
-                        toolset,
-                        "original-doc-1",
-                        "ranker value failure",
-                        None,
-                        action="refocus",
-                    ),
-                    _authorized_snippet(
-                        toolset,
-                        "original-doc-1",
-                        "extractor failure",
-                        None,
-                        action="refocus",
-                    ),
-                )
+            tool_payloads.append(
+                json.loads(_authorized_snippet(toolset, "original-doc-1", "focus", None))
             )
             return {"messages": [{"role": "assistant", "content": "Done."}]}
 
@@ -1070,15 +1216,14 @@ def test_snippet_tool_returns_safe_errors_for_invalid_requests_and_extractor_fai
     assert [payload["error"] for payload in tool_payloads] == [
         "unknown document_id",
         "focus_query must be non-empty text",
-        "invalid cursor",
-        "snippet extraction failed",
-        "snippet extraction failed",
+        "unknown document_id",
     ]
+    assert extractor.calls == []
     assert all("budget_snapshot" in payload for payload in tool_payloads)
     assert "/private/" not in json.dumps(tool_payloads)
 
 
-def test_retrieve_raises_when_one_document_id_has_conflicting_nonempty_text() -> None:
+def test_retrieve_does_not_treat_retained_passages_as_complete_documents() -> None:
     class ConflictingRetriever(FakeRetriever):
         def retrieve(self, query):
             return [
@@ -1102,11 +1247,8 @@ def test_retrieve_raises_when_one_document_id_has_conflicting_nonempty_text() ->
             )[1]
         )
 
-    with pytest.raises(AgentRetrievalError) as raised:
-        _sdk(ConflictingRetriever(), agent_factory).retrieve("narrative")
-
-    assert str(raised.value.__cause__) == "conflicting text for document_id shared-doc"
-    assert [search.kind for search in raised.value.searches] == ["original"]
+    result = _sdk(ConflictingRetriever(), agent_factory).retrieve("narrative")
+    assert [candidate.docid for candidate in result.candidates] == ["shared-doc"]
 
 
 def test_retrieve_rejects_empty_narrative_before_external_calls() -> None:
@@ -1458,7 +1600,7 @@ def test_retrieve_uses_stable_hashes_for_private_cache_variants() -> None:
     )
 
 
-def test_retrieve_wraps_agent_failure_with_completed_searches() -> None:
+def test_retrieve_maps_provider_failure_to_partial_result() -> None:
     fake_retriever = FakeRetriever()
     failure = RuntimeError("provider unavailable")
     tracing = FakeTracing()
@@ -1469,11 +1611,12 @@ def test_retrieve_wraps_agent_failure_with_completed_searches() -> None:
     ) -> FakeAgent:
         return FakeAgent(lambda _payload: (_ for _ in ()).throw(failure))
 
-    with pytest.raises(AgentRetrievalError) as raised:
-        _sdk(fake_retriever, agent_factory, tracing=tracing).retrieve("narrative")
+    result = _sdk(fake_retriever, agent_factory, tracing=tracing).retrieve("narrative")
 
-    assert [search.kind for search in raised.value.searches] == ["original"]
-    assert raised.value.__cause__ is failure
+    assert [search.kind for search in result.searches] == ["original"]
+    assert result.stopping_reason == "retrieval_unavailable"
+    assert result.topic_snapshot.status == "incomplete"
+    assert result.topic_snapshot.stopping_reason == "retrieval_unavailable"
     assert tracing.flushes == 1
 
 
@@ -1497,8 +1640,8 @@ def test_result_reports_successful_trace_flush() -> None:
 def test_result_reports_disabled_tracing_as_successful_noop() -> None:
     tracing = create_retrieval_tracing(environ={})
 
-    result = DeepAgentRetriever(
-        retriever=FakeRetriever(),
+    result = _topic_bound_sdk(
+        FakeRetriever(),
         agent_factory=lambda _model, _toolset: FakeAgent(
             lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
         ),
@@ -1574,9 +1717,7 @@ def test_trace_span_lifecycle_failure_does_not_change_completed_result(
             lambda _payload: (
                 snippet_payloads.append(
                     json.loads(
-                        _authorized_snippet(
-                            toolset, "original-doc-1", "safe focus", None
-                        )
+                        _authorized_snippet(toolset, "original-doc-1", "safe focus", None)
                     )
                 ),
                 {"messages": [{"role": "assistant", "content": "Stable rationale."}]},
@@ -1586,7 +1727,7 @@ def test_trace_span_lifecycle_failure_does_not_change_completed_result(
         snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("narrative")
 
-    assert snippet_payloads[0]["document_id"] == "original-doc-1"
+    assert snippet_payloads[0]["code"] == "UNKNOWN_DOCUMENT"
     assert [search.query for search in result.searches] == ["narrative"]
     assert [candidate.docid for candidate in result.candidates] == [
         "original-doc-1",
@@ -1646,7 +1787,7 @@ def test_trace_evidence_rejection_does_not_change_retrieval(
     assert tracing.flushes == 1
 
 
-def test_snippet_trace_validation_rejection_does_not_change_tool_result(
+def test_legacy_snippet_trace_rejection_returns_unknown_document(
     isolated_real_tracing: None,
 ) -> None:
     oversized_document_id = "d" * (MAX_TRACE_DOCUMENT_ID_CHARACTERS + 1)
@@ -1675,9 +1816,7 @@ def test_snippet_trace_validation_rejection_does_not_change_tool_result(
             lambda _payload: (
                 snippet_payloads.append(
                     json.loads(
-                        _authorized_snippet(
-                            toolset, oversized_document_id, "safe focus", None
-                        )
+                        _authorized_snippet(toolset, oversized_document_id, "safe focus", None)
                     )
                 ),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
@@ -1687,7 +1826,7 @@ def test_snippet_trace_validation_rejection_does_not_change_tool_result(
         snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("narrative")
 
-    assert snippet_payloads[0]["document_id"] == oversized_document_id
+    assert snippet_payloads[0]["code"] == "UNKNOWN_DOCUMENT"
     assert result.candidates[0].docid == oversized_document_id
 
 
@@ -1703,9 +1842,7 @@ def test_snippet_span_lifecycle_failure_does_not_change_tool_result(
             lambda _payload: (
                 snippet_payloads.append(
                     json.loads(
-                        _authorized_snippet(
-                            toolset, "original-doc-1", "safe focus", None
-                        )
+                        _authorized_snippet(toolset, "original-doc-1", "safe focus", None)
                     )
                 ),
                 {"messages": [{"role": "assistant", "content": "Done."}]},
@@ -1715,7 +1852,7 @@ def test_snippet_span_lifecycle_failure_does_not_change_tool_result(
         snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("narrative")
 
-    assert snippet_payloads[0]["document_id"] == "original-doc-1"
+    assert snippet_payloads[0]["code"] == "UNKNOWN_DOCUMENT"
     assert result.candidates[0].docid == "original-doc-1"
 
 
@@ -1803,9 +1940,9 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     assert isinstance(kwargs["model"], ChatOpenRouter)
     assert kwargs["model"].model_name == "deepseek/test-model"
     assert kwargs["model"].max_retries == 0
-    assert kwargs["model"].request_timeout == 120_000
+    assert kwargs["model"].request_timeout == 300_000
     sdk_config = kwargs["model"].client.sdk_configuration
-    assert sdk_config.timeout_ms == 120_000
+    assert sdk_config.timeout_ms == 300_000
     assert sdk_config.retry_config.strategy == "none"
     assert sdk_config.retry_config.retry_connection_errors is False
     assert kwargs["tools"] == [
@@ -1820,8 +1957,6 @@ def test_factory_passes_only_explicit_deepagents_070_arguments(monkeypatch) -> N
     assert kwargs["subagents"][0]["model"] is kwargs["model"]
     assert kwargs["subagents"][0]["tools"] == [
         passages_tool,
-        search_tool,
-        snippet_tool,
         view_tool,
     ]
     assert len(kwargs["middleware"]) == 4
@@ -1943,8 +2078,8 @@ def test_real_deepagents_factory_exposes_retrieval_and_safe_state_tools(
     monkeypatch.setattr(
         "deepagents.graph.resolve_model", lambda _spec: resolved_model[0]
     )
-    result = DeepAgentRetriever(
-        retriever=FakeRetriever(),
+    result = _topic_bound_sdk(
+        FakeRetriever(),
         model="openrouter:test/deepagent-retrieval-capture",
         tracing=FakeTracing(),
     ).retrieve("narrative")
@@ -1996,12 +2131,6 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
         sort_keys=True,
     )
     bundle_snapshot = ResearchBudget(ResearchBudgetConfig()).snapshot().as_dict()
-    followup_document_id = (
-        "followup-"
-        + hashlib.sha256(b"focused researcher query").hexdigest()[:16]
-        + "-doc-1"
-    )
-    snippet_extractor = RecordingSnippetExtractor()
     model = CaptureChatModel(
         responses=[
             AIMessage(
@@ -2041,28 +2170,13 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
                 content="",
                 tool_calls=[
                     {
-                        "name": "search_climbmix",
+                        "name": "search_passages",
                         "args": {
                             "query": "focused researcher query",
                             "motivating_ids": ["N1"],
                             "rationale": "N1 has no grounded source",
                         },
                         "id": "research-search",
-                    }
-                ],
-            ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "extract_relevant_snippets",
-                        "args": {
-                            "document_id": followup_document_id,
-                            "focus_query": "evidence answering N1",
-                            "motivating_ids": ["N1"],
-                            "rationale": "Inspect the most relevant search result",
-                        },
-                        "id": "research-snippets",
                     }
                 ],
             ),
@@ -2108,34 +2222,29 @@ def test_offline_coordinator_delegates_to_researcher_and_continues_after_bundle(
     monkeypatch.setattr("langchain_openrouter.ChatOpenRouter", fake_openrouter)
     fake_retriever = FakeRetriever()
 
-    result = DeepAgentRetriever(
-        retriever=fake_retriever,
+    result = _topic_bound_sdk(
+        fake_retriever,
         model="openrouter:test/offline-coordinator",
         tracing=FakeTracing(),
-        snippet_extractor=snippet_extractor,
     ).retrieve("narrative")
 
     assert len(constructor_calls) == 1
     constructor = constructor_calls[0]
     assert constructor["model"] == "test/offline-coordinator"
     assert constructor["max_retries"] == 0
-    assert constructor["timeout"] == 120_000
+    assert constructor["timeout"] == 300_000
     sdk_config = constructor["client"].sdk_configuration
-    assert sdk_config.timeout_ms == 120_000
+    assert sdk_config.timeout_ms == 300_000
     assert sdk_config.retry_config.strategy == "none"
     assert sdk_config.retry_config.retry_connection_errors is False
     assert [query.query_text for query in fake_retriever.queries] == [
         "narrative",
         "focused researcher query",
     ]
-    search_action, snippet_action = result.coverage_report.actions[-2:]
+    search_action = result.coverage_report.actions[-1]
     assert search_action.research_task_id == "R1-N1"
     assert search_action.target == "focused researcher query"
-    assert snippet_action.research_task_id == "R1-N1"
-    assert snippet_action.target == followup_document_id
-    assert len(snippet_extractor.calls) == 1
-    assert snippet_extractor.calls[0][0] == followup_document_id
-    assert result.coverage_report.inspected_page_count == 1
+    assert result.coverage_report.inspected_page_count == 2
     assert result.budget_snapshot.completed_researchers == 1
     assert result.rationale == "Final grounded response after researcher bundle."
 
@@ -2412,7 +2521,7 @@ def test_choose_next_action_rejects_unhashable_action_kinds_as_safe_json() -> No
     ]
 
 
-def test_paginate_rejects_unseen_document_focus_before_extractor_work() -> None:
+def test_legacy_pagination_after_shared_search_rejects_unknown_document_before_extractor_work() -> None:
     extractor = RecordingSnippetExtractor()
     observed: dict[str, object] = {}
 
@@ -2437,11 +2546,11 @@ def test_paginate_rejects_unseen_document_focus_before_extractor_work() -> None:
         "narrative"
     )
 
-    assert observed["page"]["code"] == "INVALID_CURSOR"
-    assert observed["page"]["error"] == "pagination requires prior snippet page"
+    assert observed["page"]["code"] == "UNKNOWN_DOCUMENT"
+    assert observed["page"]["error"] == "unknown document_id"
     assert extractor.calls == []
     assert result.coverage_report.actions[-1].state == "consumed"
-    assert result.coverage_report.inspected_page_count == 0
+    assert result.coverage_report.inspected_page_count == 1
 
 
 def test_coverage_report_preserves_five_seeded_topic_224_needs_and_open_gaps() -> None:
@@ -2521,7 +2630,8 @@ def test_complete_retrieval_rejects_live_evidence_without_a_draft_selection() ->
         _model: str, toolset: deepagent_retrieval.AgentToolset
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+            _add_need_and_facet(toolset, need_id="test-need", facet_id="test-facet")
+            passage = json.loads(_authorized_passage(toolset, "test need evidence"))
             toolset.update_retrieval_state(
                 {
                     "add_nuggets": [
@@ -2529,8 +2639,8 @@ def test_complete_retrieval_rejects_live_evidence_without_a_draft_selection() ->
                             "nugget_id": "g1",
                             "text": "Grounded test evidence.",
                             "need_ids": ["test-need"],
-                            "facet_ids": [],
-                            "evidence": [{"cite": "S1"}],
+                            "facet_ids": ["test-facet"],
+                            "evidence": [{"cite": passage["passages"][0]["cite"]}],
                         }
                     ]
                 }
@@ -2560,7 +2670,8 @@ def test_retriever_wires_a_live_closeout_predicate_into_the_agent_toolset() -> N
         observed["predicate"] = toolset.closeout_pending
 
         def invoke(_payload: dict[str, object]) -> object:
-            _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+            _add_need_and_facet(toolset, need_id="test-need", facet_id="test-facet")
+            passage = json.loads(_authorized_passage(toolset, "test need evidence"))
             toolset.update_retrieval_state(
                 {
                     "add_nuggets": [
@@ -2568,8 +2679,8 @@ def test_retriever_wires_a_live_closeout_predicate_into_the_agent_toolset() -> N
                             "nugget_id": "g1",
                             "text": "Grounded test evidence.",
                             "need_ids": ["test-need"],
-                            "facet_ids": [],
-                            "evidence": [{"cite": "S1"}],
+                            "facet_ids": ["test-facet"],
+                            "evidence": [{"cite": passage["passages"][0]["cite"]}],
                         }
                     ]
                 }
@@ -2611,7 +2722,8 @@ def test_complete_retrieval_records_the_only_successful_completion_transition() 
         _model: str, toolset: deepagent_retrieval.AgentToolset
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+            _add_need_and_facet(toolset, need_id="test-need", facet_id="test-facet")
+            passage = json.loads(_authorized_passage(toolset, "test need evidence"))
             toolset.update_retrieval_state(
                 {
                     "add_nuggets": [
@@ -2619,8 +2731,8 @@ def test_complete_retrieval_records_the_only_successful_completion_transition() 
                             "nugget_id": "g1",
                             "text": "Grounded test evidence.",
                             "need_ids": ["test-need"],
-                            "facet_ids": [],
-                            "evidence": [{"cite": "S1"}],
+                            "facet_ids": ["test-facet"],
+                            "evidence": [{"cite": passage["passages"][0]["cite"]}],
                         }
                     ],
                     "set_need_status": [
@@ -2732,7 +2844,8 @@ def test_production_toolset_rejects_live_incomplete_completion_and_continues() -
     def agent_factory(
         _model: str, toolset: deepagent_retrieval.AgentToolset
     ) -> object:
-        _authorized_snippet(toolset, "original-doc-1", "test need evidence")
+        _add_need_and_facet(toolset, need_id="test-need", facet_id="test-facet")
+        passage = json.loads(_authorized_passage(toolset, "test need evidence"))
         toolset.update_retrieval_state(
             {
                 "add_nuggets": [
@@ -2740,8 +2853,8 @@ def test_production_toolset_rejects_live_incomplete_completion_and_continues() -
                         "nugget_id": "g1",
                         "text": "Grounded test evidence.",
                         "need_ids": ["test-need"],
-                        "facet_ids": [],
-                        "evidence": [{"cite": "S1"}],
+                        "facet_ids": ["test-facet"],
+                        "evidence": [{"cite": passage["passages"][0]["cite"]}],
                     }
                 ]
             }
@@ -2823,9 +2936,8 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
         _model: str, toolset: deepagent_retrieval.AgentToolset
     ) -> FakeAgent:
         def invoke(_payload: dict[str, object]) -> object:
-            _authorized_snippet(
-                toolset, "original-doc-1", "test need evidence", None
-            )
+            _add_need_and_facet(toolset, need_id="test-need", facet_id="test-facet")
+            passage = json.loads(_authorized_passage(toolset, "test need evidence"))
             toolset.update_retrieval_state(
                 {
                     "add_nuggets": [
@@ -2833,8 +2945,8 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
                             "nugget_id": "nugget-1",
                             "text": "Grounded test evidence.",
                             "need_ids": ["test-need"],
-                            "facet_ids": [],
-                            "evidence": [{"cite": "S1"}],
+                            "facet_ids": ["test-facet"],
+                            "evidence": [{"cite": passage["passages"][0]["cite"]}],
                         }
                     ],
                     "set_need_status": [
@@ -2853,8 +2965,8 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
 
         return FakeAgent(invoke)
 
-    result = DeepAgentRetriever(
-        retriever=FakeRetriever(),
+    result = _topic_bound_sdk(
+        FakeRetriever(),
         agent_factory=agent_factory,
         tracing=tracing,
         model="test-model",
@@ -2883,8 +2995,8 @@ def test_run_wide_budget_stop_maps_to_public_budget_exhausted_reason() -> None:
             )[1]
         )
 
-    result = DeepAgentRetriever(
-        retriever=FakeRetriever(),
+    result = _topic_bound_sdk(
+        FakeRetriever(),
         agent_factory=agent_factory,
         tracing=tracing,
         model="test-model",
@@ -2902,7 +3014,7 @@ def test_run_wide_budget_stop_maps_to_public_budget_exhausted_reason() -> None:
     )
 
 
-def test_snippet_finishing_after_hard_deadline_is_not_recorded_or_yielded(
+def test_legacy_extraction_after_shared_search_never_crosses_into_deadline_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeClock:
@@ -2952,8 +3064,8 @@ def test_snippet_finishing_after_hard_deadline_is_not_recorded_or_yielded(
 
         return FakeAgent(invoke)
 
-    result = DeepAgentRetriever(
-        retriever=FakeRetriever(),
+    result = _topic_bound_sdk(
+        FakeRetriever(),
         agent_factory=agent_factory,
         tracing=tracing,
         model="test-model",
@@ -2962,14 +3074,16 @@ def test_snippet_finishing_after_hard_deadline_is_not_recorded_or_yielded(
     ).retrieve("narrative")
 
     assert tool_payload["ok"] is False
-    assert tool_payload["code"] == "HARD_DEADLINE_REACHED"
-    assert tool_payload["must_stop"] is True
+    assert tool_payload["code"] == "UNKNOWN_DOCUMENT"
+    assert tool_payload["must_stop"] is False
     assert "snippets" not in tool_payload
-    assert result.coverage_report.inspected_page_count == 0
-    assert result.coverage_report.documents == ()
+    assert result.coverage_report.inspected_page_count == 1
+    assert [row.focus_query for row in result.coverage_report.documents] == [
+        "narrative"
+    ]
     assert tracing.snippet_records == []
-    assert result.stopping_reason == "budget_exhausted"
-    assert result.budget_snapshot.stop_code == "HARD_DEADLINE_REACHED"
+    assert result.stopping_reason == "agent_completed"
+    assert result.budget_snapshot.stop_code is None
 
 
 def test_retrieval_only_middleware_allows_retrieval_and_state_tools_but_denies_others() -> (
@@ -3139,8 +3253,8 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
 
         return FakeAgent(invoke)
 
-    result = DeepAgentRetriever(
-        retriever=fake_retriever,
+    result = _topic_bound_sdk(
+        fake_retriever,
         agent_factory=agent_factory,
         tracing=tracing,
         model="test-model",
@@ -3168,11 +3282,11 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
 
 
 def test_large_fused_override_keeps_root_trace_ids_at_safe_limit() -> None:
-    requested_limit = MAX_TRACE_DOCUMENTS + 1
+    requested_limit = MAX_TRACE_DOCUMENTS
     tracing = FakeTracing()
 
-    result = DeepAgentRetriever(
-        retriever=FakeRetriever(candidate_count=requested_limit),
+    result = _topic_bound_sdk(
+        FakeRetriever(candidate_count=requested_limit),
         agent_factory=lambda _model, _toolset: FakeAgent(
             lambda _payload: {"messages": [{"role": "assistant", "content": "Done."}]}
         ),
@@ -3180,11 +3294,6 @@ def test_large_fused_override_keeps_root_trace_ids_at_safe_limit() -> None:
         model="test-model",
         hits_per_search=requested_limit,
         fused_result_limit=requested_limit,
-        # Retained candidates are now bounded by rerank_depth, so this test
-        # raises it to keep exercising what it is about: trace-id capping.
-        passage_config=PassageSelectionConfig(
-            pool_hits=requested_limit, rerank_depth=requested_limit
-        ),
     ).retrieve("narrative")
 
     assert len(result.candidates) == requested_limit
@@ -3201,66 +3310,47 @@ def test_constructor_rejects_invalid_retrieval_bounds_before_use(
 ) -> None:
     with pytest.raises(ValueError, match=f"{parameter} must be a positive integer"):
         DeepAgentRetriever(
-            retriever=FakeRetriever(),
+            passage_search=_SharedPassageSearch(),
             tracing=FakeTracing(),
             **{parameter: value},
         )
 
 
-def test_from_env_threads_nondefault_retrieval_bounds_into_remote_config(
+def test_from_env_threads_nondefault_bounds_around_injected_shared_search(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    created = []
-
-    class OfflineRemoteRetriever:
-        def __init__(self, config: object, *, cache_dir: object) -> None:
-            self.config = config
-            self.cache_dir = cache_dir
-            created.append(self)
-
-        def retrieve(self, _query: object) -> list[RetrievedCandidate]:
-            return []
-
-    monkeypatch.setattr(
-        "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever", OfflineRemoteRetriever
-    )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    passage_search = _SharedPassageSearch()
 
     sdk = DeepAgentRetriever.from_env(
         root=tmp_path,
+        passage_search=passage_search,
         tracing=FakeTracing(),
+        snippet_extractor=RecordingSnippetExtractor(),
         hits_per_search=7,
         max_followup_searches=2,
         fused_result_limit=5,
-        passage_config=PassageSelectionConfig(pool_hits=250, rerank_depth=25),
     )
 
-    # The remote request depth is the passage pool, not the number of documents
-    # the older document-selection tool shows the model.
-    assert created[0].config.hits == 250
+    assert sdk._passage_search is passage_search
     assert sdk._hits_per_search == 7
     assert sdk._max_followup_searches == 2
     assert sdk._fused_result_limit == 5
 
 
-def test_from_env_rejects_invalid_bound_before_remote_retriever_construction(
+def test_from_env_rejects_invalid_bound_before_use(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    remote_constructions = []
-    monkeypatch.setattr(
-        "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever",
-        lambda *_args, **_kwargs: remote_constructions.append(True),
-    )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     with pytest.raises(ValueError, match="hits_per_search must be a positive integer"):
         DeepAgentRetriever.from_env(
             root=tmp_path,
+            passage_search=_SharedPassageSearch(),
             tracing=FakeTracing(),
+            snippet_extractor=RecordingSnippetExtractor(),
             hits_per_search=True,
         )
-
-    assert remote_constructions == []
 
 
 def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
@@ -3289,25 +3379,7 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
         "text_lengths",
     }
     assert tracing.search_records[0]["text_lengths"] == (19,)
-    assert tracing.snippet_records == [
-        {
-            "chunk_ids": ("chunk-1",),
-            "start_chars": (0,),
-            "end_chars": (19,),
-            "relevance_scores": (0.75,),
-            "texts": ("narrative excerpt 1",),
-            "cache_status": "miss",
-            "ranker_backend": "private-ranker",
-            "latency_ms": ANY,
-            "page_offset": 0,
-            "has_next_page": False,
-            "page_index": 0,
-            "residual_count": 0,
-            "residual_top_score": None,
-            "returned_min_score": 0.75,
-            "pages_estimated": 1,
-        }
-    ]
+    assert tracing.snippet_records == []
     assert tracing.result_records == [
         {
             "fused_document_ids": ("original-doc-1",),
@@ -3364,10 +3436,9 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     spans = exporter.get_finished_spans()
     assert [span.name for span in spans] == [
         "climbmix.retrieve",
-        "deepagent.extract_relevant_snippets",
         "deepagent.retrieve",
     ]
-    retriever_span, snippet_span, root_span = spans
+    retriever_span, root_span = spans
     assert retriever_span.parent is not None
     assert retriever_span.parent.span_id == root_span.context.span_id
     assert set(retriever_span.attributes) == {
@@ -3394,37 +3465,6 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
     assert retriever_span.attributes["retrieval.latency_ms"] == 125.0
     assert retriever_span.attributes["retrieval.document_count"] == 2
     assert retriever_span.attributes["retrieval.document_text_lengths"] == (27, 27)
-    assert snippet_span.parent is not None
-    assert snippet_span.parent.span_id == root_span.context.span_id
-    assert snippet_span.attributes["input.value"] == (
-        "private focus query" if trace_content else REDACTED_CONTENT
-    )
-    assert snippet_span.attributes["snippet.document_id"] == "original-doc-1"
-    assert snippet_span.attributes["snippet.chunk_ids"] == ("chunk-1",)
-    assert snippet_span.attributes["snippet.start_chars"] == (0,)
-    assert snippet_span.attributes["snippet.end_chars"] == (27,)
-    assert snippet_span.attributes["snippet.relevance_scores"] == (0.75,)
-    assert snippet_span.attributes["snippet.texts"] == (
-        ("private narrative excerpt 1",) if trace_content else (REDACTED_CONTENT,)
-    )
-    assert snippet_span.attributes["snippet.cache_status"] == "miss"
-    assert snippet_span.attributes["snippet.ranker_backend"] == "private-ranker"
-    assert snippet_span.attributes["snippet.latency_ms"] == pytest.approx(7.5)
-    assert snippet_span.attributes["snippet.page_offset"] == 0
-    assert snippet_span.attributes["snippet.has_next_page"] is False
-    assert snippet_span.attributes["snippet.page_index"] == 0
-    assert snippet_span.attributes["snippet.residual_count"] == 0
-    assert "snippet.residual_top_score" not in snippet_span.attributes
-    assert snippet_span.attributes["snippet.returned_min_score"] == 0.75
-    assert snippet_span.attributes["snippet.pages_estimated"] == 1
-    assert snippet_span.attributes["deepagent.research_task_id"].startswith(
-        "test-research-"
-    )
-    assert snippet_span.attributes["deepagent.research_round_index"] == 1
-    assert snippet_span.attributes["deepagent.research_depth"] == "focused"
-    assert snippet_span.attributes["deepagent.budget_code"] == "OK"
-    assert snippet_span.attributes["deepagent.budget_must_stop"] is False
-    assert snippet_span.attributes["deepagent.remaining_retrieval_calls"] == 99
     assert set(root_span.attributes) == {
         "input.value",
         "openinference.span.kind",
@@ -3498,24 +3538,10 @@ def test_retrieve_traces_research_context_on_followup_search(
     assert followup_span.attributes["deepagent.remaining_retrieval_calls"] == 99
 
 
-def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(
+def test_from_env_preserves_injected_search_and_model_precedence(
     monkeypatch, tmp_path
 ) -> None:
-    created = []
     snippet_roots = []
-
-    class OfflineRemoteRetriever:
-        def __init__(self, config: object, *, cache_dir: object) -> None:
-            self.config = config
-            self.cache_dir = cache_dir
-            created.append(self)
-
-        def retrieve(self, _query: object) -> list[RetrievedCandidate]:
-            return []
-
-    monkeypatch.setattr(
-        "trec_rag.deepagent_retrieval.PyseriniRemoteRetriever", OfflineRemoteRetriever
-    )
     monkeypatch.setattr(
         "trec_rag.deepagent_retrieval.create_default_snippet_extractor",
         lambda root: snippet_roots.append(root) or RecordingSnippetExtractor(),
@@ -3523,33 +3549,35 @@ def test_from_env_uses_offline_retriever_config_cache_and_model_precedence(
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("DEEPAGENT_MODEL", "openrouter:environment-model")
     tracing = FakeTracing()
+    passage_search = _SharedPassageSearch()
 
     configured = DeepAgentRetriever.from_env(
         root=tmp_path,
+        passage_search=passage_search,
         model="openrouter:constructor-model",
         tracing=tracing,
     )
-    from_environment = DeepAgentRetriever.from_env(root=tmp_path, tracing=tracing)
+    from_environment = DeepAgentRetriever.from_env(
+        root=tmp_path, passage_search=passage_search, tracing=tracing
+    )
     monkeypatch.delenv("DEEPAGENT_MODEL")
-    defaulted = DeepAgentRetriever.from_env(root=tmp_path, tracing=tracing)
+    defaulted = DeepAgentRetriever.from_env(
+        root=tmp_path, passage_search=passage_search, tracing=tracing
+    )
 
     assert [sdk._model for sdk in (configured, from_environment, defaulted)] == [
         "openrouter:constructor-model",
         "openrouter:environment-model",
         "openrouter:deepseek/deepseek-v4-flash",
     ]
-    assert len(created) == 3
     assert snippet_roots == [tmp_path, tmp_path, tmp_path]
-    assert created[0].config.name == "deepagent_climbmix"
-    assert created[0].config.type == "pyserini_remote"
-    assert created[0].config.query_variants == ("original", "followup")
-    assert created[0].config.hits == 1000
-    assert created[0].config.index == "climbmix-400b"
-    assert created[0].config.cache is True
-    assert created[0].cache_dir == tmp_path / "cache" / "retrieval" / "pyserini_remote"
+    assert all(
+        sdk._passage_search is passage_search
+        for sdk in (configured, from_environment, defaulted)
+    )
 
 
-def test_direct_construction_creates_default_extractor_only_when_snippet_tool_is_called(
+def test_direct_construction_does_not_create_extractor_for_shared_search_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created_roots: list[object] = []
@@ -3586,64 +3614,78 @@ def test_direct_construction_creates_default_extractor_only_when_snippet_tool_is
 
     _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
 
-    assert len(created_roots) == 1
-    assert snippet_payloads[0]["document_id"] == "original-doc-1"
+    assert created_roots == []
+    assert snippet_payloads[0]["code"] == "UNKNOWN_DOCUMENT"
 
 
-class _PassageChunker:
-    """One chunk per sentence, so a document yields several rankable passages."""
-
-    def split_text(self, text, *, document_id):
-        from trec_rag.chunking import TextChunk
-
-        parts = [part for part in text.split(". ") if part.strip()]
-        chunks = []
-        cursor = 0
-        for index, part in enumerate(parts):
-            chunks.append(
-                TextChunk(
-                    document_id=document_id,
-                    chunk_id=f"{document_id}::c{index}",
-                    text=part.strip() + ".",
-                    start_char=cursor,
-                    end_char=cursor + len(part) + 1,
-                )
-            )
-            cursor += len(part) + 2
-        return chunks
-
-
-class _PassageRanker:
-    """Rank so that one document holds every top score, which is the collapse case."""
-
-    identity = {"backend": "fake"}
+class _SharedPassageSearch:
+    topic_id = "internal-topic"
 
     def __init__(self, failing: bool = False) -> None:
         self.failing = failing
-        self.calls = 0
 
-    def rank(self, focus_query, chunks):
-        self.calls += 1
+    def search(self, query: FocusedQuery) -> PassageSearchResult:
         if self.failing:
-            raise RuntimeError("ranker exploded with a secret path /home/user/key")
-        from trec_rag.deepagent_snippets import ScoredTextChunk
+            return PassageSearchResult(
+                query,
+                "incomplete",
+                "scoring_failed",
+                1000,
+                0,
+                0,
+                0,
+                (),
+                (),
+                1,
+                True,
+            )
+        documents = []
+        passages = []
+        for rank in range(1, 6):
+            docid = f"original-doc-{rank}"
+            text = f"Grounded evidence from document {rank}."
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            passage_id = f"p-{docid}"
+            score = float(100 - rank)
+            documents.append(
+                SourceDocument(docid, digest, rank, score, passage_id, score)
+            )
+            passages.append(
+                SourcePassage(
+                    passage_id,
+                    docid,
+                    digest,
+                    rank,
+                    score,
+                    0,
+                    len(text),
+                    0,
+                    len(text.encode()),
+                    digest,
+                    text,
+                    score,
+                    rank,
+                    f"cache-{docid}",
+                    digest,
+                    {"backend": "test-chunker"},
+                )
+            )
+        return PassageSearchResult(
+            query,
+            "complete",
+            None,
+            5,
+            5,
+            5,
+            5,
+            tuple(documents),
+            tuple(passages),
+            1,
+            False,
+        )
 
-        scored = []
-        for chunk in chunks:
-            # "doc-1" wins on every chunk, so an undiversified top-K would
-            # return nothing else.
-            base = 100.0 if chunk.document_id.endswith("-doc-1") else 1.0
-            scored.append(ScoredTextChunk(chunk=chunk, relevance_score=base))
-        return tuple(scored)
 
-
-class _PassageExtractor:
-    def __init__(self, ranker) -> None:
-        self.ranker = ranker
-        self.chunker = _PassageChunker()
-
-
-def _passage_toolset(ranker, *, candidate_count=5):
+def _passage_toolset(*, scoring_failed=False, candidate_count=5):
     captured: list[deepagent_retrieval.AgentToolset] = []
 
     def agent_factory(_model, toolset):
@@ -3655,21 +3697,13 @@ def _passage_toolset(ranker, *, candidate_count=5):
         return SimpleNamespace(invoke=invoke)
 
     sdk = deepagent_retrieval.DeepAgentRetriever(
-        retriever=FakeRetriever(candidate_count=candidate_count),
+        passage_search=_SharedPassageSearch(scoring_failed),
         model="openrouter:test/model",
         agent_factory=agent_factory,
         tracing=FakeTracing(),
-        snippet_extractor=_PassageExtractor(ranker),
-        passage_config=PassageSelectionConfig(
-            pool_hits=10,
-            rerank_depth=5,
-            top_k=6,
-            per_document_cap=2,
-            min_distinct_documents=3,
-        ),
     )
     try:
-        sdk.retrieve("narrative")
+        sdk.retrieve(_HarnessTopicLedger("internal-topic"), "narrative")
     except Exception:
         pass
     return captured[0]
@@ -3682,9 +3716,8 @@ def _authorized_passage_search(toolset, query):
         return toolset.search_passages(query, ["test-need"], "test need remains open")
 
 
-def test_passage_search_spans_documents_that_a_top_k_would_have_collapsed() -> None:
-    ranker = _PassageRanker()
-    toolset = _passage_toolset(ranker)
+def test_passage_search_returns_shared_rows_across_multiple_documents() -> None:
+    toolset = _passage_toolset()
 
     payload = json.loads(_authorized_passage_search(toolset, "a focused query"))
 
@@ -3692,13 +3725,11 @@ def test_passage_search_spans_documents_that_a_top_k_would_have_collapsed() -> N
     documents = {row["document_id"] for row in payload["passages"]}
     assert len(documents) >= 3, "selection collapsed onto too few documents"
     assert payload["distinct_documents"] == len(documents)
-    # The ranker gave one document every top score, so breadth here is the
-    # code's doing, not the scores'.
-    assert len([r for r in payload["passages"] if r["document_id"].endswith("-doc-1")]) <= 2
+    assert payload["documents_scored"] == payload["documents_retrieved"]
 
 
 def test_passage_search_mints_citable_handles_through_the_existing_ledger() -> None:
-    toolset = _passage_toolset(_PassageRanker())
+    toolset = _passage_toolset()
 
     payload = json.loads(_authorized_passage_search(toolset, "a focused query"))
 
@@ -3712,7 +3743,7 @@ def test_passage_search_mints_citable_handles_through_the_existing_ledger() -> N
 
 
 def test_passage_search_reports_what_it_did_not_return() -> None:
-    toolset = _passage_toolset(_PassageRanker())
+    toolset = _passage_toolset()
 
     payload = json.loads(_authorized_passage_search(toolset, "a focused query"))
 
@@ -3726,35 +3757,1218 @@ def test_passage_search_reports_what_it_did_not_return() -> None:
 
 def test_a_scoring_failure_is_classified_and_never_reads_as_finding_nothing() -> None:
     """The recurring defect class: refusing correctly but costing the wrong thing."""
-    ranker = _PassageRanker(failing=True)
-    toolset = _passage_toolset(ranker)
+    toolset = _passage_toolset(scoring_failed=True)
 
     raw = _authorized_passage_search(toolset, "a focused query")
     payload = json.loads(raw)
 
     assert payload["ok"] is False
     assert payload["code"] == "PASSAGE_SCORING_FAILED"
-    assert "passages" not in payload
+    assert payload["passages"] == []
     # Raw exception text must not reach agent context.
     assert "exploded" not in raw
     assert "/home/user/key" not in raw
 
 
-def test_passage_search_is_charged_its_own_budget_unit() -> None:
-    toolset = _passage_toolset(_PassageRanker())
-    config = toolset.budget_config
+def test_repeated_shared_passage_rows_eventually_trigger_the_bounded_no_yield_stop() -> None:
+    toolset = _passage_toolset()
 
     _seed_test_need(toolset, narrative_span="narrative")
     _, envelope = _test_research_context(toolset)
     with bind_research_task(envelope):
-        for index in range(config.max_passage_searches_per_researcher):
+        for index in range(3):
             payload = json.loads(
                 toolset.search_passages(f"query {index}", ["test-need"], "open")
             )
             assert payload["ok"] is True, payload
+        json.loads(toolset.search_passages("one too many", ["test-need"], "open"))
         refused = json.loads(
-            toolset.search_passages("one too many", ["test-need"], "open")
+            toolset.search_passages("the stop is now enforced", ["test-need"], "open")
         )
 
     assert refused["ok"] is False
-    assert refused["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
+    assert refused["code"] == "NO_YIELD_STOP"
+
+
+def test_topic_scoped_retrieval_commits_validated_handoff_and_reads_snapshot() -> None:
+    class RecordingTopicLedger:
+        topic_id = "internal-topic"
+        run_id = "run-1"
+
+        def __init__(self) -> None:
+            self._facets = {}
+            self.searches = []
+            self.handoffs = []
+            self.snapshots = 0
+            self.completions = []
+
+        def add_facets(self, facets) -> None:
+            self._facets.update({facet.subnarrative_id: facet for facet in facets})
+
+        def add_passage_search(self, result) -> None:
+            self.searches.append(result)
+
+        def add_researcher_handoff(self, handoff) -> None:
+            self.handoffs.append(handoff)
+
+        def topic_snapshot(self):
+            self.snapshots += 1
+            return {"handoffs": len(self.handoffs)}
+
+        def set_completion(self, status, stopping_reason) -> None:
+            self.completions.append((status, stopping_reason))
+
+    ledger = RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _seed_test_need(toolset)
+            _test_research_context(toolset)
+            update = toolset.update_retrieval_state(
+                {
+                    "add_facets": [
+                        {
+                            "facet_id": "test-need",
+                            "need_ids": ["test-need"],
+                            "dimension": "evidence",
+                            "value": "test evidence",
+                            "origin": "narrative",
+                        }
+                    ]
+                }
+            )
+            assert "test-need" in json.loads(update)["accepted_ids"]
+            _, envelope = _test_research_context(toolset)
+            with bind_research_task(envelope):
+                payload = json.loads(
+                    toolset.search_passages(
+                        "focused evidence query",
+                        ["test-need"],
+                        "test need remains open",
+                    )
+                )
+            assert payload["ok"] is True
+            toolset.update_retrieval_state(
+                {
+                    "add_nuggets": [
+                        {
+                            "nugget_id": "g1",
+                            "text": "Grounded test evidence.",
+                            "need_ids": ["test-need"],
+                            "facet_ids": ["test-need"],
+                            "evidence": [{"cite": "S1"}],
+                            "contradicts": [],
+                        }
+                    ]
+                }
+            )
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = DeepAgentRetriever(
+        passage_search=_SharedPassageSearch(),
+        agent_factory=agent_factory,
+        tracing=FakeTracing(),
+        model="test-model",
+    ).retrieve(ledger, "narrative")
+
+    assert len(ledger.searches) == 2
+    assert len(ledger.handoffs) == 1
+    assert ledger.handoffs[0].run_id == "run-1"
+    assert ledger.handoffs[0].evidence[0].passage_id == "p-original-doc-1"
+    assert ledger.snapshots == 1
+    assert ledger.completions == [("incomplete", "no_evidence")]
+    assert result.topic_snapshot == {"handoffs": 1}
+
+
+def test_active_api_requires_shared_search_and_topic_records_builder() -> None:
+    constructor = inspect.signature(DeepAgentRetriever).parameters
+    retrieve = inspect.signature(DeepAgentRetriever.retrieve).parameters
+
+    assert constructor["passage_search"].default is inspect.Parameter.empty
+    assert "retriever" not in constructor
+    assert list(retrieve) == ["self", "records", "narrative"]
+    assert retrieve["narrative"].default is inspect.Parameter.empty
+
+
+def test_from_env_uses_injected_shared_search_without_constructing_legacy_retriever(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    legacy_constructions: list[object] = []
+    monkeypatch.setattr(
+        deepagent_retrieval,
+        "PyseriniRemoteRetriever",
+        lambda *_args, **_kwargs: legacy_constructions.append(object()),
+        raising=False,
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    passage_search = _SharedPassageSearch()
+
+    sdk = DeepAgentRetriever.from_env(
+        root=tmp_path,
+        passage_search=passage_search,
+        tracing=FakeTracing(),
+        snippet_extractor=RecordingSnippetExtractor(),
+    )
+
+    assert sdk._passage_search is passage_search
+    assert legacy_constructions == []
+
+
+def test_retrieve_rejects_cross_topic_scope_before_search_or_ledger_admission() -> None:
+    class PoisonPassageSearch:
+        topic_id = "topic-search"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, _query: FocusedQuery) -> PassageSearchResult:
+            self.calls += 1
+            raise AssertionError("cross-topic search was admitted")
+
+    class PoisonRecords:
+        topic_id = "topic-records"
+        run_id = "run-1"
+
+        def __init__(self) -> None:
+            self.admissions = 0
+
+        def _poison(self, *_args, **_kwargs) -> None:
+            self.admissions += 1
+            raise AssertionError("cross-topic ledger admission occurred")
+
+        add_facets = _poison
+        add_passage_search = _poison
+        add_researcher_handoff = _poison
+        set_completion = _poison
+
+        def topic_snapshot(self):
+            self.admissions += 1
+            raise AssertionError("cross-topic snapshot occurred")
+
+    passage_search = PoisonPassageSearch()
+    records = PoisonRecords()
+    sdk = DeepAgentRetriever(
+        passage_search=passage_search,
+        agent_factory=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("agent construction occurred")
+        ),
+        tracing=FakeTracing(),
+        model="test-model",
+    )
+
+    with pytest.raises(ValueError, match="topic"):
+        sdk.retrieve(records, "narrative")
+
+    assert passage_search.calls == 0
+    assert records.admissions == 0
+
+
+class _RecordingTopicLedger:
+    def __init__(
+        self,
+        *,
+        topic_id: str = "internal-topic",
+        run_id: str = "run-1",
+    ) -> None:
+        self.topic_id = topic_id
+        self.run_id = run_id
+        self._facets = {}
+        self.searches = []
+        self.handoffs = []
+        self.completion: tuple[str, str] | None = None
+        self.events: list[tuple[object, ...]] = []
+        self.snapshots = 0
+
+    def add_facets(self, facets) -> None:
+        self._facets.update((facet.subnarrative_id, facet) for facet in facets)
+        self.events.append(
+            ("facets", tuple(facet.subnarrative_id for facet in facets))
+        )
+
+    def add_passage_search(self, result) -> None:
+        self.searches.append(result)
+        self.events.append(("search", result.query.query_id))
+
+    def add_researcher_handoff(self, handoff) -> None:
+        self.handoffs.append(handoff)
+        self.events.append(("handoff", handoff.researcher_id))
+
+    def set_completion(self, status: str, stopping_reason: str) -> None:
+        self.completion = (status, stopping_reason)
+        self.events.append(("completion", status, stopping_reason))
+
+    def topic_snapshot(self):
+        self.snapshots += 1
+        self.events.append(("snapshot", self.completion))
+        return SimpleNamespace(
+            status=self.completion[0] if self.completion is not None else None,
+            stopping_reason=(
+                self.completion[1] if self.completion is not None else None
+            ),
+            researcher_handoffs=tuple(self.handoffs),
+        )
+
+
+class _QuerySpecificPassageSearch:
+    topic_id = "internal-topic"
+
+    def search(self, query: FocusedQuery) -> PassageSearchResult:
+        suffix = hashlib.sha256(query.text.encode("utf-8")).hexdigest()[:12]
+        docid = f"doc-{suffix}"
+        text = f"Grounded evidence for {query.text}."
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        passage_id = f"p-{suffix}"
+        document = SourceDocument(docid, digest, 1, 1.0, passage_id, 1.0)
+        passage = SourcePassage(
+            passage_id,
+            docid,
+            digest,
+            1,
+            1.0,
+            0,
+            len(text),
+            0,
+            len(text.encode("utf-8")),
+            digest,
+            text,
+            1.0,
+            1,
+            f"cache-{suffix}",
+            digest,
+            {"backend": "query-specific-test-chunker"},
+        )
+        return PassageSearchResult(
+            query,
+            "complete",
+            None,
+            1000,
+            1,
+            1,
+            1,
+            (document,),
+            (passage,),
+            1,
+            True,
+        )
+
+
+class _FollowupExplodingPassageSearch(_QuerySpecificPassageSearch):
+    def search(self, query: FocusedQuery) -> PassageSearchResult:
+        if query.query_id == "original":
+            return super().search(query)
+        raise RuntimeError("private worker failure detail")
+
+
+class _OffsetPassageSearch:
+    topic_id = "internal-topic"
+
+    passage_id = "p-offset-exact"
+    passage_text = "The retained passage carries the grounded claim."
+    prefix = "é" * 17
+    document_text = prefix + passage_text + " Trailing source text."
+    start_char = len(prefix)
+    end_char = start_char + len(passage_text)
+    start_byte = len(prefix.encode("utf-8"))
+    end_byte = start_byte + len(passage_text.encode("utf-8"))
+
+    def __init__(self, store: DocumentStore | None = None) -> None:
+        if store is not None:
+            store.admit_text(self.document_text)
+
+    def search(self, query: FocusedQuery) -> PassageSearchResult:
+        content_digest = hashlib.sha256(
+            self.document_text.encode("utf-8")
+        ).hexdigest()
+        passage_digest = hashlib.sha256(
+            self.passage_text.encode("utf-8")
+        ).hexdigest()
+        passage = SourcePassage(
+            self.passage_id,
+            "doc-offset",
+            content_digest,
+            1,
+            0.95,
+            self.start_char,
+            self.end_char,
+            self.start_byte,
+            self.end_byte,
+            passage_digest,
+            self.passage_text,
+            0.95,
+            1,
+            "cache-offset-exact",
+            passage_digest,
+            {"backend": "offset-test-chunker"},
+        )
+        document = SourceDocument(
+            "doc-offset", content_digest, 1, 0.95, self.passage_id, 0.95
+        )
+        return PassageSearchResult(
+            query,
+            "complete",
+            None,
+            1000,
+            1,
+            1,
+            1,
+            (document,),
+            (passage,),
+            1,
+            True,
+        )
+
+
+def _topic_sdk(
+    agent_factory,
+    *,
+    passage_search=None,
+    budget_config: ResearchBudgetConfig | None = None,
+) -> DeepAgentRetriever:
+    return DeepAgentRetriever(
+        passage_search=passage_search or _QuerySpecificPassageSearch(),
+        agent_factory=agent_factory,
+        tracing=FakeTracing(),
+        model="test-model",
+        budget_config=budget_config,
+    )
+
+
+def _add_needs(toolset, *need_ids: str) -> None:
+    result = json.loads(
+        toolset.update_retrieval_state(
+            {
+                "add_needs": [
+                    {
+                        "need_id": need_id,
+                        "narrative_span": "narrative",
+                        "question": f"What evidence closes {need_id}?",
+                    }
+                    for need_id in need_ids
+                ]
+            }
+        )
+    )
+    assert set(need_ids) <= set(result["accepted_ids"])
+
+
+def _add_need_and_facet(toolset, *, need_id: str, facet_id: str) -> None:
+    result = json.loads(
+        toolset.update_retrieval_state(
+            {
+                "add_needs": [
+                    {
+                        "need_id": need_id,
+                        "narrative_span": "narrative",
+                        "question": f"What evidence closes {need_id}?",
+                    }
+                ],
+                "add_facets": [
+                    {
+                        "facet_id": facet_id,
+                        "need_ids": [need_id],
+                        "dimension": "evidence",
+                        "value": f"Evidence for {facet_id}",
+                        "origin": "narrative",
+                    }
+                ],
+            }
+        )
+    )
+    assert {need_id, facet_id} <= set(result["accepted_ids"])
+
+
+def _run_researcher_search(
+    toolset,
+    *,
+    researcher_id: str,
+    round_index: int,
+    motivating_id: str,
+    query: str,
+) -> dict[str, object]:
+    context = ResearchTaskContext(
+        researcher_id,
+        round_index,
+        "focused",
+        (motivating_id,),
+    )
+    envelope = ResearchTaskEnvelope(
+        research_task_id=researcher_id,
+        round_index=round_index,
+        depth="focused",
+        motivating_ids=[motivating_id],
+        goal=f"Find evidence for {motivating_id}.",
+    )
+    assert toolset.budget.reserve_task(context).ok
+    try:
+        with bind_research_task(envelope):
+            return json.loads(
+                toolset.search_passages(
+                    query,
+                    [motivating_id],
+                    f"{motivating_id} has no evidence.",
+                )
+            )
+    finally:
+        toolset.budget.finish_task(context)
+
+
+def test_unexpected_research_tool_error_is_sanitized_and_raised_after_agent(
+) -> None:
+    captured: dict[str, object] = {}
+    records = _RecordingTopicLedger(
+        topic_id="internal-topic",
+        run_id="run-tool-failure",
+    )
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            captured["tool_payload"] = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="trigger worker failure",
+            )
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        return FakeAgent(invoke)
+
+    with pytest.raises(AgentRetrievalError, match="retrieval tool failed") as raised:
+        _topic_sdk(
+            agent_factory,
+            passage_search=_FollowupExplodingPassageSearch(),
+        ).retrieve(records, "narrative")
+
+    tool_payload = captured["tool_payload"]
+    assert isinstance(tool_payload, dict)
+    assert set(tool_payload) == {
+        "budget_snapshot",
+        "code",
+        "error",
+        "must_stop",
+        "ok",
+        "tool",
+    }
+    assert tool_payload["code"] == "INTERNAL_TOOL_FAILURE"
+    assert tool_payload["error"] == "internal retrieval tool failed"
+    assert tool_payload["must_stop"] is True
+    assert tool_payload["ok"] is False
+    assert tool_payload["tool"] == "search_passages"
+    assert isinstance(tool_payload["budget_snapshot"], dict)
+    assert "private worker failure detail" not in json.dumps(tool_payload)
+    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert [search.query.query_id for search in records.searches] == ["original"]
+    assert records.completion is None
+
+
+def _assert_returned_completion(
+    result,
+    records: _RecordingTopicLedger,
+    *,
+    status: str,
+    stopping_reason: str,
+) -> None:
+    assert result.topic_snapshot.status == status
+    assert result.topic_snapshot.stopping_reason == stopping_reason
+    assert records.snapshots == 1
+    assert records.events[-2:] == [
+        ("completion", status, stopping_reason),
+        ("snapshot", (status, stopping_reason)),
+    ]
+
+
+def test_direct_passage_citation_retains_exact_source_passage_and_offsets(
+    tmp_path,
+) -> None:
+    store = DocumentStore(tmp_path / "objects")
+    passage_search = _OffsetPassageSearch(store)
+    records = TopicRecordsBuilder(
+        tmp_path / "topic",
+        passage_search.topic_id,
+        store,
+        run_id="run-1",
+    )
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="offset grounded evidence",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-offset",
+                                "text": passage_search.passage_text,
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["facet-1"],
+                                "evidence": [{"cite": payload["passages"][0]["cite"]}],
+                            }
+                        ]
+                    }
+                )
+            )
+            assert update["accepted_ids"] == ["nugget-offset"]
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        passage_search=passage_search,
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason != "evidence_validation_failed"
+    recorded = next(
+        passage
+        for passage in result.topic_snapshot.passages
+        if passage.passage_id == passage_search.passage_id
+    )
+    assert (
+        recorded.start_char,
+        recorded.end_char,
+        recorded.start_byte,
+        recorded.end_byte,
+    ) == (
+        passage_search.start_char,
+        passage_search.end_char,
+        passage_search.start_byte,
+        passage_search.end_byte,
+    )
+    assert [
+        (row.subnarrative_id, row.passage_id)
+        for handoff in result.topic_snapshot.researcher_handoffs
+        for row in handoff.evidence
+    ] == [
+        ("facet-1", passage_search.passage_id)
+    ]
+
+
+def test_direct_need_citation_retains_exact_source_passage_and_offsets(
+    tmp_path,
+) -> None:
+    store = DocumentStore(tmp_path / "objects")
+    passage_search = _OffsetPassageSearch(store)
+    records = TopicRecordsBuilder(
+        tmp_path / "topic",
+        passage_search.topic_id,
+        store,
+        run_id="run-1",
+    )
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_needs(toolset, "need-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="need-1",
+                query="direct need grounded evidence",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-unhanded-off",
+                                "text": "The retained passage carries the grounded claim.",
+                                "need_ids": ["need-1"],
+                                "facet_ids": [],
+                                "evidence": [{"cite": payload["passages"][0]["cite"]}],
+                            }
+                        ]
+                    }
+                )
+            )
+            assert update["accepted_ids"] == ["nugget-unhanded-off"]
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        passage_search=passage_search,
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason != "evidence_validation_failed"
+    recorded = next(
+        passage
+        for passage in result.topic_snapshot.passages
+        if passage.passage_id == passage_search.passage_id
+    )
+    assert (
+        recorded.start_char,
+        recorded.end_char,
+        recorded.start_byte,
+        recorded.end_byte,
+    ) == (
+        passage_search.start_char,
+        passage_search.end_char,
+        passage_search.start_byte,
+        passage_search.end_byte,
+    )
+    assert [
+        (row.subnarrative_id, row.passage_id)
+        for handoff in result.topic_snapshot.researcher_handoffs
+        for row in handoff.evidence
+    ] == [("need-1", passage_search.passage_id)]
+
+
+def test_direct_multi_need_citation_admits_each_need_and_deduplicates_passage(
+    tmp_path,
+) -> None:
+    store = DocumentStore(tmp_path / "objects")
+    passage_search = _OffsetPassageSearch(store)
+    records = TopicRecordsBuilder(
+        tmp_path / "topic",
+        passage_search.topic_id,
+        store,
+        run_id="run-1",
+    )
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_needs(toolset, "need-1", "need-2")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="need-1",
+                query="multi need grounded evidence",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": nugget_id,
+                                "text": passage_search.passage_text,
+                                "need_ids": ["need-1", "need-2"],
+                                "facet_ids": [],
+                                "evidence": [
+                                    {"cite": payload["passages"][0]["cite"]}
+                                ],
+                            }
+                            for nugget_id in ("nugget-one", "nugget-two")
+                        ]
+                    }
+                )
+            )
+            assert set(update["accepted_ids"]) == {"nugget-one", "nugget-two"}
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        passage_search=passage_search,
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason != "evidence_validation_failed"
+    assert sorted(
+        (row.subnarrative_id, row.passage_id)
+        for handoff in result.topic_snapshot.researcher_handoffs
+        for row in handoff.evidence
+    ) == [
+        ("need-1", passage_search.passage_id),
+        ("need-2", passage_search.passage_id),
+    ]
+
+
+def test_live_coverage_citation_dropped_by_projector_fails_validation(
+    monkeypatch,
+) -> None:
+    records = _RecordingTopicLedger()
+    evidence_type = deepagent_retrieval.ResearcherEvidence
+
+    def replace_passage_id(subnarrative_id, passage_id, relevance):
+        return evidence_type(
+            subnarrative_id,
+            f"dropped-{passage_id}",
+            relevance,
+        )
+
+    monkeypatch.setattr(
+        deepagent_retrieval,
+        "ResearcherEvidence",
+        replace_passage_id,
+    )
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="citation dropped from durable handoff",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-dropped",
+                                "text": "The retained passage carries the grounded claim.",
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["facet-1"],
+                                "evidence": [
+                                    {"cite": payload["passages"][0]["cite"]}
+                                ],
+                            }
+                        ]
+                    }
+                )
+            )
+            assert update["accepted_ids"] == ["nugget-dropped"]
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        passage_search=_OffsetPassageSearch(),
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "evidence_validation_failed"
+    assert result.topic_snapshot.status == "incomplete"
+    assert result.topic_snapshot.stopping_reason == "evidence_validation_failed"
+
+
+def test_legacy_extraction_after_shared_search_returns_unknown_document() -> None:
+    records = _RecordingTopicLedger()
+    extractor = RecordingSnippetExtractor()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="shared search before legacy extraction",
+            )
+            context = ResearchTaskContext("researcher-2", 1, "focused", ("facet-1",))
+            envelope = ResearchTaskEnvelope(
+                research_task_id="researcher-2",
+                round_index=1,
+                depth="focused",
+                motivating_ids=["facet-1"],
+                goal="Find evidence for facet-1.",
+            )
+            assert toolset.budget.reserve_task(context).ok
+            try:
+                with bind_research_task(envelope):
+                    response = json.loads(
+                        toolset.extract_relevant_snippets(
+                            payload["passages"][0]["document_id"],
+                            "shared search before legacy extraction",
+                            ["facet-1"],
+                            "facet-1 still needs evidence.",
+                        )
+                    )
+            finally:
+                toolset.budget.finish_task(context)
+            assert response["code"] == "UNKNOWN_DOCUMENT"
+            assert extractor.calls == []
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    _topic_sdk(agent_factory, passage_search=_OffsetPassageSearch()).retrieve(
+        records, "narrative"
+    )
+
+
+def test_provider_stop_after_validated_research_returns_and_persists_partial_topic() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="provider partial evidence",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-1",
+                                "text": "Validated provider-partial evidence.",
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["facet-1"],
+                                "evidence": [
+                                    {"cite": payload["passages"][0]["cite"]}
+                                ],
+                            }
+                        ]
+                    }
+                )
+            )
+            assert update["accepted_ids"] == ["nugget-1"]
+            raise RuntimeError("provider unavailable")
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(agent_factory).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "retrieval_unavailable"
+    assert len(records.handoffs) == 1
+    assert [row.passage_id for row in records.handoffs[0].evidence] == [
+        records.searches[1].passages[0].passage_id
+    ]
+    _assert_returned_completion(
+        result,
+        records,
+        status="incomplete",
+        stopping_reason="retrieval_unavailable",
+    )
+
+
+def test_programming_failure_after_search_remains_loud() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, _toolset):
+        return FakeAgent(
+            lambda _payload: (_ for _ in ()).throw(ValueError("programming conflict"))
+        )
+
+    with pytest.raises(ValueError, match="programming conflict"):
+        _topic_sdk(agent_factory).retrieve(records, "narrative")
+
+    assert records.completion is None
+    assert records.snapshots == 0
+
+
+def test_two_researchers_commit_only_their_evidence_and_discovered_facets() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            for need_id in ("need-1", "need-2"):
+                accepted = json.loads(
+                    toolset.update_retrieval_state(
+                        {
+                            "add_needs": [
+                                {
+                                    "need_id": need_id,
+                                    "narrative_span": "narrative",
+                                    "question": f"What closes {need_id}?",
+                                }
+                            ]
+                        }
+                    )
+                )
+                assert accepted["accepted_ids"] == [need_id]
+
+            for index in (1, 2):
+                researcher_id = f"researcher-{index}"
+                need_id = f"need-{index}"
+                facet_id = f"discovered-{index}"
+                payload = _run_researcher_search(
+                    toolset,
+                    researcher_id=researcher_id,
+                    round_index=index,
+                    motivating_id=need_id,
+                    query=f"disjoint query {index}",
+                )
+                passage = payload["passages"][0]
+                envelope = ResearchTaskEnvelope(
+                    research_task_id=researcher_id,
+                    round_index=index,
+                    depth="focused",
+                    motivating_ids=[need_id],
+                    goal=f"Find evidence for {need_id}.",
+                )
+                with bind_research_task(envelope):
+                    update = json.loads(
+                        toolset.update_retrieval_state(
+                            {
+                                "add_facets": [
+                                    {
+                                        "facet_id": facet_id,
+                                        "need_ids": [need_id],
+                                        "dimension": "discovered",
+                                        "value": f"Discovered facet {index}",
+                                        "origin": "snippet",
+                                        "origin_snippet_id": passage["passage_id"],
+                                    }
+                                ],
+                                "add_nuggets": [
+                                    {
+                                        "nugget_id": f"nugget-{index}",
+                                        "text": f"Disjoint evidence {index}.",
+                                        "need_ids": [need_id],
+                                        "facet_ids": [facet_id],
+                                        "evidence": [{"cite": passage["cite"]}],
+                                    }
+                                ],
+                            }
+                        )
+                    )
+                assert set(update["accepted_ids"]) == {
+                    facet_id,
+                    f"nugget-{index}",
+                }
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    _topic_sdk(agent_factory).retrieve(records, "narrative")
+
+    handoffs = {row.researcher_id: row for row in records.handoffs}
+    assert set(handoffs) == {"researcher-1", "researcher-2"}
+    assert [row.subnarrative_id for row in handoffs["researcher-1"].facet_updates] == [
+        "discovered-1"
+    ]
+    assert [row.subnarrative_id for row in handoffs["researcher-2"].facet_updates] == [
+        "discovered-2"
+    ]
+    assert [row.passage_id for row in handoffs["researcher-1"].evidence] == [
+        records.searches[1].passages[0].passage_id
+    ]
+    assert [row.passage_id for row in handoffs["researcher-2"].evidence] == [
+        records.searches[2].passages[0].passage_id
+    ]
+
+
+def test_shared_passage_discovered_facet_is_handed_off_only_by_its_creator() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            for index in (1, 2):
+                _add_need_and_facet(
+                    toolset,
+                    need_id=f"need-{index}",
+                    facet_id=f"facet-{index}",
+                )
+
+            observed_passage_ids = []
+            for index in (1, 2):
+                researcher_id = f"researcher-{index}"
+                motivating_id = f"facet-{index}"
+                context = ResearchTaskContext(
+                    researcher_id,
+                    index,
+                    "focused",
+                    (motivating_id,),
+                )
+                envelope = ResearchTaskEnvelope(
+                    research_task_id=researcher_id,
+                    round_index=index,
+                    depth="focused",
+                    motivating_ids=[motivating_id],
+                    goal=f"Find evidence for {motivating_id}.",
+                )
+                assert toolset.budget.reserve_task(context).ok
+                try:
+                    with bind_research_task(envelope):
+                        payload = json.loads(
+                            toolset.search_passages(
+                                f"overlapping query {index}",
+                                [motivating_id],
+                                f"{motivating_id} has no evidence.",
+                            )
+                        )
+                        passage = payload["passages"][0]
+                        observed_passage_ids.append(passage["passage_id"])
+                        if index == 1:
+                            update = json.loads(
+                                toolset.update_retrieval_state(
+                                    {
+                                        "add_facets": [
+                                            {
+                                                "facet_id": "creator-only-facet",
+                                                "need_ids": ["need-1"],
+                                                "dimension": "discovered",
+                                                "value": "Created only by researcher 1",
+                                                "origin": "snippet",
+                                                "origin_snippet_id": passage[
+                                                    "passage_id"
+                                                ],
+                                            }
+                                        ]
+                                    }
+                                )
+                            )
+                            assert update["accepted_ids"] == ["creator-only-facet"]
+                finally:
+                    toolset.budget.finish_task(context)
+
+            assert observed_passage_ids[0] == observed_passage_ids[1]
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    _topic_sdk(
+        agent_factory,
+        passage_search=_SharedPassageSearch(),
+    ).retrieve(records, "narrative")
+
+    handoffs = {row.researcher_id: row for row in records.handoffs}
+    assert [row.subnarrative_id for row in handoffs["researcher-1"].facet_updates] == [
+        "creator-only-facet"
+    ]
+    assert handoffs["researcher-2"].facet_updates == ()
+
+
+def test_complete_topic_is_written_before_returned_snapshot() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            passage = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="complete grounded evidence",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-1",
+                                "text": "Complete grounded evidence.",
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["facet-1"],
+                                "evidence": [{"cite": passage["passages"][0]["cite"]}],
+                            }
+                        ],
+                        "set_need_status": [
+                            {
+                                "need_id": "need-1",
+                                "status": "answerable",
+                                "remaining_gap": "",
+                                "draft_answer": "Complete grounded answer.",
+                                "draft_nugget_ids": ["nugget-1"],
+                            }
+                        ],
+                    }
+                )
+            )
+            assert "nugget-1" in update["accepted_ids"]
+            assert json.loads(toolset.complete_retrieval())["ok"] is True
+            return {"messages": [{"role": "assistant", "content": "Complete."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(agent_factory).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "completion"
+    _assert_returned_completion(
+        result,
+        records,
+        status="complete",
+        stopping_reason="coverage_sufficient",
+    )
+
+
+def test_budget_exhaustion_is_written_before_returned_snapshot() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="single budgeted query",
+            )
+            assert payload["ok"] is True
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        budget_config=ResearchBudgetConfig(max_retrieval_calls=1),
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "budget_exhausted"
+    _assert_returned_completion(
+        result,
+        records,
+        status="incomplete",
+        stopping_reason="budget_exhausted",
+    )
+
+
+def test_hard_deadline_is_written_before_returned_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClock:
+        seconds = 0.0
+
+        def __call__(self) -> float:
+            return self.seconds
+
+    clock = FakeClock()
+    real_budget = ResearchBudget
+    monkeypatch.setattr(
+        deepagent_retrieval,
+        "ResearchBudget",
+        lambda config: real_budget(config, clock=clock),
+    )
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, _toolset):
+        def invoke(_payload):
+            clock.seconds = 2.0
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        budget_config=ResearchBudgetConfig(soft_seconds=0, hard_seconds=1),
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "hard_deadline"
+    _assert_returned_completion(
+        result,
+        records,
+        status="incomplete",
+        stopping_reason="hard_deadline",
+    )
+
+
+def test_no_evidence_is_written_before_returned_snapshot() -> None:
+    records = _RecordingTopicLedger()
+    result = _topic_sdk(
+        lambda _model, _toolset: FakeAgent(
+            lambda _payload: {
+                "messages": [{"role": "assistant", "content": "No evidence."}]
+            }
+        )
+    ).retrieve(records, "narrative")
+
+    _assert_returned_completion(
+        result,
+        records,
+        status="incomplete",
+        stopping_reason="no_evidence",
+    )

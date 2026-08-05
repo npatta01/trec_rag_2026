@@ -4,30 +4,33 @@ The score builder intentionally uses the same schema-v2 artifact and global
 content-cache interfaces on local and remote hardware.  This module is the
 trust boundary between a downloaded staging directory and the shared local
 cache: it reconciles the download against the local retrieval inputs, validates
-all four JSONL files, and only then switches the destination files into place.
+the JSONL artifacts plus sealed SQLite score databases, and logically imports
+scores before publishing a manifest-last promotion receipt.
 
-Promotion is a quiescent-process operation: no scorer, cache writer, or second
-promotion process may mutate the staged or destination files during the
-transaction.  Within that contract, every live-file switch is atomic and any
-process-local failure, including ``KeyboardInterrupt``, triggers rollback.
+Source databases are never copied as files.  Identical promotion attempts are
+serialized, and bounded logical imports make retries safe after a process-local
+failure, including ``KeyboardInterrupt``.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import math
 import os
 import re
+import sqlite3
 import shutil
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
 from trec_rag.pipeline import pipeline_cache_dir
@@ -40,11 +43,13 @@ from trec_rag.rerank_score_cache import (
     DEFAULT_INDEX_URL,
     DEFAULT_MODEL_REVISION,
     DEFAULT_SCORE_REPRESENTATION,
+    GlobalScoreCache,
     ScoreCacheContext,
     _queries_by_topic,
     _topic_candidates,
     _topics,
     build_arg_parser as build_score_cache_arg_parser,
+    score_cache_key_from_hashes,
 )
 
 
@@ -101,6 +106,26 @@ RAG25_WINDOW_ROWS_PER_TOPIC = {
 }
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+_SQLITE_HEADER = b"SQLite format 3\x00"
+_SCORE_CACHE_SCHEMA_VERSION = "score-cache-v2"
+_FALSE_LEGACY_INPUT_POLICIES = frozenset(
+    {"trec_rag_raw_v2", "extractive_sentence_pair_v1"}
+)
+_EFFECTIVE_INPUT_POLICY = "trec_rag_whitespace_v1"
+_SCORE_CACHE_OBJECTS = {
+    ("table", "cache_meta"),
+    ("table", "scores"),
+    ("table", "claims"),
+    ("table", "imports"),
+    ("index", "claims_expiry_idx"),
+}
+_SCORE_CACHE_OBJECT_SQL = {
+    ("table", "cache_meta"): "CREATE TABLE cache_meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL ) STRICT",
+    ("table", "scores"): "CREATE TABLE scores ( key_sha256 BLOB PRIMARY KEY CHECK(length(key_sha256) = 32), query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32), text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32), score REAL NOT NULL CHECK(typeof(score) = 'real' AND score = score AND abs(score) <= 1.7976931348623157e+308) ) STRICT",
+    ("table", "claims"): "CREATE TABLE claims ( key_sha256 BLOB PRIMARY KEY CHECK(length(key_sha256) = 32), query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32), text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32), owner TEXT NOT NULL, token BLOB NOT NULL CHECK(length(token) = 16), claimed_at REAL NOT NULL, lease_expires_at REAL NOT NULL ) STRICT",
+    ("table", "imports"): "CREATE TABLE imports ( source_sha256 BLOB PRIMARY KEY CHECK(length(source_sha256) = 32), source_path TEXT NOT NULL, source_row_count INTEGER NOT NULL CHECK(source_row_count >= 0), inserted_count INTEGER NOT NULL CHECK(inserted_count >= 0), logical_digest BLOB NOT NULL CHECK(length(logical_digest) = 32), authorization_sha256 BLOB CHECK(authorization_sha256 IS NULL OR length(authorization_sha256) = 32) ) STRICT",
+    ("index", "claims_expiry_idx"): "CREATE INDEX claims_expiry_idx ON claims(lease_expires_at)",
+}
 
 
 class CacheBundleValidationError(ValueError):
@@ -155,14 +180,18 @@ class FileValidation:
     sha256: str
     row_count: int
     unique_key_count: int
+    logical_digest: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "path": str(self.path),
             "sha256": self.sha256,
             "row_count": self.row_count,
             "unique_key_count": self.unique_key_count,
         }
+        if self.logical_digest is not None:
+            payload["logical_digest"] = self.logical_digest
+        return payload
 
 
 @dataclass(frozen=True)
@@ -438,18 +467,11 @@ def _validate_artifact_metadata(
 def _cache_key_from_hashes(
     context: ScoreCacheContext, *, query_sha256: str, text_sha256: str
 ) -> str:
-    payload = {
-        "schema_version": 2,
-        "backend": context.backend,
-        "model": context.model,
-        "max_length": context.max_length,
-        "score_kind": context.score_kind,
-        **context.cache_identity_metadata,
-        "query_sha256": query_sha256,
-        "text_sha256": text_sha256,
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return _sha256_text(encoded)
+    return score_cache_key_from_hashes(
+        context,
+        query_sha256=query_sha256,
+        text_sha256=text_sha256,
+    )
 
 
 def _record_cache_reference(
@@ -487,10 +509,15 @@ def _require_expected_context(
     expected: ScoreCacheContext | None,
     *,
     label: str,
+    allow_legacy_policy_rebinding: bool = False,
 ) -> bool:
     if expected is None:
         return False
     if actual == expected:
+        return True
+    if allow_legacy_policy_rebinding and _is_legacy_policy_rebinding(
+        actual, expected
+    ):
         return True
     actual_fields = asdict(actual)
     expected_fields = asdict(expected)
@@ -502,6 +529,20 @@ def _require_expected_context(
     raise CacheBundleValidationError(
         f"{label} artifact context differs from selected config: "
         + ", ".join(mismatches)
+    )
+
+
+def _is_legacy_policy_rebinding(
+    legacy_context: ScoreCacheContext, target_context: ScoreCacheContext
+) -> bool:
+    if legacy_context.input_policy not in _FALSE_LEGACY_INPUT_POLICIES:
+        return False
+    if target_context.input_policy != _EFFECTIVE_INPUT_POLICY:
+        return False
+    return all(
+        legacy_value == getattr(target_context, field)
+        for field, legacy_value in asdict(legacy_context).items()
+        if field != "input_policy"
     )
 
 
@@ -782,65 +823,233 @@ def _resolve_cache_paths(
     return document_path, window_path
 
 
+def _normalize_schema_sql(value: str) -> str:
+    normalized = value.lower().rstrip(";")
+    for character in "(),=":
+        normalized = normalized.replace(character, f" {character} ")
+    return " ".join(normalized.split())
+
+
+def _score_cache_sidecars(path: Path) -> tuple[Path, Path]:
+    return (
+        path.with_name(path.name + "-wal"),
+        path.with_name(path.name + "-shm"),
+    )
+
+
+def _assert_sealed_score_cache(path: Path) -> None:
+    sidecars = [
+        sidecar
+        for sidecar in _score_cache_sidecars(path)
+        if sidecar.exists() or sidecar.is_symlink()
+    ]
+    if sidecars:
+        raise CacheBundleValidationError(
+            f"{path}: sealed score cache has an active or uncheckpointed WAL sidecar: "
+            + ", ".join(str(sidecar) for sidecar in sidecars)
+        )
+
+
+def _verify_sealed_score_cache_identity(path: Path, expected_sha256: str) -> None:
+    _assert_sealed_score_cache(path)
+    if _sha256_file(path) != expected_sha256:
+        raise CacheBundleValidationError(f"sealed score cache changed: {path}")
+    _assert_sealed_score_cache(path)
+
+
+def _open_score_cache(
+    path: Path,
+    context: ScoreCacheContext,
+    *,
+    sealed: bool,
+) -> sqlite3.Connection:
+    if path.is_symlink() or not path.is_file():
+        raise CacheBundleValidationError(
+            f"{path}: score cache must be a regular SQLite database"
+        )
+    if sealed:
+        _assert_sealed_score_cache(path)
+    connection: sqlite3.Connection | None = None
+    try:
+        with path.open("rb") as source:
+            header = source.read(20)
+            if header[: len(_SQLITE_HEADER)] != _SQLITE_HEADER:
+                raise CacheBundleValidationError(
+                    f"{path}: score cache is not a SQLite database"
+                )
+            if sealed and header[18:20] != b"\x02\x02":
+                raise CacheBundleValidationError(
+                    f"{path}: score cache is not a sealed WAL database"
+                )
+        uri = (
+            f"file:{quote(str(path.resolve()), safe='/')}?mode=ro"
+            + ("&immutable=1" if sealed else "")
+        )
+        connection = sqlite3.connect(uri, uri=True, timeout=5, isolation_level=None)
+        connection.execute("PRAGMA query_only = ON")
+        journal_mode = str(
+            connection.execute("PRAGMA journal_mode").fetchone()[0]
+        ).lower()
+        if not sealed and journal_mode != "wal":
+            raise CacheBundleValidationError(
+                f"{path}: score cache must use WAL journal mode; found {journal_mode!r}"
+            )
+        if sealed and str(
+            connection.execute("PRAGMA locking_mode").fetchone()[0]
+        ).lower() != "normal":
+            raise CacheBundleValidationError(
+                f"{path}: score cache has an active exclusive lock"
+            )
+        schema_rows = connection.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        ).fetchall()
+        actual_objects = {(str(row[0]), str(row[1])) for row in schema_rows}
+        if actual_objects != _SCORE_CACHE_OBJECTS:
+            raise CacheBundleValidationError(
+                f"{path}: score-cache-v2 schema objects do not match exactly; "
+                f"found {sorted(actual_objects)!r}"
+            )
+        for row in schema_rows:
+            identity = (str(row[0]), str(row[1]))
+            if _normalize_schema_sql(str(row[2])) != _normalize_schema_sql(
+                _SCORE_CACHE_OBJECT_SQL[identity]
+            ):
+                raise CacheBundleValidationError(
+                    f"{path}: score-cache-v2 schema definition mismatch for {identity!r}"
+                )
+        metadata_rows = connection.execute(
+            "SELECT key, value FROM cache_meta ORDER BY key"
+        ).fetchall()
+        if any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in metadata_rows
+        ):
+            raise CacheBundleValidationError(f"{path}: score-cache-v2 metadata is malformed")
+        metadata = dict(metadata_rows)
+        expected_metadata = {
+            "schema_version": _SCORE_CACHE_SCHEMA_VERSION,
+            "context_sha256": context.context_sha256,
+            "context_json": context.context_json,
+        }
+        if metadata != expected_metadata or len(metadata_rows) != len(expected_metadata):
+            raise CacheBundleValidationError(
+                f"{path}: score-cache-v2 schema/context metadata mismatch"
+            )
+        integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+        if integrity_rows != [("ok",)]:
+            raise CacheBundleValidationError(
+                f"{path}: SQLite integrity check failed: {integrity_rows!r}"
+            )
+        return connection
+    except CacheBundleValidationError:
+        if connection is not None:
+            connection.close()
+        raise
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        if connection is not None:
+            connection.close()
+        raise CacheBundleValidationError(
+            f"{path}: invalid SQLite score cache: {exc}"
+        ) from exc
+
+
+def _score_cache_row(
+    path: Path,
+    context: ScoreCacheContext,
+    row: Sequence[Any],
+) -> tuple[str, str, str, float]:
+    key, query_hash, text_hash, score, score_type = row
+    if not all(
+        isinstance(value, bytes) and len(value) == 32
+        for value in (key, query_hash, text_hash)
+    ):
+        raise CacheBundleValidationError(
+            f"{path}: score cache hashes must be 32-byte BLOBs"
+        )
+    if (
+        score_type != "real"
+        or isinstance(score, bool)
+        or not isinstance(score, int | float)
+    ):
+        raise CacheBundleValidationError(
+            f"{path}: score cache scores must be SQLite REAL values, not Boolean or other types"
+        )
+    value = float(score)
+    if not math.isfinite(value):
+        raise CacheBundleValidationError(f"{path}: score cache contains a nonfinite score")
+    key_hex = bytes(key).hex()
+    query_hex = bytes(query_hash).hex()
+    text_hex = bytes(text_hash).hex()
+    expected_key = _cache_key_from_hashes(
+        context, query_sha256=query_hex, text_sha256=text_hex
+    )
+    if key_hex != expected_key:
+        raise CacheBundleValidationError(
+            f"{path}: score cache key does not match metadata/content hashes"
+        )
+    return key_hex, query_hex, text_hex, value
+
+
+def _score_row_digest(
+    key_hex: str, query_hex: str, text_hex: str, score: float
+) -> bytes:
+    return hashlib.sha256(
+        bytes.fromhex(key_hex)
+        + bytes.fromhex(query_hex)
+        + bytes.fromhex(text_hex)
+        + score.hex().encode("ascii")
+    ).digest()
+
+
 def _validate_score_cache(
     path: Path,
     context: ScoreCacheContext,
     artifact_references: Mapping[str, _CacheReference],
 ) -> tuple[FileValidation, int]:
-    cache_references: dict[str, _CacheReference] = {}
+    connection = _open_score_cache(path, context, sealed=True)
+    covered_keys: set[str] = set()
     row_count = 0
-    expected_metadata = {
-        "schema_version": 2,
-        **context.cache_identity_metadata,
-        "max_length": context.max_length,
-        "score_kind": context.score_kind,
-    }
-    for line_number, row in _jsonl_rows(path):
-        row_count += 1
-        for field, expected in expected_metadata.items():
-            if row.get(field) != expected:
+    extra_count = 0
+    logical_hasher = hashlib.sha256(bytes.fromhex(context.context_sha256))
+    try:
+        for row in connection.execute(
+            "SELECT key_sha256, query_sha256, text_sha256, score, typeof(score) "
+            "FROM scores ORDER BY key_sha256"
+        ):
+            cache_key, query_hash, text_hash, score = _score_cache_row(
+                path, context, row
+            )
+            row_count += 1
+            logical_hasher.update(
+                _score_row_digest(cache_key, query_hash, text_hash, score)
+            )
+            artifact_reference = artifact_references.get(cache_key)
+            if artifact_reference is None:
+                extra_count += 1
+                continue
+            covered_keys.add(cache_key)
+            if artifact_reference != _CacheReference(query_hash, text_hash, score):
                 raise CacheBundleValidationError(
-                    f"{path}:{line_number}: {field} must be {expected!r}; "
-                    f"found {row.get(field)!r}"
+                    f"{path}: global cache conflicts with artifact key {cache_key}"
                 )
-        query_hash = _required_sha256(
-            row, "query_sha256", path=path, line_number=line_number
-        )
-        text_hash = _required_sha256(
-            row, "text_sha256", path=path, line_number=line_number
-        )
-        cache_key = _required_sha256(
-            row, "cache_key", path=path, line_number=line_number
-        )
-        score = _finite_score(row, path=path, line_number=line_number)
-        expected_cache_key = _cache_key_from_hashes(
-            context, query_sha256=query_hash, text_sha256=text_hash
-        )
-        if cache_key != expected_cache_key:
+        missing_count = len(artifact_references) - len(covered_keys)
+        if missing_count:
             raise CacheBundleValidationError(
-                f"{path}:{line_number}: cache_key does not match metadata/content hashes"
+                f"{path}: global cache is missing {missing_count} artifact score keys"
             )
-        _record_cache_reference(
-            cache_references,
-            cache_key,
-            _CacheReference(query_hash, text_hash, score),
-            label="global score cache key",
+        return (
+            FileValidation(
+                path,
+                _sha256_file(path),
+                row_count,
+                row_count,
+                logical_digest=logical_hasher.hexdigest(),
+            ),
+            extra_count,
         )
-
-    missing = set(artifact_references) - set(cache_references)
-    if missing:
-        raise CacheBundleValidationError(
-            f"{path}: global cache is missing {len(missing)} artifact score keys"
-        )
-    for cache_key, artifact_reference in artifact_references.items():
-        if cache_references[cache_key] != artifact_reference:
-            raise CacheBundleValidationError(
-                f"{path}: global cache conflicts with artifact key {cache_key}"
-            )
-    return (
-        FileValidation(path, _sha256_file(path), row_count, len(cache_references)),
-        len(set(cache_references) - set(artifact_references)),
-    )
+    finally:
+        connection.close()
 
 
 def _runtime_count(
@@ -1024,6 +1233,7 @@ def validate_cache_bundle(
     *,
     expectations: BundleExpectations | None = None,
     runtime_status_path: Path | None = None,
+    _allow_legacy_policy_rebinding: bool = False,
 ) -> BundleValidation:
     """Validate a staged document/window artifact and its schema-v2 caches."""
 
@@ -1036,11 +1246,13 @@ def validate_cache_bundle(
         document_context,
         expectations.document_context,
         label="document",
+        allow_legacy_policy_rebinding=_allow_legacy_policy_rebinding,
     )
     window_context_matched = _require_expected_context(
         window_context,
         expectations.window_context,
         label="window",
+        allow_legacy_policy_rebinding=_allow_legacy_policy_rebinding,
     )
     if (
         document_context.cache_identity_metadata
@@ -1289,7 +1501,12 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _write_json_durable(path: Path, payload: Mapping[str, object]) -> None:
+def _write_json_durable(
+    path: Path,
+    payload: Mapping[str, object],
+    *,
+    on_replace: Callable[[], None] | None = None,
+) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     with temporary.open("x", encoding="utf-8") as sink:
         json.dump(payload, sink, indent=2, sort_keys=True)
@@ -1297,6 +1514,8 @@ def _write_json_durable(path: Path, payload: Mapping[str, object]) -> None:
         sink.flush()
         os.fsync(sink.fileno())
     os.replace(temporary, path)
+    if on_replace is not None:
+        on_replace()
     _fsync_directory(path.parent)
 
 
@@ -1306,7 +1525,296 @@ def _atomic_replace(source: Path, destination: Path) -> None:
     os.replace(source, destination)
 
 
-def promote_cache_bundle(
+def _validate_destination_score_cache(
+    path: Path, context: ScoreCacheContext
+) -> None:
+    sidecars = _score_cache_sidecars(path)
+    if not path.exists():
+        if any(sidecar.exists() or sidecar.is_symlink() for sidecar in sidecars):
+            raise CacheBundleValidationError(
+                f"destination score cache is missing its main SQLite file: {path}"
+            )
+        return
+    if path.is_symlink() or not path.is_file():
+        raise CacheBundleValidationError(
+            f"destination score cache must be a regular file: {path}"
+        )
+    connection = _open_score_cache(path, context, sealed=False)
+    connection.close()
+
+
+def _destination_cache(
+    path: Path,
+    root: Path | None,
+    context: ScoreCacheContext,
+) -> GlobalScoreCache:
+    if root is None:
+        suffix_length = len(context.path_parts)
+        if len(path.parents) <= suffix_length - 1 or tuple(path.parts[-suffix_length:]) != context.path_parts:
+            raise CacheBundleValidationError(
+                "explicit destination score-cache paths must use the context path layout"
+            )
+        root = path.parents[suffix_length - 1]
+    cache = GlobalScoreCache(root, context)
+    if cache.path.resolve() != path.resolve():
+        cache.close()
+        raise CacheBundleValidationError(
+            f"destination score cache path does not match its context: {path}"
+        )
+    return cache
+
+
+def _import_sqlite_score_cache(
+    source_path: Path,
+    source_context: ScoreCacheContext,
+    target_cache: GlobalScoreCache,
+    target_context: ScoreCacheContext,
+    *,
+    expected_source_sha256: str,
+    expected_source_row_count: int,
+    expected_source_logical_digest: str,
+) -> dict[str, object]:
+    if _sha256_file(source_path) != expected_source_sha256:
+        raise CacheBundleValidationError(
+            f"staged score cache changed after validation: {source_path}"
+        )
+    logical_hasher = hashlib.sha256(bytes.fromhex(source_context.context_sha256))
+    authorization_sha256 = _promotion_authorization_sha256(
+        source_context,
+        target_context,
+    )
+
+    def rows() -> Iterator[dict[str, object]]:
+        connection = _open_score_cache(source_path, source_context, sealed=True)
+        try:
+            for row in connection.execute(
+                "SELECT key_sha256, query_sha256, text_sha256, score, typeof(score) "
+                "FROM scores ORDER BY key_sha256"
+            ):
+                cache_key, query_hash, text_hash, score = _score_cache_row(
+                    source_path, source_context, row
+                )
+                logical_hasher.update(
+                    _score_row_digest(cache_key, query_hash, text_hash, score)
+                )
+                yield {
+                    "key": _cache_key_from_hashes(
+                        target_context,
+                        query_sha256=query_hash,
+                        text_sha256=text_hash,
+                    ),
+                    "query_sha256": query_hash,
+                    "text_sha256": text_hash,
+                    "score": score,
+                }
+        finally:
+            connection.close()
+
+    receipt: dict[str, object] | None = None
+    try:
+        receipt = target_cache.import_scores(
+            rows(),
+            source_path=source_path,
+            source_sha256=expected_source_sha256,
+            authorization_sha256=authorization_sha256,
+            expected_row_count=expected_source_row_count,
+        )
+        if logical_hasher.hexdigest() != expected_source_logical_digest:
+            raise CacheBundleValidationError(
+                f"staged score cache logical digest changed after validation: {source_path}"
+            )
+        _verify_sealed_score_cache_identity(source_path, expected_source_sha256)
+        return receipt
+    except BaseException:
+        if receipt is not None:
+            target_cache._rollback_score_import(receipt)
+        raise
+
+
+def _validate_destination_conflicts(
+    source_path: Path,
+    source_context: ScoreCacheContext,
+    destination_path: Path,
+    destination_context: ScoreCacheContext,
+) -> None:
+    """Check all existing destination rows before either cache is mutated."""
+
+    if not destination_path.exists():
+        return
+    source_connection = _open_score_cache(source_path, source_context, sealed=True)
+    destination_connection = _open_score_cache(
+        destination_path, destination_context, sealed=False
+    )
+    try:
+        for row in destination_connection.execute(
+            "SELECT key_sha256, query_sha256, text_sha256, score, typeof(score) "
+            "FROM scores ORDER BY key_sha256"
+        ):
+            _score_cache_row(destination_path, destination_context, row)
+
+        batch: list[tuple[bytes, str, str, float]] = []
+
+        def check_batch() -> None:
+            if not batch:
+                return
+            expected_by_key = {
+                key: (query_hash, text_hash, score)
+                for key, query_hash, text_hash, score in batch
+            }
+            placeholders = ", ".join("?" for _ in batch)
+            rows = destination_connection.execute(
+                "SELECT key_sha256, query_sha256, text_sha256, score, typeof(score) "
+                f"FROM scores WHERE key_sha256 IN ({placeholders})",
+                tuple(key for key, _query, _text, _score in batch),
+            )
+            for row in rows:
+                observed_key, query_hash, text_hash, score = _score_cache_row(
+                    destination_path, destination_context, row
+                )
+                expected = expected_by_key[bytes.fromhex(observed_key)]
+                if (query_hash, text_hash, score) != expected:
+                    raise CacheBundleValidationError(
+                        f"destination score cache conflicts with staged score key {observed_key}"
+                    )
+            batch.clear()
+
+        for row in source_connection.execute(
+            "SELECT key_sha256, query_sha256, text_sha256, score, typeof(score) "
+            "FROM scores ORDER BY key_sha256"
+        ):
+            source_key, query_hash, text_hash, score = _score_cache_row(
+                source_path, source_context, row
+            )
+            target_key = _cache_key_from_hashes(
+                destination_context,
+                query_sha256=query_hash,
+                text_sha256=text_hash,
+            )
+            batch.append((bytes.fromhex(target_key), query_hash, text_hash, score))
+            if len(batch) >= 512:
+                check_batch()
+        check_batch()
+    finally:
+        destination_connection.close()
+        source_connection.close()
+
+
+def _promotion_authorization_sha256(
+    source_context: ScoreCacheContext,
+    target_context: ScoreCacheContext,
+) -> str:
+    return _sha256_text(
+        json.dumps(
+            {
+                "authorization_schema_version": 1,
+                "legacy_context_sha256": source_context.context_sha256,
+                "target_context_sha256": target_context.context_sha256,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def _promotion_cache_receipt(
+    validation: BundleValidation,
+    *,
+    label: str,
+    target_context: ScoreCacheContext,
+    import_receipt: Mapping[str, object],
+) -> dict[str, object]:
+    summary = (
+        validation.document_score_cache
+        if label == "document"
+        else validation.window_score_cache
+    )
+    legacy_context = (
+        validation.document_context
+        if label == "document"
+        else validation.window_context
+    )
+    authorization_sha256 = _promotion_authorization_sha256(
+        legacy_context,
+        target_context,
+    )
+    if import_receipt.get("source_sha256") != summary.sha256:
+        raise CacheBundleValidationError("score-cache import source receipt mismatch")
+    if import_receipt.get("authorization_sha256") != authorization_sha256:
+        raise CacheBundleValidationError(
+            "score-cache import authorization receipt mismatch"
+        )
+    return {
+        "source_sha256": summary.sha256,
+        "source_logical_digest": summary.logical_digest,
+        "target_logical_digest": import_receipt["logical_digest"],
+        "source_row_count": summary.row_count,
+        "inserted_count": import_receipt["inserted_count"],
+        "already_identical_count": import_receipt["already_identical_count"],
+        "receipt_reused": import_receipt["receipt_reused"],
+        "legacy_context_sha256": legacy_context.context_sha256,
+        "target_context_sha256": target_context.context_sha256,
+        "declared_input_policy": legacy_context.input_policy,
+        "effective_input_policy": target_context.input_policy,
+        "authorization_sha256": authorization_sha256,
+    }
+
+
+def _promotion_destination_paths(
+    destination: CacheBundlePaths,
+    expectations: BundleExpectations,
+) -> tuple[Path, ...]:
+    document_context = expectations.document_context
+    window_context = expectations.window_context
+    if document_context is None or window_context is None:
+        raise CacheBundleValidationError(
+            "promotion requires document/window score contexts derived from the selected config"
+        )
+    document_cache, window_cache = _resolve_cache_paths(
+        destination,
+        document_context,
+        window_context,
+    )
+    return (
+        destination.document_artifact,
+        destination.window_artifact,
+        document_cache,
+        window_cache,
+    )
+
+
+def _acquire_promotion_locks(
+    destination: CacheBundlePaths,
+    expectations: BundleExpectations,
+) -> list[Any]:
+    lock_paths = sorted(
+        {
+            path.resolve().with_name(f".{path.name}.promotion.lock")
+            for path in _promotion_destination_paths(destination, expectations)
+        },
+        key=str,
+    )
+    lock_files: list[Any] = []
+    try:
+        for lock_path in lock_paths:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = lock_path.open("a+b")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            lock_files.append(lock_file)
+        return lock_files
+    except BaseException:
+        _release_promotion_locks(lock_files)
+        raise
+
+
+def _release_promotion_locks(lock_files: Sequence[Any]) -> None:
+    for lock_file in reversed(lock_files):
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+def _promote_cache_bundle_unlocked(
     staged: CacheBundlePaths,
     destination: CacheBundlePaths,
     *,
@@ -1314,20 +1822,21 @@ def promote_cache_bundle(
     expectations: BundleExpectations,
     runtime_status_path: Path | None = None,
 ) -> PromotionResult:
-    """Validate, archive old files, and transactionally switch in a cache bundle.
+    """Validate and promote artifacts while logically importing SQLite scores.
 
-    Each individual switch uses ``os.replace`` in the destination directory.
-    The four-file transaction retains rollback copies until all replacements,
-    checksum checks, and the audit manifest succeed.  Callers must quiesce all
-    other readers/writers that could modify staged or destination paths; this
-    function provides rollback for process-local failures, not coordination
-    with concurrent cache writers.
+    Source score databases are sealed read-only inputs and are never copied.
+    Their rows are imported into the context-bound destination caches in
+    bounded transactions.  Artifact files are switched only after both logical
+    imports succeed; the durable promotion manifest is written last.  A retry
+    after an interrupted import is safe because ``GlobalScoreCache`` treats
+    identical existing rows as idempotent and rejects contradictory rows.
     """
 
     validation = validate_cache_bundle(
         staged,
         expectations=expectations,
         runtime_status_path=runtime_status_path,
+        _allow_legacy_policy_rebinding=True,
     )
     if (
         not validation.reconciled_to_local_inputs
@@ -1342,11 +1851,17 @@ def promote_cache_bundle(
             "promotion requires exact artifact/cache key coverage; staged global "
             f"cache has extra keys: {dict(validation.cache_extra_keys)}"
         )
+    target_document_context = expectations.document_context
+    target_window_context = expectations.window_context
+    if target_document_context is None or target_window_context is None:
+        raise CacheBundleValidationError(
+            "promotion requires document/window score contexts derived from the selected config"
+        )
     staged_document_cache, staged_window_cache = _resolve_cache_paths(
         staged, validation.document_context, validation.window_context
     )
     destination_document_cache, destination_window_cache = _resolve_cache_paths(
-        destination, validation.document_context, validation.window_context
+        destination, target_document_context, target_window_context
     )
     sources = {
         "document_artifact": staged.document_artifact,
@@ -1370,123 +1885,281 @@ def promote_cache_bundle(
                 f"staged and destination {label} paths must be different"
             )
 
-    expected_digests = {
-        "document_artifact": validation.document_artifact.sha256,
-        "window_artifact": validation.window_artifact.sha256,
-        "document_score_cache": validation.document_score_cache.sha256,
-        "window_score_cache": validation.window_score_cache.sha256,
-    }
-    transaction_id = (
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        + "-"
-        + uuid.uuid4().hex[:8]
+    for label, target in destinations.items():
+        if label.endswith("_artifact") and target.exists():
+            if target.is_symlink() or not target.is_file():
+                raise CacheBundleValidationError(
+                    f"destination {label} must be a regular file: {target}"
+                )
+    _validate_destination_score_cache(
+        destination_document_cache, target_document_context
     )
-    archive_dir = archive_root / transaction_id
-    previous_dir = archive_dir / "previous"
-    archive_root_preexisted = archive_root.exists()
-    archive_root.mkdir(parents=True, exist_ok=True)
-    if not archive_root_preexisted:
-        _fsync_directory(archive_root.parent)
-    archive_dir.mkdir(exist_ok=False)
-    _fsync_directory(archive_root)
-    previous_dir.mkdir()
-    _fsync_directory(archive_dir)
+    _validate_destination_score_cache(destination_window_cache, target_window_context)
 
-    incoming: dict[str, Path] = {}
-    rollback: dict[str, Path] = {}
-    backups: dict[str, Path] = {}
-    installed: set[str] = set()
-    old_moved: set[str] = set()
+    _validate_destination_conflicts(
+        staged_document_cache,
+        validation.document_context,
+        destination_document_cache,
+        target_document_context,
+    )
+    _validate_destination_conflicts(
+        staged_window_cache,
+        validation.window_context,
+        destination_window_cache,
+        target_window_context,
+    )
+
+    if destination_document_cache.resolve() == destination_window_cache.resolve():
+        raise CacheBundleValidationError("promotion destination paths must be distinct")
+    if archive_root.exists() and not archive_root.is_dir():
+        raise CacheBundleValidationError(f"promotion archive root must be a directory: {archive_root}")
+
+    destination_document_cache_obj = _destination_cache(
+        destination_document_cache,
+        destination.score_cache_root,
+        target_document_context,
+    )
+    destination_window_cache_obj = _destination_cache(
+        destination_window_cache,
+        destination.score_cache_root,
+        target_window_context,
+    )
+    import_receipts: list[tuple[GlobalScoreCache, dict[str, object]]] = []
+    manifest_published = False
     try:
-        for label, source in sources.items():
-            target = destinations[label]
-            target.parent.mkdir(parents=True, exist_ok=True)
-            incoming_path = target.with_name(
-                f".{target.name}.{transaction_id}.incoming"
+        try:
+            document_import_receipt = _import_sqlite_score_cache(
+                staged_document_cache,
+                validation.document_context,
+                destination_document_cache_obj,
+                target_document_context,
+                expected_source_sha256=validation.document_score_cache.sha256,
+                expected_source_row_count=validation.document_score_cache.row_count,
+                expected_source_logical_digest=(
+                    validation.document_score_cache.logical_digest or ""
+                ),
             )
-            incoming[label] = incoming_path
-            _copy_file_durable(source, incoming_path)
-            _fsync_directory(target.parent)
-            if _sha256_file(incoming_path) != expected_digests[label]:
-                raise CacheBundleValidationError(
-                    f"staged {label} changed after validation; promotion aborted"
-                )
-            if target.exists():
-                if target.is_symlink() or not target.is_file():
-                    raise CacheBundleValidationError(
-                        f"destination {label} must be a regular file: {target}"
-                    )
-                backup = previous_dir / f"{label}__{target.name}"
-                _copy_file_durable(target, backup)
-                backups[label] = backup
-                rollback[label] = target.with_name(
-                    f".{target.name}.{transaction_id}.rollback"
-                )
+            import_receipts.append(
+                (destination_document_cache_obj, document_import_receipt)
+            )
+            window_import_receipt = _import_sqlite_score_cache(
+                staged_window_cache,
+                validation.window_context,
+                destination_window_cache_obj,
+                target_window_context,
+                expected_source_sha256=validation.window_score_cache.sha256,
+                expected_source_row_count=validation.window_score_cache.row_count,
+                expected_source_logical_digest=(
+                    validation.window_score_cache.logical_digest or ""
+                ),
+            )
+            import_receipts.append(
+                (destination_window_cache_obj, window_import_receipt)
+            )
+        except (CacheBundleValidationError, OSError, sqlite3.Error, ValueError) as exc:
+            raise CacheBundleValidationError(
+                f"destination score-cache logical import failed: {exc}"
+            ) from exc
 
-        # The archive hierarchy and every previous-file directory entry must be
-        # durable before the first live destination is moved aside.
-        _fsync_directory(previous_dir)
-        _fsync_directory(archive_dir)
-        _fsync_directory(archive_root)
-
-        for label, target in destinations.items():
-            if target.exists():
-                _atomic_replace(target, rollback[label])
-                old_moved.add(label)
-            _atomic_replace(incoming[label], target)
-            installed.add(label)
-            _fsync_directory(target.parent)
-
-        for label, target in destinations.items():
-            if _sha256_file(target) != expected_digests[label]:
-                raise CacheBundleValidationError(
-                    f"promoted {label} checksum differs from validated staging file"
-                )
-        manifest = {
-            "transaction_id": transaction_id,
-            "promoted_at_utc": datetime.now(timezone.utc).isoformat(),
-            "sources": {key: str(value) for key, value in sources.items()},
-            "destinations": {key: str(value) for key, value in destinations.items()},
-            "backups": {key: str(value) for key, value in backups.items()},
-            "sha256": expected_digests,
-            "reviewed_modal_runtime_status": (
-                validation.runtime_status.to_dict()
-                if validation.runtime_status is not None
-                else None
-            ),
-            "validation": validation.to_dict(),
+        _verify_sealed_score_cache_identity(
+            staged_document_cache,
+            validation.document_score_cache.sha256,
+        )
+        _verify_sealed_score_cache_identity(
+            staged_window_cache,
+            validation.window_score_cache.sha256,
+        )
+        expected_artifact_digests = {
+            "document_artifact": validation.document_artifact.sha256,
+            "window_artifact": validation.window_artifact.sha256,
         }
-        _write_json_durable(archive_dir / "promotion_manifest.json", manifest)
-    except BaseException:
-        for label, target in reversed(list(destinations.items())):
-            target_changed = False
-            if label in installed and target.exists():
-                target.unlink()
-                target_changed = True
-            rollback_path = rollback.get(label)
-            if label in old_moved and rollback_path and rollback_path.exists():
-                _atomic_replace(rollback_path, target)
-                target_changed = True
-            if target_changed:
+        transaction_id = (
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + uuid.uuid4().hex[:8]
+        )
+        archive_dir = archive_root / transaction_id
+        previous_dir = archive_dir / "previous"
+        archive_root.mkdir(parents=True, exist_ok=True)
+        _fsync_directory(archive_root.parent)
+        archive_dir.mkdir(exist_ok=False)
+        _fsync_directory(archive_root)
+        previous_dir.mkdir()
+        _fsync_directory(archive_dir)
+
+        artifact_labels = ("document_artifact", "window_artifact")
+        incoming: dict[str, Path] = {}
+        rollback: dict[str, Path] = {}
+        backups: dict[str, Path] = {}
+        installed: set[str] = set()
+        old_moved: set[str] = set()
+        unchanged: set[str] = set()
+        manifest_path = archive_dir / "promotion_manifest.json"
+        try:
+            for label in artifact_labels:
+                source = sources[label]
+                target = destinations[label]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if (
+                    target.is_file()
+                    and _sha256_file(target) == expected_artifact_digests[label]
+                ):
+                    unchanged.add(label)
+                    continue
+                incoming_path = target.with_name(
+                    f".{target.name}.{transaction_id}.incoming"
+                )
+                incoming[label] = incoming_path
+                _copy_file_durable(source, incoming_path)
                 _fsync_directory(target.parent)
-        raise
-    finally:
-        incoming_parents: set[Path] = set()
-        for path in incoming.values():
+                if _sha256_file(incoming_path) != expected_artifact_digests[label]:
+                    raise CacheBundleValidationError(
+                        f"staged {label} changed after validation; promotion aborted"
+                    )
+                if target.exists():
+                    if target.is_symlink() or not target.is_file():
+                        raise CacheBundleValidationError(
+                            f"destination {label} must be a regular file: {target}"
+                        )
+                    backup = previous_dir / f"{label}__{target.name}"
+                    _copy_file_durable(target, backup)
+                    backups[label] = backup
+                    rollback[label] = target.with_name(
+                        f".{target.name}.{transaction_id}.rollback"
+                    )
+
+            # The archive hierarchy and every previous-file directory entry must be
+            # durable before the first live destination is moved aside.
+            _fsync_directory(previous_dir)
+            _fsync_directory(archive_dir)
+            _fsync_directory(archive_root)
+
+            for label in artifact_labels:
+                target = destinations[label]
+                if label in unchanged:
+                    continue
+                if target.exists():
+                    _atomic_replace(target, rollback[label])
+                    old_moved.add(label)
+                _atomic_replace(incoming[label], target)
+                installed.add(label)
+                _fsync_directory(target.parent)
+
+            for label in artifact_labels:
+                target = destinations[label]
+                if _sha256_file(target) != expected_artifact_digests[label]:
+                    raise CacheBundleValidationError(
+                        f"promoted {label} checksum differs from validated staging file"
+                    )
+            manifest = {
+                "transaction_id": transaction_id,
+                "promoted_at_utc": datetime.now(timezone.utc).isoformat(),
+                "sources": {key: str(value) for key, value in sources.items()},
+                "destinations": {
+                    key: str(value) for key, value in destinations.items()
+                },
+                "backups": {key: str(value) for key, value in backups.items()},
+                "sha256": {
+                    **expected_artifact_digests,
+                    "document_score_cache": validation.document_score_cache.sha256,
+                    "window_score_cache": validation.window_score_cache.sha256,
+                },
+                "score_cache_receipts": {
+                    "document": _promotion_cache_receipt(
+                        validation,
+                        label="document",
+                        target_context=target_document_context,
+                        import_receipt=document_import_receipt,
+                    ),
+                    "window": _promotion_cache_receipt(
+                        validation,
+                        label="window",
+                        target_context=target_window_context,
+                        import_receipt=window_import_receipt,
+                    ),
+                },
+                "reviewed_modal_runtime_status": (
+                    validation.runtime_status.to_dict()
+                    if validation.runtime_status is not None
+                    else None
+                ),
+                "validation": validation.to_dict(),
+            }
+            def mark_manifest_published() -> None:
+                nonlocal manifest_published
+                manifest_published = True
+
+            _write_json_durable(
+                manifest_path,
+                manifest,
+                on_replace=mark_manifest_published,
+            )
+        except BaseException:
+            # The archive directory is unique to this attempt, so the marker can
+            # only exist after our atomic rename. Rename is the publication
+            # boundary even if its following directory fsync reports an error.
+            if not manifest_published and manifest_path.is_file():
+                manifest_published = True
+            if not manifest_published:
+                for label in reversed(artifact_labels):
+                    target = destinations[label]
+                    target_changed = False
+                    if label in installed and target.exists():
+                        target.unlink()
+                        target_changed = True
+                    rollback_path = rollback.get(label)
+                    if label in old_moved and rollback_path and rollback_path.exists():
+                        _atomic_replace(rollback_path, target)
+                        target_changed = True
+                    if target_changed:
+                        _fsync_directory(target.parent)
+            raise
+        finally:
+            incoming_parents: set[Path] = set()
+            for path in incoming.values():
+                if path.exists():
+                    path.unlink()
+                    incoming_parents.add(path.parent)
+            for parent in incoming_parents:
+                _fsync_directory(parent)
+
+        rollback_parents: set[Path] = set()
+        for path in rollback.values():
             if path.exists():
                 path.unlink()
-                incoming_parents.add(path.parent)
-        for parent in incoming_parents:
+                rollback_parents.add(path.parent)
+        for parent in rollback_parents:
             _fsync_directory(parent)
+        return PromotionResult(validation, archive_dir, destinations, backups)
+    except BaseException:
+        if not manifest_published:
+            for cache, receipt in reversed(import_receipts):
+                cache._rollback_score_import(receipt)
+        raise
+    finally:
+        destination_document_cache_obj.close()
+        destination_window_cache_obj.close()
 
-    rollback_parents: set[Path] = set()
-    for path in rollback.values():
-        if path.exists():
-            path.unlink()
-            rollback_parents.add(path.parent)
-    for parent in rollback_parents:
-        _fsync_directory(parent)
-    return PromotionResult(validation, archive_dir, destinations, backups)
+
+def promote_cache_bundle(
+    staged: CacheBundlePaths,
+    destination: CacheBundlePaths,
+    *,
+    archive_root: Path,
+    expectations: BundleExpectations,
+    runtime_status_path: Path | None = None,
+) -> PromotionResult:
+    lock_files = _acquire_promotion_locks(destination, expectations)
+    try:
+        return _promote_cache_bundle_unlocked(
+            staged,
+            destination,
+            archive_root=archive_root,
+            expectations=expectations,
+            runtime_status_path=runtime_status_path,
+        )
+    finally:
+        _release_promotion_locks(lock_files)
 
 
 def _common_cli_arguments(
@@ -1520,8 +2193,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promote = commands.add_parser(
         "promote",
         description=(
-            "Promote a validated bundle while all staged and destination cache readers "
-            "and writers are quiescent. Concurrent access is unsupported."
+            "Promote a validated bundle with a logical SQLite import and a "
+            "manifest-last receipt. Identical attempts are serialized."
         ),
     )
     _common_cli_arguments(promote, runtime_status_required=True)

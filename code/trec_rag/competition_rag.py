@@ -1,10 +1,9 @@
-"""Generate organizer-format TREC RAG answers from a fixed retrieval run."""
+"""Generate organizer-format TREC RAG answers from a sealed evidence handoff."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import io
 import json
 import math
 import os
@@ -12,218 +11,72 @@ import re
 import shutil
 import tempfile
 import time
-import zipfile
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Collection, Iterator, Mapping, Protocol, Sequence, TextIO
+from typing import Any, Protocol, Sequence
 from urllib.parse import unquote
 
 import requests
 import yaml
 from filelock import FileLock, Timeout as FileLockTimeout
 
+from trec_rag.generation_handoff import (
+    PROMPT_CONTRACT_VERSION,
+    ClaimHint,
+    GenerationHandoff,
+    GenerationTopic,
+    load_generation_handoff,
+    render_generation_evidence,
+    select_generation_topics,
+)
 from trec_rag.repo_env import find_repo_root, load_repo_env, shared_checkout_root
-from trec_rag.topics import load_narrative_topics
 
 
-_SCHEMA_VERSION = "competition_rag_config_v1"
+_SCHEMA_VERSION = "competition_rag_config_v2"
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 # strict_schema pins provider selection to schema-capable endpoints; json_object is the
 # portable fallback; none sends no response_format at all.
 STRUCTURED_OUTPUT_MODES = frozenset({"strict_schema", "json_object", "none"})
 _MAX_REDACTION_NORMALIZATION_ROUNDS = 32
+MAX_SEMANTIC_ATTEMPTS = 2
+_CITATION_VALIDATION_CONTRACT_VERSION = "exact_hint_linked_docids_v1"
 
-SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
-provided reference documents and the user's task instructions. Do not invent evidence,
-document identifiers, references, or source-specific claims."""
+SYSTEM_PROMPT = """You are a selected-evidence RAG answer-generation agent. Use only the
+provided selected passages and the user's task instructions. Treat claim hints as advisory.
+Do not invent evidence, document identifiers, references, or source-specific claims."""
 
-USER_PROMPT = """Answer the question using only the reference documents below.
+SELECTED_EVIDENCE_USER_PROMPT = """Answer the official narrative using only the frozen
+selected retrieval evidence below. Selected passages are factual authority; canonical claim
+hints are advisory and must be checked against their linked passage text.
 
-Read every reference document before writing. Cover answer-relevant evidence,
-tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
-1,024 whitespace-separated words. Each answer object must have one to three unique zero-based
-citation indexes into references. When an answer object cites more than one reference, order its
-citation indexes from strongest to weakest support for that object. Include each cited raw
-ClimbMix docid once in references, and cite every reference. Return one JSON object with exactly
-references and answer; no Markdown.
+Cover distinct answer-relevant evidence, tradeoffs, constraints, and uncertainty without
+padding or repetition. Write each answer object as one self-contained sentence stating one
+claim. The complete answer must never exceed 1,024 whitespace-separated words.
 
-Reference documents:
-{documents}
+Give each answer object one to three unique raw ClimbMix docid strings in its citations,
+ordered strongest support first. Do not use numeric citation indexes. Include a raw ClimbMix
+docid in references only when an answer object cites it. Never cite a document unless its
+selected passage fully supports that answer object.
 
-Question: {question}
-"""
+Return one JSON object with exactly references and answer; no Markdown.
 
-ATOMIC_USER_PROMPT = """Answer the question using only the reference documents below.
+{evidence}
 
-Read every reference document before writing. Cover answer-relevant evidence,
-tradeoffs, constraints, and uncertainty without padding. The complete answer must be at most
-1,024 whitespace-separated words.
+Restating the output contract: one JSON object with exactly references and answer; each answer
+object is one self-contained sentence with one claim and one to three unique raw ClimbMix
+docids in citations, never numeric indexes; never exceed 1,024 words."""
 
-Write each answer object as one self-contained sentence stating a single claim. Do not join
-several claims into one answer object and do not prefix an object with a section heading or
-label, because a cited document must be able to support the whole object on its own.
+SEMANTIC_RETRY_INSTRUCTION = """
 
-Each answer object must have one to three unique zero-based citation indexes into references.
-When an answer object cites more than one reference, order its citation indexes from strongest
-to weakest support for that object. Include each cited raw ClimbMix docid once in references,
-and cite every reference. Return one JSON object with exactly references and answer; no
-Markdown.
-
-Reference documents:
-{documents}
-
-Question: {question}
-"""
-
-FULL_BUDGET_USER_PROMPT = """Answer the question using only the reference documents below.
-
-Read every reference document before writing. Aim for roughly 900 whitespace-separated words
-and never exceed 1,024, counting every answer object together. A longer answer is only better
-when the extra words carry new evidence, so keep adding distinct, answer-relevant points that
-the reference documents support, covering the question's different aspects, tradeoffs,
-constraints and uncertainty. Do not pad, repeat a point already made, or restate the
-question.
-
-Write each answer object as one self-contained sentence stating a single claim. Do not join
-several claims into one answer object and do not prefix an object with a section heading or
-label, because a cited document must be able to support the whole object on its own.
-
-Each answer object must have one to three unique zero-based citation indexes into references.
-When an answer object cites more than one reference, order its citation indexes from strongest
-to weakest support for that object. Include each cited raw ClimbMix docid once in references,
-and cite every reference. Return one JSON object with exactly references and answer; no
-Markdown.
-
-Reference documents:
-{documents}
-
-Question: {question}
-"""
-
-FOCUSED_CITATION_USER_PROMPT = """Answer the question using only the reference documents below.
-
-Read every reference document before writing. Aim for roughly 900 whitespace-separated words
-and never exceed 1,024, counting every answer object together. A longer answer is only better
-when the extra words carry new evidence, so keep adding distinct, answer-relevant points that
-the reference documents support, covering the question's different aspects, tradeoffs,
-constraints and uncertainty. Do not pad, repeat a point already made, or restate the
-question.
-
-Write each answer object as one self-contained sentence stating a single claim. Do not join
-several claims into one answer object and do not prefix an object with a section heading or
-label, because a cited document must be able to support the whole object on its own.
-
-Cite the single document that best supports each answer object. Add a second or third citation
-only when that document by itself also fully supports the same object, and order citations from
-strongest to weakest support. Never add a citation to spread coverage across documents: an
-extra citation that does not support the object on its own is worse than no extra citation.
-List a document in references only if some answer object cites it.
-
-Give each answer object one to three unique zero-based citation indexes into references. Return
-one JSON object with exactly references and answer; no Markdown.
-
-Reference documents:
-{documents}
-
-Question: {question}
-"""
-
-JSON_EXAMPLE_USER_PROMPT = FOCUSED_CITATION_USER_PROMPT.replace(
-    """Give each answer object one to three unique zero-based citation indexes into references. Return
-one JSON object with exactly references and answer; no Markdown.""",
-    """Give each answer object one to three unique zero-based citation indexes into references.
-Return one json object with exactly references and answer; no Markdown. Use exactly this json
-shape, in which every answer object states a single claim and cites the one document supporting
-it:
-
-{{"references": ["shard_00459_61697", "shard_01012_88420"],
- "answer": [{{"text": "Commercial reactors generate heat by fissioning uranium.", "citations": [0]}},
-            {{"text": "Spent fuel needs long-term isolation from the environment.", "citations": [1]}}]}}""",
-)
-assert JSON_EXAMPLE_USER_PROMPT != FOCUSED_CITATION_USER_PROMPT, "json example substitution failed"
-
-
-TAIL_CONTRACT_USER_PROMPT = FOCUSED_CITATION_USER_PROMPT + """
-Restating the output contract, which the reference documents above have separated from this
-point by a long span of text:
-
-- one json object with exactly references and answer, no Markdown
-- each answer object is one self-contained sentence stating a single claim
-- cite the document that best supports each object, one to three unique zero-based indexes,
-  strongest first, and never add a citation that does not support the object on its own
-- list a document in references only if some answer object cites it
-- roughly 900 whitespace-separated words in total, never more than 1,024
-"""
-
-CONTRACT_SYSTEM_PROMPT = """You are a reference-document RAG answer-generation agent. Use only the
-provided reference documents and the user's task instructions. Do not invent evidence,
-document identifiers, references, or source-specific claims.
-
-Always produce one json object with exactly two keys, references and answer, and no Markdown.
-
-- Each answer object is one self-contained sentence stating a single claim. Never join several
-  claims into one object and never prefix an object with a section heading or label, because a
-  cited document must support the whole object on its own.
-- Cite the document that best supports each object. Give one to three unique zero-based indexes
-  into references, strongest support first. Never add a citation that does not support the
-  object on its own.
-- List a document in references only if some answer object cites it.
-- Write roughly 900 whitespace-separated words in total and never exceed 1,024."""
-
-CONTRACT_IN_SYSTEM_USER_PROMPT = """Answer the question using only the reference documents below,
-following the output contract in your instructions.
-
-Read every reference document before writing. Keep adding distinct, answer-relevant points that
-the documents support, covering the question's different aspects, tradeoffs, constraints and
-uncertainty. Do not pad, repeat a point already made, or restate the question.
-
-Reference documents:
-{documents}
-
-Question: {question}
-"""
-
-# Every profile records what it measured, not only what it was meant to do, so a later reader
-# does not re-select one that was already tried and rejected. Figures are strict_vital on four
-# development topics against the released gold nuggets; see
-# reports/experiments/dev4_paired_prompt_profile_v1/.
-PROMPT_PROFILES = {
-    # Superseded. Fuses several claims per answer object behind a heading, which caps citation
-    # support at Partial: hard precision 0.071 against 0.586 for the current default.
-    "default": USER_PROMPT,
-    # Superseded. One claim per object, but suppresses length, so coverage falls to 0.570.
-    "atomic_claims": ATOMIC_USER_PROMPT,
-    # Superseded by focused_citations_tail. Coverage 0.621, citation error rate 30%.
-    "atomic_claims_full_budget": FULL_BUDGET_USER_PROMPT,
-    # Superseded by focused_citations_tail, which is this profile plus a restated contract.
-    "focused_citations": FOCUSED_CITATION_USER_PROMPT,
-    # REJECTED. DeepSeek documents that JSON output needs the literal word "json" and a worked
-    # example, but adding one measured worse: single-citation compliance fell 59% to 26%,
-    # answers shortened, and one topic failed outright. Kept only to record the negative result.
-    "focused_citations_json_example": JSON_EXAMPLE_USER_PROMPT,
-    # CURRENT DEFAULT for both competition configs. Restates the contract after the question,
-    # because with 100 documents inserted the leading contract sits roughly 120k tokens above
-    # the generation point. Best measured on every metric: Sol strict_vital 0.630, weighted
-    # citation precision 0.747, hard precision 0.586.
-    "focused_citations_tail": TAIL_CONTRACT_USER_PROMPT,
-    # REJECTED. Moving the contract into the system message measured worse than restating it
-    # after the question, 0.509 against 0.578, so proximity to the generation point matters
-    # more than channel. Kept only to record the negative result.
-    "contract_in_system": CONTRACT_IN_SYSTEM_USER_PROMPT,
-}
-
-# Profiles that carry their contract in the system message need a matching system prompt.
-SYSTEM_PROMPT_PROFILES = {"contract_in_system": CONTRACT_SYSTEM_PROMPT}
-
-
-def system_prompt_for(prompt_profile: str) -> str:
-    """Return the system message a prompt profile expects."""
-    if prompt_profile not in PROMPT_PROFILES:
-        raise ValueError(f"unsupported prompt profile: {prompt_profile}")
-    return SYSTEM_PROMPT_PROFILES.get(prompt_profile, SYSTEM_PROMPT)
+Previous completion failed local validation. Return a fresh answer that satisfies the JSON
+schema and all evidence rules; do not describe or repair the previous completion. Citations
+must be exact raw ClimbMix docid strings from the supplied evidence; never use numeric indexes.
+If an answer sentence reuses an advisory claim hint, cite only docids from that hint's listed
+evidence_ids, mapping each evidence_id to its [EVIDENCE ... docid=...] block."""
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -258,18 +111,13 @@ _UniqueKeySafeLoader.add_constructor(
 @dataclass(frozen=True)
 class RagGenerationConfig:
     schema_version: str
-    queries_path: Path
-    run_path: Path
-    documents_path: Path
+    handoff_manifest_path: Path
     output_path: Path
     work_dir: Path
     team_id: str
     run_id: str
     run_desc: str
-    archive_member: str | None
     topic_ids: tuple[str, ...] | None
-    top_k: int | None
-    max_document_words: int
     concurrency: int
     resume: bool
     overwrite: bool
@@ -278,7 +126,6 @@ class RagGenerationConfig:
     api_key_env: str
     model: str
     reasoning_effort: str
-    prompt_profile: str
     structured_output: str
     temperature: float | None
     max_tokens: int
@@ -298,18 +145,23 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     config = _mapping(raw, "config")
     _reject_unknown(
         config,
-        {"schema_version", "experiment", "submission", "inputs", "retrieval", "generation"},
+        {"schema_version", "experiment", "submission", "inputs", "generation"},
         "config",
     )
     _require_fields(
         config,
-        {"schema_version", "experiment", "submission", "inputs", "retrieval", "generation"},
+        {"schema_version", "experiment", "submission", "inputs", "generation"},
         "config",
     )
     if _text(config, "schema_version", "config") != _SCHEMA_VERSION:
         raise ValueError(f"config.schema_version must be {_SCHEMA_VERSION}")
 
-    experiment = _section(config, "experiment", {"id", "output_dir", "mode"})
+    experiment = _section(
+        config,
+        "experiment",
+        {"id", "output_dir", "mode", "topic_ids"},
+        required={"id", "output_dir", "mode"},
+    )
     experiment_id = _text(experiment, "id", "experiment")
     if not _SAFE_EXPERIMENT_ID.fullmatch(experiment_id):
         raise ValueError("experiment.id must be a safe identifier")
@@ -322,13 +174,7 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     inputs = _section(
         config,
         "inputs",
-        {"queries", "run", "documents", "archive_member", "topic_ids"},
-        required={"queries", "run", "documents"},
-    )
-    retrieval = _section(
-        config,
-        "retrieval",
-        {"top_k", "max_document_words"},
+        {"handoff_manifest"},
     )
     generation = _section(
         config,
@@ -339,7 +185,6 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "api_key_env",
             "model",
             "reasoning_effort",
-            "prompt_profile",
             "structured_output",
             "temperature",
             "max_tokens",
@@ -347,7 +192,6 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             "transport_max_attempts",
             "concurrency",
         },
-        # prompt_profile is optional so existing configs keep the default prompt.
         required={
             "type",
             "api_base",
@@ -366,9 +210,6 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
     reasoning_effort = _text(generation, "reasoning_effort", "generation").lower()
     if reasoning_effort not in _REASONING_EFFORTS:
         raise ValueError("generation.reasoning_effort is unsupported")
-    prompt_profile = _optional_text(generation, "prompt_profile", "generation") or "default"
-    if prompt_profile not in PROMPT_PROFILES:
-        raise ValueError("generation.prompt_profile is unsupported")
     structured_output = (
         _optional_text(generation, "structured_output", "generation") or "strict_schema"
     )
@@ -377,18 +218,15 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
 
     return RagGenerationConfig(
         schema_version=_SCHEMA_VERSION,
-        queries_path=_input_path(root_dir, _text(inputs, "queries", "inputs")),
-        run_path=_input_path(root_dir, _text(inputs, "run", "inputs")),
-        documents_path=_input_path(root_dir, _text(inputs, "documents", "inputs")),
+        handoff_manifest_path=_input_path(
+            root_dir, _text(inputs, "handoff_manifest", "inputs")
+        ),
         output_path=output_dir / "rag_output_trec_rag_2026.jsonl",
         work_dir=output_dir / "work",
         team_id=_text(submission, "team_id", "submission"),
         run_id=experiment_id,
         run_desc=_text(submission, "run_desc", "submission"),
-        archive_member=_optional_text(inputs, "archive_member", "inputs"),
-        topic_ids=_topic_ids(inputs),
-        top_k=_optional_positive_int(inputs=retrieval, key="top_k", owner="retrieval"),
-        max_document_words=_positive_int(retrieval, "max_document_words", "retrieval"),
+        topic_ids=_topic_ids(experiment, owner="experiment"),
         concurrency=_positive_int(generation, "concurrency", "generation"),
         resume=mode == "resume",
         overwrite=mode == "overwrite",
@@ -397,7 +235,6 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
         api_key_env=_text(generation, "api_key_env", "generation"),
         model=_text(generation, "model", "generation"),
         reasoning_effort=reasoning_effort,
-        prompt_profile=prompt_profile,
         structured_output=structured_output,
         temperature=_optional_finite_float(generation, "temperature", "generation"),
         max_tokens=_positive_int(generation, "max_tokens", "generation"),
@@ -406,294 +243,6 @@ def load_rag_generation_config(path: Path) -> RagGenerationConfig:
             generation, "transport_max_attempts", "generation"
         ),
     )
-
-
-def load_queries(path: Path) -> list[tuple[str, str]]:
-    """Read the canonical headerless ``narrative_id<TAB>narrative`` topic TSV."""
-    topics = load_narrative_topics(path)
-    if topics[0].id.strip().casefold() in {
-        "qid",
-        "query_id",
-        "topic_id",
-        "narrative_id",
-    }:
-        raise ValueError(f"{path}:1: topic TSV must not have a header")
-    queries = [(topic.id, topic.narrative) for topic in topics]
-    return queries
-
-
-def select_queries(
-    queries: Sequence[tuple[str, str]], topic_ids: Sequence[str] | None
-) -> list[tuple[str, str]]:
-    """Select an explicit unique topic subset while retaining official TSV order."""
-    if topic_ids is None:
-        return list(queries)
-    if not topic_ids:
-        raise ValueError("inputs.topic_ids must contain at least one topic ID")
-    available = {topic_id for topic_id, _ in queries}
-    requested: set[str] = set()
-    for value in topic_ids:
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("inputs.topic_ids must contain non-empty text")
-        topic_id = value.strip()
-        if topic_id in requested:
-            raise ValueError(f"duplicate topic ID: {topic_id}")
-        if topic_id not in available:
-            raise ValueError(f"unknown topic ID: {topic_id}")
-        requested.add(topic_id)
-    return [query for query in queries if query[0] in requested]
-
-
-def load_trec_run(
-    path: Path, topic_ids: set[str], top_k: int | None
-) -> dict[str, list[str]]:
-    """Decode one strictly valid six-column TREC run for the selected topics."""
-    if not topic_ids:
-        raise ValueError("at least one topic ID is required")
-    if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0):
-        raise ValueError("top_k must be a positive integer or null")
-    grouped: dict[str, list[tuple[int, float, str]]] = {}
-    run_tag: str | None = None
-    for line_number, raw_line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
-        if not raw_line.strip():
-            raise ValueError(f"{path}:{line_number}: blank TREC rows are invalid")
-        fields = raw_line.split()
-        if len(fields) != 6:
-            raise ValueError(f"{path}:{line_number}: expected six TREC fields")
-        topic_id, q0, docid, raw_rank, raw_score, tag = fields
-        if q0 != "Q0":
-            raise ValueError(f"{path}:{line_number}: TREC second field must be literal Q0")
-        if not topic_id or not docid:
-            raise ValueError(f"{path}:{line_number}: topic id and docid must be non-empty")
-        try:
-            rank = int(raw_rank)
-        except ValueError as exc:
-            raise ValueError(f"{path}:{line_number}: invalid rank") from exc
-        if rank <= 0:
-            raise ValueError(f"{path}:{line_number}: rank must be positive")
-        try:
-            score = float(raw_score)
-        except ValueError as exc:
-            raise ValueError(f"{path}:{line_number}: invalid numeric score") from exc
-        if not math.isfinite(score):
-            raise ValueError(f"{path}:{line_number}: score must be finite")
-        if not tag:
-            raise ValueError(f"{path}:{line_number}: run tag must be non-empty")
-        if run_tag is None:
-            run_tag = tag
-        elif tag != run_tag:
-            raise ValueError(f"{path}:{line_number}: run tag must be stable")
-        grouped.setdefault(topic_id, []).append((rank, score, docid))
-    if run_tag is None:
-        raise ValueError(f"{path}: no TREC rows found")
-
-    ranked: dict[str, list[str]] = {}
-    for topic_id, rows in grouped.items():
-        ranks = [rank for rank, _, _ in rows]
-        docids = [docid for _, _, docid in rows]
-        if len(ranks) != len(set(ranks)):
-            raise ValueError(f"{path}: {topic_id} contains duplicate rank")
-        if ranks != sorted(ranks):
-            raise ValueError(f"{path}: {topic_id} rows are out of rank order")
-        if ranks[0] != 1:
-            raise ValueError(f"{path}: {topic_id} ranks must start at 1")
-        if len(docids) != len(set(docids)):
-            raise ValueError(f"{path}: {topic_id} contains duplicate docid")
-        scores = [score for _, score, _ in rows]
-        if any(previous < current for previous, current in zip(scores, scores[1:])):
-            raise ValueError(f"{path}: {topic_id} scores must be non-increasing by rank")
-        if topic_id in topic_ids:
-            selected = docids if top_k is None else docids[:top_k]
-            ranked[topic_id] = selected
-    missing = sorted(topic_ids - ranked.keys())
-    if missing:
-        raise ValueError(f"{path}: missing ranked documents for {', '.join(missing)}")
-    return ranked
-
-
-@contextmanager
-def _document_lines(path: Path, archive_member: str | None) -> Iterator[TextIO]:
-    document_path = Path(path)
-    expects_zip = document_path.suffix.lower() == ".zip"
-    if not expects_zip and not zipfile.is_zipfile(document_path):
-        if archive_member is not None:
-            raise ValueError("archive_member requires a ZIP document input")
-        with document_path.open(encoding="utf-8") as handle:
-            try:
-                yield handle
-            except UnicodeDecodeError as exc:
-                raise ValueError(
-                    f"{document_path}: document input is not valid UTF-8"
-                ) from exc
-        return
-    try:
-        with zipfile.ZipFile(document_path) as archive:
-            candidates = [
-                name
-                for name in archive.namelist()
-                if name.lower().endswith((".jsonl", ".json"))
-            ]
-            member = archive_member or (candidates[0] if len(candidates) == 1 else None)
-            if member is None or member not in candidates:
-                raise ValueError(
-                    f"{document_path}: choose one JSONL ZIP member with archive_member; "
-                    f"found {candidates}"
-                )
-            with archive.open(member) as raw:
-                with io.TextIOWrapper(raw, encoding="utf-8") as handle:
-                    try:
-                        yield handle
-                    except UnicodeDecodeError as exc:
-                        raise ValueError(
-                            f"{document_path}: selected document member is not valid UTF-8"
-                        ) from exc
-    except zipfile.BadZipFile as exc:
-        raise ValueError(f"{document_path}: invalid ZIP document archive") from exc
-
-
-def _iter_document_candidates(
-    path: Path,
-    archive_member: str | None,
-    *,
-    topic_ids: set[str] | None,
-) -> Iterator[tuple[int, str, str, str]]:
-    with _document_lines(path, archive_member) as lines:
-        for line_number, raw_line in enumerate(lines, 1):
-            if not raw_line.strip():
-                raise ValueError(f"{path}:{line_number}: blank JSONL rows are invalid")
-            try:
-                record = json.loads(raw_line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{line_number}: expected a JSON object")
-            query = record.get("query")
-            candidates = record.get("candidates")
-            if not isinstance(query, dict) or not _nonempty_text(query.get("qid")):
-                raise ValueError(f"{path}:{line_number}: organizer query core is invalid")
-            topic_id = str(query["qid"])
-            if topic_ids is not None and topic_id not in topic_ids:
-                continue
-            if not isinstance(candidates, list):
-                raise ValueError(f"{path}:{line_number}: organizer candidates core is invalid")
-            for candidate in candidates:
-                if not isinstance(candidate, dict):
-                    raise ValueError(f"{path}:{line_number}: candidate must be an object")
-                docid = candidate.get("docid")
-                text = candidate.get("doc")
-                if not _nonempty_text(docid) or not _nonempty_text(text):
-                    raise ValueError(f"{path}:{line_number}: candidate docid and doc are required")
-                yield line_number, topic_id, docid.strip(), " ".join(text.split())
-
-
-def _validate_max_document_words(max_words: int) -> None:
-    if isinstance(max_words, bool) or not isinstance(max_words, int) or max_words <= 0:
-        raise ValueError("max_words must be a positive integer")
-
-
-def load_topic_documents(
-    path: Path,
-    archive_member: str | None,
-    topic_docids: Mapping[str, Collection[str]],
-    max_words: int,
-) -> dict[str, dict[str, str]]:
-    """Read document text while preserving the topic that ranked each document.
-
-    A document ID is only valid for the topic row that supplied it. The same ID may
-    therefore have different text under different topics without one answer borrowing
-    another topic's evidence.
-    """
-    if not topic_docids:
-        raise ValueError("at least one topic document set is required")
-    _validate_max_document_words(max_words)
-    wanted_by_topic: dict[str, set[str]] = {}
-    for topic_id, docids in topic_docids.items():
-        if not isinstance(topic_id, str) or not topic_id.strip():
-            raise ValueError("topic IDs must be non-empty text")
-        if isinstance(docids, (str, bytes)) or not isinstance(docids, Collection):
-            raise ValueError(f"{topic_id}: document IDs must be a collection")
-        normalized = {
-            docid.strip()
-            for docid in docids
-            if isinstance(docid, str) and docid.strip()
-        }
-        if not normalized:
-            raise ValueError(f"{topic_id}: at least one wanted docid is required")
-        wanted_by_topic[topic_id] = normalized
-
-    documents_by_topic = {topic_id: {} for topic_id in wanted_by_topic}
-    for line_number, topic_id, docid, text in _iter_document_candidates(
-        path,
-        archive_member,
-        topic_ids=set(wanted_by_topic),
-    ):
-        wanted = wanted_by_topic[topic_id]
-        if docid not in wanted:
-            continue
-        documents = documents_by_topic[topic_id]
-        existing = documents.get(docid)
-        if existing is not None and existing != text:
-            raise ValueError(
-                f"{path}:{line_number}: conflicting duplicate document {docid} "
-                f"for topic {topic_id}"
-            )
-        documents[docid] = text
-
-    for topic_id, wanted in wanted_by_topic.items():
-        missing = sorted(wanted - documents_by_topic[topic_id].keys())
-        if missing:
-            raise ValueError(
-                f"{path}: {topic_id} missing {len(missing)} ranked documents "
-                f"({', '.join(missing[:5])})"
-            )
-    return {
-        topic_id: {
-            docid: " ".join(text.split()[:max_words])
-            for docid, text in documents.items()
-        }
-        for topic_id, documents in documents_by_topic.items()
-    }
-
-
-def load_documents(
-    path: Path,
-    archive_member: str | None,
-    wanted_docids: set[str],
-    max_words: int,
-    *,
-    topic_ids: set[str] | None = None,
-) -> dict[str, str]:
-    """Read organizer query-bundled documents while allowing extension fields.
-
-    ``topic_ids`` restricts harvesting to rows for the selected topics. The archive is keyed by
-    topic, so without it a document could be taken from a different topic's row whenever the two
-    share a docid, grounding an answer in evidence retrieved for another narrative. Callers on
-    the submission path must pass it; a missing topic then surfaces as an unresolved docid
-    rather than as silently borrowed text.
-    """
-    if not wanted_docids:
-        raise ValueError("at least one wanted docid is required")
-    _validate_max_document_words(max_words)
-    documents: dict[str, str] = {}
-    for line_number, _topic_id, docid, text in _iter_document_candidates(
-        path,
-        archive_member,
-        topic_ids=topic_ids,
-    ):
-        if docid not in wanted_docids:
-            continue
-        existing = documents.get(docid)
-        if existing is not None and existing != text:
-            raise ValueError(
-                f"{path}:{line_number}: conflicting duplicate document {docid}"
-            )
-        documents[docid] = text
-    missing = sorted(wanted_docids - documents.keys())
-    if missing:
-        raise ValueError(f"{path}: missing {len(missing)} ranked documents ({', '.join(missing[:5])})")
-    return {
-        docid: " ".join(text.split()[:max_words]) for docid, text in documents.items()
-    }
 
 
 def _load_yaml(path: Path) -> object:
@@ -750,17 +299,17 @@ def _optional_text(mapping: dict[str, Any], key: str, owner: str) -> str | None:
     return value.strip()
 
 
-def _topic_ids(inputs: dict[str, Any]) -> tuple[str, ...] | None:
-    value = inputs.get("topic_ids")
-    if value is None and "topic_ids" not in inputs:
+def _topic_ids(section: dict[str, Any], *, owner: str) -> tuple[str, ...] | None:
+    value = section.get("topic_ids")
+    if value is None and "topic_ids" not in section:
         return None
     if not isinstance(value, list) or not value:
-        raise ValueError("inputs.topic_ids must be a non-empty list")
+        raise ValueError(f"{owner}.topic_ids must be a non-empty list")
     normalized: list[str] = []
     seen: set[str] = set()
     for topic_id in value:
         if not _nonempty_text(topic_id):
-            raise ValueError("inputs.topic_ids must contain non-empty text")
+            raise ValueError(f"{owner}.topic_ids must contain non-empty text")
         clean = topic_id.strip()
         if clean in seen:
             raise ValueError(f"duplicate topic ID: {clean}")
@@ -773,15 +322,6 @@ def _positive_int(mapping: dict[str, Any], key: str, owner: str) -> int:
     value = mapping.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{owner}.{key} must be a positive integer")
-    return value
-
-
-def _optional_positive_int(*, inputs: dict[str, Any], key: str, owner: str) -> int | None:
-    value = inputs.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{owner}.{key} must be a positive integer or null")
     return value
 
 
@@ -841,8 +381,15 @@ def _nonempty_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def output_schema() -> dict[str, Any]:
+def output_schema(citation_mode: str = "docid") -> dict[str, Any]:
     """Return the provider-safe schema; cross-field rules are validated locally."""
+    if citation_mode not in {"docid", "index"}:
+        raise ValueError(f"unsupported citation mode: {citation_mode}")
+    citation_schema = (
+        {"type": "string", "minLength": 1}
+        if citation_mode == "docid"
+        else {"type": "integer"}
+    )
     return {
         "type": "object",
         "additionalProperties": False,
@@ -864,7 +411,7 @@ def output_schema() -> dict[str, Any]:
                         "text": {"type": "string"},
                         "citations": {
                             "type": "array",
-                            "items": {"type": "integer"},
+                            "items": citation_schema,
                             "minItems": 1,
                             "maxItems": 3,
                         },
@@ -890,9 +437,12 @@ class JsonGenerator(Protocol):
 class SemanticCompletionError(ValueError):
     """A successful provider response that cannot be accepted without repair."""
 
-    def __init__(self, message: str, raw_response: object) -> None:
+    def __init__(
+        self, message: str, raw_response: object, *, retryable: bool = False
+    ) -> None:
         super().__init__(message)
         self.raw_response = raw_response
+        self.retryable = retryable
 
 
 class OpenRouterJsonGenerator:
@@ -999,11 +549,13 @@ class OpenRouterJsonGenerator:
                 raise SemanticCompletionError(
                     "OpenRouter returned a non-JSON response; no repair call was made",
                     safe_response,
+                    retryable=True,
                 )
             if not isinstance(envelope, dict):
                 raise SemanticCompletionError(
                     "OpenRouter response must be a JSON object; no repair call was made",
                     safe_response,
+                    retryable=True,
                 )
             # Checked outside the parse guard below, which catches ValueError and would
             # otherwise rewrite this as a generic malformed-completion error.
@@ -1031,6 +583,7 @@ class OpenRouterJsonGenerator:
                     f"OpenRouter finish_reason was {finish_reason!r} rather than 'stop'; "
                     "no repair call was made",
                     safe_response,
+                    retryable=finish_reason is None,
                 )
             try:
                 message = envelope["choices"][0]["message"]
@@ -1039,6 +592,7 @@ class OpenRouterJsonGenerator:
                 raise SemanticCompletionError(
                     "OpenRouter returned a malformed semantic completion; no repair call was made",
                     safe_response,
+                    retryable=True,
                 ) from exc
             return generated, safe_response
         raise AssertionError("unreachable OpenRouter retry state")
@@ -1093,20 +647,13 @@ def _message_text(content: object) -> str:
     raise ValueError("completion content is not nonempty text")
 
 
-def render_prompt(
-    narrative: str,
-    ranked_docids: list[str],
-    documents: dict[str, str],
-    prompt_profile: str = "default",
-) -> str:
-    template = PROMPT_PROFILES.get(prompt_profile)
-    if template is None:
-        raise ValueError(f"unsupported prompt profile: {prompt_profile}")
-    context = "\n\n".join(
-        f"Reference document docid: {docid}\n{documents[docid]}"
-        for docid in ranked_docids
+def render_prompt(topic: GenerationTopic) -> str:
+    """Render the one pinned writer prompt from a validated evidence topic."""
+    if not isinstance(topic, GenerationTopic):
+        raise TypeError("topic must be GenerationTopic")
+    return SELECTED_EVIDENCE_USER_PROMPT.format(
+        evidence=render_generation_evidence(topic)
     )
-    return template.format(documents=context, question=narrative)
 
 
 def parse_generated_json(text: str) -> dict[str, Any]:
@@ -1193,7 +740,10 @@ def validate_submission_record(
     ):
         raise ValueError(f"{topic_id}: references must be nonempty docid strings")
     if len(references) != len(set(references)) or not set(references) <= set(allowed_docids):
-        raise ValueError(f"{topic_id}: references are duplicated or outside selected TREC rows")
+        raise ValueError(
+            f"{topic_id}: references are duplicated or outside the "
+            "selected-evidence citation domain"
+        )
     answer = record.get("answer")
     if not isinstance(answer, list) or not answer:
         raise ValueError(f"{topic_id}: answer must be a nonempty list")
@@ -1220,7 +770,13 @@ def validate_submission_record(
         raise ValueError(f"{topic_id}: answer exceeds 1,024 words")
 
 
-def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
+def normalize_generated_record(
+    record: dict[str, Any],
+    *,
+    allowed_docids: Sequence[str] | None = None,
+    citation_mode: str = "index",
+    ranked_docids: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Rebuild ``references`` from the citations actually used, then re-index them.
 
     The organizer baseline validator requires every reference to be cited. Asking the model to
@@ -1232,6 +788,15 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
     construction. Answer text is never touched, and each citation keeps pointing at exactly the
     document it pointed at before, so no claim changes its evidence.
     """
+    if citation_mode not in {"index", "docid"}:
+        raise ValueError(f"unsupported citation mode: {citation_mode}")
+    if ranked_docids is not None:
+        if allowed_docids is not None and list(allowed_docids) != list(ranked_docids):
+            raise ValueError("allowed_docids and ranked_docids disagree")
+        allowed_docids = ranked_docids
+    if citation_mode == "docid" and allowed_docids is None:
+        raise ValueError("docid citation mode requires ranked_docids")
+
     references = record.get("references")
     answer = record.get("answer")
     # Runs before validate_submission_record, so it cannot assume a well-formed record. A model
@@ -1247,6 +812,59 @@ def normalize_generated_record(record: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"answer[{index}] has no text string")
         if not isinstance(item.get("citations"), list):
             raise ValueError(f"answer[{index}] has no citations list")
+
+    if allowed_docids is not None:
+        allowed = set(allowed_docids)
+        if not allowed or any(
+            not isinstance(docid, str) or not docid or docid != docid.strip()
+            for docid in allowed_docids
+        ):
+            raise ValueError("allowed_docids must contain exact nonempty docid strings")
+        if not all(
+            isinstance(docid, str) and docid and docid == docid.strip()
+            for docid in references
+        ):
+            raise ValueError("references must be exact raw docid strings")
+        foreign_references = [docid for docid in references if docid not in allowed]
+        if foreign_references:
+            raise ValueError(
+                "references outside supplied ranked documents: "
+                + ", ".join(foreign_references)
+            )
+
+        order: list[str] = []
+        resolved: list[list[str]] = []
+        for index, item in enumerate(answer):
+            cites: list[str] = []
+            for citation in item["citations"]:
+                if (
+                    not isinstance(citation, str)
+                    or not citation
+                    or citation != citation.strip()
+                ):
+                    raise ValueError(
+                        f"answer[{index}] citations must be raw docid strings"
+                    )
+                if citation not in allowed:
+                    raise ValueError(
+                        f"answer[{index}] citation {citation!r} is outside supplied ranked documents"
+                    )
+                if citation not in cites:
+                    cites.append(citation)
+                if citation not in order:
+                    order.append(citation)
+            resolved.append(cites)
+        if not order:
+            raise ValueError("generated answer cites no valid reference")
+        remap = {docid: index for index, docid in enumerate(order)}
+        return {
+            **record,
+            "references": order,
+            "answer": [
+                {"text": item["text"], "citations": [remap[docid] for docid in cites]}
+                for item, cites in zip(answer, resolved)
+            ],
+        }
 
     # Only prune uncited references. An out-of-range or non-integer citation is a model error
     # that validate_submission_record is responsible for reporting, so it must not be silently
@@ -1361,6 +979,53 @@ def _validate_generated_submission_record(
         raise ValueError(f"{topic_id}: generated answer has uncited references")
 
 
+def _claim_match_key(text: str) -> str:
+    """Conservatively match a generated sentence to a near-verbatim claim hint."""
+    normalized = " ".join(text.split()).casefold()
+    return normalized[:-1] if normalized.endswith(".") else normalized
+
+
+def _validate_exact_hint_citations(
+    record: dict[str, Any],
+    *,
+    topic: GenerationTopic,
+) -> None:
+    """Reject knowable hint-to-document citation mismatches without rewriting output."""
+    hints_by_text: dict[str, list[ClaimHint]] = {}
+    for hint in topic.claim_hints:
+        hints_by_text.setdefault(_claim_match_key(hint.text), []).append(hint)
+
+    evidence_by_id = {evidence.evidence_id: evidence for evidence in topic.evidence}
+    references = record["references"]
+    mismatches: list[str] = []
+    for answer_index, item in enumerate(record["answer"]):
+        matches = hints_by_text.get(_claim_match_key(item["text"]), [])
+        if len(matches) != 1:
+            # Do not guess when two hints normalize to the same sentence.
+            continue
+        hint = matches[0]
+        linked_docids = tuple(
+            dict.fromkeys(
+                evidence_by_id[evidence_id].docid for evidence_id in hint.evidence_ids
+            )
+        )
+        cited_docids = tuple(references[citation] for citation in item["citations"])
+        unlinked_docids = tuple(
+            docid for docid in cited_docids if docid not in linked_docids
+        )
+        if unlinked_docids:
+            mismatches.append(
+                f"answer[{answer_index}] claim_hint={hint.claim_id} "
+                f"unlinked_docids={','.join(unlinked_docids)} "
+                f"linked_docids={','.join(linked_docids)}"
+            )
+    if mismatches:
+        raise ValueError(
+            f"{topic.topic_id}: exact claim-hint citation mismatches: "
+            + "; ".join(mismatches)
+        )
+
+
 def _safe_topic_name(topic_id: str) -> str:
     prefix = "".join(
         character if character.isalnum() or character in "-_." else "_"
@@ -1473,9 +1138,7 @@ def _write_json(path: Path, value: object, *, compact: bool = False) -> None:
 def _saved_record(
     path: Path,
     *,
-    topic_id: str,
-    narrative: str,
-    allowed_docids: list[str],
+    topic: GenerationTopic,
     config: RagGenerationConfig,
 ) -> dict[str, Any] | None:
     try:
@@ -1484,79 +1147,123 @@ def _saved_record(
             return None
         _validate_generated_submission_record(
             record,
-            topic_id=topic_id,
-            narrative=narrative,
-            allowed_docids=allowed_docids,
+            topic_id=topic.topic_id,
+            narrative=topic.narrative,
+            allowed_docids=list(topic.citation_docids),
             team_id=config.team_id,
             run_id=config.run_id,
             run_desc=config.run_desc,
         )
+        _validate_exact_hint_citations(record, topic=topic)
         return record
     except (OSError, ValueError, json.JSONDecodeError):
         return None
 
 
+def _next_raw_attempt_number(raw_dir: Path, topic_name: str) -> int:
+    """Return the next monotonic raw-attempt number for one topic."""
+    if not raw_dir.exists():
+        return 1
+    pattern = re.compile(
+        rf"^{re.escape(topic_name)}\.attempt-(?P<number>[1-9][0-9]*)(?:\.failed)?\.json$"
+    )
+    highest = 0
+    for path in raw_dir.iterdir():
+        match = pattern.fullmatch(path.name)
+        if match is not None:
+            highest = max(highest, int(match.group("number")))
+    return highest + 1
+
+
 async def _generate_topic(
     *,
-    topic_id: str,
-    narrative: str,
-    ranked_docids: list[str],
-    documents: dict[str, str],
+    topic: GenerationTopic,
     generator: JsonGenerator,
     config: RagGenerationConfig,
     semaphore: asyncio.Semaphore,
+    executor: ThreadPoolExecutor,
 ) -> tuple[str, str | None]:
+    topic_id = topic.topic_id
     work_dir = config.resolved_work_dir
     topic_name = _safe_topic_name(topic_id)
+    raw_dir = work_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
     secrets = (os.environ.get(config.api_key_env, ""),)
-    try:
-        async with semaphore:
-            generated, raw_response = await asyncio.to_thread(
-                generator.complete_json,
-                topic_id=topic_id,
-                system_prompt=system_prompt_for(config.prompt_profile),
-                user_prompt=render_prompt(
-                    narrative, ranked_docids, documents, config.prompt_profile
-                ),
-                response_schema=output_schema(),
-            )
-        _write_json(
-            work_dir / "raw" / f"{topic_name}.json",
-            _redact(raw_response, secrets),
-        )
-        record = normalize_generated_record(
-            trim_to_word_limit(
+    next_attempt = _next_raw_attempt_number(raw_dir, topic_name)
+    last_error: str | None = None
+    for semantic_attempt in range(MAX_SEMANTIC_ATTEMPTS):
+        attempt_number = next_attempt + semantic_attempt
+        raw_path = raw_dir / f"{topic_name}.attempt-{attempt_number}.json"
+        failed_path = raw_dir / f"{topic_name}.attempt-{attempt_number}.failed.json"
+        raw_written = False
+        try:
+            user_prompt = render_prompt(topic)
+            if semantic_attempt:
+                user_prompt += SEMANTIC_RETRY_INSTRUCTION
+            async with semaphore:
+                completion = executor.submit(
+                    partial(
+                        generator.complete_json,
+                        topic_id=topic_id,
+                        system_prompt=SYSTEM_PROMPT,
+                        user_prompt=user_prompt,
+                        response_schema=output_schema(),
+                    )
+                )
+                # Polling avoids relying on the event loop's cross-thread wakeup descriptor,
+                # which is unavailable in some constrained runner environments.
+                while not completion.done():
+                    await asyncio.sleep(0.01)
+                generated, raw_response = completion.result()
+            _write_json(raw_path, _redact(raw_response, secrets))
+            raw_written = True
+            record = normalize_generated_record(
                 build_submission_record(
-                generated,
+                    generated,
+                    topic_id=topic_id,
+                    narrative=topic.narrative,
+                    team_id=config.team_id,
+                    run_id=config.run_id,
+                    run_desc=config.run_desc,
+                ),
+                allowed_docids=list(topic.citation_docids),
+            )
+            _validate_generated_submission_record(
+                record,
                 topic_id=topic_id,
-                narrative=narrative,
+                narrative=topic.narrative,
+                allowed_docids=list(topic.citation_docids),
                 team_id=config.team_id,
                 run_id=config.run_id,
-                    run_desc=config.run_desc,
-                )
+                run_desc=config.run_desc,
             )
-        )
-        _validate_generated_submission_record(
-            record,
-            topic_id=topic_id,
-            narrative=narrative,
-            allowed_docids=ranked_docids,
-            team_id=config.team_id,
-            run_id=config.run_id,
-            run_desc=config.run_desc,
-        )
-        _write_json(work_dir / "rows" / f"{topic_name}.json", record, compact=True)
-        return topic_id, None
-    except Exception as exc:
-        if isinstance(exc, SemanticCompletionError):
-            _write_json(
-                work_dir / "raw" / f"{topic_name}.failed.json",
-                _redact(exc.raw_response, secrets),
-            )
-        error_path = work_dir / "errors" / f"{topic_name}.txt"
-        sanitized_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
-        _atomic_write_text(error_path, f"{sanitized_error}\n")
-        return topic_id, sanitized_error
+            _validate_exact_hint_citations(record, topic=topic)
+            _write_json(work_dir / "rows" / f"{topic_name}.json", record, compact=True)
+            error_path = work_dir / "errors" / f"{topic_name}.txt"
+            if error_path.exists():
+                error_path.unlink()
+                _fsync_directory(error_path.parent)
+            return topic_id, None
+        except SemanticCompletionError as exc:
+            _write_json(failed_path, _redact(exc.raw_response, secrets))
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            if not exc.retryable:
+                break
+        except ValueError as exc:
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            if not raw_written:
+                _write_json(failed_path, {"error": last_error})
+        except Exception as exc:
+            last_error = _redact(f"{type(exc).__name__}: {exc}", secrets)
+            if not raw_written:
+                _write_json(failed_path, {"error": last_error})
+            break
+
+    if last_error is None:
+        last_error = "RuntimeError: semantic attempt budget must be positive"
+    error_path = work_dir / "errors" / f"{topic_name}.txt"
+    _atomic_write_text(error_path, f"{last_error}\n")
+    return topic_id, last_error
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
@@ -1567,9 +1274,7 @@ def _paths_overlap(first: Path, second: Path) -> bool:
 
 def _validate_artifact_paths(config: RagGenerationConfig) -> None:
     inputs = {
-        "queries_path": config.queries_path,
-        "run_path": config.run_path,
-        "documents_path": config.documents_path,
+        "handoff_manifest_path": config.handoff_manifest_path,
     }
     targets = {
         "output_path": config.output_path,
@@ -1604,48 +1309,69 @@ def _clear_generation_artifacts(config: RagGenerationConfig) -> None:
         _fsync_directory(config.output_path.parent)
 
 
-def _file_digest(path: Path) -> str:
-    """Return a streaming sha256 so large document archives do not load into memory."""
-    digest = sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _generation_identity(config: RagGenerationConfig) -> dict[str, Any]:
+def _generation_identity(
+    config: RagGenerationConfig,
+    handoff: GenerationHandoff,
+    topics: Sequence[GenerationTopic],
+) -> dict[str, Any]:
     """Return the settings that make already-generated rows comparable.
 
     Resuming reuses rows produced by an earlier invocation. Those rows are revalidated for
     shape, but shape cannot detect that they came from a different model or prompt, so a resume
     after any of these changed would publish one file containing answers from two systems.
 
-    The retrieval inputs are digested too. Regenerating them in place between create and resume
-    would otherwise leave earlier rows grounded in evidence that no longer exists, and they
-    would still validate whenever their references happen to survive.
+    The sealed handoff and rendered prompt are included so replacing selected evidence between
+    create and resume cannot silently mix answers grounded in different contexts.
     """
     return {
-        # Bump when the recorded fields change OR when the acceptance policy changes, so rows
-        # written under looser rules are not adopted. Version 3 requires finish_reason "stop";
-        # version 2 rows may have been accepted with "error", "content_filter", or none at all.
-        "identity_version": 3,
-        "run_sha256": _file_digest(config.run_path),
-        "documents_sha256": _file_digest(config.documents_path),
-        "archive_member": config.archive_member,
+        # Version 6 also binds deterministic claim-hint citation validation.
+        "identity_version": 6,
+        "handoff_schema_version": handoff.schema_version,
+        "handoff_manifest_sha256": handoff.manifest_sha256,
+        "selected_topics": [
+            {
+                "topic_id": topic.topic_id,
+                "context_sha256": topic.context_sha256,
+                "prompt_sha256": sha256(render_prompt(topic).encode("utf-8")).hexdigest(),
+            }
+            for topic in topics
+        ],
+        "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        "system_prompt_sha256": sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+        "response_schema_sha256": sha256(
+            json.dumps(output_schema(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "semantic_attempt_policy": {
+            "max_attempts": MAX_SEMANTIC_ATTEMPTS,
+            "retryable_failures": ["local_validation", "malformed_semantic_completion"],
+            "retry_instruction_sha256": sha256(
+                SEMANTIC_RETRY_INSTRUCTION.encode("utf-8")
+            ).hexdigest(),
+        },
+        "citation_validation_contract_version": _CITATION_VALIDATION_CONTRACT_VERSION,
+        "team_id": config.team_id,
+        "run_id": config.run_id,
+        "run_desc": config.run_desc,
         "model": config.model,
         "provider": config.provider,
         "api_base": config.api_base,
+        "api_key_env": config.api_key_env,
         "reasoning_effort": config.reasoning_effort,
-        "prompt_profile": config.prompt_profile,
         "structured_output": config.structured_output,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
-        "top_k": config.top_k,
-        "max_document_words": config.max_document_words,
+        "timeout_seconds": config.timeout_seconds,
+        "transport_max_attempts": config.transport_max_attempts,
+        "concurrency": config.concurrency,
     }
 
 
-def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) -> None:
+def _enforce_generation_identity(
+    config: RagGenerationConfig,
+    work_dir: Path,
+    handoff: GenerationHandoff,
+    topics: Sequence[GenerationTopic],
+) -> None:
     """Refuse to resume into rows generated under different settings.
 
     Fails closed. Rows that predate identity tracking, or that were recorded by an older
@@ -1653,7 +1379,7 @@ def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) ->
     than adopted: adopting them would publish one file mixing two systems.
     """
     identity_path = work_dir / "generation_identity.json"
-    identity = _generation_identity(config)
+    identity = _generation_identity(config, handoff, topics)
     if identity_path.exists():
         recorded = json.loads(identity_path.read_text(encoding="utf-8"))
         if recorded.get("identity_version") != identity["identity_version"]:
@@ -1682,7 +1408,10 @@ def _enforce_generation_identity(config: RagGenerationConfig, work_dir: Path) ->
 
 
 async def _run_generation_locked(
-    config: RagGenerationConfig, generator: JsonGenerator
+    config: RagGenerationConfig,
+    generator: JsonGenerator,
+    handoff: GenerationHandoff,
+    topics: Sequence[GenerationTopic],
 ) -> None:
     work_dir = config.resolved_work_dir
     if config.overwrite:
@@ -1695,54 +1424,42 @@ async def _run_generation_locked(
             "experiment.mode: overwrite"
         )
 
-    topics = select_queries(load_queries(config.queries_path), config.topic_ids)
-    ranked = load_trec_run(config.run_path, {topic_id for topic_id, _ in topics}, config.top_k)
-    topic_docids = {
-        topic_id: set(ranked[topic_id])
-        for topic_id, _narrative in topics
-    }
-    documents_by_topic = load_topic_documents(
-        config.documents_path,
-        config.archive_member,
-        topic_docids,
-        config.max_document_words,
-    )
-    # After the fallible input loading, so a failed overwrite leaves no work directory behind.
     work_dir.mkdir(parents=True, exist_ok=True)
-    _enforce_generation_identity(config, work_dir)
+    _enforce_generation_identity(config, work_dir, handoff, topics)
 
     rows_dir = work_dir / "rows"
-    pending: list[tuple[str, str]] = []
-    for topic_id, narrative in topics:
+    pending: list[GenerationTopic] = []
+    for topic in topics:
+        topic_id = topic.topic_id
         row_path = rows_dir / f"{_safe_topic_name(topic_id)}.json"
         saved = (
             _saved_record(
                 row_path,
-                topic_id=topic_id,
-                narrative=narrative,
-                allowed_docids=ranked[topic_id],
+                topic=topic,
                 config=config,
             )
             if config.resume
             else None
         )
         if saved is None:
-            pending.append((topic_id, narrative))
+            pending.append(topic)
     semaphore = asyncio.Semaphore(config.concurrency)
-    results = await asyncio.gather(
-        *[
-            _generate_topic(
-                topic_id=topic_id,
-                narrative=narrative,
-                ranked_docids=ranked[topic_id],
-                documents=documents_by_topic[topic_id],
-                generator=generator,
-                config=config,
-                semaphore=semaphore,
-            )
-            for topic_id, narrative in pending
-        ]
-    )
+    with ThreadPoolExecutor(
+        max_workers=config.concurrency,
+        thread_name_prefix="trec-rag-generation",
+    ) as executor:
+        results = await asyncio.gather(
+            *[
+                _generate_topic(
+                    topic=topic,
+                    generator=generator,
+                    config=config,
+                    semaphore=semaphore,
+                    executor=executor,
+                )
+                for topic in pending
+            ]
+        )
     failures = [(topic_id, error) for topic_id, error in results if error]
     if failures:
         raise RuntimeError(
@@ -1750,12 +1467,11 @@ async def _run_generation_locked(
             "experiment.mode: resume"
         )
     final_records: list[dict[str, Any]] = []
-    for topic_id, narrative in topics:
+    for topic in topics:
+        topic_id = topic.topic_id
         record = _saved_record(
             rows_dir / f"{_safe_topic_name(topic_id)}.json",
-            topic_id=topic_id,
-            narrative=narrative,
-            allowed_docids=ranked[topic_id],
+            topic=topic,
             config=config,
         )
         if record is None:
@@ -1770,14 +1486,22 @@ async def _run_generation_locked(
     )
 
 
-async def run_generation(config: RagGenerationConfig, generator: JsonGenerator) -> None:
+async def run_generation(
+    config: RagGenerationConfig,
+    generator: JsonGenerator,
+    *,
+    handoff: GenerationHandoff | None = None,
+) -> None:
     """Generate missing topic rows and atomically publish the organizer JSONL."""
     _validate_artifact_paths(config)
+    if handoff is None:
+        handoff = load_generation_handoff(config.handoff_manifest_path)
+    topics = select_generation_topics(handoff, config.topic_ids)
     lock_path = config.output_path.with_name(f".{config.output_path.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with FileLock(lock_path, timeout=0):
-            await _run_generation_locked(config, generator)
+            await _run_generation_locked(config, generator, handoff, topics)
     except FileLockTimeout as exc:
         raise RuntimeError(
             f"generation is already active for {config.output_path}"
@@ -1794,7 +1518,8 @@ def main() -> None:
     try:
         config_path = arguments()
         config = load_rag_generation_config(config_path)
-        select_queries(load_queries(config.queries_path), config.topic_ids)
+        handoff = load_generation_handoff(config.handoff_manifest_path)
+        select_generation_topics(handoff, config.topic_ids)
         load_repo_env(find_repo_root(config_path.resolve().parent))
         generator = OpenRouterJsonGenerator(
             api_base=config.api_base,
@@ -1807,7 +1532,7 @@ def main() -> None:
             timeout_seconds=config.timeout_seconds,
             transport_max_attempts=config.transport_max_attempts,
         )
-        asyncio.run(run_generation(config, generator))
+        asyncio.run(run_generation(config, generator, handoff=handoff))
     except KeyboardInterrupt:
         raise SystemExit(130)
     except Exception as exc:

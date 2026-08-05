@@ -1132,6 +1132,63 @@ def test_local_ranker_identity_and_partial_cache_miss_are_exact(tmp_path: Path) 
     assert model.pairs == [[("query", "first evidence")], [("query", "second evidence")]]
 
 
+def test_local_ranker_uses_score_many_for_cache_miss_computation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = FakeCrossEncoder([[0.8, 0.2]])
+    ranker = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: model,
+        device="cpu",
+    )
+
+    def fail_legacy_api(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("legacy per-pair score-cache API was used")
+
+    monkeypatch.setattr(ranker._score_cache, "get", fail_legacy_api)
+    monkeypatch.setattr(ranker._score_cache, "add_many", fail_legacy_api)
+
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [
+        0.8,
+        0.2,
+    ]
+    assert model.predict_calls == 1
+
+
+def test_local_ranker_computes_independent_cache_misses_concurrently(
+    tmp_path: Path,
+) -> None:
+    rendezvous = Barrier(2)
+
+    class ConcurrentModel:
+        def __init__(self, score: float) -> None:
+            self.score = score
+
+        def predict(
+            self, pairs: Sequence[tuple[str, str]], **_kwargs: object
+        ) -> list[float]:
+            rendezvous.wait(timeout=2)
+            return [self.score for _pair in pairs]
+
+    first = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: ConcurrentModel(0.8),
+        device="cpu",
+    )
+    second = LocalMixedbreadSnippetRanker(
+        score_cache_root=tmp_path,
+        model_loader=lambda **_kwargs: ConcurrentModel(0.2),
+        device="cpu",
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_result = executor.submit(first.rank, "first query", ADAPTER_CHUNKS[:1])
+        second_result = executor.submit(second.rank, "second query", ADAPTER_CHUNKS[1:])
+
+        assert first_result.result(timeout=5)[0].relevance_score == 0.8
+        assert second_result.result(timeout=5)[0].relevance_score == 0.2
+
+
 @pytest.mark.parametrize(
     ("first_settings", "second_settings"),
     [
@@ -1265,12 +1322,6 @@ def test_local_score_cache_spawned_process_misses_are_single_flight(
         scores = [outcome[1] for outcome in outcomes]
         assert scores[0] == scores[1]
         assert predict_calls.value == 1
-        score_files = list(tmp_path.rglob("*.jsonl"))
-        assert len(score_files) == 1
-        rows = score_files[0].read_text(encoding="utf-8").splitlines()
-        assert len(rows) == 1
-        json.loads(rows[0])
-
         reloaded_model = FakeCrossEncoder([])
         reloaded = LocalMixedbreadSnippetRanker(
             score_cache_root=tmp_path,
@@ -1282,6 +1333,9 @@ def test_local_score_cache_spawned_process_misses_are_single_flight(
             == scores[0]
         )
         assert reloaded_model.predict_calls == 0
+        assert reloaded._score_cache.connection.execute(
+            "SELECT COUNT(*) FROM scores"
+        ).fetchone()[0] == 1
     finally:
         start_barrier.abort()
         predict_barrier.abort()
@@ -1386,6 +1440,35 @@ def test_small_llm_ranker_caches_validated_scores_and_batches_prompts(tmp_path: 
             "chunks": [{"chunk_id": "doc-a:0001", "text": "second evidence"}],
         },
     ]
+
+
+def test_small_llm_ranker_uses_score_many_for_cache_miss_computation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat = FakeChatModel(
+        [
+            '{"scores":[{"chunk_id":"doc-a:0000","score":0.2}]}',
+            '{"scores":[{"chunk_id":"doc-a:0001","score":0.8}]}',
+        ]
+    )
+    ranker = SmallLLMSnippetRanker(
+        chat_model=chat,
+        score_cache_root=tmp_path,
+        model_name="test-small-llm",
+        batch_size=2,
+    )
+
+    def fail_legacy_api(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("legacy per-pair score-cache API was used")
+
+    monkeypatch.setattr(ranker._score_cache, "get", fail_legacy_api)
+    monkeypatch.setattr(ranker._score_cache, "add_many", fail_legacy_api)
+
+    assert [row.relevance_score for row in ranker.rank("query", ADAPTER_CHUNKS)] == [
+        0.8,
+        0.2,
+    ]
+    assert len(chat.prompts) == 2
 
 
 def test_small_llm_ranker_sends_every_uncached_duplicate_text_chunk_id(

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from trec_rag.facet_evidence import SentencePair
+from trec_rag.facet_evidence import (
+    SCORING_NORMALIZATION_VERSION,
+    ScoringView,
+    SentencePair,
+)
 from trec_rag.rerank_score_cache import (
     DEFAULT_BACKEND_VERSION,
     DEFAULT_INFERENCE_DTYPE,
@@ -30,7 +33,7 @@ INFERENCE_DTYPE = DEFAULT_INFERENCE_DTYPE
 SENTENCE_MAX_LENGTH = 512
 SCORE_KIND = "extractive_sentence_v1"
 _BACKEND = "sentence-transformers-cross-encoder"
-_INPUT_POLICY = "extractive_sentence_pair_v1"
+_INPUT_POLICY = SCORING_NORMALIZATION_VERSION
 
 __all__ = [
     "BACKEND_VERSION",
@@ -59,6 +62,7 @@ def mixedbread_sentence_scorer_identity() -> dict[str, object]:
         "inference_dtype": INFERENCE_DTYPE,
         "score_kind": SCORE_KIND,
         "sentence_max_length": SENTENCE_MAX_LENGTH,
+        "input_policy": SCORING_NORMALIZATION_VERSION,
     }
 
 
@@ -86,20 +90,6 @@ def _load_local_cross_encoder(
         device=device,
         local_files_only=True,
     )
-
-
-def _reject_boolean_cache_scores(path: Path) -> None:
-    if not path.exists():
-        return
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue  # GlobalScoreCache reports the canonical malformed-row error.
-        if isinstance(row, dict) and isinstance(row.get("score"), bool):
-            raise ValueError(f"{path}:{line_number}: cached score must not be Boolean")
 
 
 def _contains_boolean(value: Any) -> bool:
@@ -161,7 +151,6 @@ class MixedbreadSentencePairScorer:
             requested_max_length=SENTENCE_MAX_LENGTH,
         )
         score_cache_root = Path(score_cache_root)
-        _reject_boolean_cache_scores(score_cache_root.joinpath(*context.path_parts))
         self.score_cache = GlobalScoreCache(
             score_cache_root,
             context,
@@ -176,44 +165,34 @@ class MixedbreadSentencePairScorer:
         rows = tuple(pairs)
         if any(not isinstance(pair, SentencePair) for pair in rows):
             raise TypeError("pairs must contain SentencePair values")
-        missing: dict[str, SentencePair] = {}
-        scores: dict[str, float] = {}
-        for pair in rows:
-            key = self.score_cache.cache_key(query_text=pair.query_text, text=pair.sentence_text)
-            score = self.score_cache.get(query_text=pair.query_text, text=pair.sentence_text)
-            if score is None:
-                missing.setdefault(key, pair)
-            else:
-                scores[key] = self._finite_score(score)
-        representatives = tuple(missing.values())
-        for offset in range(0, len(representatives), self.batch_size):
-            batch = representatives[offset : offset + self.batch_size]
+        views = tuple(ScoringView(pair.sentence_text) for pair in rows)
+        if any(not view.scoring_text for view in views):
+            raise ValueError("sentence scoring view must not be empty")
+        normalized_pairs = tuple(
+            (pair.query_text, view.scoring_text)
+            for pair, view in zip(rows, views, strict=True)
+        )
+
+        def compute_batch(batch: Sequence[tuple[str, str]]) -> tuple[float, ...]:
             predicted = tuple(
                 self._finite_score(score)
                 for score in _predict(
                     self._model,
-                    [(pair.query_text, pair.sentence_text) for pair in batch],
+                    list(batch),
                     batch_size=self.batch_size,
                     score_representation=SCORE_REPRESENTATION,
                 )
             )
             if len(predicted) != len(batch):
                 raise ValueError("model score count must match sentence pair count")
-            self.score_cache.add_many(
-                (pair.query_text, pair.sentence_text, score)
-                for pair, score in zip(batch, predicted, strict=True)
-            )
-            scores.update(
-                (
-                    self.score_cache.cache_key(query_text=pair.query_text, text=pair.sentence_text),
-                    score,
-                )
-                for pair, score in zip(batch, predicted, strict=True)
-            )
-        return tuple(
-            scores[self.score_cache.cache_key(query_text=pair.query_text, text=pair.sentence_text)]
-            for pair in rows
+            return predicted
+
+        scores = self.score_cache.score_many(
+            normalized_pairs,
+            compute_batch,
+            batch_size=self.batch_size,
         )
+        return tuple(self._finite_score(score) for score in scores)
 
     @staticmethod
     def _finite_score(value: object) -> float:
