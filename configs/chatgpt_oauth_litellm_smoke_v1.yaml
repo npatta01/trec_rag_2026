@@ -4,7 +4,9 @@ experiment:
   id: issue27_chatgpt_oauth_litellm_smoke_v1
 
 auth:
-  token_store: ~/.codex/auth.json
+  token_dir: ~/.config/litellm/chatgpt
+  auth_file: auth.json
+  login_if_missing: true
 
 model:
   name: chatgpt/gpt-5.4

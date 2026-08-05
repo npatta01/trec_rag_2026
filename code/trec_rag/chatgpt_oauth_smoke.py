@@ -1,4 +1,4 @@
-"""Run a small LiteLLM request using ChatGPT OAuth and no API keys."""
+"""Run a small LiteLLM request using its native ChatGPT OAuth flow."""
 
 from __future__ import annotations
 
@@ -27,13 +27,6 @@ FORBIDDEN_API_KEY_ENV = (
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "LITELLM_API_KEY",
-)
-_AUTH_FIELDS = (
-    "access_token",
-    "refresh_token",
-    "id_token",
-    "account_id",
-    "expires_at",
 )
 _SECRET_PATTERNS = (
     re.compile(r"(?i)bearer\s+\S+"),
@@ -73,7 +66,9 @@ _UniqueKeySafeLoader.add_constructor(
 
 @dataclass(frozen=True)
 class AuthSettings:
-    token_store: Path
+    token_dir: Path
+    auth_file: str
+    login_if_missing: bool
 
 
 @dataclass(frozen=True)
@@ -130,9 +125,15 @@ def load_smoke_config(path: Path) -> SmokeConfig:
         raise ValueError("experiment.id must be a safe identifier")
 
     auth_raw = _mapping(document.get("auth"), "auth")
-    _reject_unknown(auth_raw, {"token_store"}, "auth")
-    token_store = _expand_path(root_dir, _text(auth_raw, "token_store", "auth"))
-    _require_outside_repo(root_dir, token_store, "auth.token_store")
+    _reject_unknown(auth_raw, {"token_dir", "auth_file", "login_if_missing"}, "auth")
+    token_dir = _expand_path(root_dir, _text(auth_raw, "token_dir", "auth"))
+    _require_outside_repo(root_dir, token_dir, "auth.token_dir")
+    auth_file = _text(auth_raw, "auth_file", "auth")
+    if Path(auth_file).name != auth_file or auth_file in {".", ".."}:
+        raise ValueError("auth.auth_file must be a file name, not a path")
+    login_if_missing = auth_raw.get("login_if_missing")
+    if not isinstance(login_if_missing, bool):
+        raise ValueError("auth.login_if_missing must be a boolean")
 
     model_raw = _mapping(document.get("model"), "model")
     _reject_unknown(model_raw, {"name", "originator", "timeout_seconds"}, "model")
@@ -160,7 +161,11 @@ def load_smoke_config(path: Path) -> SmokeConfig:
     return SmokeConfig(
         root_dir=root_dir,
         experiment_id=experiment_id,
-        auth=AuthSettings(token_store=token_store),
+        auth=AuthSettings(
+            token_dir=token_dir,
+            auth_file=auth_file,
+            login_if_missing=login_if_missing,
+        ),
         model=model,
         probe=probe,
         report_path=report_path,
@@ -173,57 +178,56 @@ def execute_smoke(
     runtime: RuntimeBindings | None = None,
     environ: MutableMapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Execute the OAuth-only request and persist a sanitized report."""
+    """Execute the native LiteLLM OAuth request and persist a sanitized report."""
     environment = os.environ if environ is None else environ
     started_at = _utc_now()
-    source_schema = "unknown"
     bindings = runtime
+    auth_file = config.auth.token_dir / config.auth.auth_file
+    auth_report = {
+        "method": "chatgpt_device_code",
+        "token_dir": _display_path(config.auth.token_dir),
+        "auth_file": config.auth.auth_file,
+        "login_if_missing": config.auth.login_if_missing,
+        "owned_by_litellm": True,
+    }
 
     try:
         _assert_oauth_only_environment(environment)
-        auth_record, source_schema = normalize_oauth_record(config.auth.token_store)
-
-        with TemporaryDirectory(prefix="trec-rag-chatgpt-oauth-") as temporary:
-            temporary_dir = Path(temporary)
-            temporary_auth = temporary_dir / "auth.json"
-            temporary_auth.write_text(
-                json.dumps(auth_record, sort_keys=True) + "\n",
-                encoding="utf-8",
+        if not config.auth.login_if_missing and not auth_file.exists():
+            raise FileNotFoundError(
+                "LiteLLM OAuth auth file is missing and auth.login_if_missing is false: "
+                + _display_path(auth_file)
             )
-            try:
-                temporary_auth.chmod(0o600)
-            except OSError:
-                pass
 
-            updates = {
-                "CHATGPT_TOKEN_DIR": str(temporary_dir),
-                "CHATGPT_AUTH_FILE": temporary_auth.name,
-                "CHATGPT_ORIGINATOR": config.model.originator,
-            }
-            # LiteLLM imports python-dotenv at module import time. Importing from
-            # an empty temporary cwd prevents discovery of the repository .env.
-            with _temporary_environment(environment, updates), chdir(temporary_dir):
-                if bindings is None:
-                    bindings = _load_runtime()
-                _assert_oauth_only_environment(environment)
-                response = bindings.responses(
-                    model=config.model.name,
-                    input=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "input_text", "text": config.probe.prompt}
-                            ],
-                        }
-                    ],
-                    timeout=config.model.timeout_seconds,
-                )
-                answer = collect_response_text(response)
+        updates = {
+            "CHATGPT_TOKEN_DIR": str(config.auth.token_dir),
+            "CHATGPT_AUTH_FILE": config.auth.auth_file,
+            "CHATGPT_ORIGINATOR": config.model.originator,
+        }
+        # LiteLLM imports python-dotenv at module import time. Importing from
+        # an empty temporary cwd prevents discovery of the repository .env.
+        with TemporaryDirectory(prefix="trec-rag-chatgpt-oauth-cwd-") as temporary, (
+            _temporary_environment(environment, updates)
+        ), chdir(temporary):
+            if bindings is None:
+                bindings = _load_runtime()
+            _assert_oauth_only_environment(environment)
+            response = bindings.responses(
+                model=config.model.name,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": config.probe.prompt}],
+                    }
+                ],
+                timeout=config.model.timeout_seconds,
+            )
+            answer = collect_response_text(response)
 
         checks = {
             "exact_response": answer.strip() == config.probe.expected_response,
             "api_key_environment_absent": True,
-            "temporary_auth_copy_removed": not temporary_auth.exists(),
+            "native_litellm_oauth_configured": True,
         }
         status = "passed" if all(checks.values()) else "failed"
         report: dict[str, object] = {
@@ -233,12 +237,7 @@ def execute_smoke(
             "started_at": started_at,
             "finished_at": _utc_now(),
             "model": config.model.name,
-            "auth": {
-                "method": "chatgpt_oauth",
-                "source_schema": source_schema,
-                "token_store": _display_path(config.auth.token_store),
-                "source_file_modified": False,
-            },
+            "auth": auth_report,
             "probe": {
                 "prompt": config.probe.prompt,
                 "expected_response": config.probe.expected_response,
@@ -255,16 +254,11 @@ def execute_smoke(
             "started_at": started_at,
             "finished_at": _utc_now(),
             "model": config.model.name,
-            "auth": {
-                "method": "chatgpt_oauth",
-                "source_schema": source_schema,
-                "token_store": _display_path(config.auth.token_store),
-                "source_file_modified": False,
-            },
+            "auth": auth_report,
             "checks": {
                 "exact_response": False,
                 "api_key_environment_absent": False,
-                "temporary_auth_copy_removed": True,
+                "native_litellm_oauth_configured": False,
             },
             "error": {"type": type(exc).__name__, "message": _redact(str(exc))[:2000]},
             "package_versions": (
@@ -274,39 +268,6 @@ def execute_smoke(
 
     _write_report(config.report_path, report)
     return report
-
-
-def normalize_oauth_record(path: Path) -> tuple[dict[str, object], str]:
-    """Return only OAuth fields in the flat schema LiteLLM expects."""
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"ChatGPT OAuth token store not found at {_display_path(path)}"
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError("ChatGPT OAuth token store contains invalid JSON") from exc
-    if not isinstance(raw, Mapping):
-        raise ValueError("ChatGPT OAuth token store must contain a JSON object")
-
-    nested = raw.get("tokens")
-    if isinstance(nested, Mapping):
-        source: Mapping[str, object] = nested
-        source_schema = "codex_nested"
-    else:
-        source = raw
-        source_schema = "litellm_flat"
-
-    normalized = {
-        field: source[field]
-        for field in _AUTH_FIELDS
-        if field in source and source[field] is not None
-    }
-    if not isinstance(normalized.get("access_token"), str) and not isinstance(
-        normalized.get("refresh_token"), str
-    ):
-        raise ValueError("ChatGPT OAuth token store has no access or refresh token")
-    return normalized, source_schema
 
 
 def collect_response_text(response: object) -> str:

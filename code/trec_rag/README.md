@@ -1299,11 +1299,11 @@ subscription call through LiteLLM. It deliberately refuses `OPENAI_API_KEY`,
 empty temporary working directory so LiteLLM cannot discover the repository
 `.env` file.
 
-The default config reads the OAuth session created by Codex at
-`~/.codex/auth.json`. Codex stores tokens under a nested `tokens` object while
-LiteLLM 1.95.0 expects flat fields. The runner copies only OAuth fields into a
-temporary, restricted auth file, allows LiteLLM to refresh that copy if needed,
-and removes it after the call. It never edits the source Codex auth file.
+The default config uses a dedicated LiteLLM OAuth directory at
+`~/.config/litellm/chatgpt/auth.json`. If that file is missing, LiteLLM starts
+its native device-code flow, prints the verification URL and one-time code, and
+saves the resulting ChatGPT subscription session in that directory. The runner
+does not read, transform, or copy the Codex CLI auth file.
 
 Install the optional dependency group and run the config-driven probe:
 

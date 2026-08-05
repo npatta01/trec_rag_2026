@@ -17,33 +17,20 @@ from trec_rag.chatgpt_oauth_smoke import (
     collect_response_text,
     execute_smoke,
     load_smoke_config,
-    normalize_oauth_record,
 )
 
 
 def _config(tmp_path: Path) -> SmokeConfig:
     root = tmp_path / "repo"
     root.mkdir()
-    token_store = tmp_path / "credentials" / "auth.json"
-    token_store.parent.mkdir()
-    token_store.write_text(
-        json.dumps(
-            {
-                "auth_mode": "chatgpt",
-                "OPENAI_API_KEY": "must-not-be-copied",
-                "tokens": {
-                    "access_token": "test-access-token",
-                    "refresh_token": "test-refresh-token",
-                    "account_id": "test-account",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
     return SmokeConfig(
         root_dir=root,
         experiment_id="oauth_smoke_test",
-        auth=AuthSettings(token_store=token_store),
+        auth=AuthSettings(
+            token_dir=tmp_path / "credentials",
+            auth_file="auth.json",
+            login_if_missing=True,
+        ),
         model=ModelSettings(
             name="chatgpt/gpt-test",
             originator="test-suite",
@@ -52,20 +39,6 @@ def _config(tmp_path: Path) -> SmokeConfig:
         probe=ProbeSettings(prompt="Say passed.", expected_response="passed"),
         report_path=root / "outputs" / "oauth-smoke" / "result.json",
     )
-
-
-def test_normalize_oauth_record_flattens_codex_tokens_only(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-
-    record, schema = normalize_oauth_record(config.auth.token_store)
-
-    assert schema == "codex_nested"
-    assert record == {
-        "access_token": "test-access-token",
-        "refresh_token": "test-refresh-token",
-        "account_id": "test-account",
-    }
-    assert "OPENAI_API_KEY" not in record
 
 
 def test_execute_smoke_uses_structured_input_and_collects_stream(tmp_path: Path) -> None:
@@ -99,9 +72,9 @@ def test_execute_smoke_uses_structured_input_and_collects_stream(tmp_path: Path)
         }
     ]
     assert "api_key" not in captured
-    assert report["auth"]["source_schema"] == "codex_nested"
-    assert report["auth"]["source_file_modified"] is False
-    assert report["checks"]["temporary_auth_copy_removed"] is True
+    assert report["auth"]["owned_by_litellm"] is True
+    assert report["auth"]["auth_file"] == "auth.json"
+    assert report["checks"]["native_litellm_oauth_configured"] is True
     assert environment == {}
     assert config.report_path.exists()
 
@@ -143,7 +116,9 @@ def test_example_config_loads() -> None:
     config = load_smoke_config(root / "configs" / "chatgpt_oauth_litellm_smoke_v1.yaml")
 
     assert config.model.name == "chatgpt/gpt-5.4"
-    assert config.auth.token_store == Path.home() / ".codex" / "auth.json"
+    assert config.auth.token_dir == Path.home() / ".config" / "litellm" / "chatgpt"
+    assert config.auth.auth_file == "auth.json"
+    assert config.auth.login_if_missing is True
     assert config.report_path == root / "outputs" / config.experiment_id / "result.json"
 
 
@@ -154,7 +129,10 @@ def test_config_rejects_token_store_inside_repo(tmp_path: Path) -> None:
         """
 schema_version: chatgpt_oauth_smoke_v1
 experiment: {id: oauth_test}
-auth: {token_store: local-auth.json}
+auth:
+  token_dir: local-auth
+  auth_file: auth.json
+  login_if_missing: false
 model:
   name: chatgpt/gpt-test
   originator: test-suite
@@ -167,5 +145,5 @@ output: {report_path: outputs/oauth-test/result.json}
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="auth.token_store must remain outside"):
+    with pytest.raises(ValueError, match="auth.token_dir must remain outside"):
         load_smoke_config(config_path)
