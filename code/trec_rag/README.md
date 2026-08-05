@@ -297,16 +297,67 @@ recorded backend version stays honest. The two groups are declared conflicting
 because one lock cannot hold both torch builds; regenerate `uv.lock` on the ROCm
 host, where `repo.radeon.com` is reachable.
 
-`code/tools/verify_torch_groups.sh` proves each group selects its intended torch
-build. It is read-only — `uv export --frozen` resolves from the committed lock
-and never installs, downloads, or touches a model or retrieval cache — so it is
-safe to run beside an active pipeline task.
+`code/tools/verify_torch_groups.sh` proves three things without installing
+anything:
+
+1. **`uv.lock` is current with `pyproject.toml`.** `uv lock --check` re-resolves
+   and compares the result against the committed lock, failing if they differ.
+   It never writes the lock and never installs, but it does re-resolve, so it
+   needs package-index access.
+2. **Each group selects the torch build it should.** `uv export --frozen` reads
+   the committed lock alone. The `rocm` group must resolve a `repo.radeon.com`
+   wheel. The `cuda` group must resolve *exactly* `torch==2.9.1` — a direct URL,
+   a CPU wheel, or any other version fails — and the export must also carry the
+   `nvidia-cuda-runtime`, `nvidia-cublas`, and `nvidia-cudnn` packages a
+   GPU-enabled wheel depends on, which is what separates the real build from a
+   CPU-only one published under the same version.
+3. **That `cuda` torch comes from PyPI.** The requirements format renders every
+   registry package as `name==version` with no source attached, so
+   `torch==2.9.1` reads identically whether PyPI, a mirror, or a private index
+   served it. To settle it, the script also exports the same group as PEP 751
+   metadata (`uv export --frozen --group cuda --format pylock.toml`), which does
+   record a per-package index, and requires the single `torch` entry there to be
+   version `2.9.1` with index exactly `https://pypi.org/simple`. Asking uv for
+   the group-scoped export is what keeps this honest — reading an unscoped
+   multi-fork `uv.lock` block would leave the fork ambiguous.
+
+Every uv call runs with `--no-cache` and a throwaway `--cache-dir` removed on
+exit, so the script neither reads nor writes the shared persistent uv cache, and
+it never touches a model, retrieval, or reranker cache. Every call also runs
+with `--no-python-downloads`, which is what makes "installs nothing" hold on a
+host that does not already have the pinned Python 3.12.13: without it, `uv lock`
+would fetch and install a managed interpreter just to resolve. With it, such a
+host fails loudly instead. Safe to run beside an active pipeline task. When uv
+itself fails for an unrelated reason — no network, a rejected credential, an
+unknown flag — the script reports uv's own message instead of blaming the
+dependency group, and it withholds the "regenerate the lock" hint, which is
+printed only when the lock is actually diagnosed as stale.
 
 ```bash
 ./code/tools/verify_torch_groups.sh
+OK   uv.lock is current with pyproject.toml
 OK   rocm: torch @ https://repo.radeon.com/rocm/.../torch-2.9.1+rocm7.2.1...whl
-OK   cuda: torch==2.9.1
+OK   cuda: torch==2.9.1 from https://pypi.org/simple
 ```
+
+`code/tests/test_verify_torch_groups.py` and
+`code/tests/test_env_setup_contract.py` cover this bootstrap path hermetically:
+the first runs the script against a stub `uv` on `PATH`, the second executes the
+setup script's prefetch block against a stubbed `huggingface_hub` and drives the
+production loaders with stub loaders. Neither reaches the network, resolves
+dependencies, or downloads a model.
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_verify_torch_groups.py \
+  code/tests/test_env_setup_contract.py -q
+```
+
+These tests do write files — a throwaway SQLite score-cache database and a stub
+uv cache directory — but only under pytest's per-test `tmp_path`. Nothing is
+written to the shared persistent caches under `cache/` (`cache/reranker/`,
+`cache/retrieval/`, `cache/documents/`), to the Hugging Face model cache, or to
+the shared uv cache, so the suite is safe to run beside a live pipeline task.
 
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
 provenance, fallback, and byte-stable resume behavior, but it does not establish

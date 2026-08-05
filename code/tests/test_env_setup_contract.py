@@ -3,6 +3,14 @@
 These are hermetic: the prefetch test executes the setup script's embedded
 Python against a stubbed ``huggingface_hub``, so it never reaches the network,
 never writes to a model cache, and never needs torch installed.
+
+One test does write a file. Constructing ``MixedbreadPassageScorer`` opens its
+SQLite score cache eagerly, so ``_passage_scoring_request`` creates a real
+database — under pytest's per-test ``tmp_path``, never under the shared
+persistent ``cache/reranker/``. No shared cache is read or written here.
+
+``code/tests/test_verify_torch_groups.py`` covers the third bootstrap script,
+``verify_torch_groups.sh``, against a stub ``uv``.
 """
 
 from __future__ import annotations
