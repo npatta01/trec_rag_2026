@@ -471,6 +471,7 @@ def comparison(
                 {
                     "canonical_id": nugget.canonical_nugget_id,
                     "claim": nugget.claim_text,
+                    "importance": nugget.importance,
                     "evidence_aliases": list(canonical_aliases[nugget.canonical_nugget_id]),
                     "documents": sorted({row.docid for row in nugget.evidence}),
                 }

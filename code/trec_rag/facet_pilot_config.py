@@ -15,10 +15,13 @@ from trec_rag.repo_env import find_repo_root, repo_cache_root, shared_checkout_r
 from trec_rag.topics import Topic, load_narrative_topics
 
 
-_SCHEMA_VERSION = "facet_pilot_config_v1"
+_SCHEMA_VERSION = "facet_pilot_config_v2"
 _QUERY_SOURCES = ("original", "subnarrative")
 _RERANKER_MODEL = "mixedbread-ai/mxbai-rerank-base-v2"
-_SELECTION_POLICY = "round_robin_subnarrative_coverage"
+_DOCUMENTS_PER_QUERY = 1_000
+_PASSAGES_PER_QUERY = 100
+_CHUNK_MAX_CHARACTERS = 3_500
+_CHUNK_OVERLAP_CHARACTERS = 350
 _SAFE_EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 
@@ -61,17 +64,18 @@ class RetrievalSettings:
     index: str
     cache_dir: Path
     query_sources: tuple[str, ...]
-    candidate_depth_per_query: int
+    documents_per_query: int
+    corpus_epoch: str | None = None
 
 
 @dataclass(frozen=True)
-class RerankingSettings:
+class PassageSettings:
     model: str
     score_cache_dir: Path
     device: str
-    rerank_depth_per_query: int
-    candidate_pool_depth: int
-    selection_policy: str
+    passages_per_query: int
+    chunk_max_characters: int
+    chunk_overlap_characters: int
 
 
 @dataclass(frozen=True)
@@ -82,13 +86,19 @@ class NuggetSettings:
 
 
 @dataclass(frozen=True)
+class ExecutionSettings:
+    topic_workers: int
+
+
+@dataclass(frozen=True)
 class FacetPilotConfig:
     root_dir: Path
     experiment: ExperimentSettings
     topics_path: Path
     retrieval: RetrievalSettings
-    reranking: RerankingSettings
+    passage: PassageSettings
     nuggets: NuggetSettings
+    execution: ExecutionSettings = ExecutionSettings(topic_workers=1)
 
     @property
     def output_dir(self) -> Path:
@@ -112,30 +122,48 @@ class FacetPilotConfig:
                 "index": self.retrieval.index,
                 "cache_dir": _portable_path(self.root_dir, self.retrieval.cache_dir),
                 "query_sources": list(self.retrieval.query_sources),
-                "candidate_depth_per_query": self.retrieval.candidate_depth_per_query,
+                "documents_per_query": self.retrieval.documents_per_query,
+                "corpus_epoch": self.retrieval.corpus_epoch,
             },
-            "reranking": {
-                "model": self.reranking.model,
-                "score_cache_dir": _portable_path(self.root_dir, self.reranking.score_cache_dir),
-                "device": self.reranking.device,
-                "rerank_depth_per_query": self.reranking.rerank_depth_per_query,
-                "candidate_pool_depth": self.reranking.candidate_pool_depth,
-                "selection_policy": self.reranking.selection_policy,
+            "passage": {
+                "model": self.passage.model,
+                "score_cache_dir": _portable_path(self.root_dir, self.passage.score_cache_dir),
+                "device": self.passage.device,
+                "passages_per_query": self.passage.passages_per_query,
+                "chunk_max_characters": self.passage.chunk_max_characters,
+                "chunk_overlap_characters": self.passage.chunk_overlap_characters,
             },
             "nuggets": {
                 "evidence_budget_per_subnarrative": self.nuggets.evidence_budget_per_subnarrative,
                 "maximum_claims_per_subnarrative": self.nuggets.maximum_claims_per_subnarrative,
                 "maximum_supporting_documents_per_claim": self.nuggets.maximum_supporting_documents_per_claim,
             },
+            "execution": {"topic_workers": self.execution.topic_workers},
         }
 
-def load_facet_pilot_config(path: Path) -> FacetPilotConfig:
+def load_facet_pilot_config(
+    path: Path,
+    *,
+    source_bytes: bytes | None = None,
+) -> FacetPilotConfig:
     config_path = Path(path).resolve()
     root_dir = find_repo_root(config_path.parent)
-    raw = _strict_mapping(_load_yaml(config_path), "config")
-    _reject_unknown(raw, {"schema_version", "experiment", "topics", "retrieval", "reranking", "nuggets"}, "config")
+    raw = _strict_mapping(_load_yaml(config_path, source_bytes=source_bytes), "config")
     if _require_text(raw, "schema_version", "config") != _SCHEMA_VERSION:
         raise ValueError(f"config.schema_version must be {_SCHEMA_VERSION}")
+    _reject_unknown(
+        raw,
+        {
+            "schema_version",
+            "experiment",
+            "topics",
+            "retrieval",
+            "passage",
+            "nuggets",
+            "execution",
+        },
+        "config",
+    )
 
     experiment_raw = _strict_mapping(raw.get("experiment"), "experiment")
     _reject_unknown(experiment_raw, {"id"}, "experiment")
@@ -148,37 +176,49 @@ def load_facet_pilot_config(path: Path) -> FacetPilotConfig:
     topics_path = _resolve_repo_path(root_dir, _require_text(topics_raw, "path", "topics"))
 
     retrieval_raw = _strict_mapping(raw.get("retrieval"), "retrieval")
-    _reject_unknown(retrieval_raw, {"index", "cache_dir", "query_sources", "candidate_depth_per_query"}, "retrieval")
+    _reject_unknown(
+        retrieval_raw,
+        {"index", "cache_dir", "query_sources", "documents_per_query", "corpus_epoch"},
+        "retrieval",
+    )
     query_sources = _required_text_tuple(retrieval_raw, "query_sources", "retrieval")
     if query_sources != _QUERY_SOURCES:
         raise ValueError(f"retrieval.query_sources must be {list(_QUERY_SOURCES)}")
-    candidate_depth = _positive_int(retrieval_raw, "candidate_depth_per_query", "retrieval")
+    documents_per_query = _positive_int(retrieval_raw, "documents_per_query", "retrieval")
+    if documents_per_query != _DOCUMENTS_PER_QUERY:
+        raise ValueError(f"retrieval.documents_per_query must be {_DOCUMENTS_PER_QUERY}")
     retrieval = RetrievalSettings(
         index=_require_text(retrieval_raw, "index", "retrieval"),
         cache_dir=_resolve_cache_path(root_dir, _require_text(retrieval_raw, "cache_dir", "retrieval")),
         query_sources=query_sources,
-        candidate_depth_per_query=candidate_depth,
+        documents_per_query=documents_per_query,
+        corpus_epoch=_optional_text(retrieval_raw, "corpus_epoch"),
     )
 
-    reranking_raw = _strict_mapping(raw.get("reranking"), "reranking")
-    _reject_unknown(reranking_raw, {"model", "score_cache_dir", "device", "rerank_depth_per_query", "candidate_pool_depth", "selection_policy"}, "reranking")
-    if _require_text(reranking_raw, "model", "reranking") != _RERANKER_MODEL:
-        raise ValueError(f"reranking.model must be {_RERANKER_MODEL}")
-    if _require_text(reranking_raw, "selection_policy", "reranking") != _SELECTION_POLICY:
-        raise ValueError(f"reranking.selection_policy must be {_SELECTION_POLICY}")
-    rerank_depth = _positive_int(reranking_raw, "rerank_depth_per_query", "reranking")
-    candidate_pool_depth = _positive_int(reranking_raw, "candidate_pool_depth", "reranking")
-    if rerank_depth > candidate_depth:
-        raise ValueError("reranking.rerank_depth_per_query must not exceed retrieval.candidate_depth_per_query")
-    if candidate_pool_depth > rerank_depth:
-        raise ValueError("reranking.candidate_pool_depth must not exceed reranking.rerank_depth_per_query")
-    reranking = RerankingSettings(
+    passage_raw = _strict_mapping(raw.get("passage"), "passage")
+    _reject_unknown(
+        passage_raw,
+        {"model", "score_cache_dir", "device", "passages_per_query", "chunk_max_characters", "chunk_overlap_characters"},
+        "passage",
+    )
+    if _require_text(passage_raw, "model", "passage") != _RERANKER_MODEL:
+        raise ValueError(f"passage.model must be {_RERANKER_MODEL}")
+    passages_per_query = _positive_int(passage_raw, "passages_per_query", "passage")
+    if passages_per_query != _PASSAGES_PER_QUERY:
+        raise ValueError(f"passage.passages_per_query must be {_PASSAGES_PER_QUERY}")
+    chunk_max_characters = _positive_int(passage_raw, "chunk_max_characters", "passage")
+    if chunk_max_characters != _CHUNK_MAX_CHARACTERS:
+        raise ValueError(f"passage.chunk_max_characters must be {_CHUNK_MAX_CHARACTERS}")
+    chunk_overlap_characters = _positive_int(passage_raw, "chunk_overlap_characters", "passage")
+    if chunk_overlap_characters != _CHUNK_OVERLAP_CHARACTERS:
+        raise ValueError(f"passage.chunk_overlap_characters must be {_CHUNK_OVERLAP_CHARACTERS}")
+    passage = PassageSettings(
         model=_RERANKER_MODEL,
-        score_cache_dir=_resolve_cache_path(root_dir, _require_text(reranking_raw, "score_cache_dir", "reranking")),
-        device=_require_text(reranking_raw, "device", "reranking"),
-        rerank_depth_per_query=rerank_depth,
-        candidate_pool_depth=candidate_pool_depth,
-        selection_policy=_SELECTION_POLICY,
+        score_cache_dir=_resolve_cache_path(root_dir, _require_text(passage_raw, "score_cache_dir", "passage")),
+        device=_require_text(passage_raw, "device", "passage"),
+        passages_per_query=passages_per_query,
+        chunk_max_characters=chunk_max_characters,
+        chunk_overlap_characters=chunk_overlap_characters,
     )
 
     nuggets_raw = _strict_mapping(raw.get("nuggets"), "nuggets")
@@ -188,7 +228,23 @@ def load_facet_pilot_config(path: Path) -> FacetPilotConfig:
         maximum_claims_per_subnarrative=_bounded_positive_int(nuggets_raw, "maximum_claims_per_subnarrative", "nuggets", maximum=20),
         maximum_supporting_documents_per_claim=_bounded_positive_int(nuggets_raw, "maximum_supporting_documents_per_claim", "nuggets", maximum=3),
     )
-    return FacetPilotConfig(root_dir, ExperimentSettings(experiment_id), topics_path, retrieval, reranking, nuggets)
+    # Older local smoke configs in this worktree remain safely serial unless
+    # they opt into process dispatch. The checked-in production config pins 2.
+    execution_value = raw.get("execution", {"topic_workers": 1})
+    execution_raw = _strict_mapping(execution_value, "execution")
+    _reject_unknown(execution_raw, {"topic_workers"}, "execution")
+    execution = ExecutionSettings(
+        topic_workers=_positive_int(execution_raw, "topic_workers", "execution")
+    )
+    return FacetPilotConfig(
+        root_dir,
+        ExperimentSettings(experiment_id),
+        topics_path,
+        retrieval,
+        passage,
+        nuggets,
+        execution,
+    )
 
 
 def select_configured_topics(
@@ -219,10 +275,19 @@ def select_configured_topics(
     return tuple(topic for topic in official_topics if topic.id in wanted)
 
 
-def _load_yaml(path: Path) -> object:
+def _load_yaml(path: Path, *, source_bytes: bytes | None = None) -> object:
+    if source_bytes is None:
+        source_text = path.read_text(encoding="utf-8")
+    else:
+        if not isinstance(source_bytes, bytes) or not source_bytes:
+            raise ValueError("config source_bytes must be non-empty bytes")
+        try:
+            source_text = source_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"invalid UTF-8 YAML config: {path}") from exc
     try:
         return yaml.load(
-            path.read_text(encoding="utf-8"),
+            source_text,
             Loader=_UniqueKeySafeLoader,
         )
     except yaml.YAMLError as exc:
@@ -245,6 +310,15 @@ def _require_text(mapping: dict[str, Any], key: str, owner: str) -> str:
     value = mapping.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{owner}.{key} must be non-empty text")
+    return value.strip()
+
+
+def _optional_text(mapping: dict[str, Any], key: str) -> str | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be non-empty text when provided")
     return value.strip()
 
 

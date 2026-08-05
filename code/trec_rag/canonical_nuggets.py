@@ -20,6 +20,7 @@ from typing import Protocol
 from trec_rag.evidence_store import decode_subnarrative_selection
 from trec_rag.facet_evidence import (
     EvidenceMember,
+    SCORING_NORMALIZATION_VERSION,
     SELECTION_SCHEMA_VERSION,
     SelectionPolicy,
     SubnarrativeSelection,
@@ -36,20 +37,23 @@ from trec_rag.facet_extraction import (
     _decode_json,
     _openrouter_completion,
 )
+from trec_rag.topic_records import CANDIDATE_STAGE, TOPIC_RECORDS_SCHEMA_VERSION
 
 
-CANONICAL_NUGGET_SCHEMA_VERSION = "canonical_nuggets_v1"
-PROMPT_VERSION = "canonical_nuggetizer_v4"
+CANONICAL_NUGGET_SCHEMA_VERSION = "canonical_nuggets_v2"
+PROMPT_VERSION = "canonical_nuggetizer_v5"
 MAX_CANONICAL_NUGGETS = 20
 MAX_EVIDENCE_ALIASES_PER_CLAIM = 3
 MAX_SUPPORTING_DOCUMENTS_PER_CLAIM = 3
 MAX_CANONICAL_REQUEST_BYTES = 1_000_000
 MAX_CLAIM_CHARACTERS = 1_000
 SELECTION_MANIFEST_SCHEMA_VERSION = "subnarrative_selection_manifest_v1"
-RESULT_SCHEMA_VERSION = "canonical_nugget_result_v1"
+RESULT_SCHEMA_VERSION = "canonical_nugget_result_v2"
 MANIFEST_SCHEMA_VERSION = "canonical_nugget_manifest_v2"
-RAW_CACHE_SCHEMA_VERSION = "canonical_nugget_raw_cache_v1"
-VALIDATED_CACHE_SCHEMA_VERSION = "canonical_nugget_validated_cache_v2"
+RAW_CACHE_SCHEMA_VERSION = "canonical_nugget_raw_cache_v2"
+VALIDATED_CACHE_SCHEMA_VERSION = "canonical_nugget_validated_cache_v3"
+NUGGET_IMPORTANCE_VALUES = frozenset({"vital", "okay"})
+SCORER_MODE_VALUES = frozenset({"hosted", "local_all_okay"})
 
 _SAFE_METADATA_FIELDS = frozenset({
     "requested_model", "response_model", "provider", "finish_reason", "usage",
@@ -63,9 +67,10 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SELECTION_MANIFEST_FIELDS = frozenset({
     "schema_version", "selection_schema_version", "context_schema_version",
-    "candidate_schema_version", "candidate_manifest_schema_version", "candidates_file",
-    "candidate_manifest_file", "contexts_file", "selection_file", "candidates_sha256",
-    "candidate_manifest_sha256", "contexts_sha256", "selections_sha256", "output_sha256",
+    "candidate_schema_version", "records_schema_version", "records_stage",
+    "records_file", "records_manifest_file", "contexts_file", "selection_file",
+    "records_database_sha256", "candidate_semantic_sha256", "contexts_sha256",
+    "selections_sha256", "output_sha256",
     "candidate_rows_scanned", "candidate_projection_count", "loaded_candidate_projection_count",
     "context_count", "selection_count", "exact_group_count", "semantic_cluster_count",
     "selected_cluster_count", "policy", "embedding_identity", "candidate_scorer_identity",
@@ -87,7 +92,8 @@ _RESULT_FIELDS = frozenset({
 })
 _RAW_CACHE_FIELDS = frozenset({
     "schema_version", "request_sha256", "status", "content_base64",
-    "response_body_base64", "response_body_sha256", "metadata",
+    "response_bodies_base64", "response_body_sha256s", "metadata",
+    "metadata_entries",
 })
 _RUN_COUNTER_FIELDS = (
     "hosted_llm_calls", "validated_cache_hits", "raw_cache_writes",
@@ -95,7 +101,7 @@ _RUN_COUNTER_FIELDS = (
 )
 _SCORER_IDENTITY_FIELDS = frozenset({
     "model", "model_revision", "backend_version", "score_representation",
-    "inference_dtype", "score_kind", "sentence_max_length",
+    "inference_dtype", "score_kind", "sentence_max_length", "input_policy",
 })
 _RESULT_STATES = frozenset({"complete", "empty", "fallback_extractive"})
 
@@ -129,6 +135,7 @@ class CanonicalNuggetRequest:
     fallback_evidence: tuple[CanonicalEvidence, ...]
     request_body: bytes
     request_sha256: str
+    scorer_mode: str = "hosted"
 
 
 @dataclass(frozen=True)
@@ -137,6 +144,7 @@ class CanonicalNugget:
 
     canonical_nugget_id: str
     claim_text: str
+    importance: str
     evidence: tuple[CanonicalEvidence, ...]
 
 
@@ -228,17 +236,20 @@ class OpenRouterCanonicalNuggetBackend:
             )
             if _contains_credential(content, self._key):
                 raise ValueError("OpenRouter response contained the API credential")
+            metadata = {
+                "requested_model": OPENROUTER_DEEPSEEK_MODEL,
+                "response_model": completion.response_model,
+                "provider": completion.provider,
+                "finish_reason": completion.finish_reason,
+                "usage": dict(completion.usage),
+            }
             return BackendReply(
                 content=completion.content.encode("utf-8"),
                 response_body=response.body,
                 status=response.status,
-                metadata={
-                    "requested_model": OPENROUTER_DEEPSEEK_MODEL,
-                    "response_model": completion.response_model,
-                    "provider": completion.provider,
-                    "finish_reason": completion.finish_reason,
-                    "usage": dict(completion.usage),
-                },
+                metadata=metadata,
+                response_bodies=(response.body,),
+                metadata_entries=(metadata,),
             )
         except Exception as exc:
             message = str(exc).replace(self._key, "[REDACTED]")
@@ -271,12 +282,15 @@ def run_canonical_stage(
     cache_dir: Path,
     max_canonical_claims: int = MAX_CANONICAL_NUGGETS,
     max_supporting_documents_per_claim: int = MAX_SUPPORTING_DOCUMENTS_PER_CLAIM,
+    scorer_mode: str = "hosted",
     backend_factory: Callable[[], object] | None = None,
     cache_ignore_checker: Callable[[Path], bool] | None = None,
 ) -> CanonicalArtifacts:
     """Canonicalize sealed selections through typed paths and settings."""
     if isinstance(selected_budget, bool) or not isinstance(selected_budget, int):
         raise TypeError("selected_budget must be a non-Boolean integer")
+    if scorer_mode not in SCORER_MODE_VALUES:
+        raise ValueError("scorer_mode must be 'hosted' or 'local_all_okay'")
     paths = tuple(
         _typed_path(value, label)
         for value, label in (
@@ -342,6 +356,7 @@ def run_canonical_stage(
             selected_budget,
             max_canonical_claims=max_canonical_claims,
             max_supporting_documents_per_claim=max_supporting_documents_per_claim,
+            scorer_mode=scorer_mode,
         )
         for selection in selections
     )
@@ -401,7 +416,12 @@ def run_canonical_stage(
                             NuggetizerCanonicalNuggetBackend,
                         )
 
-                        factory = NuggetizerCanonicalNuggetBackend
+                        if scorer_mode == "hosted":
+                            factory = NuggetizerCanonicalNuggetBackend
+                        else:
+                            factory = lambda: NuggetizerCanonicalNuggetBackend(
+                                scorer_mode=scorer_mode
+                            )
                     else:
                         factory = backend_factory
                     live_backend = factory()
@@ -473,6 +493,7 @@ def build_canonical_nugget_request(
     *,
     max_canonical_claims: int = MAX_CANONICAL_NUGGETS,
     max_supporting_documents_per_claim: int = MAX_SUPPORTING_DOCUMENTS_PER_CLAIM,
+    scorer_mode: str = "hosted",
     max_request_bytes: int = MAX_CANONICAL_REQUEST_BYTES,
 ) -> CanonicalNuggetRequest:
     """Build one fixed, bounded request from one validated selection snapshot."""
@@ -492,6 +513,8 @@ def build_canonical_nugget_request(
         "max_supporting_documents_per_claim",
         maximum=MAX_SUPPORTING_DOCUMENTS_PER_CLAIM,
     )
+    if scorer_mode not in SCORER_MODE_VALUES:
+        raise ValueError("scorer_mode must be 'hosted' or 'local_all_okay'")
     snapshots = {snapshot.budget: snapshot for snapshot in selection.snapshots}
     snapshot = snapshots.get(budget)
     if snapshot is None:
@@ -534,6 +557,7 @@ def build_canonical_nugget_request(
         evidence=tuple(evidence),
         max_canonical_claims=max_canonical_claims,
         max_supporting_documents_per_claim=max_supporting_documents_per_claim,
+        scorer_mode=scorer_mode,
     )
     if len(request_body) > max_request_bytes:
         raise ValueError("canonical nugget request exceeds configured byte limit")
@@ -548,6 +572,7 @@ def build_canonical_nugget_request(
         fallback_evidence=tuple(fallbacks[:max_canonical_claims]),
         request_body=request_body,
         request_sha256=sha256(request_body).hexdigest(),
+        scorer_mode=scorer_mode,
     )
 
 
@@ -574,7 +599,16 @@ def canonicalize_subnarrative(
             raise ValueError(f"canonical backend returned HTTP {reply.status}")
         if not isinstance(reply.content, bytes) or not isinstance(reply.response_body, bytes):
             raise TypeError("backend reply bodies must be bytes")
-        if len(reply.response_body) > MAX_RESPONSE_BYTES:
+        if reply.response_bodies:
+            response_bodies = _reply_response_bodies(reply)
+            _reply_metadata_entries(reply, len(response_bodies))
+            if any(len(body) > MAX_RESPONSE_BYTES for body in response_bodies):
+                raise ValueError("canonical backend response exceeded byte cap")
+        elif reply.metadata_entries and any(
+            not isinstance(entry, Mapping) for entry in reply.metadata_entries
+        ):
+            raise TypeError("backend reply metadata provenance is invalid")
+        elif len(reply.response_body) > MAX_RESPONSE_BYTES:
             raise ValueError("canonical backend response exceeded byte cap")
         metadata = _validated_metadata(reply.metadata)
         nuggets = _parse_claims(reply.content, request)
@@ -586,6 +620,7 @@ def canonicalize_subnarrative(
                     request, row.text, (row.candidate_nugget_id,), "extractive"
                 ),
                 claim_text=row.text,
+                importance="okay",
                 evidence=(row,),
             )
             for row in request.fallback_evidence[:request.max_canonical_claims]
@@ -663,7 +698,12 @@ def _response_schema(
     }
 
 
-def _parse_claims(content: bytes, request: CanonicalNuggetRequest) -> tuple[CanonicalNugget, ...]:
+def _parse_claims(
+    content: bytes,
+    request: CanonicalNuggetRequest,
+    *,
+    allow_missing_importance: bool = False,
+) -> tuple[CanonicalNugget, ...]:
     payload = _decode_json(content, "canonical nugget response")
     if set(payload) != {"claims"}:
         raise ValueError("canonical nugget response has unexpected or missing fields")
@@ -675,10 +715,20 @@ def _parse_claims(content: bytes, request: CanonicalNuggetRequest) -> tuple[Cano
     seen_claims: set[str] = set()
     result: list[CanonicalNugget] = []
     for item in claims:
-        if not isinstance(item, Mapping) or set(item) != {"claim", "evidence_aliases"}:
+        if not isinstance(item, Mapping):
+            raise ValueError("canonical claim has unexpected or missing fields")
+        expected_fields = {"claim", "evidence_aliases"}
+        if "importance" in item:
+            expected_fields.add("importance")
+        if set(item) != expected_fields or (
+            not allow_missing_importance and "importance" not in item
+        ):
             raise ValueError("canonical claim has unexpected or missing fields")
         claim = item["claim"]
         aliases = item["evidence_aliases"]
+        importance = item.get("importance", "okay")
+        if importance not in NUGGET_IMPORTANCE_VALUES:
+            raise ValueError("canonical claim importance is invalid")
         if (
             not isinstance(claim, str)
             or not claim
@@ -712,6 +762,7 @@ def _parse_claims(content: bytes, request: CanonicalNuggetRequest) -> tuple[Cano
         result.append(CanonicalNugget(
             canonical_nugget_id=_nugget_id(request, claim, evidence_ids, "model_claim"),
             claim_text=claim,
+            importance=importance,
             evidence=evidence,
         ))
     return tuple(result)
@@ -869,12 +920,19 @@ def validate_canonical_nugget_result(
         _require_fields(
             nugget,
             frozenset(
-                {"canonical_nugget_id", "nugget_kind", "claim_text", "evidence"}
+                {
+                    "canonical_nugget_id",
+                    "nugget_kind",
+                    "claim_text",
+                    "importance",
+                    "evidence",
+                }
             ),
             "canonical nugget",
         )
         kind = nugget["nugget_kind"]
         claim = nugget["claim_text"]
+        importance = nugget["importance"]
         evidence = nugget["evidence"]
         expected_kind = (
             "model_claim" if state == "complete" else "extractive_fallback"
@@ -887,6 +945,7 @@ def validate_canonical_nugget_result(
             or len(claim) > MAX_CLAIM_CHARACTERS
             or "\n" in claim
             or "\r" in claim
+            or importance not in NUGGET_IMPORTANCE_VALUES
             or not isinstance(evidence, list)
             or not 1 <= len(evidence) <= MAX_EVIDENCE_ALIASES_PER_CLAIM
         ):
@@ -1129,7 +1188,10 @@ def _validate_selection_manifest(
         "selection_schema_version": SELECTION_SCHEMA_VERSION,
         "context_schema_version": "subnarrative_selection_context_v1",
         "candidate_schema_version": "extractive_candidate_nugget_v1",
-        "candidate_manifest_schema_version": "extractive_candidate_manifest_v1",
+        "records_schema_version": TOPIC_RECORDS_SCHEMA_VERSION,
+        "records_stage": CANDIDATE_STAGE,
+        "records_file": "records.sqlite3",
+        "records_manifest_file": "records-manifest.json",
         "selection_file": selection_path.name,
         "selections_sha256": sha256(selection_bytes).hexdigest(),
         "output_sha256": sha256(selection_bytes).hexdigest(),
@@ -1142,8 +1204,8 @@ def _validate_selection_manifest(
         if manifest[key] != expected_value:
             raise ValueError(f"selection manifest {key} identity mismatch")
     for key in (
-        "candidates_sha256",
-        "candidate_manifest_sha256",
+        "records_database_sha256",
+        "candidate_semantic_sha256",
         "contexts_sha256",
         "selections_sha256",
         "output_sha256",
@@ -1170,7 +1232,7 @@ def _validate_selection_manifest(
             raise ValueError(
                 f"selection manifest {key} must be a non-negative integer"
             )
-    for key in ("candidates_file", "candidate_manifest_file", "contexts_file"):
+    for key in ("records_file", "records_manifest_file", "contexts_file"):
         value = manifest[key]
         if (
             not isinstance(value, str)
@@ -1199,6 +1261,7 @@ def _validate_selection_manifest(
     if (
         scorer["score_representation"] != "raw_logits"
         or scorer["score_kind"] != "extractive_sentence_v1"
+        or scorer["input_policy"] != SCORING_NORMALIZATION_VERSION
     ):
         raise ValueError("selection manifest candidate scorer identity is invalid")
     if (
@@ -1418,21 +1481,47 @@ class _RawCachingBackend:
         reply = complete(request)
         if not isinstance(reply, BackendReply):
             raise TypeError("backend must return BackendReply")
+        response_bodies = _reply_response_bodies(reply)
+        metadata_entries = _reply_metadata_entries(reply, len(response_bodies))
         raw = {
             "schema_version": RAW_CACHE_SCHEMA_VERSION,
             "request_sha256": self._request_sha256,
             "status": reply.status,
             "content_base64": base64.b64encode(reply.content).decode("ascii"),
-            "response_body_base64": base64.b64encode(reply.response_body).decode(
-                "ascii"
-            ),
-            "response_body_sha256": sha256(reply.response_body).hexdigest(),
+            "response_bodies_base64": [
+                base64.b64encode(body).decode("ascii") for body in response_bodies
+            ],
+            "response_body_sha256s": [
+                sha256(body).hexdigest() for body in response_bodies
+            ],
             "metadata": dict(reply.metadata),
+            "metadata_entries": [dict(entry) for entry in metadata_entries],
         }
         _atomic_write(self._path, _canonical_json(raw) + b"\n")
         self.reply = reply
         self.wrote_raw = True
         return reply
+
+
+def _reply_response_bodies(reply: BackendReply) -> tuple[bytes, ...]:
+    bodies = reply.response_bodies or (reply.response_body,)
+    if not bodies or any(not isinstance(body, bytes) for body in bodies):
+        raise TypeError("backend reply response bodies must be non-empty bytes")
+    if bodies[0] != reply.response_body:
+        raise ValueError("backend reply primary response body differs from provenance")
+    return tuple(bodies)
+
+
+def _reply_metadata_entries(
+    reply: BackendReply,
+    expected_count: int,
+) -> tuple[Mapping[str, object], ...]:
+    entries = reply.metadata_entries or (reply.metadata,)
+    if len(entries) != expected_count or any(
+        not isinstance(entry, Mapping) for entry in entries
+    ):
+        raise TypeError("backend reply metadata provenance is invalid")
+    return tuple(entries)
 
 
 def _transport_invocation_count(backend: object) -> int | None:
@@ -1452,14 +1541,19 @@ def _write_validated(
     content_bytes = _canonical_json(
         _decode_json(reply.content, "validated canonical content")
     )
+    response_bodies = _reply_response_bodies(reply)
+    metadata_entries = _reply_metadata_entries(reply, len(response_bodies))
     cached = {
         "schema_version": VALIDATED_CACHE_SCHEMA_VERSION,
         "request_sha256": request.request_sha256,
         "content": content_bytes.decode("utf-8"),
         "content_sha256": sha256(content_bytes).hexdigest(),
         "status": reply.status,
-        "response_body_sha256": sha256(reply.response_body).hexdigest(),
+        "response_body_sha256s": [
+            sha256(body).hexdigest() for body in response_bodies
+        ],
         "metadata": dict(reply.metadata),
+        "metadata_entries": [dict(entry) for entry in metadata_entries],
     }
     _atomic_write(path, _canonical_json(cached) + b"\n")
 
@@ -1475,28 +1569,51 @@ def _load_raw(
         if source != _canonical_json(cached) + b"\n":
             return None
         content_text = cached["content_base64"]
-        response_text = cached["response_body_base64"]
-        if not isinstance(content_text, str) or not isinstance(response_text, str):
+        response_texts = cached["response_bodies_base64"]
+        response_hashes = cached["response_body_sha256s"]
+        metadata_entries = cached["metadata_entries"]
+        if (
+            not isinstance(content_text, str)
+            or not isinstance(response_texts, list)
+            or not response_texts
+            or not isinstance(response_hashes, list)
+            or len(response_hashes) != len(response_texts)
+            or not isinstance(metadata_entries, list)
+            or len(metadata_entries) != len(response_texts)
+            or any(not isinstance(value, str) for value in response_texts)
+            or any(not isinstance(value, Mapping) for value in metadata_entries)
+        ):
             return None
         content = base64.b64decode(content_text.encode("ascii"), validate=True)
-        response_body = base64.b64decode(response_text.encode("ascii"), validate=True)
+        response_bodies = tuple(
+            base64.b64decode(value.encode("ascii"), validate=True)
+            for value in response_texts
+        )
         if (
             cached["schema_version"] != RAW_CACHE_SCHEMA_VERSION
             or cached["request_sha256"] != request.request_sha256
             or type(cached["status"]) is not int
             or base64.b64encode(content).decode("ascii") != content_text
-            or base64.b64encode(response_body).decode("ascii") != response_text
-            or not isinstance(cached["response_body_sha256"], str)
-            or not _SHA256.fullmatch(cached["response_body_sha256"])
-            or cached["response_body_sha256"] != sha256(response_body).hexdigest()
+            or any(
+                base64.b64encode(body).decode("ascii") != encoded
+                for body, encoded in zip(response_bodies, response_texts, strict=True)
+            )
+            or any(
+                not isinstance(digest, str)
+                or not _SHA256.fullmatch(digest)
+                or digest != sha256(body).hexdigest()
+                for digest, body in zip(response_hashes, response_bodies, strict=True)
+            )
             or not isinstance(cached["metadata"], Mapping)
         ):
             return None
         return BackendReply(
             content=content,
-            response_body=response_body,
+            response_body=response_bodies[0],
             status=cached["status"],
             metadata=dict(cached["metadata"]),
+            response_bodies=response_bodies,
+            metadata_entries=tuple(dict(entry) for entry in metadata_entries),
         )
     except (OSError, ValueError, UnicodeEncodeError, binascii.Error):
         return None
@@ -1517,8 +1634,9 @@ def _load_validated(
                     "content",
                     "content_sha256",
                     "status",
-                    "response_body_sha256",
+                    "response_body_sha256s",
                     "metadata",
+                    "metadata_entries",
                 }
             ),
             "validated canonical cache",
@@ -1528,6 +1646,8 @@ def _load_validated(
             if isinstance(cached["content"], str)
             else b""
         )
+        response_hashes = cached["response_body_sha256s"]
+        metadata_entries = cached["metadata_entries"]
         if (
             cached["schema_version"] != VALIDATED_CACHE_SCHEMA_VERSION
             or cached["request_sha256"] != request.request_sha256
@@ -1538,8 +1658,15 @@ def _load_validated(
                 _decode_json(content_bytes, "validated canonical content")
             )
             or type(cached["status"]) is not int
-            or not isinstance(cached["response_body_sha256"], str)
-            or not _SHA256.fullmatch(cached["response_body_sha256"])
+            or not isinstance(response_hashes, list)
+            or not response_hashes
+            or any(
+                not isinstance(digest, str) or not _SHA256.fullmatch(digest)
+                for digest in response_hashes
+            )
+            or not isinstance(metadata_entries, list)
+            or len(metadata_entries) != len(response_hashes)
+            or any(not isinstance(entry, Mapping) for entry in metadata_entries)
             or not isinstance(cached["metadata"], Mapping)
         ):
             return None
@@ -1548,6 +1675,7 @@ def _load_validated(
             response_body=b"",
             status=cached["status"],
             metadata=dict(cached["metadata"]),
+            metadata_entries=tuple(dict(entry) for entry in metadata_entries),
         )
     except (OSError, ValueError):
         return None
@@ -1583,6 +1711,7 @@ def _result_json(result: CanonicalNuggetResult) -> dict[str, object]:
                 "canonical_nugget_id": nugget.canonical_nugget_id,
                 "nugget_kind": kind,
                 "claim_text": nugget.claim_text,
+                "importance": nugget.importance,
                 "evidence": [
                     _result_evidence_json(row)
                     for row in nugget.evidence

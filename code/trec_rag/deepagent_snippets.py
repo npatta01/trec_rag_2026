@@ -68,14 +68,6 @@ def _thread_lock_for(path: Path) -> Lock:
         return _PATH_LOCKS.setdefault(key, Lock())
 
 
-@contextmanager
-def _locked_score_cache(cache: GlobalScoreCache) -> Iterator[GlobalScoreCache]:
-    lock_path = cache.path.with_suffix(cache.path.suffix + ".lock")
-    with _thread_lock_for(lock_path), FileLock(str(lock_path)):
-        cache.scores = cache._load()
-        yield cache
-
-
 def _create_score_cache(
     root_dir: Path, context: ScoreCacheContext
 ) -> GlobalScoreCache:
@@ -309,58 +301,35 @@ class LocalMixedbreadSnippetRanker:
         self, focus_query: str, chunks: Sequence[TextChunk]
     ) -> tuple[ScoredTextChunk, ...]:
         rows = tuple(chunks)
-        with _locked_score_cache(self._score_cache):
-            missing: dict[str, TextChunk] = {}
-            scores: dict[str, float] = {}
-            for chunk in rows:
-                key = self._score_cache.cache_key(
-                    query_text=focus_query, text=chunk.text
-                )
-                cached = self._score_cache.get(
-                    query_text=focus_query, text=chunk.text
-                )
-                if cached is None:
-                    missing.setdefault(key, chunk)
-                else:
-                    scores[key] = _finite_score(cached, source="cached local")
-            pending = tuple(missing.values())
-            for offset in range(0, len(pending), self._batch_size):
-                batch = pending[offset : offset + self._batch_size]
-                model = self._get_model()
-                predicted = _model_scores(
-                    model.predict(
-                        [(focus_query, chunk.text) for chunk in batch],
-                        batch_size=self._batch_size,
-                        show_progress_bar=False,
-                        convert_to_tensor=True,
-                        activation_fn=_identity_activation,
-                    ),
-                    expected_count=len(batch),
-                )
-                self._score_cache.add_many(
-                    (focus_query, chunk.text, score)
-                    for chunk, score in zip(batch, predicted, strict=True)
-                )
-                scores.update(
-                    (
-                        self._score_cache.cache_key(
-                            query_text=focus_query, text=chunk.text
-                        ),
-                        score,
-                    )
-                    for chunk, score in zip(batch, predicted, strict=True)
-                )
-            return tuple(
-                ScoredTextChunk(
-                    chunk,
-                    scores[
-                        self._score_cache.cache_key(
-                            query_text=focus_query, text=chunk.text
-                        )
-                    ],
-                )
-                for chunk in rows
+        pairs = tuple((focus_query, chunk.text) for chunk in rows)
+
+        def compute_batch(
+            pending: Sequence[tuple[str, str]],
+        ) -> Sequence[float]:
+            model = self._get_model()
+            return _model_scores(
+                model.predict(
+                    pending,
+                    batch_size=self._batch_size,
+                    show_progress_bar=False,
+                    convert_to_tensor=True,
+                    activation_fn=_identity_activation,
+                ),
+                expected_count=len(pending),
             )
+
+        values = self._score_cache.score_many(
+            pairs,
+            compute_batch,
+            batch_size=self._batch_size,
+        )
+        return tuple(
+            ScoredTextChunk(
+                chunk,
+                _finite_score(value, source="cached local"),
+            )
+            for chunk, value in zip(rows, values, strict=True)
+        )
 
     def _get_model(self) -> Any:
         if self._model is not None:
@@ -450,39 +419,39 @@ class SmallLLMSnippetRanker:
         if len({chunk.chunk_id for chunk in rows}) != len(rows):
             raise ValueError("small-LLM ranking requires unique chunk IDs")
         scores: dict[str, float] = {}
-        with _locked_score_cache(self._score_cache):
-            for batch in self._prompt_batches(rows):
-                prompt = self._prompt(focus_query, batch)
-                records = {
-                    chunk.chunk_id: _canonical_json(
-                        {"chunk_id": chunk.chunk_id, "text": chunk.text}
-                    )
-                    for chunk in batch
-                }
-                cached_batch: dict[str, float] = {}
-                for chunk in batch:
-                    cached = self._score_cache.get(
-                        query_text=prompt,
-                        text=records[chunk.chunk_id],
-                    )
-                    if cached is not None:
-                        cached_batch[chunk.chunk_id] = _finite_score(
-                            cached, source="cached small-LLM"
-                        )
-                if len(cached_batch) == len(batch):
-                    scores.update(cached_batch)
-                    continue
-
-                returned_scores = self._invoke_scores(prompt, batch)
-                self._score_cache.add_many(
-                    (
-                        prompt,
-                        records[chunk.chunk_id],
-                        returned_scores[chunk.chunk_id],
-                    )
-                    for chunk in batch
+        for batch in self._prompt_batches(rows):
+            prompt = self._prompt(focus_query, batch)
+            records = {
+                chunk.chunk_id: _canonical_json(
+                    {"chunk_id": chunk.chunk_id, "text": chunk.text}
                 )
-                scores.update(returned_scores)
+                for chunk in batch
+            }
+            pairs = tuple((prompt, records[chunk.chunk_id]) for chunk in batch)
+            chunk_by_record = {
+                records[chunk.chunk_id]: chunk for chunk in batch
+            }
+
+            def compute_batch(
+                pending: Sequence[tuple[str, str]],
+            ) -> Sequence[float]:
+                returned_scores = self._invoke_scores(prompt, batch)
+                return [
+                    returned_scores[chunk_by_record[text].chunk_id]
+                    for _query, text in pending
+                ]
+
+            returned = self._score_cache.score_many(
+                pairs,
+                compute_batch,
+                batch_size=self._batch_size,
+            )
+            scores.update(
+                {
+                    chunk.chunk_id: _finite_score(value, source="cached small-LLM")
+                    for chunk, value in zip(batch, returned, strict=True)
+                }
+            )
         return tuple(
             sorted(
                 (

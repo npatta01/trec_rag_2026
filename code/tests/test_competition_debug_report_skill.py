@@ -70,11 +70,11 @@ class CompetitionDebugReportSkillContract(unittest.TestCase):
     def test_includes_literal_retrieval_only_and_rag_examples(self) -> None:
         retrieval_only = """uv run --no-sync .venv/bin/python \\
   -m trec_rag.competition_debug_report \\
-  --retrieval-config configs/rag26_competition_retrieval_v1.yaml"""
+  --retrieval-config configs/rag26_competition_retrieval_v2.yaml"""
         retrieval_plus_rag = """uv run --no-sync .venv/bin/python \\
   -m trec_rag.competition_debug_report \\
-  --retrieval-config configs/rag26_competition_retrieval_v1.yaml \\
-  --rag-config configs/rag26_competition_rag_gpt_sol_v1.yaml"""
+  --retrieval-config configs/rag26_competition_retrieval_v2.yaml \\
+  --rag-config configs/rag26_competition_rag_gpt_sol_v2.yaml"""
         self.assertIn(retrieval_only, self.body)
         self.assertIn(retrieval_plus_rag, self.body)
 

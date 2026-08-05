@@ -23,16 +23,26 @@ from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 import zipfile
 
 from trec_rag.competition_rag import (
-    load_queries,
     load_rag_generation_config,
-    select_queries,
     validate_submission_record,
+)
+from trec_rag.canonical_nuggets import (
+    CANONICAL_NUGGET_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION,
+    NUGGET_IMPORTANCE_VALUES,
+    PROMPT_VERSION,
+    RESULT_SCHEMA_VERSION,
 )
 from trec_rag.evidence_store import decode_subnarrative_selection
 from trec_rag.facet_pilot_config import (
     FacetPilotConfig,
     load_facet_pilot_config,
     select_configured_topics,
+)
+from trec_rag.generation_handoff import (
+    load_generation_handoff,
+    select_generation_topics,
+    serialize_generation_handoff,
 )
 from trec_rag.repo_env import find_repo_root
 from trec_rag.topics import Topic
@@ -41,6 +51,10 @@ from trec_rag.topics import Topic
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_JSONL_BYTES = 16 * 1024 * 1024
 _MAX_STREAM_RECORD_BYTES = 8 * 1024 * 1024
+# A depth-1,000 audit stores candidate provenance for the original narrative
+# plus as many as eight configured subnarratives, so it is intentionally larger
+# than the ordinary JSON artifacts while remaining strictly bounded.
+_MAX_RETRIEVAL_AUDIT_BYTES = 16 * 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _SCORE_FIELDS = {
     "topic_id", "lane_name", "semantic_query_sha256", "docid", "bm25_rank",
@@ -109,11 +123,11 @@ class NewDocumentReport:
 
 @dataclass(frozen=True)
 class WinningPassageReport:
-    chunk_index: int
+    passage_id: str
+    passage_rank: int
     start_char: int
     end_char: int
     raw_logit: float
-    weighted_rank: int
     text: str
 
 
@@ -121,15 +135,13 @@ class WinningPassageReport:
 class PassageRankingReport:
     subnarrative_id: str
     docid: str
-    selection_rank: int
-    bm25_rank: int
-    bm25_score: float
-    aggregate_rank: int
-    aggregate_score: float
-    long_document_raw_logit: float
-    weighted_passage_raw_logit: float
-    within_document_span_support: int
-    score_representation: str
+    document_sha256: str
+    selection_rank: int | None
+    lane_schema_version: str
+    source_rank: int
+    source_score: float
+    passage_document_rank: int
+    best_passage_raw_logit: float
     winning_passages: tuple[WinningPassageReport, ...]
 
 
@@ -164,6 +176,7 @@ class CanonicalNuggetReport:
     canonical_nugget_id: str
     nugget_kind: str
     claim_text: str
+    importance: str
     evidence: tuple[CanonicalEvidenceReport, ...]
     maximum_claims: int
     maximum_supporting_documents: int
@@ -184,9 +197,9 @@ class RetrievalDocumentReport:
     docid: str
     rank: int
     score: float
-    selection_rank: int
-    selected_from_lane: str
-    selected_from_lane_rank: int
+    selection_rank: int | None
+    selected_from_lane: str | None
+    selected_from_lane_rank: int | None
     text: str
     memberships: tuple[Mapping[str, Any], ...]
     subnarrative_scores: tuple[Mapping[str, Any], ...]
@@ -307,7 +320,7 @@ def _project_funnel(topic: TopicReport) -> _FunnelReport:
 class _BestStoredPassage:
     subnarrative_id: str
     subnarrative_text: str
-    aggregate_rank: int
+    passage_document_rank: int
     passage: WinningPassageReport
 
 
@@ -345,16 +358,18 @@ def _best_stored_passage(
     ranking = min(
         candidates,
         key=lambda candidate: (
-            candidate.aggregate_rank,
+            candidate.passage_document_rank,
             subnarrative_order[candidate.subnarrative_id],
         ),
     )
-    passage = min(ranking.winning_passages, key=lambda candidate: candidate.weighted_rank)
+    passage = min(
+        ranking.winning_passages, key=lambda candidate: candidate.passage_rank
+    )
     subnarrative = subnarratives[ranking.subnarrative_id]
     return _BestStoredPassage(
         subnarrative_id=subnarrative.subnarrative_id,
         subnarrative_text=subnarrative.text,
-        aggregate_rank=ranking.aggregate_rank,
+        passage_document_rank=ranking.passage_document_rank,
         passage=passage,
     )
 
@@ -367,6 +382,7 @@ class _RootRetrievalArtifacts:
     document_stage: Mapping[tuple[str, str], str]
     topic_depths: Mapping[str, tuple[int, int]]
     source_seals: Mapping[str, Mapping[str, str]]
+    export_schema_version: str
 
 
 @dataclass(frozen=True)
@@ -444,7 +460,6 @@ def load_debug_report_data(
             data,
             Path(rag_config_path),
             exported_topics,
-            retrieval_artifacts.run_docids,
         )
     return data
 
@@ -453,28 +468,23 @@ def _attach_rag_outputs(
     data: DebugReportData,
     rag_config_path: Path,
     exported_topics: Sequence[Topic],
-    run_docids: Mapping[str, tuple[str, ...]],
 ) -> DebugReportData:
     config = load_rag_generation_config(rag_config_path)
-    expected_run = (data.output_dir / "r_output_trec_rag_2026.tsv").resolve()
-    expected_documents = (data.output_dir / "retrieval_with_text.jsonl.zip").resolve()
-    if config.run_path.resolve() != expected_run:
-        raise ValueError("RAG retrieval run path is incompatible with the retrieval export")
-    if config.documents_path.resolve() != expected_documents:
-        raise ValueError("RAG retrieval documents path is incompatible with the retrieval export")
-
-    configured_queries = select_queries(load_queries(config.queries_path), config.topic_ids)
-    configured_ids = tuple(topic_id for topic_id, _ in configured_queries)
+    expected_handoff = (data.output_dir / "generation_handoff_manifest.json").resolve()
+    if config.handoff_manifest_path.resolve() != expected_handoff:
+        raise ValueError("RAG handoff manifest path is incompatible with the retrieval export")
+    handoff = load_generation_handoff(config.handoff_manifest_path)
+    configured_topics = select_generation_topics(handoff, config.topic_ids)
+    configured_ids = tuple(topic.topic_id for topic in configured_topics)
     if configured_ids != tuple(topic.id for topic in exported_topics):
         raise ValueError("RAG topic order or coverage is incompatible with the retrieval export")
     retrieval_narratives = {topic.id: topic.narrative for topic in exported_topics}
-    for topic_id, narrative in configured_queries:
-        if narrative != retrieval_narratives[topic_id]:
+    for topic in configured_topics:
+        if topic.narrative != retrieval_narratives[topic.topic_id]:
             raise ValueError("RAG topic narrative is incompatible with the retrieval export")
 
     allowed_by_topic = {
-        topic_id: list(run_docids[topic_id][: config.top_k])
-        for topic_id in configured_ids
+        topic.topic_id: list(topic.citation_docids) for topic in configured_topics
     }
     output_parent = _safe_directory(config.output_path.parent, "RAG output directory")
     output_path = _safe_file(config.output_path, output_parent)
@@ -483,15 +493,16 @@ def _attach_rag_outputs(
         output_sha256,
     ):
         rows = _decode_jsonl(output_raw, "RAG output")
-    if len(rows) != len(configured_queries):
+    if len(rows) != len(configured_topics):
         raise ValueError("RAG output topic coverage is incompatible with the RAG config")
 
     rag_by_topic: dict[str, RagOutputReport] = {}
-    for row, (topic_id, narrative) in zip(rows, configured_queries, strict=True):
+    for row, topic in zip(rows, configured_topics, strict=True):
+        topic_id = topic.topic_id
         validate_submission_record(
             row,
             topic_id=topic_id,
-            narrative=narrative,
+            narrative=topic.narrative,
             allowed_docids=allowed_by_topic[topic_id],
             team_id=config.team_id,
             run_id=config.run_id,
@@ -524,6 +535,9 @@ def _attach_rag_outputs(
         )
 
     sources = dict(data.source_sha256s)
+    sources["rag/generation_handoff_manifest.json"] = sha256(
+        serialize_generation_handoff(handoff)
+    ).hexdigest()
     sources["rag/rag_output_trec_rag_2026.jsonl"] = output_sha256
     return replace(
         data,
@@ -592,7 +606,7 @@ def _load_topic_report(
         decomposition["narrative_sha256"],
         decomposition["source_sha256"],
         subnarratives,
-        config.retrieval.candidate_depth_per_query,
+        config.retrieval.documents_per_query,
     )
     selected_by_docid = {row.docid: row for row in selected}
     lane_provenance = _load_lane_score_provenance(
@@ -640,6 +654,8 @@ def _load_topic_report(
         topic,
         subnarratives,
         selected,
+        retrieval_depth=config.retrieval.documents_per_query,
+        passage_limit=config.passage.passages_per_query,
         allow_empty=original_only_fallback,
     )
     evidence_clusters, canonical_nuggets, canonical_results = _load_canonical_projection(
@@ -649,7 +665,7 @@ def _load_topic_report(
         receipts,
         topic,
         subnarratives,
-        selected,
+        passage_rankings,
         canonical_manifest_sha256=_canonical_manifest_seal(
             retrieval_artifacts, topic
         ),
@@ -658,6 +674,7 @@ def _load_topic_report(
     retrieval_output = _decode_retrieval_output(
         topic,
         selected,
+        evidence_clusters,
         canonical_nuggets,
         retrieval_artifacts,
         original_only_fallback=original_only_fallback,
@@ -724,6 +741,14 @@ def _load_root_retrieval_artifacts(
         isinstance(export.get("artifacts"), Mapping)
         and "retrieval_provenance.jsonl" in export["artifacts"]
     )
+    export_schema_version = export.get("schema_version")
+    legacy_export = export_schema_version in {
+        "retrieval_export_manifest_v2",
+        "retrieval_export_manifest_v3",
+        "retrieval_export_manifest_v4",
+    }
+    if has_provenance != legacy_export:
+        raise ValueError("export schema and provenance sidecar disagree")
     if has_provenance:
         paths["provenance"] = _safe_file(provenance_path, output_dir)
     artifact_receipts = {
@@ -833,6 +858,7 @@ def _load_root_retrieval_artifacts(
         MappingProxyType(archive_stages),
         MappingProxyType(depths),
         MappingProxyType(source_seals),
+        export_schema_version,
     )
 
 
@@ -1019,6 +1045,8 @@ def _load_passage_rankings(
     subnarratives: Sequence[SubnarrativeReport],
     selected: Sequence[SelectedDocumentReport],
     *,
+    retrieval_depth: int,
+    passage_limit: int,
     allow_empty: bool = False,
 ) -> tuple[PassageRankingReport, ...]:
     path = _safe_file(topic_root / "scoring" / "selected_subnarrative_scores.jsonl", output_dir)
@@ -1031,96 +1059,235 @@ def _load_passage_rankings(
         )
     selected_by_id = {row.docid: row for row in selected}
     subnarrative_by_id = {row.subnarrative_id: row for row in subnarratives}
-    grouped: dict[str, list[PassageRankingReport]] = {
-        row.subnarrative_id: [] for row in subnarratives
+    subnarrative_order = {
+        row.subnarrative_id: index for index, row in enumerate(subnarratives)
     }
-    seen: set[tuple[str, str]] = set()
+    results: list[PassageRankingReport] = []
+    seen_subnarratives: set[str] = set()
     for value in rows:
-        if set(value) != _SCORE_FIELDS:
-            raise ValueError("selected subnarrative score schema is invalid")
-        docid, subnarrative_id = value.get("docid"), value.get("subnarrative_id")
-        document = selected_by_id.get(docid)
+        if set(value) != {"schema_version", "subnarrative_id", "passage_search"}:
+            raise ValueError("selected subnarrative passage lane schema is invalid")
+        subnarrative_id = value.get("subnarrative_id")
         subnarrative = subnarrative_by_id.get(subnarrative_id)
-        pair = (docid, subnarrative_id)
         if (
-            value.get("topic_id") != topic.id
-            or document is None
+            value.get("schema_version") != "facet_passage_lane_v2"
             or subnarrative is None
-            or pair in seen
-            or value.get("selection_rank") != document.selection_rank
-            or value.get("text_sha256") != document.text_sha256
-            or value.get("lane_name") != f"subnarrative:{subnarrative_id}"
-            or value.get("semantic_query_sha256") != subnarrative.semantic_query_sha256
-            or value.get("bm25_queries") != list(subnarrative.bm25_queries)
-            or value.get("bm25_query_sha256s") != list(subnarrative.bm25_query_sha256s)
-            or value.get("downstream_only") is not True
-            or value.get("score_representation") != "raw_logits"
+            or subnarrative_id in seen_subnarratives
         ):
-            raise ValueError("selected subnarrative score identity is invalid")
-        for field in ("bm25_rank", "aggregate_rank"):
-            if not _positive_int(value.get(field)):
-                raise ValueError("selected subnarrative score rank is invalid")
-        for field in (
-            "bm25_score", "aggregate_score", "long_document_raw_logit",
-            "weighted_passage_raw_logit",
+            raise ValueError("selected subnarrative passage lane identity is invalid")
+        seen_subnarratives.add(subnarrative_id)
+        search = value.get("passage_search")
+        expected_search_fields = {
+            "query", "status", "stopping_reason", "requested_documents",
+            "returned_documents", "scored_documents", "scored_passages",
+            "documents", "passages", "attempt_count", "source_exhausted",
+        }
+        if not isinstance(search, Mapping) or set(search) != expected_search_fields:
+            raise ValueError("selected subnarrative passage search schema is invalid")
+        query = search.get("query")
+        if (
+            not isinstance(query, Mapping)
+            or set(query) != {
+                "query_id", "text", "primary_subnarrative_id",
+                "supporting_subnarrative_ids",
+            }
+            or query.get("query_id") != f"facet:{subnarrative_id}:text"
+            or query.get("text") != subnarrative.text
+            or query.get("primary_subnarrative_id") != subnarrative_id
+            or query.get("supporting_subnarrative_ids") != []
         ):
-            if not _finite_number(value.get(field)):
-                raise ValueError("selected subnarrative score logit or score is invalid")
-        if type(value.get("within_document_span_support")) is not int or value["within_document_span_support"] < 0:
-            raise ValueError("selected subnarrative span support is invalid")
-        passages_value = value.get("winning_passages")
-        if not isinstance(passages_value, list) or not passages_value:
-            raise ValueError("selected subnarrative winning passages are invalid")
-        passages: list[WinningPassageReport] = []
-        for passage in passages_value:
-            if not isinstance(passage, Mapping) or set(passage) != _PASSAGE_FIELDS:
-                raise ValueError("selected subnarrative winning passage schema is invalid")
-            start, end = passage.get("start_char"), passage.get("end_char")
-            if type(start) is not int or type(end) is not int or not (0 <= start < end <= len(document.text)):
-                raise ValueError("winning passage offsets are outside selected document")
+            raise ValueError("selected subnarrative passage query identity is invalid")
+        status = search.get("status")
+        stopping_reason = search.get("stopping_reason")
+        documents_value = search.get("documents")
+        passages_value = search.get("passages")
+        if (
+            status not in {"complete", "incomplete"}
+            or (status == "complete" and stopping_reason is not None)
+            or (status == "incomplete" and not _is_text(stopping_reason))
+            or search.get("requested_documents") != retrieval_depth
+            or type(search.get("returned_documents")) is not int
+            or search["returned_documents"] < 0
+            or type(search.get("scored_documents")) is not int
+            or not 0 <= search["scored_documents"] <= search["returned_documents"]
+            or type(search.get("scored_passages")) is not int
+            or search["scored_passages"] < 0
+            or not _positive_int(search.get("attempt_count"))
+            or type(search.get("source_exhausted")) is not bool
+            or not isinstance(documents_value, list)
+            or len(documents_value) != search["returned_documents"]
+            or not isinstance(passages_value, list)
+            or len(passages_value) > passage_limit
+            or len(passages_value) > search["scored_passages"]
+        ):
+            raise ValueError("selected subnarrative passage search state is invalid")
+
+        document_fields = {
+            "docid", "content_sha256", "source_rank", "source_score",
+            "best_passage_id", "best_passage_raw_logit",
+        }
+        documents: dict[str, Mapping[str, Any]] = {}
+        for source_rank, document_value in enumerate(documents_value, start=1):
+            if not isinstance(document_value, Mapping) or set(document_value) != document_fields:
+                raise ValueError("selected subnarrative source document schema is invalid")
+            docid = document_value.get("docid")
+            best_passage_id = document_value.get("best_passage_id")
+            best_logit = document_value.get("best_passage_raw_logit")
             if (
-                type(passage.get("chunk_index")) is not int
-                or passage["chunk_index"] < 0
-                or not _finite_number(passage.get("raw_logit"))
-                or not _positive_int(passage.get("weighted_rank"))
+                not _is_docid(docid)
+                or docid in documents
+                or document_value.get("source_rank") != source_rank
+                or not _is_sha256(document_value.get("content_sha256"))
+                or not _finite_number(document_value.get("source_score"))
+                or ((best_passage_id is None) != (best_logit is None))
+                or (
+                    best_passage_id is not None
+                    and (
+                        not _is_identifier(best_passage_id)
+                        or not _finite_number(best_logit)
+                    )
+                )
             ):
-                raise ValueError("selected subnarrative winning passage value is invalid")
-            passages.append(
+                raise ValueError("selected subnarrative source document is invalid")
+            selected_document = selected_by_id.get(docid)
+            if (
+                selected_document is not None
+                and selected_document.text_sha256 != document_value["content_sha256"]
+            ):
+                raise ValueError("selected document differs from passage search source")
+            documents[docid] = document_value
+
+        passage_fields = {
+            "passage_id", "docid", "content_sha256", "source_rank",
+            "source_score", "start_char", "end_char", "start_byte",
+            "end_byte", "text_sha256", "text", "raw_logit", "rank",
+            "score_cache_key", "scoring_text_sha256", "chunker_identity",
+        }
+        grouped_passages: dict[str, list[Mapping[str, Any]]] = {}
+        seen_passage_ids: set[str] = set()
+        for passage_rank, passage in enumerate(passages_value, start=1):
+            if not isinstance(passage, Mapping) or set(passage) != passage_fields:
+                raise ValueError("selected subnarrative source passage schema is invalid")
+            passage_id = passage.get("passage_id")
+            docid = passage.get("docid")
+            document_value = documents.get(docid)
+            text = passage.get("text")
+            start = passage.get("start_char")
+            end = passage.get("end_char")
+            start_byte = passage.get("start_byte")
+            end_byte = passage.get("end_byte")
+            if (
+                not _is_identifier(passage_id)
+                or passage_id in seen_passage_ids
+                or document_value is None
+                or passage.get("rank") != passage_rank
+                or passage.get("content_sha256") != document_value["content_sha256"]
+                or passage.get("source_rank") != document_value["source_rank"]
+                or passage.get("source_score") != document_value["source_score"]
+                or type(start) is not int
+                or type(end) is not int
+                or not 0 <= start < end
+                or type(start_byte) is not int
+                or type(end_byte) is not int
+                or not 0 <= start_byte < end_byte
+                or not _is_text(text)
+                or passage.get("text_sha256") != _text_sha256(
+                    text, "selected subnarrative source passage"
+                )
+                or passage.get("scoring_text_sha256") != passage.get("text_sha256")
+                or not _finite_number(passage.get("raw_logit"))
+                or not _is_sha256(passage.get("score_cache_key"))
+                or not isinstance(passage.get("chunker_identity"), Mapping)
+            ):
+                raise ValueError("selected subnarrative source passage is invalid")
+            selected_document = selected_by_id.get(docid)
+            if selected_document is not None and (
+                end > len(selected_document.text)
+                or selected_document.text[start:end] != text
+                or len(selected_document.text[:start].encode("utf-8")) != start_byte
+                or len(selected_document.text[:end].encode("utf-8")) != end_byte
+            ):
+                raise ValueError("winning passage offsets are outside selected document")
+            seen_passage_ids.add(passage_id)
+            grouped_passages.setdefault(docid, []).append(passage)
+
+        ranked_documents = sorted(
+            (
+                document_value
+                for document_value in documents.values()
+                if document_value["best_passage_raw_logit"] is not None
+            ),
+            key=lambda document_value: (
+                -float(document_value["best_passage_raw_logit"]),
+                document_value["source_rank"],
+                document_value["docid"],
+            ),
+        )
+        passage_document_ranks = {
+            document_value["docid"]: rank
+            for rank, document_value in enumerate(ranked_documents, start=1)
+        }
+        for docid, source_passages in grouped_passages.items():
+            document_value = documents[docid]
+            source_passages.sort(key=lambda passage: passage["rank"])
+            best = min(
+                source_passages,
+                key=lambda passage: (-float(passage["raw_logit"]), passage["passage_id"]),
+            )
+            if (
+                best["passage_id"] != document_value["best_passage_id"]
+                or not math.isclose(
+                    float(best["raw_logit"]),
+                    float(document_value["best_passage_raw_logit"]),
+                    rel_tol=0.0,
+                    abs_tol=0.0,
+                )
+            ):
+                raise ValueError("retained passage differs from document best passage")
+            selected_document = selected_by_id.get(docid)
+            winning = tuple(
                 WinningPassageReport(
-                    passage["chunk_index"], start, end, float(passage["raw_logit"]),
-                    passage["weighted_rank"], document.text[start:end],
+                    passage_id=passage["passage_id"],
+                    passage_rank=passage["rank"],
+                    start_char=passage["start_char"],
+                    end_char=passage["end_char"],
+                    raw_logit=float(passage["raw_logit"]),
+                    text=passage["text"],
+                )
+                for passage in source_passages
+            )
+            results.append(
+                PassageRankingReport(
+                    subnarrative_id=subnarrative_id,
+                    docid=docid,
+                    document_sha256=document_value["content_sha256"],
+                    selection_rank=(
+                        selected_document.selection_rank
+                        if selected_document is not None
+                        else None
+                    ),
+                    lane_schema_version="facet_passage_lane_v2",
+                    source_rank=document_value["source_rank"],
+                    source_score=float(document_value["source_score"]),
+                    passage_document_rank=passage_document_ranks[docid],
+                    best_passage_raw_logit=float(
+                        document_value["best_passage_raw_logit"]
+                    ),
+                    winning_passages=winning,
                 )
             )
-        seen.add(pair)
-        grouped[subnarrative_id].append(
-            PassageRankingReport(
-                subnarrative_id=subnarrative_id,
-                docid=docid,
-                selection_rank=document.selection_rank,
-                bm25_rank=value["bm25_rank"],
-                bm25_score=float(value["bm25_score"]),
-                aggregate_rank=value["aggregate_rank"],
-                aggregate_score=float(value["aggregate_score"]),
-                long_document_raw_logit=float(value["long_document_raw_logit"]),
-                weighted_passage_raw_logit=float(value["weighted_passage_raw_logit"]),
-                within_document_span_support=value["within_document_span_support"],
-                score_representation="raw_logits",
-                winning_passages=tuple(passages),
-            )
+    if seen_subnarratives != set(subnarrative_by_id):
+        raise ValueError("selected subnarrative passage lane set is incomplete")
+    return tuple(
+        sorted(
+            results,
+            key=lambda row: (
+                subnarrative_order[row.subnarrative_id],
+                row.passage_document_rank,
+                row.docid,
+            ),
         )
-    if seen != {
-        (document.docid, subnarrative.subnarrative_id)
-        for subnarrative in subnarratives
-        for document in selected
-    }:
-        raise ValueError("selected subnarrative score matrix is incomplete")
-    result: list[PassageRankingReport] = []
-    for subnarrative in subnarratives:
-        ranked = sorted(grouped[subnarrative.subnarrative_id], key=lambda row: row.aggregate_rank)
-        if [row.aggregate_rank for row in ranked] != list(range(1, len(ranked) + 1)):
-            raise ValueError("selected subnarrative aggregate ranks are not continuous")
-        result.extend(ranked)
-    return tuple(result)
+    )
 
 
 def _load_canonical_projection(
@@ -1130,7 +1297,7 @@ def _load_canonical_projection(
     receipts: dict[str, str],
     topic: Topic,
     subnarratives: Sequence[SubnarrativeReport],
-    selected: Sequence[SelectedDocumentReport],
+    passage_rankings: Sequence[PassageRankingReport],
     *,
     canonical_manifest_sha256: str,
     original_only_fallback: bool = False,
@@ -1228,7 +1395,11 @@ def _load_canonical_projection(
     )
     request_sha256s = manifest.get("request_sha256s")
     if (
-        manifest.get("schema_version") != "canonical_nugget_manifest_v2"
+        manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION
+        or manifest.get("result_schema_version") != RESULT_SCHEMA_VERSION
+        or manifest.get("canonical_response_schema_version")
+        != CANONICAL_NUGGET_SCHEMA_VERSION
+        or manifest.get("prompt_version") != PROMPT_VERSION
         or manifest.get("selected_budget") != budget
         or manifest.get("max_canonical_claims") != maximum_claims
         or manifest.get("max_supporting_documents_per_claim") != maximum_supporting
@@ -1256,7 +1427,12 @@ def _load_canonical_projection(
     ):
         raise ValueError("original-only fallback canonical work is not empty")
 
-    selected_by_id = {row.docid: row for row in selected}
+    passage_document_hashes: dict[tuple[str, str], str] = {}
+    for ranking in passage_rankings:
+        key = (ranking.subnarrative_id, ranking.docid)
+        previous = passage_document_hashes.setdefault(key, ranking.document_sha256)
+        if previous != ranking.document_sha256:
+            raise ValueError("passage rankings disagree on document identity")
     selection_rows = _decode_jsonl(
         authenticated_artifacts["canonical/subnarrative-selections.jsonl"],
         "subnarrative selections",
@@ -1294,9 +1470,15 @@ def _load_canonical_projection(
                 raise ValueError("subnarrative selection snapshot names unknown cluster")
             evidence: list[CanonicalEvidenceReport] = []
             for support in cluster.supports:
-                document = selected_by_id.get(support.docid)
-                if document is None or document.text_sha256 != support.document_sha256:
-                    raise ValueError("selected evidence document differs from selected pool")
+                if (
+                    passage_document_hashes.get(
+                        (expected.subnarrative_id, support.docid)
+                    )
+                    != support.document_sha256
+                ):
+                    raise ValueError(
+                        "selected evidence document differs from sealed passage lane"
+                    )
                 report = CanonicalEvidenceReport(
                     support.candidate_nugget_id, support.candidate_kind, support.text,
                     _text_sha256(support.text, "selected evidence text"), support.docid,
@@ -1331,7 +1513,7 @@ def _load_canonical_projection(
             raise ValueError("canonical nugget request identity differs from manifest")
         if (
             set(raw) != required
-            or raw.get("schema_version") != "canonical_nugget_result_v1"
+            or raw.get("schema_version") != "canonical_nugget_result_v2"
             or raw.get("topic_id") != topic.id
             or raw.get("subnarrative_id") != expected.subnarrative_id
             or raw.get("selected_budget") != budget
@@ -1384,7 +1566,7 @@ def _load_canonical_projection(
         result_nuggets: list[CanonicalNuggetReport] = []
         for nugget in values:
             if not isinstance(nugget, Mapping) or set(nugget) != {
-                "canonical_nugget_id", "nugget_kind", "claim_text", "evidence"
+                "canonical_nugget_id", "nugget_kind", "claim_text", "importance", "evidence"
             }:
                 raise ValueError("canonical nugget schema is invalid")
             nugget_id, evidence_values = nugget.get("canonical_nugget_id"), nugget.get("evidence")
@@ -1394,6 +1576,7 @@ def _load_canonical_projection(
                 not _is_identifier(nugget_id)
                 or nugget_id in seen_nuggets
                 or not _is_text(nugget.get("claim_text"))
+                or nugget.get("importance") not in NUGGET_IMPORTANCE_VALUES
                 or not isinstance(evidence_values, list)
                 or not evidence_values
             ):
@@ -1404,7 +1587,7 @@ def _load_canonical_projection(
             evidence_candidate_ids: set[str] = set()
             for evidence in evidence_values:
                 report = _decode_canonical_evidence(
-                    evidence, expected.subnarrative_id, selected_by_id,
+                    evidence, expected.subnarrative_id, passage_document_hashes,
                     selected_evidence, selected_cluster_ids[expected.subnarrative_id],
                 )
                 if report.candidate_nugget_id in evidence_candidate_ids:
@@ -1420,8 +1603,9 @@ def _load_canonical_projection(
             ):
                 raise ValueError("canonical nugget fallback state or kind is invalid")
             report = CanonicalNuggetReport(
-                    expected.subnarrative_id, budget, state, nugget_id,
-                    nugget["nugget_kind"], nugget["claim_text"], tuple(evidence_reports),
+                expected.subnarrative_id, budget, state, nugget_id,
+                    nugget["nugget_kind"], nugget["claim_text"], nugget["importance"],
+                    tuple(evidence_reports),
                     maximum_claims, maximum_supporting,
             )
             canonical.append(report)
@@ -1444,7 +1628,7 @@ def _load_canonical_projection(
 def _decode_canonical_evidence(
     value: object,
     subnarrative_id: str,
-    selected_by_id: Mapping[str, SelectedDocumentReport],
+    passage_document_hashes: Mapping[tuple[str, str], str],
     selected_evidence: Mapping[tuple[str, str], CanonicalEvidenceReport],
     selected_cluster_ids: set[str],
 ) -> CanonicalEvidenceReport:
@@ -1455,10 +1639,10 @@ def _decode_canonical_evidence(
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("canonical evidence schema is invalid")
     source = selected_evidence.get((subnarrative_id, value.get("candidate_nugget_id")))
-    document = selected_by_id.get(value.get("docid"))
     if (
         source is None
-        or document is None
+        or passage_document_hashes.get((subnarrative_id, value.get("docid")))
+        != value.get("document_sha256")
         or value.get("cluster_id") not in selected_cluster_ids
         or source.cluster_id != value.get("cluster_id")
         or source.candidate_kind != value.get("candidate_kind")
@@ -1466,7 +1650,6 @@ def _decode_canonical_evidence(
         or source.docid != value.get("docid")
         or source.document_sha256 != value.get("document_sha256")
         or value.get("text_sha256") != _text_sha256(source.text, "canonical evidence text")
-        or document.text_sha256 != value.get("document_sha256")
     ):
         raise ValueError("canonical evidence differs from selected cluster or document")
     return CanonicalEvidenceReport(
@@ -1479,6 +1662,7 @@ def _decode_canonical_evidence(
 def _decode_retrieval_output(
     topic: Topic,
     selected: Sequence[SelectedDocumentReport],
+    evidence_clusters: Sequence[EvidenceClusterReport],
     canonical: Sequence[CanonicalNuggetReport],
     artifacts: _RootRetrievalArtifacts,
     *,
@@ -1488,24 +1672,49 @@ def _decode_retrieval_output(
     selected_depth, final_depth = artifacts.topic_depths[topic.id]
     if selected_depth < len(selected):
         raise ValueError("retrieval export selected-pool depth differs from selected documents")
+    selected_evidence_hashes: dict[str, str] = {}
+    for cluster in evidence_clusters:
+        for evidence in cluster.evidence:
+            previous = selected_evidence_hashes.setdefault(
+                evidence.docid, evidence.document_sha256
+            )
+            if previous != evidence.document_sha256:
+                raise ValueError("selected evidence disagrees on document identity")
     canonical_by_docid: dict[str, set[str]] = {}
     for nugget in canonical:
         for evidence in nugget.evidence:
+            if (
+                selected_evidence_hashes.get(evidence.docid)
+                != evidence.document_sha256
+            ):
+                raise ValueError("canonical evidence is absent from selected evidence")
             canonical_by_docid.setdefault(evidence.docid, set()).add(nugget.canonical_nugget_id)
     run_docids = artifacts.run_docids[topic.id]
+    has_legacy_provenance = artifacts.export_schema_version in {
+        "retrieval_export_manifest_v2",
+        "retrieval_export_manifest_v3",
+        "retrieval_export_manifest_v4",
+    }
+    if bool(artifacts.provenance) != has_legacy_provenance:
+        raise ValueError("export schema and loaded provenance disagree")
     if original_only_fallback:
-        if canonical or tuple(run_docids) != tuple(row.docid for row in selected):
+        if (
+            evidence_clusters
+            or canonical
+            or tuple(run_docids) != tuple(row.docid for row in selected)
+        ):
             raise ValueError(
                 "organizer run differs from original-only selected-document projection"
             )
-    elif set(run_docids) != set(canonical_by_docid):
+    elif has_legacy_provenance and set(run_docids) != set(canonical_by_docid):
         raise ValueError(
             "organizer run differs from canonical supported-document projection"
         )
+    elif not has_legacy_provenance and set(run_docids) != set(selected_evidence_hashes):
+        raise ValueError("organizer run differs from selected-evidence projection")
     if final_depth != len(run_docids):
         raise ValueError("retrieval export final depth differs from organizer run")
     documents: list[RetrievalDocumentReport] = []
-    has_legacy_provenance = bool(artifacts.provenance)
     for rank, docid in enumerate(run_docids, start=1):
         pair = (topic.id, docid)
         document = selected_by_id.get(docid)
@@ -1514,16 +1723,40 @@ def _decode_retrieval_output(
         if has_legacy_provenance:
             provenance = artifacts.provenance[pair]
         else:
-            if document is None:
-                raise ValueError("bundle projection document is absent from selected documents")
+            expected_document_sha256 = selected_evidence_hashes.get(docid)
+            if original_only_fallback:
+                if document is None or text != document.text:
+                    raise ValueError(
+                        "original-only bundle document differs from selected document"
+                    )
+            elif (
+                expected_document_sha256 is None
+                or _text_sha256(text, "selected evidence document")
+                != expected_document_sha256
+            ):
+                raise ValueError(
+                    "selected evidence document differs from full-text archive"
+                )
+            if document is not None and text != document.text:
+                raise ValueError(
+                    "bundle projection document differs from selected document"
+                )
             nugget_ids = sorted(canonical_by_docid.get(docid, set()))
             provenance = {
                 "rank": rank,
                 "score": len(run_docids) - rank + 1,
-                "selection_rank": document.selection_rank,
-                "selected_from_lane": document.selected_from_lane,
-                "selected_from_lane_rank": document.selected_from_lane_rank,
-                "memberships": list(document.memberships),
+                "selection_rank": (
+                    document.selection_rank if document is not None else None
+                ),
+                "selected_from_lane": (
+                    document.selected_from_lane if document is not None else None
+                ),
+                "selected_from_lane_rank": (
+                    document.selected_from_lane_rank if document is not None else None
+                ),
+                "memberships": (
+                    list(document.memberships) if document is not None else []
+                ),
                 "subnarrative_scores": [],
                 "nuggets": [{"canonical_nugget_id": nugget_id} for nugget_id in nugget_ids],
                 "source_seals": artifacts.source_seals.get(topic.id, {}),
@@ -1533,14 +1766,9 @@ def _decode_retrieval_output(
         nuggets = provenance.get("nuggets")
         seals = provenance.get("source_seals")
         if (
-            document is None
-            or text != document.text
-            or provenance.get("rank") != rank
-            or provenance.get("selection_rank") != document.selection_rank
-            or provenance.get("selected_from_lane") != document.selected_from_lane
-            or provenance.get("selected_from_lane_rank") != document.selected_from_lane_rank
+            provenance.get("rank") != rank
+            or not _finite_number(provenance.get("score"))
             or not isinstance(memberships, list)
-            or not memberships
             or any(not isinstance(row, Mapping) for row in memberships)
             or not isinstance(subnarrative_scores, list)
             or any(not isinstance(row, Mapping) for row in subnarrative_scores)
@@ -1550,8 +1778,30 @@ def _decode_retrieval_output(
             or set(seals) != {"scoring_manifest_sha256", "canonical_manifest_sha256"}
             or any(not _is_sha256(value) for value in seals.values())
         ):
-            raise ValueError("retrieval provenance differs from sealed selected document")
-        if tuple(dict(row) for row in memberships) != tuple(
+            raise ValueError("retrieval projection provenance is invalid")
+        if document is None:
+            if (
+                has_legacy_provenance
+                or provenance.get("selection_rank") is not None
+                or provenance.get("selected_from_lane") is not None
+                or provenance.get("selected_from_lane_rank") is not None
+                or memberships
+            ):
+                raise ValueError(
+                    "evidence-only retrieval document has selected-pool provenance"
+                )
+        elif (
+            text != document.text
+            or provenance.get("selection_rank") != document.selection_rank
+            or provenance.get("selected_from_lane") != document.selected_from_lane
+            or provenance.get("selected_from_lane_rank")
+            != document.selected_from_lane_rank
+            or not memberships
+        ):
+            raise ValueError(
+                "retrieval provenance differs from sealed selected document"
+            )
+        elif tuple(dict(row) for row in memberships) != tuple(
             dict(row) for row in document.memberships
         ):
             raise ValueError(
@@ -1560,10 +1810,15 @@ def _decode_retrieval_output(
         expected_stage = (
             "original_only_fallback"
             if original_only_fallback
-            else "canonical_supported"
+            else (
+                "canonical_supported"
+                if has_legacy_provenance
+                else "selected_evidence"
+            )
         )
         if (
-            archive_stage not in {expected_stage, "bundle_projection"}
+            archive_stage
+            not in {expected_stage, "canonical_supported", "bundle_projection"}
             or (
                 has_legacy_provenance
                 and (
@@ -1591,9 +1846,9 @@ def _decode_retrieval_output(
                 docid=docid,
                 rank=rank,
                 score=float(provenance["score"]),
-                selection_rank=document.selection_rank,
-                selected_from_lane=document.selected_from_lane,
-                selected_from_lane_rank=document.selected_from_lane_rank,
+                selection_rank=provenance.get("selection_rank"),
+                selected_from_lane=provenance.get("selected_from_lane"),
+                selected_from_lane_rank=provenance.get("selected_from_lane_rank"),
                 text=text,
                 memberships=tuple(MappingProxyType(dict(row)) for row in memberships),
                 subnarrative_scores=tuple(
@@ -1615,6 +1870,9 @@ def _validate_export_manifest(
     if value.get("schema_version") not in {
         "retrieval_export_manifest_v2",
         "retrieval_export_manifest_v3",
+        "retrieval_export_manifest_v4",
+        "retrieval_export_manifest_v5",
+        "retrieval_export_manifest_v6",
     }:
         raise ValueError("retrieval export manifest schema is invalid")
     if value.get("run_id") != config.run_id:
@@ -2060,7 +2318,6 @@ def _load_lane_score_provenance(
                 type(support) is not int
                 or support < 0
                 or not isinstance(passages, list)
-                or not passages
             ):
                 raise ValueError("lane score span or passage provenance is invalid")
             for passage in passages:
@@ -2106,10 +2363,11 @@ def _load_audit_hashes(
     if not path.exists():
         return MappingProxyType({})
     path = _safe_file(path, output_dir)
-    with _open_hashed_snapshot(path, _MAX_JSON_BYTES) as (raw, digest):
+    with _open_hashed_snapshot(path, _MAX_RETRIEVAL_AUDIT_BYTES) as (raw, digest):
         receipts[_portable_label(output_dir, path)] = digest
         value = _decode_json_object(raw, "retrieval audit")
     lanes = value.get("lanes")
+    passage_search_results = value.get("passage_search_results")
     expected_lanes = [
         ("original", None, narrative_sha256, narrative_sha256),
         *[
@@ -2125,6 +2383,7 @@ def _load_audit_hashes(
     required = {
         "schema_version", "topic_id", "narrative_sha256",
         "decomposition_source_sha256", "requested_depth", "lanes",
+        "passage_search_results",
     }
     if (
         set(value) != required
@@ -2135,6 +2394,9 @@ def _load_audit_hashes(
         or value.get("requested_depth") != requested_depth
         or not isinstance(lanes, list)
         or len(lanes) != len(expected_lanes)
+        or not isinstance(passage_search_results, list)
+        or len(passage_search_results) != len(expected_lanes)
+        or any(not isinstance(row, Mapping) for row in passage_search_results)
     ):
         raise ValueError("retrieval audit identity or lane set is invalid")
     hashes: dict[str, str] = {}
@@ -2970,7 +3232,7 @@ def _render_selected_document_disclosure(
             f'<p class="break">{_html(_bounded_excerpt(best.passage.text))}</p>'
             '<dl class="card-metadata">'
             f'<div><dt>Subnarrative</dt><dd><code>{_html(best.subnarrative_id)}</code></dd></div>'
-            f'<div><dt>Aggregate rank</dt><dd>{_html(best.aggregate_rank)}</dd></div>'
+            f'<div><dt>Passage-document rank</dt><dd>{_html(best.passage_document_rank)}</dd></div>'
             f'<div><dt>Facet</dt><dd class="break">{_html(best.subnarrative_text)}</dd></div>'
             "</dl></div>"
         )
@@ -3025,13 +3287,10 @@ def _membership_coverage(memberships: Sequence[Mapping[str, Any]]) -> str:
 def _render_passage_rows(rankings: Sequence[PassageRankingReport]) -> str:
     return "".join(
         "<tr>"
-        f"<th scope=\"row\">{_html(item.aggregate_rank)}</th><td>{_html(item.subnarrative_id)}</td>"
-        f"<td>{_html(item.docid)}</td><td>{_html(item.selection_rank)}</td>"
-        f"<td>{_html(item.bm25_rank)}</td><td>{_html(_number(item.bm25_score))}</td>"
-        f"<td>{_html(_number(item.aggregate_score))}</td>"
-        f"<td>{_html(_number(item.long_document_raw_logit))}</td>"
-        f"<td>{_html(_number(item.weighted_passage_raw_logit))}</td>"
-        f"<td>{_html(item.within_document_span_support)}</td>"
+        f"<th scope=\"row\">{_html(item.passage_document_rank)}</th><td>{_html(item.subnarrative_id)}</td>"
+        f"<td>{_html(item.docid)}</td><td>{_html(item.selection_rank if item.selection_rank is not None else '—')}</td>"
+        f"<td>{_html(item.source_rank)}</td><td>{_html(_number(item.source_score))}</td>"
+        f"<td>{_html(_number(item.best_passage_raw_logit))}</td>"
         f"<td>{_detail_passages(item.winning_passages)}</td></tr>"
         for item in rankings
     )
@@ -3045,7 +3304,16 @@ def _render_passages(topic: TopicReport, prefix: str) -> str:
             "Top passages",
             "<p>No downstream passage rankings; original-only fallback bypassed downstream scoring.</p>",
         )
-    headings = ("Aggregate rank", "Subnarrative", "DocID", "Selection rank", "BM25 rank", "BM25 score", "Aggregate score", "Document raw logit", "Passage raw logit", "Span support", "Winning passages")
+    headings = (
+        "Passage-document rank",
+        "Subnarrative",
+        "DocID",
+        "Selection rank",
+        "Source rank",
+        "Source score",
+        "Best passage raw logit",
+        "Retained passages",
+    )
     groups: list[str] = []
     for subnarrative in topic.subnarratives:
         rankings = tuple(
@@ -3095,8 +3363,10 @@ def _render_passages(topic: TopicReport, prefix: str) -> str:
         prefix,
         "top-passages",
         "Top passages",
-        '<p class="stage-note">Aggregate ranks are meaningful only within each '
-        'subnarrative. Open a facet to inspect its stored diagnostic table.</p>'
+        '<p class="stage-note">Lane schema: <code>facet_passage_lane_v2</code>. '
+        'Passage-document ranks are meaningful only within each subnarrative, and '
+        'the table includes only documents with at least one globally retained '
+        'passage. Open a facet to inspect its stored diagnostic table.</p>'
         + "".join(groups),
     )
 
@@ -3147,6 +3417,7 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
             "<tr>"
             f"<th scope=\"row\">{_html(item.canonical_nugget_id)}</th>"
             f"<td>{_html(item.nugget_kind)}</td>"
+            f"<td>{_html(item.importance)}</td>"
             f"<td class=\"break\">{_html(item.claim_text)}</td>"
             f"<td>{_detail_evidence(item.evidence)}</td></tr>"
             for item in claims
@@ -3158,7 +3429,7 @@ def _render_nuggets(topic: TopicReport, prefix: str) -> str:
         claims_body = (
             _table(
                 f"Claims for {result.subnarrative_id}",
-                ("Nugget ID", "Kind", "Claim", "Supporting evidence"),
+                ("Nugget ID", "Kind", "Importance", "Claim", "Supporting evidence"),
                 claim_rows,
             )
             if claims
@@ -3200,6 +3471,13 @@ def _render_retrieval(topic: TopicReport, prefix: str) -> str:
 
 
 def _render_retrieval_document_card(item: RetrievalDocumentReport) -> str:
+    selection_rank = item.selection_rank if item.selection_rank is not None else "—"
+    source_lane = item.selected_from_lane or "—"
+    source_lane_rank = (
+        item.selected_from_lane_rank
+        if item.selected_from_lane_rank is not None
+        else "—"
+    )
     return (
         '<li><article class="retrieval-document-card">'
         '<h3 class="card-heading">'
@@ -3207,11 +3485,11 @@ def _render_retrieval_document_card(item: RetrievalDocumentReport) -> str:
         f'<code>{_html(item.docid)}</code></h3>'
         '<dl class="card-metadata">'
         f'<div><dt>Score</dt><dd>{_html(_number(item.score))}</dd></div>'
-        f'<div><dt>Selection rank</dt><dd>{_html(item.selection_rank)}</dd></div>'
-        f'<div><dt>Source lane</dt><dd class="break">{_html(item.selected_from_lane)}</dd></div>'
+        f'<div><dt>Selection rank</dt><dd>{_html(selection_rank)}</dd></div>'
+        f'<div><dt>Source lane</dt><dd class="break">{_html(source_lane)}</dd></div>'
         '</dl><details class="technical-provenance"><summary>'
         'Retrieval provenance and document excerpt</summary><dl>'
-        f'<dt>Selected lane rank</dt><dd>{_html(item.selected_from_lane_rank)}</dd>'
+        f'<dt>Selected lane rank</dt><dd>{_html(source_lane_rank)}</dd>'
         f'<dt>Stage</dt><dd>{_html(item.stage)}</dd>'
         '</dl><h4>Sealed provenance</h4>'
         f'{_retrieval_provenance_fields(item)}'
@@ -3308,9 +3586,13 @@ def _render_rag_reference_card(
         seals = "; ".join(
             f"{key}: {value}" for key, value in sorted(document.source_seals.items())
         ) or "None"
+        selection_rank = (
+            document.selection_rank if document.selection_rank is not None else "—"
+        )
+        source_lane = document.selected_from_lane or "—"
         detail = (
-            f"Organizer rank {document.rank}; selection rank {document.selection_rank}; "
-            f"source lane {document.selected_from_lane}; memberships {memberships}; "
+            f"Organizer rank {document.rank}; selection rank {selection_rank}; "
+            f"source lane {source_lane}; memberships {memberships}; "
             f"source seals {seals}."
         )
     return (
@@ -3342,7 +3624,11 @@ def _table(caption: str, headings: Sequence[str], rows: str) -> str:
 
 def _detail_passages(passages: Sequence[WinningPassageReport]) -> str:
     items = "".join(
-        f'<li>Chunk {_html(item.chunk_index)}, offsets {_html(item.start_char)}–{_html(item.end_char)}, raw logit {_html(_number(item.raw_logit))}: <span class="break">{_html(item.text)}</span></li>'
+        f'<li>Passage rank {_html(item.passage_rank)} '
+        f'(<code>{_html(item.passage_id)}</code>), offsets '
+        f'{_html(item.start_char)}–{_html(item.end_char)}, raw logit '
+        f'{_html(_number(item.raw_logit))}: '
+        f'<span class="break">{_html(item.text)}</span></li>'
         for item in passages
     )
     return f'<details><summary>{_html(len(passages))} stored passage(s)</summary><ul>{items}</ul></details>'

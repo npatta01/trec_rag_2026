@@ -157,8 +157,21 @@ def test_client_builds_authenticated_search_request():
     assert captured["params"] == {"query": "wildfire smoke", "hits": "3"}
     assert captured["headers"]["Accept"] == "application/json"
     assert captured["headers"]["Authorization"] == "Bearer secret-token"
-    assert captured["timeout"] == 30
+    assert captured["timeout"] == 300
     assert captured["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("timeout", [True, False, 0, -1, 1.5, "30"])
+def test_client_rejects_non_positive_or_non_integer_timeout(timeout):
+    config = RemotePyseriniConfig("https://api.test/search", None, 3, ())
+    with pytest.raises(ValueError, match="timeout must be a positive integer"):
+        RemotePyseriniClient(config, session=object(), timeout=timeout)
+
+
+def test_client_accepts_explicit_positive_timeout_override():
+    config = RemotePyseriniConfig("https://api.test/search", None, 3, ())
+    client = RemotePyseriniClient(config, session=object(), timeout=17)
+    assert client.timeout == 17
 
 
 def test_client_persists_raw_bytes_before_decoding():

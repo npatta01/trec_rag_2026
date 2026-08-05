@@ -32,7 +32,7 @@ Retrieval-only:
 ```bash
 uv run --no-sync .venv/bin/python \
   -m trec_rag.competition_debug_report \
-  --retrieval-config configs/rag26_competition_retrieval_v1.yaml
+  --retrieval-config configs/rag26_competition_retrieval_v2.yaml
 ```
 
 Retrieval plus RAG:
@@ -40,8 +40,8 @@ Retrieval plus RAG:
 ```bash
 uv run --no-sync .venv/bin/python \
   -m trec_rag.competition_debug_report \
-  --retrieval-config configs/rag26_competition_retrieval_v1.yaml \
-  --rag-config configs/rag26_competition_rag_gpt_sol_v1.yaml
+  --retrieval-config configs/rag26_competition_retrieval_v2.yaml \
+  --rag-config configs/rag26_competition_rag_gpt_sol_v2.yaml
 ```
 
 4. Read the single JSON receipt from stdout. Confirm it contains `schema_version`, an absolute `output_path`, `topic_ids`, `rag_included`, and `source_sha256s`, and that its topics and RAG status match the request.

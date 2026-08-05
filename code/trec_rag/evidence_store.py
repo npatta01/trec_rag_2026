@@ -1,14 +1,14 @@
 """Typed, strict artifact stages for extractive facet evidence.
 
 It projects a sealed retrieval checkpoint, strictly decodes and seals evidence
-JSONL, manages temporary SQLite spill, and invokes only pinned local evidence
-models. Hosted-model and retrieval clients are deliberately outside this module.
+JSONL, and invokes only pinned local evidence models. Hosted-model and
+retrieval clients are deliberately outside this module.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from hashlib import sha256
 import json
 import math
@@ -26,6 +26,7 @@ from trec_rag.evidence_local import (
     minilm_similarity_identity,
     mixedbread_sentence_scorer_identity,
 )
+from trec_rag.document_store import DocumentStore, DocumentStoreIntegrityError
 from trec_rag.facet_evidence import (
     SCHEMA_VERSION as CANDIDATE_SCHEMA_VERSION,
     SELECTION_SCHEMA_VERSION,
@@ -40,7 +41,6 @@ from trec_rag.facet_evidence import (
     ScoredPassage,
     SentenceEvidence,
     SemanticCluster,
-    SelectionCandidate,
     SelectionPolicy,
     SubnarrativeContext,
     SubnarrativeSelection,
@@ -51,9 +51,18 @@ from trec_rag.facet_evidence import (
     validate_candidate_request,
     validate_extractive_candidate_source,
     _SourceValidationCache,
-    _source_validation_cache,
     _canonical_identity,
 )
+from trec_rag.topic_records import (
+    CANDIDATE_STAGE,
+    FacetRecord,
+    TOPIC_RECORDS_SCHEMA_VERSION,
+    PublishedTopicRecords,
+    TopicRecords,
+    TopicRecordsBuilder,
+    ValidatedTopicRecords,
+)
+from trec_rag.topic_passage_search import PassageSearchResult, SourceDocument, SourcePassage
 from trec_rag.topics import Topic
 
 if TYPE_CHECKING:
@@ -61,9 +70,13 @@ if TYPE_CHECKING:
 
 
 REQUEST_SCHEMA_VERSION = "extractive_candidate_request_v1"
+PASSAGE_REQUEST_SCHEMA_VERSION = "extractive_candidate_request_v2"
+_SUPPORTED_REQUEST_SCHEMA_VERSIONS = frozenset({
+    REQUEST_SCHEMA_VERSION,
+    PASSAGE_REQUEST_SCHEMA_VERSION,
+})
 CONTEXT_SCHEMA_VERSION = "subnarrative_selection_context_v1"
 HANDOFF_SCHEMA_VERSION = "facet_canonical_handoff_v1"
-CANDIDATE_MANIFEST_SCHEMA_VERSION = "extractive_candidate_manifest_v1"
 SELECTION_MANIFEST_SCHEMA_VERSION = "subnarrative_selection_manifest_v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -79,7 +92,9 @@ _SCORING_MANIFEST_FIELDS = frozenset({
     "decomposition_source_sha256", "code_commit", "retriever",
     "selection_schema_version",
     "retrieval_manifest_sha256", "scorer", "rerank_depth", "selection_k",
-    "selection_policy", "score_policy", "selected_set_sha256", "artifacts",
+    "selection_policy", "selection_scope", "score_policy", "selected_set_sha256",
+    "passage_search",
+    "artifacts",
 })
 _SELECTED_FIELDS = frozenset({
     "topic_id", "docid", "selection_rank", "selected_from_lane",
@@ -129,6 +144,8 @@ def materialize_candidate_inputs(
     output_dir: Path,
     code_commit: str,
     official_topics_sha256: str,
+    passage_results: Sequence[PassageSearchResult] = (),
+    document_store_root: Path | None = None,
 ) -> HandoffArtifacts:
     """Create exact request/context ledgers from one sealed scoring checkpoint."""
     _validate_identity(topic, decomposition, code_commit, official_topics_sha256)
@@ -181,25 +198,52 @@ def materialize_candidate_inputs(
     else:
         if decomposition.result.plan is None or not decomposition.result.subnarratives:
             raise ValueError("admitted decomposition has no generated subnarratives")
-        scores = _subnarrative_scores(
-            score_path,
-            score_receipt,
-            topic,
-            decomposition,
-            sealed_documents,
-        )
+        if passage_results:
+            scores = {}
+        else:
+            scores = _subnarrative_scores(
+                score_path,
+                score_receipt,
+                topic,
+                decomposition,
+                sealed_documents,
+            )
         context_rows = tuple(
             _context_row(topic, subnarrative)
             for subnarrative in decomposition.result.subnarratives
         )
-        document_count = len(sealed_documents)
+        document_count = (
+            len({
+                passage.docid
+                for result in passage_results
+                if result.query.primary_subnarrative_id != "original"
+                for passage in result.passages
+            })
+            if passage_results
+            else len(sealed_documents)
+        )
 
+    request_schema_version = (
+        PASSAGE_REQUEST_SCHEMA_VERSION if passage_results else REQUEST_SCHEMA_VERSION
+    )
     request_temp: Path | None = None
     context_temp: Path | None = None
     try:
         if decomposition.result.used_fallback:
             request_temp, request_receipt = _write_jsonl_temp(requests_path, ())
             passage_count = 0
+        elif passage_results:
+            if document_store_root is None:
+                raise ValueError(
+                    "document_store_root is required for passage-first handoff"
+                )
+            request_temp, request_receipt, passage_count = _write_requests_from_passages(
+                requests_path,
+                topic,
+                decomposition,
+                passage_results,
+                document_store_root=Path(document_store_root),
+            )
         else:
             request_temp, request_receipt, passage_count = _write_requests_temp(
                 requests_path,
@@ -214,7 +258,7 @@ def materialize_candidate_inputs(
         _require_receipt(score_manifest_path, score_manifest_receipt, "scoring manifest")
         manifest = {
             "schema_version": HANDOFF_SCHEMA_VERSION,
-            "request_schema_version": REQUEST_SCHEMA_VERSION,
+            "request_schema_version": request_schema_version,
             "context_schema_version": CONTEXT_SCHEMA_VERSION,
             "topic_id": topic.id,
             "official_topics_sha256": official_topics_sha256,
@@ -320,6 +364,10 @@ def _validate_scoring_manifest(
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise ValueError(f"scoring manifest {key} identity changed")
+    if manifest.get("selection_scope") != (
+        "internal_fixed_path_projection_not_final_submission"
+    ):
+        raise ValueError("scoring manifest selection scope is not internal-only")
     artifact_rows = manifest.get("artifacts")
     if not isinstance(artifact_rows, list) or len(artifact_rows) != len(_SCORING_ARTIFACTS):
         raise ValueError("scoring manifest artifact receipts are invalid")
@@ -495,6 +543,134 @@ def _validate_passage_records(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(dict(row) for row in value)
 
 
+def _write_requests_from_passages(
+    output_path: Path,
+    topic: Topic,
+    decomposition: Any,
+    passage_results: Sequence[PassageSearchResult],
+    *,
+    document_store_root: Path,
+) -> tuple[Path, _FileReceipt, int]:
+    """Build one facet request per sealed semantic passage group.
+
+    The fixed v2 handoff population is the shared top-100 passage set.  The
+    round-robin selected-document artifact is retained as retrieval metadata,
+    but never filters these semantic evidence requests.
+    """
+    subnarratives = {
+        row.subnarrative_id: CandidateSubnarrative(row.subnarrative_id, row.text)
+        for row in decomposition.result.subnarratives
+    }
+    documents: dict[str, SourceDocument] = {}
+    groups: dict[tuple[str, str], list[tuple[SourcePassage, str]]] = {}
+    for result in passage_results:
+        subnarrative_id = result.query.primary_subnarrative_id
+        if subnarrative_id == "original":
+            continue
+        if subnarrative_id not in subnarratives:
+            raise ValueError("semantic passage result is not in the decomposition")
+        by_docid = {document.docid: document for document in result.documents}
+        for passage in result.passages:
+            document = by_docid.get(passage.docid)
+            if document is None or passage.content_sha256 != document.content_sha256:
+                raise ValueError("sealed passage source document identity changed")
+            previous = documents.setdefault(passage.docid, document)
+            if previous.content_sha256 != document.content_sha256:
+                raise ValueError("sealed passage source document conflicts across lanes")
+            groups.setdefault((subnarrative_id, passage.docid), []).append(
+                (passage, result.query.query_id)
+            )
+    if not groups:
+        temporary, receipt = _write_jsonl_temp(output_path, ())
+        return temporary, receipt, 0
+
+    store = DocumentStore(document_store_root)
+    source_cache: dict[str, str] = {}
+    rows: list[dict[str, object]] = []
+    passage_count = 0
+    for (subnarrative_id, docid), passages in sorted(
+        groups.items(), key=lambda item: (item[0][0], item[0][1])
+    ):
+        document = documents[docid]
+        source = source_cache.get(document.content_sha256)
+        if source is None:
+            source = store.read_text(document.content_sha256)
+            if not source.strip() or _digest(source.encode()) != document.content_sha256:
+                raise ValueError("topic CAS document does not match source document")
+            source_cache[document.content_sha256] = source
+        for passage, _ in passages:
+            if (
+                source[passage.start_char : passage.end_char] != passage.text
+                or _digest(passage.text.encode()) != passage.text_sha256
+                or len(source[: passage.start_char].encode()) != passage.start_byte
+                or len(source[: passage.end_char].encode()) != passage.end_byte
+            ):
+                raise ValueError("sealed passage offsets or text do not match topic CAS")
+        scoring_text, projected = project_source_spans(
+            source,
+            tuple(
+                (passage.start_char, passage.end_char)
+                for passage, _ in passages
+            ),
+        )
+        scoring_sha256 = _digest(scoring_text.encode())
+        scored_passages = tuple(
+            ScoredPassage(
+                passage_id=passage.passage_id,
+                lane_id=f"subnarrative:{subnarrative_id}",
+                query_id=query_id,
+                scoring_start_char=start,
+                scoring_end_char=end,
+                scoring_text_sha256=scoring_sha256,
+                chunk_text_sha256=_digest(chunk.encode()),
+                cross_encoder_score=passage.raw_logit,
+                cross_encoder_rank=passage.rank,
+            )
+            for (passage, query_id), (start, end, chunk) in zip(
+                passages,
+                projected,
+                strict=True,
+            )
+        )
+        request = ExtractiveCandidateRequest(
+            topic_id=topic.id,
+            document_id=docid,
+            source=source,
+            document_sha256=document.content_sha256,
+            scoring_text_sha256=scoring_sha256,
+            subnarratives=(subnarratives[subnarrative_id],),
+            passages=scored_passages,
+        )
+        validate_candidate_request(request)
+        rows.append(_passage_request_row(request, passages))
+        passage_count += len(scored_passages)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output_path.name}.", dir=output_path.parent
+    )
+    temporary = Path(temporary_name)
+    digest = sha256()
+    byte_count = 0
+    try:
+        with os.fdopen(descriptor, "wb") as sink:
+            for row in rows:
+                body = _canonical_json(row) + b"\n"
+                sink.write(body)
+                digest.update(body)
+                byte_count += len(body)
+            sink.flush()
+            os.fsync(sink.fileno())
+        return temporary, _FileReceipt(byte_count, digest.hexdigest()), passage_count
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def _write_requests_temp(
     output_path: Path,
     selected_path: Path,
@@ -525,10 +701,11 @@ def _write_requests_temp(
                 identity, source = _selected_document(row, document_index, topic, seen)
                 if document_index > len(documents) or identity != documents[document_index - 1]:
                     raise ValueError("selected document changed between validation passes")
-                source_passages: list[tuple[Any, dict[str, Any]]] = []
-                for subnarrative in decomposition.result.subnarratives:
-                    for passage in scores[(identity.docid, subnarrative.subnarrative_id)]:
-                        source_passages.append((subnarrative, passage))
+                source_passages = [
+                    (subnarrative, passage)
+                    for subnarrative in subnarratives
+                    for passage in scores[(identity.docid, subnarrative.subnarrative_id)]
+                ]
                 scoring_text, projected = project_source_spans(
                     source,
                     tuple(
@@ -547,7 +724,7 @@ def _write_requests_temp(
                             f"{identity.docid}:{passage['chunk_index']:04d}"
                         ),
                         lane_id=f"subnarrative:{subnarrative.subnarrative_id}",
-                        query_id=subnarrative.semantic_query_sha256,
+                        query_id=subnarrative.text_sha256,
                         scoring_start_char=start,
                         scoring_end_char=end,
                         scoring_text_sha256=scoring_sha256,
@@ -614,6 +791,52 @@ def _request_row(request: ExtractiveCandidateRequest) -> dict[str, object]:
                 "cross_encoder_rank": row.cross_encoder_rank,
             }
             for row in request.passages
+        ],
+    }
+
+
+def _passage_request_row(
+    request: ExtractiveCandidateRequest,
+    source_passages: Sequence[tuple[SourcePassage, str]],
+) -> dict[str, object]:
+    """Encode a CAS-backed request without serializing document text."""
+    if len(request.subnarratives) != 1:
+        raise ValueError("passage-first requests must contain exactly one facet")
+    if len(source_passages) != len(request.passages):
+        raise ValueError("passage-first request geometry changed during projection")
+    facet = request.subnarratives[0]
+    return {
+        "schema_version": PASSAGE_REQUEST_SCHEMA_VERSION,
+        "topic_id": request.topic_id,
+        "document_id": request.document_id,
+        "content_sha256": request.document_sha256,
+        "scoring_text_sha256": request.scoring_text_sha256,
+        "facet": {
+            "subnarrative_id": facet.subnarrative_id,
+            "text": facet.text,
+        },
+        "passages": [
+            {
+                "passage_id": scored.passage_id,
+                "lane_id": scored.lane_id,
+                "query_id": query_id,
+                "source_start_char": source.start_char,
+                "source_end_char": source.end_char,
+                "source_start_byte": source.start_byte,
+                "source_end_byte": source.end_byte,
+                "source_text_sha256": source.text_sha256,
+                "scoring_start_char": scored.scoring_start_char,
+                "scoring_end_char": scored.scoring_end_char,
+                "scoring_text_sha256": scored.scoring_text_sha256,
+                "chunk_text_sha256": scored.chunk_text_sha256,
+                "cross_encoder_score": scored.cross_encoder_score,
+                "cross_encoder_rank": scored.cross_encoder_rank,
+            }
+            for (source, query_id), scored in zip(
+                source_passages,
+                request.passages,
+                strict=True,
+            )
         ],
     }
 
@@ -847,10 +1070,20 @@ _CANDIDATE_REQUEST_FIELDS = frozenset({
     "schema_version", "topic_id", "document_id", "source", "document_sha256",
     "scoring_text_sha256", "subnarratives", "passages",
 })
+_PASSAGE_REQUEST_FIELDS = frozenset({
+    "schema_version", "topic_id", "document_id", "content_sha256",
+    "scoring_text_sha256", "facet", "passages",
+})
 _CANDIDATE_SUBNARRATIVE_FIELDS = frozenset({"subnarrative_id", "text"})
 _CANDIDATE_PASSAGE_FIELDS = frozenset({
     "passage_id", "lane_id", "query_id", "scoring_start_char", "scoring_end_char",
     "scoring_text_sha256", "chunk_text_sha256", "cross_encoder_score", "cross_encoder_rank",
+})
+_PASSAGE_REQUEST_PASSAGE_FIELDS = frozenset({
+    "passage_id", "lane_id", "query_id", "source_start_char", "source_end_char",
+    "source_start_byte", "source_end_byte", "source_text_sha256",
+    "scoring_start_char", "scoring_end_char", "scoring_text_sha256",
+    "chunk_text_sha256", "cross_encoder_score", "cross_encoder_rank",
 })
 
 
@@ -863,30 +1096,97 @@ class _CandidateRequestAudit:
 
 @dataclass(frozen=True)
 class CandidateArtifacts:
-    candidates_path: Path
+    records_path: Path
     manifest_path: Path
+    document_store_root: Path
+    # Process-local validation state; it must never enter serialized artifacts.
+    validation_session: ValidatedTopicRecords | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+
+def _fixed_retrieval_completion(
+    passage_results: Sequence[PassageSearchResult],
+    *,
+    admitted_document_count: int,
+) -> tuple[str, str]:
+    """Return the explicit topic completion pair sealed by fixed retrieval."""
+    if type(admitted_document_count) is not int or admitted_document_count < 0:
+        raise ValueError("admitted_document_count must be a non-negative integer")
+    results = tuple(passage_results)
+    if any(not isinstance(result, PassageSearchResult) for result in results):
+        raise TypeError("passage_results must contain PassageSearchResult values")
+    incomplete_reasons: set[str] = set()
+    for result in results:
+        if result.status == "incomplete":
+            if result.stopping_reason is None:
+                raise ValueError("incomplete passage search is missing a stopping reason")
+            incomplete_reasons.add(result.stopping_reason)
+    for reason in ("scoring_failed", "retrieval_unavailable", "no_evidence"):
+        if reason in incomplete_reasons:
+            return "incomplete", reason
+    if results or admitted_document_count > 0:
+        return "complete", "coverage_sufficient"
+    return "incomplete", "no_evidence"
 
 
 def generate_candidate_artifacts(
     paths: HandoffArtifacts,
     *,
+    run_id: str,
     score_cache_root: Path,
     device: str,
+    document_store_root: Path,
     scorer: object | None = None,
+    facets: Sequence[FacetRecord] = (),
+    passage_results: Sequence[PassageSearchResult] = (),
 ) -> CandidateArtifacts:
-    """Generate and seal candidate JSONL from one typed handoff."""
+    """Generate and seal one topic records database from a typed handoff."""
     if not isinstance(paths, HandoffArtifacts):
         raise TypeError("paths must be HandoffArtifacts")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id must be a non-empty string")
     input_path = Path(paths.requests_path)
     canonical_root = input_path.parent.parent
-    output_path = canonical_root / "candidates.jsonl"
-    manifest_path = canonical_root / "candidate-manifest.json"
+    topic_root = canonical_root.parent
+    records_path = topic_root / "records.sqlite3"
+    manifest_path = canonical_root / "records-manifest.json"
+    handoff_manifest_path = Path(paths.manifest_path)
     resolved_paths = (
-        input_path.resolve(), output_path.resolve(), manifest_path.resolve()
+        input_path.resolve(), records_path.resolve(), manifest_path.resolve()
     )
     if len(set(resolved_paths)) != len(resolved_paths):
         raise ValueError("candidate input and output paths must name different files")
-    audit = _audit_candidate_requests(input_path)
+    handoff_manifest = _strict_candidate_json_object(
+        handoff_manifest_path.read_bytes(), handoff_manifest_path, 1
+    )
+    topic_id = handoff_manifest.get("topic_id")
+    if not isinstance(topic_id, str) or not _SAFE_TOPIC_ID.fullmatch(topic_id):
+        raise ValueError("handoff manifest topic_id is invalid")
+    request_schema_version = handoff_manifest.get("request_schema_version")
+    if (
+        not isinstance(request_schema_version, str)
+        or request_schema_version not in _SUPPORTED_REQUEST_SCHEMA_VERSIONS
+    ):
+        raise ValueError("handoff manifest request schema is unsupported")
+    if handoff_manifest.get("requests_file") != input_path.name:
+        raise ValueError("handoff manifest requests_file does not match input basename")
+    document_store_root = Path(document_store_root)
+    document_store = DocumentStore(document_store_root)
+    audit = _audit_candidate_requests(
+        input_path,
+        document_store=document_store,
+        expected_schema=request_schema_version,
+    )
+    requests_sha256 = handoff_manifest.get("requests_sha256")
+    if (
+        not isinstance(requests_sha256, str)
+        or not _SHA256.fullmatch(requests_sha256)
+        or requests_sha256 != audit.source_sha256
+    ):
+        raise ValueError("handoff manifest request hash does not match audited requests")
     if scorer is None and audit.document_count:
         scorer = MixedbreadSentencePairScorer(
             score_cache_root=Path(score_cache_root),
@@ -898,56 +1198,76 @@ def generate_candidate_artifacts(
         else _candidate_scorer_identity(scorer)
     )
     run_identity = {
-        "request_schema_version": REQUEST_SCHEMA_VERSION,
+        "request_schema_version": request_schema_version,
         "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
+        "source_file": input_path.name,
         "source_sha256": audit.source_sha256,
         "scorer": identity,
         "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
         "scoring_normalization_version": SCORING_NORMALIZATION_VERSION,
     }
-    _reject_conflicting_candidate_outputs(output_path, manifest_path, run_identity)
-    candidate_count = 0
     second_pass_sha256 = sha256()
-
-    def candidate_stream():
-        nonlocal candidate_count
+    builder = TopicRecordsBuilder(
+        topic_root,
+        topic_id,
+        document_store,
+        run_id=run_id,
+    )
+    published: PublishedTopicRecords | None = None
+    try:
+        builder.add_facets(facets)
+        for passage_result in passage_results:
+            builder.add_passage_search(passage_result)
         for request in _iter_candidate_requests(
-            input_path, digest=second_pass_sha256
+            input_path,
+            document_store=document_store,
+            expected_schema=request_schema_version,
+            digest=second_pass_sha256,
         ):
             if scorer is None:
                 raise ValueError(
                     "request JSONL changed while candidates were being generated"
                 )
+            builder.bind_document(
+                request.document_id,
+                request.source,
+                expected_sha256=request.document_sha256,
+            )
             for candidate in extract_document_candidates(request, scorer):
-                candidate_count += 1
-                yield candidate
+                builder.add_candidate(candidate)
         if second_pass_sha256.hexdigest() != audit.source_sha256:
             raise ValueError(
                 "request JSONL changed while candidates were being generated"
             )
-
-    candidates_sha256 = write_candidate_jsonl(output_path, candidate_stream())
-    manifest = {
-        "schema_version": CANDIDATE_MANIFEST_SCHEMA_VERSION,
-        **run_identity,
-        "source_file": input_path.name,
-        "candidate_file": output_path.name,
-        "input_sha256": run_identity["source_sha256"],
-        "candidates_sha256": candidates_sha256,
-        "output_sha256": candidates_sha256,
-        "document_count": audit.document_count,
-        "unique_document_count": audit.document_count,
-        "unique_subnarrative_count": audit.unique_subnarrative_count,
-        "failure_count": 0,
-        "candidate_count": candidate_count,
-        "retrieval_network_calls": 0,
-        "hosted_llm_calls": 0,
-    }
-    _atomic_candidate_json_write(manifest_path, manifest)
-    return CandidateArtifacts(output_path, manifest_path)
+        completion = _fixed_retrieval_completion(
+            passage_results,
+            admitted_document_count=audit.document_count,
+        )
+        builder.set_completion(*completion)
+        published = builder.publish(run_identity)
+    finally:
+        if published is None:
+            builder._cleanup()
+    return CandidateArtifacts(
+        records_path,
+        manifest_path,
+        document_store_root,
+        validation_session=published.validation_session,
+    )
 
 
-def _iter_candidate_requests(path: Path, *, digest: Any | None = None) -> Iterator[ExtractiveCandidateRequest]:
+def _iter_candidate_requests(
+    path: Path,
+    *,
+    document_store: DocumentStore | None = None,
+    expected_schema: str | None = None,
+    digest: Any | None = None,
+) -> Iterator[ExtractiveCandidateRequest]:
+    if (
+        expected_schema is not None
+        and expected_schema not in _SUPPORTED_REQUEST_SCHEMA_VERSIONS
+    ):
+        raise ValueError("expected request schema is unsupported")
     with path.open("rb") as source:
         for line_number, raw_line in enumerate(source, start=1):
             if digest is not None:
@@ -955,30 +1275,189 @@ def _iter_candidate_requests(path: Path, *, digest: Any | None = None) -> Iterat
             if not raw_line.strip():
                 raise ValueError(f"{path}:{line_number}: blank JSONL rows are not allowed")
             value = _strict_candidate_json_object(raw_line, path, line_number)
-            _require_candidate_fields(value, _CANDIDATE_REQUEST_FIELDS, f"{path}:{line_number}: request")
-            if value["schema_version"] != REQUEST_SCHEMA_VERSION:
+            schema_version = value.get("schema_version")
+            if (
+                not isinstance(schema_version, str)
+                or schema_version not in _SUPPORTED_REQUEST_SCHEMA_VERSIONS
+            ):
                 raise ValueError(f"{path}:{line_number}: unsupported request schema version")
-            subnarratives = value["subnarratives"]
-            passages = value["passages"]
-            if not isinstance(subnarratives, list) or not isinstance(passages, list):
-                raise ValueError(f"{path}:{line_number}: subnarratives and passages must be arrays")
-            try:
-                request = ExtractiveCandidateRequest(
-                    topic_id=value["topic_id"],
-                    document_id=value["document_id"],
-                    source=value["source"],
-                    document_sha256=value["document_sha256"],
-                    scoring_text_sha256=value["scoring_text_sha256"],
-                    subnarratives=tuple(_candidate_subnarrative(row, path, line_number) for row in subnarratives),
-                    passages=tuple(_candidate_passage(row, path, line_number) for row in passages),
+            if expected_schema is not None and schema_version != expected_schema:
+                raise ValueError(
+                    f"{path}:{line_number}: request schema differs from handoff manifest"
                 )
-            except (TypeError, ValueError) as exc:
+            try:
+                if schema_version == REQUEST_SCHEMA_VERSION:
+                    request = _decode_legacy_candidate_request(
+                        value,
+                        path,
+                        line_number,
+                    )
+                else:
+                    if document_store is None:
+                        raise ValueError(
+                            "passage-first requests require a DocumentStore"
+                        )
+                    request = _decode_passage_candidate_request(
+                        value,
+                        path,
+                        line_number,
+                        document_store,
+                    )
+            except (DocumentStoreIntegrityError, TypeError, ValueError) as exc:
                 raise ValueError(f"{path}:{line_number}: invalid request: {exc}") from exc
-            _validate_candidate_source_hashes(request, path, line_number)
             yield request
 
 
-def _audit_candidate_requests(path: Path) -> _CandidateRequestAudit:
+def _decode_legacy_candidate_request(
+    value: Mapping[str, Any],
+    path: Path,
+    line_number: int,
+) -> ExtractiveCandidateRequest:
+    _require_candidate_fields(
+        value,
+        _CANDIDATE_REQUEST_FIELDS,
+        f"{path}:{line_number}: request",
+    )
+    subnarratives = value["subnarratives"]
+    passages = value["passages"]
+    if not isinstance(subnarratives, list) or not isinstance(passages, list):
+        raise ValueError("subnarratives and passages must be arrays")
+    request = ExtractiveCandidateRequest(
+        topic_id=value["topic_id"],
+        document_id=value["document_id"],
+        source=value["source"],
+        document_sha256=value["document_sha256"],
+        scoring_text_sha256=value["scoring_text_sha256"],
+        subnarratives=tuple(
+            _candidate_subnarrative(row, path, line_number)
+            for row in subnarratives
+        ),
+        passages=tuple(
+            _candidate_passage(row, path, line_number) for row in passages
+        ),
+    )
+    _validate_candidate_source_hashes(request, path, line_number)
+    validate_candidate_request(request)
+    return request
+
+
+def _decode_passage_candidate_request(
+    value: Mapping[str, Any],
+    path: Path,
+    line_number: int,
+    document_store: DocumentStore,
+) -> ExtractiveCandidateRequest:
+    _require_candidate_fields(
+        value,
+        _PASSAGE_REQUEST_FIELDS,
+        f"{path}:{line_number}: passage-first request",
+    )
+    facet = _candidate_subnarrative(value["facet"], path, line_number)
+    raw_passages = value["passages"]
+    if not isinstance(raw_passages, list) or not raw_passages:
+        raise ValueError("passage-first passages must be a non-empty array")
+    content_sha256 = value["content_sha256"]
+    source = document_store.read_text(content_sha256)
+    if not source.strip() or _digest(source.encode("utf-8")) != content_sha256:
+        raise ValueError("CAS source is empty or differs from content_sha256")
+
+    source_spans: list[tuple[int, int]] = []
+    for raw in raw_passages:
+        if not isinstance(raw, dict):
+            raise ValueError("passage-first passages must contain objects")
+        _require_candidate_fields(
+            raw,
+            _PASSAGE_REQUEST_PASSAGE_FIELDS,
+            f"{path}:{line_number}: passage-first passage",
+        )
+        start = raw["source_start_char"]
+        end = raw["source_end_char"]
+        start_byte = raw["source_start_byte"]
+        end_byte = raw["source_end_byte"]
+        if any(
+            isinstance(offset, bool) or not isinstance(offset, int)
+            for offset in (start, end, start_byte, end_byte)
+        ):
+            raise ValueError("source passage offsets must be integers")
+        if start < 0 or end <= start or end > len(source):
+            raise ValueError("source passage character offsets are out of range")
+        if (
+            start_byte != len(source[:start].encode("utf-8"))
+            or end_byte != len(source[:end].encode("utf-8"))
+            or end_byte <= start_byte
+        ):
+            raise ValueError("source passage byte offsets differ from CAS text")
+        source_slice = source[start:end]
+        if _digest(source_slice.encode("utf-8")) != raw["source_text_sha256"]:
+            raise ValueError("source passage digest differs from CAS text")
+        source_spans.append((start, end))
+
+    scoring_text, projected = project_source_spans(source, tuple(source_spans))
+    scoring_sha256 = _digest(scoring_text.encode("utf-8"))
+    if value["scoring_text_sha256"] != scoring_sha256:
+        raise ValueError("request scoring digest differs from CAS text")
+    passages: list[ScoredPassage] = []
+    passage_ids: set[str] = set()
+    passage_ranks: set[int] = set()
+    for raw, (scoring_start, scoring_end, chunk) in zip(
+        raw_passages,
+        projected,
+        strict=True,
+    ):
+        if any(
+            isinstance(offset, bool) or not isinstance(offset, int)
+            for offset in (
+                raw["scoring_start_char"],
+                raw["scoring_end_char"],
+            )
+        ):
+            raise ValueError("passage scoring offsets must be integers")
+        if (
+            raw["scoring_start_char"] != scoring_start
+            or raw["scoring_end_char"] != scoring_end
+            or raw["scoring_text_sha256"] != scoring_sha256
+            or raw["chunk_text_sha256"] != _digest(chunk.encode("utf-8"))
+        ):
+            raise ValueError("passage scoring geometry differs from CAS projection")
+        passage = ScoredPassage(
+            passage_id=raw["passage_id"],
+            lane_id=raw["lane_id"],
+            query_id=raw["query_id"],
+            scoring_start_char=scoring_start,
+            scoring_end_char=scoring_end,
+            scoring_text_sha256=scoring_sha256,
+            chunk_text_sha256=raw["chunk_text_sha256"],
+            cross_encoder_score=raw["cross_encoder_score"],
+            cross_encoder_rank=raw["cross_encoder_rank"],
+        )
+        if passage.lane_id != f"subnarrative:{facet.subnarrative_id}":
+            raise ValueError("passage lane differs from request facet")
+        if passage.passage_id in passage_ids or passage.cross_encoder_rank in passage_ranks:
+            raise ValueError("passage IDs and ranks must be unique within a request")
+        passage_ids.add(passage.passage_id)
+        passage_ranks.add(passage.cross_encoder_rank)
+        passages.append(passage)
+
+    request = ExtractiveCandidateRequest(
+        topic_id=value["topic_id"],
+        document_id=value["document_id"],
+        source=source,
+        document_sha256=content_sha256,
+        scoring_text_sha256=scoring_sha256,
+        subnarratives=(facet,),
+        passages=tuple(passages),
+    )
+    _validate_candidate_source_hashes(request, path, line_number)
+    validate_candidate_request(request)
+    return request
+
+
+def _audit_candidate_requests(
+    path: Path,
+    *,
+    document_store: DocumentStore,
+    expected_schema: str,
+) -> _CandidateRequestAudit:
     descriptor, audit_path = tempfile.mkstemp(prefix=".extractive-candidate-request-audit.")
     os.close(descriptor)
     digest = sha256()
@@ -989,19 +1468,37 @@ def _audit_candidate_requests(path: Path) -> _CandidateRequestAudit:
             audit.execute("PRAGMA synchronous=OFF")
             audit.execute("PRAGMA temp_store=FILE")
             audit.execute("PRAGMA cache_size=-2048")
-            audit.execute("CREATE TABLE documents (document_id TEXT PRIMARY KEY)")
+            audit.execute(
+                "CREATE TABLE request_groups ("
+                "document_id TEXT NOT NULL, subnarrative_id TEXT NOT NULL, "
+                "PRIMARY KEY (document_id, subnarrative_id))"
+            )
             audit.execute(
                 "CREATE TABLE subnarratives ("
                 "topic_id TEXT NOT NULL, subnarrative_id TEXT NOT NULL, "
                 "text_sha256 TEXT NOT NULL, "
                 "PRIMARY KEY (topic_id, subnarrative_id, text_sha256))"
             )
-            for line_number, request in enumerate(_iter_candidate_requests(path, digest=digest), start=1):
+            for line_number, request in enumerate(
+                _iter_candidate_requests(
+                    path,
+                    document_store=document_store,
+                    expected_schema=expected_schema,
+                    digest=digest,
+                ),
+                start=1,
+            ):
                 try:
-                    audit.execute("INSERT INTO documents VALUES (?)", (request.document_id,))
+                    audit.executemany(
+                        "INSERT INTO request_groups VALUES (?, ?)",
+                        (
+                            (request.document_id, subnarrative.subnarrative_id)
+                            for subnarrative in request.subnarratives
+                        ),
+                    )
                 except sqlite3.IntegrityError as exc:
                     raise ValueError(
-                        f"{path}:{line_number}: duplicate document_id {request.document_id!r}"
+                        f"{path}:{line_number}: duplicate document/subnarrative request"
                     ) from exc
                 audit.executemany(
                     "INSERT OR IGNORE INTO subnarratives VALUES (?, ?, ?)",
@@ -1086,48 +1583,12 @@ def _candidate_scorer_identity(scorer: Any) -> dict[str, object]:
         raise TypeError("scorer must expose an identity dictionary")
     required = {
         "model", "model_revision", "backend_version", "score_representation",
-        "inference_dtype", "score_kind", "sentence_max_length",
+        "inference_dtype", "score_kind", "sentence_max_length", "input_policy",
     }
     if set(identity) != required:
         raise ValueError("scorer identity fields differ from the local sentence scorer contract")
     return dict(identity)
 
-
-def _reject_conflicting_candidate_outputs(
-    output: Path,
-    manifest: Path,
-    identity: Mapping[str, object],
-) -> None:
-    if not manifest.exists():
-        return
-    if not output.is_file() or not manifest.is_file():
-        raise ValueError("a sealed candidate manifest requires its output file")
-    try:
-        existing = _strict_candidate_json_object(manifest.read_bytes(), manifest, 1)
-    except ValueError as exc:
-        raise ValueError(str(exc)) from exc
-    if existing.get("schema_version") != CANDIDATE_MANIFEST_SCHEMA_VERSION or any(
-        existing.get(key) != value for key, value in identity.items()
-    ):
-        raise ValueError("existing output manifest identity differs from this run")
-
-
-def _atomic_candidate_json_write(path: Path, value: Mapping[str, object]) -> None:
-    body = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as sink:
-            sink.write(body)
-            sink.flush()
-            os.fsync(sink.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
 
 _CONTEXT_FIELDS = frozenset({
     "schema_version", "topic_id", "official_narrative", "official_narrative_sha256",
@@ -1140,18 +1601,15 @@ _CANDIDATE_FIELDS = frozenset({
     "rank_within_document_subnarrative", "document_sha256", "scoring_text_sha256",
     "subnarrative_sha256", "sentence_splitter_version",
 })
-_CANDIDATE_MANIFEST_FIELDS = frozenset({
-    "schema_version", "request_schema_version", "candidate_schema_version", "source_sha256",
-    "scorer", "sentence_splitter_version", "scoring_normalization_version", "source_file",
-    "candidate_file", "input_sha256", "candidates_sha256", "output_sha256", "document_count",
-    "unique_document_count", "unique_subnarrative_count", "failure_count", "candidate_count",
-    "retrieval_network_calls", "hosted_llm_calls",
+_CANDIDATE_STAGE_IDENTITY_FIELDS = frozenset({
+    "request_schema_version", "candidate_schema_version", "source_file",
+    "source_sha256", "scorer", "sentence_splitter_version",
+    "scoring_normalization_version",
 })
 _SCORER_IDENTITY_FIELDS = frozenset({
     "model", "model_revision", "backend_version", "score_representation",
-    "inference_dtype", "score_kind", "sentence_max_length",
+    "inference_dtype", "score_kind", "sentence_max_length", "input_policy",
 })
-_SELECTION_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def decode_extractive_candidate(
@@ -1245,23 +1703,106 @@ def decode_extractive_candidate(
     return candidate
 
 
+def _canonical_candidate_artifact_paths(
+    paths: CandidateArtifacts,
+) -> tuple[Path, Path, Path]:
+    records_path = Path(paths.records_path)
+    manifest_path = Path(paths.manifest_path)
+    document_store_root = Path(paths.document_store_root)
+    if (
+        records_path.name != "records.sqlite3"
+        or manifest_path.name != "records-manifest.json"
+        or manifest_path.parent.name != "canonical"
+        or records_path.parent.resolve() != manifest_path.parent.parent.resolve()
+    ):
+        raise ValueError("canonical candidate artifact paths are invalid")
+    return records_path, manifest_path, document_store_root
+
+
+def _validate_candidate_stage_identity(
+    records: TopicRecords,
+) -> dict[str, object]:
+    # TopicRecords.open validated this exact manifest snapshot against the DB seal.
+    identity_json = records._manifest.get("identity_json")
+    try:
+        identity = json.loads(identity_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("candidate stage identity JSON is invalid") from exc
+    if not isinstance(identity, dict):
+        raise ValueError("candidate stage identity must be an object")
+    _require_selection_fields(
+        identity,
+        _CANDIDATE_STAGE_IDENTITY_FIELDS,
+        "candidate stage identity",
+    )
+    expected = {
+        "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
+        "sentence_splitter_version": SENTENCE_SPLITTER_VERSION,
+        "scoring_normalization_version": SCORING_NORMALIZATION_VERSION,
+    }
+    if identity["request_schema_version"] not in _SUPPORTED_REQUEST_SCHEMA_VERSIONS:
+        raise ValueError("candidate stage identity request_schema_version mismatch")
+    for key, expected_value in expected.items():
+        if identity[key] != expected_value:
+            raise ValueError(f"candidate stage identity {key} mismatch")
+    source_file = identity["source_file"]
+    if (
+        not isinstance(source_file, str)
+        or not source_file
+        or source_file in {".", ".."}
+        or "/" in source_file
+        or "\\" in source_file
+        or "\x00" in source_file
+    ):
+        raise ValueError("candidate stage identity source_file must be a basename")
+    source_sha256 = identity["source_sha256"]
+    if not isinstance(source_sha256, str) or not _SHA256.fullmatch(source_sha256):
+        raise ValueError(
+            "candidate stage identity source_sha256 must be a lowercase SHA-256 digest"
+        )
+    scorer = identity["scorer"]
+    if not isinstance(scorer, dict):
+        raise ValueError("candidate stage identity scorer must be an object")
+    _require_selection_fields(
+        scorer,
+        _SCORER_IDENTITY_FIELDS,
+        "candidate stage identity scorer",
+    )
+    for key in _SCORER_IDENTITY_FIELDS - {"sentence_max_length"}:
+        if not isinstance(scorer[key], str) or not scorer[key]:
+            raise ValueError(
+                "candidate stage identity scorer values must be non-empty strings"
+            )
+    if (
+        scorer["score_representation"] != "raw_logits"
+        or scorer["score_kind"] != "extractive_sentence_v1"
+        or scorer["input_policy"] != SCORING_NORMALIZATION_VERSION
+    ):
+        raise ValueError("candidate stage identity scorer contract mismatch")
+    sentence_max_length = scorer["sentence_max_length"]
+    if (
+        isinstance(sentence_max_length, bool)
+        or not isinstance(sentence_max_length, int)
+        or sentence_max_length <= 0
+    ):
+        raise ValueError(
+            "candidate stage identity scorer sentence_max_length must be positive"
+        )
+    return identity
+
+
 def load_validated_candidate_artifacts(
-    candidates_path: Path,
-    manifest_path: Path,
+    paths: CandidateArtifacts,
     *,
-    documents: Mapping[str, str],
-    subnarratives: Mapping[str, str],
+    expected_topic_id: str,
     required_candidate_keys: frozenset[tuple[str, str]] | None = None,
 ) -> Mapping[tuple[str, str], ExtractiveCandidate]:
-    """Stream a sealed ledger and source-validate the candidates a caller needs."""
-    candidates_path, manifest_path = Path(candidates_path), Path(manifest_path)
-    manifest = _strict_selection_json_object(
-        manifest_path.read_bytes(), manifest_path, 1
+    """Open sealed topic records and reconstruct the candidates a caller needs."""
+    if not isinstance(paths, CandidateArtifacts):
+        raise TypeError("paths must be CandidateArtifacts")
+    records_path, manifest_path, document_store_root = (
+        _canonical_candidate_artifact_paths(paths)
     )
-    _require_selection_fields(
-        manifest, _CANDIDATE_MANIFEST_FIELDS, "candidate manifest"
-    )
-    _validate_candidate_manifest_identity(manifest, candidates_path)
     if required_candidate_keys is not None and (
         not isinstance(required_candidate_keys, frozenset)
         or any(
@@ -1272,62 +1813,15 @@ def load_validated_candidate_artifacts(
         )
     ):
         raise TypeError("required_candidate_keys must be a frozenset of string pairs")
-    digest = sha256()
-    candidate_count = 0
-    seen_keys: set[tuple[str, str]] = set()
-    result: dict[tuple[str, str], ExtractiveCandidate] = {}
-    source_caches: dict[str, _SourceValidationCache] = {}
-    with candidates_path.open("rb") as candidate_file:
-        for line_number, encoded_line in enumerate(candidate_file, start=1):
-            digest.update(encoded_line)
-            candidate_count += 1
-            if not encoded_line.endswith(b"\n"):
-                raise ValueError("candidate JSONL must end with LF")
-            raw = encoded_line[:-1]
-            if raw.endswith(b"\r"):
-                raw = raw[:-1]
-            if not raw:
-                raise ValueError("candidate JSONL contains a blank row")
-            value = _strict_selection_json_object(raw, candidates_path, line_number)
-            subnarrative_id = value.get("subnarrative_id")
-            candidate_nugget_id = value.get("candidate_nugget_id")
-            if (
-                not isinstance(subnarrative_id, str)
-                or not subnarrative_id
-                or not isinstance(candidate_nugget_id, str)
-                or not candidate_nugget_id
-            ):
-                raise ValueError("candidate artifact has an invalid candidate identity")
-            key = (subnarrative_id, candidate_nugget_id)
-            if key in seen_keys:
-                raise ValueError("candidate artifact contains a duplicate candidate ID")
-            seen_keys.add(key)
-            docid = value.get("docid")
-            document_text = documents.get(docid) if isinstance(docid, str) else None
-            subnarrative_text = subnarratives.get(subnarrative_id)
-            if document_text is None:
-                raise ValueError(
-                    "canonical evidence document is absent from selected documents"
-                )
-            if subnarrative_text is None:
-                raise ValueError("candidate subnarrative is absent from canonical plan")
-            source_cache = source_caches.get(docid)
-            if source_cache is None:
-                source_cache = _source_validation_cache(document_text)
-                source_caches[docid] = source_cache
-            candidate = decode_extractive_candidate(
-                raw,
-                document_text=document_text,
-                subnarrative_text=subnarrative_text,
-                source_cache=source_cache,
-            )
-            if required_candidate_keys is None or key in required_candidate_keys:
-                result[key] = candidate
-    _reconcile_candidate_manifest(
-        manifest,
-        _ScannedCandidates(candidate_count, digest.hexdigest()),
-    )
-    return MappingProxyType(result)
+    with TopicRecords.open(
+        records_path,
+        manifest_path,
+        expected_topic_id,
+        DocumentStore(document_store_root),
+        validation_session=paths.validation_session,
+    ) as records:
+        _validate_candidate_stage_identity(records)
+        return MappingProxyType(dict(records.load_candidates(required_candidate_keys)))
 
 
 @dataclass(frozen=True)
@@ -1347,14 +1841,15 @@ def select_evidence_artifacts(
     """Select and seal clustered evidence from typed candidate artifacts."""
     if not isinstance(paths, CandidateArtifacts):
         raise TypeError("paths must be CandidateArtifacts")
-    candidates_path = Path(paths.candidates_path)
-    candidate_manifest_path = Path(paths.manifest_path)
+    records_path, records_manifest_path, document_store_root = (
+        _canonical_candidate_artifact_paths(paths)
+    )
     contexts_path = Path(contexts)
-    canonical_root = candidates_path.parent
+    canonical_root = records_manifest_path.parent
     output_path = canonical_root / "subnarrative-selections.jsonl"
     manifest_path = canonical_root / "selection-manifest.json"
     resolved_paths = (
-        candidates_path.resolve(), candidate_manifest_path.resolve(),
+        records_path.resolve(), records_manifest_path.resolve(),
         contexts_path.resolve(), output_path.resolve(), manifest_path.resolve(),
     )
     if len(set(resolved_paths)) != len(resolved_paths):
@@ -1365,35 +1860,45 @@ def select_evidence_artifacts(
     embedding_batch_size = 256
     contexts_bytes = contexts_path.read_bytes()
     loaded_contexts = _load_contexts(contexts_bytes, contexts_path)
-    candidate_manifest_bytes = candidate_manifest_path.read_bytes()
-    candidate_manifest = _strict_selection_json_object(
-        candidate_manifest_bytes, candidate_manifest_path, 1
+    records_manifest_bytes = records_manifest_path.read_bytes()
+    records_manifest = _strict_selection_json_object(
+        records_manifest_bytes, records_manifest_path, 1
     )
-    _require_selection_fields(
-        candidate_manifest, _CANDIDATE_MANIFEST_FIELDS, "candidate manifest"
+    expected_topic_id = (
+        loaded_contexts[0].topic_id
+        if loaded_contexts
+        else records_manifest.get("topic_id")
     )
-    _validate_candidate_manifest_identity(candidate_manifest, candidates_path)
-    locked_similarity: _LockedSimilarity | None = None
-    if similarity is None and loaded_contexts:
-        similarity = LocalMiniLMSimilarity(
-            device=device, batch_size=embedding_batch_size
-        )
-    if similarity is None:
-        similarity_identity = minilm_similarity_identity(
-            device=device, batch_size=embedding_batch_size
-        )
-    else:
-        locked_similarity = _LockedSimilarity(similarity)
-        similarity_identity = dict(locked_similarity.identity)
+    if not isinstance(expected_topic_id, str) or not expected_topic_id:
+        raise ValueError("records manifest topic_id is invalid")
     loaded_candidate_projection_count = 0
-    with _CandidateSpill(loaded_contexts, directory=None) as spill:
-        scanned = spill.scan(candidates_path)
-        _reconcile_candidate_manifest(candidate_manifest, scanned)
+    records_receipt = None
+    with TopicRecords.open(
+        records_path,
+        records_manifest_path,
+        expected_topic_id,
+        DocumentStore(document_store_root),
+        validation_session=paths.validation_session,
+    ) as records:
+        candidate_stage_identity = _validate_candidate_stage_identity(records)
+        scorer_identity = candidate_stage_identity["scorer"]
+        locked_similarity: _LockedSimilarity | None = None
+        if similarity is None and loaded_contexts:
+            similarity = LocalMiniLMSimilarity(
+                device=device, batch_size=embedding_batch_size
+            )
+        if similarity is None:
+            similarity_identity = minilm_similarity_identity(
+                device=device, batch_size=embedding_batch_size
+            )
+        else:
+            locked_similarity = _LockedSimilarity(similarity)
+            similarity_identity = dict(locked_similarity.identity)
         selections_list: list[SubnarrativeSelection] = []
         for context in loaded_contexts:
             if locked_similarity is None:
                 raise RuntimeError("similarity provider was not initialized")
-            pool = spill.load_precluster_pool(context, policy.precluster_limit)
+            pool = records.selection_pool(context, policy.precluster_limit)
             loaded_candidate_projection_count += len(pool.candidates)
             selected = select_subnarrative_candidates(
                 context, pool.candidates, locked_similarity, policy
@@ -1404,7 +1909,9 @@ def select_evidence_artifacts(
                 exact_group_count=pool.exact_group_count,
             ))
         selections = tuple(selections_list)
-    candidates_sha256 = scanned.candidates_sha256
+        records_receipt = records.receipt
+    if records_receipt is None:  # pragma: no cover - context manager invariant
+        raise RuntimeError("topic records receipt was not resolved")
     output_bytes = b"".join(
         _selection_canonical_json(_selection_json(selection)) + b"\n"
         for selection in selections
@@ -1419,17 +1926,18 @@ def select_evidence_artifacts(
         "selection_schema_version": SELECTION_SCHEMA_VERSION,
         "context_schema_version": CONTEXT_SCHEMA_VERSION,
         "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
-        "candidate_manifest_schema_version": CANDIDATE_MANIFEST_SCHEMA_VERSION,
-        "candidates_file": candidates_path.name,
-        "candidate_manifest_file": candidate_manifest_path.name,
+        "records_schema_version": TOPIC_RECORDS_SCHEMA_VERSION,
+        "records_stage": CANDIDATE_STAGE,
+        "records_file": "records.sqlite3",
+        "records_manifest_file": "records-manifest.json",
         "contexts_file": contexts_path.name,
         "selection_file": output_path.name,
-        "candidates_sha256": candidates_sha256,
-        "candidate_manifest_sha256": sha256(candidate_manifest_bytes).hexdigest(),
+        "records_database_sha256": records_receipt.database_sha256,
+        "candidate_semantic_sha256": records_receipt.semantic_sha256,
         "contexts_sha256": sha256(contexts_bytes).hexdigest(),
         "selections_sha256": sha256(output_bytes).hexdigest(),
         "output_sha256": sha256(output_bytes).hexdigest(),
-        "candidate_rows_scanned": scanned.candidate_count,
+        "candidate_rows_scanned": records_receipt.row_counts["candidate"],
         "candidate_projection_count": sum(
             selection.candidate_count for selection in selections
         ),
@@ -1447,7 +1955,7 @@ def select_evidence_artifacts(
         ),
         "policy": _policy_json(policy),
         "embedding_identity": similarity_identity,
-        "candidate_scorer_identity": dict(candidate_manifest["scorer"]),
+        "candidate_scorer_identity": dict(scorer_identity),
         "retrieval_network_calls": 0,
         "hosted_llm_calls": 0,
     }
@@ -1643,62 +2151,6 @@ def _exact_fields(value: Mapping[str, object], expected: set[str], label: str) -
         raise ValueError(f"{label} has unexpected or missing fields")
 
 
-def _validate_candidate_manifest_identity(manifest: Mapping[str, Any], candidates: Path) -> None:
-    expected = {
-        "schema_version": CANDIDATE_MANIFEST_SCHEMA_VERSION,
-        "request_schema_version": "extractive_candidate_request_v1",
-        "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
-        "sentence_splitter_version": "exact_rules_v1",
-        "scoring_normalization_version": "trec_rag_whitespace_v1",
-        "candidate_file": candidates.name,
-        "failure_count": 0,
-        "retrieval_network_calls": 0,
-        "hosted_llm_calls": 0,
-    }
-    for key, expected_value in expected.items():
-        if manifest[key] != expected_value:
-            raise ValueError(f"candidate manifest {key} identity mismatch")
-    scorer = manifest["scorer"]
-    if not isinstance(scorer, dict):
-        raise ValueError("candidate manifest scorer identity mismatch")
-    try:
-        _require_selection_fields(scorer, _SCORER_IDENTITY_FIELDS, "candidate manifest scorer identity")
-    except ValueError as exc:
-        raise ValueError(f"candidate manifest scorer identity mismatch: {exc}") from exc
-    for key in _SCORER_IDENTITY_FIELDS - {"sentence_max_length"}:
-        if not isinstance(scorer[key], str) or not scorer[key]:
-            raise ValueError("candidate manifest scorer identity values must be non-empty strings")
-    if scorer["score_representation"] != "raw_logits" or scorer["score_kind"] != "extractive_sentence_v1":
-        raise ValueError("candidate manifest scorer identity mismatch")
-    if (
-        isinstance(scorer["sentence_max_length"], bool)
-        or not isinstance(scorer["sentence_max_length"], int)
-        or scorer["sentence_max_length"] <= 0
-    ):
-        raise ValueError("candidate manifest scorer identity sentence_max_length must be positive")
-    for key in ("candidate_count", "document_count", "unique_document_count", "unique_subnarrative_count"):
-        if isinstance(manifest[key], bool) or not isinstance(manifest[key], int) or manifest[key] < 0:
-            raise ValueError(f"candidate manifest {key} must be a non-negative integer")
-    for key in ("source_sha256", "input_sha256", "candidates_sha256", "output_sha256"):
-        if not isinstance(manifest[key], str) or not _SELECTION_SHA256.fullmatch(manifest[key]):
-            raise ValueError(f"candidate manifest {key} must be a lowercase SHA-256 digest")
-    if manifest["source_sha256"] != manifest["input_sha256"]:
-        raise ValueError("candidate manifest source/input SHA-256 identity mismatch")
-
-
-@dataclass(frozen=True)
-class _ScannedCandidates:
-    candidate_count: int
-    candidates_sha256: str
-
-
-@dataclass(frozen=True)
-class _PreclusterPool:
-    candidates: tuple[SelectionCandidate, ...]
-    candidate_count: int
-    exact_group_count: int
-
-
 class _LockedSimilarity:
     """Take one identity snapshot while delegating cosine work to the provider."""
 
@@ -1708,247 +2160,6 @@ class _LockedSimilarity:
 
     def cosine_matrix(self, texts: Sequence[str]) -> Any:
         return self._delegate.cosine_matrix(texts)
-
-
-class _CandidateSpill:
-    """A deleted local SQLite index for exact, bounded precluster projection."""
-
-    def __init__(self, contexts: Sequence[SubnarrativeContext], *, directory: Path | None) -> None:
-        self._contexts = {(row.topic_id, row.subnarrative_id): row for row in contexts}
-        self._directory = directory
-        self._path: Path | None = None
-        self._database: sqlite3.Connection | None = None
-
-    def __enter__(self) -> _CandidateSpill:
-        if self._directory is not None:
-            self._directory.mkdir(parents=True, exist_ok=True)
-        descriptor, raw_path = tempfile.mkstemp(
-            prefix=".candidate-selection-", suffix=".sqlite3",
-            dir=self._directory,
-        )
-        os.close(descriptor)
-        self._path = Path(raw_path)
-        try:
-            self._database = sqlite3.connect(self._path)
-            self._database.executescript("""
-                PRAGMA journal_mode=OFF;
-                PRAGMA synchronous=OFF;
-                PRAGMA temp_store=FILE;
-                CREATE TABLE seen_candidates (
-                    candidate_nugget_id TEXT PRIMARY KEY
-                ) WITHOUT ROWID;
-                CREATE TABLE document_identities (
-                    docid TEXT NOT NULL,
-                    topic_id TEXT NOT NULL,
-                    document_sha256 TEXT NOT NULL,
-                    PRIMARY KEY (docid, topic_id, document_sha256)
-                ) WITHOUT ROWID;
-                CREATE TABLE subnarrative_identities (
-                    topic_id TEXT NOT NULL,
-                    subnarrative_id TEXT NOT NULL,
-                    subnarrative_sha256 TEXT NOT NULL,
-                    PRIMARY KEY (topic_id, subnarrative_id, subnarrative_sha256)
-                ) WITHOUT ROWID;
-                CREATE TABLE selected_candidates (
-                    topic_id TEXT NOT NULL,
-                    subnarrative_id TEXT NOT NULL,
-                    candidate_kind TEXT NOT NULL,
-                    text TEXT NOT NULL,
-                    candidate_nugget_id TEXT PRIMARY KEY,
-                    docid TEXT NOT NULL,
-                    document_sha256 TEXT NOT NULL,
-                    raw_logit REAL NOT NULL
-                ) WITHOUT ROWID;
-                CREATE INDEX selected_candidate_groups ON selected_candidates (
-                    topic_id, subnarrative_id, candidate_kind, text
-                );
-                CREATE TABLE exact_groups (
-                    topic_id TEXT NOT NULL,
-                    subnarrative_id TEXT NOT NULL,
-                    candidate_kind TEXT NOT NULL,
-                    text TEXT NOT NULL,
-                    representative_candidate_nugget_id TEXT NOT NULL,
-                    representative_raw_logit REAL NOT NULL,
-                    PRIMARY KEY (topic_id, subnarrative_id, candidate_kind, text)
-                ) WITHOUT ROWID;
-                CREATE TABLE chosen_groups (
-                    topic_id TEXT NOT NULL,
-                    subnarrative_id TEXT NOT NULL,
-                    candidate_kind TEXT NOT NULL,
-                    text TEXT NOT NULL,
-                    group_rank INTEGER NOT NULL,
-                    PRIMARY KEY (topic_id, subnarrative_id, candidate_kind, text)
-                ) WITHOUT ROWID;
-            """)
-        except BaseException:
-            self.__exit__(None, None, None)
-            raise
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        if self._database is not None:
-            self._database.close()
-            self._database = None
-        if self._path is not None:
-            for path in (self._path, Path(str(self._path) + "-wal"), Path(str(self._path) + "-shm")):
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-            self._path = None
-
-    @property
-    def database(self) -> sqlite3.Connection:
-        if self._database is None:
-            raise RuntimeError("candidate spill is not open")
-        return self._database
-
-    def scan(self, path: Path) -> _ScannedCandidates:
-        digest = sha256()
-        database = self.database
-        with path.open("rb") as source:
-            for line_number, raw_line in enumerate(source, start=1):
-                digest.update(raw_line)
-                if not raw_line.endswith(b"\n") or not raw_line.strip():
-                    raise ValueError(
-                        f"{path}:{line_number}: candidate JSONL rows must be non-blank and newline-terminated"
-                    )
-                value = _strict_selection_json_object(raw_line, path, line_number)
-                _require_selection_fields(value, _CANDIDATE_FIELDS, f"{path}:{line_number}: candidate")
-                candidate = self._validated_candidate(value, path, line_number)
-                subnarrative_sha256 = value["subnarrative_sha256"]
-                if not isinstance(subnarrative_sha256, str) or not _SELECTION_SHA256.fullmatch(subnarrative_sha256):
-                    raise ValueError(f"{path}:{line_number}: invalid candidate subnarrative hash")
-                try:
-                    database.execute(
-                        "INSERT INTO seen_candidates VALUES (?)",
-                        (candidate.candidate_nugget_id,),
-                    )
-                except sqlite3.IntegrityError as exc:
-                    raise ValueError(
-                        f"{path}:{line_number}: duplicate candidate ID {candidate.candidate_nugget_id!r}"
-                    ) from exc
-                database.execute(
-                    "INSERT OR IGNORE INTO document_identities VALUES (?, ?, ?)",
-                    (candidate.docid, candidate.topic_id, candidate.document_sha256),
-                )
-                database.execute(
-                    "INSERT OR IGNORE INTO subnarrative_identities VALUES (?, ?, ?)",
-                    (candidate.topic_id, candidate.subnarrative_id, subnarrative_sha256),
-                )
-                context = self._contexts.get((candidate.topic_id, candidate.subnarrative_id))
-                if context is not None:
-                    if subnarrative_sha256 != context.subnarrative_sha256:
-                        raise ValueError(f"{path}:{line_number}: candidate subnarrative hash mismatch")
-                    self._insert_selected(candidate)
-                if line_number % 10_000 == 0:
-                    database.commit()
-        database.commit()
-        candidate_count = self._scalar("SELECT COUNT(*) FROM seen_candidates")
-        document_count = self._scalar("SELECT COUNT(DISTINCT docid) FROM document_identities")
-        if self._scalar("SELECT COUNT(*) FROM document_identities") != document_count:
-            raise ValueError("candidate rows contain conflicting document identities")
-        subnarrative_count = self._scalar("SELECT COUNT(*) FROM subnarrative_identities")
-        distinct_subnarratives = self._scalar(
-            "SELECT COUNT(*) FROM (SELECT DISTINCT topic_id, subnarrative_id FROM subnarrative_identities)"
-        )
-        if subnarrative_count != distinct_subnarratives:
-            raise ValueError("candidate rows contain conflicting subnarrative identities")
-        return _ScannedCandidates(candidate_count, digest.hexdigest())
-
-    def _validated_candidate(self, value: Mapping[str, Any], path: Path, line_number: int) -> SelectionCandidate:
-        if value["schema_version"] != CANDIDATE_SCHEMA_VERSION or value["nugget_type"] != "extractive":
-            raise ValueError(f"{path}:{line_number}: candidate schema identity mismatch")
-        if value["sentence_splitter_version"] != "exact_rules_v1":
-            raise ValueError(f"{path}:{line_number}: sentence splitter identity mismatch")
-        try:
-            return SelectionCandidate(
-                topic_id=value["topic_id"],
-                subnarrative_id=value["subnarrative_id"],
-                candidate_nugget_id=value["candidate_nugget_id"],
-                candidate_kind=value["candidate_kind"],
-                text=value["text"],
-                docid=value["docid"],
-                document_sha256=value["document_sha256"],
-                raw_logit=value["sentence_cross_encoder_score"],
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{path}:{line_number}: invalid candidate projection: {exc}") from exc
-
-    def _insert_selected(self, candidate: SelectionCandidate) -> None:
-        values = (
-            candidate.topic_id, candidate.subnarrative_id, candidate.candidate_kind,
-            candidate.text, candidate.candidate_nugget_id, candidate.docid,
-            candidate.document_sha256, candidate.raw_logit,
-        )
-        self.database.execute("INSERT INTO selected_candidates VALUES (?, ?, ?, ?, ?, ?, ?, ?)", values)
-        self.database.execute("""
-            INSERT INTO exact_groups VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(topic_id, subnarrative_id, candidate_kind, text) DO UPDATE SET
-                representative_candidate_nugget_id=excluded.representative_candidate_nugget_id,
-                representative_raw_logit=excluded.representative_raw_logit
-            WHERE excluded.representative_raw_logit > exact_groups.representative_raw_logit
-               OR (
-                   excluded.representative_raw_logit = exact_groups.representative_raw_logit
-                   AND excluded.representative_candidate_nugget_id
-                       < exact_groups.representative_candidate_nugget_id
-               )
-        """, (
-            candidate.topic_id, candidate.subnarrative_id, candidate.candidate_kind,
-            candidate.text, candidate.candidate_nugget_id, candidate.raw_logit,
-        ))
-
-    def load_precluster_pool(self, context: SubnarrativeContext, limit: int) -> _PreclusterPool:
-        scope = (context.topic_id, context.subnarrative_id)
-        candidate_count = self._scalar(
-            "SELECT COUNT(*) FROM selected_candidates WHERE topic_id=? AND subnarrative_id=?",
-            scope,
-        )
-        exact_group_count = self._scalar(
-            "SELECT COUNT(*) FROM exact_groups WHERE topic_id=? AND subnarrative_id=?",
-            scope,
-        )
-        groups = self.database.execute("""
-            SELECT candidate_kind, text
-            FROM exact_groups
-            WHERE topic_id=? AND subnarrative_id=?
-            ORDER BY representative_raw_logit DESC, representative_candidate_nugget_id ASC
-            LIMIT ?
-        """, (*scope, limit)).fetchall()
-        self.database.execute("DELETE FROM chosen_groups")
-        self.database.executemany(
-            "INSERT INTO chosen_groups VALUES (?, ?, ?, ?, ?)",
-            ((*scope, kind, text, rank) for rank, (kind, text) in enumerate(groups, start=1)),
-        )
-        rows = self.database.execute("""
-            SELECT c.topic_id, c.subnarrative_id, c.candidate_nugget_id,
-                   c.candidate_kind, c.text, c.docid, c.document_sha256, c.raw_logit
-            FROM selected_candidates AS c
-            JOIN chosen_groups AS g
-              ON c.topic_id=g.topic_id
-             AND c.subnarrative_id=g.subnarrative_id
-             AND c.candidate_kind=g.candidate_kind
-             AND c.text=g.text
-            ORDER BY g.group_rank ASC, c.raw_logit DESC, c.candidate_nugget_id ASC
-        """).fetchall()
-        candidates = tuple(SelectionCandidate(*row) for row in rows)
-        return _PreclusterPool(candidates, candidate_count, exact_group_count)
-
-    def _scalar(self, query: str, parameters: Sequence[object] = ()) -> int:
-        row = self.database.execute(query, tuple(parameters)).fetchone()
-        if row is None or len(row) != 1 or not isinstance(row[0], int):
-            raise RuntimeError("candidate spill count query failed")
-        return row[0]
-
-
-def _reconcile_candidate_manifest(
-    manifest: Mapping[str, Any],
-    scanned: _ScannedCandidates,
-) -> None:
-    if manifest["candidates_sha256"] != scanned.candidates_sha256 or manifest["output_sha256"] != scanned.candidates_sha256:
-        raise ValueError("candidate manifest candidates_sha256 does not match candidate bytes")
-    if manifest["candidate_count"] != scanned.candidate_count:
-        raise ValueError("candidate manifest candidate_count does not match scanned candidate rows")
 
 
 def _member_json(member: Any) -> dict[str, object]:

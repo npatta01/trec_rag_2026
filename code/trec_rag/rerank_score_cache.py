@@ -9,12 +9,16 @@ import importlib.metadata
 import json
 import math
 import os
+import secrets
+import sqlite3
+import threading
 import time
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
 from trec_rag.pipeline import pipeline_cache_dir
@@ -34,6 +38,27 @@ DEFAULT_BACKEND_VERSION = "5.6.0"
 DEFAULT_SCORE_REPRESENTATION = "raw_logits"
 DEFAULT_INFERENCE_DTYPE = "bfloat16"
 ARTIFACT_SCHEMA_VERSION = 2
+SCORE_CACHE_SCHEMA_VERSION = "score-cache-v2"
+SCORE_CACHE_CONTEXT_VERSION = 2
+_HASH_BYTES = 32
+_CLAIM_TOKEN_BYTES = 16
+_SQLITE_BUSY_TIMEOUT_MS = 60_000
+_MAX_FINITE_SCORE = 1.7976931348623157e+308
+_FALSE_LEGACY_INPUT_POLICIES = frozenset(
+    {"trec_rag_raw_v2", "extractive_sentence_pair_v1"}
+)
+_EFFECTIVE_INPUT_POLICY = "trec_rag_whitespace_v1"
+_LEGACY_IDENTITY_FIELDS = (
+    "backend",
+    "backend_version",
+    "model",
+    "model_revision",
+    "score_representation",
+    "inference_dtype",
+    "input_policy",
+    "max_length",
+    "score_kind",
+)
 
 
 def _topic_sort_key(topic_id: str) -> tuple[int, int | str]:
@@ -65,19 +90,36 @@ class ScoreCacheContext:
     pair_buffer_tokens: int = 0
     chunk_max_characters: int | None = None
     chunk_overlap_characters: int | None = None
+    effective_max_length: int | None = None
+    scoring_contract: str = "cross-encoder-score-v2"
+    transformers_version: str | None = None
+    torch_version: str | None = None
+    device_family: str = "unspecified"
+    fixed_batch_policy: str = "unspecified"
+
+    @property
+    def context_payload(self) -> dict[str, object]:
+        payload = {"context_schema_version": SCORE_CACHE_CONTEXT_VERSION, **asdict(self)}
+        payload["effective_max_length"] = (
+            self.max_length if self.effective_max_length is None else self.effective_max_length
+        )
+        return payload
+
+    @property
+    def context_json(self) -> str:
+        return json.dumps(self.context_payload, sort_keys=True, separators=(",", ":"))
+
+    @property
+    def context_sha256(self) -> str:
+        return _sha256_text(self.context_json)
 
     @property
     def path_parts(self) -> tuple[str, ...]:
         return (
-            "schema_v2",
+            "score-cache-v2",
             _slug(self.backend),
-            f"backend_{_slug(self.backend_version)}",
             _slug(self.model),
-            f"revision_{_slug(self.model_revision)}",
-            f"representation_{_slug(self.score_representation)}",
-            f"dtype_{_slug(self.inference_dtype)}",
-            f"max_length_{self.max_length}",
-            f"{_slug(self.score_kind)}.jsonl",
+            f"{_slug(self.score_kind)}--{self.context_sha256}.sqlite3",
         )
 
     @property
@@ -90,6 +132,11 @@ class ScoreCacheContext:
             "score_representation": self.score_representation,
             "inference_dtype": self.inference_dtype,
             "input_policy": self.input_policy,
+            "scoring_contract": self.scoring_contract,
+            "transformers_version": self.transformers_version,
+            "torch_version": self.torch_version,
+            "device_family": self.device_family,
+            "fixed_batch_policy": self.fixed_batch_policy,
         }
 
     @property
@@ -100,6 +147,16 @@ class ScoreCacheContext:
             "max_length": self.max_length,
             "score_kind": self.score_kind,
             "pair_buffer_tokens": self.pair_buffer_tokens,
+            "scoring_contract": self.scoring_contract,
+            "transformers_version": self.transformers_version,
+            "torch_version": self.torch_version,
+            "device_family": self.device_family,
+            "fixed_batch_policy": self.fixed_batch_policy,
+            "effective_max_length": (
+                self.max_length
+                if self.effective_max_length is None
+                else self.effective_max_length
+            ),
         }
         if self.requested_max_length is not None:
             metadata["requested_max_length"] = self.requested_max_length
@@ -110,96 +167,1284 @@ class ScoreCacheContext:
         return metadata
 
 
+@dataclass(frozen=True)
+class _Pair:
+    raw: Any
+    key: bytes
+    query_sha256: bytes
+    text_sha256: bytes
+
+
+@dataclass(frozen=True)
+class _ScoredPair:
+    pair: _Pair
+    score: float
+
+
+@dataclass(frozen=True)
+class _Claim:
+    pair: _Pair
+    owner: str
+    token: bytes
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+
+
+def _hash_text(value: str) -> bytes:
+    if not isinstance(value, str):
+        raise TypeError("score-cache pair text must be str")
+    return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def _hash_blob(value: str | bytes | bytearray) -> bytes:
+    if isinstance(value, str):
+        if len(value) != 64:
+            raise ValueError("score-cache hashes must be 64 hexadecimal characters")
+        try:
+            result = bytes.fromhex(value)
+        except ValueError as exc:
+            raise ValueError("score-cache hashes must be hexadecimal") from exc
+    else:
+        result = bytes(value)
+    if len(result) != _HASH_BYTES:
+        raise ValueError("score-cache hashes must be 32 bytes")
+    return result
+
+
+def score_cache_key_from_hashes(
+    context: ScoreCacheContext,
+    *,
+    query_sha256: str | bytes | bytearray,
+    text_sha256: str | bytes | bytearray,
+) -> str:
+    """Derive the canonical v2 score-cache key from content hashes."""
+    query_hash = _hash_blob(query_sha256)
+    text_hash = _hash_blob(text_sha256)
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "cache_key_schema_version": 2,
+                "context_sha256": context.context_sha256,
+                "query_sha256": query_hash.hex(),
+                "text_sha256": text_hash.hex(),
+            }
+        )
+    ).hexdigest()
+
+
+def _finite_score(value: Any, *, source: str = "score") -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{source} must be a finite real number, not bool")
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a finite real number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{source} must be finite")
+    if abs(result) > _MAX_FINITE_SCORE:
+        raise ValueError(f"{source} exceeds SQLite REAL range")
+    return result
+
+
 class GlobalScoreCache:
-    """Content-addressed cross-encoder score cache shared across experiments."""
+    """Content-addressed SQLite score cache shared across experiments."""
 
     schema_version = 2
 
     def __init__(self, root_dir: Path, context: ScoreCacheContext) -> None:
         self.context = context
-        self.path = root_dir.joinpath(*context.path_parts)
-        self.scores = self._load()
+        self.root_dir = Path(root_dir)
+        self.path = self.root_dir.joinpath(*context.path_parts)
+        self._local = threading.local()
+        self._owner_prefix = f"{os.getpid()}:{uuid4().hex}"
+        self._integrity_check_lock = threading.Lock()
+        self._integrity_checked = False
+        self.connection
+
+    @property
+    def context_sha256(self) -> str:
+        return self.context.context_sha256
+
+    @property
+    def context_json(self) -> str:
+        return self.context.context_json
+
+    @staticmethod
+    def _schema_sql() -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS cache_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS scores (
+            key_sha256 BLOB PRIMARY KEY CHECK(length(key_sha256) = 32),
+            query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32),
+            text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32),
+            score REAL NOT NULL CHECK(
+                typeof(score) = 'real'
+                AND score = score
+                AND abs(score) <= 1.7976931348623157e+308
+            )
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS claims (
+            key_sha256 BLOB PRIMARY KEY CHECK(length(key_sha256) = 32),
+            query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32),
+            text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32),
+            owner TEXT NOT NULL,
+            token BLOB NOT NULL CHECK(length(token) = 16),
+            claimed_at REAL NOT NULL,
+            lease_expires_at REAL NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS claims_expiry_idx ON claims(lease_expires_at);
+        CREATE TABLE IF NOT EXISTS imports (
+            source_sha256 BLOB PRIMARY KEY CHECK(length(source_sha256) = 32),
+            source_path TEXT NOT NULL,
+            source_row_count INTEGER NOT NULL CHECK(source_row_count >= 0),
+            inserted_count INTEGER NOT NULL CHECK(inserted_count >= 0),
+            logical_digest BLOB NOT NULL CHECK(length(logical_digest) = 32),
+            authorization_sha256 BLOB CHECK(
+                authorization_sha256 IS NULL OR length(authorization_sha256) = 32
+            )
+        ) STRICT;
+        """
+
+    @staticmethod
+    def _normalize_schema_sql(value: str) -> str:
+        normalized = value.lower()
+        for character in "(),=":
+            normalized = normalized.replace(character, f" {character} ")
+        return " ".join(normalized.split())
+
+    def _validate_existing_schema(self, connection: sqlite3.Connection, database: Path) -> None:
+        expected = {
+            ("table", "cache_meta"),
+            ("table", "scores"),
+            ("table", "claims"),
+            ("table", "imports"),
+            ("index", "claims_expiry_idx"),
+        }
+        actual_rows = connection.execute(
+            "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        actual = {(str(row[0]), str(row[1])) for row in actual_rows}
+        if actual != expected:
+            raise ValueError(f"{database}: score-cache-v2 schema objects do not match exactly")
+        expected_sql = {
+            ("table", "cache_meta"): "CREATE TABLE cache_meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL ) STRICT",
+            ("table", "scores"): "CREATE TABLE scores ( key_sha256 BLOB PRIMARY KEY CHECK(length(key_sha256) = 32), query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32), text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32), score REAL NOT NULL CHECK(typeof(score) = 'real' AND score = score AND abs(score) <= 1.7976931348623157e+308) ) STRICT",
+            ("table", "claims"): "CREATE TABLE claims ( key_sha256 BLOB PRIMARY KEY CHECK(length(key_sha256) = 32), query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32), text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32), owner TEXT NOT NULL, token BLOB NOT NULL CHECK(length(token) = 16), claimed_at REAL NOT NULL, lease_expires_at REAL NOT NULL ) STRICT",
+            ("table", "imports"): "CREATE TABLE imports ( source_sha256 BLOB PRIMARY KEY CHECK(length(source_sha256) = 32), source_path TEXT NOT NULL, source_row_count INTEGER NOT NULL CHECK(source_row_count >= 0), inserted_count INTEGER NOT NULL CHECK(inserted_count >= 0), logical_digest BLOB NOT NULL CHECK(length(logical_digest) = 32), authorization_sha256 BLOB CHECK(authorization_sha256 IS NULL OR length(authorization_sha256) = 32) ) STRICT",
+            ("index", "claims_expiry_idx"): "CREATE INDEX claims_expiry_idx ON claims(lease_expires_at)",
+        }
+        for row in actual_rows:
+            identity = (str(row[0]), str(row[1]))
+            if self._normalize_schema_sql(str(row[2])) != self._normalize_schema_sql(
+                expected_sql[identity]
+            ):
+                raise ValueError(f"{database}: score-cache-v2 schema definition mismatch")
+
+    def _new_connection(
+        self,
+        path: Path | None = None,
+        *,
+        validate_integrity: bool = True,
+    ) -> sqlite3.Connection:
+        database = path or self.path
+        database.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(
+            database,
+            timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
+            isolation_level=None,
+            check_same_thread=False,
+        )
+        try:
+            connection.execute("PRAGMA busy_timeout = 60000")
+            connection.execute("PRAGMA foreign_keys = ON")
+            deadline = time.monotonic() + (_SQLITE_BUSY_TIMEOUT_MS / 1000)
+            while True:
+                try:
+                    journal_mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+            if str(journal_mode).lower() != "wal":
+                raise ValueError(f"score cache requires WAL journal mode, found {journal_mode!r}")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                schema_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
+                ).fetchone() is not None
+                if schema_exists:
+                    self._validate_existing_schema(connection, database)
+                else:
+                    self._initialize_schema(connection)
+                self._validate_or_initialize_meta(
+                    connection,
+                    initialize=not schema_exists,
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            if validate_integrity and database == self.path:
+                with self._integrity_check_lock:
+                    if not self._integrity_checked:
+                        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                            raise ValueError(f"{database}: SQLite integrity check failed")
+                        self._integrity_checked = True
+            return connection
+        except BaseException:
+            connection.close()
+            raise
+
+    def _initialize_schema(self, connection: sqlite3.Connection) -> None:
+        statement = ""
+        for line in self._schema_sql().splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                connection.execute(statement)
+                statement = ""
+        if statement.strip():  # pragma: no cover - static schema is always complete
+            raise ValueError("score-cache-v2 schema contains an incomplete statement")
+
+    def _validate_or_initialize_meta(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        initialize: bool,
+    ) -> None:
+        expected = {
+            "schema_version": SCORE_CACHE_SCHEMA_VERSION,
+            "context_sha256": self.context_sha256,
+            "context_json": self.context_json,
+        }
+        rows = dict(connection.execute("SELECT key, value FROM cache_meta"))
+        if not rows and initialize:
+            connection.executemany(
+                "INSERT INTO cache_meta(key, value) VALUES (?, ?)", expected.items()
+            )
+            return
+        if not rows:
+            raise ValueError(f"{self.path}: score-cache-v2 metadata is empty")
+        if rows != expected:
+            raise ValueError(f"{self.path}: score-cache-v2 schema/context metadata mismatch")
+
+    def _get_connection(self) -> sqlite3.Connection:
+        process_id = os.getpid()
+        thread_id = threading.get_ident()
+        state = getattr(self._local, "state", None)
+        if state is not None and (state[0] != process_id or state[1] != thread_id):
+            try:
+                state[2].close()
+            except sqlite3.Error:
+                pass
+            state = None
+        if state is None:
+            state = (process_id, thread_id, self._new_connection())
+            self._local.state = state
+        return state[2]
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self._get_connection()
+
+    @property
+    def connection_identity(self) -> tuple[int, int]:
+        self._get_connection()
+        return (os.getpid(), threading.get_ident())
+
+    def close(self) -> None:
+        state = getattr(self._local, "state", None)
+        if state is not None:
+            state[2].close()
+            self._local.state = None
 
     def _load(self) -> dict[str, float]:
-        scores: dict[str, float] = {}
-        if not self.path.exists():
-            return scores
-        for line_number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{self.path}:{line_number}: invalid JSONL row") from exc
-            if row.get("schema_version") != self.schema_version:
-                continue
-            score = float(row["score"])
-            if not math.isfinite(score):
-                raise ValueError(f"{self.path}:{line_number}: cached score must be finite")
-            cache_key = str(row["cache_key"])
-            if cache_key in scores and scores[cache_key] != score:
-                raise ValueError(
-                    f"{self.path}:{line_number}: conflicting duplicate cache score"
-                )
-            scores[cache_key] = score
-        return scores
+        return {
+            bytes(key).hex(): _finite_score(score, source="stored score")
+            for key, score in self.connection.execute("SELECT key_sha256, score FROM scores")
+        }
+
+    @property
+    def scores(self) -> dict[str, float]:
+        return self._load()
+
+    @scores.setter
+    def scores(self, _value: object) -> None:
+        # Compatibility lock adapters may assign a stale snapshot. SQLite is
+        # still the only mutable state and subsequent reads query it directly.
+        return
+
+    def _key_from_hashes(self, query_sha256: bytes, text_sha256: bytes) -> bytes:
+        return bytes.fromhex(
+            score_cache_key_from_hashes(
+                self.context,
+                query_sha256=query_sha256,
+                text_sha256=text_sha256,
+            )
+        )
 
     def cache_key(self, *, query_text: str, text: str) -> str:
-        payload = {
+        return self._key_from_hashes(_hash_text(query_text), _hash_text(text)).hex()
+
+    def _legacy_key_from_hashes(
+        self,
+        query_sha256: bytes,
+        text_sha256: bytes,
+        *,
+        context: ScoreCacheContext | None = None,
+    ) -> str:
+        legacy_context = self.context if context is None else context
+        return hashlib.sha256(
+            _canonical_json(
+                {
+                    "schema_version": self.schema_version,
+                    "backend": legacy_context.backend,
+                    "model": legacy_context.model,
+                    "max_length": legacy_context.max_length,
+                    "score_kind": legacy_context.score_kind,
+                    "backend_version": legacy_context.backend_version,
+                    "model_revision": legacy_context.model_revision,
+                    "score_representation": legacy_context.score_representation,
+                    "inference_dtype": legacy_context.inference_dtype,
+                    "input_policy": legacy_context.input_policy,
+                    "query_sha256": query_sha256.hex(),
+                    "text_sha256": text_sha256.hex(),
+                }
+            )
+        ).hexdigest()
+
+    def _normalize_pair(self, raw: Any) -> _Pair:
+        supplied_key: bytes | None = None
+        if isinstance(raw, _Pair):
+            return raw
+        if isinstance(raw, dict):
+            query_text = raw.get("query_text")
+            text = raw.get("text")
+            query_sha256 = _hash_text(query_text) if query_text is not None else _hash_blob(raw["query_sha256"])
+            text_sha256 = _hash_text(text) if text is not None else _hash_blob(raw["text_sha256"])
+            if "key" in raw:
+                supplied_key = _hash_blob(raw["key"])
+            elif "cache_key" in raw:
+                supplied_key = _hash_blob(raw["cache_key"])
+        elif isinstance(raw, (tuple, list)) and len(raw) == 2:
+            query_text, text = raw
+            query_sha256, text_sha256 = _hash_text(query_text), _hash_text(text)
+        elif isinstance(raw, (tuple, list)) and len(raw) == 3:
+            query_text, text, _score = raw
+            query_sha256, text_sha256 = _hash_text(query_text), _hash_text(text)
+        elif isinstance(raw, (tuple, list)) and len(raw) == 4:
+            supplied_key = _hash_blob(raw[0])
+            query_sha256, text_sha256 = _hash_blob(raw[1]), _hash_blob(raw[2])
+        else:
+            query_text = getattr(raw, "query_text", None)
+            text = getattr(raw, "text", None)
+            query_sha256 = _hash_text(query_text) if query_text is not None else _hash_blob(raw.query_sha256)
+            text_sha256 = _hash_text(text) if text is not None else _hash_blob(raw.text_sha256)
+            supplied_key_value = getattr(raw, "key", None)
+            supplied_key = _hash_blob(supplied_key_value) if supplied_key_value is not None else None
+        expected_key = self._key_from_hashes(query_sha256, text_sha256)
+        if supplied_key is not None and supplied_key != expected_key:
+            raise ValueError("score-cache key/hash mismatch")
+        return _Pair(raw=raw, key=expected_key, query_sha256=query_sha256, text_sha256=text_sha256)
+
+    def _normalize_pairs(self, pairs: Iterable[Any]) -> tuple[list[_Pair], list[_Pair]]:
+        unique: dict[bytes, _Pair] = {}
+        ordered: list[_Pair] = []
+        for raw in pairs:
+            pair = self._normalize_pair(raw)
+            prior = unique.get(pair.key)
+            if prior is not None and (
+                prior.query_sha256 != pair.query_sha256 or prior.text_sha256 != pair.text_sha256
+            ):
+                raise ValueError("score-cache key/hash mismatch")
+            if prior is None:
+                unique[pair.key] = pair
+            ordered.append(unique[pair.key])
+        return list(unique.values()), ordered
+
+    def _normalize_scored(self, raw: Any) -> _ScoredPair:
+        if isinstance(raw, dict):
+            score = raw.get("score")
+            pair = self._normalize_pair(raw)
+        elif isinstance(raw, (tuple, list)) and len(raw) == 3:
+            pair = self._normalize_pair(raw[:2])
+            score = raw[2]
+        elif isinstance(raw, (tuple, list)) and len(raw) == 4:
+            pair = self._normalize_pair(raw[:3] + (raw[3],))
+            score = raw[3]
+        else:
+            score = getattr(raw, "score")
+            pair = self._normalize_pair(raw)
+        value = _finite_score(score, source="global score cache score")
+        return _ScoredPair(pair=pair, score=value)
+
+    def _lookup_normalized(self, pairs: Sequence[_Pair]) -> dict[bytes, float]:
+        result: dict[bytes, float] = {}
+        keys = list(pairs)
+        for offset in range(0, len(keys), 500):
+            batch = keys[offset : offset + 500]
+            pairs_by_key = {pair.key: pair for pair in batch}
+            placeholders = ", ".join("?" for _ in batch)
+            rows = self.connection.execute(
+                "SELECT key_sha256, query_sha256, text_sha256, score "
+                f"FROM scores WHERE key_sha256 IN ({placeholders})",
+                tuple(pair.key for pair in batch),
+            )
+            for key, query_hash, text_hash, score in rows:
+                key_bytes = bytes(key)
+                pair = pairs_by_key[key_bytes]
+                if bytes(query_hash) != pair.query_sha256 or bytes(text_hash) != pair.text_sha256:
+                    raise ValueError("score-cache key/hash mismatch")
+                result[key_bytes] = _finite_score(score, source="stored score")
+        return result
+
+    def lookup_many(self, pairs: Iterable[Any]) -> list[float | None]:
+        _unique, ordered = self._normalize_pairs(pairs)
+        if not ordered:
+            return []
+        found = self._lookup_normalized(_unique)
+        return [found.get(pair.key) for pair in ordered]
+
+    def get(self, *, query_text: str, text: str) -> float | None:
+        return self.lookup_many([(query_text, text)])[0]
+
+    def _insert_score(
+        self,
+        connection: sqlite3.Connection,
+        row: _ScoredPair,
+        claim: _Claim | None,
+    ) -> int:
+        score = _finite_score(row.score, source="global score cache score")
+        existing = connection.execute(
+            "SELECT query_sha256, text_sha256, score FROM scores WHERE key_sha256 = ?",
+            (row.pair.key,),
+        ).fetchone()
+        if existing is not None:
+            if bytes(existing[0]) != row.pair.query_sha256 or bytes(existing[1]) != row.pair.text_sha256:
+                raise ValueError("score-cache key/hash mismatch")
+            if _finite_score(existing[2], source="stored score") != score:
+                raise ValueError("conflicting score for existing global cache key")
+            return 0
+        if claim is not None:
+            current = connection.execute(
+                "SELECT owner, token, lease_expires_at FROM claims WHERE key_sha256 = ?",
+                (row.pair.key,),
+            ).fetchone()
+            if (
+                current is None
+                or str(current[0]) != claim.owner
+                or bytes(current[1]) != claim.token
+                or float(current[2]) <= time.time()
+            ):
+                raise ValueError("score-cache claim lost before commit")
+        connection.execute(
+            "INSERT INTO scores(key_sha256, query_sha256, text_sha256, score) VALUES (?, ?, ?, ?)",
+            (row.pair.key, row.pair.query_sha256, row.pair.text_sha256, score),
+        )
+        if claim is not None:
+            connection.execute(
+                "DELETE FROM claims WHERE key_sha256 = ? AND owner = ? AND token = ?",
+                (row.pair.key, claim.owner, claim.token),
+            )
+        return 1
+
+    def _seed_batch(self, rows: Sequence[_ScoredPair]) -> int:
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        inserted = 0
+        try:
+            for row in rows:
+                inserted += self._insert_score(connection, row, claim=None)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        return inserted
+
+    @staticmethod
+    def _receipt_result(
+        row_count: int,
+        inserted_count: int,
+        logical_digest: bytes,
+        authorization_sha256: bytes | None,
+        *,
+        legacy_context: ScoreCacheContext,
+        target_context: ScoreCacheContext,
+    ) -> dict[str, object]:
+        return {
+            "source_row_count": row_count,
+            "inserted_count": inserted_count,
+            "logical_digest": logical_digest.hex(),
+            "authorization_sha256": (
+                authorization_sha256.hex() if authorization_sha256 is not None else None
+            ),
+            "legacy_context_sha256": legacy_context.context_sha256,
+            "target_context_sha256": target_context.context_sha256,
+            "declared_input_policy": legacy_context.input_policy,
+            "effective_input_policy": target_context.input_policy,
+        }
+
+    def _authorization_digest(self, legacy_context: ScoreCacheContext) -> bytes:
+        return hashlib.sha256(
+            _canonical_json(
+                {
+                    "authorization_schema_version": 1,
+                    "legacy_context_sha256": legacy_context.context_sha256,
+                    "target_context_sha256": self.context_sha256,
+                }
+            )
+        ).digest()
+
+    def _validate_legacy_context_rebinding(
+        self,
+        legacy_context: ScoreCacheContext,
+    ) -> None:
+        target_context = self.context
+        for field, legacy_value in asdict(legacy_context).items():
+            if field == "input_policy":
+                continue
+            if legacy_value != getattr(target_context, field):
+                raise ValueError(
+                    "legacy score JSONL context rebinding mismatch for "
+                    f"{field}: legacy={legacy_value!r} target={getattr(target_context, field)!r}"
+                )
+
+        legacy_policy = legacy_context.input_policy
+        target_policy = target_context.input_policy
+        if legacy_policy in _FALSE_LEGACY_INPUT_POLICIES:
+            if target_policy != _EFFECTIVE_INPUT_POLICY:
+                raise ValueError(
+                    "legacy score JSONL input policy rebinding is allowed only to "
+                    f"{_EFFECTIVE_INPUT_POLICY}"
+                )
+        elif legacy_policy != target_policy:
+            raise ValueError("legacy score JSONL input policy rebinding mismatch")
+
+    def seed_many(
+        self,
+        source: Iterable[Any],
+        *,
+        source_path: str | Path | None = None,
+        source_sha256: str | bytes | None = None,
+        batch_size: int = 512,
+    ) -> int:
+        if source_path is None or source_sha256 is None:
+            if isinstance(source, dict):
+                source_path = source.get("source_path", source.get("path"))
+                source_sha256 = source.get("source_sha256", source.get("sha256"))
+                source = source.get("rows", source.get("source"))
+            else:
+                source_path = getattr(source, "source_path", getattr(source, "path", None))
+                source_sha256 = getattr(
+                    source, "source_sha256", getattr(source, "sha256", None)
+                )
+                source = getattr(source, "rows", source)
+        if not str(source_path):
+            raise ValueError("authenticated score source requires a path or identifier")
+        if source_sha256 is None:
+            raise ValueError("authenticated score source requires a SHA-256")
+        if batch_size <= 0:
+            raise ValueError("seed batch_size must be positive")
+        source_digest = _hash_blob(source_sha256)
+        row_count = 0
+        logical_hasher = hashlib.sha256()
+        rows: list[_ScoredPair] = []
+        for raw in source:
+            row = self._normalize_scored(raw)
+            row_count += 1
+            logical_hasher.update(
+                _canonical_json(
+                    [
+                        row.pair.key.hex(),
+                        row.pair.query_sha256.hex(),
+                        row.pair.text_sha256.hex(),
+                        row.score.hex(),
+                    ]
+                )
+                + b"\n"
+            )
+            rows.append(row)
+        logical_digest = logical_hasher.digest()
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing = connection.execute(
+                "SELECT source_row_count, inserted_count, logical_digest, authorization_sha256 "
+                "FROM imports WHERE source_sha256 = ?",
+                (source_digest,),
+            ).fetchone()
+            if existing is not None:
+                if int(existing[0]) != row_count or bytes(existing[2]) != logical_digest:
+                    raise ValueError("score source conflict")
+                connection.commit()
+                return int(existing[1])
+            inserted = 0
+            for offset in range(0, len(rows), batch_size):
+                for row in rows[offset : offset + batch_size]:
+                    inserted += self._insert_score(connection, row, claim=None)
+            connection.execute(
+                "INSERT INTO imports(source_sha256, source_path, source_row_count, inserted_count, logical_digest, authorization_sha256) "
+                "VALUES (?, ?, ?, ?, ?, NULL)",
+                (source_digest, str(source_path), row_count, inserted, logical_digest),
+            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        return inserted
+
+    @staticmethod
+    def _score_rows_logical_digest(rows: Sequence[_ScoredPair]) -> bytes:
+        """Hash normalized score rows without depending on their source format."""
+        logical_hasher = hashlib.sha256()
+        for row in sorted(rows, key=lambda item: item.pair.key):
+            logical_hasher.update(
+                _canonical_json(
+                    [
+                        row.pair.key.hex(),
+                        row.pair.query_sha256.hex(),
+                        row.pair.text_sha256.hex(),
+                        row.score.hex(),
+                    ]
+                )
+                + b"\n"
+            )
+        return logical_hasher.digest()
+
+    def import_scores(
+        self,
+        source: Iterable[Any],
+        *,
+        source_path: str | Path,
+        source_sha256: str | bytes,
+        authorization_sha256: str | bytes | None = None,
+        expected_row_count: int | None = None,
+        expected_logical_digest: str | bytes | None = None,
+    ) -> dict[str, object]:
+        """Import normalized score rows in one durable transaction.
+
+        The primitive deliberately knows nothing about JSONL or any producer
+        artifact.  The caller supplies normalized rows and an authenticated
+        source identity.  All source iteration and duplicate/conflict checks
+        happen before the destination transaction; publication of scores and
+        their internal import receipt is one SQLite transaction.
+        """
+        if not str(source_path):
+            raise ValueError("score import requires a source path or identifier")
+        source_digest = _hash_blob(source_sha256)
+        authorization_digest = (
+            _hash_blob(authorization_sha256) if authorization_sha256 is not None else None
+        )
+        normalized: list[_ScoredPair] = []
+        by_key: dict[bytes, _ScoredPair] = {}
+        raw_row_count = 0
+        for raw in source:
+            raw_row_count += 1
+            row = self._normalize_scored(raw)
+            prior = by_key.get(row.pair.key)
+            if prior is not None:
+                if (
+                    prior.pair.query_sha256 != row.pair.query_sha256
+                    or prior.pair.text_sha256 != row.pair.text_sha256
+                    or prior.score != row.score
+                ):
+                    raise ValueError("conflicting score import row")
+                continue
+            by_key[row.pair.key] = row
+            normalized.append(row)
+
+        row_count = raw_row_count
+        duplicate_count = row_count - len(normalized)
+        if expected_row_count is not None and expected_row_count != row_count:
+            raise ValueError(
+                f"score import row count mismatch: expected {expected_row_count}, found {row_count}"
+            )
+        logical_digest = self._score_rows_logical_digest(normalized)
+        if expected_logical_digest is not None:
+            expected_digest = _hash_blob(expected_logical_digest)
+            if expected_digest != logical_digest:
+                raise ValueError("score import logical digest mismatch")
+
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        inserted_keys: list[bytes] = []
+        try:
+            existing = connection.execute(
+                "SELECT source_row_count, inserted_count, logical_digest, authorization_sha256 "
+                "FROM imports WHERE source_sha256 = ?",
+                (source_digest,),
+            ).fetchone()
+            if existing is not None:
+                existing_authorization = (
+                    bytes(existing[3]) if existing[3] is not None else None
+                )
+                if (
+                    int(existing[0]) != row_count
+                    or bytes(existing[2]) != logical_digest
+                    or existing_authorization != authorization_digest
+                ):
+                    raise ValueError("score import source conflict")
+                connection.commit()
+                return {
+                    "source_path": str(source_path),
+                    "source_sha256": source_digest.hex(),
+                    "source_row_count": row_count,
+                    "unique_row_count": len(normalized),
+                    "duplicate_count": duplicate_count,
+                    "inserted_count": 0,
+                    "already_identical_count": len(normalized),
+                    "logical_digest": logical_digest.hex(),
+                    "authorization_sha256": (
+                        authorization_digest.hex()
+                        if authorization_digest is not None
+                        else None
+                    ),
+                    "receipt_reused": True,
+                    "_inserted_keys": (),
+                    "_new_import": False,
+                }
+
+            for row in normalized:
+                if self._insert_score(connection, row, claim=None):
+                    inserted_keys.append(row.pair.key)
+            connection.execute(
+                "INSERT INTO imports(source_sha256, source_path, source_row_count, inserted_count, logical_digest, authorization_sha256) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    source_digest,
+                    str(source_path),
+                    row_count,
+                    len(inserted_keys),
+                    logical_digest,
+                    authorization_digest,
+                ),
+            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        return {
+            "source_path": str(source_path),
+            "source_sha256": source_digest.hex(),
+            "source_row_count": row_count,
+            "unique_row_count": len(normalized),
+            "duplicate_count": duplicate_count,
+            "inserted_count": len(inserted_keys),
+            "already_identical_count": len(normalized) - len(inserted_keys),
+            "logical_digest": logical_digest.hex(),
+            "authorization_sha256": (
+                authorization_digest.hex() if authorization_digest is not None else None
+            ),
+            "receipt_reused": False,
+            "_inserted_keys": tuple(inserted_keys),
+            "_new_import": True,
+        }
+
+    def _rollback_score_import(self, receipt: dict[str, object]) -> None:
+        """Undo only rows published by one import after receipt publication fails."""
+        if not receipt.get("_new_import"):
+            return
+        source_digest = _hash_blob(str(receipt["source_sha256"]))
+        keys = tuple(receipt.get("_inserted_keys", ()))
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for key in keys:
+                connection.execute("DELETE FROM scores WHERE key_sha256 = ?", (key,))
+            connection.execute("DELETE FROM imports WHERE source_sha256 = ?", (source_digest,))
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+
+    def add_many(self, rows: Iterable[tuple[str, str, float]]) -> int:
+        materialized = list(rows)
+        if not materialized:
+            return 0
+        return self._seed_batch([self._normalize_scored(row) for row in materialized])
+
+    def _claim_keys(
+        self,
+        pairs: Sequence[_Pair],
+        owner: str,
+        token: bytes,
+        lease_seconds: float,
+    ) -> list[_Claim]:
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        now = time.time()
+        claimed: list[_Claim] = []
+        try:
+            for pair in pairs:
+                score = connection.execute(
+                    "SELECT query_sha256, text_sha256 FROM scores WHERE key_sha256 = ?",
+                    (pair.key,),
+                ).fetchone()
+                if score is not None:
+                    if bytes(score[0]) != pair.query_sha256 or bytes(score[1]) != pair.text_sha256:
+                        raise ValueError("score-cache key/hash mismatch")
+                    continue
+                existing = connection.execute(
+                    "SELECT query_sha256, text_sha256, lease_expires_at FROM claims WHERE key_sha256 = ?",
+                    (pair.key,),
+                ).fetchone()
+                if existing is not None:
+                    if bytes(existing[0]) != pair.query_sha256 or bytes(existing[1]) != pair.text_sha256:
+                        raise ValueError("score-cache key/hash mismatch")
+                    if float(existing[2]) > now:
+                        continue
+                    connection.execute(
+                        "UPDATE claims SET query_sha256 = ?, text_sha256 = ?, owner = ?, token = ?, claimed_at = ?, lease_expires_at = ? WHERE key_sha256 = ?",
+                        (pair.query_sha256, pair.text_sha256, owner, token, now, now + lease_seconds, pair.key),
+                    )
+                else:
+                    connection.execute(
+                        "INSERT INTO claims(key_sha256, query_sha256, text_sha256, owner, token, claimed_at, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (pair.key, pair.query_sha256, pair.text_sha256, owner, token, now, now + lease_seconds),
+                    )
+                claimed.append(_Claim(pair, owner, token))
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        return claimed
+
+    def _heartbeat(self, owner: str, token: bytes, lease_seconds: float) -> None:
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                "UPDATE claims SET lease_expires_at = ? WHERE owner = ? AND token = ?",
+                (time.time() + lease_seconds, owner, token),
+            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+
+    def _release(self, owner: str, token: bytes) -> None:
+        connection = self.connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("DELETE FROM claims WHERE owner = ? AND token = ?", (owner, token))
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+
+    def score_many(
+        self,
+        pairs: Iterable[Any],
+        compute_batch: Callable[[Sequence[Any]], Sequence[float]],
+        batch_size: int,
+        lease_seconds: float = 120,
+        *,
+        _stats: dict[str, int] | None = None,
+    ) -> list[float]:
+        if batch_size <= 0:
+            raise ValueError("score batch_size must be positive")
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        unique, ordered = self._normalize_pairs(pairs)
+        if not ordered:
+            return []
+        scores = self._lookup_normalized(unique)
+        if _stats is not None:
+            _stats["cache_hits"] = len(scores)
+        pending = {pair.key: pair for pair in unique if pair.key not in scores}
+        owner = f"{self._owner_prefix}:{uuid4().hex}"
+        token = secrets.token_bytes(_CLAIM_TOKEN_BYTES)
+        stop = threading.Event()
+        heartbeat_thread: threading.Thread | None = None
+        wait_seconds = 0.05
+
+        def heartbeat_loop() -> None:
+            interval = max(0.001, min(1.0, lease_seconds / 3.0))
+            while not stop.wait(interval):
+                try:
+                    self._heartbeat(owner, token, lease_seconds)
+                except sqlite3.Error:
+                    continue
+
+        try:
+            while pending:
+                pending_pairs = list(pending.values())[:batch_size]
+                claims = self._claim_keys(
+                    pending_pairs,
+                    owner,
+                    token,
+                    lease_seconds,
+                )
+                if claims:
+                    if heartbeat_thread is None:
+                        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+                        heartbeat_thread.start()
+                    self._heartbeat(owner, token, lease_seconds)
+                    batch_claims = claims
+                    predicted = list(
+                        compute_batch([claim.pair.raw for claim in batch_claims])
+                    )
+                    if len(predicted) != len(batch_claims):
+                        raise ValueError("compute_batch returned the wrong number of scores")
+                    connection = self.connection
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        for claim, score in zip(batch_claims, predicted, strict=True):
+                            value = _finite_score(score, source="global score cache score")
+                            self._insert_score(
+                                connection,
+                                _ScoredPair(claim.pair, value),
+                                claim=claim,
+                            )
+                            scores[claim.pair.key] = value
+                            pending.pop(claim.pair.key, None)
+                        connection.commit()
+                    except BaseException:
+                        connection.rollback()
+                        raise
+                refreshed = self._lookup_normalized(list(pending.values()))
+                scores.update(refreshed)
+                for key in refreshed:
+                    pending.pop(key, None)
+                if pending and not claims:
+                    time.sleep(wait_seconds)
+                    wait_seconds = min(wait_seconds * 2.0, 1.0)
+                else:
+                    wait_seconds = 0.05
+            return [scores[pair.key] for pair in ordered]
+        finally:
+            stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=max(1.0, lease_seconds))
+            try:
+                self._release(owner, token)
+            except sqlite3.Error:
+                pass
+
+    def logical_binding(self, pairs: Iterable[Any] | None = None) -> str:
+        if pairs is None:
+            rows = self.connection.execute(
+                "SELECT key_sha256, query_sha256, text_sha256, score FROM scores"
+            )
+            digests = [
+                hashlib.sha256(
+                    bytes(key)
+                    + bytes(query_hash)
+                    + bytes(text_hash)
+                    + _finite_score(score, source="stored score").hex().encode()
+                ).digest()
+                for key, query_hash, text_hash, score in rows
+            ]
+        else:
+            unique, _ordered = self._normalize_pairs(pairs)
+            found = self._lookup_normalized(unique)
+            digests = []
+            for pair in unique:
+                if pair.key not in found:
+                    raise KeyError(f"missing score for {pair.key.hex()}")
+                digests.append(
+                    hashlib.sha256(
+                        pair.key
+                        + pair.query_sha256
+                        + pair.text_sha256
+                        + float(found[pair.key]).hex().encode()
+                    ).digest()
+                )
+        return hashlib.sha256(
+            bytes.fromhex(self.context_sha256) + b"".join(sorted(digests))
+        ).hexdigest()
+
+    def _legacy_import_row(
+        self,
+        row: dict[str, Any],
+        *,
+        legacy_context: ScoreCacheContext | None,
+    ) -> _ScoredPair:
+        if row.get("schema_version") != self.schema_version:
+            raise ValueError("legacy score JSONL schema mismatch")
+        if legacy_context is None:
+            raise ValueError(
+                "legacy score JSONL import requires explicit legacy context authorization"
+            )
+        for field, expected in legacy_context.artifact_metadata.items():
+            if field in row and row[field] != expected:
+                raise ValueError(f"legacy score JSONL context mismatch for {field}")
+        if "context_sha256" in row and row["context_sha256"] != legacy_context.context_sha256:
+            raise ValueError("legacy score JSONL context mismatch for context_sha256")
+        for field in _LEGACY_IDENTITY_FIELDS:
+            expected = getattr(legacy_context, field)
+            if field not in row or row[field] != expected:
+                raise ValueError(f"legacy score JSONL context mismatch for {field}")
+        query_hash = _hash_blob(row["query_sha256"])
+        text_hash = _hash_blob(row["text_sha256"])
+        supplied_key = str(row.get("cache_key", ""))
+        if supplied_key not in {
+            self._legacy_key_from_hashes(query_hash, text_hash, context=legacy_context),
+            self._key_from_hashes(query_hash, text_hash).hex(),
+        }:
+            raise ValueError("legacy score JSONL key/hash mismatch")
+        raw = {
+            "query_sha256": query_hash,
+            "text_sha256": text_hash,
+            "key": self._key_from_hashes(query_hash, text_hash),
+        }
+        return self._normalize_scored({**raw, "score": row.get("score")})
+
+    def _logical_digest_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        table: str = "scores",
+    ) -> bytes:
+        if table == "scores":
+            query = (
+                "SELECT key_sha256, query_sha256, text_sha256, score "
+                "FROM scores ORDER BY key_sha256"
+            )
+        elif table == "temp.legacy_import_staging":
+            query = (
+                "SELECT key_sha256, query_sha256, text_sha256, MIN(score) "
+                "FROM temp.legacy_import_staging "
+                "GROUP BY key_sha256, query_sha256, text_sha256 ORDER BY key_sha256"
+            )
+        else:  # pragma: no cover - only internal table names are supported
+            raise ValueError(f"unsupported logical digest table: {table}")
+        logical_hasher = hashlib.sha256()
+        logical_hasher.update(bytes.fromhex(self.context_sha256))
+        for key, query_hash, text_hash, score in connection.execute(query):
+            logical_hasher.update(
+                hashlib.sha256(
+                    bytes(key)
+                    + bytes(query_hash)
+                    + bytes(text_hash)
+                    + _finite_score(score, source="stored score").hex().encode()
+                ).digest()
+            )
+        return logical_hasher.digest()
+
+    @staticmethod
+    def _validate_legacy_staging_duplicates(connection: sqlite3.Connection) -> None:
+        conflict = connection.execute(
+            "SELECT 1 FROM temp.legacy_import_staging "
+            "GROUP BY key_sha256 "
+            "HAVING COUNT(DISTINCT query_sha256 || text_sha256) > 1 "
+            "OR COUNT(DISTINCT score) > 1 LIMIT 1"
+        ).fetchone()
+        if conflict is not None:
+            raise ValueError("legacy import contains conflicting duplicate scores")
+
+    @staticmethod
+    def _validate_legacy_target_conflicts(connection: sqlite3.Connection) -> None:
+        conflict = connection.execute(
+            "SELECT 1 "
+            "FROM ("
+            "  SELECT key_sha256, query_sha256, text_sha256, MIN(score) AS score "
+            "  FROM temp.legacy_import_staging "
+            "  GROUP BY key_sha256, query_sha256, text_sha256"
+            ") AS staged "
+            "JOIN scores AS existing ON existing.key_sha256 = staged.key_sha256 "
+            "WHERE existing.query_sha256 != staged.query_sha256 "
+            "OR existing.text_sha256 != staged.text_sha256 "
+            "OR existing.score != staged.score LIMIT 1"
+        ).fetchone()
+        if conflict is not None:
+            raise ValueError("legacy import conflicts with an existing score")
+
+    def import_legacy_jsonl(
+        self,
+        path: Path,
+        *,
+        legacy_context: ScoreCacheContext | None = None,
+    ) -> dict[str, object]:
+        """Import one old JSONL file through an authorized, atomic promotion."""
+        source_path = Path(path)
+        if not source_path.exists():
+            raise FileNotFoundError(source_path)
+        if legacy_context is None:
+            raise ValueError(
+                "legacy score JSONL import requires explicit legacy context authorization"
+            )
+        self._validate_legacy_context_rebinding(legacy_context)
+        authorization_sha256 = self._authorization_digest(legacy_context)
+        connection = self.connection
+        connection.execute("PRAGMA temp_store = FILE")
+        connection.execute("DROP TABLE IF EXISTS temp.legacy_import_staging")
+        connection.execute(
+            "CREATE TEMP TABLE legacy_import_staging ("
+            "key_sha256 BLOB NOT NULL CHECK(length(key_sha256) = 32), "
+            "query_sha256 BLOB NOT NULL CHECK(length(query_sha256) = 32), "
+            "text_sha256 BLOB NOT NULL CHECK(length(text_sha256) = 32), "
+            "score REAL NOT NULL CHECK("
+            "typeof(score) = 'real' AND score = score "
+            "AND abs(score) <= 1.7976931348623157e+308)"
+            ") STRICT"
+        )
+        source_hasher = hashlib.sha256()
+        row_count = 0
+        try:
+            connection.execute("BEGIN")
+            try:
+                batch: list[tuple[bytes, bytes, bytes, float]] = []
+                with source_path.open("rb") as source:
+                    for line_number, raw_line in enumerate(source, start=1):
+                        source_hasher.update(raw_line)
+                        if not raw_line.strip():
+                            continue
+                        try:
+                            row = json.loads(raw_line.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                            raise ValueError(
+                                f"{source_path}:{line_number}: invalid legacy JSONL row"
+                            ) from exc
+                        if not isinstance(row, dict):
+                            raise ValueError(
+                                f"{source_path}:{line_number}: legacy row must be an object"
+                            )
+                        row_count += 1
+                        item = self._legacy_import_row(row, legacy_context=legacy_context)
+                        batch.append(
+                            (
+                                item.pair.key,
+                                item.pair.query_sha256,
+                                item.pair.text_sha256,
+                                item.score,
+                            )
+                        )
+                        if len(batch) >= 512:
+                            connection.executemany(
+                                "INSERT INTO temp.legacy_import_staging "
+                                "(key_sha256, query_sha256, text_sha256, score) "
+                                "VALUES (?, ?, ?, ?)",
+                                batch,
+                            )
+                            batch.clear()
+                if batch:
+                    connection.executemany(
+                        "INSERT INTO temp.legacy_import_staging "
+                        "(key_sha256, query_sha256, text_sha256, score) VALUES (?, ?, ?, ?)",
+                        batch,
+                    )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+            self._validate_legacy_staging_duplicates(connection)
+            source_digest = source_hasher.digest()
+            logical_digest = self._logical_digest_from_connection(
+                connection,
+                table="temp.legacy_import_staging",
+            )
+
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    "SELECT source_row_count, inserted_count, logical_digest, authorization_sha256 "
+                    "FROM imports WHERE source_sha256 = ?",
+                    (source_digest,),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        int(existing[0]) != row_count
+                        or bytes(existing[2]) != logical_digest
+                        or existing[3] is None
+                        or bytes(existing[3]) != authorization_sha256
+                    ):
+                        raise ValueError("legacy import source conflict")
+                    connection.commit()
+                    return self._receipt_result(
+                        int(existing[0]),
+                        int(existing[1]),
+                        bytes(existing[2]),
+                        bytes(existing[3]),
+                        legacy_context=legacy_context,
+                        target_context=self.context,
+                    )
+
+                self._validate_legacy_target_conflicts(connection)
+                staged_scores_sql = (
+                    "SELECT key_sha256, query_sha256, text_sha256, MIN(score) AS score "
+                    "FROM temp.legacy_import_staging "
+                    "GROUP BY key_sha256, query_sha256, text_sha256"
+                )
+                inserted = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM ("
+                        + staged_scores_sql
+                        + ") AS staged "
+                        "LEFT JOIN scores AS existing "
+                        "ON existing.key_sha256 = staged.key_sha256 "
+                        "WHERE existing.key_sha256 IS NULL"
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    "INSERT INTO scores(key_sha256, query_sha256, text_sha256, score) "
+                    "SELECT staged.key_sha256, staged.query_sha256, "
+                    "staged.text_sha256, staged.score FROM ("
+                    + staged_scores_sql
+                    + ") AS staged "
+                    "LEFT JOIN scores AS existing "
+                    "ON existing.key_sha256 = staged.key_sha256 "
+                    "WHERE existing.key_sha256 IS NULL ORDER BY staged.key_sha256"
+                )
+                connection.execute(
+                    "INSERT INTO imports(source_sha256, source_path, source_row_count, inserted_count, logical_digest, authorization_sha256) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        source_digest,
+                        str(source_path),
+                        row_count,
+                        inserted,
+                        logical_digest,
+                        authorization_sha256,
+                    ),
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            return self._receipt_result(
+                row_count,
+                inserted,
+                logical_digest,
+                authorization_sha256,
+                legacy_context=legacy_context,
+                target_context=self.context,
+            )
+        finally:
+            try:
+                connection.execute("DROP TABLE IF EXISTS temp.legacy_import_staging")
+            except sqlite3.Error:
+                pass
+
+    import_jsonl = import_legacy_jsonl
+
+    def _cache_row(self, query_text: str, text: str, score: float) -> dict[str, Any]:
+        return {
             "schema_version": self.schema_version,
             "backend": self.context.backend,
             "model": self.context.model,
             "max_length": self.context.max_length,
             "score_kind": self.context.score_kind,
             **self.context.cache_identity_metadata,
+            "context_sha256": self.context_sha256,
+            "cache_key": self.cache_key(query_text=query_text, text=text),
             "query_sha256": _sha256_text(query_text),
             "text_sha256": _sha256_text(text),
+            "score": _finite_score(score, source="artifact score"),
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-    def get(self, *, query_text: str, text: str) -> float | None:
-        return self.scores.get(self.cache_key(query_text=query_text, text=text))
-
-    def add_many(self, rows: Iterable[tuple[str, str, float]]) -> int:
-        materialized: list[dict[str, Any]] = []
-        staged_scores: dict[str, float] = {}
-        for query_text, text, score in rows:
-            if not math.isfinite(score):
-                raise ValueError("global score cache only accepts finite scores")
-            cache_key = self.cache_key(query_text=query_text, text=text)
-            if cache_key in self.scores:
-                if self.scores[cache_key] != float(score):
-                    raise ValueError("conflicting score for existing global cache key")
-                continue
-            if cache_key in staged_scores:
-                if staged_scores[cache_key] != float(score):
-                    raise ValueError("conflicting score for new global cache key")
-                continue
-            query_hash = _sha256_text(query_text)
-            text_hash = _sha256_text(text)
-            staged_scores[cache_key] = float(score)
-            materialized.append(
-                {
-                    "schema_version": self.schema_version,
-                    "backend": self.context.backend,
-                    "model": self.context.model,
-                    "max_length": self.context.max_length,
-                    "score_kind": self.context.score_kind,
-                    **self.context.cache_identity_metadata,
-                    "cache_key": cache_key,
-                    "query_sha256": query_hash,
-                    "text_sha256": text_hash,
-                    "score": float(score),
-                }
-            )
-        written = _append_jsonl(self.path, materialized)
-        self.scores.update(staged_scores)
-        return written
 
 
 def global_score_cache_dir(root_dir: Path) -> Path:
-    return repo_cache_root(root_dir) / "reranker" / "score_cache"
+    return repo_cache_root(root_dir) / "reranker"
 
 
 def shared_output_path(root_dir: Path, path: Path) -> Path:
@@ -244,9 +1489,7 @@ def _read_document_scores(
             raise ValueError(f"{path}:{line_number}: invalid JSONL row") from exc
         if context:
             _validate_artifact_row(row, context, path=path, line_number=line_number)
-        score = float(row["score"])
-        if not math.isfinite(score):
-            raise ValueError(f"{path}:{line_number}: document score must be finite")
+        score = _finite_score(row["score"], source=f"{path}:{line_number}: document score")
         row["score"] = score
         scores[(str(row["topic_id"]), str(row["docid"]))].append(row)
     return dict(scores)
@@ -269,9 +1512,7 @@ def _read_window_scores(
             raise ValueError(f"{path}:{line_number}: invalid JSONL row") from exc
         if context:
             _validate_artifact_row(row, context, path=path, line_number=line_number)
-        score = float(row["score"])
-        if not math.isfinite(score):
-            raise ValueError(f"{path}:{line_number}: window score must be finite")
+        score = _finite_score(row["score"], source=f"{path}:{line_number}: window score")
         key = (str(row["topic_id"]), str(row["docid"]), int(row["chunk_index"]))
         row["score"] = score
         scores[key].append(row)
@@ -340,7 +1581,7 @@ def _matching_window_rows(
 def _consistent_score(rows: Sequence[dict[str, Any]], *, label: str) -> float | None:
     if not rows:
         return None
-    scores = {float(row["score"]) for row in rows}
+    scores = {_finite_score(row["score"], source=f"score for {label}") for row in rows}
     if len(scores) != 1:
         raise ValueError(f"conflicting duplicate scores for {label}")
     return scores.pop()
@@ -354,6 +1595,7 @@ def _seed_document_score_cache(
     score_cache: GlobalScoreCache,
 ) -> int:
     rows: list[tuple[str, str, float]] = []
+    candidates_to_seed: list[tuple[str, str, float]] = []
     for candidate in candidates:
         matches = _matching_document_rows(
             candidate,
@@ -361,11 +1603,16 @@ def _seed_document_score_cache(
             score_cache,
         )
         score = _consistent_score(matches, label=f"topic={topic.id} docid={candidate.docid}")
-        if score is not None and score_cache.get(
-            query_text=candidate.query_text,
-            text=candidate.text,
-        ) is None:
-            rows.append((candidate.query_text, candidate.text, score))
+        if score is not None:
+            candidates_to_seed.append((candidate.query_text, candidate.text, score))
+    found = score_cache.lookup_many(
+        [(query_text, text) for query_text, text, _score in candidates_to_seed]
+    )
+    rows.extend(
+        row
+        for row, cached in zip(candidates_to_seed, found, strict=True)
+        if cached is None
+    )
     return score_cache.add_many(rows)
 
 
@@ -377,7 +1624,7 @@ def _seed_window_score_cache(
     score_cache: GlobalScoreCache,
     chunker: SemanticTextChunker,
 ) -> int:
-    rows: list[tuple[str, str, float]] = []
+    candidates_to_seed: list[tuple[str, str, float]] = []
     for candidate in candidates:
         chunks = chunker.split_text(candidate.text, document_id=candidate.docid)
         chunk_count = len(chunks)
@@ -396,8 +1643,15 @@ def _seed_window_score_cache(
             )
             if score is None:
                 continue
-            if score_cache.get(query_text=candidate.query_text, text=chunk.text) is None:
-                rows.append((candidate.query_text, chunk.text, score))
+            candidates_to_seed.append((candidate.query_text, chunk.text, score))
+    found = score_cache.lookup_many(
+        [(query_text, text) for query_text, text, _score in candidates_to_seed]
+    )
+    rows = [
+        row
+        for row, cached in zip(candidates_to_seed, found, strict=True)
+        if cached is None
+    ]
     return score_cache.add_many(rows)
 
 
@@ -488,8 +1742,8 @@ def _scores_to_list(scores: Any) -> list[float]:
     if hasattr(scores, "tolist"):
         scores = scores.tolist()
     if isinstance(scores, float | int):
-        return [float(scores)]
-    return [float(score) for score in scores]
+        return [_finite_score(scores, source="model score")]
+    return [_finite_score(score, source="model score") for score in scores]
 
 
 def _identity(value: Any) -> Any:
@@ -629,7 +1883,6 @@ def _score_document_rows(
         raise ValueError("document score kind does not match the cache context")
     rows: list[dict[str, Any]] = []
     pending_by_key: dict[str, list[RetrievedCandidate]] = defaultdict(list)
-    cache_hits = 0
     for candidate in candidates:
         key = (topic.id, candidate.docid)
         matches = _matching_document_rows(
@@ -639,54 +1892,46 @@ def _score_document_rows(
         )
         if _consistent_score(matches, label=f"topic={topic.id} docid={candidate.docid}") is not None:
             continue
-        score = score_cache.get(query_text=candidate.query_text, text=candidate.text)
-        if score is None:
-            pending_by_key[
-                score_cache.cache_key(
-                    query_text=candidate.query_text,
-                    text=candidate.text,
-                )
-            ].append(candidate)
-            continue
-        cache_hits += 1
-        row = _document_artifact_row(
-            topic=topic,
-            candidate=candidate,
-            score=score,
-            score_cache=score_cache,
-        )
-        rows.append(row)
-        existing_scores.setdefault(key, []).append(row)
+        pending_by_key[
+            score_cache.cache_key(
+                query_text=candidate.query_text,
+                text=candidate.text,
+            )
+        ].append(candidate)
     representatives = [group[0] for group in pending_by_key.values()]
-    for offset in range(0, len(representatives), batch_size):
-        batch = representatives[offset : offset + batch_size]
-        scores = _predict(
+    representative_pairs = [
+        (candidate.query_text, candidate.text) for candidate in representatives
+    ]
+    score_stats: dict[str, int] = {}
+    scores = score_cache.score_many(
+        representative_pairs,
+        lambda batch: _predict(
             model,
-            [(candidate.query_text, candidate.text) for candidate in batch],
+            list(batch),
             batch_size=batch_size,
             score_representation=score_cache.context.score_representation,
+        ),
+        batch_size=batch_size,
+        _stats=score_stats,
+    )
+    for representative, score in zip(representatives, scores, strict=True):
+        cache_key = score_cache.cache_key(
+            query_text=representative.query_text,
+            text=representative.text,
         )
-        score_cache.add_many(
-            (candidate.query_text, candidate.text, score)
-            for candidate, score in zip(batch, scores, strict=True)
-        )
-        for representative, score in zip(batch, scores, strict=True):
-            cache_key = score_cache.cache_key(
-                query_text=representative.query_text,
-                text=representative.text,
+        for candidate in pending_by_key[cache_key]:
+            row = _document_artifact_row(
+                topic=topic,
+                candidate=candidate,
+                score=score,
+                score_cache=score_cache,
             )
-            for candidate in pending_by_key[cache_key]:
-                row = _document_artifact_row(
-                    topic=topic,
-                    candidate=candidate,
-                    score=score,
-                    score_cache=score_cache,
-                )
-                rows.append(row)
-                existing_scores.setdefault((topic.id, candidate.docid), []).append(row)
+            rows.append(row)
+            existing_scores.setdefault((topic.id, candidate.docid), []).append(row)
     print(
         "  document_global_cache_hits="
-        f"{cache_hits} document_model_scores={len(representatives)}",
+        f"{score_stats.get('cache_hits', 0)} "
+        f"document_model_scores={len(representatives) - score_stats.get('cache_hits', 0)}",
         flush=True,
     )
     return rows
@@ -705,7 +1950,6 @@ def _score_window_rows(
     rows: list[dict[str, Any]] = []
     pending_by_key: dict[str, list[tuple[RetrievedCandidate, Any, int]]] = defaultdict(list)
     chunk_counts: dict[tuple[str, str], int] = {}
-    cache_hits = 0
     for candidate in candidates:
         chunks = chunker.split_text(candidate.text, document_id=candidate.docid)
         if not chunks:
@@ -727,39 +1971,29 @@ def _score_window_rows(
                 label=f"topic={topic.id} docid={candidate.docid} chunk={chunk_index}",
             ) is not None:
                 continue
-            score = score_cache.get(query_text=candidate.query_text, text=chunk.text)
-            if score is None:
-                pending_by_key[
-                    score_cache.cache_key(
-                        query_text=candidate.query_text,
-                        text=chunk.text,
-                    )
-                ].append((candidate, chunk, chunk_index))
-                continue
-            cache_hits += 1
-            row = _window_artifact_row(
-                topic=topic,
-                candidate=candidate,
-                chunk=chunk,
-                chunk_index=chunk_index,
-                chunk_count=chunk_count,
-                score=score,
-                score_cache=score_cache,
-            )
-            rows.append(row)
-            existing_scores.setdefault(key, []).append(row)
+            pending_by_key[
+                score_cache.cache_key(
+                    query_text=candidate.query_text,
+                    text=chunk.text,
+                )
+            ].append((candidate, chunk, chunk_index))
 
     representatives = [group[0] for group in pending_by_key.values()]
-    pairs = [(candidate.query_text, chunk.text) for candidate, chunk, _ in representatives]
-    scores = _predict(
-        model,
-        pairs,
+    representative_pairs = [
+        (candidate.query_text, chunk.text)
+        for candidate, chunk, _ in representatives
+    ]
+    score_stats: dict[str, int] = {}
+    scores = score_cache.score_many(
+        representative_pairs,
+        lambda batch: _predict(
+            model,
+            list(batch),
+            batch_size=batch_size,
+            score_representation=score_cache.context.score_representation,
+        ),
         batch_size=batch_size,
-        score_representation=score_cache.context.score_representation,
-    )
-    score_cache.add_many(
-        (candidate.query_text, chunk.text, score)
-        for (candidate, chunk, _), score in zip(representatives, scores, strict=True)
+        _stats=score_stats,
     )
     for (representative, representative_chunk, _), score in zip(
         representatives,
@@ -784,7 +2018,9 @@ def _score_window_rows(
             rows.append(row)
             existing_scores.setdefault(key, []).append(row)
     print(
-        f"  window_global_cache_hits={cache_hits} window_model_scores={len(representatives)}",
+        "  window_global_cache_hits="
+        f"{score_stats.get('cache_hits', 0)} "
+        f"window_model_scores={len(representatives) - score_stats.get('cache_hits', 0)}",
         flush=True,
     )
     return rows
@@ -1014,7 +2250,10 @@ def main() -> int:
                     label=f"topic={topic.id} docid={candidate.docid}",
                 )
                 is None
-                and document_score_cache.get(query_text=candidate.query_text, text=candidate.text) is not None
+                and document_score_cache.lookup_many(
+                    [(candidate.query_text, candidate.text)]
+                )[0]
+                is not None
                 for candidate in candidates
             )
             print(
@@ -1068,10 +2307,9 @@ def main() -> int:
                 label=f"topic={topic.id} docid={candidate.docid}",
             )
             is None
-            and document_score_cache.get(
-                query_text=candidate.query_text,
-                text=candidate.text,
-            )
+            and document_score_cache.lookup_many(
+                [(candidate.query_text, candidate.text)]
+            )[0]
             is None
             for topic in topics
             for candidate in candidates_by_topic[topic.id]
@@ -1096,10 +2334,9 @@ def main() -> int:
                         label=(
                             f"topic={topic.id} docid={candidate.docid} chunk={chunk_index}"
                         ),
-                    ) is None and window_score_cache.get(
-                        query_text=candidate.query_text,
-                        text=chunk.text,
-                    ) is None:
+                    ) is None and window_score_cache.lookup_many(
+                        [(candidate.query_text, chunk.text)]
+                    )[0] is None:
                         window_model_required = True
                         break
                 if window_model_required:

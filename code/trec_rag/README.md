@@ -148,7 +148,8 @@ organizer-compatible facet experiment. Run it with the strict checked-in
 configuration:
 
 ```bash
-uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+PYTHONPATH=code .venv/bin/python-rocm -m trec_rag.competition_retrieval \
+  configs/rag26_competition_retrieval_v2.yaml
 ```
 
 The command runs all official topics by default. Repeat `--topic ID` for an
@@ -161,10 +162,11 @@ The runner executes five internal stages:
 1. **Planning:** DeepSeek produces a bounded structured decomposition while the
    untouched narrative remains the first retrieval lane. Saved BM25 suggestions
    are validated historical metadata, not active lanes.
-2. **Retrieval and reranking:** Pyserini retrieves the original narrative plus
-   one full-text lane per admitted subnarrative. Mixedbread reranks only the
-   configured head of each lane, followed by deterministic round-robin
-   selection.
+2. **Shared passage retrieval:** for every focused original or subnarrative
+   query, Pyserini retrieves up to 1,000 documents. Every non-empty returned
+   document is chunked and scored with Mixedbread; the query retains one global
+   top-100 passage list. The fixed and agentic adapters call this same search
+   boundary and cache identity.
 3. **Extractive evidence:** exact source spans are scored within their own
    subnarrative, deduplicated, diversity-clustered, and selected under the
    configured budget. Raw logits are ranking values, not calibrated
@@ -176,15 +178,23 @@ The runner executes five internal stages:
    and assignment are deliberately bypassed; exact evidence admission and
    extractive fallback remain local. Generation quality is still experimental,
    and the adapter can be replaced behind the existing canonical-backend seam.
-5. **Organizer export:** validated topic checkpoints are exported once in
-   official topic order.
+5. **Organizer export:** validated, evidence-backed documents are deduplicated
+   and ranked at a narrative-specific depth. The 1,000-document and 100-passage
+   search ceilings never pad or cap the final organizer run.
 
-The YAML has five operational blocks. `experiment.id` fixes both
+The YAML has six operational blocks. `experiment.id` fixes both
 `outputs/<experiment.id>/` and the run ID; `topics.path` identifies the
-narrative-only source; and `retrieval`, `reranking`, and `nuggets` fix
-cache locations, model/index identities, depths, selection policy, evidence
-budget, claim limit, and supporting-document limit. Output paths and run tags
-are conventions, not configuration knobs.
+narrative-only source; `execution.topic_workers` controls independent local
+topic processes; and `retrieval`, `passage`, and `nuggets` fix cache locations,
+model/index identities, the 1,000/100 shared-search policy, evidence budget,
+claim limit, and supporting-document limit. Output paths and run tags are
+conventions, not configuration knobs.
+
+Each topic worker constructs its own scorer and may place another model copy on
+the auto-selected accelerator. Choose `topic_workers` from available device
+memory and use `1` on a memory-constrained single GPU. The runner intentionally
+does not impose a device-count ceiling because CPU and externally sharded topic
+workers use the same topic-first contract.
 
 A completed run publishes these three conventional files beneath the experiment
 directory:
@@ -201,10 +211,15 @@ available inside the private per-topic checkpoints when needed for validation.
 Per-topic stages are also sealed by hashes through
 `<topic-id>/canonical/complete.json`. Resume revalidates checkpoint schemas,
 source bytes, configured identities, and the hash chain rather than trusting
-file existence. Compatible sealed topics are skipped, request/content-addressed
-caches retain their existing reuse rules, and the export is regenerated and
-re-read. A tracked-dirty worktree is rejected before runtime dependencies are
-constructed; changing `experiment.id` starts a separate checkpoint tree.
+file existence. Each topic owns one `records.sqlite3` ledger and one dispatch
+receipt. Complete and bounded-incomplete topics are both resumable; each carries
+an explicit stopping reason. The projection and dispatch receipt both bind the
+SHA-256 of the exact YAML bytes used by that topic, so a projection-only crash
+cannot be promoted after even a non-semantic config edit. Compatible sealed topics are skipped,
+request/content-addressed caches retain their existing reuse rules, and the
+export is regenerated and re-read in official source order. A tracked-dirty
+worktree is rejected before runtime dependencies are constructed; changing
+`experiment.id` starts a separate checkpoint tree.
 
 Planning transport, parsing, schema, or semantic failure retains exactly the
 untouched original-narrative retrieval lane and produces empty downstream
@@ -225,6 +240,27 @@ that generated decompositions improve retrieval or that canonical claims are
 entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
+
+## Topic-record source geometry
+
+`topic_geometry.py` derives immutable validation geometry once per exact UTF-8
+document body. Input is a full lowercase content SHA-256 plus the exact source
+text. Output is a `DocumentGeometry` containing character-to-byte offsets,
+scoring text/source boundaries, exact paragraph and sentence spans, and O(1)
+membership/adjacency indexes. `DocumentGeometryIndex` reuses that object for
+repeated candidates, rejects a digest mismatch or conflicting source, and
+exposes derivation counters for bounded-work tests. It performs no SQL, model,
+network, cache publication, or topic lookup; TopicRecords owns those concerns.
+
+Validate the module with:
+
+```bash
+.venv/bin/python -m pytest code/tests/test_topic_geometry.py -q
+```
+
+The tests cover exact Unicode byte/scoring coordinates, paragraph and sentence
+membership/adjacency, one derivation per content hash across multiple documents,
+digest conflicts, invalid lookups, and duplicate derived-span rejection.
 
 ## Evidence bundle boundary
 
@@ -286,108 +322,111 @@ Migration note:
   publishes the superseded candidate-pool, provenance, or resolved-config
   sidecars.
 
-## Competition fixed-retrieval RAG inputs
+## Competition selected-evidence RAG input
 
-`trec_rag.competition_rag` strictly loads the organizer-facing inputs for fixed
-retrieval answer generation. Its checked-in configuration is
-`configs/rag26_competition_rag_gpt_sol_v1.yaml`. By default it selects all 119
-canonical topics and joins these three files:
+`trec_rag.competition_rag` accepts one immutable input:
+`generation_handoff_manifest.json`. Retrieval builds it from the authenticated
+per-topic `TopicRecords` snapshot and includes the exact official narrative,
+selected passages grouped by subnarrative and cluster, advisory canonical claim
+hints, and the only document IDs generation may cite. It contains no complete
+documents, document-head windows, qrels, gold nuggets, or RAGDoll scores.
 
-- the headerless `narrative_id<TAB>narrative` organizer topic TSV;
-- `outputs/facet-deepseek-b40-v1/r_output_trec_rag_2026.tsv`, a six-field TREC
-  run; and
-- `outputs/facet-deepseek-b40-v1/retrieval_with_text.jsonl.zip`, whose required
-  core is `query.qid`, `candidates[].docid`, and `candidates[].doc`.
+The checked-in one-shot configs are
+`configs/rag26_competition_rag_gpt_sol_v2.yaml` and
+`configs/rag26_competition_rag_deepseek_v2.yaml`. They use the same runner,
+prompt, validation, retry, and citation-conversion path. Their model settings
+are the intended difference. Each config has one input field:
 
-The ZIP is a generation sidecar, not a TREC submission. Retrieval submits only
-`r_output_trec_rag_2026.tsv`; generation submits only its final JSONL. The
-deterministic generation destination is
-`outputs/rag26_competition_rag_gpt_sol_v1/rag_output_trec_rag_2026.jsonl`.
+```yaml
+inputs:
+  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+```
 
-Set up the environment once, then run the two paths independently with their
-canonical configurations. Generation consumes the three files above after
-retrieval has published its TSV and ZIP; it never reads retrieval manifests or
-per-topic checkpoints.
+Generation validates the complete handoff before mutating generation state.
+The model must cite raw ClimbMix document IDs from the current topic's sealed
+domain; code validates those IDs and deterministically converts them to the
+organizer's integer citation indexes. The organizer TREC run and full-text ZIP
+remain retrieval/evaluation artifacts, but fixed generation never opens them.
+
+Set up the environment once, run retrieval to completion, confirm the root
+manifest-last receipt includes the handoff, and then run generation:
 
 ```bash
 code/tools/setup_env.sh
 
-# Publish the full retrieval TSV and full-text ZIP.
-uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/rag26_competition_retrieval_v1.yaml
+PYTHONPATH=code .venv/bin/python-rocm -m trec_rag.competition_retrieval \
+  configs/rag26_competition_retrieval_v2.yaml
 
-# Generate the full organizer JSONL from those files.
-uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+.venv/bin/python -m trec_rag.competition_rag \
+  --config configs/rag26_competition_rag_gpt_sol_v2.yaml
 ```
 
-For a two-topic smoke run, keep the checked-in configurations and their full
-exports unchanged. Repository-relative paths are resolved from the checkout
-containing the config, so put local variants under the ignored
-`configs/local/` directory, not `/tmp`:
+For a two-topic smoke, preserve the checked-in full-run configs and copy both
+under ignored `configs/local/`. Give each a smoke-only experiment ID/output
+directory. Point the local RAG config at the local retrieval handoff and put the
+same topic IDs under `experiment.topic_ids`:
 
 ```bash
 mkdir -p configs/local
-cp configs/rag26_competition_retrieval_v1.yaml configs/local/rag26_competition_retrieval_two_topic_smoke.yaml
-cp configs/rag26_competition_rag_gpt_sol_v1.yaml configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+cp configs/rag26_competition_retrieval_v2.yaml \
+  configs/local/two-topic-passage-v2.yaml
+cp configs/rag26_competition_rag_gpt_sol_v2.yaml \
+  configs/local/rag26-competition-rag-gpt-sol-two-topic-v2.yaml
 ```
 
-In `configs/local/rag26_competition_retrieval_two_topic_smoke.yaml`, replace
-the complete `experiment` block with this distinct retrieval namespace; leave
-all other blocks identical to the checked-in retrieval config:
-
 ```yaml
+# Retrieval config
 experiment:
-  id: facet-deepseek-b40-v1-two-topic-smoke
+  id: facet-deepseek-selected-evidence-two-topic-smoke
 ```
 
-In `configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml`, replace
-the complete `experiment` and `inputs` blocks with the following. The generation
-output and both retrieval inputs now point to smoke-only directories, while
-`inputs.topic_ids` restores the requested IDs to canonical TSV order:
-
 ```yaml
+# RAG config
 experiment:
   id: rag26-competition-rag-gpt-sol-two-topic-smoke
   output_dir: outputs/rag26-competition-rag-gpt-sol-two-topic-smoke
   mode: create
+  topic_ids: [rag2026-0, rag2026-1]
 
 inputs:
-  queries: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
-  run: outputs/facet-deepseek-b40-v1-two-topic-smoke/r_output_trec_rag_2026.tsv
-  documents: outputs/facet-deepseek-b40-v1-two-topic-smoke/retrieval_with_text.jsonl.zip
-  archive_member: null
-  topic_ids: [rag2026-0, rag2026-1]
+  handoff_manifest: outputs/facet-deepseek-selected-evidence-two-topic-smoke/generation_handoff_manifest.json
 ```
 
-Run the two paths with those local configs. The repeated retrieval selectors
-bound the expensive retrieval work; the generation config independently bounds
-the downstream join:
+Run retrieval with repeated selectors, then start generation only after the
+smoke handoff exists:
 
 ```bash
-uv run --no-sync .venv/bin/python-rocm -m trec_rag.competition_retrieval configs/local/rag26_competition_retrieval_two_topic_smoke.yaml --topic rag2026-0 --topic rag2026-1
-uv run --no-sync .venv/bin/python -m trec_rag.competition_rag --config configs/local/rag26_competition_rag_gpt_sol_two_topic_smoke.yaml
+PYTHONPATH=code .venv/bin/python-rocm -m trec_rag.competition_retrieval \
+  configs/local/two-topic-passage-v2.yaml \
+  --topic rag2026-0 --topic rag2026-1
+
+.venv/bin/python -m trec_rag.competition_rag \
+  --config configs/local/rag26-competition-rag-gpt-sol-two-topic-v2.yaml
 ```
 
-These commands publish only under
-`outputs/facet-deepseek-b40-v1-two-topic-smoke/` and
-`outputs/rag26-competition-rag-gpt-sol-two-topic-smoke/`; they never replace
-the full canonical exports.
+Before starting smoke retrieval, verify: two selected topics;
+`execution.topic_workers: 2`; up to 1,000 organizer documents per focused
+query; Mixedbread scoring over every returned non-empty document; top 100
+passages per query; one SQLite ledger per topic; expected organizer, reranker,
+and canonical-cache reuse; the smoke-only output roots; and zero hosted
+generation calls before the generation command.
 
-`experiment.mode: create` refuses an existing generation output or work tree.
-For an interrupted generation, switch the local config to `resume`; valid
-per-topic rows are reused and missing rows are generated. To replace a
-generation result, use `overwrite`: it removes only that generation JSONL and
-its dedicated `work/` directory before starting again, never the retrieval TSV
-or ZIP inputs.
+Manifest order remains authoritative even if `experiment.topic_ids` is listed
+in another order. `experiment.mode: create` refuses existing generation state;
+`resume` reuses a topic only when the handoff, selected context, rendered prompt,
+prompt contract, semantic-attempt policy, and model settings match; `overwrite`
+removes only that generation JSONL and its dedicated `work/` directory. It never
+removes or rewrites retrieval artifacts or the handoff.
 
-Raw provider responses are retained only when safely available: parsed JSON is
-stored as a recursively sanitized structured envelope with no duplicate raw
-body. Opaque non-JSON bodies are never persisted, for any HTTP status including
-a 2xx semantic failure; their artifacts contain only the status when available,
-an omission marker, UTF-8 byte length, and SHA-256. Run the module's targeted
-contract suite with the repository environment already set up:
+Each topic gets at most two semantic attempts. Parsed provider responses are
+stored only after recursive secret redaction. Opaque non-JSON bodies are stored
+as status, byte length, and SHA-256, never verbatim. Run the offline contract
+tests with:
 
 ```bash
-uv run --no-sync .venv/bin/python -m pytest code/tests/test_competition_rag.py -q
+.venv/bin/python -m pytest -q \
+  code/tests/test_generation_handoff.py \
+  code/tests/test_competition_rag.py
 ```
 
 ## Private post-run competition debug report
@@ -397,19 +436,19 @@ run from its standard retrieval config and, optionally, its matching standard
 RAG config. A retrieval-only report uses:
 
 ```bash
-uv run --no-sync .venv/bin/python \
+.venv/bin/python \
   -m trec_rag.competition_debug_report \
-  --retrieval-config configs/rag26_competition_retrieval_v1.yaml
+  --retrieval-config configs/rag26_competition_retrieval_v2.yaml
 ```
 
 Include validated final answers by supplying the RAG config rather than a raw
 output path:
 
 ```bash
-uv run --no-sync .venv/bin/python \
+.venv/bin/python \
   -m trec_rag.competition_debug_report \
-  --retrieval-config configs/rag26_competition_retrieval_v1.yaml \
-  --rag-config configs/rag26_competition_rag_gpt_sol_v1.yaml
+  --retrieval-config configs/rag26_competition_retrieval_v2.yaml \
+  --rag-config configs/rag26_competition_rag_gpt_sol_v2.yaml
 ```
 
 Repeat `--topic ID` to select exported topics in official order. Use `--output
@@ -541,72 +580,60 @@ documents, which cannot show whether the ranking concentrates relevance.
 
 ## Passage-first retrieval selection
 
-`trec_rag.deepagent_passages` decides which passages a researcher sees. It
-exists because the agent used to choose a *document*: a measured run drew 63
-grounded nuggets from 5 documents, with per-need nugget counts exactly equal to
-per-document counts. Retrieving deeper alone would have made that worse, not
-better, since one document out of 1000 is a smaller share of the pool than one
-out of 10.
+`trec_rag.topic_passage_search` is the single retrieval-and-passage policy used
+by both fixed facet retrieval and DeepAgent retrieval. For every focused query
+it:
 
-**Inputs.** `PooledDocument(document_id, rank, text)` rows from a retrieval
-response, a focus query, a chunker, and a cross-encoder ranker.
-`PassageSelectionConfig` carries `pool_hits` (how deep to retrieve),
-`rerank_depth` (how deep to score), `top_k`, `per_document_cap`, and
-`min_distinct_documents`.
+1. requests retrieval depth 1,000 and retains every returned source document;
+2. stores each document body once in the content-addressed document store;
+3. chunks and Mixedbread-scores passages from all returned documents; and
+4. returns the global top 100 passages ordered by raw logit, source-document
+   rank, and passage ID.
 
-**Outputs.** `score_document_pool` returns a `PoolScoringResult` with every
-scored passage plus the counts of what was scored and what was skipped.
-`select_diverse_passages` returns the passage set the agent sees.
-`selection_summary` reports what was dropped as well as what was kept, so a
-capped selection is never mistaken for an exhaustive one.
+There is no hidden depth-100 scoring cutoff, top-16 agent cutoff, per-document
+cap, or second diversity selector. The result retains every returned
+source-document record, the scored-passage count, source offsets and hashes,
+and an explicit
+`complete` or `incomplete` stopping reason. Missing corpus data, organizer
+failure, and scoring failure are persisted as honest incomplete results rather
+than silently replaced by another retrieval path.
 
-**How diversity is enforced.** In code, never by asking the model. Selection
-runs in two deterministic phases: a breadth phase admits each document's single
-best passage, best documents first, until `min_distinct_documents` is reached;
-then a depth phase fills remaining slots in global score order subject to
-`per_document_cap`. A plain global top-K collapses onto one document, which
-`test_global_top_k_alone_would_have_collapsed_onto_one_document` asserts
-directly.
+`trec_rag.deepagent_passages` now only groups already ranked `SourcePassage`
+rows for handle metadata. It never retrieves, scores, reranks, or truncates.
+`code/tests/test_retrieval_path_parity.py` guards the shared policy boundary;
+`code/tests/test_topic_passage_search.py` covers ordering, all-document
+scoring, retries, cache identity, and incomplete outcomes.
 
-**Validation.** `code/tests/test_deepagent_passages.py` covers the collapse
-case, breadth-before-depth ordering, graceful degradation when too few
-documents exist, determinism under input reordering, deterministic tie-breaks,
-the cap and top-K bounds, and rejection of unusable configurations. Selection
-is pure, so none of it needs a GPU or a live index.
-
-**Cost, measured on this ROCm host against a real depth-1000 pool.** About 12.6
-chunks per document and ~10ms per chunk:
-
-| rerank depth | chunks | scoring time |
-| ---: | ---: | ---: |
-| 50 | 594 | 6.1s |
-| 100 | 1,290 | 13.8s |
-| 250 | 3,518 | 44.1s |
-| 500 | 6,900 | 69.7s |
-| 1000 | 12,617 | 113.2s |
-
-The per-chunk score cache makes repeated chunks free across queries, so a run
-whose queries overlap pays much less than depth times searches. Note that these
-documents are roughly 3x longer than the 300-document sample used in the
-original design note (median 22,776 characters against 7,336), so per-document
-chunk counts there were low by about the same factor.
+Document bodies are content-addressed and reused across topics. Passage scores
+are cached by the exact query, text, model, revision, runtime, dtype, batch, and
+chunker identity. A new facet query still has to score its own query/passage
+pairs, while repeated or resumed work reuses validated cache entries.
 
 ## Experimental Deep Agent retrieval SDK
 
-`trec_rag.deepagent_retrieval` is a small, narrative-only experimental SDK. It
-is not wired into `run_pipeline`, `official_run`, organizer exports, sealed
-artifacts, or the ranking semantics of the official pipeline.
+`trec_rag.deepagent_retrieval` is an experimental agentic coordinator over the
+same topic-scoped passage search and records ledger used by fixed retrieval. It
+is not selected by the fixed competition CLI; an agentic experiment must
+construct it explicitly.
 
-Pass the narrative you already have directly; the first search uses that exact
-string without rewriting it:
+Pass an already constructed `TopicPassageSearch` and a `TopicRecordsBuilder`
+for the same topic. The first search uses the untouched narrative without
+rewriting it, and every search/handoff/completion update is written to that
+topic's ledger:
 
 ```python
 from trec_rag.deepagent_retrieval import DeepAgentRetriever
 
-result = DeepAgentRetriever.from_env().retrieve(provided_narrative)
+agent = DeepAgentRetriever.from_env(passage_search=topic_passage_search)
+result = agent.retrieve(topic_records_builder, provided_narrative)
 for candidate in result.candidates:
     print(candidate.rank, candidate.docid, candidate.score)
 ```
+
+The passage search topic ID must equal the records-builder topic ID. The
+builder also carries the run ID, so one topic's evidence cannot be committed to
+another topic or experiment. The caller owns final `TopicRecordsBuilder`
+publication after retrieval.
 
 Topic-file lookup remains deliberately separate and always requires an
 explicit path. It is a convenience for experiments, not a second SDK input:
@@ -624,9 +651,10 @@ provided_narrative = load_topic_narrative(
 
 Inputs and configuration:
 
-- Required: `OPENROUTER_API_KEY`, `INDEX_URL`, and `PYSERINI_API_TOKEN`.
-  `PHOENIX_COLLECTOR_ENDPOINT` is also required when exporting Phoenix traces;
-  omit it to disable tracing.
+- `OPENROUTER_API_KEY` is required by `DeepAgentRetriever.from_env`.
+  The supplied passage-search adapter owns organizer credentials and validated
+  retrieval/reranking caches. `PHOENIX_COLLECTOR_ENDPOINT` is required only
+  when exporting Phoenix traces; omit it to disable tracing.
 - Optional: `PHOENIX_API_KEY` is required by Phoenix Cloud endpoints, and
   `PHOENIX_PROJECT_NAME` overrides the default
   `trec-rag-deepagent-retrieval` project. `DEEPAGENT_MODEL` overrides the
@@ -635,11 +663,12 @@ Inputs and configuration:
   the OpenRouter client with `max_retries=0`; it does not silently retry model,
   Pyserini, or Phoenix calls.
 
-The SDK first retrieves the untouched narrative deterministically, then the
-main coordinator delegates bounded research tasks. Each ClimbMix search returns
-at most ten candidates; results are document-ID deduplicated with deterministic
-reciprocal-rank fusion (RRF, `k=60`) and return at most twenty candidates. Raw
-BM25 scores from different queries are never compared.
+The SDK first runs the untouched narrative through the shared depth-1,000,
+top-100-passage search, then the main coordinator delegates bounded research
+tasks. Compact document metadata shown to a coordinator is capped separately
+from the passage result. Final document candidates are document-ID deduplicated
+with deterministic reciprocal-rank fusion (RRF, `k=60`) and return at most
+twenty candidates; raw BM25 scores from different queries are never compared.
 
 | Role | Available capabilities | Deliberately unavailable |
 | --- | --- | --- |
@@ -703,8 +732,10 @@ longer counts.
 (`AgentSearch` records), fused `candidates` (`RankedCandidate` records with
 per-search provenance), the agent's `rationale`, `stopping_reason`, immutable
 `coverage_report`, immutable `budget_snapshot`, and immutable
-`trace_flush_succeeded`. Inspect the coverage and budget through the Python SDK
-when deciding whether the evidence is ready for a downstream draft:
+`trace_flush_succeeded`. Its `topic_snapshot` is the one holistic ledger view
+taken after researcher handoffs and completion state have been persisted.
+Inspect the coverage and budget through the Python SDK when deciding whether
+the evidence is ready for a downstream draft:
 
 ```python
 coverage = result.coverage_report
@@ -726,9 +757,13 @@ ceiling records `MAIN_MODEL_BUDGET_EXHAUSTED`, so a run cut short by that
 ceiling reports `budget_exhausted` rather than claiming `agent_completed`. A search that cannot reach the index
 reports `RETRIEVAL_UNAVAILABLE` to the agent and makes `stopping_reason`
 `retrieval_unavailable`, so an outage is never read as a narrative with no
-evidence. That is recorded, not enforced: one unreachable search does not
-cancel the remaining retrieval, and a sustained outage still ends the run
-through the no-yield and no-progress guards.
+evidence. Provider, deadline, and retrieval failures preserve all evidence
+already admitted and seal the ledger `incomplete`; downstream generation may
+still consume that explicit partial result. There is no alternate fallback
+retriever. Before completion, every live coverage citation is compared with
+the passages actually admitted through durable researcher handoffs. A mismatch
+seals `incomplete/evidence_validation_failed`; it can never be reported as
+complete.
 
 The agent maintains three distinct stores, each with a different job:
 
@@ -746,9 +781,11 @@ coverage judgments. Researcher search and snippet calls atomically record their
 own actual arguments; they do not require `choose_next_action` authorization.
 The legacy `choose_next_action` callback is retained for compatibility with
 older injected toolsets, but it cannot record a terminal stop;
-`complete_retrieval` is the only valid terminal transition. The SDK owns this
-state for one retrieval invocation; it is not a persistent cache or a
-replacement for the final result's immutable `coverage_report`.
+`complete_retrieval` is the only valid terminal transition. The coordinator's
+semantic coverage state is invocation-local. Accepted searches, facets,
+passages, researcher handoffs, and final completion are also projected into the
+persistent per-topic `TopicRecordsBuilder`; that sealed topic ledger is the
+durable handoff boundary.
 
 `update_retrieval_state(delta)` is the universal append/update entry point for
 the three stores. Its model-facing delta accepts these eight optional lists:
@@ -1269,19 +1306,32 @@ unadapted submission joins to nothing and reports empty metrics instead of faili
 ```bash
 .venv/bin/python -m trec_rag.ragdoll_io \
   --submission outputs/<id>/rag_output_trec_rag_2026.jsonl \
+  --topics trec-rag-data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv \
   --gold-nuggets trec-rag-data/trec-rag-2026/development-data/rag25-dev-nuggets/rag25-dev-nuggets.jsonl \
   --answers-out <dir>/answers.jsonl --nuggets-out <dir>/nuggets.jsonl \
-  --documents <the document file the generator read> --support-out <dir>/support_input.jsonl
+  --handoff-manifest outputs/<retrieval-id>/generation_handoff_manifest.json \
+  --generation-identity outputs/<rag-id>/work/generation_identity.json \
+  --support-out <dir>/support_input.jsonl
 ```
 
 Outputs: an answers file and reshaped gold nuggets for `ragdoll nuggetizer eval`, and
 optionally resolved rows for `ragdoll support judge`. Validation: the answers/nuggets join must
-be non-empty, every cited docid must resolve to text, and a citation naming a document outside
-`references` is rejected because RAGDoll would silently drop it from the metric denominator.
+be non-empty, every submission narrative must equal the authoritative `--topics` narrative,
+every cited docid must resolve to text, and a citation naming a document outside `references`
+is rejected because RAGDoll would silently drop it from the metric denominator.
 
-`--documents` must be the file the generator actually read. Judging citations against text the
-model never saw produces spurious No Support; doing so once inflated a measured rate from 4.8%
-to 32.7% and inverted a conclusion.
+Support evaluation accepts only selected-evidence v2 inputs. `--handoff-manifest` resolves each
+citation to all exact selected passages shown for that topic/docid, in authenticated evidence
+order. `--generation-identity` then proves that the handoff digest, prompt contract, run ID, and
+topic contexts are the ones recorded by this answer-generation run. The adapter does not accept
+a retrieval document archive or a word limit, so a full-document head cannot be substituted or
+silently truncated. Judging against that wrong view once inflated No Support and inverted the
+conclusion; those evaluation artifacts were discarded.
+
+After `ragdoll support judge` finishes, rerun the same adapter command with
+`--support-judgments <dir>/support_judgments.jsonl`. It fails closed unless the output contains
+exactly one completed `FS`, `PS`, or `NS` judgment for every expected citation and each judgment
+still matches the input statement, selected evidence, run, topic, and document.
 
 ### `dev_rag_inputs.py`
 

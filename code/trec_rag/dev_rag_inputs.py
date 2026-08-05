@@ -227,9 +227,9 @@ def _rank_of(row: object) -> int:
 def trec_run_lines(topics: Sequence[ArchivedTopic], *, run_id: str) -> Iterator[str]:
     """Yield six-column TREC rows with dense ranks and non-increasing scores.
 
-    ``competition_rag.load_trec_run`` rejects duplicate ranks, rank gaps, and scores that rise
-    with rank, so ranks are renumbered after deduplication and scores are clamped to stay
-    monotonically non-increasing.
+    Organizer-format consumers reject duplicate ranks, rank gaps, and scores
+    that rise with rank, so ranks are renumbered after deduplication and scores
+    are clamped to stay monotonically non-increasing.
     """
     if not run_id.strip() or any(character.isspace() for character in run_id):
         raise ValueError("run_id must be non-empty and whitespace-free")
@@ -246,7 +246,7 @@ def trec_run_lines(topics: Sequence[ArchivedTopic], *, run_id: str) -> Iterator[
 def document_rows(
     topics: Sequence[ArchivedTopic], *, passage_words: int | None = None
 ) -> Iterator[dict[str, object]]:
-    """Yield ``competition_rag.load_documents`` rows, one per topic.
+    """Yield organizer query-bundled document rows, one per topic.
 
     With ``passage_words`` set, each document is reduced to its most query-relevant windows
     instead of being left for the generator to head-truncate.

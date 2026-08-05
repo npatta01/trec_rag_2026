@@ -4,9 +4,13 @@ from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
+import trec_rag.evidence_store as evidence_store_module
+from trec_rag.document_store import DocumentStore
 from trec_rag.facet_evidence import (
     CandidateSubnarrative,
     ExtractiveCandidateRequest,
@@ -22,6 +26,7 @@ from trec_rag.facet_evidence import (
 )
 from trec_rag.evidence_store import (
     CandidateArtifacts,
+    HandoffArtifacts,
     generate_candidate_artifacts,
     load_validated_candidate_artifacts,
     materialize_candidate_inputs,
@@ -32,6 +37,17 @@ from trec_rag.facet_extraction import FacetPlanningResult, plan_facet_queries
 from trec_rag.competition_retrieval import ValidatedDecomposition
 from trec_rag.pipeline_models import QueryVariant
 from trec_rag.topics import Topic
+from trec_rag.topic_records import (
+    FacetRecord,
+    TopicRecordsBuilder,
+    TopicRecordsIntegrityError,
+)
+from trec_rag.topic_passage_search import (
+    FocusedQuery,
+    PassageSearchResult,
+    SourceDocument,
+    SourcePassage,
+)
 
 
 def _digest(value: str | bytes) -> str:
@@ -52,6 +68,7 @@ class _LiteralScorer:
         "inference_dtype": "float32",
         "score_kind": "extractive_sentence_v1",
         "sentence_max_length": 512,
+        "input_policy": "trec_rag_whitespace_v1",
     }
 
     def score_pairs(self, pairs):
@@ -72,6 +89,238 @@ class _FixedScorer:
 
     def score_pairs(self, pairs):
         return self.values(pairs) if callable(self.values) else self.values
+
+
+def _candidate_stage_scorer_identity(**overrides: object) -> dict[str, object]:
+    identity: dict[str, object] = {
+        "model": "literal-local-scorer",
+        "model_revision": "test-v1",
+        "backend_version": "test-v1",
+        "score_representation": "raw_logits",
+        "inference_dtype": "float32",
+        "score_kind": "extractive_sentence_v1",
+        "sentence_max_length": 512,
+        "input_policy": "trec_rag_whitespace_v1",
+    }
+    identity.update(overrides)
+    return identity
+
+
+def _candidate_stage_identity(**overrides: object) -> dict[str, object]:
+    identity: dict[str, object] = {
+        "request_schema_version": "extractive_candidate_request_v1",
+        "candidate_schema_version": "extractive_candidate_nugget_v1",
+        "source_file": "candidate-requests.jsonl",
+        "source_sha256": "a" * 64,
+        "scorer": _candidate_stage_scorer_identity(),
+        "sentence_splitter_version": "exact_rules_v1",
+        "scoring_normalization_version": "trec_rag_whitespace_v1",
+    }
+    identity.update(overrides)
+    return identity
+
+
+def _without_field(value: dict[str, object], field: str) -> dict[str, object]:
+    result = dict(value)
+    del result[field]
+    return result
+
+
+def test_candidate_artifacts_session_is_worker_local_and_not_part_of_value_identity(
+    tmp_path: Path,
+) -> None:
+    paths = CandidateArtifacts(
+        tmp_path / "records.sqlite3",
+        tmp_path / "canonical" / "records-manifest.json",
+        tmp_path / "objects",
+    )
+    with_session = replace(paths, validation_session=object())
+
+    assert with_session == paths
+    assert "validation_session" not in repr(with_session)
+
+
+def test_generate_candidate_artifacts_returns_exact_published_validation_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handoff_root = tmp_path / "topic-224" / "canonical" / "handoff"
+    handoff_root.mkdir(parents=True)
+    requests_path = handoff_root / "candidate-requests.jsonl"
+    contexts_path = handoff_root / "selection-contexts.jsonl"
+    manifest_path = handoff_root / "handoff-manifest.json"
+    requests_path.write_bytes(b"")
+    contexts_path.write_bytes(b"")
+    manifest_path.write_bytes(
+        b'{"request_schema_version":"extractive_candidate_request_v1",'
+        b'"topic_id":"224","requests_file":"candidate-requests.jsonl",'
+        b'"requests_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4'
+        b'649b934ca495991b7852b855"}\n'
+    )
+    handoff = HandoffArtifacts(
+        requests_path,
+        contexts_path,
+        manifest_path,
+        "a" * 64,
+        False,
+    )
+    validation_session = object()
+    published = SimpleNamespace(validation_session=validation_session)
+
+    class BuilderSpy:
+        def __init__(self, destination, topic_id, document_store, *, run_id):
+            assert run_id == "test-run"
+            self.published_identity = None
+
+        def publish(self, identity):
+            self.published_identity = identity
+            return published
+
+        def add_facets(self, facets):
+            assert facets == ()
+
+        def add_passage_search(self, result):
+            raise AssertionError("empty fixture must not add passage search rows")
+
+        def set_completion(self, status, stopping_reason):
+            assert (status, stopping_reason) == ("incomplete", "no_evidence")
+
+        def _cleanup(self):
+            raise AssertionError("successful publication must not be cleaned up")
+
+    monkeypatch.setattr(evidence_store_module, "TopicRecordsBuilder", BuilderSpy)
+
+    artifacts = generate_candidate_artifacts(
+        handoff,
+        run_id="test-run",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        document_store_root=tmp_path / "objects",
+    )
+
+    assert artifacts.validation_session is validation_session
+
+
+class _ValidationSessionRecordsSpy:
+    def __init__(self) -> None:
+        self._manifest = {
+            "identity_json": json.dumps(
+                _candidate_stage_identity(), sort_keys=True, separators=(",", ":")
+            )
+        }
+        self.receipt = SimpleNamespace(
+            database_sha256="a" * 64,
+            semantic_sha256="b" * 64,
+            row_counts={"candidate": 0},
+        )
+        self.exited = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.exited = True
+
+    def load_candidates(self, required_keys):
+        return {}
+
+
+def _candidate_artifacts_for_open_spy(
+    tmp_path: Path,
+    validation_session: object,
+) -> tuple[CandidateArtifacts, Path]:
+    canonical_root = tmp_path / "topic-224" / "canonical"
+    canonical_root.mkdir(parents=True)
+    records_path = canonical_root.parent / "records.sqlite3"
+    manifest_path = canonical_root / "records-manifest.json"
+    manifest_path.write_bytes(b'{"topic_id":"224"}\n')
+    contexts_path = canonical_root / "contexts.jsonl"
+    contexts_path.write_bytes(b"")
+    return (
+        CandidateArtifacts(
+            records_path,
+            manifest_path,
+            tmp_path / "objects",
+            validation_session,
+        ),
+        contexts_path,
+    )
+
+
+def test_load_validated_candidate_artifacts_passes_validation_session_to_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validation_session = object()
+    artifacts, _ = _candidate_artifacts_for_open_spy(tmp_path, validation_session)
+    opened: list[object] = []
+    records = _ValidationSessionRecordsSpy()
+
+    class TopicRecordsSpy:
+        @staticmethod
+        def open(*args, **kwargs):
+            opened.append(kwargs["validation_session"])
+            return records
+
+    monkeypatch.setattr(evidence_store_module, "TopicRecords", TopicRecordsSpy)
+
+    assert load_validated_candidate_artifacts(
+        artifacts,
+        expected_topic_id="224",
+        required_candidate_keys=frozenset(),
+    ) == {}
+    assert opened == [validation_session]
+    assert records.exited
+
+
+def test_select_evidence_artifacts_passes_validation_session_to_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validation_session = object()
+    artifacts, contexts_path = _candidate_artifacts_for_open_spy(
+        tmp_path, validation_session
+    )
+    opened: list[object] = []
+    records = _ValidationSessionRecordsSpy()
+
+    class TopicRecordsSpy:
+        @staticmethod
+        def open(*args, **kwargs):
+            opened.append(kwargs["validation_session"])
+            return records
+
+    monkeypatch.setattr(evidence_store_module, "TopicRecords", TopicRecordsSpy)
+
+    select_evidence_artifacts(artifacts, contexts_path, device="cpu")
+
+    assert opened == [validation_session]
+    assert records.exited
+
+
+def _publish_candidate_stage_fixture(
+    tmp_path: Path,
+    identity: dict[str, object],
+) -> tuple[CandidateArtifacts, Path]:
+    topic_root = tmp_path / "topic-224"
+    document_store_root = tmp_path / "objects"
+    builder = TopicRecordsBuilder(
+        topic_root,
+        "224",
+        DocumentStore(document_store_root),
+        run_id="test-run",
+    )
+    builder.publish(identity)
+    contexts_path = topic_root / "canonical" / "contexts.jsonl"
+    contexts_path.write_bytes(b"")
+    return (
+        CandidateArtifacts(
+            topic_root / "records.sqlite3",
+            topic_root / "canonical" / "records-manifest.json",
+            document_store_root,
+        ),
+        contexts_path,
+    )
 
 
 def _request() -> ExtractiveCandidateRequest:
@@ -304,81 +553,41 @@ def test_selection_deduplicates_clusters_diversifies_and_honors_budgets() -> Non
 
 
 def test_selection_artifact_matches_fixed_golden_digest(tmp_path: Path) -> None:
-    canonical_root = tmp_path / "canonical"
-    canonical_root.mkdir()
     text = "Exact coastal evidence."
     text_digest = _digest(text)
     subnarrative = "Documented coastal safety measures"
     subnarrative_digest = _digest(subnarrative)
-    candidate = {
-        "schema_version": "extractive_candidate_nugget_v1",
-        "topic_id": "224",
-        "docid": "doc-a",
-        "subnarrative_id": "subnarrative-1",
-        "candidate_nugget_id": "n1",
-        "nugget_type": "extractive",
-        "candidate_kind": "exact_sentence",
-        "text": text,
-        "evidence_sentences": [{
-            "text": text, "start_char": 0, "end_char": 23,
-            "start_byte": 0, "end_byte": 23, "text_sha256": text_digest,
-            "cross_encoder_score": 1.5,
-        }],
-        "matched_paragraph": {
-            "text": text, "start_char": 0, "end_char": 23,
-            "start_byte": 0, "end_byte": 23, "text_sha256": text_digest,
-        },
-        "context_before": None,
-        "context_after": None,
-        "passages": [{
-            "passage_id": "p1", "lane_id": "original", "query_id": "topic-224",
-            "scoring_start_char": 0, "scoring_end_char": 23,
-            "source_start_char": 0, "source_end_char": 23,
-            "source_start_byte": 0, "source_end_byte": 23,
-            "source_text": text, "source_text_sha256": text_digest,
-            "scoring_text_sha256": text_digest, "chunk_text_sha256": text_digest,
-            "normalization_version": "trec_rag_whitespace_v1",
-            "cross_encoder_score": 2.0, "cross_encoder_rank": 1,
-        }],
-        "sentence_cross_encoder_score": 1.5,
-        "rank_within_document_subnarrative": 1,
-        "document_sha256": text_digest,
-        "scoring_text_sha256": text_digest,
-        "subnarrative_sha256": subnarrative_digest,
-        "sentence_splitter_version": "exact_rules_v1",
-    }
-    candidates_path = canonical_root / "candidates.jsonl"
-    candidate_bytes = (
-        json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    topic_root = tmp_path / "topic-224"
+    canonical_root = topic_root / "canonical"
+    canonical_root.mkdir(parents=True)
+    request = ExtractiveCandidateRequest(
+        topic_id="224",
+        document_id="doc-a",
+        source=text,
+        document_sha256=text_digest,
+        scoring_text_sha256=text_digest,
+        subnarratives=(CandidateSubnarrative("subnarrative-1", subnarrative),),
+        passages=(ScoredPassage(
+            "p1", "original", "topic-224", 0, len(text), text_digest,
+            text_digest, 2.0, 1,
+        ),),
     )
-    candidates_path.write_bytes(candidate_bytes)
-    candidate_manifest_path = canonical_root / "candidate-manifest.json"
-    candidate_manifest_path.write_text(json.dumps({
-        "schema_version": "extractive_candidate_manifest_v1",
+    candidate = extract_document_candidates(request, _FixedScorer((1.5,)))[0]
+    document_store_root = tmp_path / "objects"
+    builder = TopicRecordsBuilder(
+        topic_root, "224", DocumentStore(document_store_root), run_id="test-run"
+    )
+    builder.bind_document("doc-a", text, expected_sha256=text_digest)
+    builder.add_candidate(candidate)
+    builder.publish({
         "request_schema_version": "extractive_candidate_request_v1",
         "candidate_schema_version": "extractive_candidate_nugget_v1",
-        "source_sha256": "1" * 64,
-        "scorer": {
-            "model": "fake-local-mixedbread", "model_revision": "pin",
-            "backend_version": "test", "score_representation": "raw_logits",
-            "inference_dtype": "float32", "score_kind": "extractive_sentence_v1",
-            "sentence_max_length": 512,
-        },
+        "source_file": "candidate-requests.jsonl",
+        "source_sha256": text_digest,
+        "scorer": dict(_LiteralScorer.identity),
         "sentence_splitter_version": "exact_rules_v1",
         "scoring_normalization_version": "trec_rag_whitespace_v1",
-        "source_file": "requests.jsonl",
-        "candidate_file": "candidates.jsonl",
-        "input_sha256": "1" * 64,
-        "candidates_sha256": _digest(candidate_bytes),
-        "output_sha256": _digest(candidate_bytes),
-        "document_count": 1,
-        "unique_document_count": 1,
-        "unique_subnarrative_count": 1,
-        "failure_count": 0,
-        "candidate_count": 1,
-        "retrieval_network_calls": 0,
-        "hosted_llm_calls": 0,
-    }, sort_keys=True, separators=(",", ":")) + "\n")
+    })
     narrative = "Explain documented coastal safety measures."
     contexts_path = canonical_root / "contexts.jsonl"
     contexts_path.write_text(json.dumps({
@@ -392,15 +601,182 @@ def test_selection_artifact_matches_fixed_golden_digest(tmp_path: Path) -> None:
     }, sort_keys=True, separators=(",", ":")) + "\n")
 
     artifacts = select_evidence_artifacts(
-        CandidateArtifacts(candidates_path, candidate_manifest_path),
+        CandidateArtifacts(
+            topic_root / "records.sqlite3",
+            canonical_root / "records-manifest.json",
+            document_store_root,
+        ),
         contexts_path,
         device="cpu",
         similarity=_Similarity({}),
     )
 
-    assert _digest(artifacts.selections_path.read_bytes()) == (
-        "02a0b34a1a0d78a0d465ea00c012ad1fc4fb0ef77549fbab9519994818ffb99f"
+    selection_manifest = json.loads(artifacts.manifest_path.read_bytes())
+    records_manifest = json.loads(
+        (topic_root / "canonical" / "records-manifest.json").read_bytes()
     )
+    assert selection_manifest["records_file"] == "records.sqlite3"
+    assert selection_manifest["records_manifest_file"] == "records-manifest.json"
+    assert selection_manifest["records_schema_version"] == "topic-records-v4"
+    assert selection_manifest["records_stage"] == "canonical-candidates-v1"
+    assert selection_manifest["records_database_sha256"] == _digest(
+        (topic_root / "records.sqlite3").read_bytes()
+    )
+    assert selection_manifest["candidate_semantic_sha256"] == records_manifest[
+        "semantic_sha256"
+    ]
+    assert not {
+        "candidates_file",
+        "candidate_manifest_file",
+        "candidates_sha256",
+        "candidate_manifest_sha256",
+    } & selection_manifest.keys()
+    assert _digest(artifacts.selections_path.read_bytes()) == (
+        "9beb32dade0e1c3baa439056401e7bc7569453ef72d8ea8a56f2724429414f2e"
+    )
+
+
+@pytest.mark.parametrize("consumer", ("selection", "loading"))
+@pytest.mark.parametrize(
+    "identity",
+    (
+        pytest.param(
+            _candidate_stage_identity(request_schema_version="request-v0"),
+            id="request-schema",
+        ),
+        pytest.param(
+            _candidate_stage_identity(candidate_schema_version="candidate-v0"),
+            id="candidate-schema",
+        ),
+        pytest.param(
+            _candidate_stage_identity(sentence_splitter_version="splitter-v0"),
+            id="sentence-splitter",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scoring_normalization_version="normalization-v0"
+            ),
+            id="scoring-normalization",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                source_file="handoff/candidate-requests.jsonl"
+            ),
+            id="source-basename",
+        ),
+        pytest.param(
+            _candidate_stage_identity(source_sha256="A" * 64),
+            id="source-digest",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scorer=_candidate_stage_scorer_identity(
+                    score_representation="probabilities"
+                )
+            ),
+            id="scorer-representation",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scorer=_candidate_stage_scorer_identity(
+                    score_kind="extractive_sentence_v0"
+                )
+            ),
+            id="scorer-kind",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scorer=_candidate_stage_scorer_identity(model="")
+            ),
+            id="scorer-empty-string",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scorer=_candidate_stage_scorer_identity(sentence_max_length=0)
+            ),
+            id="scorer-max-length",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scorer=_without_field(
+                    _candidate_stage_scorer_identity(), "model_revision"
+                )
+            ),
+            id="scorer-missing-field",
+        ),
+        pytest.param(
+            _candidate_stage_identity(
+                scorer=_candidate_stage_scorer_identity(extra="unexpected")
+            ),
+            id="scorer-extra-field",
+        ),
+        pytest.param(
+            _without_field(_candidate_stage_identity(), "source_file"),
+            id="identity-missing-field",
+        ),
+        pytest.param(
+            _candidate_stage_identity(extra="unexpected"),
+            id="identity-extra-field",
+        ),
+    ),
+)
+def test_candidate_stage_identity_fails_closed_for_both_consumers(
+    tmp_path: Path,
+    identity: dict[str, object],
+    consumer: str,
+) -> None:
+    artifacts, contexts_path = _publish_candidate_stage_fixture(tmp_path, identity)
+
+    with pytest.raises(ValueError, match="candidate stage identity"):
+        if consumer == "selection":
+            select_evidence_artifacts(artifacts, contexts_path, device="cpu")
+        else:
+            load_validated_candidate_artifacts(
+                artifacts,
+                expected_topic_id="224",
+                required_candidate_keys=frozenset(),
+            )
+
+    assert not (artifacts.manifest_path.parent / "subnarrative-selections.jsonl").exists()
+    assert not (artifacts.manifest_path.parent / "selection-manifest.json").exists()
+
+
+@pytest.mark.parametrize("layout", ("renamed", "different-topic-roots"))
+def test_selection_rejects_copied_noncanonical_candidate_artifact_paths(
+    tmp_path: Path,
+    layout: str,
+) -> None:
+    artifacts, contexts_path = _publish_candidate_stage_fixture(
+        tmp_path, _candidate_stage_identity()
+    )
+    if layout == "renamed":
+        copied_records = artifacts.records_path.with_name("records-copy.sqlite3")
+        copied_manifest = artifacts.manifest_path.with_name(
+            "records-manifest-copy.json"
+        )
+    else:
+        copied_records = tmp_path / "records-copy" / "records.sqlite3"
+        copied_manifest = (
+            tmp_path
+            / "manifest-copy"
+            / "canonical"
+            / "records-manifest.json"
+        )
+    copied_records.parent.mkdir(parents=True, exist_ok=True)
+    copied_manifest.parent.mkdir(parents=True, exist_ok=True)
+    copied_records.write_bytes(artifacts.records_path.read_bytes())
+    copied_manifest.write_bytes(artifacts.manifest_path.read_bytes())
+    copied = CandidateArtifacts(
+        copied_records,
+        copied_manifest,
+        artifacts.document_store_root,
+    )
+
+    with pytest.raises(ValueError, match="canonical candidate artifact paths"):
+        select_evidence_artifacts(copied, contexts_path, device="cpu")
+
+    assert not (copied_manifest.parent / "subnarrative-selections.jsonl").exists()
+    assert not (copied_manifest.parent / "selection-manifest.json").exists()
 
 
 def test_nonfinite_similarity_fails_closed() -> None:
@@ -506,7 +882,10 @@ def _write_scoring_checkpoint(
         "decomposition_source_sha256": decomposition.source_sha256,
         "code_commit": "a" * 40, "retriever": {"name": "fake"},
         "scorer": {"model": "fake"}, "rerank_depth": 100, "selection_k": 100,
-        "selection_policy": "round_robin_lane_order_no_fusion", "score_policy": {},
+        "selection_policy": "round_robin_lane_order_no_fusion",
+        "selection_scope": "internal_fixed_path_projection_not_final_submission",
+        "score_policy": {},
+        "passage_search": {},
         "retrieval_manifest_sha256": "b" * 64, "selected_set_sha256": _digest('["doc-1"]'),
         "artifacts": artifacts,
     }
@@ -542,7 +921,10 @@ def test_original_only_pipeline_is_empty_and_never_constructs_local_models(
     pilot_root = tmp_path / "pilot"
     _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=True)
     handoff = materialize_candidate_inputs(
-        topic, decomposition, pilot_root=pilot_root, output_dir=tmp_path / "canonical" / "handoff",
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / topic.id / "canonical" / "handoff",
         code_commit="a" * 40, official_topics_sha256="c" * 64,
     )
     monkeypatch.setattr(
@@ -555,57 +937,208 @@ def test_original_only_pipeline_is_empty_and_never_constructs_local_models(
     )
 
     candidates = generate_candidate_artifacts(
-        handoff, score_cache_root=tmp_path / "score-cache", device="cpu"
+        handoff,
+        run_id="test-run",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        document_store_root=tmp_path / "objects",
     )
     selections = select_evidence_artifacts(candidates, handoff.contexts_path, device="cpu")
 
     assert handoff.requests_path.read_bytes() == b""
     assert handoff.contexts_path.read_bytes() == b""
-    assert candidates.candidates_path.read_bytes() == b""
+    assert candidates.records_path.is_file()
+    assert candidates.manifest_path.is_file()
+    assert candidates.document_store_root == tmp_path / "objects"
+    assert candidates.records_path == tmp_path / topic.id / "records.sqlite3"
+    assert candidates.manifest_path == (
+        tmp_path / topic.id / "canonical" / "records-manifest.json"
+    )
+    assert not (candidates.records_path.parent / "canonical" / "candidates.jsonl").exists()
+    assert not (candidates.records_path.parent / "canonical" / "candidate-manifest.json").exists()
     assert selections.selections_path.read_bytes() == b""
-    candidate_manifest = json.loads(candidates.manifest_path.read_bytes())
+    records_manifest = json.loads(candidates.manifest_path.read_bytes())
     selection_manifest = json.loads(selections.manifest_path.read_bytes())
-    assert candidate_manifest["retrieval_network_calls"] == 0
-    assert candidate_manifest["hosted_llm_calls"] == 0
+    assert records_manifest["row_counts"]["candidate"] == 0
+    assert selection_manifest["records_file"] == "records.sqlite3"
+    assert selection_manifest["records_manifest_file"] == "records-manifest.json"
+    assert selection_manifest["records_schema_version"] == "topic-records-v4"
+    assert selection_manifest["records_stage"] == "canonical-candidates-v1"
     assert selection_manifest["retrieval_network_calls"] == 0
     assert selection_manifest["hosted_llm_calls"] == 0
 
 
-def test_candidate_validation_streams_when_only_selected_candidates_are_required(
+def test_official_passage_path_preserves_query_provenance_into_candidate_links(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     topic = _topic()
-    decomposition = _decomposition(topic, fallback=True)
+    decomposition = _decomposition(topic)
     pilot_root = tmp_path / "pilot"
-    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=True)
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=False)
+
+    source = "Lead.\n\n  Evidence\t sentence about cafés and rents.  \nTail."
+    document_sha256 = _digest(source)
+    passage_start = source.index("Evidence")
+    passage_end = source.index(".", passage_start) + 1
+    passage_text = source[passage_start:passage_end]
+    passage_id = "official-passage"
+    query_id = "official-query-1"
+    subnarrative = decomposition.result.subnarratives[0]
+    passage_result = PassageSearchResult(
+        FocusedQuery(query_id, subnarrative.text, subnarrative.subnarrative_id),
+        "complete",
+        None,
+        1,
+        1,
+        1,
+        1,
+        (SourceDocument("doc-1", document_sha256, 1, 4.5, passage_id, 7.25),),
+        (SourcePassage(
+            passage_id,
+            "doc-1",
+            document_sha256,
+            1,
+            4.5,
+            passage_start,
+            passage_end,
+            len(source[:passage_start].encode()),
+            len(source[:passage_end].encode()),
+            _digest(passage_text),
+            passage_text,
+            7.25,
+            1,
+            "cache-official",
+            _digest(passage_text),
+            {"backend": "test", "implementation": "official"},
+        ),),
+        1,
+        False,
+    )
+    document_store_root = tmp_path / "objects"
+    DocumentStore(document_store_root).admit_text(
+        source,
+        expected_sha256=document_sha256,
+    )
+
     handoff = materialize_candidate_inputs(
         topic,
         decomposition,
         pilot_root=pilot_root,
-        output_dir=tmp_path / "canonical" / "handoff",
+        output_dir=tmp_path / topic.id / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+        passage_results=(passage_result,),
+        document_store_root=document_store_root,
+    )
+    request = json.loads(handoff.requests_path.read_bytes())
+    assert request["passages"][0]["query_id"] == query_id
+
+    artifacts = generate_candidate_artifacts(
+        handoff,
+        run_id="test-run",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        document_store_root=document_store_root,
+        scorer=_FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+        facets=(FacetRecord(subnarrative.subnarrative_id, subnarrative.text, "initial"),),
+        passage_results=(passage_result,),
+    )
+
+    connection = sqlite3.connect(artifacts.records_path)
+    try:
+        assert tuple(connection.execute(
+            "SELECT query_id FROM query_identity ORDER BY query_id"
+        )) == ((query_id,),)
+        assert tuple(connection.execute(
+            "SELECT l.query_id, qp.raw_logit, qp.passage_rank "
+            "FROM candidate_passage_link AS l "
+            "JOIN query_passage AS qp "
+            "ON qp.query_id=l.query_id AND qp.passage_pk=l.passage_pk"
+        )) == ((query_id, 7.25, 1),)
+    finally:
+        connection.close()
+
+
+def test_candidate_validation_opens_records_and_validates_all_sources(
+    tmp_path: Path,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=False)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / topic.id / "canonical" / "handoff",
         code_commit="a" * 40,
         official_topics_sha256="c" * 64,
     )
     artifacts = generate_candidate_artifacts(
-        handoff, score_cache_root=tmp_path / "score-cache", device="cpu"
+        handoff,
+        run_id="test-run",
+        score_cache_root=tmp_path / "score-cache",
+        device="cpu",
+        scorer=_FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+        document_store_root=tmp_path / "objects",
     )
-    original_read_bytes = Path.read_bytes
-
-    def reject_candidate_buffering(path: Path) -> bytes:
-        if path == artifacts.candidates_path:
-            raise AssertionError("candidate validation must stream the JSONL ledger")
-        return original_read_bytes(path)
-
-    monkeypatch.setattr(Path, "read_bytes", reject_candidate_buffering)
-
+    records_manifest = json.loads(artifacts.manifest_path.read_bytes())
+    stage_identity = json.loads(records_manifest["identity_json"])
+    assert stage_identity["source_sha256"] == _digest(
+        handoff.requests_path.read_bytes()
+    )
+    assert stage_identity["source_file"] == handoff.requests_path.name
+    assert stage_identity["scorer"] == _LiteralScorer.identity
+    assert stage_identity["sentence_splitter_version"] == "exact_rules_v1"
+    assert stage_identity["scoring_normalization_version"] == (
+        "trec_rag_whitespace_v1"
+    )
     assert load_validated_candidate_artifacts(
-        artifacts.candidates_path,
-        artifacts.manifest_path,
-        documents={},
-        subnarratives={},
+        artifacts,
+        expected_topic_id=topic.id,
         required_candidate_keys=frozenset(),
     ) == {}
+
+
+def test_candidate_generation_rejects_request_hash_tamper_before_publication(
+    tmp_path: Path,
+) -> None:
+    topic = _topic()
+    decomposition = _decomposition(topic)
+    pilot_root = tmp_path / "pilot"
+    _write_scoring_checkpoint(pilot_root, topic, decomposition, fallback=False)
+    handoff = materialize_candidate_inputs(
+        topic,
+        decomposition,
+        pilot_root=pilot_root,
+        output_dir=tmp_path / topic.id / "canonical" / "handoff",
+        code_commit="a" * 40,
+        official_topics_sha256="c" * 64,
+    )
+    rows = [
+        json.loads(line)
+        for line in handoff.requests_path.read_bytes().splitlines()
+    ]
+    rows[0]["passages"][0]["cross_encoder_score"] = 99.0
+    handoff.requests_path.write_bytes(
+        b"".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+            for row in rows
+        )
+    )
+
+    with pytest.raises(ValueError, match="request.*hash|sealed.*request"):
+        generate_candidate_artifacts(
+            handoff,
+            run_id="test-run",
+            score_cache_root=tmp_path / "score-cache",
+            device="cpu",
+            scorer=_FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+            document_store_root=tmp_path / "objects",
+        )
+
+    assert not (tmp_path / topic.id / "records.sqlite3").exists()
 
 
 def test_candidate_validation_rejects_semantic_tamper_in_an_unselected_row(
@@ -619,36 +1152,25 @@ def test_candidate_validation_rejects_semantic_tamper_in_an_unselected_row(
         topic,
         decomposition,
         pilot_root=pilot_root,
-        output_dir=tmp_path / "canonical" / "handoff",
+        output_dir=tmp_path / topic.id / "canonical" / "handoff",
         code_commit="a" * 40,
         official_topics_sha256="c" * 64,
     )
     artifacts = generate_candidate_artifacts(
         handoff,
+        run_id="test-run",
         score_cache_root=tmp_path / "score-cache",
         device="cpu",
         scorer=_FixedScorer(lambda pairs: tuple(1.0 for _ in pairs)),
+        document_store_root=tmp_path / "objects",
     )
-    rows = artifacts.candidates_path.read_bytes().splitlines()
-    tampered = json.loads(rows[0])
-    tampered["document_sha256"] = "0" * 64
-    rows[0] = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode()
-    candidate_bytes = b"\n".join(rows) + b"\n"
-    artifacts.candidates_path.write_bytes(candidate_bytes)
     manifest = json.loads(artifacts.manifest_path.read_bytes())
-    manifest["candidates_sha256"] = _digest(candidate_bytes)
-    manifest["output_sha256"] = _digest(candidate_bytes)
+    manifest["semantic_sha256"] = "0" * 64
     artifacts.manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
-    request = json.loads(handoff.requests_path.read_bytes().splitlines()[0])
 
-    with pytest.raises(ValueError, match="document_sha256"):
+    with pytest.raises(TopicRecordsIntegrityError, match="manifest bytes"):
         load_validated_candidate_artifacts(
-            artifacts.candidates_path,
-            artifacts.manifest_path,
-            documents={request["document_id"]: request["source"]},
-            subnarratives={
-                row["subnarrative_id"]: row["text"]
-                for row in request["subnarratives"]
-            },
+            artifacts,
+            expected_topic_id=topic.id,
             required_candidate_keys=frozenset(),
         )

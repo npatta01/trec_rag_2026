@@ -11,13 +11,19 @@ import trec_rag.canonical_nuggets as canonical_nuggets
 import trec_rag.facet_pilot_config as facet_pilot_config
 import trec_rag.nuggetizer_adapter as nuggetizer_adapter
 import trec_rag.competition_retrieval as competition_retrieval
-from trec_rag.competition_debug_report import load_debug_report_data, render_debug_report
 from trec_rag.facet_extraction import BackendReply
 from trec_rag.facet_pilot_config import load_facet_pilot_config
 from trec_rag.facet_retrieval import LaneDocumentScore, PassageScore
-from trec_rag.competition_retrieval import ExternalAdapters, RunReceipt, run_official
+from trec_rag.competition_retrieval import (
+    ExternalAdapters,
+    RunReceipt,
+    _configured_passage_search_identity,
+    run_official,
+)
+from trec_rag.mixedbread_passage_scorer import ScoredPassage as MixedbreadScoredPassage
 from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
 from trec_rag.retrieval_export import RetrievalExportReceipt
+from trec_rag.topic_dispatch import TopicDispatchError
 from trec_rag.topics import Topic
 
 
@@ -35,7 +41,7 @@ def _write_config(
     config = root / "official.yaml"
     config.write_text(
         f"""\
-schema_version: facet_pilot_config_v1
+schema_version: facet_pilot_config_v2
 experiment:
   id: {experiment_id}
 topics:
@@ -44,14 +50,14 @@ retrieval:
   index: climbmix-test
   cache_dir: cache/retrieval
   query_sources: [original, subnarrative]
-  candidate_depth_per_query: 7
-reranking:
+  documents_per_query: 1000
+passage:
   model: mixedbread-ai/mxbai-rerank-base-v2
   score_cache_dir: cache/reranker
   device: cpu
-  rerank_depth_per_query: 5
-  candidate_pool_depth: 3
-  selection_policy: round_robin_subnarrative_coverage
+  passages_per_query: 100
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
 nuggets:
   evidence_budget_per_subnarrative: 2
   maximum_claims_per_subnarrative: 1
@@ -127,7 +133,10 @@ def test_config_routes_relative_reusable_caches_to_shared_checkout(
     config = load_facet_pilot_config(_write_config(worktree))
 
     assert config.retrieval.cache_dir == shared / "cache" / "retrieval"
-    assert config.reranking.score_cache_dir == shared / "cache" / "reranker"
+    assert config.passage.score_cache_dir == shared / "cache" / "reranker"
+    assert competition_retrieval.document_store_dir(config.root_dir) == (
+        shared / "cache" / "documents" / "v1"
+    )
 
 
 def test_config_rejects_reusable_cache_outside_shared_cache(tmp_path: Path) -> None:
@@ -213,9 +222,9 @@ def test_config_rejects_duplicate_yaml_keys_recursively(
     source = config_path.read_text(encoding="utf-8")
     if level == "top-level":
         source = source.replace(
-            "schema_version: facet_pilot_config_v1\n",
-            "schema_version: facet_pilot_config_v1\n"
-            "schema_version: facet_pilot_config_v1\n",
+            "schema_version: facet_pilot_config_v2\n",
+            "schema_version: facet_pilot_config_v2\n"
+            "schema_version: facet_pilot_config_v2\n",
             1,
         )
     else:
@@ -237,7 +246,14 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
     """Catches reordered topics, dropped configured limits, and renamed export files."""
     config_path = _write_config(tmp_path)
     planning_backend = object()
-    retriever = object()
+    retriever_identity = {
+        "name": "fixture-retriever",
+        "type": "fixture",
+        "index": "climbmix-test",
+        "index_url": "https://retrieval.invalid/search",
+        "hits": 1000,
+    }
+    retriever = SimpleNamespace(identity=retriever_identity)
     canonical_factory = lambda: object()
     local = competition_retrieval._RuntimeDependencies(
         code_commit="a" * 40,
@@ -246,8 +262,9 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         similarity=object(),
         cache_ignore_checker=lambda _path: True,
     )
-    calls: list[tuple[object, object, object, object]] = []
+    calls: list[tuple[object, object, object, object, object]] = []
     export_events: list[str] = []
+    projection_receipts: dict[str, object] = {}
 
     monkeypatch.setattr(
         competition_retrieval, "_production_dependencies", lambda: local
@@ -256,37 +273,69 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
     )
 
-    def run_topic(topic, config, identity, dependencies):
-        calls.append((topic, config, identity, dependencies))
-        (config.output_dir / topic.id / "canonical").mkdir(
-            parents=True,
-            exist_ok=True,
+    def missing_projection(_config, _topic):
+        raise ValueError("expanded canonical checkpoint is missing")
+
+    monkeypatch.setattr(
+        competition_retrieval,
+        "read_topic_projection_receipt",
+        missing_projection,
+        raising=False,
+    )
+
+    def run_topic(
+        topic,
+        config,
+        identity,
+        dependencies,
+        *,
+        config_sha256,
+        expected_retriever_identity,
+    ):
+        assert len(config_sha256) == 64
+        calls.append(
+            (topic, config, identity, dependencies, expected_retriever_identity)
         )
-        (config.output_dir / topic.id / "canonical" / "complete.json").write_text(
-            "{}",
-            encoding="utf-8",
+        manifest_bytes = b"{}\n"
+        manifest_path = (
+            config.output_dir
+            / topic.id
+            / "canonical"
+            / "retrieval-projection-manifest.json"
         )
-        return competition_retrieval.TopicPhaseOutcome(
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_bytes(manifest_bytes)
+        projection_receipt = SimpleNamespace(
+            topic_id=topic.id,
+            manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        )
+        projection_receipts[topic.id] = projection_receipt
+        return competition_retrieval._TopicTaskOutcome(
             topic.id,
-            "canonical",
-            config.output_dir / topic.id / "canonical" / "complete.json",
             False,
+            projection_receipt,
         )
 
-    def export(config, topics, *, code_commit):
+    def export(config, topics, projection_receipts, *, code_commit):
         assert [topic.id for topic in topics] == ["topic-2", "topic-1"]
+        assert [receipt.topic_id for receipt in projection_receipts] == [
+            "topic-2",
+            "topic-1",
+        ]
         assert code_commit == "a" * 40
         export_events.append("written")
         output = config.output_dir
         return RetrievalExportReceipt(
             official_run=output / "r_output_trec_rag_2026.tsv",
             with_text_archive=output / "retrieval_with_text.jsonl.zip",
+            generation_handoff=output / "generation_handoff_manifest.json",
             manifest=output / "retrieval_export_manifest.json",
         )
 
     validated_export = RetrievalExportReceipt(
         official_run=tmp_path / "validated" / "r_output_trec_rag_2026.tsv",
         with_text_archive=tmp_path / "validated" / "retrieval_with_text.jsonl.zip",
+        generation_handoff=tmp_path / "validated" / "generation_handoff_manifest.json",
         manifest=tmp_path / "validated" / "retrieval_export_manifest.json",
     )
 
@@ -298,6 +347,25 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
         return validated_export
 
     monkeypatch.setattr(competition_retrieval, "_run_topic", run_topic)
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_topic_completion_for_dispatch",
+        lambda _config, _topic: ("complete", "coverage_sufficient"),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "validate_retrieval_topic_checkpoints",
+        lambda _config, topics, **_kwargs: tuple(
+            projection_receipts[topic.id] for topic in topics
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_decomposition_producer_sha256",
+        lambda topic, _output_dir, _backend: hashlib.sha256(
+            f"fixture-producer:{topic.id}".encode()
+        ).hexdigest(),
+    )
     monkeypatch.setattr(competition_retrieval, "export_retrieval_run", export)
     monkeypatch.setattr(
         competition_retrieval, "read_retrieval_export_receipt", read_export
@@ -322,38 +390,52 @@ def test_run_official_preserves_source_order_and_returns_only_export_receipt(
     assert receipt.retrieval_export.manifest.name == "retrieval_export_manifest.json"
     assert receipt.retrieval_export is validated_export
     assert export_events == ["written", "validated"]
-    assert [topic.id for topic, _config, _identity, _dependencies in calls] == [
+    assert [
+        topic.id
+        for topic, _config, _identity, _dependencies, _retriever_identity in calls
+    ] == [
         "topic-2",
         "topic-1",
     ]
-    for _topic, config, identity, dependencies in calls:
+    for _topic, config, identity, dependencies, expected_identity in calls:
         assert len(identity) == 64
+        assert expected_identity == retriever_identity
         assert dependencies.planning_backend is planning_backend
         assert dependencies.retriever is retriever
         assert dependencies.document_scorer is local.document_scorer
         assert dependencies.candidate_scorer is local.candidate_scorer
         assert dependencies.similarity is local.similarity
         assert dependencies.canonical_backend_factory is canonical_factory
-        assert config.retrieval.candidate_depth_per_query == 7
-        assert config.reranking.rerank_depth_per_query == 5
-        assert config.reranking.candidate_pool_depth == 3
+        assert config.retrieval.documents_per_query == 1000
+        assert config.passage.passages_per_query == 100
+        assert config.passage.chunk_max_characters == 3500
+        assert config.passage.chunk_overlap_characters == 350
         assert config.nuggets.evidence_budget_per_subnarrative == 2
         assert config.nuggets.maximum_claims_per_subnarrative == 1
         assert config.nuggets.maximum_supporting_documents_per_claim == 1
 
 
-def test_run_official_rejects_corrupt_resumed_seal_before_dependencies(
+def test_run_official_rejects_corrupt_unsealed_checkpoint_before_topic_work(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Catches existence-only resume checks that construct dependencies too early."""
+    """A partial topic is never mistaken for a run-bound dispatch receipt."""
     config_path = _write_config(tmp_path)
     corrupt = tmp_path / "outputs" / "official-interface-test" / "topic-2" / "canonical"
     corrupt.mkdir(parents=True)
     (corrupt / "complete.json").write_text("{}", encoding="utf-8")
+    dependency_calls: list[bool] = []
+    local = competition_retrieval._RuntimeDependencies(
+        code_commit="a" * 40,
+        document_scorer=object(),
+        candidate_scorer=object(),
+        similarity=object(),
+        cache_ignore_checker=lambda _path: True,
+    )
 
     def dependencies():
-        raise AssertionError("corrupt seals must fail before dependency construction")
+        dependency_calls.append(True)
+        return local
 
     monkeypatch.setattr(
         competition_retrieval, "_production_dependencies", dependencies
@@ -362,8 +444,25 @@ def test_run_official_rejects_corrupt_resumed_seal_before_dependencies(
         competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
     )
 
-    with pytest.raises(ValueError):
-        run_official(config_path, topic_ids=("topic-2",))
+    with pytest.raises(TopicDispatchError, match="canonical checkpoint"):
+        run_official(
+            config_path,
+            topic_ids=("topic-2",),
+            external=ExternalAdapters(
+                planning_backend=object(),
+                retriever=SimpleNamespace(
+                    identity={
+                        "name": "fixture-retriever",
+                        "type": "fixture",
+                        "index": "climbmix-test",
+                        "index_url": "https://retrieval.invalid/search",
+                        "hits": 1000,
+                    }
+                ),
+                canonical_backend_factory=lambda: object(),
+            ),
+        )
+    assert dependency_calls == [True]
 
 
 def test_run_official_rejects_dirty_tree_before_corrupt_resumed_seal(
@@ -399,7 +498,7 @@ def _write_pipeline_config(root: Path) -> Path:
     path = root / "pipeline.yaml"
     path.write_text(
         """\
-schema_version: facet_pilot_config_v1
+schema_version: facet_pilot_config_v2
 experiment:
   id: public-e2e
 topics:
@@ -408,14 +507,14 @@ retrieval:
   index: climbmix-test
   cache_dir: cache/retrieval
   query_sources: [original, subnarrative]
-  candidate_depth_per_query: 3
-reranking:
+  documents_per_query: 1000
+passage:
   model: mixedbread-ai/mxbai-rerank-base-v2
   score_cache_dir: cache/reranker
   device: cpu
-  rerank_depth_per_query: 3
-  candidate_pool_depth: 2
-  selection_policy: round_robin_subnarrative_coverage
+  passages_per_query: 100
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
 nuggets:
   evidence_budget_per_subnarrative: 2
   maximum_claims_per_subnarrative: 1
@@ -445,6 +544,11 @@ def _plan(topic_id: str) -> dict[str, object]:
 
 class _PlanningBackend:
     def __init__(self, *, reject: bool = False) -> None:
+        self.identity = {
+            "backend": "fixture-planner",
+            "model": "fixture-v1",
+            "prompt_version": "fixture-v1",
+        }
         self.reject = reject
         self.calls: list[Topic] = []
 
@@ -455,12 +559,41 @@ class _PlanningBackend:
         return _plan(topic.id)
 
 
+def test_decomposition_checkpoint_rejects_changed_planner_identity(
+    tmp_path: Path,
+) -> None:
+    topic = Topic("housing-1", "", "Explain housing impacts.")
+    first_backend = _PlanningBackend()
+
+    _result, resumed = competition_retrieval._decompose_topic(
+        topic,
+        tmp_path,
+        first_backend,
+    )
+    assert resumed is False
+    assert len(first_backend.calls) == 1
+
+    changed_backend = _PlanningBackend()
+    changed_backend.identity = {
+        **first_backend.identity,
+        "prompt_version": "fixture-v2",
+    }
+    with pytest.raises(ValueError, match="planner identity changed"):
+        competition_retrieval._decompose_topic(
+            topic,
+            tmp_path,
+            changed_backend,
+        )
+
+    assert changed_backend.calls == []
+
+
 class _Retriever:
     identity = {
         "name": "fake-climbmix",
         "index": "climbmix-test",
         "index_url": "https://retrieval.invalid/search",
-        "hits": 3,
+        "hits": 1000,
     }
 
     def __init__(self) -> None:
@@ -485,12 +618,30 @@ class _Retriever:
 
 
 class _DocumentScorer:
-    identity = {
-        "model": "mixedbread-ai/mxbai-rerank-base-v2",
-        "model_revision": "3ea9d4dffa7d12a4f366be8e275c349de9fc9865",
-        "backend_version": "test",
-        "score_representation": "raw_logits",
-    }
+    def __init__(self) -> None:
+        self.identity = dict(
+            _configured_passage_search_identity(
+                retrieval_depth=1000,
+                passages_per_query=100,
+                chunk_max_characters=3500,
+                chunk_overlap_characters=350,
+                model="mixedbread-ai/mxbai-rerank-base-v2",
+                device="cpu",
+            )["scorer"]
+        )
+
+    @staticmethod
+    def cache_key(query_text: str, passage_text: str) -> str:
+        return hashlib.sha256(f"{query_text}\0{passage_text}".encode()).hexdigest()
+
+    @staticmethod
+    def rank(query_text: str, chunks: object) -> tuple[MixedbreadScoredPassage, ...]:
+        del query_text
+        rows = tuple(chunks)
+        return tuple(
+            MixedbreadScoredPassage(chunk, float(len(rows) - index))
+            for index, chunk in enumerate(rows)
+        )
 
     def score_lane(self, _topic: Topic, lane: object, candidates: object) -> tuple[LaneDocumentScore, ...]:
         return tuple(
@@ -527,6 +678,7 @@ class _CandidateScorer:
         "inference_dtype": "float32",
         "score_kind": "extractive_sentence_v1",
         "sentence_max_length": 512,
+        "input_policy": "trec_rag_whitespace_v1",
     }
 
     def __init__(self) -> None:
@@ -565,6 +717,7 @@ class _CanonicalBackend:
                     {
                         "claim": f"Canonical claim for {request.subnarrative_id}.",
                         "evidence_aliases": ["e001"],
+                        "importance": "vital",
                     }
                 ]
             }
@@ -638,6 +791,58 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
         retriever=retriever,
     )
 
+    real_build_topic_projection = getattr(
+        competition_retrieval, "build_topic_projection", None
+    )
+    assert real_build_topic_projection is not None
+    build_events: list[str] = []
+
+    def build_topic_projection(*args, **kwargs):
+        complete = (
+            tmp_path
+            / "outputs"
+            / "public-e2e"
+            / "housing-1"
+            / "canonical"
+            / "complete.json"
+        )
+        assert not complete.exists()
+        build_events.append("before")
+        receipt = real_build_topic_projection(*args, **kwargs)
+        assert complete.is_file()
+        assert (
+            complete.parent / "retrieval-projection.json"
+        ).is_file()
+        assert (
+            complete.parent / "retrieval-projection-manifest.json"
+        ).is_file()
+        expanded = json.loads(complete.read_bytes())
+        assert {
+            row["relative_path"] for row in expanded["artifacts"]
+        } == {
+            "canonical/handoff/candidate-requests.jsonl",
+            "canonical/handoff/selection-contexts.jsonl",
+            "canonical/handoff/handoff-manifest.json",
+            "records.sqlite3",
+            "canonical/records-manifest.json",
+            "canonical/subnarrative-selections.jsonl",
+            "canonical/selection-manifest.json",
+            "canonical/canonical-nuggets.jsonl",
+                "canonical/canonical-nugget-manifest.json",
+                "canonical/retrieval-projection.json",
+                "canonical/retrieval-projection-manifest.json",
+                "canonical/generation-projection.json",
+                "canonical/generation-projection-manifest.json",
+            }
+        build_events.append("after")
+        return receipt
+
+    monkeypatch.setattr(
+        competition_retrieval,
+        "build_topic_projection",
+        build_topic_projection,
+    )
+
     first = run_official(config, external=adapters)
     output = tmp_path / "outputs" / "public-e2e"
     before = {
@@ -652,10 +857,26 @@ def test_public_run_executes_one_topic_without_network_and_resumes(
         if path.is_file()
     }
 
+    changed_planner = _PlanningBackend()
+    changed_planner.identity = {
+        **planning.identity,
+        "prompt_version": "fixture-v2",
+    }
+    with pytest.raises(ValueError, match="planner identity changed"):
+        run_official(
+            config,
+            external=ExternalAdapters(
+                planning_backend=changed_planner,
+                retriever=retriever,
+            ),
+        )
+
     assert first.selected_topic_ids == ("housing-1",)
     assert second.resumed_topic_ids == ("housing-1",)
+    assert build_events == ["before", "after"]
     assert before == after
     assert len(planning.calls) == 1
+    assert changed_planner.calls == []
     assert wrapper_factories == [True]
     assert len(canonical.requests) == 2
     canonical_rows = [
@@ -699,8 +920,7 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Catches fallback exports that invent canonical support or skip publication."""
-    import zipfile
+    """A plan failure cannot fabricate selected evidence for generation."""
 
     config = _write_pipeline_config(tmp_path)
     planning = _PlanningBackend(reject=True)
@@ -717,14 +937,15 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
         lambda: _local_dependencies(candidate_scorer, similarity),
     )
 
-    receipt = run_official(
-        config,
-        external=ExternalAdapters(
-            planning_backend=planning,
-            retriever=retriever,
-            canonical_backend_factory=lambda: canonical_factories.append(True),
-        ),
-    )
+    with pytest.raises(TopicDispatchError, match="no supported document"):
+        run_official(
+            config,
+            external=ExternalAdapters(
+                planning_backend=planning,
+                retriever=retriever,
+                canonical_backend_factory=lambda: canonical_factories.append(True),
+            ),
+        )
 
     canonical_root = tmp_path / "outputs" / "public-e2e" / "housing-1" / "canonical"
     decomposition = json.loads(
@@ -737,64 +958,118 @@ def test_rejected_plan_exports_original_only_without_downstream_hosted_calls(
             / "result.json"
         ).read_text(encoding="utf-8")
     )
-    exported = receipt.retrieval_export
     assert decomposition["error"] == "RuntimeError"
-    assert receipt.selected_topic_ids == ("housing-1",)
-    assert all(
-        path.is_file()
-        for path in (
-            exported.official_run,
-            exported.with_text_archive,
-            exported.manifest,
-        )
-    )
-    assert all(
-        not (exported.official_run.parent / name).exists()
-        for name in (
-            "retrieval_candidate_pool.trec",
-            "retrieval_provenance.jsonl",
-            "resolved_config.yaml",
-        )
-    )
-    assert exported.official_run.read_bytes() == (
-        b"housing-1 Q0 original-d1 1 2 public-e2e\n"
-        b"housing-1 Q0 original-d2 2 1 public-e2e\n"
-    )
-    with zipfile.ZipFile(exported.with_text_archive) as archive:
-        assert archive.namelist() == ["retrieval_with_text.jsonl"]
-        with_text = json.loads(archive.read("retrieval_with_text.jsonl"))
-    assert [row["docid"] for row in with_text["candidates"]] == [
-        "original-d1",
-        "original-d2",
-    ]
-    manifest = json.loads(exported.manifest.read_bytes())
-    assert manifest["official_row_count"] == 2
-    assert manifest["topic_depths"] == {
-        "housing-1": {"official": 2, "natural_union": 3}
-    }
-    assert retriever.calls == ["original", "original"]
+    output = canonical_root.parent.parent
+    assert not (output / "retrieval_export_manifest.json").exists()
+    assert not (output / "generation_handoff_manifest.json").exists()
+    assert retriever.calls == ["original"]
     assert candidate_scorer.calls == []
     assert similarity.calls == []
     assert canonical_factories == []
     assert (canonical_root / "canonical-nuggets.jsonl").read_bytes() == b""
 
-    report_data = load_debug_report_data(config)
-    report_topic = report_data.topics[0]
-    assert report_topic.original_only_fallback is True
-    assert report_topic.subnarratives == ()
-    assert report_topic.new_documents == ()
-    assert report_topic.passage_rankings == ()
-    assert report_topic.evidence_clusters == ()
-    assert report_topic.canonical_results == ()
-    assert [row.docid for row in report_topic.retrieval_output.documents] == [
-        "original-d1",
-        "original-d2",
-    ]
-    assert {
-        row.stage for row in report_topic.retrieval_output.documents
-    } == {"original_only_fallback"}
 
-    rendered = render_debug_report(report_data)
-    assert "Original-only fallback" in rendered
-    assert "No generated subnarratives" in rendered
-    assert "Final retrieval uses the sealed original-only selected pool" in rendered
+def test_public_run_rejects_base_only_legacy_checkpoint_without_hosted_or_model_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _write_pipeline_config(tmp_path)
+    planning = _PlanningBackend()
+    retriever = _Retriever()
+    candidate_scorer = _CandidateScorer()
+    similarity = _Similarity()
+    canonical = _CanonicalBackend()
+
+    monkeypatch.setattr(
+        competition_retrieval, "_tracked_worktree_is_dirty", lambda _repo: False
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_production_dependencies",
+        lambda: _local_dependencies(candidate_scorer, similarity),
+    )
+    run_official(
+        config,
+        external=ExternalAdapters(
+            planning_backend=planning,
+            retriever=retriever,
+            canonical_backend_factory=lambda: canonical,
+        ),
+    )
+    planning_calls = len(planning.calls)
+    retrieval_calls = len(retriever.calls)
+    canonical_calls = len(canonical.requests)
+
+    canonical_root = tmp_path / "outputs" / "public-e2e" / "housing-1" / "canonical"
+    complete = canonical_root / "complete.json"
+    legacy = json.loads(complete.read_bytes())
+    legacy["artifacts"] = [
+        row
+        for row in legacy["artifacts"]
+        if not row["relative_path"].startswith(
+            (
+                "canonical/retrieval-projection",
+                "canonical/generation-projection",
+            )
+        )
+    ]
+    complete.write_bytes(
+        (
+            json.dumps(
+                legacy,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+    )
+    (canonical_root / "retrieval-projection.json").unlink()
+    (canonical_root / "retrieval-projection-manifest.json").unlink()
+    (canonical_root / "generation-projection.json").unlink()
+    (canonical_root / "generation-projection-manifest.json").unlink()
+    (
+        tmp_path
+        / "outputs"
+        / "public-e2e"
+        / "housing-1"
+        / "topic-job-receipt.json"
+    ).unlink()
+
+    class _FailingPlanning:
+        def extract(self, _topic: Topic) -> object:
+            raise AssertionError("legacy checkpoint rejection must not plan")
+
+    class _FailingRetriever:
+        identity = dict(_Retriever.identity)
+
+        def retrieve(self, _query: QueryVariant) -> list[RetrievedCandidate]:
+            raise AssertionError("legacy checkpoint rejection must not retrieve")
+
+    def failing_canonical_factory() -> object:
+        raise AssertionError(
+            "legacy checkpoint rejection must not call the canonical backend"
+        )
+
+    base_only_complete = complete.read_bytes()
+    with pytest.raises(
+        TopicDispatchError,
+        match="legacy canonical checkpoint is incompatible",
+    ):
+        run_official(
+            config,
+            external=ExternalAdapters(
+                planning_backend=_FailingPlanning(),
+                retriever=_FailingRetriever(),
+                canonical_backend_factory=failing_canonical_factory,
+            ),
+        )
+
+    assert len(planning.calls) == planning_calls
+    assert len(retriever.calls) == retrieval_calls
+    assert len(canonical.requests) == canonical_calls
+    assert complete.read_bytes() == base_only_complete
+    assert not (canonical_root / "retrieval-projection.json").exists()
+    assert not (canonical_root / "retrieval-projection-manifest.json").exists()
+    assert not (canonical_root / "generation-projection.json").exists()
+    assert not (canonical_root / "generation-projection-manifest.json").exists()

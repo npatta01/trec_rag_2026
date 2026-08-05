@@ -66,22 +66,22 @@ coding agent working in this repository.
   `trec-rag-skills/skills/pyserini-rest-api/SKILL.md` for API mechanics and
   token-safety rules.
 - The supported competition workflow has two ordered commands. Retrieval must
-  finish first because RAG consumes its run TSV and full-text ZIP:
+  finish first and publish the sealed selected-evidence handoff before RAG:
 
   ```bash
   .venv/bin/python-rocm -m trec_rag.competition_retrieval \
-    configs/rag26_competition_retrieval_v1.yaml
+    configs/rag26_competition_retrieval_v2.yaml
 
   .venv/bin/python -m trec_rag.competition_rag \
-    --config configs/rag26_competition_rag_gpt_sol_v1.yaml
+    --config configs/rag26_competition_rag_gpt_sol_v2.yaml
   ```
 
 - The checked-in configs are the canonical full-run configs and select all 119
   test narratives by default. Do not use them for an exploratory one-, two-, or
   three-topic run. Follow the two-topic smoke instructions in
   `code/trec_rag/README.md`: copy both configs into ignored `configs/local/`,
-  assign unique experiment IDs/output directories, point the RAG inputs at the
-  smoke retrieval outputs, and set the RAG `inputs.topic_ids` to the same IDs.
+  assign unique experiment IDs/output directories, point the RAG input at the
+  smoke retrieval handoff, and set RAG `experiment.topic_ids` to the same IDs.
   Bound retrieval with one repeated selector per narrative:
 
   ```bash
@@ -110,9 +110,11 @@ coding agent working in this repository.
   explicit user authorization because it deletes that RAG config's generation
   JSONL and dedicated `work/` directory.
 - Verify retrieval by reading its manifest-last receipt and confirming
-  `r_output_trec_rag_2026.tsv` plus `retrieval_with_text.jsonl.zip`. Verify RAG
-  by validating `rag_output_trec_rag_2026.jsonl` against the official topic IDs,
-  narratives, document IDs, word limit, and citation rules.
+  `generation_handoff_manifest.json` plus the organizer-facing TREC run and
+  full-text ZIP. Verify RAG by validating `rag_output_trec_rag_2026.jsonl`
+  against the handoff's exact topic IDs, narratives, citation domains, word
+  limit, and organizer citation rules. Generation must never open the TREC run,
+  full-text ZIP, qrels, gold nuggets, or RAGDoll scores.
 - Keep `outputs/`, caches, raw corpus text, generated claims, provider responses,
   and debug reports private. Do not commit, publish, serve, or copy them into a
   rendered-artifact directory without explicit authorization and a privacy
