@@ -22,7 +22,7 @@ selection quality. k falls out of where ledger evidence ends.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Literal, Protocol, Sequence
 
 if TYPE_CHECKING:
     from trec_rag.deepagent_evidence import EvidenceCoverageReport
@@ -168,6 +168,131 @@ def submission_rows(
             "run_id": run_id,
         }
         for index, row in enumerate(ranked, start=1)
+    )
+
+
+class _CandidateLike(Protocol):
+    """Anything that names a document at a position: a retrieved or fused row."""
+
+    docid: str
+    rank: int
+
+
+class _SearchLike(Protocol):
+    """One completed search, as the agentic runner records it."""
+
+    candidates: Sequence[_CandidateLike]
+
+
+_OrderSource = Literal["fused", "search", "unplaced"]
+
+
+@dataclass(frozen=True)
+class AgenticDocumentRank:
+    """One submitted document, its rank, and where its position came from."""
+
+    document_id: str
+    rank: int
+    score: int
+    order_source: _OrderSource
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "document_id": self.document_id,
+            "rank": self.rank,
+            "score": self.score,
+            "order_source": self.order_source,
+        }
+
+
+def _grounded_document_ids(report: "EvidenceCoverageReport") -> set[str]:
+    """The documents that back a claim the ledger still stands behind.
+
+    A superseded nugget was replaced by a better one, so it no longer vouches
+    for anything, and a document that was merely retrieved or read never
+    grounded a claim at all.
+    """
+    return {
+        reference.document_id
+        for nugget in report.nuggets
+        if nugget.superseded_by is None
+        for reference in nugget.evidence
+    }
+
+
+def rank_agentic_documents(
+    report: "EvidenceCoverageReport",
+    *,
+    fused_candidates: Sequence[_CandidateLike] = (),
+    searches: Sequence[_SearchLike] = (),
+) -> tuple[AgenticDocumentRank, ...]:
+    """Rank the grounded documents at whatever depth the ledger reached.
+
+    Membership and ordering are separate questions. The ledger decides *which*
+    documents are submitted, so k is variable and no depth is padded. Retrieval
+    decides *how* they are ordered, because the ledger's own usefulness weights
+    are not calibrated across narratives:
+
+    1. documents that survived into the final fused candidates keep that order,
+       which is the run's best evidence-independent ranking;
+    2. the rest fall back to the earliest ``(search ordinal, passage rank,
+       document id)`` any immutable search sighting gave them, so a document
+       fusion dropped is placed by when retrieval first found it rather than by
+       when an agent happened to cite it;
+    3. a grounded document that appears in neither — a snippet read outside the
+       recorded candidate sequences — is still submitted, last, by document id,
+       rather than silently dropped from evidence.
+
+    Scores are ``document_count - rank + 1``: positive, strictly decreasing
+    integers that carry the order the run-file contract needs and claim no
+    calibrated magnitude the agentic run cannot support.
+
+    Both sequences are accepted structurally, so this stays free of the runner's
+    import graph; duplicates collapse to a document's first accepted position.
+    """
+    grounded = _grounded_document_ids(report)
+    if not grounded:
+        return ()
+
+    placed: set[str] = set()
+    fused_order: list[str] = []
+    for candidate in fused_candidates:
+        document_id = candidate.docid
+        if document_id in grounded and document_id not in placed:
+            placed.add(document_id)
+            fused_order.append(document_id)
+
+    earliest: dict[str, tuple[int, int]] = {}
+    for ordinal, search in enumerate(searches):
+        for candidate in search.candidates:
+            document_id = candidate.docid
+            if document_id not in grounded or document_id in placed:
+                continue
+            sighting = (ordinal, int(candidate.rank))
+            seen_at = earliest.get(document_id)
+            if seen_at is None or sighting < seen_at:
+                earliest[document_id] = sighting
+
+    search_order = sorted(
+        earliest,
+        key=lambda document_id: (*earliest[document_id], document_id),
+    )
+    unplaced = sorted(grounded - placed - set(earliest))
+
+    ordered: list[tuple[str, _OrderSource]] = [
+        *((document_id, "fused") for document_id in fused_order),
+        *((document_id, "search") for document_id in search_order),
+        *((document_id, "unplaced") for document_id in unplaced),
+    ]
+    document_count = len(ordered)
+    return tuple(
+        AgenticDocumentRank(
+            document_id=document_id,
+            rank=rank,
+            score=document_count - rank + 1,
+            order_source=order_source,
+        )
+        for rank, (document_id, order_source) in enumerate(ordered, start=1)
     )
 
 
