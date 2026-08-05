@@ -234,6 +234,132 @@ planning, retrieval, evidence, and canonicalization; they belong only in
 post-seal evaluation. Outputs include source text and generated claims, so keep
 `outputs/` ignored and private.
 
+### Splitting one run across hosts
+
+Topic selection plus per-topic sealing make it practical to run part of a run on
+a rented GPU box and finish it locally. Partition the topics with
+`--topic-subset`, never overlap the two sets, and copy the remote work back
+before the final local run. Sealed topics revalidate and are skipped, the
+remaining topics run locally, and the export is regenerated over every selected
+topic, so the organizer TSV, full-text ZIP, and handoff never need manual
+merging.
+
+The downloadable artifact is **two directories**, not one:
+
+| Path | Required | Why |
+| --- | --- | --- |
+| `outputs/<experiment.id>/<topic-id>/` | yes | sealed per-topic checkpoints, ledger, and receipts |
+| `cache/documents/v1/` | yes | content-addressed document text the export reads for every row |
+| `cache/retrieval/pyserini_remote/` | no | avoids re-querying the hosted index if a topic is rerun |
+| `cache/canonical/<prompt-version>/` | no | avoids re-paying for hosted canonical calls on a rerun |
+| `cache/reranker/` | **no — do not copy** | the score database path is derived from the scoring context, so both hosts write the same filename with different contents and a copy clobbers local scores |
+
+Skipping `cache/documents/v1/` is the quiet failure: the checkpoints validate
+and the export then fails on missing document text. Both required directories
+are content-addressed or topic-scoped, so they merge by copy.
+
+Both hosts must agree on the things the checkpoints seal, or resume fails
+closed:
+
+- **The same config bytes.** The YAML SHA-256 is sealed into every dispatch and
+  projection receipt, so `experiment.id` and every other field must be
+  byte-identical on both hosts.
+- **`passage.device` pinned, not `auto`.** The resolved device string is part of
+  the sealed passage-search identity, and the exporting host recomputes it.
+  `auto` resolving to `cpu` remotely and `cuda` locally rejects the download.
+  The checked-in config pins `cuda`, which both ROCm and NVIDIA report.
+- **The same `INDEX_URL`.** It is part of the retriever identity and is required
+  even for a resume-and-export pass that issues no queries.
+- **A clean tracked worktree containing real git metadata.** The runner rejects
+  a dirty tree and reads `HEAD` for the recorded commit, so ship a checkout
+  rather than a file tarball.
+- **No commit change inside a topic.** All phases of one topic must share a
+  commit; different topics may carry different commits.
+- **Both pinned model snapshots pre-cached.** The retrieval path loads two, each
+  at a pinned revision with `local_files_only=True`, and each must resolve from
+  the cache alone before a run starts:
+
+  | Snapshot | Revision | Loaded by |
+  | --- | --- | --- |
+  | `mixedbread-ai/mxbai-rerank-base-v2` | `3ea9d4dffa7d12a4f366be8e275c349de9fc9865` | passage scoring |
+  | `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | evidence selection |
+
+  `code/tools/setup_cuda_env.sh` fetches both and re-resolves each with
+  `local_files_only=True`. Caching only the reranker is the trap: selection runs
+  *after* passage scoring, so the missing MiniLM surfaces as a late failure with
+  the expensive stage already paid for.
+
+Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
+CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
+same `sentence-transformers`, `transformers`, and `numpy` versions the `rocm`
+group resolves to, so reranker score-cache entries stay interchangeable and the
+recorded backend version stays honest. The two groups are declared conflicting,
+so `uv.lock` carries separate CUDA and ROCm resolution forks. Regenerate it on a
+ROCm host whenever either group changes, because `repo.radeon.com` must be
+reachable while uv resolves both forks.
+
+`code/tools/verify_torch_groups.sh` proves three things without installing
+anything:
+
+1. **`uv.lock` is current with `pyproject.toml`.** `uv lock --check` re-resolves
+   and compares the result against the committed lock, failing if they differ.
+   It never writes the lock and never installs, but it does re-resolve, so it
+   needs package-index access.
+2. **Each group selects the torch build it should.** `uv export --frozen` reads
+   the committed lock alone. The `rocm` group must resolve a `repo.radeon.com`
+   wheel. The `cuda` group must resolve *exactly* `torch==2.9.1` — a direct URL,
+   a CPU wheel, or any other version fails — and the export must also carry the
+   `nvidia-cuda-runtime`, `nvidia-cublas`, and `nvidia-cudnn` packages a
+   GPU-enabled wheel depends on, which is what separates the real build from a
+   CPU-only one published under the same version.
+3. **That `cuda` torch comes from PyPI.** The requirements format renders every
+   registry package as `name==version` with no source attached, so
+   `torch==2.9.1` reads identically whether PyPI, a mirror, or a private index
+   served it. To settle it, the script also exports the same group as PEP 751
+   metadata (`uv export --frozen --group cuda --format pylock.toml`), which does
+   record a per-package index, and requires the single `torch` entry there to be
+   version `2.9.1` with index exactly `https://pypi.org/simple`. Asking uv for
+   the group-scoped export is what keeps this honest — reading an unscoped
+   multi-fork `uv.lock` block would leave the fork ambiguous.
+
+Every uv call runs with `--no-cache` and a throwaway `--cache-dir` removed on
+exit, so the script neither reads nor writes the shared persistent uv cache, and
+it never touches a model, retrieval, or reranker cache. Every call also runs
+with `--no-python-downloads`, which is what makes "installs nothing" hold on a
+host that does not already have the pinned Python 3.12.13: without it, `uv lock`
+would fetch and install a managed interpreter just to resolve. With it, such a
+host fails loudly instead. Safe to run beside an active pipeline task. When uv
+itself fails for an unrelated reason — no network, a rejected credential, an
+unknown flag — the script reports uv's own message instead of blaming the
+dependency group, and it withholds the "regenerate the lock" hint, which is
+printed only when the lock is actually diagnosed as stale.
+
+```bash
+./code/tools/verify_torch_groups.sh
+OK   uv.lock is current with pyproject.toml
+OK   rocm: torch @ https://repo.radeon.com/rocm/.../torch-2.9.1+rocm7.2.1...whl
+OK   cuda: torch==2.9.1 from https://pypi.org/simple
+```
+
+`code/tests/test_verify_torch_groups.py` and
+`code/tests/test_env_setup_contract.py` cover this bootstrap path hermetically:
+the first runs the script against a stub `uv` on `PATH`, the second executes the
+setup script's prefetch block against a stubbed `huggingface_hub` and drives the
+production loaders with stub loaders. Neither reaches the network, resolves
+dependencies, or downloads a model.
+
+```bash
+.venv/bin/python -m pytest \
+  code/tests/test_verify_torch_groups.py \
+  code/tests/test_env_setup_contract.py -q
+```
+
+These tests do write files — a throwaway SQLite score-cache database and a stub
+uv cache directory — but only under pytest's per-test `tmp_path`. Nothing is
+written to the shared persistent caches under `cache/` (`cache/reranker/`,
+`cache/retrieval/`, `cache/documents/`), to the Hugging Face model cache, or to
+the shared uv cache, so the suite is safe to run beside a live pipeline task.
+
 **Model quality is not validated.** The two-topic pilot verifies mechanics,
 provenance, fallback, and byte-stable resume behavior, but it does not establish
 that generated decompositions improve retrieval or that canonical claims are
@@ -339,7 +465,7 @@ are the intended difference. Each config has one input field:
 
 ```yaml
 inputs:
-  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+  handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 ```
 
 Generation validates the complete handoff before mutating generation state.

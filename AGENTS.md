@@ -41,8 +41,10 @@ coding agent working in this repository.
   out of git.
 - Use one local virtual environment, `.venv/`, for the active machine.
 - Run `code/tools/setup_env.sh` to set up the environment. It auto-detects AMD
-  ROCm and syncs the `rocm` dependency group; otherwise it syncs the standard
-  project environment.
+  ROCm and syncs the `rocm` dependency group, or NVIDIA and syncs the `cuda`
+  group; otherwise it syncs the standard project environment, which has no
+  torch. The `rocm` and `cuda` groups are mutually exclusive, so `uv.lock` must
+  be regenerated on a host that can reach `repo.radeon.com`.
 - After setup, run Python commands through `.venv/bin/python` or
   `.venv/bin/python-rocm` instead of relying on `uv run`, because `uv run` syncs
   only uv's static default groups and does not auto-detect ROCm hardware.

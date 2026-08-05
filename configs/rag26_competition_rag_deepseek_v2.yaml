@@ -15,7 +15,7 @@ submission:
   run_desc: Selected-evidence retrieval with DeepSeek V4 Flash 0731 answer generation.
 
 inputs:
-  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+  handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 
 generation:
   type: openrouter
