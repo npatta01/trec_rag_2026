@@ -80,6 +80,15 @@ and model-turn limits still bound work. Individual HTTP/provider timeouts remain
 finite so a dead connection cannot hang forever; they are transport safety
 settings, not a topic time budget.
 
+Exhausting the researcher, retrieval-call, or model-turn budget is a normal
+bounded-completion condition, not an export failure. The runner records the
+exact stopping reason and unresolved need IDs, gives the coordinator its
+reserved final synthesis opportunity when possible, and continues to topic
+projection. Unresolved needs do not block the Retrieval artifacts or generation
+handoff. The handoff contains the grounded draft-selected evidence that exists;
+if no draft selection survives, it uses the deterministic original-query
+fallback defined below.
+
 ## Shared Cache Contract
 
 Both runners resolve relative `cache/...` paths through `repo_cache_root`, so
@@ -179,7 +188,8 @@ own experiment directory:
 The outer manifest authenticates the selected topic order, source revisions,
 per-topic seals, topic statuses, artifact sizes, and artifact SHA-256 hashes.
 It is written last after the TREC rows, full-text archive, and generation
-handoff validate together.
+handoff validate together. Topic status preserves budget exhaustion and partial
+coverage without making the handoff unusable.
 
 The existing `trec_rag.competition_rag` loader consumes the handoff unchanged.
 An agentic RAG config differs only in its experiment/output identity and
@@ -195,6 +205,9 @@ separate and cannot overwrite one another.
   cross-artifact document-closure failures are fatal integrity errors.
 - A provider or retrieval failure leaves the topic unsealed and prevents root
   publication. `resume` restarts that topic from the beginning with warm caches.
+- Research-count exhaustion and unresolved needs are not provider/retrieval
+  failures; they publish partial grounded evidence or the original-query
+  fallback as specified above.
 - The runner never fabricates evidence, weakens TopicRecords integrity, drops
   a citation to force validation, reads organizer qrels/gold/RAGDoll outputs,
   or silently falls back to fixed retrieval.
@@ -209,6 +222,8 @@ Implementation proceeds test-first. Automated verification must cover:
   budget values;
 - absence of time-based admission and stopping under an advanced fake clock;
 - unchanged count, concurrency, no-yield, and no-progress limits;
+- successful handoff publication after researcher-budget exhaustion with both
+  partial draft evidence and zero-draft fallback cases;
 - linked-worktree shared cache resolution and conflict-safe cache import;
 - exact cache hits for repeated retrieval and reranker identities;
 - fresh agent state on incomplete-topic restart;
