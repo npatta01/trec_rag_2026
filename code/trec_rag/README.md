@@ -293,9 +293,10 @@ Set up a rented NVIDIA box with `code/tools/setup_env.sh`, which now detects
 CUDA as well as ROCm and syncs the `cuda` dependency group. That group pins the
 same `sentence-transformers`, `transformers`, and `numpy` versions the `rocm`
 group resolves to, so reranker score-cache entries stay interchangeable and the
-recorded backend version stays honest. The two groups are declared conflicting
-because one lock cannot hold both torch builds; regenerate `uv.lock` on the ROCm
-host, where `repo.radeon.com` is reachable.
+recorded backend version stays honest. The two groups are declared conflicting,
+so `uv.lock` carries separate CUDA and ROCm resolution forks. Regenerate it on a
+ROCm host whenever either group changes, because `repo.radeon.com` must be
+reachable while uv resolves both forks.
 
 `code/tools/verify_torch_groups.sh` proves three things without installing
 anything:

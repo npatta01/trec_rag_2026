@@ -15,8 +15,8 @@ rented GPU box**, download the artifact, and finish the run locally.
   - both offline models prefetched, new experiment namespace (review round 1)
   - `verify_torch_groups.sh` and the hermetic bootstrap contract tests (review round 2)
   - this handover, plus any later follow-ups
-- Owner review, two rounds. Everything is addressed **except the `uv.lock` P1, which is still a
-  merge blocker** — see below.
+- Owner review, three rounds. All review findings are addressed. The local ROCm host regenerated
+  `uv.lock`, and the strict non-installing verifier accepts both resolution forks — see below.
 - Tests, full suite — **pre-follow-up evidence, measured at `eab10ce`** ("Bind the bootstrap
   contract to the production loaders"), before the uncommitted `verify_torch_groups.sh` /
   `test_verify_torch_groups.py` follow-up landed on top of it: **1870 passed**, plus 15 failures
@@ -43,21 +43,23 @@ rented GPU box**, download the artifact, and finish the run locally.
     code/tests/test_verify_torch_groups.py
   ```
 
-## ⛔ The one open blocker: `uv.lock`
+## `uv.lock`: regenerated and verified
 
-`pyproject.toml` gained a `cuda` dependency group and a `[tool.uv] conflicts` declaration, but
-`uv.lock` still records only the ROCm group. **`code/tools/setup_cuda_env.sh` cannot bootstrap a
-CUDA host until the lock is regenerated.** The cloud session could not do it: `repo.radeon.com`
-is denied by that environment's egress policy (403 on CONNECT), and the conflicts declaration
-forces the ROCm fork to re-resolve, so `uv lock` fails on the pinned ROCm `torch`/`triton` URLs.
+`pyproject.toml` gained a `cuda` dependency group and a `[tool.uv] conflicts` declaration. The
+cloud session could not regenerate `uv.lock`: `repo.radeon.com` was denied by that environment's
+egress policy (403 on CONNECT), and the conflicts declaration forces the ROCm fork to re-resolve.
+The local ROCm host completed `uv lock` in 237 ms from its existing uv cache. The committed lock
+now carries both `torch==2.9.1` from PyPI with its `nvidia-*` runtime dependencies and the pinned
+ROCm Torch/Triton URLs.
 
-On this host, where radeon is reachable:
+Acceptance verification on that regenerated lock:
 
 ```bash
-uv lock
-./code/tools/verify_torch_groups.sh   # the acceptance check; must print OK for both groups
-uv sync --group cuda --locked         # must succeed with no repo.radeon.com fetch
-uv sync --group rocm                  # confirm the ROCm env still resolves as before
+./code/tools/verify_torch_groups.sh
+OK   uv.lock is current with pyproject.toml
+OK   rocm: torch @ https://repo.radeon.com/rocm/.../torch-2.9.1%2Brocm7.2.1...whl
+OK   cuda: torch==2.9.1 from https://pypi.org/simple
+Both hardware groups select their intended torch source.
 ```
 
 `verify_torch_groups.sh` installs nothing and writes no shared cache: `uv lock --check` only
@@ -70,13 +72,10 @@ interpreter just to resolve. With the flag such a host fails loudly instead of s
 one. It is safe to run beside an active task. It does need package-index access, because
 `uv lock --check` re-resolves.
 
-Against today's lock it fails at the currency check (`FAIL uv.lock is stale`, exit 1), since
-`pyproject.toml` carries a `cuda` group the lock does not. After regeneration it should print
-`OK uv.lock is current with pyproject.toml`, `OK rocm: torch @ https://repo.radeon.com/...`, and
-`OK cuda: torch==2.9.1 from https://pypi.org/simple`, exit 0. The cuda line is checked strictly:
-exactly `torch==2.9.1`, no direct URL, no CPU wheel, plus `nvidia-cuda-runtime`/`nvidia-cublas`/
-`nvidia-cudnn` present in the export as evidence the resolved wheel is GPU-enabled. Then commit
-the lock and the blocker clears.
+The CUDA line is checked strictly: exactly `torch==2.9.1`, no direct URL, no CPU wheel, plus
+`nvidia-cuda-runtime`/`nvidia-cublas`/`nvidia-cudnn` present in the export as evidence the resolved
+wheel is GPU-enabled. An actual CUDA-host sync and CUDA probe remain part of provisioning the
+rented NVIDIA host; they were not run against the local ROCm environment.
 
 The source claim needed a second export, because the requirements format cannot carry one: it
 renders every registry package as `name==version`, so a mirror or a private index would print the
@@ -97,8 +96,8 @@ Mechanism note, because the review and the original PR description disagreed: `-
 ROCm URL requirements even when only `--group cuda` is requested. So against a stale lock the
 real sequence is fetch-then-reject-as-stale, not a silent ROCm install. Verified by running it.
 
-The CUDA pin set was confirmed to resolve on PyPI in isolation (58 packages, CUDA-enabled torch
-with the `nvidia-*` runtime deps). The real forked lock is unverified.
+The real forked lock is now committed and verified for freshness, exact Torch sources, and NVIDIA
+runtime dependencies. Hardware execution still needs the rented NVIDIA host.
 
 ## What this branch does
 
@@ -190,15 +189,14 @@ These came out of reading the pipeline and are the reason the diff looks the way
 
 ## Suggested next steps
 
-1. Regenerate and commit `uv.lock` (above). This unblocks the PR.
-2. Run the full test suite with the ML stack present.
-3. Provision an NVIDIA box (the local `dstack` skill is the obvious route) and bootstrap it with
+1. Run the full test suite with the ML stack present.
+2. Provision an NVIDIA box (the local `dstack` skill is the obvious route) and bootstrap it with
    `code/tools/setup_env.sh`, which now auto-detects CUDA. The box needs `INDEX_URL` byte-identical
    to the local value, `PYSERINI_API_TOKEN`, `OPENROUTER_API_KEY`, egress to
    `api.castorini.uwaterloo.ca` and `openrouter.ai`, and disk for the HF weights plus the document
    store. If the provisioning has a persistent volume, point `HF_HOME` at it — that is what the
    Modal runner does, and it keeps the pinned weights across restarts.
-4. Smoke it on two topics per `code/trec_rag/README.md` before committing to a large split run.
+3. Smoke it on two topics per `code/trec_rag/README.md` before committing to a large split run.
    Full runs still need explicit authorization per `AGENTS.md`.
 
 ## Deliberately not done
