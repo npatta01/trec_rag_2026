@@ -2206,7 +2206,7 @@ color-scheme: light;
 --guide-ink: #17201c;
 --guide-muted: #52615a;
 }
-[data-bs-theme="dark"] {
+body.quarto-dark {
 color-scheme: dark;
 --guide-retrieval: #67d4c7;
 --guide-retrieval-soft: #183d38;
@@ -2402,8 +2402,18 @@ figure,
 details {
 break-inside: avoid;
 }
+figure.quarto-float img {
+width: auto;
+max-width: 100%;
+max-height: 7.1in;
+margin-inline: auto;
+}
 details > * {
 display: block !important;
+}
+details::details-content {
+display: block !important;
+content-visibility: visible !important;
 }
 .quarto-lightbox,
 .quarto-color-scheme-toggle {

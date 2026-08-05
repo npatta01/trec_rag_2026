@@ -25,6 +25,20 @@ assert(
 
 const qmd = fs.readFileSync(sourcePath, "utf8");
 const html = fs.readFileSync(htmlPath, "utf8");
+const reportCss = fs.readFileSync(path.join(assetRoot, "report.css"), "utf8");
+
+assert(
+  /body\.quarto-dark\s*\{/.test(reportCss),
+  "report CSS should switch guide variables on Quarto's dark-mode body class",
+);
+assert(
+  /@media print[\s\S]*figure\.quarto-float img\s*\{[\s\S]*max-height:/m.test(reportCss),
+  "print CSS should constrain tall figures to a printable page",
+);
+assert(
+  /@media print[\s\S]*details::details-content\s*\{[\s\S]*content-visibility:\s*visible/m.test(reportCss),
+  "print CSS should expose closed disclosure content",
+);
 
 for (const signal of [
   "embed-resources: true",
