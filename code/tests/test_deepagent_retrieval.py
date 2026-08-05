@@ -1304,7 +1304,8 @@ def test_retrieve_default_budget_admits_four_followups() -> (
         "followup",
     ]
     assert all(json.loads(item)["ok"] for item in tool_results)
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
+    assert result.synthesis_outcome == "zero_grounded_nuggets"
 
 
 def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
@@ -1369,7 +1370,7 @@ def test_retrieve_serializes_concurrent_followups_at_three_successes() -> None:
         "followup",
     ]
     assert all(payload["ok"] for payload in payloads)
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
 
 
 def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
@@ -1417,7 +1418,7 @@ def test_retrieve_rejects_concurrent_duplicate_without_using_budget() -> None:
         sum(payload.get("error") == "duplicate follow-up query" for payload in payloads)
         == 1
     )
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
 
 
 def test_retrieve_concurrent_blank_followups_are_budgeted_as_no_yield() -> None:
@@ -1457,7 +1458,7 @@ def test_retrieve_concurrent_blank_followups_are_budgeted_as_no_yield() -> None:
     )
     assert all(json.loads(item)["must_stop"] is True for item in successful_results)
     assert result.budget_snapshot.stop_code is None
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
 
 
 def test_retrieve_failure_releases_lock_and_preserves_serialized_success_order() -> (
@@ -1567,7 +1568,7 @@ def test_retrieve_rejects_blank_and_original_duplicate_followups_with_budget_cha
     assert json.loads(tool_results[0])["error"] == "query must be non-empty text"
     assert json.loads(tool_results[1])["error"] == "duplicate follow-up query"
     assert json.loads(tool_results[-1])["ok"] is True
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
 
 
 def test_retrieve_uses_stable_hashes_for_private_cache_variants() -> None:
@@ -1734,7 +1735,7 @@ def test_trace_span_lifecycle_failure_does_not_change_completed_result(
         "original-doc-2",
     ]
     assert result.rationale == "Stable rationale."
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
     assert result.trace_flush_succeeded is True
     assert tracing.flushes == 1
 
@@ -1782,7 +1783,7 @@ def test_trace_evidence_rejection_does_not_change_retrieval(
         "original-doc-1",
         "original-doc-2",
     ]
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
     assert len(retriever.queries) == 1
     assert tracing.flushes == 1
 
@@ -2600,10 +2601,10 @@ def test_coverage_report_preserves_five_seeded_topic_224_needs_and_open_gaps() -
         "n5",
     )
     assert result.coverage_report.terminal_reason is None
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
 
 
-def test_recorded_terminal_stop_controls_result_stopping_reason() -> None:
+def test_zero_grounded_outweighs_recorded_terminal_stop() -> None:
     def agent_factory(
         _model: str, toolset: deepagent_retrieval.AgentToolset
     ) -> FakeAgent:
@@ -2618,7 +2619,8 @@ def test_recorded_terminal_stop_controls_result_stopping_reason() -> None:
         FakeRetriever(), agent_factory, snippet_extractor=RecordingSnippetExtractor()
     ).retrieve("narrative")
 
-    assert result.stopping_reason == "completion"
+    assert result.stopping_reason == "zero_grounded_nuggets"
+    assert result.synthesis_outcome == "zero_grounded_nuggets"
     assert result.coverage_report.terminal_reason == "completion"
     assert result.coverage_report.actions[-1].state == "terminal"
 
@@ -2658,7 +2660,9 @@ def test_complete_retrieval_rejects_live_evidence_without_a_draft_selection() ->
     assert observed["completion"]["code"] == "INCOMPLETE_CLOSEOUT"
     assert observed["completion"]["need_ids"] == ["test-need"]
     assert result.coverage_report.terminal_reason is None
-    assert result.stopping_reason == "closeout_refused"
+    assert result.stopping_reason == "agent_completed"
+    assert result.synthesis_outcome == "deterministic_grounded_recovery"
+    assert result.coverage_report.needs[0].draft_nugget_ids == ("g1",)
 
 
 def test_retriever_wires_a_live_closeout_predicate_into_the_agent_toolset() -> None:
@@ -2759,6 +2763,7 @@ def test_complete_retrieval_records_the_only_successful_completion_transition() 
     assert observed["completion"]["state"] == "terminal"
     assert result.coverage_report.terminal_reason == "completion"
     assert result.stopping_reason == "completion"
+    assert result.synthesis_outcome == "coordinator_selected"
 
 
 def test_production_toolset_completes_through_a_real_langgraph_loop() -> None:
@@ -2798,7 +2803,8 @@ def test_production_toolset_completes_through_a_real_langgraph_loop() -> None:
     result = _sdk(FakeRetriever(), agent_factory).retrieve("narrative")
 
     assert result.coverage_report.terminal_reason == "completion"
-    assert result.stopping_reason == "completion"
+    assert result.stopping_reason == "zero_grounded_nuggets"
+    assert result.synthesis_outcome == "zero_grounded_nuggets"
 
 
 def test_production_toolset_rejects_live_incomplete_completion_and_continues() -> None:
@@ -2879,7 +2885,8 @@ def test_production_toolset_rejects_live_incomplete_completion_and_continues() -
     ).retrieve("narrative")
 
     assert result.coverage_report.terminal_reason is None
-    assert result.stopping_reason == "closeout_refused"
+    assert result.stopping_reason == "agent_completed"
+    assert result.synthesis_outcome == "coordinator_selected"
     assert result.coverage_report.unresolved_need_ids == ("test-need",)
 
 
@@ -2926,7 +2933,8 @@ def test_rejected_completion_is_not_reported_as_agent_completed() -> None:
     assert observed["completion"]["ok"] is False
     assert observed["completion"]["code"] == "COMPLETION_OPEN_NEEDS"
     assert observed["completion"]["need_ids"] == ["test-need"]
-    assert result.stopping_reason == "closeout_refused"
+    assert result.stopping_reason == "zero_grounded_nuggets"
+    assert result.synthesis_outcome == "zero_grounded_nuggets"
 
 
 def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None:
@@ -2982,7 +2990,7 @@ def test_coverage_terminal_reason_wins_over_budget_in_result_and_trace() -> None
     )
 
 
-def test_run_wide_budget_stop_maps_to_public_budget_exhausted_reason() -> None:
+def test_run_wide_budget_stop_without_nuggets_reports_zero_grounded() -> None:
     tracing = FakeTracing()
 
     def agent_factory(
@@ -3004,10 +3012,10 @@ def test_run_wide_budget_stop_maps_to_public_budget_exhausted_reason() -> None:
         budget_config=ResearchBudgetConfig(max_retrieval_calls=1),
     ).retrieve("narrative")
 
-    assert result.stopping_reason == "budget_exhausted"
+    assert result.stopping_reason == "zero_grounded_nuggets"
     assert result.coverage_report.terminal_reason is None
     assert result.budget_snapshot.stop_code == "RETRIEVAL_BUDGET_EXHAUSTED"
-    assert tracing.result_records[0]["stopping_reason"] == "budget_exhausted"
+    assert tracing.result_records[0]["stopping_reason"] == "zero_grounded_nuggets"
     assert (
         tracing.result_records[0]["budget_stop_code"]
         == "RETRIEVAL_BUDGET_EXHAUSTED"
@@ -3082,7 +3090,7 @@ def test_legacy_extraction_after_shared_search_never_crosses_into_deadline_work(
         "narrative"
     ]
     assert tracing.snippet_records == []
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
     assert result.budget_snapshot.stop_code is None
 
 
@@ -3268,7 +3276,7 @@ def test_nondefault_retrieval_bounds_control_model_budget_trace_and_fusion() -> 
     assert len(tool_payloads[0]["documents"]) == 2
     assert tool_payloads[0]["remaining_budget"] == 99
     assert tool_payloads[1]["code"] == "TASK_TOOL_BUDGET_EXHAUSTED"
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
     assert len(result.candidates) == 1
     assert len(result.searches[0].candidates) == 4
     assert len(result.searches[1].candidates) == 4
@@ -3368,7 +3376,7 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
         snippet_extractor=RecordingSnippetExtractor(),
     ).retrieve("narrative")
 
-    assert result.stopping_reason == "agent_completed"
+    assert result.stopping_reason == "zero_grounded_nuggets"
     assert len(tracing.search_records) == 1
     assert set(tracing.search_records[0]) == {
         "document_ids",
@@ -3383,7 +3391,7 @@ def test_retrieve_uses_only_the_purpose_specific_tracing_api() -> None:
     assert tracing.result_records == [
         {
             "fused_document_ids": ("original-doc-1",),
-            "stopping_reason": "agent_completed",
+            "stopping_reason": "zero_grounded_nuggets",
             "coverage_state_hash": result.coverage_report.state_hash,
             "need_count": 1,
             "answerable_need_count": 0,
@@ -3488,7 +3496,9 @@ def test_retrieve_exports_complete_bounded_safe_trace_payload(
         "original-doc-1",
         "original-doc-2",
     )
-    assert root_span.attributes["retrieval.stopping_reason"] == "agent_completed"
+    assert root_span.attributes["retrieval.stopping_reason"] == (
+        "zero_grounded_nuggets"
+    )
     assert root_span.attributes["coverage.state_hash"] == result.coverage_report.state_hash
     assert root_span.attributes["coverage.need_count"] == 1
     assert root_span.attributes["coverage.answerable_need_count"] == 0
@@ -4960,7 +4970,7 @@ def test_complete_topic_is_written_before_returned_snapshot() -> None:
     )
 
 
-def test_budget_exhaustion_is_written_before_returned_snapshot() -> None:
+def test_budget_exhaustion_without_grounded_nuggets_reports_zero_grounded() -> None:
     records = _RecordingTopicLedger()
 
     def agent_factory(_model, toolset):
@@ -4983,11 +4993,63 @@ def test_budget_exhaustion_is_written_before_returned_snapshot() -> None:
         budget_config=ResearchBudgetConfig(max_retrieval_calls=1),
     ).retrieve(records, "narrative")
 
-    assert result.stopping_reason == "budget_exhausted"
+    assert result.stopping_reason == "zero_grounded_nuggets"
+    assert result.synthesis_outcome == "zero_grounded_nuggets"
     _assert_returned_completion(
         result,
         records,
         status="incomplete",
+        stopping_reason="zero_grounded_nuggets",
+    )
+
+
+def test_budget_exhaustion_with_grounded_nuggets_is_complete_and_exportable() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            passage = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="single grounded budgeted query",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-1",
+                                "text": "Grounded partial evidence.",
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["facet-1"],
+                                "evidence": [
+                                    {"cite": passage["passages"][0]["cite"]}
+                                ],
+                            }
+                        ]
+                    }
+                )
+            )
+            assert update["accepted_ids"] == ["nugget-1"]
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        budget_config=ResearchBudgetConfig(max_retrieval_calls=1),
+    ).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "budget_exhausted"
+    assert result.synthesis_outcome == "deterministic_grounded_recovery"
+    assert result.coverage_report.needs[0].draft_nugget_ids == ("nugget-1",)
+    _assert_returned_completion(
+        result,
+        records,
+        status="complete",
         stopping_reason="budget_exhausted",
     )
 
@@ -5045,5 +5107,6 @@ def test_no_evidence_is_written_before_returned_snapshot() -> None:
         result,
         records,
         status="incomplete",
-        stopping_reason="no_evidence",
+        stopping_reason="zero_grounded_nuggets",
     )
+    assert result.synthesis_outcome == "zero_grounded_nuggets"

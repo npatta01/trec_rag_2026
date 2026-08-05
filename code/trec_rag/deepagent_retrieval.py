@@ -326,6 +326,11 @@ class AgentRetrievalResult:
     candidates: tuple[AgentRankedCandidate, ...]
     rationale: str
     stopping_reason: str
+    synthesis_outcome: Literal[
+        "coordinator_selected",
+        "deterministic_grounded_recovery",
+        "zero_grounded_nuggets",
+    ]
     coverage_report: EvidenceCoverageReport
     budget_snapshot: BudgetSnapshot
     trace_flush_succeeded: bool
@@ -1929,7 +1934,14 @@ class DeepAgentRetriever:
                 candidates = reciprocal_rank_fuse(
                     searches, limit=self._fused_result_limit
                 )
+                recovery = coverage_state.recover_grounded_drafts()
                 coverage_report = coverage_state.report()
+                if not recovery.live_grounded_nugget_ids:
+                    synthesis_outcome = "zero_grounded_nuggets"
+                elif recovery.recovered_need_ids:
+                    synthesis_outcome = "deterministic_grounded_recovery"
+                else:
+                    synthesis_outcome = "coordinator_selected"
                 admitted_handoff_passage_ids = commit_researcher_handoffs(coverage_report)
                 live_evidence_passage_ids = {
                     evidence.snippet_id
@@ -1948,40 +1960,39 @@ class DeepAgentRetriever:
                         admitted_handoff_passage_ids
                     )
                 )
-                if (
-                    coverage_report.terminal_reason is None
-                    and coverage_state.pending_closeout_need_ids()
-                ):
+                closeout_pending_after_recovery = bool(
+                    coverage_state.pending_closeout_need_ids()
+                )
+                if closeout_pending_after_recovery:
                     budget.note_closeout_refused()
                 budget_snapshot = budget.snapshot()
                 if evidence_validation_failed:
                     stopping_reason = "evidence_validation_failed"
                 elif "scoring_failed" in shared_failure_reasons:
                     stopping_reason = "scoring_failed"
-                elif budget.retrieval_unavailable() or "retrieval_unavailable" in shared_failure_reasons:
+                elif (
+                    budget.retrieval_unavailable()
+                    or "retrieval_unavailable" in shared_failure_reasons
+                    or operational_provider_stop
+                ):
                     stopping_reason = "retrieval_unavailable"
-                elif "no_evidence" in shared_failure_reasons and not coverage_report.nuggets:
-                    stopping_reason = "no_evidence"
-                elif coverage_report.terminal_reason is not None:
-                    stopping_reason = coverage_report.terminal_reason
                 elif budget_snapshot.hard_deadline_reached:
                     stopping_reason = "hard_deadline"
+                elif synthesis_outcome == "zero_grounded_nuggets":
+                    stopping_reason = "zero_grounded_nuggets"
+                elif coverage_report.terminal_reason is not None:
+                    stopping_reason = coverage_report.terminal_reason
                 elif budget_snapshot.stop_code is not None:
                     stopping_reason = "budget_exhausted"
-                elif operational_provider_stop:
-                    stopping_reason = "retrieval_unavailable"
-                elif (
-                    budget.closeout_refused()
-                ):
+                elif budget.closeout_refused() and closeout_pending_after_recovery:
                     stopping_reason = "closeout_refused"
                 else:
                     stopping_reason = "agent_completed"
                 incomplete_reasons = {
                     "retrieval_unavailable",
                     "scoring_failed",
-                    "budget_exhausted",
                     "hard_deadline",
-                    "no_evidence",
+                    "zero_grounded_nuggets",
                     "evidence_validation_failed",
                 }
                 if stopping_reason in incomplete_reasons:
@@ -1991,8 +2002,10 @@ class DeepAgentRetriever:
                     and coverage_report.terminal_reason is None
                 ):
                     completion = ("incomplete", "no_evidence")
-                else:
+                elif coverage_report.terminal_reason is not None:
                     completion = ("complete", "coverage_sufficient")
+                else:
+                    completion = ("complete", stopping_reason)
                 records_builder.set_completion(*completion)
                 # Completion is part of the coordinator view. Take exactly one
                 # holistic snapshot, after every handoff and completion write.
@@ -2047,6 +2060,7 @@ class DeepAgentRetriever:
             candidates=candidates,
             rationale=rationale,
             stopping_reason=stopping_reason,
+            synthesis_outcome=synthesis_outcome,
             coverage_report=coverage_report,
             budget_snapshot=budget_snapshot,
             trace_flush_succeeded=trace_flush_succeeded,

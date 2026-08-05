@@ -2536,7 +2536,7 @@ class TopicRecordsBuilder:
         if status not in {"complete", "incomplete"}:
             raise ValueError("completion status must be complete or incomplete")
         allowed = (
-            {"coverage_sufficient"}
+            {"coverage_sufficient", "budget_exhausted", "agent_completed"}
             if status == "complete"
             else {
                 "budget_exhausted",
@@ -2544,6 +2544,7 @@ class TopicRecordsBuilder:
                 "retrieval_unavailable",
                 "scoring_failed",
                 "no_evidence",
+                "zero_grounded_nuggets",
                 "evidence_validation_failed",
             }
         )

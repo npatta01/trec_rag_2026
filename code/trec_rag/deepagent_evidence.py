@@ -342,6 +342,15 @@ class EvidenceCoverageReport:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class GroundedDraftRecovery:
+    """Deterministic draft selections recovered from admitted live nuggets."""
+
+    live_grounded_nugget_ids: tuple[str, ...]
+    recovered_need_ids: tuple[str, ...]
+    selected_nugget_ids: tuple[str, ...]
+
+
 @dataclass
 class _Need:
     need_id: str
@@ -694,8 +703,13 @@ class EvidenceCoverageState:
             need.need_id
             for need in self._needs.values()
             if any(nugget_id in live_nugget_ids for nugget_id in need.nugget_ids)
-            and not any(
-                nugget_id in live_nugget_ids for nugget_id in need.draft_nugget_ids
+            and (
+                not need.draft_nugget_ids
+                or any(
+                    nugget_id not in live_nugget_ids
+                    or need.need_id not in self._nuggets[nugget_id].need_ids
+                    for nugget_id in need.draft_nugget_ids
+                )
             )
         )
 
@@ -703,6 +717,61 @@ class EvidenceCoverageState:
         """Return needs with live evidence but no selected live draft nuggets."""
         with self._lock:
             return self._pending_closeout_need_ids_locked()
+
+    def recover_grounded_drafts(self) -> GroundedDraftRecovery:
+        """Select only already-admitted live nuggets for undrafted needs.
+
+        This is the deterministic final-synthesis fallback. It has no access to
+        raw search passages or model text, so it cannot widen the grounded
+        evidence set. Need and nugget insertion order are both preserved.
+        """
+        with self._lock:
+            live_nuggets = {
+                nugget.nugget_id: nugget
+                for nugget in self._nuggets.values()
+                if nugget.superseded_by is None and bool(nugget.evidence)
+            }
+            recovered_need_ids: list[str] = []
+            selected_nugget_ids: list[str] = []
+            for need in self._needs.values():
+                existing = tuple(
+                    nugget_id
+                    for nugget_id in need.draft_nugget_ids
+                    if nugget_id in live_nuggets
+                    and need.need_id in live_nuggets[nugget_id].need_ids
+                )
+                if existing and len(existing) == len(need.draft_nugget_ids):
+                    continue
+                selected = tuple(
+                    nugget_id
+                    for nugget_id in need.nugget_ids
+                    if nugget_id in live_nuggets
+                    and need.need_id in live_nuggets[nugget_id].need_ids
+                )[:MAX_DRAFT_NUGGETS_PER_NEED]
+                if not selected:
+                    continue
+                outcome = self._set_need_status(
+                    {
+                        "need_id": need.need_id,
+                        "status": "partial",
+                        "remaining_gap": need.remaining_gap
+                        or "Final synthesis did not complete; grounded evidence retained.",
+                        "draft_nugget_ids": list(selected),
+                    }
+                )
+                if isinstance(outcome, str):  # guarded by the live selection above
+                    raise RuntimeError(
+                        f"grounded draft recovery violated state invariants: {outcome}"
+                    )
+                recovered_need_ids.append(need.need_id)
+                selected_nugget_ids.extend(selected)
+            if recovered_need_ids:
+                self._changed()
+            return GroundedDraftRecovery(
+                live_grounded_nugget_ids=tuple(live_nuggets),
+                recovered_need_ids=tuple(recovered_need_ids),
+                selected_nugget_ids=tuple(selected_nugget_ids),
+            )
 
     def record_search(
         self,
