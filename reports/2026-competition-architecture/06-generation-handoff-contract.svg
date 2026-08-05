@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="handoff-title handoff-desc">
+  <title id="handoff-title">The authenticated generation handoff is the only trust-boundary input</title>
+  <desc id="handoff-desc">Retrieval seals one generation_handoff_manifest.json containing the narrative, selected evidence groups and passages, advisory claim hints, allowed citation document IDs, source receipts, and hashes. Generation authenticates and consumes it. The TREC run, full-text ZIP, qrels, gold nuggets, and RAGDoll scores are barred from Generation.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7;--danger:#b4493e;--danger-soft:#f9dedb}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616;--danger:#ff9b90;--danger-soft:#482621}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:34px;font-weight:700}.label{font-size:29px;font-weight:700}.body{font-size:26px}.muted{fill:var(--muted)}.retrieval{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.generation{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.artifact{fill:var(--panel);stroke:var(--gen);stroke-width:3}.seal{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.blocked{fill:var(--danger-soft);stroke:var(--danger);stroke-width:2}.flow{fill:none;stroke:var(--gen);stroke-width:3;marker-end:url(#arrow)}.boundary{stroke:var(--ink);stroke-width:3;stroke-dasharray:16 9}.fold{fill:var(--bg);stroke:var(--gen);stroke-width:2}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1200" fill="var(--bg)"/>
+  <text class="title" x="400" y="55" text-anchor="middle">The handoff is a narrow, authenticated door</text>
+
+  <rect class="retrieval" x="210" y="95" width="380" height="82" rx="8"/>
+  <text class="label" x="400" y="147" text-anchor="middle">Retrieval publishes once</text>
+  <path class="flow" d="M400 177V230" vector-effect="non-scaling-stroke"/>
+
+  <path class="artifact" d="M115 240H685V725H115Z"/>
+  <path class="fold" d="M615 240V310H685"/>
+  <text class="label" x="400" y="295" text-anchor="middle">generation_handoff_manifest.json</text>
+  <rect class="seal" x="250" y="330" width="300" height="66" rx="33"/>
+  <text class="body" x="400" y="373" text-anchor="middle">canonical bytes + hash seals</text>
+  <text class="body" x="165" y="455">✓ official narrative</text>
+  <text class="body" x="165" y="505">✓ selected evidence groups</text>
+  <text class="body" x="165" y="555">✓ exact selected passages</text>
+  <text class="body" x="165" y="605">✓ advisory claim hints</text>
+  <text class="body" x="165" y="655">✓ allowed citation doc IDs</text>
+  <text class="body" x="165" y="705">✓ source receipts + hashes</text>
+
+  <line class="boundary" x1="45" y1="775" x2="755" y2="775" vector-effect="non-scaling-stroke"/>
+  <rect x="95" y="746" width="610" height="56" fill="var(--bg)"/>
+  <text class="body" x="400" y="784" text-anchor="middle">Retrieval / Generation boundary</text>
+  <path class="flow" d="M400 725V845" vector-effect="non-scaling-stroke"/>
+  <rect class="generation" x="185" y="855" width="430" height="100" rx="8"/>
+  <text class="label" x="400" y="900" text-anchor="middle">Generation authenticates</text>
+  <text class="body" x="400" y="939" text-anchor="middle">and opens only this manifest</text>
+
+  <text class="label" x="400" y="1010" text-anchor="middle">Barred from Generation</text>
+  <g class="blocked">
+    <rect x="35" y="1040" width="220" height="64" rx="6"/><rect x="290" y="1040" width="220" height="64" rx="6"/><rect x="545" y="1040" width="220" height="64" rx="6"/>
+    <rect x="155" y="1120" width="220" height="64" rx="6"/><rect x="425" y="1120" width="220" height="64" rx="6"/>
+  </g>
+  <text class="body" x="145" y="1081" text-anchor="middle">TREC run</text><text class="body" x="400" y="1081" text-anchor="middle">full-text ZIP</text><text class="body" x="655" y="1081" text-anchor="middle">qrels</text>
+  <text class="body" x="265" y="1161" text-anchor="middle">gold nuggets</text><text class="body" x="535" y="1161" text-anchor="middle">RAGDoll scores</text>
+</svg>

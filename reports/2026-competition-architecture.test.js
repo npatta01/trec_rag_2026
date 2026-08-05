@@ -51,4 +51,54 @@ assert(
   "HTML must not retain an embedded remote-font import",
 );
 
+const figures = [
+  "01-whole-system.svg",
+  "02-retrieval-system.svg",
+  "03-bounded-deepseek-planning.svg",
+  "04-per-query-candidate-accounting.svg",
+  "05-evidence-and-nuggetizer.svg",
+  "06-generation-handoff-contract.svg",
+  "07-sol-generation.svg",
+  "08-validation-and-retries.svg",
+  "09-organizer-output-split.svg",
+];
+
+for (const figure of figures) {
+  const figurePath = path.join(assetRoot, figure);
+  assert(fs.existsSync(figurePath), `Missing architecture figure: ${figure}`);
+  const svg = fs.readFileSync(figurePath, "utf8");
+  assert(svg.includes('role="img"'), `${figure} should expose image semantics`);
+  assert(
+    /aria-labelledby="[^"]+ [^"]+"/.test(svg),
+    `${figure} should reference title and description`,
+  );
+  assert(
+    /<title id="[^"]+">[^<]+<\/title>/.test(svg),
+    `${figure} should have a titled accessible name`,
+  );
+  assert(
+    /<desc id="[^"]+">[^<]+<\/desc>/.test(svg),
+    `${figure} should have an accessible description`,
+  );
+  assert(
+    svg.includes("prefers-color-scheme: dark"),
+    `${figure} should support dark mode`,
+  );
+  assert(
+    svg.includes('vector-effect="non-scaling-stroke"'),
+    `${figure} should retain line weight when enlarged`,
+  );
+}
+
+const assetReadmePath = path.join(assetRoot, "README.md");
+assert(fs.existsSync(assetReadmePath), "architecture asset README should exist");
+const assetReadme = fs.readFileSync(assetReadmePath, "utf8");
+for (const figure of figures) {
+  assert(assetReadme.includes(figure), `Asset README should document ${figure}`);
+}
+assert(
+  assetReadme.includes("fictional") && assetReadme.includes("conceptual"),
+  "Asset README should explain fictional content and conceptual geometry",
+);
+
 console.log("2026 competition architecture smoke test passed");
