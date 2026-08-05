@@ -391,7 +391,7 @@ are the intended difference. Each config has one input field:
 
 ```yaml
 inputs:
-  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+  handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 ```
 
 Generation validates the complete handoff before mutating generation state.

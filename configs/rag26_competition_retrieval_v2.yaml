@@ -1,7 +1,7 @@
 schema_version: facet_pilot_config_v2
 
 experiment:
-  id: facet-deepseek-b40-v2
+  id: facet-deepseek-b40-v3
 
 topics:
   path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv

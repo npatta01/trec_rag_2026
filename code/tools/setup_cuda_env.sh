@@ -27,15 +27,25 @@ fi
 
 VENV_ABS="${REPO_ROOT}/.venv"
 
-# competition_retrieval loads the reranker with local_files_only=True at a
-# pinned revision, so the weights must already be in the HF cache.
+# competition_retrieval loads both local models with local_files_only=True at
+# pinned revisions, so the weights must already be in the HF cache. Mixedbread
+# scores passages; MiniLM is constructed later for evidence selection, so a host
+# holding only the reranker fails after the expensive scoring stage rather than
+# at startup. Fetch both, then prove the offline path each loader actually uses
+# resolves from cache alone.
 "${VENV_ABS}/bin/python" - <<'PY'
 from huggingface_hub import snapshot_download
 
+from trec_rag.evidence_local import MINILM_MODEL, MINILM_REVISION
 from trec_rag.mixedbread_passage_scorer import MIXEDBREAD_MODEL, MIXEDBREAD_REVISION
 
-path = snapshot_download(MIXEDBREAD_MODEL, revision=MIXEDBREAD_REVISION)
-print(f"reranker_weights={path}")
+for label, model, revision in (
+    ("reranker", MIXEDBREAD_MODEL, MIXEDBREAD_REVISION),
+    ("similarity", MINILM_MODEL, MINILM_REVISION),
+):
+    snapshot_download(model, revision=revision)
+    cached = snapshot_download(model, revision=revision, local_files_only=True)
+    print(f"{label}_weights={cached}")
 PY
 
 "${VENV_ABS}/bin/python" - <<'PY'

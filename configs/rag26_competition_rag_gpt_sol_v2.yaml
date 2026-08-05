@@ -13,7 +13,7 @@ submission:
   run_desc: Selected-evidence retrieval with GPT-5.6 Sol answer generation.
 
 inputs:
-  handoff_manifest: outputs/facet-deepseek-b40-v2/generation_handoff_manifest.json
+  handoff_manifest: outputs/facet-deepseek-b40-v3/generation_handoff_manifest.json
 
 generation:
   type: openrouter
