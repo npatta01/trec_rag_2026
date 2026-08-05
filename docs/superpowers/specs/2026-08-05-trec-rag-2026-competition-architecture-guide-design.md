@@ -2,8 +2,9 @@
 
 ## Status
 
-Approved conversational design, ready for implementation planning after the
-written-spec review gate.
+Conversational visual design approved. Quarto authoring feedback is now
+incorporated; implementation planning remains behind the written-spec review
+gate.
 
 The work starts from merge commit
 `7e9d3b9159f5222a761ba58ad515b236dc93a423` on a new clean branch and worktree.
@@ -12,9 +13,9 @@ an implementation input.
 
 ## Objective
 
-Create a polished, image-led, standalone HTML walkthrough that helps a
-first-time reader follow one official narrative through the supported TREC RAG
-2026 competition workflow:
+Create a polished, image-led Quarto walkthrough, rendered as standalone HTML,
+that helps a first-time reader follow one official narrative through the
+supported TREC RAG 2026 competition workflow:
 
 1. bounded retrieval planning;
 2. document retrieval and passage ranking;
@@ -71,12 +72,24 @@ live in expandable technical notes.
 
 Create:
 
+- `reports/2026-competition-architecture.qmd`
 - `reports/2026-competition-architecture.html`
 
-The report is a static vertical story with embedded CSS and minimal vanilla
-JavaScript. It has no external runtime dependency. JavaScript enhances section
-navigation and image enlargement, but all content and native disclosure widgets
-remain usable without it.
+The `.qmd` file is the canonical authored source. The `.html` file is a
+checked-in generated artifact for friend-facing reading and must never be
+edited by hand. The report is a static vertical story rendered by Quarto with
+embedded resources and no external runtime dependency. Prefer Quarto Markdown,
+figures, captions, cross-references, table of contents, and built-in lightbox
+behavior over hand-authored page structure. Small semantic HTML fragments are
+allowed only where Quarto has no equivalent, such as a native disclosure with a
+required no-JavaScript fallback.
+
+Do not add a repository-wide `_quarto.yml`: no tracked Quarto project exists at
+the fixed base, and a global configuration could alter unrelated reports. Keep
+all format settings in this report's YAML front matter. A small local stylesheet
+may be used for the report's visual system and must be embedded into the
+generated HTML. Avoid custom JavaScript unless a verified accessibility need
+cannot be met by Quarto's built-in behavior.
 
 ### Reusable visual sources
 
@@ -118,6 +131,37 @@ Modify:
 copy of the report. The root README and report index make the walkthrough easy
 for friends and contributors to discover.
 
+## Quarto Authoring and Render Contract
+
+Use the installed Quarto CLI to render the one report directly; do not turn the
+repository into a Quarto project. The canonical command, run from the repository
+root, is:
+
+```bash
+quarto render reports/2026-competition-architecture.qmd --to html
+```
+
+The `.qmd` front matter owns the complete rendering contract. It must:
+
+- render HTML beside the source file;
+- embed CSS, fonts, and Quarto runtime resources in the HTML;
+- provide light and dark color schemes;
+- enable a generated table of contents and figure enlargement;
+- preserve local direct links to the nine reusable SVG sources;
+- produce no network request at viewing time.
+
+Author the narrative, headings, glossary, captions, figure references, source
+notes, and most layout in Quarto Markdown. Keep styling in a small local style
+source if needed. Use raw HTML sparingly and only for semantics that cannot be
+expressed faithfully in Quarto Markdown. Start with no custom JavaScript; add a
+local script only if browser verification proves that a required interaction or
+accessibility behavior cannot be achieved with Quarto's generated behavior.
+
+The generated HTML is committed so readers do not need Quarto installed. Each
+render handoff records the Quarto version used; the initial implementation is
+verified with the host's Quarto `1.9.38`. A clean re-render must leave the
+checked-in HTML unchanged.
+
 ## Reading Experience
 
 The report opens with three short elements:
@@ -134,7 +178,7 @@ The page then follows the nine diagrams in order. Each section contains:
 - one short plain-language explanation;
 - a visible text equivalent of the diagram's flow;
 - a native `<details>` disclosure for exact implementation notes and sources;
-- a direct control for enlarging the diagram and a direct link to its SVG.
+- Quarto's figure-enlargement control and a direct link to its SVG.
 
 A compact section navigator and persistent legend help readers retain context.
 The navigator becomes an ordinary wrapping link list on narrow screens and in
@@ -444,6 +488,8 @@ No external network source is required at report runtime.
 Add a concise `## Architecture Orientation` section to `AGENTS.md` with:
 
 - a link to the HTML walkthrough;
+- a nearby source link naming the `.qmd` as the file agents should edit and
+  re-render;
 - a statement that it covers only the supported competition path;
 - the ordered Retrieval → handoff → Generation boundary;
 - the following invariants:
@@ -459,10 +505,11 @@ Keep the existing operational commands and run-safety rules intact.
 
 ## Interaction and Progressive Enhancement
 
-- Use ordinary anchor links for section navigation.
+- Use Quarto's generated table of contents and ordinary anchor links for
+  section navigation.
 - Use native `<details>`/`<summary>` for technical notes.
-- Use labeled buttons for image enlargement; `Escape`, the close button, and
-  focus return must work.
+- Use Quarto's built-in figure enlargement rather than a hand-built modal;
+  `Escape`, the close control, and focus return must work.
 - Provide a direct SVG link beside every enlargement control.
 - Do not require hover to access information.
 - With JavaScript disabled, all nine images, captions, text equivalents,
@@ -504,10 +551,29 @@ This is a static report, so runtime failure handling is deliberately small:
 
 ## Verification
 
+### Quarto render verification
+
+Before static or browser checks:
+
+1. record `quarto --version` in the verification evidence;
+2. render the canonical `.qmd` with the documented command;
+3. confirm the output is
+   `reports/2026-competition-architecture.html`;
+4. confirm a second clean render produces no diff in the checked-in HTML;
+5. confirm no `_quarto.yml` or other repository-wide Quarto project file was
+   added.
+
+The `.qmd` is reviewed as the authored source. The `.html` is reviewed as the
+rendered reader experience. A correction to prose, structure, or styling must
+be made in the source and re-rendered, never patched into generated HTML.
+
 ### Static smoke tests
 
 `reports/2026-competition-architecture.test.js` must assert:
 
+- the canonical `.qmd` exists and identifies embedded-resource, light/dark,
+  table-of-contents, and figure-enlargement behavior;
+- the rendered HTML exists and identifies Quarto as its generator;
 - all nine expected SVG paths exist and are referenced in order;
 - each SVG has an accessible title and description;
 - all nine visible text equivalents exist;
@@ -527,8 +593,8 @@ This is a static report, so runtime failure handling is deliberately small:
 - the three-transport-attempt and two-semantic-attempt limits are distinct;
 - the report contains no external script, stylesheet, font, image, or fetch
   dependency;
-- the enlargement controls, direct SVG links, and native technical disclosures
-  exist.
+- Quarto's enlargement controls, direct SVG links, and native technical
+  disclosures exist.
 
 Extend `reports/index.test.js` to require the new report entry. Add focused
 checks that `AGENTS.md` and `README.md` link to the report and retain the required
@@ -589,14 +655,18 @@ The work is complete when:
    are visible without crowding the overview;
 8. every diagram works in light, dark, mobile, desktop, print, keyboard, and
    grayscale contexts;
-9. the report and its nine local SVGs are discoverable from `AGENTS.md`, the
-   root README, and the reports index;
-10. the branch contains no copied cache, output, environment, or private run
+9. the canonical `.qmd`, rendered report, and nine local SVGs are discoverable
+   from `AGENTS.md`, the root README, and the reports index;
+10. a clean Quarto re-render leaves the checked-in HTML unchanged;
+11. the branch contains no copied cache, output, environment, or private run
     artifact.
 
 ## Approved Decisions
 
-- Standalone HTML is the primary friend-facing artifact.
+- Quarto `.qmd` is the canonical authored source; generated standalone HTML is
+  the primary friend-facing artifact.
+- This is a standalone Quarto document, not a repository-wide Quarto project.
+- Generated HTML is never edited by hand.
 - The guide covers only the supported 2026 competition path.
 - One whole-system overview is followed by a guided story.
 - Retrieval and Generation receive separate detailed system images.
