@@ -64,8 +64,7 @@ official narratives by default. Like the fixed runner, the CLI accepts repeated
 - the OpenRouter coordinator/researcher model;
 - topic-level execution concurrency;
 - the production research-count budgets;
-- two total final-synthesis attempts; and
-- `create` or `resume` lifecycle mode.
+- two total final-synthesis attempts.
 
 The production research limits are the configuration actually planned and
 validated: 20 researcher invocations, 3 concurrent researchers, 100 total
@@ -115,10 +114,18 @@ untouched.
 
 ## Run Lifecycle and Resume
 
-Every experiment owns a distinct output directory. `create` refuses any
-existing run namespace. `resume` first authenticates the config bytes, selected
-topic identities, source revision, submodule revisions, and every sealed
-per-topic receipt.
+Every experiment owns a distinct output directory. The default CLI behavior is
+create and refuses any existing run namespace. Before hosted work, create writes
+a private authenticated `work/run_plan.json` containing the run ID, exact
+config bytes/hash, source and submodule revisions, and the complete ordered set
+of topics selected by the config plus initial `--topic` arguments.
+
+The same unchanged config resumes that run with the operational `--resume`
+flag; lifecycle mode is deliberately not stored in or edited into the semantic
+config. Resume authenticates the run plan and every sealed per-topic receipt.
+It refuses a changed run ID, changed config bytes, changed topic source,
+different source/submodule revisions, or a requested topic outside the original
+run plan.
 
 A valid completed topic is reused without calling the agent or index. An
 incomplete or unsealed topic is restarted from its official narrative with a
@@ -127,10 +134,53 @@ model caches. There is no mid-topic semantic resume and no mutation of a sealed
 topic ledger. Stale temporary state is retained as private diagnostics rather
 than being treated as authoritative or overwritten.
 
+`--resume` without topic selectors executes every missing or failed topic in
+the stored run plan and skips completed topics. Repeated `--topic` selectors may
+instead target only specific failed topics. These selectors narrow execution,
+not the publication cohort: after a targeted topic succeeds, root export still
+joins it with every already sealed topic named by the original run plan. If any
+planned topic remains incomplete, root publication stays absent and the command
+reports those topic IDs.
+
 The root organizer artifacts and export manifest are published only after all
 selected topics have a valid sealed projection. Repeated publication with
 identical authenticated bytes is idempotent. Different bytes in an existing
 sealed namespace are an integrity error; there is no agentic overwrite mode.
+
+For example, if a 20-topic run seals topics 1-19 and topic 20 fails, the 19
+receipts remain under the same experiment's `work/topics/` tree. Either of the
+following manually resumes the same run ID and output directory:
+
+```bash
+# Recommended: discover and execute every outstanding topic.
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/rag26_competition_agentic_retrieval_v1.yaml --resume
+
+# Target only the known failed topic.
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/rag26_competition_agentic_retrieval_v1.yaml \
+  --resume --topic rag2026-19
+```
+
+After topic 20 seals, both commands allow the same output root to publish one
+TREC run, full-text ZIP, generation handoff, and manifest covering all 20
+planned topics. Neither command overwrites the 19 completed topics.
+
+## Operator and Agent Documentation
+
+The implementation updates `code/trec_rag/README.md` beside the new runner and
+the CLI `--help` text with create, resume-all, and targeted-resume examples. A
+failed command prints the unresolved topic IDs and a copy-paste resume command
+using the same config path. Documentation states explicitly that:
+
+- the config and its experiment/run ID must remain unchanged;
+- `--resume` validates and reuses sealed topics;
+- `--resume --topic ID` reruns only that incomplete topic from the beginning;
+- the original run plan, not resume selectors, controls final artifact topic
+  membership;
+- exact retrieval/reranker/document work automatically hits shared caches; and
+- changing code, config bytes, topic inputs, or the run ID requires a new run
+  rather than mutating the existing artifact namespace.
 
 ## Topic Data Flow
 
@@ -249,6 +299,12 @@ Implementation proceeds test-first. Automated verification must cover:
 - exact cache hits for repeated retrieval and reranker identities;
 - fresh agent state on incomplete-topic restart;
 - reuse only of authenticated completed-topic receipts;
+- run-plan authentication and rejection of config, run-ID, topic-set, source,
+  or submodule drift;
+- resume-all and targeted-resume behavior where 19 sealed topics are skipped,
+  only the failed 20th executes, and final root artifacts still contain all 20;
+- actionable failure output containing unresolved topic IDs and a copy-paste
+  resume command;
 - deterministic agentic `GenerationTopic` projection, recovery behavior, and
   rejection of ungrounded or unranked evidence;
 - handoff-document subset closure across the TREC run and full-text ZIP;
