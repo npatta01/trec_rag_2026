@@ -64,8 +64,7 @@ official narratives by default. Like the fixed runner, the CLI accepts repeated
 - the OpenRouter coordinator/researcher model;
 - topic-level execution concurrency;
 - the production research-count budgets;
-- two total final-synthesis attempts;
-- two total zero-nugget topic attempts; and
+- two total final-synthesis attempts; and
 - `create` or `resume` lifecycle mode.
 
 The production research limits are the configuration actually planned and
@@ -181,11 +180,12 @@ synthesis outcome. This recovery cannot introduce a nugget, passage, or
 document absent from the validated coverage state.
 
 If a completed topic attempt has no live grounded nuggets at all, nothing is
-projected. The runner automatically makes one fresh topic attempt from the
-official narrative, using a new temporary ledger and the same shared caches.
-If the second topic attempt also produces no live grounded nugget, the topic
-fails without a handoff; publishing raw search passages or fabricated evidence
-is forbidden.
+projected and the topic fails immediately. The command exits nonzero, reports
+the topic ID and zero-grounded-nugget reason, preserves its private diagnostics,
+and leaves shared caches available. A later user-initiated `resume` or new run
+restarts that topic from the official narrative and automatically reuses exact
+cache hits. The runner does not retry the entire topic on its own, and
+publishing raw search passages or fabricated evidence is forbidden.
 
 Every handoff citation document must be a subset of both the topic's Retrieval
 rows and its full-text archive. The projection validates that closure before it
@@ -243,8 +243,8 @@ Implementation proceeds test-first. Automated verification must cover:
 - successful handoff publication after researcher-budget exhaustion with both
   partial draft evidence and deterministic grounded-nugget recovery;
 - rejection and one fresh retry of an invalid final synthesis;
-- one fresh warm-cache topic retry after a zero-nugget attempt, followed by a
-  hard failure if the second attempt also has no grounded nugget;
+- immediate, clearly reported failure after a zero-grounded-nugget topic, with
+  no automatic topic retry and warm-cache reuse on a later manual run;
 - linked-worktree shared cache resolution and conflict-safe cache import;
 - exact cache hits for repeated retrieval and reranker identities;
 - fresh agent state on incomplete-topic restart;
@@ -271,6 +271,7 @@ explicit authorization.
 - No changes to the fixed retrieval algorithm or its existing config bytes.
 - No caching of coordinator or researcher LLM responses.
 - No mid-topic agent-state checkpointing.
+- No automatic whole-topic retry after a zero-grounded-nugget result.
 - No original-query passage fallback in the generation handoff.
 - No prompt/schema change that prevents researchers from proposing facets.
 - No RAG generation-model, prompt, retry, or citation-policy change.
