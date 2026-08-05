@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="sol-title sol-desc">
+  <title id="sol-title">GPT-5.6 Sol generates from the selected-evidence handoff</title>
+  <desc id="sol-desc">The authenticated handoff is projected into a prompt containing the narrative, selected passages, advisory claim hints, and allowed citation document IDs. GPT-5.6 Sol runs with medium reasoning, strict structured output, and a 12000-token ceiling. It returns answer objects with raw ClimbMix document-ID citations for local validation.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:34px;font-weight:700}.label{font-size:30px;font-weight:700}.body{font-size:26px}.muted{fill:var(--muted)}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.generation{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.setting{fill:var(--adv-soft);stroke:var(--adv);stroke-width:2}.flow{fill:none;stroke:var(--gen);stroke-width:3;marker-end:url(#arrow)}.fold{fill:var(--bg);stroke:var(--line);stroke-width:2}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1200" fill="var(--bg)"/>
+  <text class="title" x="400" y="55" text-anchor="middle">Generation begins after Retrieval is sealed</text>
+
+  <path class="stage" d="M145 100H655V265H145Z"/>
+  <path class="fold" d="M595 100V160H655"/>
+  <text class="label" x="400" y="150" text-anchor="middle">Authenticated handoff</text>
+  <text class="body" x="400" y="197" text-anchor="middle">narrative • evidence • hints</text>
+  <text class="body" x="400" y="237" text-anchor="middle">allowed citation document IDs</text>
+  <path class="flow" d="M400 265V335" vector-effect="non-scaling-stroke"/>
+
+  <rect class="stage" x="105" y="345" width="590" height="150" rx="8"/>
+  <text class="label" x="400" y="393" text-anchor="middle">Deterministic prompt projection</text>
+  <text class="body" x="400" y="440" text-anchor="middle">selected passages carry facts</text>
+  <text class="body muted" x="400" y="480" text-anchor="middle">claim hints organize coverage only</text>
+  <path class="flow" d="M400 495V565" vector-effect="non-scaling-stroke"/>
+
+  <rect class="generation" x="80" y="575" width="640" height="260" rx="8"/>
+  <text class="label" x="400" y="627" text-anchor="middle">GPT-5.6 Sol</text>
+  <text class="body" x="400" y="674" text-anchor="middle">openai/gpt-5.6-sol</text>
+  <rect class="setting" x="125" y="715" width="250" height="72" rx="8"/>
+  <rect class="setting" x="425" y="715" width="250" height="72" rx="8"/>
+  <text class="body" x="250" y="760" text-anchor="middle">medium reasoning</text>
+  <text class="body" x="550" y="760" text-anchor="middle">strict schema</text>
+  <text class="body" x="400" y="817" text-anchor="middle">12,000-token ceiling</text>
+  <path class="flow" d="M400 835V905" vector-effect="non-scaling-stroke"/>
+
+  <rect class="stage" x="105" y="915" width="590" height="180" rx="8"/>
+  <text class="label" x="400" y="966" text-anchor="middle">Structured answer objects</text>
+  <text class="body" x="400" y="1013" text-anchor="middle">claim text + 1–3 raw ClimbMix doc IDs</text>
+  <text class="body muted" x="400" y="1056" text-anchor="middle">not organizer citation indexes yet</text>
+  <path class="flow" d="M400 1095V1150" vector-effect="non-scaling-stroke"/>
+  <text class="label" x="400" y="1184" text-anchor="middle">Next: local validation</text>
+</svg>

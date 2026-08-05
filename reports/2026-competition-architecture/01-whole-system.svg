@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="whole-title whole-desc">
+  <title id="whole-title">The supported TREC RAG 2026 competition path</title>
+  <desc id="whole-desc">A narrative flows through Retrieval, an authenticated selected-evidence handoff, GPT-5.6 Sol Generation, validation, and organizer RAG JSONL. Retrieval separately publishes the TREC evidence run and full-text ZIP; those artifacts do not feed Generation.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--gen:#5664c7;--gen-soft:#e6e9ff;--adv:#91610d;--adv-soft:#faecc7;--danger:#b4493e;--danger-soft:#f9dedb}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--gen:#aab4ff;--gen-soft:#242b57;--adv:#f0c46f;--adv-soft:#433616;--danger:#ff9b90;--danger-soft:#482621}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:34px;font-weight:700}.label{font-size:30px;font-weight:700}.body{font-size:26px}.muted{fill:var(--muted)}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.retrieval{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.generation{fill:var(--gen-soft);stroke:var(--gen);stroke-width:3}.artifact{fill:var(--panel);stroke:var(--line);stroke-width:2}.flow{fill:none;stroke:var(--line);stroke-width:3;marker-end:url(#arrow)}.ret-flow{stroke:var(--ret)}.gen-flow{stroke:var(--gen)}.boundary{stroke:var(--ink);stroke-width:3;stroke-dasharray:16 9}.fold{fill:var(--bg);stroke:var(--line);stroke-width:2}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1200" fill="var(--bg)"/>
+  <text class="title" x="400" y="55" text-anchor="middle">One narrative, two sealed stages</text>
+
+  <rect class="stage" x="125" y="95" width="550" height="105" rx="8"/>
+  <text class="label" x="400" y="137" text-anchor="middle">Official narrative</text>
+  <text class="body muted" x="400" y="176" text-anchor="middle">The question and its full information need</text>
+
+  <path class="flow ret-flow" d="M400 200V258" vector-effect="non-scaling-stroke"/>
+  <rect class="retrieval" x="105" y="270" width="590" height="155" rx="8"/>
+  <text class="label" x="400" y="318" text-anchor="middle">Retrieval</text>
+  <text class="body" x="400" y="359" text-anchor="middle">Plan bounded query lanes • retrieve • rank</text>
+  <text class="body" x="400" y="396" text-anchor="middle">select exact evidence • create advisory hints</text>
+
+  <path class="flow ret-flow" d="M325 425V500" vector-effect="non-scaling-stroke"/>
+  <path class="flow ret-flow" d="M570 425V476" vector-effect="non-scaling-stroke"/>
+
+  <path class="artifact" d="M35 500H500V665H35Z"/>
+  <path class="fold" d="M440 500V560H500"/>
+  <text class="label" x="267" y="548" text-anchor="middle">Authenticated handoff</text>
+  <text class="body" x="267" y="594" text-anchor="middle">selected passages + citation domain</text>
+  <text class="body muted" x="267" y="630" text-anchor="middle">claim hints remain advisory</text>
+
+  <path class="artifact" d="M530 485H765V650H530Z"/>
+  <path class="fold" d="M715 485V535H765"/>
+  <text class="body" x="647" y="548" text-anchor="middle">TREC run</text>
+  <text class="body" x="647" y="588" text-anchor="middle">+ full-text ZIP</text>
+  <text class="body muted" x="647" y="626" text-anchor="middle">Retrieval outputs</text>
+
+  <line class="boundary" x1="45" y1="710" x2="755" y2="710" vector-effect="non-scaling-stroke"/>
+  <rect x="100" y="680" width="600" height="58" rx="4" fill="var(--bg)"/>
+  <text class="body" x="400" y="718" text-anchor="middle">Retrieval / Generation trust boundary</text>
+
+  <path class="flow gen-flow" d="M267 665V784H400" vector-effect="non-scaling-stroke"/>
+  <rect class="generation" x="105" y="795" width="590" height="135" rx="8"/>
+  <text class="label" x="400" y="844" text-anchor="middle">Generation with GPT-5.6 Sol</text>
+  <text class="body" x="400" y="891" text-anchor="middle">Answer only from the sealed handoff</text>
+
+  <path class="flow gen-flow" d="M400 930V986" vector-effect="non-scaling-stroke"/>
+  <path class="stage" d="M400 980L620 1050L400 1120L180 1050Z"/>
+  <text class="label" x="400" y="1042" text-anchor="middle">Validate</text>
+  <text class="body muted" x="400" y="1080" text-anchor="middle">schema • words • citations</text>
+
+  <path class="flow gen-flow" d="M400 1120V1154" vector-effect="non-scaling-stroke"/>
+  <text class="label" x="400" y="1184" text-anchor="middle">Organizer RAG JSONL</text>
+</svg>

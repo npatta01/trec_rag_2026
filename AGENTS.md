@@ -57,6 +57,26 @@ coding agent working in this repository.
   `./cache/retrieval/...` and `./cache/reranker/...`.
 - Keep `.venv/` and generated activation helpers out of git.
 
+## Architecture Orientation
+
+Read the friend-facing
+[`reports/2026-competition-architecture.html`](reports/2026-competition-architecture.html)
+for the image-led walkthrough. Agents should edit
+[`reports/2026-competition-architecture.qmd`](reports/2026-competition-architecture.qmd)
+and re-render it with Quarto; never patch the generated HTML directly. The guide
+covers only the supported 2026 competition path: Retrieval → handoff → Generation.
+
+Keep these boundaries intact:
+
+- The untouched narrative always remains a Retrieval lane.
+- DeepSeek planning is bounded and one-shot, not an open-ended search loop.
+- Each valid subnarrative contains 1–3 BM25 query lanes, for at most 25 searches per topic including the original lane.
+- The 1,000-document and 100-passage values are per-query ceilings with a documents-to-passages unit change.
+- Selected passages are factual authority; canonical claim hints are advisory.
+- Generation consumes only the authenticated handoff.
+- Generation never opens the TREC run, full-text ZIP, qrels, gold nuggets, or RAGDoll scores.
+- Transport and semantic retry limits are separate.
+
 ## Competition Retrieval and RAG Runs
 
 - Treat `trec-rag-skills/skills/trec-rag-2026-track-guidelines/SKILL.md`

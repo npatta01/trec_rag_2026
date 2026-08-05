@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="planning-title planning-desc">
+  <title id="planning-title">DeepSeek planning is bounded and one-shot</title>
+  <desc id="planning-desc">One strict DeepSeek V4 Flash request may create zero to eight focused subnarratives. Each successful subnarrative contains one to three BM25 queries, yielding up to twenty-four planned query lanes. The untouched original narrative supplies one more lane, for at most twenty-five searches. A planning failure falls back to the original-only lane, and there is no open-ended search or tool loop.</desc>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8f7;--panel:#fff;--ink:#13231c;--muted:#4b5d54;--line:#5e6d66;--ret:#087c72;--ret-soft:#d9f1ed;--adv:#91610d;--adv-soft:#faecc7;--danger:#b4493e;--danger-soft:#f9dedb}
+    @media (prefers-color-scheme: dark){:root{--bg:#0d1411;--panel:#17211c;--ink:#f0f6f2;--muted:#bac7bf;--line:#9cada3;--ret:#69d8ca;--ret-soft:#183d38;--adv:#f0c46f;--adv-soft:#433616;--danger:#ff9b90;--danger-soft:#482621}}
+    text{fill:var(--ink);font-family:Inter,ui-sans-serif,system-ui,sans-serif}.title{font-size:34px;font-weight:700}.label{font-size:30px;font-weight:700}.body{font-size:26px}.muted{fill:var(--muted)}.stage{fill:var(--panel);stroke:var(--line);stroke-width:2}.retrieval{fill:var(--ret-soft);stroke:var(--ret);stroke-width:3}.advisory-box{fill:var(--adv-soft);stroke:var(--adv);stroke-width:3}.blocked{fill:var(--danger-soft);stroke:var(--danger);stroke-width:3}.flow{fill:none;stroke:var(--ret);stroke-width:3;marker-end:url(#arrow)}.join{fill:none;stroke:var(--ret);stroke-width:3}.control{stroke:var(--adv);stroke-dasharray:12 8}.failure{stroke:var(--danger);stroke-dasharray:8 7}
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>
+  <rect width="800" height="1200" fill="var(--bg)"/>
+  <text class="title" x="400" y="43" text-anchor="middle">Planning is agentic</text>
+  <text class="title" x="400" y="81" text-anchor="middle">but deliberately bounded</text>
+
+  <rect class="stage" x="115" y="100" width="570" height="125" rx="8"/>
+  <text class="label" x="400" y="148" text-anchor="middle">One complete narrative</text>
+  <text class="body muted" x="400" y="191" text-anchor="middle">No query rewrite replaces the original</text>
+  <path class="flow control" d="M400 225V300" vector-effect="non-scaling-stroke"/>
+
+  <rect class="advisory-box" x="105" y="310" width="590" height="190" rx="8"/>
+  <text class="label" x="400" y="360" text-anchor="middle">One strict DeepSeek V4 Flash call</text>
+  <text class="body" x="400" y="407" text-anchor="middle">structured schema • temperature 0 • seed 0</text>
+  <text class="body" x="400" y="450" text-anchor="middle">planning only—no retrieval tools</text>
+
+  <path class="flow" d="M270 500V590" vector-effect="non-scaling-stroke"/>
+  <path class="flow control" d="M530 500V590" vector-effect="non-scaling-stroke"/>
+  <rect class="retrieval" x="55" y="600" width="325" height="150" rx="8"/>
+  <text class="label" x="217" y="650" text-anchor="middle">Original query lane</text>
+  <text class="body" x="217" y="698" text-anchor="middle">always present</text>
+  <rect class="advisory-box" x="420" y="600" width="325" height="150" rx="8"/>
+  <text class="label" x="582" y="640" text-anchor="middle">0–8 subnarratives</text>
+  <text class="body" x="582" y="684" text-anchor="middle">1–3 BM25 queries each</text>
+  <text class="body" x="582" y="724" text-anchor="middle">0–24 planned lanes</text>
+
+  <path class="join" d="M217 750V850H400M582 750V850H400" vector-effect="non-scaling-stroke"/>
+  <path class="flow" d="M400 850V870" vector-effect="non-scaling-stroke"/>
+  <rect class="retrieval" x="120" y="870" width="560" height="120" rx="8"/>
+  <text class="label" x="400" y="918" text-anchor="middle">1–25 query lanes total</text>
+  <text class="body" x="400" y="958" text-anchor="middle">same fixed boundary • once per lane</text>
+
+  <path class="flow failure" d="M105 405H45V1040H120" vector-effect="non-scaling-stroke"/>
+  <rect class="blocked" x="120" y="1015" width="560" height="135" rx="8"/>
+  <text class="label" x="400" y="1060" text-anchor="middle">On planning failure: original only</text>
+  <text class="body" x="400" y="1102" text-anchor="middle">No retries that invent new lanes</text>
+
+  <text class="body" x="400" y="1183" text-anchor="middle">No open-ended plan → search → re-plan loop</text>
+</svg>
