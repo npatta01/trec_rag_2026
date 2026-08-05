@@ -4354,6 +4354,81 @@ def test_direct_passage_citation_retains_exact_source_passage_and_offsets(
     ]
 
 
+def test_coordinator_discovered_facet_is_admitted_before_researcher_handoff(
+    tmp_path,
+) -> None:
+    store = DocumentStore(tmp_path / "objects")
+    passage_search = _OffsetPassageSearch(store)
+    records = TopicRecordsBuilder(
+        tmp_path / "topic",
+        passage_search.topic_id,
+        store,
+        run_id="run-1",
+    )
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_needs(toolset, "need-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="need-1",
+                query="discover grounded facet",
+            )
+            passage = payload["passages"][0]
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_facets": [
+                            {
+                                "facet_id": "discovered-facet",
+                                "need_ids": ["need-1"],
+                                "dimension": "discovered",
+                                "value": "Coordinator accepted discovered facet",
+                                "origin": "snippet",
+                                "origin_snippet_id": passage["passage_id"],
+                            }
+                        ],
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "discovered-nugget",
+                                "text": passage_search.passage_text,
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["discovered-facet"],
+                                "evidence": [{"cite": passage["cite"]}],
+                            }
+                        ],
+                    }
+                )
+            )
+            assert set(update["accepted_ids"]) == {
+                "discovered-facet",
+                "discovered-nugget",
+            }
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(
+        agent_factory,
+        passage_search=passage_search,
+    ).retrieve(records, "narrative")
+
+    snapshot = result.topic_snapshot
+    facet = next(
+        row
+        for row in snapshot.facets
+        if row.subnarrative_id == "discovered-facet"
+    )
+    assert facet.origin == "research_discovered"
+    assert snapshot.researcher_handoffs[0].facet_updates == ()
+    assert [
+        (row.subnarrative_id, row.passage_id)
+        for row in snapshot.researcher_evidence
+    ] == [("discovered-facet", passage_search.passage_id)]
+
+
 def test_direct_need_citation_retains_exact_source_passage_and_offsets(
     tmp_path,
 ) -> None:

@@ -1773,16 +1773,18 @@ class DeepAgentRetriever:
         ) -> frozenset[str]:
             """Commit already validated passage citations once per researcher."""
             nuggets = tuple(report.nuggets)
-            direct_need_ids = tuple(
+            evidence_subnarrative_ids = tuple(
                 dict.fromkeys(
-                    need_id
+                    subnarrative_id
                     for nugget in nuggets
-                    if not nugget.facet_ids
-                    for need_id in nugget.need_ids
+                    for subnarrative_id in (nugget.facet_ids or nugget.need_ids)
                 )
             )
-            if direct_need_ids:
-                _ensure_ledger_facets(direct_need_ids, "Direct need evidence")
+            if evidence_subnarrative_ids:
+                _ensure_ledger_facets(
+                    evidence_subnarrative_ids,
+                    "Grounded researcher evidence",
+                )
             run_id = _records_run_id()
             admitted_passage_ids: set[str] = set()
             for researcher_id, passage_ids in shared_task_passages.items():
