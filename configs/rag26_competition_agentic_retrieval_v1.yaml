@@ -1,0 +1,55 @@
+schema_version: agentic_retrieval_config_v1
+retrieval_mode: agentic
+
+experiment:
+  id: agentic-deepseek-v1
+
+topics:
+  path: trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv
+
+execution:
+  topic_workers: 1
+
+caches:
+  document_store_dir: cache/documents/v1
+  model_cache_dir: cache/models/huggingface
+
+retrieval:
+  index: climbmix-400b
+  cache_dir: cache/retrieval/pyserini_remote
+  documents_per_query: 1000
+  hits_per_search: 10
+  corpus_epoch: climbmix-400b-operator-archive-facet-2025-v2-sha256-2ccad901eb908ac14747bafd2069f7c8aa96ecaaa8cc30457ff47c73ce3bf81f
+
+passage:
+  model: mixedbread-ai/mxbai-rerank-base-v2
+  revision: 3ea9d4dffa7d12a4f366be8e275c349de9fc9865
+  score_cache_dir: cache/reranker
+  device: auto
+  passages_per_query: 100
+  chunk_max_characters: 3500
+  chunk_overlap_characters: 350
+
+snippets:
+  result_cache_dir: cache/reranker/deepagent_snippets
+  snippets_per_page: 10
+
+models:
+  coordinator_and_researcher: openrouter:deepseek/deepseek-v4-flash
+
+agent:
+  fused_result_limit: 20
+
+budget:
+  max_researcher_invocations: 20
+  max_concurrent: 3
+  max_retrieval_calls: 100
+  max_tools_per_researcher: 20
+  max_searches_per_researcher: 8
+  max_snippets_per_researcher: 16
+  max_passage_searches_per_researcher: 8
+  max_models_per_researcher: 30
+  max_main_models: 80
+  synthesis_reserve_turns: 2
+  no_yield_calls: 3
+  no_progress_rounds: 2
