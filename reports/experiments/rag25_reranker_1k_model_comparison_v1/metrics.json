@@ -1,0 +1,57 @@
+{
+  "kind": "dev_projected_qrels_rag25_reranker_model_comparison",
+  "topic_count": 22,
+  "retrieved_documents": 22000,
+  "window_rows_per_model": 237089,
+  "baseline": {
+    "name": "BM25 candidate order",
+    "ndcg@10": 0.4139611685,
+    "ndcg@20": 0.4131074838,
+    "precision@10": 0.7045454545,
+    "precision@20": 0.6886363636
+  },
+  "candidate_depths": [50, 100, 200, 500, 1000],
+  "results": [
+    {"depth": 50, "mixedbread_ndcg@10": 0.5191191915, "mixedbread_ndcg@20": 0.4720723058, "gte_ndcg@10": 0.5026574080, "gte_ndcg@20": 0.4648115606, "mixedbread_delta_vs_bm25_ndcg@10": 0.1051580230, "gte_delta_vs_bm25_ndcg@10": 0.0886962395, "mixedbread_judged_rate@10": 1.0, "gte_judged_rate@10": 1.0, "mixedbread_precision@10": 0.7590909091, "mixedbread_precision@20": 0.7250000000, "gte_precision@10": 0.8136363636, "gte_precision@20": 0.7545454545, "mixedbread_topic_wins": 11, "gte_topic_wins": 11},
+    {"depth": 100, "mixedbread_ndcg@10": 0.5250539667, "mixedbread_ndcg@20": 0.5067155900, "gte_ndcg@10": 0.5319787359, "gte_ndcg@20": 0.5061580673, "mixedbread_delta_vs_bm25_ndcg@10": 0.1110927982, "gte_delta_vs_bm25_ndcg@10": 0.1180175674, "mixedbread_judged_rate@10": 1.0, "gte_judged_rate@10": 1.0, "mixedbread_precision@10": 0.7727272727, "mixedbread_precision@20": 0.7659090909, "gte_precision@10": 0.8181818182, "gte_precision@20": 0.8090909091, "mixedbread_topic_wins": 10, "gte_topic_wins": 12},
+    {"depth": 200, "mixedbread_ndcg@10": 0.4820155741, "mixedbread_ndcg@20": 0.4379582570, "gte_ndcg@10": 0.4513730951, "gte_ndcg@20": 0.4297910158, "mixedbread_delta_vs_bm25_ndcg@10": 0.0680544056, "gte_delta_vs_bm25_ndcg@10": 0.0374119265, "mixedbread_judged_rate@10": 0.8409090909, "gte_judged_rate@10": 0.8136363636, "mixedbread_precision@10": 0.6909090909, "mixedbread_precision@20": 0.6295454545, "gte_precision@10": 0.6636363636, "gte_precision@20": 0.6477272727, "mixedbread_topic_wins": 13, "gte_topic_wins": 9},
+    {"depth": 500, "mixedbread_ndcg@10": 0.4287450545, "mixedbread_ndcg@20": 0.3876971633, "gte_ndcg@10": 0.3571262040, "gte_ndcg@20": 0.3419630451, "mixedbread_delta_vs_bm25_ndcg@10": 0.0147838860, "gte_delta_vs_bm25_ndcg@10": -0.0568349646, "mixedbread_judged_rate@10": 0.7136363636, "gte_judged_rate@10": 0.6318181818, "mixedbread_precision@10": 0.6136363636, "mixedbread_precision@20": 0.5568181818, "gte_precision@10": 0.5227272727, "gte_precision@20": 0.5227272727, "mixedbread_topic_wins": 12, "gte_topic_wins": 10},
+    {"depth": 1000, "mixedbread_ndcg@10": 0.4065893342, "mixedbread_ndcg@20": 0.3685970480, "gte_ndcg@10": 0.3373486660, "gte_ndcg@20": 0.2997344996, "mixedbread_delta_vs_bm25_ndcg@10": -0.0073718343, "gte_delta_vs_bm25_ndcg@10": -0.0766125025, "mixedbread_judged_rate@10": 0.6681818182, "gte_judged_rate@10": 0.5818181818, "mixedbread_precision@10": 0.5636363636, "mixedbread_precision@20": 0.5090909091, "gte_precision@10": 0.4954545455, "gte_precision@20": 0.4522727273, "mixedbread_topic_wins": 14, "gte_topic_wins": 8}
+  ],
+  "paired_bootstrap_ndcg10_gte_minus_mixedbread": {
+    "depth_100_mean": 0.0069247692,
+    "depth_100_lower_95": -0.0478877526,
+    "depth_100_upper_95": 0.0627184769,
+    "depth_1000_mean": -0.0692406682,
+    "depth_1000_lower_95": -0.1335701733,
+    "depth_1000_upper_95": -0.0053658500,
+    "samples": 10000,
+    "seed": 20260806
+  },
+  "ranking_agreement": {
+    "full_depth_top1_overlap": 0.0454545455,
+    "full_depth_top10_overlap": 0.2590909091,
+    "full_depth_top20_overlap": 0.2977272727,
+    "document_max_score_pearson": 0.7793687482,
+    "mean_per_topic_document_rank_spearman": 0.6370249887
+  },
+  "score_calibration": {
+    "mixedbread": {"min": -4.75, "max": 10.5, "mean": 5.3662982955, "population_stddev": 1.9606663519},
+    "gte_modernbert": {"min": -0.66015625, "max": 3.3125, "mean": 1.3960244730, "population_stddev": 0.5240738743}
+  },
+  "runtime": {
+    "local_top100_mixedbread_seconds": 1014.71,
+    "local_top100_gte_seconds": 533.60,
+    "a40_full_mixedbread_seconds": 4272,
+    "a40_full_gte_seconds": 2555,
+    "a40_gpu": "NVIDIA A40",
+    "dstack_successful_cost_usd": 0.9032,
+    "dstack_total_cost_including_failed_preflight_usd": 0.9518
+  },
+  "verification": {
+    "full_pytest_passed": 2278,
+    "full_pytest_skipped": 19,
+    "subtests_passed": 60,
+    "score_bundle_sha256_verified": true
+  }
+}

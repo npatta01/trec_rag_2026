@@ -74,6 +74,12 @@ judgment-pool dependent.
 
 None of the following is merged, and none is indexed in `runs.csv`:
 
+- **`codex/rag25-reranker-1k`, branch-only:** the pinned full-depth Mixedbread
+  versus GTE ModernBERT comparison. It includes private A40 runtime evidence,
+  depth-dependent nDCG/precision, score-scale and ranking-agreement checks, and
+  auditable ignored document/passage rankings. See the
+  [`rag25_reranker_1k_model_comparison_v1` report](reports/experiments/rag25_reranker_1k_model_comparison_v1/).
+
 - **41f9 active worktree, untracked:** the sparse-relevance paired run stopped
   at its frozen gate. Its R1 arm improved head nDCG@10 versus the original-only
   control (`0.3011` vs `0.2262`) but missed the graded-Recall@100 guard
