@@ -1319,6 +1319,95 @@ def test_merge_retry_converges_from_durable_prepare_journal(tmp_path: Path) -> N
     assert_no_incomplete_cache_bundle_merge(cache_root)
 
 
+def test_concurrent_identical_merge_adopts_authenticated_completion_winner(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    competing_receipts = []
+    winning_completion_bytes = []
+
+    def complete_competing_merge(phase: str) -> None:
+        if phase != "prepare":
+            return
+        receipt = merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+        )
+        competing_receipts.append(receipt)
+        winning_completion_bytes.append(receipt.completion_path.read_bytes())
+
+    resumed = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+        publication_hook=complete_competing_merge,
+    )
+    retried = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+    )
+
+    assert len(competing_receipts) == 1
+    assert resumed == competing_receipts[0] == retried
+    assert resumed.completion_path.read_bytes() == winning_completion_bytes[0]
+    assert_no_incomplete_cache_bundle_merge(cache_root)
+
+
+def test_concurrent_merge_rejects_unauthenticated_completion_winner(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    forged_paths = []
+    forged_bodies = []
+
+    def publish_forged_completion(phase: str) -> None:
+        if phase != "prepare":
+            return
+        state_roots = tuple((cache_root / MERGE_STATE_DIRECTORY).iterdir())
+        assert len(state_roots) == 1
+        state_root = state_roots[0]
+        prepare = (state_root / "prepare.json").read_bytes()
+        forged = _canonical_json(
+            {
+                "bundle_count": 1,
+                "conflicts_sha256": "0" * 64,
+                "identical_count": 0,
+                "installed_count": 0,
+                "kept_conflict_count": 0,
+                "merge_id": state_root.name,
+                "operation_count": 0,
+                "prepare_sha256": hashlib.sha256(prepare).hexdigest(),
+                "schema_version": "trec-rag-cache-bundle-v1",
+                "score_import_count": 0,
+            }
+        )
+        complete_path = state_root / "complete.json"
+        complete_path.write_bytes(forged)
+        forged_paths.append(complete_path)
+        forged_bodies.append(forged)
+
+    with pytest.raises(CacheBundleConflictError, match="durable merge state"):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+            publication_hook=publish_forged_completion,
+        )
+
+    assert len(forged_paths) == 1
+    assert forged_paths[0].read_bytes() == forged_bodies[0]
+
+
 def test_pack_exports_portable_scores_and_merge_imports_transactionally(
     tmp_path: Path,
 ) -> None:

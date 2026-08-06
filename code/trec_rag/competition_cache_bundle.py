@@ -3285,7 +3285,26 @@ def merge_bundles(
                 "score_import_count": score_import_count,
             }
         )
-        _write_durable_create_only(complete_path, complete_bytes)
+        try:
+            _write_durable_create_only(complete_path, complete_bytes)
+        except CacheBundleConflictError as collision:
+            try:
+                return _authenticate_completed_merge(
+                    complete_path=complete_path,
+                    prepare_path=prepare_path,
+                    conflicts_path=conflicts_path,
+                    expected_prepare=prepare_bytes,
+                    expected_conflicts=conflicts_bytes,
+                    merge_id=merge_id,
+                    bundle_count=len(bundles),
+                    install_operation_count=len(operations),
+                    operation_count=len(operations) + len(score_operations),
+                    kept_operation_count=len(kept),
+                    conflict_count=len(conflicts),
+                    score_operation_count=len(score_operations),
+                )
+            except CacheBundleIntegrityError as authentication_error:
+                raise collision from authentication_error
         if publication_hook is not None:
             publication_hook("complete")
         return _authenticate_completed_merge(
