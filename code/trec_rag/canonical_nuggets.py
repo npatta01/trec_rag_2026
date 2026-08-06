@@ -453,9 +453,10 @@ def run_canonical_stage(
                         if scorer_mode == "hosted":
                             factory = NuggetizerCanonicalNuggetBackend
                         else:
-                            factory = lambda: NuggetizerCanonicalNuggetBackend(
-                                scorer_mode=scorer_mode
-                            )
+                            def factory() -> object:
+                                return NuggetizerCanonicalNuggetBackend(
+                                    scorer_mode=scorer_mode
+                                )
                     else:
                         factory = backend_factory
                     live_backend = factory()

@@ -37,7 +37,7 @@ from trec_rag.pipeline_models import QueryVariant, RetrievedCandidate
 from trec_rag.remote_client import RemoteSearchResponse
 from trec_rag.remote_config import RemotePyseriniConfig
 from trec_rag.retrieval_cache import RetrievalCacheIntegrityError
-from trec_rag.retrievers import PyseriniRemoteRetriever, cache_path, request_cache_key
+from trec_rag.retrievers import PyseriniRemoteRetriever, request_cache_key
 from trec_rag.topics import Topic
 from trec_rag.topic_passage_search import (
     FocusedQuery,

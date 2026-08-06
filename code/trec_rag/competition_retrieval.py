@@ -32,7 +32,6 @@ from trec_rag.evidence_store import (
     select_evidence_artifacts,
 )
 from trec_rag.evidence_local import LocalMiniLMSimilarity, MixedbreadSentencePairScorer
-from trec_rag.evidence_bundle import BundleLane, EvidenceBundle
 from trec_rag.facet_evidence import SelectionPolicy
 from trec_rag.facet_extraction import (
     FacetPlanningResult,
@@ -50,12 +49,6 @@ from trec_rag.facet_pilot_config import (
     select_configured_topics,
 )
 from trec_rag.facet_retrieval import (
-    LONG_DOCUMENT_WEIGHT,
-    RELATIVE_SPAN_DELTA,
-    SPAN_SUPPORT_CAP,
-    SPAN_SUPPORT_WEIGHT,
-    STRONGEST_PASSAGE_WEIGHT,
-    TOP_WINDOW_WEIGHTS,
     FacetRetrievalResult,
     LaneRanking,
     LaneDocumentScore,
@@ -945,7 +938,6 @@ def _retrieve_topic(
         passage_search=passage_search,
         retrieval_depth=retrieval_depth,
     )
-    lanes = tuple(lane.lane for lane in result.lanes)
     audit_lanes: list[dict[str, object]] = []
     passage_results: list[PassageSearchResult] = []
     for lane_result in result.lanes:

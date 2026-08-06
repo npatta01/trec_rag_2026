@@ -17,8 +17,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
-import tempfile
-from typing import Any, Callable, Mapping
+from typing import Callable, Mapping
 import uuid
 
 from filelock import FileLock
