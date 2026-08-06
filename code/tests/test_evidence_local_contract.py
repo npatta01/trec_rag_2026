@@ -17,6 +17,7 @@ from trec_rag.evidence_local import (
     _load_local_cross_encoder,
 )
 from trec_rag.facet_evidence import SentencePair
+from trec_rag.rerank_score_cache import ScoreCacheMiss
 
 
 class _Parameter:
@@ -109,6 +110,40 @@ def test_mixedbread_real_cache_deduplicates_and_restores_pair_order(tmp_path) ->
 
     assert scorer.score_pairs((other, duplicate)) == (-2.5, 1.25)
     assert len(model.calls) == 1
+
+
+def test_mixedbread_read_only_miss_is_side_effect_free_and_model_lazy(tmp_path) -> None:
+    """Catches offline sentence scoring creating SQLite or loading the model."""
+    cache_root = tmp_path / "score-cache"
+    seed = MixedbreadSentencePairScorer(score_cache_root=cache_root, device="cpu")
+    seed.score_cache.close()
+    before = {
+        path.relative_to(cache_root): path.read_bytes()
+        for path in cache_root.rglob("*")
+        if path.is_file()
+    }
+    scorer = MixedbreadSentencePairScorer(
+        score_cache_root=cache_root,
+        device="cpu",
+        model_loader=lambda *_args, **_kwargs: pytest.fail(
+            "read-only miss must not load the model"
+        ),
+        read_only=True,
+    )
+    pair = SentencePair("224", "doc-a", "safety", "Safety", "Sentence.")
+
+    with pytest.raises(ScoreCacheMiss, match="required score-cache entries are missing"):
+        scorer.score_pairs((pair,))
+
+    after = {
+        path.relative_to(cache_root): path.read_bytes()
+        for path in cache_root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert scorer.accounting.cache_hits == 0
+    assert scorer.accounting.cache_misses == 1
+    assert scorer.accounting.model_batches == 0
 
 
 def test_mixedbread_rejects_boolean_cache_and_model_scores(tmp_path) -> None:

@@ -18,7 +18,13 @@ from trec_rag.topic_dispatch import (
 )
 
 
-def _job(root: Path, topic_id: str, *, run_id: str = "run-a") -> TopicJob:
+def _job(
+    root: Path,
+    topic_id: str,
+    *,
+    run_id: str = "run-a",
+    offline_cache_only: bool = False,
+) -> TopicJob:
     config_bytes = b"schema_version: test\n"
     return TopicJob(
         topic_id=topic_id,
@@ -27,6 +33,7 @@ def _job(root: Path, topic_id: str, *, run_id: str = "run-a") -> TopicJob:
         config_bytes=config_bytes,
         config_sha256=sha256(config_bytes).hexdigest(),
         topic_root=(root / run_id / topic_id).resolve(),
+        offline_cache_only=offline_cache_only,
     )
 
 
@@ -110,6 +117,31 @@ def test_dispatch_skips_sealed_topic_before_worker_construction(tmp_path: Path) 
         raise AssertionError("worker constructed for resumed topic")
 
     assert dispatch_topics((job,), poison_worker, max_workers=2) == (expected,)
+
+
+def test_offline_dispatch_does_not_reuse_an_online_mode_receipt(tmp_path: Path) -> None:
+    """Catches an online seal suppressing the required offline cache validation."""
+    online = _job(tmp_path, "topic-a")
+    online_receipt = _receipt(online, b"projection")
+    publish_topic_receipt(online, online_receipt)
+    offline = _job(tmp_path, "topic-a", offline_cache_only=True)
+    calls: list[str] = []
+
+    def offline_worker(job: TopicJob) -> TopicJobReceipt:
+        calls.append(job.topic_id)
+        return TopicJobReceipt(
+            topic_id=job.topic_id,
+            projection_manifest_sha256=online_receipt.projection_manifest_sha256,
+            status="complete",
+            stopping_reason="coverage_sufficient",
+        )
+
+    assert dispatch_topics((offline,), offline_worker, max_workers=1) == (
+        online_receipt,
+    )
+    assert calls == ["topic-a"]
+    assert read_topic_receipt(online) == online_receipt
+    assert read_topic_receipt(offline) == online_receipt
 
 
 def test_topic_job_rejects_config_bytes_that_do_not_match_the_pinned_hash(

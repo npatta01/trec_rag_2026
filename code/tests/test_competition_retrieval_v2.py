@@ -249,14 +249,20 @@ def _offline_shared_scorer(tmp_path: Path):
     class OfflineSharedScorer:
         def __init__(self) -> None:
             self.identity = identity
+            self._stats = {"cache_hits": 0, "cache_misses": 0, "model_batches": 0}
+
+        @property
+        def stats(self):
+            return dict(self._stats)
 
         @staticmethod
         def cache_key(query_text: str, passage_text: str) -> str:
             return sha256(f"{query_text}\0{passage_text}".encode()).hexdigest()
 
-        @staticmethod
-        def rank(query_text, chunks):
+        def rank(self, query_text, chunks):
             assert query_text
+            self._stats["cache_misses"] += len(chunks)
+            self._stats["model_batches"] += int(bool(chunks))
             return tuple(
                 MixedbreadScoredPassage(chunk, float(len(chunks) - index))
                 for index, chunk in enumerate(chunks)
@@ -596,9 +602,14 @@ def test_run_topic_reaches_sealed_score_checkpoint_with_external_adapters(
 
         def __init__(self) -> None:
             self.calls: list[QueryVariant] = []
+            self.transport_calls = 0
+
+        def cache_summary(self):
+            return {"hits": 0, "misses": self.transport_calls}
 
         def retrieve(self, request: QueryVariant):
             self.calls.append(request)
+            self.transport_calls += 1
             return (
                 RetrievedCandidate(
                     request.topic_id,
@@ -835,7 +846,19 @@ def test_fresh_v2_topic_reaches_real_sealed_projection_without_network_or_models
     class RecordingRetriever:
         identity = {"name": "recording", "type": "test", "hits": 1}
 
+        def __init__(self) -> None:
+            self.transport_calls = 0
+
+        def cache_summary(self):
+            return {
+                "hits": 0,
+                "misses": self.transport_calls,
+                "bypasses": 0,
+                "writes": self.transport_calls,
+            }
+
         def retrieve(self, request: QueryVariant):
+            self.transport_calls += 1
             return (
                 RetrievedCandidate(
                     request.topic_id,
@@ -852,13 +875,41 @@ def test_fresh_v2_topic_reaches_real_sealed_projection_without_network_or_models
     class CandidateScorer:
         identity = mixedbread_sentence_scorer_identity()
 
+        def __init__(self) -> None:
+            self._cache_misses = 0
+            self._model_batches = 0
+
+        @property
+        def accounting(self):
+            return SimpleNamespace(
+                cache_hits=0,
+                cache_misses=self._cache_misses,
+                model_batches=self._model_batches,
+            )
+
         def score_pairs(self, pairs):
+            self._cache_misses += len(pairs)
+            self._model_batches += int(bool(pairs))
             return tuple(1.0 for _ in pairs)
 
     class Similarity:
         identity = {"model": "offline-similarity"}
 
+        def __init__(self) -> None:
+            self._cache_misses = 0
+            self._model_batches = 0
+
+        @property
+        def accounting(self):
+            return SimpleNamespace(
+                cache_hits=0,
+                cache_misses=self._cache_misses,
+                model_batches=self._model_batches,
+            )
+
         def cosine_matrix(self, texts):
+            self._cache_misses += 1
+            self._model_batches += int(bool(texts))
             return tuple(
                 tuple(1.0 if left == right else 0.0 for right in texts)
                 for left in texts
@@ -897,7 +948,7 @@ def test_fresh_v2_topic_reaches_real_sealed_projection_without_network_or_models
         retriever=retriever,
         canonical_backend_factory=CanonicalBackend,
     )
-    def fake_decompose(topic_arg, output_dir, _backend):
+    def fake_decompose(topic_arg, output_dir, _backend, **_kwargs):
         path = Path(output_dir) / topic_arg.id / "decomposition" / "result.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(
@@ -949,6 +1000,30 @@ def test_fresh_v2_topic_reaches_real_sealed_projection_without_network_or_models
     assert (
         config.output_dir / topic.id / "canonical" / "retrieval-projection-manifest.json"
     ).is_file()
+    operation_path = config.output_dir / topic.id / "cache-operation-receipt.json"
+    operation = json.loads(operation_path.read_bytes())
+    assert operation["mode"] == "online"
+    assert operation["config_sha256"] == "b" * 64
+    assert operation["projection_manifest_sha256"] == receipt.manifest_sha256
+    assert operation["phases"] == {
+        "planning": {"resumed": False},
+        "retrieval": {"resumed": False},
+        "scoring": {"resumed": False},
+        "canonical": {"resumed": False},
+    }
+    assert operation["stages"]["retrieval"] == {
+        "cache_hits": 0,
+        "cache_misses": 2,
+        "network_calls": 2,
+        "provider_calls": 0,
+        "model_batches": 0,
+    }
+    assert operation["stages"]["canonicalization"]["provider_calls"] == 1
+    content = dict(operation)
+    digest = content.pop("receipt_content_sha256")
+    assert digest == sha256(
+        (json.dumps(content, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
 
 
 def test_fresh_v2_all_unscored_topic_refuses_an_empty_projection(
@@ -997,6 +1072,13 @@ def test_fresh_v2_all_unscored_topic_refuses_an_empty_projection(
         def __init__(self) -> None:
             self.calls = 0
 
+        @property
+        def transport_calls(self):
+            return self.calls
+
+        def cache_summary(self):
+            return {"hits": 0, "misses": self.calls}
+
         def retrieve(self, request: QueryVariant):
             self.calls += 1
             return (
@@ -1014,6 +1096,7 @@ def test_fresh_v2_all_unscored_topic_refuses_an_empty_projection(
 
     class AlwaysFailingPassageScorer:
         identity = _offline_shared_scorer(tmp_path).identity
+        stats = {"cache_hits": 0, "cache_misses": 0, "model_batches": 0}
 
         @staticmethod
         def cache_key(query_text: str, passage_text: str) -> str:
@@ -1026,12 +1109,22 @@ def test_fresh_v2_all_unscored_topic_refuses_an_empty_projection(
 
     class CandidateScorer:
         identity = mixedbread_sentence_scorer_identity()
+        accounting = SimpleNamespace(
+            cache_hits=0,
+            cache_misses=0,
+            model_batches=0,
+        )
 
         def score_pairs(self, pairs):
             return tuple(1.0 for _ in pairs)
 
     class Similarity:
         identity = {"model": "offline-similarity"}
+        accounting = SimpleNamespace(
+            cache_hits=0,
+            cache_misses=0,
+            model_batches=0,
+        )
 
         def cosine_matrix(self, texts):
             return tuple(
@@ -1058,7 +1151,7 @@ def test_fresh_v2_all_unscored_topic_refuses_an_empty_projection(
                 },
             )
 
-    def fake_decompose(topic_arg, output_dir, _backend):
+    def fake_decompose(topic_arg, output_dir, _backend, **_kwargs):
         path = Path(output_dir) / topic_arg.id / "decomposition" / "result.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(

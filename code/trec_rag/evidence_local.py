@@ -150,6 +150,7 @@ class MixedbreadSentencePairScorer:
         device: str = "auto",
         model_loader: Callable[..., Any] = _load_local_cross_encoder,
         batch_size: int = 32,
+        read_only: bool = False,
     ) -> None:
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
@@ -170,6 +171,7 @@ class MixedbreadSentencePairScorer:
         self.score_cache = GlobalScoreCache(
             score_cache_root,
             context,
+            read_only=read_only,
         )
         self._model = _LazyPinnedModel(device=device, loader=model_loader)
         self._cache_hits = 0

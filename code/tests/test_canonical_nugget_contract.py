@@ -409,6 +409,45 @@ def test_canonical_cache_only_hit_replays_without_constructing_backend(
     assert manifest["validated_cache_writes"] == 0
 
 
+def test_canonical_cache_stats_describe_only_the_current_invocation(
+    tmp_path: Path,
+) -> None:
+    """Catches an offline receipt inheriting hosted calls from an old manifest."""
+    selections, selection_manifest = _write_inputs(tmp_path)
+    online_stats: dict[str, int] = {}
+    _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        backend_factory=lambda: _Backend(
+            b'{"claims":[{"claim":"Cached claim.","evidence_aliases":["e001"],'
+            b'"importance":"vital"}]}'
+        ),
+        cache_stats=online_stats,
+    )
+    offline_stats: dict[str, int] = {}
+
+    _stage(
+        tmp_path,
+        selections,
+        selection_manifest,
+        cache_only=True,
+        backend_factory=lambda: pytest.fail("validated hit must not construct backend"),
+        cache_stats=offline_stats,
+    )
+
+    assert online_stats == {
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "provider_calls": 1,
+    }
+    assert offline_stats == {
+        "cache_hits": 1,
+        "cache_misses": 0,
+        "provider_calls": 0,
+    }
+
+
 def test_canonical_cache_only_miss_ignores_raw_and_has_no_side_effects(
     tmp_path: Path,
 ) -> None:

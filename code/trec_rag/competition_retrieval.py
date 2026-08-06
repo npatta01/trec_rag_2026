@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 from types import MappingProxyType
@@ -19,6 +20,7 @@ from typing import Any
 import requests
 
 from trec_rag.canonical_nuggets import PROMPT_VERSION, run_canonical_stage
+from trec_rag.competition_cache_bundle import assert_no_incomplete_cache_bundle_merge
 from trec_rag.chunking import ChunkingConfig, SemanticTextChunker
 from trec_rag.document_store import DocumentStore
 from trec_rag.evidence_store import (
@@ -26,6 +28,7 @@ from trec_rag.evidence_store import (
     materialize_candidate_inputs,
     select_evidence_artifacts,
 )
+from trec_rag.evidence_local import LocalMiniLMSimilarity, MixedbreadSentencePairScorer
 from trec_rag.evidence_bundle import BundleLane, EvidenceBundle
 from trec_rag.facet_evidence import SelectionPolicy
 from trec_rag.facet_extraction import (
@@ -121,6 +124,24 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_TOPIC_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _DECOMPOSITION_MANIFEST_SCHEMA = "facet-decomposition-manifest-v1"
 _DECOMPOSITION_PRODUCER_SCHEMA = "decomposition-producer-identity-v1"
+CACHE_OPERATION_STAGE_NAMES = (
+    "planning",
+    "retrieval",
+    "passage_scores",
+    "sentence_scores",
+    "similarity",
+    "canonicalization",
+)
+_CACHE_OPERATION_COUNTER_NAMES = (
+    "cache_hits",
+    "cache_misses",
+    "network_calls",
+    "provider_calls",
+    "model_batches",
+)
+_CACHE_OPERATION_PHASE_NAMES = ("planning", "retrieval", "scoring", "canonical")
+_CACHE_OPERATION_RECEIPT_SCHEMA = "cache-operation-receipt-v1"
+_CACHE_OPERATION_MANIFEST_SCHEMA = "cache-operation-manifest-v1"
 
 
 @dataclass(frozen=True)
@@ -186,6 +207,15 @@ class RunReceipt:
 
 
 @dataclass(frozen=True)
+class _CacheOperationReceipt:
+    topic_id: str
+    path: Path
+    sha256: str
+    projection_manifest_sha256: str
+    stages: Mapping[str, Mapping[str, int]]
+
+
+@dataclass(frozen=True)
 class _RuntimeDependencies:
     """Private local seams retained for production construction and tests."""
 
@@ -221,6 +251,31 @@ class _TopicPassageSearchAdapter:
 
     def read_text(self, content_sha256: str) -> str:
         return self._document_store.read_text(content_sha256)
+
+
+class _OfflineStagingDocumentStore:
+    """Validate source CAS objects and copy them only into ephemeral output state."""
+
+    def __init__(self, *, source_root: Path, stage_root: Path) -> None:
+        self._source = DocumentStore(Path(source_root))
+        self._stage = DocumentStore(Path(stage_root))
+
+    def admit_text(self, text: str, *, expected_sha256: str | None = None) -> Any:
+        if expected_sha256 is None:
+            expected_sha256 = _hash(text.encode("utf-8"))
+        source_receipt = self._source.verify(expected_sha256)
+        if self._source.read_text(expected_sha256) != text:
+            raise ValueError("shared document cache text differs from retrieval result")
+        staged_receipt = self._stage.admit_text(
+            text,
+            expected_sha256=expected_sha256,
+        )
+        if staged_receipt != source_receipt:
+            raise ValueError("staged document receipt differs from shared cache")
+        return staged_receipt
+
+    def read_text(self, digest: str) -> str:
+        return self._source.read_text(digest)
 
 
 class _DepthBoundExternalRetriever:
@@ -843,6 +898,7 @@ def _retrieve_topic(
     retrieval_depth: int,
     passage_search: Any | None = None,
     passage_identity: Mapping[str, object],
+    cache_only: bool = False,
 ) -> TopicPhaseOutcome:
     """Run and seal one shared passage search per fixed lane."""
     if (
@@ -856,6 +912,7 @@ def _retrieve_topic(
         Path(cache_dir),
         hits=retrieval_depth,
         corpus_epoch=corpus_epoch,
+        cache_only=cache_only,
     )
     identity = _retriever_identity(retriever, retrieval_depth=retrieval_depth)
     root = Path(output_dir) / topic.id
@@ -1102,17 +1159,29 @@ def _run_topic(
     *,
     config_sha256: str,
     expected_retriever_identity: Mapping[str, object],
+    offline_cache_only: bool = False,
+    offline_source_cache_root: Path | None = None,
 ) -> _TopicTaskOutcome:
     """Run one configured topic through the private checkpointed workflow."""
     if not isinstance(config, FacetPilotConfig):
         raise TypeError("config must be a FacetPilotConfig")
     if not isinstance(dependencies, _RuntimeDependencies):
         raise TypeError("dependencies must be _RuntimeDependencies")
+    if not isinstance(offline_cache_only, bool):
+        raise TypeError("offline_cache_only must be Boolean")
+    if offline_cache_only and offline_source_cache_root is None:
+        raise ValueError("offline cache replay requires its source cache root")
     runtime_topic = _runtime_topic(topic)
-    decomposition, _ = _decompose_topic(
+    before_accounting = _runtime_cache_accounting(dependencies)
+    planning_cache_stats: dict[str, int] = {}
+    canonical_cache_stats: dict[str, int] = {}
+    decomposition, decomposition_resumed = _decompose_topic(
         runtime_topic,
         config.output_dir,
         dependencies.planning_backend,
+        planning_cache_root=repo_cache_root(config.root_dir),
+        cache_only=offline_cache_only,
+        cache_stats=planning_cache_stats,
     )
     decomposition_producer_sha256 = _decomposition_producer_sha256(
         runtime_topic,
@@ -1141,11 +1210,17 @@ def _run_topic(
         passages_per_query=config.passage.passages_per_query,
         chunk_max_characters=config.passage.chunk_max_characters,
         chunk_overlap_characters=config.passage.chunk_overlap_characters,
+        cache_only=offline_cache_only,
+        offline_source_document_store_root=(
+            Path(offline_source_cache_root) / "documents"
+            if offline_source_cache_root is not None
+            else None
+        ),
     )
     if passage_search.identity != passage_identity:
         raise ValueError("constructed passage search identity differs from v2 config")
     passage_identity = passage_search.identity
-    _retrieve_topic(
+    retrieval_outcome = _retrieve_topic(
         runtime_topic,
         decomposition,
         output_dir=config.output_dir,
@@ -1156,8 +1231,9 @@ def _run_topic(
         retrieval_depth=config.retrieval.documents_per_query,
         passage_search=passage_search,
         passage_identity=passage_identity,
+        cache_only=offline_cache_only,
     )
-    _score_topic(
+    scoring_outcome = _score_topic(
         runtime_topic,
         decomposition,
         output_dir=config.output_dir,
@@ -1181,6 +1257,8 @@ def _run_topic(
         config=config,
         official_topics_sha256=identity,
         dependencies=dependencies,
+        offline_cache_only=offline_cache_only,
+        cache_stats=canonical_cache_stats,
     )
     topic_root = config.output_dir / runtime_topic.id
     with TopicRecords.open(
@@ -1199,6 +1277,32 @@ def _run_topic(
             config_sha256=config_sha256,
             canonical_manifest_bytes=canonical.provisional_manifest_bytes,
         )
+    after_accounting = _runtime_cache_accounting(dependencies)
+    stages = _cache_accounting_delta(before_accounting, after_accounting)
+    stages["planning"].update(
+        cache_hits=planning_cache_stats.get("cache_hits", 0),
+        cache_misses=planning_cache_stats.get("cache_misses", 0),
+        provider_calls=planning_cache_stats.get("provider_calls", 0),
+    )
+    stages["canonicalization"].update(
+        cache_hits=canonical_cache_stats.get("cache_hits", 0),
+        cache_misses=canonical_cache_stats.get("cache_misses", 0),
+        provider_calls=canonical_cache_stats.get("provider_calls", 0),
+    )
+    _publish_topic_cache_operation_receipt(
+        config=config,
+        topic=runtime_topic,
+        config_sha256=config_sha256,
+        projection_manifest_sha256=projection_receipt.manifest_sha256,
+        mode="offline-cache-only" if offline_cache_only else "online",
+        phases={
+            "planning": {"resumed": decomposition_resumed},
+            "retrieval": {"resumed": retrieval_outcome.resumed},
+            "scoring": {"resumed": scoring_outcome.resumed},
+            "canonical": {"resumed": canonical.outcome.resumed},
+        },
+        stages=stages,
+    )
     return _TopicTaskOutcome(runtime_topic.id, False, projection_receipt)
 
 
@@ -1217,6 +1321,8 @@ def _build_topic_passage_search(
     passages_per_query: int,
     chunk_max_characters: int,
     chunk_overlap_characters: int,
+    cache_only: bool = False,
+    offline_source_document_store_root: Path | None = None,
 ) -> _TopicPassageSearchAdapter:
     if retriever is None:
         retriever = build_pyserini_retriever(
@@ -1224,14 +1330,27 @@ def _build_topic_passage_search(
             index=retrieval_index,
             hits=retrieval_depth,
             corpus_epoch=corpus_epoch,
+            cache_only=cache_only,
         )
     if scorer is None:
-        scorer = MixedbreadPassageScorer(score_cache_root=score_cache_root, device=device)
+        scorer = MixedbreadPassageScorer(
+            score_cache_root=score_cache_root,
+            device=device,
+            read_only=cache_only,
+        )
     scorer_identity = getattr(scorer, "identity", None)
     if not isinstance(scorer_identity, Mapping):
         raise TypeError("passage scorer must expose an identity mapping")
     actual_scorer_identity = dict(scorer_identity)
-    store = DocumentStore(document_store_root)
+    if cache_only:
+        if offline_source_document_store_root is None:
+            raise ValueError("cache-only passage search requires source document cache")
+        store: Any = _OfflineStagingDocumentStore(
+            source_root=offline_source_document_store_root,
+            stage_root=document_store_root,
+        )
+    else:
+        store = DocumentStore(document_store_root)
     passage_identity = _configured_passage_search_identity(
         retrieval_depth=retrieval_depth,
         passages_per_query=passages_per_query,
@@ -1270,6 +1389,10 @@ def _decompose_topic(
     topic: Topic,
     output_dir: Path,
     backend: Any,
+    *,
+    planning_cache_root: Path | None = None,
+    cache_only: bool = False,
+    cache_stats: dict[str, int] | None = None,
 ) -> tuple[ValidatedDecomposition, bool]:
     path = output_dir / topic.id / "decomposition" / "result.json"
     manifest_path = path.with_name("manifest.json")
@@ -1282,6 +1405,15 @@ def _decompose_topic(
             backend,
         )
         result = load_validated_decomposition(topic, path)
+        if cache_only:
+            cached = extract_facets(
+                topic,
+                planning_cache_root=planning_cache_root,
+                cache_only=True,
+                cache_stats=cache_stats,
+            )
+            if cached != result.result:
+                raise ValueError("planning cache differs from decomposition checkpoint")
         if _decomposition_producer_sha256(topic, output_dir, backend) != producer_sha256:
             raise ValueError("decomposition producer changed during validation")
         return result, True
@@ -1291,10 +1423,20 @@ def _decompose_topic(
         or _planning_seed_receipt_claims_topic(seed_receipt_path, topic.id)
     ):
         raise ValueError("decomposition producer exists without its result")
-    if backend is None:
-        backend = OpenRouterDeepSeekFacetBackend()
     planner_identity = _planner_identity(backend)
-    result = extract_facets(topic, backend)
+    if planning_cache_root is None:
+        if backend is None:
+            backend = OpenRouterDeepSeekFacetBackend()
+        result = extract_facets(topic, backend)
+    else:
+        result = extract_facets(
+            topic,
+            backend,
+            planning_cache_root=planning_cache_root,
+            backend_factory=(OpenRouterDeepSeekFacetBackend if backend is None else None),
+            cache_only=cache_only,
+            cache_stats=cache_stats,
+        )
     record = {
         "schema_version": SCHEMA,
         "topic": {"id": topic.id, "narrative": topic.narrative},
@@ -1584,6 +1726,8 @@ def _canonical_topic(
     config: FacetPilotConfig,
     official_topics_sha256: str,
     dependencies: _RuntimeDependencies,
+    offline_cache_only: bool = False,
+    cache_stats: dict[str, int] | None = None,
 ) -> _CanonicalPhaseResult:
     """Run the local evidence tail and canonical stage for one topic."""
     root = config.output_dir / topic.id
@@ -1650,7 +1794,7 @@ def _canonical_topic(
             config.nuggets.maximum_supporting_documents_per_claim
         ),
     }
-    if _resume(manifest, root, expected, artifacts):
+    if _resume(manifest, root, expected, artifacts) and not offline_cache_only:
         return _CanonicalPhaseResult(
             TopicPhaseOutcome(topic.id, "canonical", manifest, True),
             manifest.read_bytes(),
@@ -1692,6 +1836,8 @@ def _canonical_topic(
         cache_dir=canonical_response_cache_dir(config.root_dir),
         backend_factory=dependencies.canonical_backend_factory,
         cache_ignore_checker=dependencies.cache_ignore_checker,
+        cache_only=offline_cache_only,
+        cache_stats=cache_stats,
     )
     provisional_manifest_bytes = _complete_manifest_bytes(
         root, expected, artifacts, pretty=False
@@ -2258,9 +2404,404 @@ def _file_receipt(path: Path) -> tuple[int, str]:
     return byte_count, digest.hexdigest()
 
 
-def _production_dependencies() -> _RuntimeDependencies:
+def _validated_cache_operation_stages(
+    stages: Mapping[str, Mapping[str, int]],
+) -> dict[str, dict[str, int]]:
+    if not isinstance(stages, Mapping) or set(stages) != set(CACHE_OPERATION_STAGE_NAMES):
+        raise ValueError("cache operation stages changed")
+    validated: dict[str, dict[str, int]] = {}
+    for stage_name in CACHE_OPERATION_STAGE_NAMES:
+        counters = stages[stage_name]
+        if not isinstance(counters, Mapping) or set(counters) != set(
+            _CACHE_OPERATION_COUNTER_NAMES
+        ):
+            raise ValueError(f"cache operation {stage_name} counters changed")
+        row: dict[str, int] = {}
+        for counter_name in _CACHE_OPERATION_COUNTER_NAMES:
+            value = counters[counter_name]
+            if type(value) is not int or value < 0:
+                raise ValueError("cache operation counters must be non-negative integers")
+            row[counter_name] = value
+        validated[stage_name] = row
+    return validated
+
+
+def _validated_cache_operation_phases(
+    phases: Mapping[str, Mapping[str, bool]],
+) -> dict[str, dict[str, bool]]:
+    if not isinstance(phases, Mapping) or set(phases) != set(
+        _CACHE_OPERATION_PHASE_NAMES
+    ):
+        raise ValueError("cache operation phases changed")
+    validated: dict[str, dict[str, bool]] = {}
+    for phase_name in _CACHE_OPERATION_PHASE_NAMES:
+        phase = phases[phase_name]
+        if (
+            not isinstance(phase, Mapping)
+            or set(phase) != {"resumed"}
+            or not isinstance(phase["resumed"], bool)
+        ):
+            raise ValueError("cache operation phase outcome is invalid")
+        validated[phase_name] = {"resumed": phase["resumed"]}
+    return validated
+
+
+def _operation_payload_with_digest(payload: Mapping[str, object]) -> dict[str, object]:
+    content = dict(payload)
+    content["receipt_content_sha256"] = _hash(_json_bytes(content, pretty=False))
+    return content
+
+
+def _publish_create_only_json(path: Path, payload: Mapping[str, object]) -> bytes:
+    body = _json_bytes(dict(payload), pretty=False)
+    if path.exists():
+        if path.read_bytes() != body:
+            raise ValueError(f"conflicting immutable operation receipt: {path}")
+        return body
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != body:
+                raise ValueError(f"conflicting immutable operation receipt: {path}")
+        descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return body
+
+
+def _publish_topic_cache_operation_receipt(
+    *,
+    config: FacetPilotConfig,
+    topic: Topic,
+    config_sha256: str,
+    projection_manifest_sha256: str,
+    mode: str,
+    phases: Mapping[str, Mapping[str, bool]],
+    stages: Mapping[str, Mapping[str, int]],
+) -> _CacheOperationReceipt:
+    if mode not in {"online", "offline-cache-only"}:
+        raise ValueError("cache operation mode is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", config_sha256):
+        raise ValueError("cache operation config_sha256 is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", projection_manifest_sha256):
+        raise ValueError("cache operation projection digest is invalid")
+    validated_stages = _validated_cache_operation_stages(stages)
+    validated_phases = _validated_cache_operation_phases(phases)
+    if mode == "offline-cache-only" and any(
+        counters[counter] != 0
+        for counters in validated_stages.values()
+        for counter in (
+            "cache_misses",
+            "network_calls",
+            "provider_calls",
+            "model_batches",
+        )
+    ):
+        raise ValueError(
+            "offline cache operation requires zero misses, calls, and model batches"
+        )
+    payload = _operation_payload_with_digest(
+        {
+            "schema_version": _CACHE_OPERATION_RECEIPT_SCHEMA,
+            "mode": mode,
+            "run_id": config.run_id,
+            "topic_id": topic.id,
+            "config_sha256": config_sha256,
+            "projection_manifest_sha256": projection_manifest_sha256,
+            "phases": validated_phases,
+            "stages": validated_stages,
+        }
+    )
+    path = config.output_dir / topic.id / "cache-operation-receipt.json"
+    body = _publish_create_only_json(path, payload)
+    return _CacheOperationReceipt(
+        topic_id=topic.id,
+        path=path,
+        sha256=_hash(body),
+        projection_manifest_sha256=projection_manifest_sha256,
+        stages=MappingProxyType(
+            {
+                name: MappingProxyType(dict(counters))
+                for name, counters in validated_stages.items()
+            }
+        ),
+    )
+
+
+def _read_topic_cache_operation_receipt(
+    *,
+    config: FacetPilotConfig,
+    topic: Topic,
+    config_sha256: str,
+    projection_manifest_sha256: str,
+    mode: str,
+) -> _CacheOperationReceipt:
+    path = config.output_dir / topic.id / "cache-operation-receipt.json"
+    try:
+        body = path.read_bytes()
+    except OSError as exc:
+        raise ValueError("cache operation topic receipt is missing") from exc
+    value = _loads(body, "cache operation topic receipt")
+    if not isinstance(value, dict) or _json_bytes(value, pretty=False) != body:
+        raise ValueError("cache operation topic receipt is not canonical")
+    expected_fields = {
+        "schema_version",
+        "mode",
+        "run_id",
+        "topic_id",
+        "config_sha256",
+        "projection_manifest_sha256",
+        "phases",
+        "stages",
+        "receipt_content_sha256",
+    }
+    content = dict(value)
+    digest = content.pop("receipt_content_sha256", None)
+    if (
+        set(value) != expected_fields
+        or digest != _hash(_json_bytes(content, pretty=False))
+        or value.get("schema_version") != _CACHE_OPERATION_RECEIPT_SCHEMA
+        or value.get("mode") != mode
+        or value.get("run_id") != config.run_id
+        or value.get("topic_id") != topic.id
+        or value.get("config_sha256") != config_sha256
+        or value.get("projection_manifest_sha256") != projection_manifest_sha256
+    ):
+        raise ValueError("cache operation topic receipt identity changed")
+    phases = _validated_cache_operation_phases(value.get("phases", {}))
+    stages = _validated_cache_operation_stages(value.get("stages", {}))
+    if mode == "offline-cache-only" and any(
+        counters[counter] != 0
+        for counters in stages.values()
+        for counter in (
+            "cache_misses",
+            "network_calls",
+            "provider_calls",
+            "model_batches",
+        )
+    ):
+        raise ValueError(
+            "offline cache operation requires zero misses, calls, and model batches"
+        )
+    del phases
+    return _CacheOperationReceipt(
+        topic_id=topic.id,
+        path=path,
+        sha256=_hash(body),
+        projection_manifest_sha256=projection_manifest_sha256,
+        stages=MappingProxyType(
+            {
+                name: MappingProxyType(dict(counters))
+                for name, counters in stages.items()
+            }
+        ),
+    )
+
+
+def _publish_cache_operation_manifest(
+    *,
+    config: FacetPilotConfig,
+    topics: Sequence[Topic],
+    config_sha256: str,
+    mode: str,
+    receipts: Sequence[_CacheOperationReceipt],
+    export_manifest_path: Path,
+) -> Path:
+    ordered_topics = tuple(topics)
+    ordered_receipts = tuple(receipts)
+    if len(ordered_topics) != len(ordered_receipts) or any(
+        topic.id != receipt.topic_id
+        for topic, receipt in zip(ordered_topics, ordered_receipts, strict=True)
+    ):
+        raise ValueError("cache operation topic receipt order changed")
+    totals = {
+        stage: {counter: 0 for counter in _CACHE_OPERATION_COUNTER_NAMES}
+        for stage in CACHE_OPERATION_STAGE_NAMES
+    }
+    receipt_digests: list[str] = []
+    projection_digests: list[str] = []
+    for topic, receipt in zip(ordered_topics, ordered_receipts, strict=True):
+        body = receipt.path.read_bytes()
+        if _hash(body) != receipt.sha256:
+            raise ValueError("cache operation topic receipt changed")
+        value = _loads(body, "cache operation topic receipt")
+        if not isinstance(value, dict) or _json_bytes(value, pretty=False) != body:
+            raise ValueError("cache operation topic receipt is not canonical")
+        content = dict(value)
+        content_digest = content.pop("receipt_content_sha256", None)
+        if (
+            content_digest != _hash(_json_bytes(content, pretty=False))
+            or value.get("schema_version") != _CACHE_OPERATION_RECEIPT_SCHEMA
+            or value.get("mode") != mode
+            or value.get("run_id") != config.run_id
+            or value.get("topic_id") != topic.id
+            or value.get("config_sha256") != config_sha256
+            or value.get("projection_manifest_sha256")
+            != receipt.projection_manifest_sha256
+        ):
+            raise ValueError("cache operation topic receipt identity changed")
+        stages = _validated_cache_operation_stages(value.get("stages", {}))
+        for stage_name, counters in stages.items():
+            for counter_name, counter_value in counters.items():
+                totals[stage_name][counter_name] += counter_value
+        receipt_digests.append(receipt.sha256)
+        projection_digests.append(receipt.projection_manifest_sha256)
+    export_path = Path(export_manifest_path)
+    export_bytes = export_path.read_bytes()
+    payload = _operation_payload_with_digest(
+        {
+            "schema_version": _CACHE_OPERATION_MANIFEST_SCHEMA,
+            "mode": mode,
+            "run_id": config.run_id,
+            "config_sha256": config_sha256,
+            "topic_ids": [topic.id for topic in ordered_topics],
+            "topic_receipt_sha256s": receipt_digests,
+            "projection_manifest_sha256s": projection_digests,
+            "retrieval_export_manifest": export_path.name,
+            "retrieval_export_manifest_sha256": _hash(export_bytes),
+            "totals": totals,
+        }
+    )
+    path = config.output_dir / "cache-operation-manifest.json"
+    _publish_create_only_json(path, payload)
+    return path
+
+
+def _nonnegative_counter(value: object) -> int:
+    return value if type(value) is int and value >= 0 else 0
+
+
+def _accounting_values(value: object) -> dict[str, int]:
+    if isinstance(value, Mapping):
+        source: object = value
+        getter = value.get
+    else:
+        source = value
+        getter = lambda name, default=0: getattr(source, name, default)
+    return {
+        "cache_hits": _nonnegative_counter(getter("cache_hits", getter("hits", 0))),
+        "cache_misses": _nonnegative_counter(
+            getter("cache_misses", getter("misses", 0))
+        ),
+        "model_batches": _nonnegative_counter(getter("model_batches", 0)),
+    }
+
+
+def _required_local_accounting(
+    provider: object,
+    *,
+    attribute: str,
+    label: str,
+) -> dict[str, int]:
+    try:
+        value = getattr(provider, attribute)
+    except Exception as exc:
+        raise TypeError(f"{label} must expose exact cache accounting") from exc
+    names = ("cache_hits", "cache_misses", "model_batches")
+    if isinstance(value, Mapping):
+        if any(name not in value for name in names):
+            raise TypeError(f"{label} must expose exact cache accounting")
+        raw = tuple(value[name] for name in names)
+    else:
+        if any(not hasattr(value, name) for name in names):
+            raise TypeError(f"{label} must expose exact cache accounting")
+        raw = tuple(getattr(value, name) for name in names)
+    if any(type(item) is not int or item < 0 for item in raw):
+        raise TypeError(f"{label} must expose exact cache accounting")
+    return dict(zip(names, raw, strict=True))
+
+
+def _runtime_cache_accounting(
+    dependencies: _RuntimeDependencies,
+) -> dict[str, dict[str, int]]:
+    stages = {
+        name: {counter: 0 for counter in _CACHE_OPERATION_COUNTER_NAMES}
+        for name in CACHE_OPERATION_STAGE_NAMES
+    }
+    retriever = dependencies.retriever
+    if retriever is not None:
+        cache_summary = getattr(retriever, "cache_summary", None)
+        transport_calls = getattr(retriever, "transport_calls", None)
+        if (
+            not callable(cache_summary)
+            or type(transport_calls) is not int
+            or transport_calls < 0
+        ):
+            raise TypeError("retriever must expose exact cache accounting")
+        summary = cache_summary()
+        if (
+            not isinstance(summary, Mapping)
+            or not {"hits", "misses"}.issubset(summary)
+            or any(
+                type(summary[name]) is not int or summary[name] < 0
+                for name in ("hits", "misses")
+            )
+        ):
+            raise TypeError("retriever must expose exact cache accounting")
+        retrieval_values = _accounting_values(summary)
+        stages["retrieval"].update(retrieval_values)
+        stages["retrieval"]["network_calls"] = transport_calls
+    if dependencies.document_scorer is not None:
+        stages["passage_scores"].update(
+            _required_local_accounting(
+                dependencies.document_scorer,
+                attribute="stats",
+                label="passage scorer",
+            )
+        )
+    if dependencies.candidate_scorer is not None:
+        stages["sentence_scores"].update(
+            _required_local_accounting(
+                dependencies.candidate_scorer,
+                attribute="accounting",
+                label="sentence scorer",
+            )
+        )
+    if dependencies.similarity is not None:
+        stages["similarity"].update(
+            _required_local_accounting(
+                dependencies.similarity,
+                attribute="accounting",
+                label="similarity provider",
+            )
+        )
+    return stages
+
+
+def _cache_accounting_delta(
+    before: Mapping[str, Mapping[str, int]],
+    after: Mapping[str, Mapping[str, int]],
+) -> dict[str, dict[str, int]]:
+    result: dict[str, dict[str, int]] = {}
+    for stage_name in CACHE_OPERATION_STAGE_NAMES:
+        result[stage_name] = {}
+        for counter_name in _CACHE_OPERATION_COUNTER_NAMES:
+            delta = after[stage_name][counter_name] - before[stage_name][counter_name]
+            if delta < 0:
+                raise ValueError("cache operation accounting moved backwards")
+            result[stage_name][counter_name] = delta
+    return result
+
+
+def _production_dependencies(*, load_environment: bool = True) -> _RuntimeDependencies:
     repo = Path(__file__).resolve().parents[2]
-    load_repo_env(repo)
+    if load_environment:
+        load_repo_env(repo)
     code_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo,
@@ -2366,35 +2907,75 @@ def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
     if len(matches) != 1:
         raise ValueError("topic job identity is absent or duplicated in official topics")
     topic = matches[0]
-    dependencies = _production_dependencies()
+    cache_root = repo_cache_root(config.root_dir)
+    assert_no_incomplete_cache_bundle_merge(cache_root)
+    dependencies = (
+        _production_dependencies(load_environment=False)
+        if job.offline_cache_only
+        else _production_dependencies()
+    )
     retriever = build_pyserini_retriever(
         config.retrieval.cache_dir,
         index=config.retrieval.index,
         hits=config.retrieval.documents_per_query,
         corpus_epoch=config.retrieval.corpus_epoch,
+        cache_only=job.offline_cache_only,
     )
     expected_retriever_identity = _retriever_identity(
         retriever,
         retrieval_depth=config.retrieval.documents_per_query,
     )
-    recovered = _validated_existing_topic_job_receipt(
-        config,
-        topic,
-        expected_config_sha256=job.config_sha256,
-        expected_retriever_identity=expected_retriever_identity,
-        planning_backend=None,
+    if not job.offline_cache_only:
+        recovered = _validated_existing_topic_job_receipt(
+            config,
+            topic,
+            expected_config_sha256=job.config_sha256,
+            expected_retriever_identity=expected_retriever_identity,
+            planning_backend=None,
+        )
+        if recovered is not None:
+            return recovered
+    passage_scorer = MixedbreadPassageScorer(
+        score_cache_root=config.passage.score_cache_dir,
+        device=config.passage.device,
+        read_only=job.offline_cache_only,
     )
-    if recovered is not None:
-        return recovered
-    dependencies = replace(dependencies, retriever=retriever)
-    outcome = _run_topic(
-        topic,
-        config,
-        _topics_sha256(official_topics),
+    candidate_scorer = MixedbreadSentencePairScorer(
+        score_cache_root=config.passage.score_cache_dir,
+        device=config.passage.device,
+        read_only=job.offline_cache_only,
+    )
+    similarity = LocalMiniLMSimilarity(
+        device=config.passage.device,
+        cache_root=cache_root,
+        cache_only=job.offline_cache_only,
+    )
+    dependencies = replace(
         dependencies,
-        config_sha256=job.config_sha256,
-        expected_retriever_identity=expected_retriever_identity,
+        retriever=retriever,
+        document_scorer=passage_scorer,
+        candidate_scorer=candidate_scorer,
+        similarity=similarity,
     )
+    if job.offline_cache_only:
+        outcome = _run_offline_topic_staged(
+            job,
+            topic,
+            config,
+            _topics_sha256(official_topics),
+            dependencies,
+            config_sha256=job.config_sha256,
+            expected_retriever_identity=expected_retriever_identity,
+        )
+    else:
+        outcome = _run_topic(
+            topic,
+            config,
+            _topics_sha256(official_topics),
+            dependencies,
+            config_sha256=job.config_sha256,
+            expected_retriever_identity=expected_retriever_identity,
+        )
     if outcome.topic_id != topic.id or outcome.projection_receipt.topic_id != topic.id:
         raise ValueError("topic worker produced a wrong topic")
     status, stopping_reason = _topic_completion_for_dispatch(config, topic)
@@ -2406,12 +2987,70 @@ def _run_production_topic_job(job: TopicJob) -> TopicJobReceipt:
     )
 
 
+def _run_offline_topic_staged(
+    job: TopicJob,
+    topic: Topic,
+    config: FacetPilotConfig,
+    identity: str,
+    dependencies: _RuntimeDependencies,
+    **kwargs: Any,
+) -> _TopicTaskOutcome:
+    """Build an offline replay privately and publish its topic tree only on success."""
+    if job.topic_root.exists():
+        raise ValueError("offline cache replay requires a fresh topic output namespace")
+    stage_root = Path(
+        tempfile.mkdtemp(prefix=f".offline-cache-{topic.id}-", dir=config.root_dir)
+    )
+    try:
+        source_cache_root = repo_cache_root(config.root_dir)
+        stage_cache_root = stage_root / "cache"
+        stage_cache_root.mkdir()
+        (stage_cache_root / "documents").mkdir()
+        for name in (
+            "canonical",
+            "planning-cache-v1",
+            "retrieval",
+            "reranker",
+            "similarity-cache-v1",
+        ):
+            source = source_cache_root / name
+            if source.exists():
+                (stage_cache_root / name).symlink_to(
+                    source,
+                    target_is_directory=True,
+                )
+        staged_config = replace(config, root_dir=stage_root)
+        outcome = _run_topic(
+            topic,
+            staged_config,
+            identity,
+            dependencies,
+            offline_cache_only=True,
+            offline_source_cache_root=source_cache_root,
+            **kwargs,
+        )
+        staged_topic_root = staged_config.output_dir / topic.id
+        if not staged_topic_root.is_dir():
+            raise RuntimeError("offline cache replay did not produce its topic tree")
+        job.topic_root.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.rename(staged_topic_root, job.topic_root)
+        except FileExistsError as exc:
+            raise ValueError(
+                "offline cache replay topic output appeared during publication"
+            ) from exc
+        return outcome
+    finally:
+        shutil.rmtree(stage_root, ignore_errors=True)
+
+
 def run_official(
     config: str | Path,
     *,
     topic_ids: Sequence[str] | None = None,
     topic_subset: Path | None = None,
     external: ExternalAdapters | None = None,
+    offline_cache_only: bool = False,
 ) -> RunReceipt:
     """Run selected official topics and export their organizer-compatible receipt."""
     return _run_official(
@@ -2419,6 +3058,7 @@ def run_official(
         topic_ids=topic_ids,
         topic_subset=topic_subset,
         external=external,
+        offline_cache_only=offline_cache_only,
         dependency_factory=_production_dependencies,
     )
 
@@ -2429,6 +3069,7 @@ def _run_official(
     topic_ids: Sequence[str] | None,
     topic_subset: Path | None,
     external: ExternalAdapters | None,
+    offline_cache_only: bool = False,
     dependency_factory: Callable[[], _RuntimeDependencies],
 ) -> RunReceipt:
     """Private implementation that delays runtime construction until preflight passes."""
@@ -2438,6 +3079,10 @@ def _run_official(
     loaded_config = load_facet_pilot_config(config_path)
     if config_path.read_bytes() != config_bytes:
         raise RuntimeError("retrieval config changed while it was being loaded")
+    if not isinstance(offline_cache_only, bool):
+        raise TypeError("offline_cache_only must be Boolean")
+    cache_root = repo_cache_root(loaded_config.root_dir)
+    assert_no_incomplete_cache_bundle_merge(cache_root)
     if topic_ids is None:
         requested_ids: tuple[str, ...] = ()
     else:
@@ -2479,16 +3124,20 @@ def _run_official(
             config_bytes=config_bytes,
             config_sha256=config_sha256,
             topic_root=(loaded_config.output_dir / topic.id).resolve(),
+            offline_cache_only=offline_cache_only,
         )
         for topic in selected_topics
     )
-    dependencies = dependency_factory()
     production_dispatch = (
         dependency_factory is _production_dependencies
         and adapters.planning_backend is None
         and adapters.retriever is None
         and adapters.canonical_backend_factory is None
     )
+    if offline_cache_only and dependency_factory is _production_dependencies:
+        dependencies = _production_dependencies(load_environment=False)
+    else:
+        dependencies = dependency_factory()
     identity_retriever = adapters.retriever
     if selected_topics and identity_retriever is None:
         identity_retriever = build_pyserini_retriever(
@@ -2496,6 +3145,7 @@ def _run_official(
             index=loaded_config.retrieval.index,
             hits=loaded_config.retrieval.documents_per_query,
             corpus_epoch=loaded_config.retrieval.corpus_epoch,
+            cache_only=offline_cache_only,
         )
     if identity_retriever is None:
         raise ValueError("selected topics require a configured retriever identity")
@@ -2532,12 +3182,29 @@ def _run_official(
             inline_scorer = MixedbreadPassageScorer(
                 score_cache_root=loaded_config.passage.score_cache_dir,
                 device=loaded_config.passage.device,
+                read_only=offline_cache_only,
+            )
+        inline_candidate_scorer = dependencies.candidate_scorer
+        if pending_topic_ids and inline_candidate_scorer is None:
+            inline_candidate_scorer = MixedbreadSentencePairScorer(
+                score_cache_root=loaded_config.passage.score_cache_dir,
+                device=loaded_config.passage.device,
+                read_only=offline_cache_only,
+            )
+        inline_similarity = dependencies.similarity
+        if pending_topic_ids and inline_similarity is None:
+            inline_similarity = LocalMiniLMSimilarity(
+                device=loaded_config.passage.device,
+                cache_root=cache_root,
+                cache_only=offline_cache_only,
             )
         dependencies = replace(
             dependencies,
             planning_backend=adapters.planning_backend,
             retriever=identity_retriever,
             document_scorer=inline_scorer,
+            candidate_scorer=inline_candidate_scorer,
+            similarity=inline_similarity,
             canonical_backend_factory=adapters.canonical_backend_factory,
         )
 
@@ -2551,23 +3218,35 @@ def _run_official(
             topic = selected_by_id.get(job.topic_id)
             if topic is None:
                 raise ValueError("injected topic worker received an unknown topic")
-            recovered = _validated_existing_topic_job_receipt(
-                loaded_config,
-                topic,
-                expected_config_sha256=job.config_sha256,
-                expected_retriever_identity=expected_retriever_identity,
-                planning_backend=dependencies.planning_backend,
-            )
-            if recovered is not None:
-                return recovered
-            outcome = _run_topic(
-                topic,
-                loaded_config,
-                official_topics_sha256,
-                dependencies,
-                config_sha256=job.config_sha256,
-                expected_retriever_identity=expected_retriever_identity,
-            )
+            if not job.offline_cache_only:
+                recovered = _validated_existing_topic_job_receipt(
+                    loaded_config,
+                    topic,
+                    expected_config_sha256=job.config_sha256,
+                    expected_retriever_identity=expected_retriever_identity,
+                    planning_backend=dependencies.planning_backend,
+                )
+                if recovered is not None:
+                    return recovered
+            if job.offline_cache_only:
+                outcome = _run_offline_topic_staged(
+                    job,
+                    topic,
+                    loaded_config,
+                    official_topics_sha256,
+                    dependencies,
+                    config_sha256=job.config_sha256,
+                    expected_retriever_identity=expected_retriever_identity,
+                )
+            else:
+                outcome = _run_topic(
+                    topic,
+                    loaded_config,
+                    official_topics_sha256,
+                    dependencies,
+                    config_sha256=job.config_sha256,
+                    expected_retriever_identity=expected_retriever_identity,
+                )
             if (
                 outcome.topic_id != topic.id
                 or outcome.projection_receipt.topic_id != topic.id
@@ -2633,6 +3312,30 @@ def _run_official(
         code_commit=dependencies.code_commit,
     )
     retrieval_export = read_retrieval_export_receipt(loaded_config, selected_topics)
+    operation_mode = "offline-cache-only" if offline_cache_only else "online"
+    operation_receipts = tuple(
+        _read_topic_cache_operation_receipt(
+            config=loaded_config,
+            topic=topic,
+            config_sha256=config_sha256,
+            projection_manifest_sha256=projection_receipt.manifest_sha256,
+            mode=operation_mode,
+        )
+        for topic, projection_receipt in zip(
+            selected_topics,
+            ordered_receipts,
+            strict=True,
+        )
+    )
+    assert_no_incomplete_cache_bundle_merge(cache_root)
+    _publish_cache_operation_manifest(
+        config=loaded_config,
+        topics=selected_topics,
+        config_sha256=config_sha256,
+        mode=operation_mode,
+        receipts=operation_receipts,
+        export_manifest_path=retrieval_export.manifest,
+    )
     return RunReceipt(
         experiment_id=loaded_config.experiment.id,
         selected_topic_ids=tuple(topic.id for topic in selected_topics),
@@ -2644,6 +3347,7 @@ def _run_official(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the official facet retrieval export.")
     parser.add_argument("config", type=Path)
+    parser.add_argument("--offline-cache-only", action="store_true")
     selectors = parser.add_mutually_exclusive_group()
     selectors.add_argument("--topic", action="append", dest="topic_ids")
     selectors.add_argument("--topic-subset", type=Path)
@@ -2652,6 +3356,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.config,
         topic_ids=None if args.topic_ids is None else tuple(args.topic_ids),
         topic_subset=args.topic_subset,
+        offline_cache_only=args.offline_cache_only,
     )
     print(f"output={receipt.retrieval_export.manifest.parent}")
     return 0

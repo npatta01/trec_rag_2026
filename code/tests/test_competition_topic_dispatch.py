@@ -223,6 +223,19 @@ def test_official_runner_dispatches_pending_topics_in_source_order_without_paren
         "read_retrieval_export_receipt",
         lambda *_args, **_kwargs: export_receipt,
     )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_read_topic_cache_operation_receipt",
+        lambda **kwargs: SimpleNamespace(
+            topic_id=kwargs["topic"].id,
+            projection_manifest_sha256=kwargs["projection_manifest_sha256"],
+        ),
+    )
+    monkeypatch.setattr(
+        competition_retrieval,
+        "_publish_cache_operation_manifest",
+        lambda **kwargs: captured.update(operation_manifest=kwargs),
+    )
 
     result = competition_retrieval._run_official(
         V2_CONFIG,
@@ -245,6 +258,7 @@ def test_official_runner_dispatches_pending_topics_in_source_order_without_paren
     assert result.selected_topic_ids == ("topic-b", "topic-a")
     assert result.resumed_topic_ids == ()
     assert result.retrieval_export is export_receipt
+    assert captured["operation_manifest"]["mode"] == "online"
 
 
 def test_dispatch_receipt_rejects_an_unsealed_topic_completion(
