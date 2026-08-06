@@ -149,6 +149,7 @@ class MixedbreadPassageScorer:
         device: str = "auto",
         model_loader: Callable[..., Any] = load_pinned_cross_encoder,
         batch_size: int = 8,
+        read_only: bool = False,
     ) -> None:
         if not isinstance(device, str) or not device.strip():
             raise ValueError("device must be a nonblank string")
@@ -156,12 +157,16 @@ class MixedbreadPassageScorer:
             raise ValueError("batch_size must be a positive integer")
         if not callable(model_loader):
             raise TypeError("model_loader must be callable")
+        if not isinstance(read_only, bool):
+            raise TypeError("read_only must be a bool")
 
         self.batch_size = batch_size
         self._device = _choose_device(device)
         self._model_loader = model_loader
         self._model: Any | None = None
         self._model_lock = Lock()
+        self._stats_lock = Lock()
+        self._stats = {"cache_hits": 0, "cache_misses": 0, "model_batches": 0}
         self.score_cache = GlobalScoreCache(
             Path(score_cache_root),
             ScoreCacheContext(
@@ -176,6 +181,7 @@ class MixedbreadPassageScorer:
                 inference_dtype=INFERENCE_DTYPE,
                 input_policy=INPUT_POLICY,
             ),
+            read_only=read_only,
         )
 
     @property
@@ -199,6 +205,11 @@ class MixedbreadPassageScorer:
     def cache_key(self, query_text: str, passage_text: str) -> str:
         return self.score_cache.cache_key(query_text=query_text, text=passage_text)
 
+    @property
+    def stats(self) -> dict[str, int]:
+        with self._stats_lock:
+            return dict(self._stats)
+
     def rank(self, query_text: str, chunks: Sequence[TextChunk]) -> tuple[ScoredPassage, ...]:
         rows = tuple(chunks)
         if any(not isinstance(chunk, TextChunk) for chunk in rows):
@@ -216,14 +227,19 @@ class MixedbreadPassageScorer:
             )
             return _model_scores(predicted, expected_count=len(batch))
 
-        scores = _cached_scores(
-            self.score_cache.score_many(
+        call_stats: dict[str, int] = {}
+        try:
+            cached = self.score_cache.score_many(
                 pairs,
                 compute_batch,
                 batch_size=self.batch_size,
-            ),
-            expected_count=len(rows),
-        )
+                _stats=call_stats,
+            )
+        finally:
+            with self._stats_lock:
+                for name in self._stats:
+                    self._stats[name] += call_stats.get(name, 0)
+        scores = _cached_scores(cached, expected_count=len(rows))
         return tuple(
             ScoredPassage(chunk=chunk, relevance_score=score)
             for chunk, score in zip(rows, scores, strict=True)

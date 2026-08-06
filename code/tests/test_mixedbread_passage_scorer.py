@@ -16,7 +16,11 @@ from trec_rag.mixedbread_passage_scorer import (
     MixedbreadPassageScorer,
     load_pinned_cross_encoder,
 )
-from trec_rag.rerank_score_cache import DEFAULT_BACKEND_VERSION, DEFAULT_INFERENCE_DTYPE
+from trec_rag.rerank_score_cache import (
+    DEFAULT_BACKEND_VERSION,
+    DEFAULT_INFERENCE_DTYPE,
+    ScoreCacheMiss,
+)
 
 
 class _Parameter:
@@ -77,6 +81,50 @@ def test_scorer_preserves_input_order_across_hits_and_misses(tmp_path: Path) -> 
     scorer = MixedbreadPassageScorer(tmp_path, model_loader=lambda **_: model)
     rows = scorer.rank("query", chunks("second", "first"))
     assert [row.chunk.text for row in rows] == ["second", "first"]
+
+
+def test_scorer_exposes_cumulative_cache_and_model_batch_accounting(tmp_path: Path) -> None:
+    seed = MixedbreadPassageScorer(
+        tmp_path,
+        model_loader=lambda **_: FakeModel([0.1]),
+    )
+    seed.rank("query", chunks("cached"))
+    model = FakeModel([0.7, 0.8])
+    scorer = MixedbreadPassageScorer(
+        tmp_path,
+        model_loader=lambda **_: model,
+        batch_size=2,
+    )
+
+    scorer.rank("query", chunks("cached", "new-a", "new-b"))
+
+    assert scorer.stats == {"cache_hits": 1, "cache_misses": 2, "model_batches": 1}
+    assert model.calls == [[("query", "new-a"), ("query", "new-b")]]
+
+    scorer.rank("query", chunks("cached", "new-a", "new-b"))
+    assert scorer.stats == {"cache_hits": 4, "cache_misses": 2, "model_batches": 1}
+    assert len(model.calls) == 1
+
+
+def test_scorer_read_only_mode_never_loads_model_and_accounts_for_misses(tmp_path: Path) -> None:
+    seed = MixedbreadPassageScorer(
+        tmp_path,
+        model_loader=lambda **_: FakeModel([0.1]),
+    )
+    seed.rank("query", chunks("cached"))
+    seed.score_cache.close()
+    read_only = MixedbreadPassageScorer(
+        tmp_path,
+        read_only=True,
+        model_loader=lambda **_: pytest.fail("read-only scorer loaded the model"),
+    )
+
+    assert read_only.rank("query", chunks("cached"))[0].relevance_score == 0.1
+    with pytest.raises(ScoreCacheMiss) as captured:
+        read_only.rank("query", chunks("missing"))
+
+    assert captured.value.missing[0].cache_key == read_only.cache_key("query", "missing")
+    assert read_only.stats == {"cache_hits": 1, "cache_misses": 1, "model_batches": 0}
 
 
 def test_scorer_exposes_pinned_json_identity_and_exact_cache_key(tmp_path: Path) -> None:
