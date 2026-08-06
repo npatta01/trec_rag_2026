@@ -158,7 +158,9 @@ git -C "$snapshot" branch --set-upstream-to="origin/$tracking_branch" "$snapshot
 [[ ! -e $snapshot/.env && ! -e $snapshot/.env.local ]] || die "a secret env file entered the committed-only snapshot"
 
 task_config="$transport_tmp/rag26-retrieval-cache-shard.yaml"
-"$project_python" - "$TASK_TEMPLATE" "$task_config" "$snapshot" "$TRANSPORT_SENTINEL" <<'PY'
+snapshot_task_template="$snapshot/${TASK_TEMPLATE#"$REPO_ROOT"/}"
+[[ -f $snapshot_task_template && ! -L $snapshot_task_template ]] || die "snapshot task template is missing"
+"$project_python" - "$snapshot_task_template" "$task_config" "$snapshot" "$TRANSPORT_SENTINEL" <<'PY'
 from __future__ import annotations
 
 import os

@@ -335,6 +335,9 @@ def _clean_launcher_checkout(tmp_path: Path) -> Path:
         destination = checkout / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    (checkout / ".dstack" / "test-transport-marker").write_text(
+        "test-only committed transport marker\n", encoding="utf-8"
+    )
     (checkout / ".git" / "info" / "exclude").write_text("/.venv\n", encoding="utf-8")
     (checkout / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
     for name in ("trec-rag-data", "trec-rag-skills", "ragdoll"):
@@ -393,7 +396,9 @@ def _clean_launcher_checkout(tmp_path: Path) -> Path:
     return checkout
 
 
-def _fake_dstack(tmp_path: Path) -> tuple[Path, Path]:
+def _fake_dstack(
+    tmp_path: Path, *, mutate_template_after_clone: Path | None = None
+) -> tuple[Path, Path]:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     observed = tmp_path / "dstack-observed.txt"
@@ -440,6 +445,9 @@ assert subprocess.run(
     ["git", "remote", "get-url", "origin"], cwd=snapshot, check=True,
     capture_output=True, text=True,
 ).stdout.strip() == "https://example.invalid/trec-rag-test.git"
+assert config["commands"] == [
+    "bash code/tools/run_retrieval_cache_shard.sh ${{ run.args }}"
+]
 PY
 printf '%s\\n' "$*" >"$DSTACK_OBSERVED"
 printf 'FAKE DSTACK PREVIEW\\n'
@@ -447,6 +455,23 @@ printf 'FAKE DSTACK PREVIEW\\n'
         encoding="utf-8",
     )
     fake.chmod(0o755)
+    if mutate_template_after_clone is not None:
+        fake_git = fake_bin / "git"
+        real_git = shutil.which("git")
+        assert real_git is not None
+        fake_git.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == clone ]]; then
+  "$REAL_GIT" "$@"
+  printf '\ncommands:\n  - "printf unsafe-live-template"\n' >>"$MUTATE_TEMPLATE"
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+""",
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o755)
     return fake_bin, observed
 
 
@@ -454,7 +479,10 @@ def test_launcher_couples_apply_to_a_clean_committed_only_snapshot(
     tmp_path: Path,
 ) -> None:
     checkout = _clean_launcher_checkout(tmp_path)
-    fake_bin, observed = _fake_dstack(tmp_path)
+    fake_bin, observed = _fake_dstack(
+        tmp_path,
+        mutate_template_after_clone=(checkout / CONFIG_PATH.relative_to(REPO_ROOT)),
+    )
     expected_head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=checkout,
@@ -475,6 +503,8 @@ def test_launcher_couples_apply_to_a_clean_committed_only_snapshot(
     env["DSTACK_OBSERVED"] = str(observed)
     env["EXPECTED_TRANSPORT_HEAD"] = expected_head
     env["EXPECTED_TRANSPORT_BASE"] = expected_base
+    env["REAL_GIT"] = shutil.which("git") or ""
+    env["MUTATE_TEMPLATE"] = str(checkout / CONFIG_PATH.relative_to(REPO_ROOT))
 
     result = subprocess.run(
         [
