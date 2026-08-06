@@ -21,6 +21,24 @@ cacheable. Both retrieval modes meet only at the existing typed
 content-addressed document/retrieval/reranker caches, deterministic ZIP/JSON,
 OpenRouter DeepSeek, Pyserini REST, Mixedbread ROCm reranking.
 
+## Current status (2026-08-05)
+
+- Tasks 1-9 are implemented, including independent-review fixes for official
+  topic identity, exact Git revision validation, TopicRecords receipts,
+  producer revision binding, evidence-phase provider failure propagation,
+  synthesis provider retry/recovery, and the shared two-attempt closeout bound.
+- Task 9 is green: the full sandboxed suite passed 2,091 tests with 19 skips
+  and one expected Chrome IPC sandbox failure; that exact Chrome test passed
+  separately with its required process access. The offline one-topic CLI test
+  now exercises production cache/dependency wiring, a real TopicRecords
+  publication, grounded projection, topic sealing, and aggregate export while
+  replacing only external provider/GPU boundaries.
+- Task 10 steps 1-2 are complete. The authenticated warm cache was merged
+  conflict-safely into this isolated checkout's cache: 35 retrieval entries,
+  25,616 documents, 171,568 reranker scores, and the pinned Mixedbread model
+  snapshot now validate. The ignored smoke config, live `rag2026-0` run, and
+  sealed-output validation remain pending.
+
 ## Global constraints
 
 - Work only in the isolated worktree rooted at

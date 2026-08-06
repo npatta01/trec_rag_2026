@@ -35,11 +35,13 @@ from trec_rag.deepagent_evidence import (
     SnippetHandle,
 )
 from trec_rag.deepagent_research import (
+    CloseoutAttemptsExhausted,
     MainToolFilterMiddleware,
     ResearchTaskBudgetMiddleware,
     _RoleToolFilterMiddleware,
     build_research_subagent,
     current_research_task,
+    is_operational_provider_stop,
 )
 from trec_rag.deepagent_passages import (
     group_by_document,
@@ -347,39 +349,6 @@ class AgentRetrievalError(RuntimeError):
     def __init__(self, message: str, *, searches: Sequence[AgentSearch]) -> None:
         super().__init__(message)
         self.searches = tuple(searches)
-
-
-def _is_operational_provider_stop(exc: Exception) -> bool:
-    """Classify bounded provider/transport stops without swallowing code bugs."""
-    if isinstance(exc, (ConnectionError, TimeoutError)):
-        return True
-    module = type(exc).__module__.split(".", 1)[0]
-    name = type(exc).__name__.lower()
-    if module in {
-        "httpcore",
-        "httpx",
-        "openai",
-        "openrouter",
-        "requests",
-    }:
-        return True
-    if any(
-        marker in name
-        for marker in ("connection", "provider", "ratelimit", "timeout")
-    ):
-        return True
-    if isinstance(exc, RuntimeError):
-        detail = str(exc).lower()
-        return any(
-            marker in detail
-            for marker in (
-                "provider unavailable",
-                "provider timeout",
-                "rate limit",
-                "service unavailable",
-            )
-        )
-    return False
 
 
 @dataclass(frozen=True)
@@ -931,6 +900,7 @@ class DeepAgentRetriever:
         admitted_ledger_facets: set[str] = set()
         topic_snapshot: object | None = None
         operational_provider_stop = False
+        closeout_provider_stop = False
         unexpected_tool_failures: list[tuple[str, Exception]] = []
         unexpected_tool_failure_lock = Lock()
 
@@ -1911,11 +1881,22 @@ class DeepAgentRetriever:
                             ]
                         }
                     )
+                except CloseoutAttemptsExhausted as exc:
+                    cause = exc.__cause__
+                    if not isinstance(cause, Exception):
+                        raise
+                    if isinstance(
+                        cause,
+                        (AssertionError, TypeError, ValueError, TopicRecordsIntegrityError),
+                    ) or not is_operational_provider_stop(cause):
+                        raise cause
+                    closeout_provider_stop = True
+                    reply = {"messages": ()}
                 except Exception as exc:
                     if isinstance(
                         exc,
                         (AssertionError, TypeError, ValueError, TopicRecordsIntegrityError),
-                    ) or not _is_operational_provider_stop(exc):
+                    ) or not is_operational_provider_stop(exc):
                         raise
                     operational_provider_stop = True
                     reply = {"messages": ()}
@@ -1980,6 +1961,8 @@ class DeepAgentRetriever:
                     stopping_reason = "hard_deadline"
                 elif synthesis_outcome == "zero_grounded_nuggets":
                     stopping_reason = "zero_grounded_nuggets"
+                elif closeout_provider_stop:
+                    stopping_reason = "budget_exhausted"
                 elif coverage_report.terminal_reason is not None:
                     stopping_reason = coverage_report.terminal_reason
                 elif budget_snapshot.stop_code is not None:

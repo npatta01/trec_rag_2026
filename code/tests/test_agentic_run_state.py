@@ -266,13 +266,43 @@ def _projection(tmp_path: Path, topic: Topic):
     )
 
 
-def _receipt(topic_id: str) -> dict[str, object]:
+def _row_counts(*, document_count: int) -> dict[str, int]:
     return {
-        "topic_id": topic_id,
-        "run_id": RUN_ID,
+        "candidate": 0,
+        "candidate_passage_link": 0,
+        "candidate_span": 0,
+        "document_binding": document_count,
+        "passage": document_count,
+        "query_facet": 0,
+        "query_identity": 0,
+        "query_passage": 0,
+        "researcher_evidence": 0,
+        "researcher_facet_update": 0,
+        "researcher_handoff": 0,
+        "retrieval_candidate": 0,
+        "stage_seal": 1,
+        "subnarrative_identity": 0,
+        "topic_completion": 1,
+        "topic_identity": 1,
+    }
+
+
+def _receipt(projection) -> dict[str, object]:
+    document_sha256s = sorted(
+        candidate.document_sha256
+        for candidate in projection.full_text_candidates
+    )
+    return {
+        "database_bytes": 4096,
         "database_sha256": "b" * 64,
+        "document_sha256s": document_sha256s,
+        "manifest_bytes": 512,
+        "manifest_sha256": "f" * 64,
+        "row_counts": _row_counts(document_count=len(document_sha256s)),
+        "run_id": RUN_ID,
+        "schema_version": "topic-records-v4",
         "semantic_sha256": "c" * 64,
-        "row_counts": {"documents": 2, "passages": 2},
+        "topic_id": projection.topic_id,
     }
 
 
@@ -301,7 +331,7 @@ def _seal(
         synthesis_outcome=synthesis_outcome,
         records_receipt=records_receipt
         if records_receipt is not None
-        else _receipt(projection.topic_id),
+        else _receipt(projection),
     )
 
 
@@ -381,6 +411,50 @@ def test_run_plan_create_rejects_unsafe_or_repeated_topic_identity(
 
     with pytest.raises(AgenticRunStateError, match="at least one topic"):
         _create(tmp_path / "empty", topics=())
+
+
+def test_run_plan_rejects_non_sha1_source_and_submodule_revisions(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AgenticRunStateError, match="source revision"):
+        _create(tmp_path / "source", source_revision="1" * 64)
+
+    with pytest.raises(AgenticRunStateError, match="submodule revision"):
+        SubmoduleRevision("ragdoll", "2" * 64)
+
+
+def test_run_plan_load_rejects_an_authenticated_non_sha1_revision(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "work"
+    _create(work)
+    path = work / RUN_PLAN_FILENAME
+    payload = json.loads(path.read_bytes().decode("utf-8"))
+    payload["source"]["revision"] = "1" * 64
+    payload["plan_sha256"] = sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in payload.items()
+                if key != "plan_sha256"
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    path.write_bytes(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+    with pytest.raises(AgenticRunStateError, match="source revision"):
+        load_run_plan(work)
 
 
 @pytest.mark.parametrize(
@@ -538,7 +612,7 @@ def test_topic_seal_authenticates_projection_generation_and_ledger_receipt(
     )
     assert seal.retrieval_topic_sha256 == projection.retrieval_topic_sha256
     assert json.loads(seal.records_receipt_bytes.decode("utf-8")) == _receipt(
-        "rag2026-0"
+        projection
     )
 
     loaded = load_topic_seal(work_dir=work, plan=plan, topic_id="rag2026-0")
@@ -568,6 +642,13 @@ def test_topic_seal_authenticates_projection_generation_and_ledger_receipt(
         published = topic_dir / row.name
         assert published.stat().st_size == row.bytes
         assert sha256(published.read_bytes()).hexdigest() == row.sha256
+    receipt_artifact = next(
+        row for row in seal.artifacts
+        if row.name == "topic_records_receipt.json"
+    )
+    assert receipt_artifact.sha256 == sha256(
+        seal.records_receipt_bytes
+    ).hexdigest()
 
 
 def test_topic_seal_refuses_non_success_or_off_plan_material(tmp_path: Path) -> None:
@@ -594,6 +675,77 @@ def test_topic_seal_refuses_non_success_or_off_plan_material(tmp_path: Path) -> 
     with pytest.raises(AgenticRunStateError, match="narrative"):
         _seal(work, plan, edited)
 
+    assert not (work / "topics" / "rag2026-0" / TOPIC_SEAL_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "missing_field",
+        "unknown_field",
+        "wrong_schema",
+        "bad_database_bytes",
+        "bad_manifest_sha256",
+        "bad_document_type",
+        "unsorted_documents",
+        "missing_row_count",
+        "bad_row_count",
+    ),
+)
+def test_topic_seal_rejects_malformed_topic_records_receipts(
+    tmp_path: Path, case: str
+) -> None:
+    work = tmp_path / "work"
+    plan = _create(work)
+    projection = _projection(tmp_path, TOPICS[0])
+    receipt = _receipt(projection)
+
+    if case == "missing_field":
+        receipt.pop("manifest_bytes")
+    elif case == "unknown_field":
+        receipt["extra"] = "not canonical"
+    elif case == "wrong_schema":
+        receipt["schema_version"] = "topic-records-v3"
+    elif case == "bad_database_bytes":
+        receipt["database_bytes"] = True
+    elif case == "bad_manifest_sha256":
+        receipt["manifest_sha256"] = "F" * 64
+    elif case == "bad_document_type":
+        receipt["document_sha256s"] = [
+            receipt["document_sha256s"][0],
+            123,
+        ]
+    elif case == "unsorted_documents":
+        receipt["document_sha256s"] = list(
+            reversed(receipt["document_sha256s"])
+        )
+    elif case == "missing_row_count":
+        row_counts = dict(receipt["row_counts"])
+        row_counts.pop("stage_seal")
+        receipt["row_counts"] = row_counts
+    elif case == "bad_row_count":
+        row_counts = dict(receipt["row_counts"])
+        row_counts["document_binding"] = False
+        receipt["row_counts"] = row_counts
+    else:  # pragma: no cover - protects the case table
+        raise AssertionError(case)
+
+    with pytest.raises(AgenticRunStateError, match="topic records receipt"):
+        _seal(work, plan, projection, records_receipt=receipt)
+    assert not (work / "topics" / "rag2026-0" / TOPIC_SEAL_FILENAME).exists()
+
+
+def test_topic_seal_requires_every_projected_document_in_receipt_closure(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "work"
+    plan = _create(work)
+    projection = _projection(tmp_path, TOPICS[0])
+    receipt = _receipt(projection)
+    receipt["document_sha256s"] = receipt["document_sha256s"][:1]
+
+    with pytest.raises(AgenticRunStateError, match="document closure"):
+        _seal(work, plan, projection, records_receipt=receipt)
     assert not (work / "topics" / "rag2026-0" / TOPIC_SEAL_FILENAME).exists()
 
 
@@ -627,7 +779,7 @@ def test_topic_seal_republish_is_idempotent_while_conflicting_bytes_fail(
             plan,
             projection,
             attempt=attempt,
-            records_receipt={**_receipt("rag2026-0"), "database_sha256": "f" * 64},
+            records_receipt={**_receipt(projection), "database_sha256": "e" * 64},
         )
     assert (work / "topics" / "rag2026-0" / TOPIC_SEAL_FILENAME).read_bytes() == body
     assert load_topic_seal(work_dir=work, plan=plan, topic_id="rag2026-0") == first
@@ -731,6 +883,68 @@ def test_topic_seal_fails_closed_on_corrupt_or_missing_artifacts(
         select_run_topics(work_dir=work, plan=plan)
 
 
+@pytest.mark.parametrize("case", ("unknown_field", "missing_projected_document"))
+def test_topic_resume_revalidates_receipt_after_all_hashes_are_recomputed(
+    tmp_path: Path, case: str
+) -> None:
+    work = tmp_path / "work"
+    plan = _create(work)
+    projection = _projection(tmp_path, TOPICS[0])
+    _seal(work, plan, projection)
+    topic_dir = work / "topics" / "rag2026-0"
+    receipt_path = topic_dir / "topic_records_receipt.json"
+    manifest_path = topic_dir / TOPIC_SEAL_FILENAME
+
+    receipt = json.loads(receipt_path.read_bytes().decode("utf-8"))
+    if case == "unknown_field":
+        receipt["extra"] = "resealed attacker-controlled value"
+    else:
+        receipt["document_sha256s"] = receipt["document_sha256s"][:1]
+    receipt_body = (
+        json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+    receipt_path.write_bytes(receipt_body)
+
+    manifest = json.loads(manifest_path.read_bytes().decode("utf-8"))
+    receipt_artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["name"] == "topic_records_receipt.json"
+    )
+    receipt_artifact["bytes"] = len(receipt_body)
+    receipt_artifact["sha256"] = sha256(receipt_body).hexdigest()
+    manifest["seal_sha256"] = sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in manifest.items()
+                if key != "seal_sha256"
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    manifest_path.write_bytes(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+    with pytest.raises(AgenticRunStateError, match="topic records receipt"):
+        load_topic_seal(work_dir=work, plan=plan, topic_id="rag2026-0")
+
+
 def test_topic_seal_is_bound_to_its_own_run_plan(tmp_path: Path) -> None:
     work = tmp_path / "work"
     plan = _create(work)
@@ -768,8 +982,8 @@ def test_topic_records_receipt_payload_is_canonical_and_hashable() -> None:
         topic_id="rag2026-0",
         run_id=RUN_ID,
         document_sha256s=("d" * 64, "e" * 64),
-        row_counts={"passages": 2, "documents": 2},
-        schema_version="topic_records_v4",
+        row_counts=_row_counts(document_count=2),
+        schema_version="topic-records-v4",
         manifest_sha256="f" * 64,
         manifest_bytes=512,
     )
@@ -783,8 +997,8 @@ def test_topic_records_receipt_payload_is_canonical_and_hashable() -> None:
         "topic_id": "rag2026-0",
         "run_id": RUN_ID,
         "document_sha256s": ["d" * 64, "e" * 64],
-        "row_counts": {"documents": 2, "passages": 2},
-        "schema_version": "topic_records_v4",
+        "row_counts": _row_counts(document_count=2),
+        "schema_version": "topic-records-v4",
         "manifest_sha256": "f" * 64,
         "manifest_bytes": 512,
     }

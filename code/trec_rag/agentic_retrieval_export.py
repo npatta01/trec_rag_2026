@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 from typing import Callable, Iterator
@@ -39,6 +40,7 @@ _PAYLOAD_NAMES = (
     GENERATION_HANDOFF_FILENAME,
 )
 _MAX_EXPORT_BYTES = 2 * 1024 * 1024 * 1024
+_LOWERCASE_GIT_REVISION = re.compile(r"[0-9a-f]{40}\Z")
 
 _PUBLICATION_TEST_HOOK: Callable[[str], None] | None = None
 
@@ -368,9 +370,14 @@ def _prepare_export(
     seals: Sequence[ValidatedTopicSeal],
     producer_revision: str,
 ) -> _PreparedExport:
-    if not isinstance(producer_revision, str) or not producer_revision:
+    if (
+        not isinstance(producer_revision, str)
+        or _LOWERCASE_GIT_REVISION.fullmatch(producer_revision) is None
+        or producer_revision != plan.source_revision
+    ):
         raise AgenticRetrievalExportError(
-            "producer_revision must be non-empty text"
+            "producer_revision must exactly match the frozen lowercase "
+            "40-character source revision"
         )
     if tuple(seal.topic_id for seal in seals) != plan.planned_topic_ids:
         raise AgenticRetrievalExportError(
@@ -581,7 +588,7 @@ def load_agentic_retrieval_export(
         or row["run_plan_sha256"] != plan.plan_sha256
         or row["planned_topic_ids"] != list(plan.planned_topic_ids)
         or row["topic_count"] != len(plan.planned_topic_ids)
-        or not isinstance(row["producer_revision"], str)
+        or row["producer_revision"] != plan.source_revision
     ):
         raise AgenticRetrievalExportError(
             "retrieval export manifest differs from its run plan"

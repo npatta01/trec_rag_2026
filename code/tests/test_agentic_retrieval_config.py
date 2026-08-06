@@ -205,6 +205,35 @@ def test_topic_selectors_preserve_official_order_and_reject_duplicates() -> None
         )
 
 
+def test_config_rejects_a_non_official_topic_source_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _agentic_module()
+    alternate_topics = tmp_path / "alternate-topics.tsv"
+    alternate_topics.write_text("made-up-topic\tNot an official narrative.\n", encoding="utf-8")
+    text = _config_text().replace(str(TOPICS), str(alternate_topics))
+    monkeypatch.setattr(module, "find_repo_root", lambda _start: ROOT)
+
+    with pytest.raises(ValueError, match="official topic source path"):
+        module.load_agentic_retrieval_config(_write_config(tmp_path, text))
+
+
+def test_topic_selection_rejects_a_non_official_cohort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _agentic_module()
+    config = module.load_agentic_retrieval_config(CANONICAL_CONFIG)
+    monkeypatch.setattr(
+        module,
+        "load_narrative_topics",
+        lambda _path: [module.Topic("made-up-topic", "", "Not official")],
+    )
+
+    with pytest.raises(ValueError, match="official topic cohort"):
+        module.select_agentic_topics(config)
+
+
 def test_resolved_payload_is_non_secret_and_binds_selected_topics() -> None:
     module = _agentic_module()
     config = module.load_agentic_retrieval_config(CANONICAL_CONFIG)

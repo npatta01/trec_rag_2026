@@ -55,6 +55,7 @@ ROOT_ARTIFACTS = (
     GENERATION_HANDOFF_FILENAME,
     EXPORT_MANIFEST_FILENAME,
 )
+SOURCE_REVISION = "1" * 40
 
 
 def _canonical(value: object) -> bytes:
@@ -69,6 +70,27 @@ def _canonical(value: object) -> bytes:
 
 def _digest(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _row_counts(*, document_count: int) -> dict[str, int]:
+    return {
+        "candidate": 0,
+        "candidate_passage_link": 0,
+        "candidate_span": 0,
+        "document_binding": document_count,
+        "passage": document_count,
+        "query_facet": 0,
+        "query_identity": 0,
+        "query_passage": 0,
+        "researcher_evidence": 0,
+        "researcher_facet_update": 0,
+        "researcher_handoff": 0,
+        "retrieval_candidate": 0,
+        "stage_seal": 1,
+        "subnarrative_identity": 0,
+        "topic_completion": 1,
+        "topic_identity": 1,
+    }
 
 
 def _generation_topic(
@@ -202,7 +224,7 @@ def _plan(output_dir: Path):
         config_bytes=b"schema_version: agentic_retrieval_config_v1\n",
         topics=TOPICS,
         official_topics_sha256=OFFICIAL_TOPICS_SHA256,
-        source_revision="1" * 40,
+        source_revision=SOURCE_REVISION,
         submodule_revisions=(
             SubmoduleRevision("ragdoll", "2" * 40),
             SubmoduleRevision("trec-rag-skills", "3" * 40),
@@ -233,11 +255,19 @@ def _seal(
         stopping_reason=stopping_reason,
         synthesis_outcome=synthesis_outcome,
         records_receipt={
-            "topic_id": topic.id,
-            "run_id": plan.run_id,
+            "database_bytes": 4096,
             "database_sha256": _digest(f"database-{topic.id}"),
+            "document_sha256s": sorted(
+                candidate.document_sha256
+                for candidate in projection.full_text_candidates
+            ),
+            "manifest_bytes": 512,
+            "manifest_sha256": _digest(f"manifest-{topic.id}"),
+            "row_counts": _row_counts(document_count=document_count),
+            "run_id": plan.run_id,
+            "schema_version": "topic-records-v4",
             "semantic_sha256": _digest(f"semantic-{topic.id}"),
-            "row_counts": {"documents": document_count},
+            "topic_id": topic.id,
         },
     )
 
@@ -276,7 +306,7 @@ def test_export_is_deterministic_ordered_and_rag_handoff_compatible(
         output_dir=output_dir,
         work_dir=work_dir,
         plan=plan,
-        producer_revision="f" * 40,
+        producer_revision=plan.source_revision,
     )
     original_bytes = {
         name: (output_dir / name).read_bytes() for name in ROOT_ARTIFACTS
@@ -285,7 +315,7 @@ def test_export_is_deterministic_ordered_and_rag_handoff_compatible(
         output_dir=output_dir,
         work_dir=work_dir,
         plan=plan,
-        producer_revision="f" * 40,
+        producer_revision=plan.source_revision,
     )
 
     assert first == second == load_agentic_retrieval_export(
@@ -360,6 +390,7 @@ def test_export_is_deterministic_ordered_and_rag_handoff_compatible(
     assert manifest["schema_version"] == "agentic_retrieval_export_manifest_v1"
     assert manifest["run_id"] == RUN_ID
     assert manifest["run_plan_sha256"] == plan.plan_sha256
+    assert manifest["producer_revision"] == SOURCE_REVISION
     assert manifest["planned_topic_ids"] == [topic.id for topic in TOPICS]
     assert [
         (row["topic_id"], row["status"], row["stopping_reason"], row["synthesis_outcome"])
@@ -396,6 +427,27 @@ def test_export_is_deterministic_ordered_and_rag_handoff_compatible(
     assert manifest_body == _canonical(manifest) + b"\n"
 
 
+@pytest.mark.parametrize(
+    "producer_revision",
+    ("f" * 40, "A" * 40, "1" * 64, "not-a-revision", ""),
+)
+def test_export_requires_the_frozen_lowercase_40_character_source_revision(
+    tmp_path: Path, producer_revision: str
+) -> None:
+    output_dir = tmp_path / "output"
+    work_dir, plan, _seals = _complete_run(output_dir)
+
+    with pytest.raises(AgenticRetrievalExportError, match="producer_revision"):
+        publish_agentic_retrieval_export(
+            output_dir=output_dir,
+            work_dir=work_dir,
+            plan=plan,
+            producer_revision=producer_revision,
+        )
+
+    assert all(not (output_dir / name).exists() for name in ROOT_ARTIFACTS)
+
+
 def test_export_refuses_an_incomplete_run_before_writing_root_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -416,7 +468,7 @@ def test_export_refuses_an_incomplete_run_before_writing_root_artifacts(
             output_dir=output_dir,
             work_dir=work_dir,
             plan=plan,
-            producer_revision="f" * 40,
+            producer_revision=plan.source_revision,
         )
 
     assert all(not (output_dir / name).exists() for name in ROOT_ARTIFACTS)
@@ -435,7 +487,7 @@ def test_export_refuses_corrupt_topic_state_before_writing_root_artifacts(
             output_dir=output_dir,
             work_dir=work_dir,
             plan=plan,
-            producer_revision="f" * 40,
+            producer_revision=plan.source_revision,
         )
 
     assert all(not (output_dir / name).exists() for name in ROOT_ARTIFACTS)
@@ -454,7 +506,7 @@ def test_export_never_overwrites_a_conflicting_root_payload(
             output_dir=output_dir,
             work_dir=work_dir,
             plan=plan,
-            producer_revision="f" * 40,
+            producer_revision=plan.source_revision,
         )
 
     assert (output_dir / RETRIEVAL_RUN_FILENAME).read_bytes() == conflict
@@ -483,7 +535,7 @@ def test_export_resumes_identical_payloads_after_a_pre_manifest_crash(
             output_dir=output_dir,
             work_dir=work_dir,
             plan=plan,
-            producer_revision="f" * 40,
+            producer_revision=plan.source_revision,
         )
     assert all(
         (output_dir / name).exists() for name in ROOT_ARTIFACTS[:-1]
@@ -500,7 +552,7 @@ def test_export_resumes_identical_payloads_after_a_pre_manifest_crash(
         output_dir=output_dir,
         work_dir=work_dir,
         plan=plan,
-        producer_revision="f" * 40,
+        producer_revision=plan.source_revision,
     )
 
     assert receipt.manifest == output_dir / EXPORT_MANIFEST_FILENAME

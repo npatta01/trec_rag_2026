@@ -241,6 +241,162 @@ entailed. Promotion requires a frozen, held-out topic evaluation measuring
 retrieval coverage, evidence quality, claim grounding, redundancy, and failure
 rate.
 
+## Agentic competition retrieval operations
+
+Fixed and agentic retrieval are separate, strict workflows that share only the
+sealed generation-handoff contract:
+
+- `configs/rag26_competition_retrieval_v2.yaml` runs with
+  `trec_rag.competition_retrieval` and keeps the fixed facet pipeline's existing
+  checkpoint behavior.
+- `configs/rag26_competition_agentic_retrieval_v1.yaml` runs with
+  `trec_rag.competition_agentic_retrieval` and uses an authenticated run plan
+  plus create-only per-topic seals.
+
+The runners reject the other mode's config before cache or output mutation.
+Both checked-in files are canonical full-run configs and select all 119 test
+narratives when no `--topic` arguments are supplied. Do not edit either one for
+a smoke run. Instead, make an ignored local copy, change only
+`experiment.id` to a fresh smoke identity, and leave all retrieval, model,
+cache, chunking, and budget identities unchanged:
+
+```bash
+mkdir -p configs/local
+cp configs/rag26_competition_agentic_retrieval_v1.yaml \
+  configs/local/rag26-agentic-two-topic-smoke.yaml
+```
+
+For example, set the copy's `experiment.id` to
+`agentic-deepseek-two-topic-smoke-20260805`. Once create starts, do not edit
+that file: resume authenticates its exact bytes. Bound a one- or two-topic
+smoke with repeated selectors:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/local/rag26-agentic-two-topic-smoke.yaml \
+  --topic rag2026-0 --topic rag2026-1
+```
+
+Before any live create or resume, verify the tracked worktree is clean,
+submodules match the superproject, the local model revision is available to
+ROCm, and the ignored `.env`/`.env.local` supplies `INDEX_URL`,
+`PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY` without printing their values.
+Confirm the exact selected topic count, the fresh or existing
+`outputs/<experiment.id>/` namespace as appropriate, expected cache hits and
+misses, and expected hosted calls. The CLI performs its own config, topic,
+revision, submodule, secret-name, and namespace preflight before constructing
+runtime dependencies or making hosted calls. A full live run still requires
+explicit authorization.
+
+Create is the default lifecycle mode; there is no `--create` flag. It refuses
+an existing output namespace. When a full-cohort run is separately authorized,
+the checked-in agentic config form is:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/rag26_competition_agentic_retrieval_v1.yaml
+```
+
+Create writes `work/run_plan.json` before topic work. Its config bytes, run ID,
+source revisions, and ordered topic cohort are immutable. Initial repeated
+`--topic` arguments define a subset cohort; omitting them selects the config's
+complete 119-topic cohort.
+
+If create exits with unresolved topics, keep the same config file, run ID, and
+output directory. Resume-all runs every outstanding topic and skips valid
+sealed successes:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  CONFIG --resume
+```
+
+Targeted resume narrows that invocation to named outstanding topics:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  CONFIG --resume --topic rag2026-19
+```
+
+Resume selectors never change final membership: the original run plan remains
+the publication cohort. A targeted topic restarts logically from its official
+narrative in a new attempt; it does not continue model state or mutate an
+earlier attempt. A zero-grounded topic likewise fails once, preserves private
+diagnostics, and waits for an explicit operator `--resume`. It is never
+automatically retried and raw original-query passages are never substituted as
+generation evidence.
+
+Logical restart does not discard shared cache reuse. An exact retrieval request
+with the same endpoint, index/corpus identity, query text, and requested depth
+hits the authenticated retrieval cache. An exact reranker pair with the same
+query text, passage text, model/revision, runtime/scoring, and chunker identity
+hits the score cache; authenticated document bodies and the pinned local model
+are also shared. A new adaptive query or query/passage pair is a normal cache
+miss. Coordinator and researcher OpenRouter responses are not cached, so a
+restarted topic makes fresh hosted model calls and may choose different
+adaptive queries.
+
+There is no agentic overwrite mode. Config-byte, run-ID, topic-source, code, or
+submodule drift requires a fresh `experiment.id` and output namespace. Sealed
+topics are immutable, and conflicting existing bytes fail closed.
+
+Root publication happens only when every topic in the original run plan has a
+valid success seal. Until then the command exits nonzero, reports unresolved
+IDs and a copy-paste resume command, and leaves the root export absent. A
+complete agentic output root publishes exactly these standard artifacts, with
+the outer receipt last:
+
+- `r_output_trec_rag_2026.tsv`
+- `retrieval_with_text.jsonl.zip`
+- `generation_handoff_manifest.json`
+- `retrieval_export_manifest.json`
+
+For a concrete 20-topic repair, first make an ignored local config copy whose
+only edit is
+`experiment.id: agentic-deepseek-twenty-topic-repair-20260805`, then freeze its
+bytes. This create command records `rag2026-0` through `rag2026-19` as the
+immutable cohort:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/local/rag26-agentic-twenty-topic-repair.yaml \
+  --topic rag2026-0 --topic rag2026-1 --topic rag2026-2 \
+  --topic rag2026-3 --topic rag2026-4 --topic rag2026-5 \
+  --topic rag2026-6 --topic rag2026-7 --topic rag2026-8 \
+  --topic rag2026-9 --topic rag2026-10 --topic rag2026-11 \
+  --topic rag2026-12 --topic rag2026-13 --topic rag2026-14 \
+  --topic rag2026-15 --topic rag2026-16 --topic rag2026-17 \
+  --topic rag2026-18 --topic rag2026-19
+```
+
+If the first 19 topics seal and `rag2026-19` fails, repair only that twentieth
+topic in the same namespace:
+
+```bash
+.venv/bin/python-rocm -m trec_rag.competition_agentic_retrieval \
+  configs/local/rag26-agentic-twenty-topic-repair.yaml \
+  --resume --topic rag2026-19
+```
+
+The 19 seals are authenticated and skipped. When `rag2026-19` seals, the same
+invocation aggregates the original run-plan cohort and publishes all four root
+artifacts for all 20 topics under
+`outputs/agentic-deepseek-twenty-topic-repair-20260805/`.
+
+RAG consumption is unchanged. Point an ignored copy of a competition RAG
+config at this run's `generation_handoff_manifest.json`, give the RAG run its
+own experiment/output identity and matching topic IDs, then use the existing
+runner:
+
+```bash
+.venv/bin/python -m trec_rag.competition_rag \
+  --config configs/local/<matching-agentic-rag-config>.yaml
+```
+
+The RAG runner does not branch on retrieval mode; it validates and consumes the
+same typed handoff produced by fixed retrieval. Do not start hosted RAG
+generation as part of a retrieval smoke unless it is separately authorized.
+
 ## Topic-record source geometry
 
 `topic_geometry.py` derives immutable validation geometry once per exact UTF-8

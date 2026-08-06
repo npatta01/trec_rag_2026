@@ -461,6 +461,16 @@ class ToolAwareFakeMessagesListChatModel(FakeMessagesListChatModel):
         return self
 
 
+class ProviderFailingChatModel(ToolAwareFakeMessagesListChatModel):
+    """Offline model whose provider call always fails operationally."""
+
+    model_calls: int = Field(default=0)
+
+    def _generate(self, *args: object, **kwargs: object):
+        self.model_calls += 1
+        raise RuntimeError("provider unavailable")
+
+
 @pytest.fixture
 def isolated_real_tracing() -> None:
     def reset() -> None:
@@ -4725,6 +4735,148 @@ def test_provider_stop_after_validated_research_returns_and_persists_partial_top
         records,
         status="incomplete",
         stopping_reason="retrieval_unavailable",
+    )
+
+
+def test_researcher_provider_stop_after_grounded_evidence_is_incomplete() -> None:
+    records = _RecordingTopicLedger()
+
+    def agent_factory(_model, toolset):
+        def invoke(_payload):
+            _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+            payload = _run_researcher_search(
+                toolset,
+                researcher_id="researcher-1",
+                round_index=1,
+                motivating_id="facet-1",
+                query="grounded evidence before researcher provider outage",
+            )
+            update = json.loads(
+                toolset.update_retrieval_state(
+                    {
+                        "add_nuggets": [
+                            {
+                                "nugget_id": "nugget-1",
+                                "text": "Grounded evidence predates the researcher outage.",
+                                "need_ids": ["need-1"],
+                                "facet_ids": ["facet-1"],
+                                "evidence": [
+                                    {"cite": payload["passages"][0]["cite"]}
+                                ],
+                            }
+                        ]
+                    }
+                )
+            )
+            assert update["accepted_ids"] == ["nugget-1"]
+
+            middleware = ResearchTaskBudgetMiddleware(toolset.budget)
+            description = ResearchTaskEnvelope(
+                research_task_id="researcher-2",
+                round_index=2,
+                depth="focused",
+                motivating_ids=["facet-1"],
+                goal="Close the remaining evidence gap.",
+            ).model_dump_json()
+            request = ToolCallRequest(
+                tool_call={
+                    "name": "task",
+                    "args": {
+                        "description": description,
+                        "subagent_type": "researcher",
+                    },
+                    "id": "provider-failure-task",
+                },
+                tool=None,
+                state={},
+                runtime=None,
+            )
+            failure = middleware.wrap_tool_call(
+                request,
+                lambda _request: (_ for _ in ()).throw(
+                    RuntimeError("provider unavailable: private response detail")
+                ),
+            )
+            failure_payload = json.loads(failure.content)
+            assert failure_payload["failure_reason"] == "retrieval_unavailable"
+            assert "private response detail" not in failure.content
+            return {"messages": [{"role": "assistant", "content": "Partial."}]}
+
+        return FakeAgent(invoke)
+
+    result = _topic_sdk(agent_factory).retrieve(records, "narrative")
+
+    assert result.stopping_reason == "retrieval_unavailable"
+    assert result.synthesis_outcome == "deterministic_grounded_recovery"
+    _assert_returned_completion(
+        result,
+        records,
+        status="incomplete",
+        stopping_reason="retrieval_unavailable",
+    )
+
+
+def test_two_synthesis_only_provider_failures_recover_grounded_topic() -> None:
+    records = _RecordingTopicLedger()
+    model = ProviderFailingChatModel(responses=[AIMessage(content="unused")])
+
+    def agent_factory(_model, toolset):
+        _add_need_and_facet(toolset, need_id="need-1", facet_id="facet-1")
+        payload = _run_researcher_search(
+            toolset,
+            researcher_id="researcher-1",
+            round_index=1,
+            motivating_id="facet-1",
+            query="grounded evidence before synthesis outage",
+        )
+        update = json.loads(
+            toolset.update_retrieval_state(
+                {
+                    "add_nuggets": [
+                        {
+                            "nugget_id": "nugget-1",
+                            "text": "Grounded evidence survives synthesis outage.",
+                            "need_ids": ["need-1"],
+                            "facet_ids": ["facet-1"],
+                            "evidence": [
+                                {"cite": payload["passages"][0]["cite"]}
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+        assert update["accepted_ids"] == ["nugget-1"]
+        assert json.loads(toolset.complete_research_round(1))["ok"] is True
+        return create_agent(
+            model=model,
+            tools=[toolset.update_retrieval_state],
+            middleware=[
+                MainToolFilterMiddleware(
+                    toolset.budget,
+                    toolset.budget_config,
+                    closeout_pending=toolset.closeout_pending,
+                )
+            ],
+        )
+
+    result = _topic_sdk(
+        agent_factory,
+        budget_config=ResearchBudgetConfig(
+            max_main_models=3,
+            synthesis_reserve_turns=2,
+        ),
+    ).retrieve(records, "narrative")
+
+    assert model.model_calls == 2
+    assert result.synthesis_outcome == "deterministic_grounded_recovery"
+    assert result.coverage_report.needs[0].draft_nugget_ids == ("nugget-1",)
+    assert result.stopping_reason == "budget_exhausted"
+    _assert_returned_completion(
+        result,
+        records,
+        status="complete",
+        stopping_reason="budget_exhausted",
     )
 
 

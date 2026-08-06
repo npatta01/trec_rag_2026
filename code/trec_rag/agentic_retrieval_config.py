@@ -39,6 +39,10 @@ CHUNK_OVERLAP_CHARACTERS = 350
 SNIPPETS_PER_PAGE = 10
 FUSED_RESULT_LIMIT = 20
 TOPIC_WORKERS = 1
+OFFICIAL_TOPICS_RELATIVE_PATH = Path(
+    "trec-rag-data/trec-rag-2026/test-data/trec_rag_2026_queries.tsv"
+)
+OFFICIAL_TOPIC_IDS = tuple(f"rag2026-{index}" for index in range(119))
 _BUDGET_LIMITS = {
     "max_researcher_invocations": 20,
     "max_concurrent": 3,
@@ -264,6 +268,7 @@ def load_agentic_retrieval_config(
     topics_path = _resolve_repo_path(
         root_dir, _require_text(topics_raw, "path", "topics")
     )
+    _validate_official_topics_path(root_dir, topics_path)
 
     execution_raw = _strict_mapping(raw.get("execution"), "execution")
     _reject_unknown(execution_raw, {"topic_workers"}, "execution")
@@ -457,6 +462,11 @@ def select_agentic_topics(
     if isinstance(topic_ids, str):
         raise TypeError("topic_ids must be a sequence of topic IDs")
     official_topics = load_narrative_topics(config.topics_path)
+    if tuple(topic.id for topic in official_topics) != OFFICIAL_TOPIC_IDS:
+        raise ValueError(
+            "official topic cohort must contain exactly rag2026-0 through "
+            "rag2026-118 in source order"
+        )
     requested = _validate_topic_ids(
         tuple(topic_ids),
         {topic.id for topic in official_topics},
@@ -543,6 +553,18 @@ def _resolve_repo_path(root_dir: Path, value: str) -> Path:
         if shared.exists():
             return shared
     return active
+
+
+def _validate_official_topics_path(root_dir: Path, topics_path: Path) -> None:
+    allowed = {(root_dir / OFFICIAL_TOPICS_RELATIVE_PATH).resolve()}
+    shared_root = shared_checkout_root(root_dir)
+    if shared_root is not None:
+        allowed.add((shared_root / OFFICIAL_TOPICS_RELATIVE_PATH).resolve())
+    if topics_path.resolve() not in allowed:
+        raise ValueError(
+            "topics.path must be the official topic source path "
+            f"{OFFICIAL_TOPICS_RELATIVE_PATH}"
+        )
 
 
 def _resolve_cache_path(root_dir: Path, value: str) -> Path:

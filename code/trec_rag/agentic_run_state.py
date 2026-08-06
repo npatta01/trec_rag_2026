@@ -30,7 +30,7 @@ from .generation_handoff import (
     deserialize_generation_topic,
     serialize_generation_topic,
 )
-from .topic_records import TopicRecordsReceipt
+from .topic_records import TOPIC_RECORDS_SCHEMA_VERSION, TopicRecordsReceipt
 from .topics import Topic
 
 
@@ -40,7 +40,7 @@ RUN_PLAN_SCHEMA = "agentic_run_plan_v1"
 TOPIC_SEAL_SCHEMA = "agentic_topic_projection_manifest_v1"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-_REVISION = re.compile(r"[0-9a-f]{40,64}\Z")
+_REVISION = re.compile(r"[0-9a-f]{40}\Z")
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _SAFE_OUTCOME = re.compile(r"[a-z][a-z0-9_]*\Z")
 _SUCCESS_OUTCOMES = frozenset(
@@ -50,6 +50,40 @@ _ARTIFACT_NAMES = (
     "retrieval_topic.json",
     "generation_topic.json",
     "topic_records_receipt.json",
+)
+_TOPIC_RECORD_ROW_COUNT_FIELDS = frozenset(
+    {
+        "candidate",
+        "candidate_passage_link",
+        "candidate_span",
+        "document_binding",
+        "passage",
+        "query_facet",
+        "query_identity",
+        "query_passage",
+        "researcher_evidence",
+        "researcher_facet_update",
+        "researcher_handoff",
+        "retrieval_candidate",
+        "stage_seal",
+        "subnarrative_identity",
+        "topic_completion",
+        "topic_identity",
+    }
+)
+_TOPIC_RECORD_RECEIPT_FIELDS = frozenset(
+    {
+        "database_sha256",
+        "database_bytes",
+        "semantic_sha256",
+        "topic_id",
+        "run_id",
+        "document_sha256s",
+        "row_counts",
+        "schema_version",
+        "manifest_sha256",
+        "manifest_bytes",
+    }
 )
 _MAX_STATE_BYTES = 512 * 1024 * 1024
 
@@ -91,7 +125,9 @@ def _require_digest(value: object, label: str) -> str:
 
 def _require_revision(value: object, label: str) -> str:
     if not isinstance(value, str) or _REVISION.fullmatch(value) is None:
-        raise AgenticRunStateError(f"{label} must be a lowercase source revision")
+        raise AgenticRunStateError(
+            f"{label} must be a lowercase 40-character Git object ID"
+        )
     return value
 
 
@@ -116,6 +152,12 @@ def _exact_mapping(
 def _positive_int(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise AgenticRunStateError(f"{label} must be a positive integer")
+    return value
+
+
+def _nonnegative_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AgenticRunStateError(f"{label} must be a non-negative integer")
     return value
 
 
@@ -770,6 +812,114 @@ def _receipt_mapping(
     return parsed
 
 
+def _validate_receipt_mapping(
+    value: Mapping[str, object] | TopicRecordsReceipt,
+    *,
+    topic_id: str,
+    run_id: str,
+    projected_document_sha256s: Sequence[str],
+) -> dict[str, object]:
+    payload = _receipt_mapping(value)
+    row = _exact_mapping(
+        payload,
+        set(_TOPIC_RECORD_RECEIPT_FIELDS),
+        "topic records receipt",
+    )
+    if row["schema_version"] != TOPIC_RECORDS_SCHEMA_VERSION:
+        raise AgenticRunStateError(
+            "topic records receipt schema changed"
+        )
+    if (
+        _require_safe_id(row["topic_id"], "topic records receipt topic")
+        != topic_id
+        or _require_safe_id(row["run_id"], "topic records receipt run id")
+        != run_id
+    ):
+        raise AgenticRunStateError(
+            "topic records receipt identity changed"
+        )
+    _require_digest(
+        row["database_sha256"], "topic records receipt database"
+    )
+    _require_digest(
+        row["semantic_sha256"], "topic records receipt semantic seal"
+    )
+    _require_digest(
+        row["manifest_sha256"], "topic records receipt manifest"
+    )
+    _nonnegative_int(
+        row["database_bytes"], "topic records receipt database bytes"
+    )
+    _nonnegative_int(
+        row["manifest_bytes"], "topic records receipt manifest bytes"
+    )
+    document_sha256s = row["document_sha256s"]
+    if (
+        not isinstance(document_sha256s, list)
+        or any(
+            not isinstance(item, str) or _SHA256.fullmatch(item) is None
+            for item in document_sha256s
+        )
+        or document_sha256s != sorted(document_sha256s)
+        or len(document_sha256s) != len(set(document_sha256s))
+    ):
+        raise AgenticRunStateError(
+            "topic records receipt document closure is invalid"
+        )
+    projected = tuple(
+        _require_digest(item, "projected document")
+        for item in projected_document_sha256s
+    )
+    if not set(projected) <= set(document_sha256s):
+        raise AgenticRunStateError(
+            "topic records receipt document closure omits projected evidence"
+        )
+    row_counts = row["row_counts"]
+    if (
+        not isinstance(row_counts, Mapping)
+        or any(not isinstance(key, str) for key in row_counts)
+        or set(row_counts) != _TOPIC_RECORD_ROW_COUNT_FIELDS
+        or any(
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            for count in row_counts.values()
+        )
+    ):
+        raise AgenticRunStateError(
+            "topic records receipt row counts are invalid"
+        )
+    return dict(row)
+
+
+def _retrieval_document_sha256s(
+    retrieval_payload: Mapping[str, object],
+) -> tuple[str, ...]:
+    full_text = retrieval_payload.get("full_text_record")
+    if not isinstance(full_text, Mapping):
+        raise AgenticRunStateError(
+            "sealed retrieval topic lacks full-text record"
+        )
+    candidates = full_text.get("candidates")
+    if not isinstance(candidates, list):
+        raise AgenticRunStateError(
+            "sealed retrieval topic full-text candidates are invalid"
+        )
+    digests: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            raise AgenticRunStateError(
+                "sealed retrieval topic candidate is invalid"
+            )
+        digests.append(
+            _require_digest(
+                candidate.get("text_sha256"),
+                "sealed retrieval topic document",
+            )
+        )
+    return tuple(digests)
+
+
 def _artifact_rows(
     payloads: Mapping[str, bytes],
 ) -> tuple[SealedArtifact, ...]:
@@ -891,15 +1041,15 @@ def seal_topic_success(
         raise AgenticRunStateError(
             "generation topic identity differs from run plan"
         )
-    receipt_payload = _receipt_mapping(records_receipt)
-    if receipt_payload.get("topic_id") != topic.topic_id:
-        raise AgenticRunStateError(
-            "topic records receipt topic differs from projection"
-        )
-    if receipt_payload.get("run_id") != plan.run_id:
-        raise AgenticRunStateError(
-            "topic records receipt run id differs from plan"
-        )
+    receipt_payload = _validate_receipt_mapping(
+        records_receipt,
+        topic_id=topic.topic_id,
+        run_id=plan.run_id,
+        projected_document_sha256s=tuple(
+            candidate.document_sha256
+            for candidate in projection.full_text_candidates
+        ),
+    )
     receipt_bytes = _canonical_line(receipt_payload)
     payloads = {
         "retrieval_topic.json": retrieval_bytes,
@@ -1154,13 +1304,14 @@ def load_topic_seal(
     records = _parse_json_line(
         records_bytes, label="topic records receipt"
     )
-    if (
-        records.get("topic_id") != topic_id
-        or records.get("run_id") != plan.run_id
-    ):
-        raise AgenticRunStateError(
-            "topic records receipt identity changed"
-        )
+    _validate_receipt_mapping(
+        records,
+        topic_id=topic_id,
+        run_id=plan.run_id,
+        projected_document_sha256s=_retrieval_document_sha256s(
+            retrieval_payload
+        ),
+    )
     return ValidatedTopicSeal(
         topic_id=topic_id,
         narrative_sha256=planned.narrative_sha256,
