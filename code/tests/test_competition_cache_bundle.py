@@ -1474,8 +1474,10 @@ def test_pack_exports_portable_scores_and_merge_imports_transactionally(
     assert_no_incomplete_cache_bundle_merge(cache_root)
 
 
+@pytest.mark.parametrize("score_conflicts", ("strict", "keep-existing"))
 def test_completed_merge_reimports_safely_missing_portable_score_database(
     tmp_path: Path,
+    score_conflicts: str,
 ) -> None:
     config = _write_fixture(tmp_path / "repo")
     context = ScoreCacheContext(
@@ -1504,6 +1506,7 @@ def test_completed_merge_reimports_safely_missing_portable_score_database(
         cache_root=cache_root,
         outputs_root=outputs_root,
         bundle_dirs=(bundle,),
+        score_conflicts=score_conflicts,
     )
     imported = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
     database = imported.path
@@ -1514,6 +1517,7 @@ def test_completed_merge_reimports_safely_missing_portable_score_database(
         cache_root=cache_root,
         outputs_root=outputs_root,
         bundle_dirs=(bundle,),
+        score_conflicts=score_conflicts,
     )
 
     restored = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
@@ -1522,6 +1526,91 @@ def test_completed_merge_reimports_safely_missing_portable_score_database(
     finally:
         restored.close()
     assert second == first
+
+
+def test_completed_merge_rejects_score_conflict_created_before_reimport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    context = ScoreCacheContext(
+        backend="fixture-backend",
+        model="fixture-model",
+        max_length=128,
+        score_kind="passage",
+        model_revision="fixture-revision",
+        backend_version="1.0",
+        score_representation="raw_logits",
+        inference_dtype="float32",
+        input_policy="trec_rag_whitespace_v1",
+    )
+    source = GlobalScoreCache(config.parent / "cache/reranker", context)
+    source.seed_many(
+        [("query", "passage", 1.25)],
+        source_path="source",
+        source_sha256="1" * 64,
+    )
+    source.close()
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    cache_root = (tmp_path / "merged-cache").resolve()
+    outputs_root = (tmp_path / "merged-outputs").resolve()
+    first = merge_bundles(
+        cache_root=cache_root,
+        outputs_root=outputs_root,
+        bundle_dirs=(bundle,),
+        score_conflicts="keep-existing",
+    )
+    completion_bytes = first.completion_path.read_bytes()
+    imported = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+    database = imported.path
+    imported.close()
+    database.unlink()
+    real_import = bundle_module._import_score_operation
+    conflict_inserted = False
+
+    def insert_conflict_then_import(
+        operation,
+        *,
+        cache_root: Path,
+        conflict_policy: str,
+    ):
+        nonlocal conflict_inserted
+        if not conflict_inserted:
+            destination = GlobalScoreCache(cache_root / "reranker", context)
+            destination.seed_many(
+                [("query", "passage", 2.5)],
+                source_path="concurrent-recovery-writer",
+                source_sha256="2" * 64,
+            )
+            destination.close()
+            conflict_inserted = True
+        return real_import(
+            operation,
+            cache_root=cache_root,
+            conflict_policy=conflict_policy,
+        )
+
+    monkeypatch.setattr(
+        bundle_module,
+        "_import_score_operation",
+        insert_conflict_then_import,
+    )
+
+    with pytest.raises(CacheBundleConflictError, match="score|conflict|audit"):
+        merge_bundles(
+            cache_root=cache_root,
+            outputs_root=outputs_root,
+            bundle_dirs=(bundle,),
+            score_conflicts="keep-existing",
+        )
+
+    retained = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
+    try:
+        assert retained.get(query_text="query", text="passage") == 2.5
+    finally:
+        retained.close()
+    assert first.completion_path.read_bytes() == completion_bytes
 
 
 def test_completed_merge_fails_closed_on_corrupt_portable_score_database(

@@ -2921,17 +2921,24 @@ def _reconcile_completed_score_operation(
     *,
     cache_root: Path,
     conflict_policy: str,
+    expected_import_conflicts: Sequence[dict[str, str]],
 ) -> None:
     """Re-import and prove every portable row after a completed-merge retry."""
     from trec_rag.rerank_score_cache import GlobalScoreCache
 
     context, rows = _portable_score_context_and_rows(operation.staged_path)
     try:
-        _import_score_operation(
+        import_receipt = _import_score_operation(
             operation,
             cache_root=cache_root,
             conflict_policy=conflict_policy,
         )
+        if import_receipt.get("conflict_count") != len(
+            expected_import_conflicts
+        ) or import_receipt.get("conflicts") != list(expected_import_conflicts):
+            raise CacheBundleConflictError(
+                "completed merge score conflicts differ from authenticated audit"
+            )
         cache = GlobalScoreCache(cache_root / "reranker", context, read_only=True)
         try:
             found = cache.lookup_many(
@@ -2948,7 +2955,15 @@ def _reconcile_completed_score_operation(
             cache.close()
     except CacheBundleConflictError:
         raise
-    except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+    except ValueError as exc:
+        if "conflict" in str(exc).casefold():
+            raise CacheBundleConflictError(
+                "completed merge score conflicts differ from authenticated audit"
+            ) from exc
+        raise CacheBundleIntegrityError(
+            f"completed merge score state is invalid: {operation.member.path}"
+        ) from exc
+    except (OSError, RuntimeError, sqlite3.Error, TypeError) as exc:
         raise CacheBundleIntegrityError(
             f"completed merge score state is invalid: {operation.member.path}"
         ) from exc
@@ -2956,12 +2971,19 @@ def _reconcile_completed_score_operation(
         raise CacheBundleIntegrityError(
             f"completed merge is missing portable scores: {operation.member.path}"
         )
-    if conflict_policy == "strict" and any(
-        value is None or value.hex() != row["score_hex"]
+    expected_scores = {
+        conflict["cache_key"]: conflict["existing_score_hex"]
+        for conflict in expected_import_conflicts
+    }
+    if any(
+        value is None
+        or value.hex()
+        != expected_scores.get(str(row["cache_key"]), str(row["score_hex"]))
         for row, value in zip(rows, found, strict=True)
     ):
         raise CacheBundleIntegrityError(
-            f"completed merge portable scores differ: {operation.member.path}"
+            "completed merge portable scores differ from authenticated audit: "
+            f"{operation.member.path}"
         )
 
 
@@ -3267,11 +3289,16 @@ def merge_bundles(
                 conflict_count=len(conflicts),
                 score_operation_count=len(score_operations),
             )
-            for operation in score_operations:
+            for operation, expected_import_conflicts in zip(
+                score_operations,
+                expected_score_import_conflicts,
+                strict=True,
+            ):
                 _reconcile_completed_score_operation(
                     operation,
                     cache_root=cache_destination,
                     conflict_policy=score_conflicts,
+                    expected_import_conflicts=expected_import_conflicts,
                 )
             return prior
 
