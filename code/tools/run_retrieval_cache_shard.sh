@@ -70,14 +70,16 @@ done
 [[ $run_id =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$ ]] || die "--run-id must be a safe run ID"
 
 case "$config_arg" in
-  /*) source_config=$config_arg ;;
-  *) source_config="$REPO_ROOT/$config_arg" ;;
+  /*) die "--config must name a tracked, repository-relative config" ;;
 esac
-[[ -f $source_config && ! -L $source_config ]] || die "config must be a regular, non-symlink file: $config_arg"
 
 cd "$REPO_ROOT"
 repo_toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || die "the dstack repo transport did not provide a Git checkout"
 [[ $repo_toplevel == "$REPO_ROOT" ]] || die "wrapper must run from its transported repository"
+source_config_rel=$(git ls-files --full-name -- "$config_arg")
+[[ -n $source_config_rel && $source_config_rel != *$'\n'* ]] || die "--config must name a tracked, repository-relative config"
+source_config="$REPO_ROOT/$source_config_rel"
+[[ -f $source_config && ! -L $source_config ]] || die "config must be a regular, non-symlink file: $config_arg"
 tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || die "current branch has no tracking branch"
 git diff --check "$tracking_ref"
 
@@ -86,23 +88,14 @@ for command_name in bash git python3 uv; do
 done
 
 hf_mode=${HF_CLI_MODE:-direct}
-venv_hf=""
+[[ $hf_mode == direct ]] || die "HF_CLI_MODE must be direct"
+venv_hf="$REPO_ROOT/.venv/bin/hf"
 hf_cli() {
-  case "$hf_mode" in
-    direct) "$venv_hf" "$@" ;;
-    uvx) uvx hf "$@" ;;
-    *) die "HF_CLI_MODE must be direct or uvx" ;;
-  esac
+  "$venv_hf" "$@"
 }
-case "$hf_mode" in
-  direct)
-    if $preflight; then
-      command -v hf >/dev/null 2>&1 || die "HF_CLI_MODE=direct but hf is unavailable"
-    fi
-    ;;
-  uvx) command -v uvx >/dev/null 2>&1 || die "HF_CLI_MODE=uvx but uvx is unavailable" ;;
-  *) die "HF_CLI_MODE must be direct or uvx" ;;
-esac
+if $preflight; then
+  [[ -x $venv_hf ]] || die "the locked project environment does not provide hf"
+fi
 
 experiment_id="${run_id}-${topic_id}"
 shard_config_rel="configs/local/${experiment_id}.yaml"
@@ -196,9 +189,7 @@ uv sync \
 venv_python="$REPO_ROOT/.venv/bin/python"
 [[ -x $venv_python ]] || die "uv did not create the expected project interpreter"
 venv_hf="$REPO_ROOT/.venv/bin/hf"
-if [[ $hf_mode == direct ]]; then
-  [[ -x $venv_hf ]] || die "the locked project environment did not install hf"
-fi
+[[ -x $venv_hf ]] || die "the locked project environment did not install hf"
 
 mkdir -p "$work_root" "$cache_root" "$(dirname "$shard_config")"
 chmod 700 "$work_root" "$cache_root"

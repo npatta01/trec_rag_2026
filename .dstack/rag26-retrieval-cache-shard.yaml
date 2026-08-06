@@ -6,11 +6,12 @@ entrypoint: /bin/bash -c
 shell: bash
 working_dir: /dstack/run/trec_rag_2026
 
-# A local repo transport clones the tracking branch, then applies every local
-# commit/change as one binary patch. The wrapper seals that applied patch in an
-# ephemeral commit before the competition runner records HEAD.
+# This deliberately nonexistent path makes a bare `dstack apply -f` fail on the
+# local machine. code/tools/apply_retrieval_cache_shard.sh replaces it in a
+# private temporary copy with a clean committed-only snapshot immediately
+# before invoking dstack.
 repos:
-  - local_path: ..
+  - local_path: /dev/null/trec-rag-dstack-transport-requires-launcher
     path: /dstack/run/trec_rag_2026
     if_exists: error
 

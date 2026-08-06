@@ -244,13 +244,22 @@ retrieval/document/planning/canonical/similarity entries, and portable reranker
 JSONL. It excludes locks, WAL files, raw provider responses, qrels, gold data,
 RAG answers, and model weights.
 
-The checked-in dstack task is
-`.dstack/rag26-retrieval-cache-shard.yaml`. It sends the current local worktree
-through dstack's Git repo transport, including local commits and changes relative
-to the tracking branch. The remote wrapper commits that applied patch only in
-the disposable checkout, verifies a clean `HEAD`, installs the locked CUDA
-environment against the image's existing Python, and runs exactly one selected
-topic. No branch push is required.
+The checked-in dstack task template is
+`.dstack/rag26-retrieval-cache-shard.yaml`. Always invoke it through
+`code/tools/apply_retrieval_cache_shard.sh`; the template's deliberately
+nonexistent repo path makes a bare `dstack apply -f` fail locally. The launcher
+requires a clean source branch whose tracking commit is an ancestor, runs the
+credential-free topic preflight, clones only committed bytes into a private
+temporary directory, binds that clone to the exact tracking commit, and passes
+only that sanitized snapshot to dstack. Ignored `.env` files, ignored local
+configs, untracked assets, and tracked-but-uncommitted changes therefore cannot
+enter the transport patch. No branch push is required.
+
+The remote wrapper commits dstack's applied patch only in the disposable
+checkout, verifies a clean `HEAD`, installs the locked CUDA environment against
+the image's existing Python, and runs exactly one selected topic. Both the local
+preflight and remote job use only the project-lock-installed `hf` executable;
+the `uvx hf` fallback is intentionally unsupported.
 
 The wrapper downloads and then resolves both public snapshots offline before
 retrieval:
@@ -276,7 +285,8 @@ delete or overwrite remote files. After both uploads it lists the prefix,
 downloads both files, compares their bytes, and runs the bundle verifier in the
 foreground. A dstack success without that round trip is not a completed shard.
 
-Run the credential-free wrapper preflight locally before looking at offers:
+You may run the credential-free wrapper preflight by itself before looking at
+offers. `--config` accepts only a tracked, repository-relative path:
 
 ```bash
 HF_CLI_MODE=direct bash code/tools/run_retrieval_cache_shard.sh \
@@ -288,25 +298,27 @@ HF_CLI_MODE=direct bash code/tools/run_retrieval_cache_shard.sh \
 The dstack task accepts only the named secrets `HF_TOKEN`, `INDEX_URL`,
 `PYSERINI_API_TOKEN`, and `OPENROUTER_API_KEY`. Configure them in the dstack
 project; never put their values in the YAML or command line. Preview each topic
-without submitting it and retain the complete offers output:
+without submitting it and retain the complete offers output. The launcher's
+`--preview` mode supplies the declining `n` itself:
 
 ```bash
-echo "n" | dstack apply \
-  -f .dstack/rag26-retrieval-cache-shard.yaml \
-  -n rag26-cache-rag2026-0 \
+bash code/tools/apply_retrieval_cache_shard.sh \
+  --preview \
+  --name rag26-cache-rag2026-0 \
   -- --topic rag2026-0 --run-id nonagentic-two-topic-20260806
 
-echo "n" | dstack apply \
-  -f .dstack/rag26-retrieval-cache-shard.yaml \
-  -n rag26-cache-rag2026-1 \
+bash code/tools/apply_retrieval_cache_shard.sh \
+  --preview \
+  --name rag26-cache-rag2026-1 \
   -- --topic rag2026-1 --run-id nonagentic-two-topic-20260806
 ```
 
 The task requests one on-demand `A5000`, `L4`, `RTX3090`, or `RTX4090` with at
 least 24 GB VRAM, 32 GB RAM, and 100 GB disk. It has a `$1.00/hour` ceiling, a
 five-hour running limit, a 30-minute retry only for `no-capacity`, and zero idle
-retention. Previewing is read-only. Launch detached with `-y -d` only after the
-two offers and expected hosted work have been explicitly approved.
+retention. Previewing is read-only. After the two offers and expected hosted
+work have been explicitly approved, replace `--preview` with `--launch`; the
+launcher then supplies dstack's `-y -d` flags itself.
 
 Download each completed private prefix to a separate local directory and verify
 before touching the shared cache:

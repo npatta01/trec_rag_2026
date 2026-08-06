@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tomllib
 
@@ -20,6 +21,9 @@ from trec_rag.hf_bucket_listing import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / ".dstack" / "rag26-retrieval-cache-shard.yaml"
 WRAPPER_PATH = REPO_ROOT / "code" / "tools" / "run_retrieval_cache_shard.sh"
+LAUNCHER_PATH = REPO_ROOT / "code" / "tools" / "apply_retrieval_cache_shard.sh"
+
+TRANSPORT_SENTINEL = "/dev/null/trec-rag-dstack-transport-requires-launcher"
 
 IMAGE = (
     "huggingface/trl@sha256:"
@@ -46,7 +50,7 @@ def test_dstack_shard_task_has_a_bounded_ephemeral_resource_contract() -> None:
     assert config["working_dir"] == "/dstack/run/trec_rag_2026"
     assert config["repos"] == [
         {
-            "local_path": "..",
+            "local_path": TRANSPORT_SENTINEL,
             "path": "/dstack/run/trec_rag_2026",
             "if_exists": "error",
         }
@@ -222,6 +226,320 @@ def test_wrapper_preflight_rejects_nonignored_untracked_transport_files() -> Non
     assert candidate.name in result.stderr
 
 
+@pytest.mark.parametrize(
+    "config_arg",
+    [
+        str(REPO_ROOT / "configs" / "rag26_competition_retrieval_v2.yaml"),
+        "configs/local/ignored-retrieval-config.yaml",
+    ],
+)
+def test_wrapper_rejects_configs_that_cannot_enter_the_committed_snapshot(
+    config_arg: str,
+) -> None:
+    ignored_config = REPO_ROOT / "configs" / "local" / "ignored-retrieval-config.yaml"
+    if config_arg.startswith("configs/local/"):
+        ignored_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            REPO_ROOT / "configs" / "rag26_competition_retrieval_v2.yaml",
+            ignored_config,
+        )
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(WRAPPER_PATH),
+                "--preflight",
+                "--topic",
+                "rag2026-0",
+                "--run-id",
+                "nonagentic-two-topic-20260806",
+                "--config",
+                config_arg,
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        ignored_config.unlink(missing_ok=True)
+
+    assert result.returncode != 0
+    assert "tracked, repository-relative config" in result.stderr
+
+
+def test_wrapper_preflight_uses_only_the_locked_project_hf_cli(tmp_path: Path) -> None:
+    restricted_bin = tmp_path / "bin"
+    restricted_bin.mkdir()
+    for command in ("bash", "git", "python3", "uv"):
+        executable = shutil.which(command)
+        assert executable is not None
+        (restricted_bin / command).symlink_to(executable)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{restricted_bin}:/usr/bin:/bin"
+    env["HF_CLI_MODE"] = "direct"
+    result = subprocess.run(
+        [
+            str(restricted_bin / "bash"),
+            str(WRAPPER_PATH),
+            "--preflight",
+            "--topic",
+            "rag2026-0",
+            "--run-id",
+            "nonagentic-two-topic-20260806",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "preflight=ok" in result.stdout
+
+
+def test_wrapper_rejects_unlocked_uvx_hf_mode() -> None:
+    env = os.environ.copy()
+    env["HF_CLI_MODE"] = "uvx"
+    result = subprocess.run(
+        [
+            "bash",
+            str(WRAPPER_PATH),
+            "--preflight",
+            "--topic",
+            "rag2026-0",
+            "--run-id",
+            "nonagentic-two-topic-20260806",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "HF_CLI_MODE must be direct" in result.stderr
+
+
+def _clean_launcher_checkout(tmp_path: Path) -> Path:
+    checkout = tmp_path / "checkout"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-hardlinks", str(REPO_ROOT), str(checkout)],
+        check=True,
+    )
+    for source in (CONFIG_PATH, WRAPPER_PATH, LAUNCHER_PATH):
+        relative = source.relative_to(REPO_ROOT)
+        destination = checkout / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    (checkout / ".git" / "info" / "exclude").write_text("/.venv\n", encoding="utf-8")
+    (checkout / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
+    for name in ("trec-rag-data", "trec-rag-skills", "ragdoll"):
+        subprocess.run(
+            ["git", "config", f"submodule.{name}.url", str(REPO_ROOT / name)],
+            cwd=checkout,
+            check=True,
+        )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        ],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "add", ".dstack", "code/tools"],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Retrieval shard test",
+            "-c",
+            "user.email=retrieval-shard-test@invalid.local",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "test sanitized dstack transport",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/trec-rag-test.git",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    return checkout
+
+
+def _fake_dstack(tmp_path: Path) -> tuple[Path, Path]:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    observed = tmp_path / "dstack-observed.txt"
+    fake = fake_bin / "dstack"
+    fake.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == version ]]; then
+  printf '0.20.29\\n'
+  exit 0
+fi
+[[ ${1:-} == apply ]]
+[[ ${2:-} == -f ]]
+task_config=$3
+shift 3
+"$DSTACK_ASSERT_PYTHON" - "$task_config" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+import yaml
+
+config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+snapshot = Path(config["repos"][0]["local_path"])
+assert snapshot.is_absolute() and snapshot.is_dir()
+assert not (snapshot / ".env").exists()
+assert not (snapshot / ".env.local").exists()
+assert subprocess.run(
+    ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+    cwd=snapshot,
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout == ""
+assert subprocess.run(
+    ["git", "rev-parse", "HEAD"], cwd=snapshot, check=True,
+    capture_output=True, text=True,
+).stdout.strip() == os.environ["EXPECTED_TRANSPORT_HEAD"]
+assert subprocess.run(
+    ["git", "rev-parse", "@{upstream}"], cwd=snapshot, check=True,
+    capture_output=True, text=True,
+).stdout.strip() == os.environ["EXPECTED_TRANSPORT_BASE"]
+assert subprocess.run(
+    ["git", "remote", "get-url", "origin"], cwd=snapshot, check=True,
+    capture_output=True, text=True,
+).stdout.strip() == "https://example.invalid/trec-rag-test.git"
+PY
+printf '%s\\n' "$*" >"$DSTACK_OBSERVED"
+printf 'FAKE DSTACK PREVIEW\\n'
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    return fake_bin, observed
+
+
+def test_launcher_couples_apply_to_a_clean_committed_only_snapshot(
+    tmp_path: Path,
+) -> None:
+    checkout = _clean_launcher_checkout(tmp_path)
+    fake_bin, observed = _fake_dstack(tmp_path)
+    expected_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "@{upstream}"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["DSTACK_ASSERT_PYTHON"] = str(REPO_ROOT / ".venv" / "bin" / "python")
+    env["DSTACK_OBSERVED"] = str(observed)
+    env["EXPECTED_TRANSPORT_HEAD"] = expected_head
+    env["EXPECTED_TRANSPORT_BASE"] = expected_base
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(checkout / LAUNCHER_PATH.relative_to(REPO_ROOT)),
+            "--preview",
+            "--name",
+            "rag26-cache-rag2026-0",
+            "--",
+            "--topic",
+            "rag2026-0",
+            "--run-id",
+            "nonagentic-two-topic-20260806",
+        ],
+        cwd=checkout,
+        env=env,
+        input="n\n",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "FAKE DSTACK PREVIEW\n"
+    assert result.stderr == ""
+    assert observed.read_text(encoding="utf-8").startswith(
+        "-n rag26-cache-rag2026-0 -- --topic rag2026-0 "
+        "--run-id nonagentic-two-topic-20260806"
+    )
+
+
+def test_launcher_rejects_a_dirty_source_before_dstack(tmp_path: Path) -> None:
+    checkout = _clean_launcher_checkout(tmp_path)
+    fake_bin, observed = _fake_dstack(tmp_path)
+    (checkout / "untracked-secret.txt").write_text(
+        "must not travel\n", encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(checkout / LAUNCHER_PATH.relative_to(REPO_ROOT)),
+            "--preview",
+            "--name",
+            "rag26-cache-rag2026-0",
+            "--",
+            "--topic",
+            "rag2026-0",
+            "--run-id",
+            "nonagentic-two-topic-20260806",
+        ],
+        cwd=checkout,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "source worktree must be clean" in result.stderr
+    assert not observed.exists()
+
+
 def test_dstack_transport_ignores_both_supported_secret_env_files() -> None:
     for name in (".env", ".env.local"):
         result = subprocess.run(
@@ -274,7 +592,9 @@ def test_wrapper_encodes_model_upload_and_remote_verification_contract() -> None
     assert "TREC_RAG_CACHE_ROOT" in script
 
     uv_sync = script.index("uv sync")
-    locked_hf = script.index('venv_hf="$REPO_ROOT/.venv/bin/hf"')
+    locked_hf = script.index(
+        '[[ -x $venv_hf ]] || die "the locked project environment did not install hf"'
+    )
     hf_auth = script.index("hf_cli auth whoami")
     prefix_guard = script.index("require-empty")
     model_download = script.index("snapshot_download")
