@@ -135,6 +135,24 @@ _TOPIC_PHASE_ARTIFACTS = {
     ),
 }
 _TOPIC_RECEIPT = "topic-job-receipt.json"
+_CACHE_OPERATION_RECEIPT = "cache-operation-receipt.json"
+_CACHE_OPERATION_RECEIPT_SCHEMA = "cache-operation-receipt-v1"
+_CACHE_OPERATION_PHASES = ("planning", "retrieval", "scoring", "canonical")
+_CACHE_OPERATION_STAGES = (
+    "planning",
+    "retrieval",
+    "passage_scores",
+    "sentence_scores",
+    "similarity",
+    "canonicalization",
+)
+_CACHE_OPERATION_COUNTERS = (
+    "cache_hits",
+    "cache_misses",
+    "network_calls",
+    "provider_calls",
+    "model_batches",
+)
 _LIVE_DECOMPOSITION_RESULT = "decomposition/result.json"
 _LIVE_DECOMPOSITION_MANIFEST = "decomposition/manifest.json"
 _SEED_DECOMPOSITION_MANIFEST = "planning-seed-manifest.json"
@@ -641,6 +659,99 @@ def _validate_production_topic_checkpoint(
         ) from exc
 
 
+def _validate_online_cache_operation_receipt(
+    source: Path,
+    *,
+    config_sha256: str,
+    run_id: str,
+    topic_id: str,
+    projection_manifest_sha256: str,
+) -> None:
+    """Validate the Task 5 wire receipt without importing the runner module."""
+    try:
+        metadata = source.lstat()
+        body = source.read_bytes()
+    except OSError as exc:
+        raise CacheBundleIntegrityError("cache operation receipt is missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise CacheBundleIntegrityError("cache operation receipt is not a regular file")
+    if len(body) > MAX_MANIFEST_BYTES:
+        raise CacheBundleIntegrityError("cache operation receipt size limit exceeded")
+    value = _require_exact_fields(
+        _strict_json(body, "cache operation receipt"),
+        {
+            "schema_version",
+            "mode",
+            "run_id",
+            "topic_id",
+            "config_sha256",
+            "projection_manifest_sha256",
+            "phases",
+            "stages",
+            "receipt_content_sha256",
+        },
+        "cache operation receipt",
+    )
+    if _canonical_json(value) != body:
+        raise CacheBundleIntegrityError("cache operation receipt is not canonical JSON")
+    content = dict(value)
+    receipt_content_sha256 = _require_digest(
+        content.pop("receipt_content_sha256"),
+        "cache operation receipt content digest",
+    )
+    if receipt_content_sha256 != hashlib.sha256(_canonical_json(content)).hexdigest():
+        raise CacheBundleIntegrityError(
+            "cache operation receipt content digest differs"
+        )
+    if (
+        value["schema_version"] != _CACHE_OPERATION_RECEIPT_SCHEMA
+        or value["mode"] != "online"
+        or value["run_id"] != run_id
+        or value["topic_id"] != topic_id
+        or _require_digest(
+            value["config_sha256"], "cache operation receipt config digest"
+        )
+        != config_sha256
+        or _require_digest(
+            value["projection_manifest_sha256"],
+            "cache operation receipt projection digest",
+        )
+        != projection_manifest_sha256
+    ):
+        raise CacheBundleIntegrityError("cache operation receipt identity changed")
+    phases = _require_exact_fields(
+        value["phases"],
+        set(_CACHE_OPERATION_PHASES),
+        "cache operation receipt phases",
+    )
+    for phase_name in _CACHE_OPERATION_PHASES:
+        phase = _require_exact_fields(
+            phases[phase_name],
+            {"resumed"},
+            f"cache operation receipt {phase_name} phase",
+        )
+        if type(phase["resumed"]) is not bool:
+            raise CacheBundleIntegrityError(
+                "cache operation receipt phase resumed value is not Boolean"
+            )
+    stages = _require_exact_fields(
+        value["stages"],
+        set(_CACHE_OPERATION_STAGES),
+        "cache operation receipt stages",
+    )
+    for stage_name in _CACHE_OPERATION_STAGES:
+        counters = _require_exact_fields(
+            stages[stage_name],
+            set(_CACHE_OPERATION_COUNTERS),
+            f"cache operation receipt {stage_name} counters",
+        )
+        for counter_name in _CACHE_OPERATION_COUNTERS:
+            _require_nonnegative_int(
+                counters[counter_name],
+                f"cache operation receipt {stage_name} {counter_name}",
+            )
+
+
 def _collect_topic_members(
     config: FacetPilotConfig,
     topic: Any,
@@ -678,6 +789,18 @@ def _collect_topic_members(
     for phase in ("retrieval", "scoring", "canonical"):
         for source in _checkpoint_manifest_sources(topic_root, phase):
             sources[source.resolve()] = topic_root
+    projection_manifest = topic_root / "canonical/retrieval-projection-manifest.json"
+    operation_receipt = topic_root / _CACHE_OPERATION_RECEIPT
+    _validate_online_cache_operation_receipt(
+        operation_receipt,
+        config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        run_id=config.run_id,
+        topic_id=topic_id,
+        projection_manifest_sha256=hashlib.sha256(
+            projection_manifest.read_bytes()
+        ).hexdigest(),
+    )
+    sources[operation_receipt.resolve()] = topic_root
     receipt = topic_root / _TOPIC_RECEIPT
     _require_regular_source(receipt, topic_root)
     sources[receipt.resolve()] = topic_root
@@ -1985,6 +2108,18 @@ def _validate_extracted_checkpoint(
             )
 
     actual = {member.path for member in members if member.kind == "checkpoint"}
+    projection_manifest = topic_root / "canonical/retrieval-projection-manifest.json"
+    operation_path = topic_root / _CACHE_OPERATION_RECEIPT
+    _validate_online_cache_operation_receipt(
+        operation_path,
+        config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        run_id=config.run_id,
+        topic_id=topic_id,
+        projection_manifest_sha256=hashlib.sha256(
+            projection_manifest.read_bytes()
+        ).hexdigest(),
+    )
+    expected.add((prefix / _CACHE_OPERATION_RECEIPT).as_posix())
     if actual != expected:
         raise CacheBundleIntegrityError(
             "checkpoint members differ from authenticated receipt closure"

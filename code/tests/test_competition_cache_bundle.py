@@ -50,6 +50,41 @@ _REAL_PRODUCTION_CHECKPOINT_VALIDATOR = (
     bundle_module._validate_production_topic_checkpoint
 )
 
+_CACHE_OPERATION_PHASES = ("planning", "retrieval", "scoring", "canonical")
+_CACHE_OPERATION_STAGES = (
+    "planning",
+    "retrieval",
+    "passage_scores",
+    "sentence_scores",
+    "similarity",
+    "canonicalization",
+)
+_CACHE_OPERATION_COUNTERS = (
+    "cache_hits",
+    "cache_misses",
+    "network_calls",
+    "provider_calls",
+    "model_batches",
+)
+_CACHE_OPERATION_TAMPER_CASES = (
+    "malformed",
+    "noncanonical",
+    "forged_digest",
+    "extra_field",
+    "schema",
+    "mode",
+    "config",
+    "topic",
+    "run",
+    "projection",
+    "phase_names",
+    "phase_value",
+    "stage_names",
+    "counter_names",
+    "counter_bool",
+    "counter_negative",
+)
+
 
 def _canonical_json(value: object) -> bytes:
     return (
@@ -75,6 +110,34 @@ def _pretty_json(value: object) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _online_cache_operation_receipt_bytes(
+    *,
+    config_sha256: str,
+    projection_manifest_sha256: str,
+) -> bytes:
+    content: dict[str, object] = {
+        "schema_version": "cache-operation-receipt-v1",
+        "mode": "online",
+        "run_id": "shard-fixture",
+        "topic_id": "rag2026-0",
+        "config_sha256": config_sha256,
+        "projection_manifest_sha256": projection_manifest_sha256,
+        "phases": {phase: {"resumed": False} for phase in _CACHE_OPERATION_PHASES},
+        "stages": {
+            stage: {counter: 0 for counter in _CACHE_OPERATION_COUNTERS}
+            for stage in _CACHE_OPERATION_STAGES
+        },
+    }
+    return _canonical_json(
+        {
+            **content,
+            "receipt_content_sha256": hashlib.sha256(
+                _canonical_json(content)
+            ).hexdigest(),
+        }
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -219,6 +282,14 @@ nuggets:
         topic_root=topic_root.resolve(),
     )
     projection = topic_root / "canonical/retrieval-projection-manifest.json"
+    (topic_root / "cache-operation-receipt.json").write_bytes(
+        _online_cache_operation_receipt_bytes(
+            config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+            projection_manifest_sha256=hashlib.sha256(
+                projection.read_bytes()
+            ).hexdigest(),
+        )
+    )
     publish_topic_receipt(
         job,
         TopicJobReceipt(
@@ -230,6 +301,16 @@ nuggets:
             stopping_reason="coverage_sufficient",
         ),
     )
+    for export_name in (
+        "cache-operation-manifest.json",
+        "generation_handoff_manifest.json",
+        "r_output_trec_rag_2026.tsv",
+        "retrieval_export_manifest.json",
+        "retrieval_with_text.jsonl.zip",
+    ):
+        (topic_root.parent / export_name).write_bytes(
+            _canonical_json({"fixture": export_name})
+        )
 
     identity = build_planning_cache_identity(
         request_body=b'{"messages":[]}',
@@ -292,6 +373,114 @@ def _write_manual_bundle(
         )
     )
     return root
+
+
+def _rewrite_bundle_member(
+    bundle: Path,
+    *,
+    path: str,
+    body: bytes | None,
+    kind: str = "checkpoint",
+) -> None:
+    archive_path = bundle / "bundle.tar.zst"
+    with zstandard.ZstdDecompressor().stream_reader(
+        io.BytesIO(archive_path.read_bytes())
+    ) as source:
+        tar_bytes = source.read()
+    bodies: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as archive:
+        members = archive.getmembers()
+        manifest_source = archive.extractfile(members[0])
+        assert manifest_source is not None
+        manifest = json.loads(manifest_source.read())
+        for member in members[1:]:
+            source = archive.extractfile(member)
+            assert source is not None
+            bodies[member.name] = source.read()
+    declarations = {row["path"]: row for row in manifest["members"]}
+    if body is None:
+        bodies.pop(path, None)
+        declarations.pop(path, None)
+    else:
+        bodies[path] = body
+        declarations[path] = _declaration(path, body, kind=kind)
+    manifest["members"] = [declarations[name] for name in sorted(declarations)]
+    manifest_body = _canonical_json(manifest)
+    rebuilt = io.BytesIO()
+    with tarfile.open(
+        fileobj=rebuilt, mode="w", format=tarfile.USTAR_FORMAT
+    ) as archive:
+        archive.addfile(
+            _tar_entry("bundle-manifest.json", manifest_body),
+            io.BytesIO(manifest_body),
+        )
+        for name in sorted(bodies):
+            member_body = bodies[name]
+            archive.addfile(_tar_entry(name, member_body), io.BytesIO(member_body))
+    compressed = zstandard.ZstdCompressor(
+        level=3,
+        write_checksum=True,
+        write_content_size=False,
+    ).compress(rebuilt.getvalue())
+    archive_path.write_bytes(compressed)
+    (bundle / "bundle-complete.json").write_bytes(
+        _canonical_json(
+            {
+                "archive": "bundle.tar.zst",
+                "archive_sha256": hashlib.sha256(compressed).hexdigest(),
+                "archive_size": len(compressed),
+                "manifest_sha256": hashlib.sha256(manifest_body).hexdigest(),
+                "member_count": len(manifest["members"]),
+                "schema_version": manifest["schema_version"],
+                "topic_id": manifest["topic_id"],
+            }
+        )
+    )
+
+
+def _tampered_cache_operation_receipt(body: bytes, case: str) -> bytes:
+    if case == "malformed":
+        return b'{"broken":\n'
+    value = json.loads(body)
+    if case == "noncanonical":
+        return _pretty_json(value)
+    if case == "forged_digest":
+        value["receipt_content_sha256"] = "0" * 64
+        return _canonical_json(value)
+    if case == "extra_field":
+        value["unexpected"] = True
+    elif case == "schema":
+        value["schema_version"] = "cache-operation-receipt-v2"
+    elif case == "mode":
+        value["mode"] = "offline-cache-only"
+    elif case == "config":
+        value["config_sha256"] = "e" * 64
+    elif case == "topic":
+        value["topic_id"] = "rag2026-1"
+    elif case == "run":
+        value["run_id"] = "another-run"
+    elif case == "projection":
+        value["projection_manifest_sha256"] = "f" * 64
+    elif case == "phase_names":
+        del value["phases"]["canonical"]
+    elif case == "phase_value":
+        value["phases"]["canonical"]["resumed"] = 1
+    elif case == "stage_names":
+        del value["stages"]["similarity"]
+    elif case == "counter_names":
+        del value["stages"]["retrieval"]["network_calls"]
+    elif case == "counter_bool":
+        value["stages"]["retrieval"]["cache_hits"] = True
+    elif case == "counter_negative":
+        value["stages"]["retrieval"]["cache_misses"] = -1
+    else:
+        raise AssertionError(f"unknown receipt tamper case: {case}")
+    content = dict(value)
+    content.pop("receipt_content_sha256")
+    value["receipt_content_sha256"] = hashlib.sha256(
+        _canonical_json(content)
+    ).hexdigest()
+    return _canonical_json(value)
 
 
 def _tar_entry(name: str, body: bytes) -> tarfile.TarInfo:
@@ -374,6 +563,105 @@ def test_pack_is_byte_reproducible_and_verify_is_manifest_driven(
     assert "outputs/shard-fixture/rag2026-0/retrieval/complete.json" in {
         member.path for member in verified.members
     }
+
+
+def test_pack_includes_online_operation_receipt_but_not_root_exports(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+
+    pack_bundle(config, "rag2026-0", bundle)
+    members = {member.path: member for member in verify_bundle(bundle).members}
+
+    operation_path = "outputs/shard-fixture/rag2026-0/cache-operation-receipt.json"
+    assert members[operation_path].kind == "checkpoint"
+    assert set(members).isdisjoint(
+        {
+            "outputs/shard-fixture/cache-operation-manifest.json",
+            "outputs/shard-fixture/generation_handoff_manifest.json",
+            "outputs/shard-fixture/r_output_trec_rag_2026.tsv",
+            "outputs/shard-fixture/retrieval_export_manifest.json",
+            "outputs/shard-fixture/retrieval_with_text.jsonl.zip",
+        }
+    )
+
+
+def test_pack_requires_online_cache_operation_receipt(tmp_path: Path) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    operation_path = (
+        config.parent / "outputs/shard-fixture/rag2026-0/cache-operation-receipt.json"
+    )
+    operation_path.unlink()
+
+    with pytest.raises(
+        CacheBundleIntegrityError,
+        match="cache operation receipt.*missing|missing.*cache operation receipt",
+    ):
+        pack_bundle(config, "rag2026-0", (tmp_path / "bundle").resolve())
+
+
+@pytest.mark.parametrize(
+    "case",
+    _CACHE_OPERATION_TAMPER_CASES,
+)
+def test_pack_rejects_invalid_online_cache_operation_receipt(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    operation_path = (
+        config.parent / "outputs/shard-fixture/rag2026-0/cache-operation-receipt.json"
+    )
+    operation_path.write_bytes(
+        _tampered_cache_operation_receipt(operation_path.read_bytes(), case)
+    )
+
+    with pytest.raises(CacheBundleIntegrityError, match="cache operation receipt"):
+        pack_bundle(config, "rag2026-0", (tmp_path / "bundle").resolve())
+
+
+@pytest.mark.parametrize(
+    "case",
+    _CACHE_OPERATION_TAMPER_CASES,
+)
+def test_verify_rejects_invalid_online_cache_operation_receipt_semantics(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    operation_source = (
+        config.parent / "outputs/shard-fixture/rag2026-0/cache-operation-receipt.json"
+    )
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    _rewrite_bundle_member(
+        bundle,
+        path="outputs/shard-fixture/rag2026-0/cache-operation-receipt.json",
+        body=_tampered_cache_operation_receipt(operation_source.read_bytes(), case),
+    )
+
+    with pytest.raises(CacheBundleIntegrityError, match="cache operation receipt"):
+        verify_bundle(bundle)
+
+
+def test_verify_requires_cache_operation_receipt_in_checkpoint_closure(
+    tmp_path: Path,
+) -> None:
+    config = _write_fixture(tmp_path / "repo")
+    bundle = (tmp_path / "bundle").resolve()
+    pack_bundle(config, "rag2026-0", bundle)
+    _rewrite_bundle_member(
+        bundle,
+        path="outputs/shard-fixture/rag2026-0/cache-operation-receipt.json",
+        body=None,
+    )
+
+    with pytest.raises(
+        CacheBundleIntegrityError,
+        match="cache operation receipt.*missing|missing.*cache operation receipt",
+    ):
+        verify_bundle(bundle)
 
 
 def test_pack_requires_complete_document_cas_closure(tmp_path: Path) -> None:
