@@ -10,6 +10,9 @@ TASK_TEMPLATE="$REPO_ROOT/.dstack/rag26-retrieval-cache-shard.yaml"
 REMOTE_WRAPPER="$REPO_ROOT/code/tools/run_retrieval_cache_shard.sh"
 TRANSPORT_SENTINEL="/dev/null/trec-rag-dstack-transport-requires-launcher"
 DSTACK_VERSION="0.20.29"
+HTTPS_REMOTE_URL="https://github.com/npatta01/trec_rag_2026.git"
+SCP_REMOTE_URL="git@github.com:npatta01/trec_rag_2026.git"
+SSH_REMOTE_URL="ssh://git@github.com/npatta01/trec_rag_2026.git"
 
 mode=""
 run_name=""
@@ -105,12 +108,8 @@ case "$tracking_merge" in
 esac
 remote_url=$(git remote get-url "$tracking_remote") || die "tracking remote has no URL"
 case "$remote_url" in
-  https://*|ssh://*|git@*:* ) ;;
-  *) die "tracking remote must use HTTPS or SSH, not a local/file URL" ;;
-esac
-[[ $remote_url != *$'\n'* && $remote_url != *$'\r'* ]] || die "tracking remote URL contains a newline"
-case "$remote_url" in
-  http://*@*|https://*@*) die "credential-bearing HTTP(S) remote URLs are forbidden" ;;
+  "$HTTPS_REMOTE_URL"|"$SCP_REMOTE_URL"|"$SSH_REMOTE_URL") ;;
+  *) die "tracking remote must be the configured public GitHub repository without embedded credentials" ;;
 esac
 
 for required_path in "$TASK_TEMPLATE" "$REMOTE_WRAPPER"; do

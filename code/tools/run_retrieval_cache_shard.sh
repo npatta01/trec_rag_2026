@@ -76,12 +76,27 @@ esac
 cd "$REPO_ROOT"
 repo_toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || die "the dstack repo transport did not provide a Git checkout"
 [[ $repo_toplevel == "$REPO_ROOT" ]] || die "wrapper must run from its transported repository"
+tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || die "current branch has no tracking branch"
+git diff --check "$tracking_ref"
+
+# Dstack materializes files added since the tracking commit as untracked patch
+# bytes. Seal the complete sanitized patch before using Git's tracked-file
+# index to validate --config. Local --preflight never mutates.
+if ! $preflight; then
+  git config user.name >/dev/null 2>&1 || git config user.name "dstack cache shard"
+  git config user.email >/dev/null 2>&1 || git config user.email "dstack-cache-shard@invalid.local"
+  git add -A
+  if ! git diff --cached --quiet; then
+    git commit --no-gpg-sign -m "dstack ephemeral cache shard ${run_id} ${topic_id}" >/dev/null
+  fi
+  tracked_status=$(git status --porcelain=v1 --untracked-files=all)
+  [[ -z $tracked_status ]] || die "transported checkout is not clean after the ephemeral commit"
+fi
+
 source_config_rel=$(git ls-files --full-name -- "$config_arg")
 [[ -n $source_config_rel && $source_config_rel != *$'\n'* ]] || die "--config must name a tracked, repository-relative config"
 source_config="$REPO_ROOT/$source_config_rel"
 [[ -f $source_config && ! -L $source_config ]] || die "config must be a regular, non-symlink file: $config_arg"
-tracking_ref=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || die "current branch has no tracking branch"
-git diff --check "$tracking_ref"
 
 for command_name in bash git python3 uv; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
@@ -156,19 +171,9 @@ for secret_name in HF_TOKEN INDEX_URL PYSERINI_API_TOKEN OPENROUTER_API_KEY; do
   [[ -n ${!secret_name:-} ]] || die "required dstack secret is missing: $secret_name"
 done
 
-# dstack clones the configured tracking commit and applies the complete local
-# binary diff. Commit that patch only inside this disposable checkout so the
-# competition runner sees clean Git metadata and a stable HEAD. Nothing is
-# pushed by this wrapper.
-git config user.name >/dev/null 2>&1 || git config user.name "dstack cache shard"
-git config user.email >/dev/null 2>&1 || git config user.email "dstack-cache-shard@invalid.local"
-git add -A
-if ! git diff --cached --quiet; then
-  git commit --no-gpg-sign -m "dstack ephemeral cache shard ${run_id} ${topic_id}" >/dev/null
-fi
 git submodule update --init --recursive
 tracked_status=$(git status --porcelain=v1 --untracked-files=all)
-[[ -z $tracked_status ]] || die "transported checkout is not clean after the ephemeral commit"
+[[ -z $tracked_status ]] || die "transported checkout changed while initializing submodules"
 
 image_python=$(command -v python3)
 case "$image_python" in

@@ -24,6 +24,7 @@ WRAPPER_PATH = REPO_ROOT / "code" / "tools" / "run_retrieval_cache_shard.sh"
 LAUNCHER_PATH = REPO_ROOT / "code" / "tools" / "apply_retrieval_cache_shard.sh"
 
 TRANSPORT_SENTINEL = "/dev/null/trec-rag-dstack-transport-requires-launcher"
+PUBLIC_REMOTE_URL = "https://github.com/npatta01/trec_rag_2026.git"
 
 IMAGE = (
     "huggingface/trl@sha256:"
@@ -388,7 +389,7 @@ def _clean_launcher_checkout(tmp_path: Path) -> Path:
             "remote",
             "set-url",
             "origin",
-            "https://example.invalid/trec-rag-test.git",
+            PUBLIC_REMOTE_URL,
         ],
         cwd=checkout,
         check=True,
@@ -444,7 +445,7 @@ assert subprocess.run(
 assert subprocess.run(
     ["git", "remote", "get-url", "origin"], cwd=snapshot, check=True,
     capture_output=True, text=True,
-).stdout.strip() == "https://example.invalid/trec-rag-test.git"
+).stdout.strip() == "https://github.com/npatta01/trec_rag_2026.git"
 assert config["commands"] == [
     "bash code/tools/run_retrieval_cache_shard.sh ${{ run.args }}"
 ]
@@ -570,6 +571,49 @@ def test_launcher_rejects_a_dirty_source_before_dstack(tmp_path: Path) -> None:
     assert not observed.exists()
 
 
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://user:password@github.com/npatta01/trec_rag_2026.git",
+        "ssh://git:password@github.com/npatta01/trec_rag_2026.git",
+        "https://github.com/npatta01/trec_rag_2026.git?token=secret",
+        "/tmp/local-repository",
+    ],
+)
+def test_launcher_rejects_noncanonical_or_credential_bearing_remote_urls(
+    tmp_path: Path,
+    remote_url: str,
+) -> None:
+    checkout = _clean_launcher_checkout(tmp_path)
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", remote_url],
+        cwd=checkout,
+        check=True,
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(checkout / LAUNCHER_PATH.relative_to(REPO_ROOT)),
+            "--preview",
+            "--name",
+            "rag26-cache-rag2026-0",
+            "--",
+            "--topic",
+            "rag2026-0",
+            "--run-id",
+            "nonagentic-two-topic-20260806",
+        ],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "public GitHub repository without embedded credentials" in result.stderr
+
+
 def test_dstack_transport_ignores_both_supported_secret_env_files() -> None:
     for name in (".env", ".env.local"):
         result = subprocess.run(
@@ -620,6 +664,7 @@ def test_wrapper_encodes_model_upload_and_remote_verification_contract() -> None
     assert "git commit" in script
     assert "git status --porcelain=v1 --untracked-files=all" in script
     assert "TREC_RAG_CACHE_ROOT" in script
+    assert script.index("git add -A") < script.index("source_config_rel=$(git ls-files")
 
     uv_sync = script.index("uv sync")
     locked_hf = script.index(
