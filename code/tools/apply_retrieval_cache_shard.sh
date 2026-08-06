@@ -190,6 +190,7 @@ PY
 
 dstack_status=0
 set +e
+cd "$transport_tmp"
 if [[ $mode == preview ]]; then
   printf 'n\n' | "$dstack_bin" apply -f "$task_config" -n "$run_name" -- "${run_args[@]}"
   dstack_status=${PIPESTATUS[1]}

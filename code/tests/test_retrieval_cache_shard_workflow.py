@@ -422,7 +422,9 @@ import subprocess
 import sys
 import yaml
 
-config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+task_config = Path(sys.argv[1]).resolve()
+assert Path.cwd() == task_config.parent
+config = yaml.safe_load(task_config.read_text(encoding="utf-8"))
 snapshot = Path(config["repos"][0]["local_path"])
 assert snapshot.is_absolute() and snapshot.is_dir()
 assert not (snapshot / ".env").exists()
